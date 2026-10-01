@@ -51,6 +51,7 @@
 
 import { routeBrowserElementPointToSidecar, type ElementPointRefusal } from '../tools/sidecar-route.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
+import { servesCapability } from '../../sidecar/capability-predicate.ts';
 
 /**
  * The routing facts this module decides on, gathered once by the caller.
@@ -127,10 +128,13 @@ export function remoteBrowserPebbleTarget(routing: RemotePointRouting): string |
   if (typeof target === 'string' && target.trim()) return null;
   if (routing.machineScoped) return null;
 
-  const browserCapable = routing.sidecars.filter((s) =>
-    s.connected
-    && s.capabilities?.includes('browser')
-    && !s.unavailable_capabilities?.some((u) => u.name === 'browser'));
+  // `servesCapability`, not a local copy of its three terms (#611). It must
+  // stay term-for-term identical to the one `localBrowserWillServe` asks, and
+  // #590's disjointness argument depends on that: the two predicates are
+  // provably exclusive (`length === 1` here versus `length === 0` there) only
+  // because the filter underneath them is the SAME filter. It is now literally
+  // the same function, so that argument no longer rests on two copies agreeing.
+  const browserCapable = routing.sidecars.filter((s) => servesCapability(s, 'browser'));
   if (browserCapable.length !== 1) return null;
 
   const only = browserCapable[0]!;

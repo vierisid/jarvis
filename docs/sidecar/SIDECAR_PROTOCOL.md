@@ -667,20 +667,37 @@ cannot be expressed in the capability map. It is enforced in the handler:
   does. Even a read that times out cannot take the browser down from here.
 - **It sends four commands, three distinct CDP methods, all getters:**
   `Page.getFrameTree` (twice, as the check and the re-check),
-  `Browser.getWindowForTarget` and `Page.getLayoutMetrics`. Four on every path,
-  including an element taken from a subframe -- the frame digest rides along on
-  the re-check's reading rather than costing a read of its own. No `Runtime.*`,
+  `Browser.getWindowForTarget` and `Page.getLayoutMetrics`. Four on every path
+  that answers, including an element taken from a subframe -- the frame digest
+  rides along on the re-check's reading rather than costing a read of its own. A
+  refusal sends the same number or fewer, **never more**: it stops where it
+  refuses, and a read with too little budget left is refused before it is issued
+  -- while the last two staleness checks sit after the fourth send, so they
+  refuse having sent all four. No `Runtime.*`,
   so no script; no `Input.*`, no `DOM.focus`, no `Page.bringToFront`, no
   `Target.activateTarget`; no `Page.navigate`; no `Browser.setWindowBounds`, no
   `Emulation.*`. That list is prose, so
   `TestBrowserElementPointSendsOnlyReads` asserts the sent sequence **exactly**,
   for the main-document and in-frame paths both -- a later edit that adds a
   fifth command fails a test rather than a review.
-- **Every read carries a sub-second budget**, not `cdpDefaultTimeout`'s 30
-  seconds. `Page.*` is answered by the renderer, so a long task or a modal
-  `alert()` blocks it; the narration upstream is abandoned after 1200 ms
-  anyway, so a read that sits for 30 seconds produces the same user-visible
-  outcome while holding a goroutine and a pending-reply slot for the other 29.
+- **The whole handler carries one budget**, 900 ms, shared by all four reads --
+  not `cdpDefaultTimeout`'s 30 seconds, and not a fresh budget per read. `Page.*`
+  is answered by the renderer, so a long task or a modal `alert()` blocks it;
+  the narration upstream is abandoned after 1200 ms anyway, so a read that sits
+  for 30 seconds produces the same user-visible outcome while holding a
+  goroutine and a pending-reply slot for the other 29. Each read is handed what
+  is left of the budget, capped at a 700 ms per-read ceiling, and a read with
+  less than 20 ms left is **refused rather than issued** -- so the sidecar never
+  spends longer on the question than the caller is willing to wait for the whole
+  of it, and never spends a round trip on a reply nobody is waiting for.
+  Whether the answer is *heard* is a weaker claim and is deliberately not made
+  here: the brain's 1200 ms also pays for its own resolution work and two
+  websocket legs, and transport is not the sidecar's to bound. One further
+  qualification on "the handler's own work": `sendOnTimeout` writes to the
+  browser's pipe *before* arming its timer, so a browser process that stops
+  draining that pipe can stall a read outside its own timeout. This was a
+  per-**read** bound until #610, which did not hold: four reads at 700 ms each is
+  a 2800 ms worst case against a 1200 ms race.
 - `Browser.getWindowForTarget` is a **browser-level** command, and it is scoped
   to the attached page only because `send` tags it with the flat-mode session
   id. An edit that sent it on `sendOn("")` with a caller-supplied `targetId`
@@ -780,7 +797,7 @@ something, and a new method has no reply field to duck-type on.
 | new | new, stale document / stale frame / unknown id | a coded refusal; no pointer, one log line |
 | new | new, **browser running headless**, or its window minimized | `BROWSER_GEOMETRY_UNAVAILABLE`; no pointer. Only the sidecar can tell |
 | new | new, element outside the visible viewport | `BROWSER_GEOMETRY_UNAVAILABLE`; no pointer |
-| new | new, busy page (a long task or a modal `alert()` blocks the renderer) | every read carries a sub-second budget, so it gives up well inside the narration's own 1200 ms; no pointer |
+| new | new, busy page (a long task or a modal `alert()` blocks the renderer) | the handler's whole budget is 900 ms, so it gives up inside the narration's own 1200 ms; the refusal carries the code of the read it ran out of budget for (`BROWSER_GEOMETRY_UNAVAILABLE` or `BROWSER_SNAPSHOT_STALE`); no pointer |
 | new | **old** (no such method) | `METHOD_NOT_FOUND`; the brain reads the **code**, reports "sidecar too old", and keeps #585's fail-closed path. Nothing falls back to `browser_evaluate`, to the brain's local coordinate cache, or to a fresh DOM query |
 | new | new, but a future `space` value | refused. An unrecognised space is never trusted |
 | old | new | never calls the method; nothing changes for it |
@@ -789,15 +806,26 @@ something, and a new method has no reply field to duck-type on.
 The failure direction is always the same: **no pointer rather than a pointer at
 the wrong element.** Every case above refuses instead of answering.
 
-### Two constants that must stay in step
+### Constants that must stay in step
 
-This contract is the only thing holding two pairs of constants together, one
-pair per language, and nothing fails on either side if they drift:
+This contract is the only thing holding these pairs of constants together, and
+nothing fails on either side if they drift:
 
 | meaning | sidecar | brain |
 |---|---|---|
 | the space name | `elementPointSpace` (`sidecar/browser_element_point.go`) | `ELEMENT_POINT_SPACE` (`src/actions/tools/sidecar-route.ts`) |
 | the coordinate sanity bound | `maxElementPointCoord` (same file) | `MAX_ELEMENT_POINT_COORD` (same file) |
+| the latency the answer must fit in | `elementPointBudget`, which must stay **under** `pebbleNarrationRace` (same file) | an inline `1200` in the `Promise.race` at `src/daemon/index.ts` |
+
+The third pair is asymmetric and worth stating plainly: the brain's side is a
+literal inside an IIFE, not an exported constant, so the sidecar keeps its own
+copy as `pebbleNarrationRace` purely to be compared against. Nothing imports it
+and nothing waits on it; `TestElementPointBudgetFitsTheNarrationRace` asserts
+the inequality so the relationship is checked on the sidecar's side rather than
+only described here. Raising the brain's race is safe; lowering it to 900 ms or
+below without lowering `elementPointBudget` puts the handler back outside the
+window, which is #610. The bound is strict on purpose -- a handler that answers
+exactly at the deadline has already lost the race.
 
 Renaming the space string on one side alone makes every point
 `unusable_reply` -- which is the safe direction, and silent. Both ends check the
