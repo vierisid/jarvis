@@ -249,6 +249,17 @@ export class BrowserController {
   private elementDoc: { loaderId: string; frameStamp: string } = { loaderId: '', frameStamp: '' };
   /** The ids the snapshot took from a same-origin subframe. */
   private elementInFrame = new Set<number>();
+  /**
+   * Bumped every time the element map is filled or dropped (#602). The mirror
+   * of the sidecar's `elemGen`, and it answers the question a loaderId cannot:
+   * a snapshot of the SAME document re-numbers every id while the document
+   * identity never moves, so "the ids I reviewed" and "the ids that exist now"
+   * can differ with every document check still passing.
+   *
+   * Read by `captureApprovalGuard`, which is synchronous and so can compare a
+   * counter but cannot ask the browser anything.
+   */
+  private snapshotGen = 0;
 
   /**
    * The isolated world the snapshot's element refs live in, retired with its
@@ -706,6 +717,9 @@ export class BrowserController {
     this.elementInFrame.clear();
     this.elementDoc = { loaderId: '', frameStamp: '' };
     this.elementWorld = null;
+    // Dropping the ids is as much a change of surface as minting new ones, so
+    // an approval reviewed against the old ones must not execute (#602).
+    this.snapshotGen++;
   }
 
   /**
@@ -902,6 +916,9 @@ export class BrowserController {
     // the stored digest describing the older tree, so a later action compares
     // unequal and refuses -- the safe direction.
     this.elementDoc = { loaderId: before.loaderId, frameStamp: beforeStamp };
+    // A new set of ids, so anything reviewed against the previous set is no
+    // longer reviewed against what exists (#602).
+    this.snapshotGen++;
     // Both halves now describe this same reading, so the caller's cleanup must
     // not undo it.
     commit();
@@ -1697,14 +1714,59 @@ export class BrowserController {
     return this._connected;
   }
 
-  /** A reviewed call cannot reconnect to a different CDP page/session.
-   * Initial navigation may connect lazily, provided nothing changed meanwhile. */
-  captureApprovalGuard(allowInitialConnection = false): () => boolean {
+  /**
+   * A reviewed call cannot reconnect to a different CDP page/session.
+   * Initial navigation may connect lazily, provided nothing changed meanwhile.
+   *
+   * `bindDocument` adds the SURFACE to what is bound (#602). Without it the
+   * guard binds the connection and the approval epoch and nothing else, so an
+   * approval reviewed against one snapshot could execute against another: the
+   * ids in `element_id` are per-snapshot, and a new snapshot of the same
+   * document re-numbers them while the loaderId never moves. So an
+   * element-addressed tool binds both the document the ids were minted in and
+   * the GENERATION of the map they came from.
+   *
+   * This is the synchronous half, and it has to be: `authorityGate` and this
+   * guard must not act, while reading the live document is a CDP round trip.
+   * The live half stays at use time in `refuseIfDocumentMoved`, which runs
+   * inside the tool and can be async. Two halves of one question, neither
+   * sufficient alone -- this one catches "a different surface was reviewed",
+   * that one catches "the page moved since".
+   *
+   * KNOWN CONSEQUENCE, stated because it is user-visible: anything that
+   * re-snapshots between the review and the execution blocks the approval,
+   * with "its original UI session or reviewed subject is no longer available"
+   * rather than a retryable error. Two shapes reach it -- a DEFERRED approval
+   * left pending while the same turn carries on with another
+   * `browser_snapshot` or a `browser_navigate` (which snapshots internally),
+   * and a second agent acting through the same module-level controller. NOT
+   * the parallel-tool shape: this orchestrator awaits each tool call in turn,
+   * so a snapshot and a click in one message always complete in order.
+   *
+   * It is the same trade the sidecar's `elemGen` check already makes, the
+   * message names something the user can act on, and the alternative is
+   * executing a click whose id now means a different element.
+   */
+  captureApprovalGuard(
+    allowInitialConnection = false,
+    opts: { bindDocument?: boolean } = {},
+  ): () => boolean {
     const epoch = this.approvalEpoch;
     const connected = this._connected;
-    return () => this.approvalEpoch === epoch && (connected
-      ? this._connected && this.cdp.isOpen && !!this.requestGuard?.isOpen
-      : allowInitialConnection && !this._connected);
+    const surface = opts.bindDocument
+      ? { loaderId: this.elementDoc.loaderId, gen: this.snapshotGen }
+      : null;
+    return () => {
+      if (this.approvalEpoch !== epoch) return false;
+      const live = connected
+        ? this._connected && this.cdp.isOpen && !!this.requestGuard?.isOpen
+        : allowInitialConnection && !this._connected;
+      if (!live) return false;
+      if (surface && (surface.loaderId !== this.elementDoc.loaderId || surface.gen !== this.snapshotGen)) {
+        return false;
+      }
+      return true;
+    };
   }
 
   private async ensureConnected(): Promise<void> {

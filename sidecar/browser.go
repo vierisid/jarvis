@@ -122,6 +122,52 @@ type cdpClient struct {
 	worldLoaderID string
 	worldContext  float64
 
+	// The same two things for the ACCESSIBILITY surface (#602).
+	//
+	// Separate from the fields above, not shared with them, for a reason that
+	// bites immediately if they are merged: `elementWorldFor` hands the DOM
+	// action paths a world they expect to hold `__jarvis_elements`. A world
+	// minted for an AX call holds no refs, and overwriting `worldContext` with
+	// it would make every `browser_type` refuse until the next DOM snapshot --
+	// a live break from interleaving two tools that have nothing to do with
+	// each other.
+	//
+	// axIdentity is the document `browser_ax_snapshot` last read, axIDs are the
+	// ids it actually emitted, and axGen counts the fills. Before this,
+	// browser_ax_click and browser_ax_set_value were the only action paths in
+	// the sidecar with no document binding at all -- and with no local-content
+	// refusal either, which made a `file:` or `chrome://settings` page
+	// clickable through them.
+	//
+	// THE ID SET IS NOT OPTIONAL, which is what measuring corrected: a
+	// backendNodeId is RENDERER-PROCESS-LOCAL and restarts at 1 on every
+	// cross-site navigation, so ids minted in different documents collide --
+	// measured, two fresh renderers both numbered their inputs 1, 2, 3, and
+	// `DOM.resolveNode` of a previous site's id resolved cleanly to a
+	// DIFFERENT element on the new page. A document comparison alone therefore
+	// does not make an id mean what it meant: snapshot A, navigate, snapshot B,
+	// act on A's id, and every identity term agrees while the id resolves
+	// against B. The DOM path has this right already -- there each id carries
+	// its own document, because it comes out of the per-element map.
+	//
+	// Membership also closes a widening nothing else bounds: without it, any
+	// backendNodeId in the document was actionable after any AX snapshot,
+	// including the nodes `buildAXElements` filtered out (ignored, unnamed and
+	// not interactive, no backing DOM node) and the tail it dropped at the
+	// reply budget -- elements the model was never shown and the card never
+	// named.
+	axMu       sync.Mutex
+	axIdentity pageIdentity
+	axIDs      map[int64]bool
+	axGen      uint64
+
+	// The AX path's own isolated world, under its own mutex so a mint cannot
+	// park a concurrent snapshot's bookkeeping behind a browser round trip --
+	// the reason the DOM path keeps `elemMu` and `worldMu` apart.
+	axWorldMu     sync.Mutex
+	axWorldLoader string
+	axWorldCtx    float64
+
 	// One-shot waiters for CDP events (e.g. Page.loadEventFired).
 	eventMu      sync.Mutex
 	eventWaiters map[string][]chan struct{}

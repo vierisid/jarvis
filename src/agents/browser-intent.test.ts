@@ -10,7 +10,7 @@ import { DeferredExecutor } from '../authority/deferred-executor';
 import { buildBackgroundProfile } from '../authority/background-profile';
 import { resolveToolGate } from '../authority/tool-action-map';
 import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry';
-import { browserClickTool, browserSnapshotTool, browserUploadFileTool, createBrowserTools } from '../actions/tools/builtin';
+import { browserClickTool, browserScrollTool, browserSnapshotTool, browserUploadFileTool, createBrowserTools } from '../actions/tools/builtin';
 import { uiActTool, uiSnapshotTool, resetUiSnapshots } from '../actions/tools/ui';
 import { runSkillTool } from '../actions/tools/skills';
 import { getSidecarManager, setSidecarManagerRef } from '../actions/tools/sidecar-route';
@@ -84,16 +84,40 @@ describe('ambiguous UI effects require review at real agent gates', () => {
   });
 
   test('reviewed arguments execute once through the durable approval executor', async () => {
-    const f = fixture([browserClickTool]);
-    await exec(f.orch, 'browser_click', { element_id: 9 });
+    // browser_scroll rather than browser_click, because what is under test here
+    // is the executor's once-only property and these fixtures run with no
+    // browser connected. #602 made an element-addressed tool's approval bind
+    // the snapshot its ids came from, and a cold browser has no snapshot, so a
+    // reviewed browser_click is correctly dead on arrival -- asserted in its
+    // own right in the next test. browser_scroll needs no snapshot and
+    // connects lazily, so it still reaches the executor.
+    const f = fixture([browserScrollTool]);
+    await exec(f.orch, 'browser_scroll', { direction: 'down' });
     const card = f.approvals.getPending()[0]!;
-    expect(JSON.parse(card.tool_arguments)).toEqual({ element_id: 9 });
+    expect(JSON.parse(card.tool_arguments)).toEqual({ direction: 'down' });
     f.approvals.approve(card.id, 'user');
     const executor = new DeferredExecutor(f.approvals, f.audit);
     executor.setToolRegistry(f.registry);
     await executor.executeApproved(card.id);
     await executor.executeApproved(card.id);
-    expect(f.calls).toEqual(['browser_click']);
+    expect(f.calls).toEqual(['browser_scroll']);
+  });
+
+  test('an element-addressed approval does not execute without the snapshot it was reviewed against', async () => {
+    // #602: `captureApprovalGuard` binds the document and the snapshot
+    // generation for click/type/hover. Nothing is connected here, so no
+    // snapshot minted the id the card names, and the approval must not run --
+    // the alternative is dispatching a trusted mouse event at a coordinate
+    // nobody measured.
+    const f = fixture([browserClickTool]);
+    await exec(f.orch, 'browser_click', { element_id: 9 });
+    const card = f.approvals.getPending()[0]!;
+    f.approvals.approve(card.id, 'user');
+    const executor = new DeferredExecutor(f.approvals, f.audit);
+    executor.setToolRegistry(f.registry);
+    const result = await executor.executeApproved(card.id);
+    expect(String(result)).toContain('no longer available');
+    expect(f.calls).toEqual([]);
   });
 
   test('voice auto-approval and sub-agents cannot bypass human review', async () => {

@@ -135,6 +135,12 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 
 		elements := buildAXElements(tree.Nodes)
 
+		// WHICH DOCUMENT these ids belong to, so the two AX actions can refuse
+		// an id from a document the browser has since left (#602). Recorded
+		// after `assertSamePage` above, so it is a document the browser
+		// confirmed for this read.
+		cdp.rememberAXDocument(checked, elements)
+
 		// `url` here is the PAGE'S CLAIM (`location.href`), not the browser's
 		// answer, and it is NOT eligible to select a site playbook -- that is
 		// `page_url` on the snapshot reply, which comes from the frame tree
@@ -170,6 +176,143 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 			"captured_at":   time.Now().UnixMilli(),
 		}}, nil
 	}
+}
+
+// rememberAXDocument records which document the AX ids just handed out belong
+// to, WHICH ids they were, and the generation of this fill (#602). Called after
+// the snapshot's own `assertSamePage`, so it stores a document the browser
+// confirmed rather than one it was showing at some point during the read.
+func (c *cdpClient) rememberAXDocument(id pageIdentity, elements []map[string]any) {
+	ids := make(map[int64]bool, len(elements))
+	for _, el := range elements {
+		if backendID, ok := el["backend_node_id"].(int64); ok && backendID != 0 {
+			ids[backendID] = true
+		}
+	}
+	c.axMu.Lock()
+	c.axIdentity = id
+	c.axIDs = ids
+	c.axGen++
+	c.axMu.Unlock()
+}
+
+// refuseStaleAXElement is the guard both AX ACTIONS run before they touch
+// anything (#602).
+//
+// `browser_ax_click` and `browser_ax_set_value` had no guard of any kind: no
+// local-content refusal, no document check, nothing. They address elements by
+// `backend_node_id`, a different id space from the DOM snapshot's integer ids,
+// so #592's isolated-world work did not cover them -- the model could name an
+// id from a snapshot of one document and have it acted on in another.
+//
+// Four questions, one frame-tree read:
+//   - was this id EMITTED by the last AX snapshot. Measured: a backendNodeId is
+//     renderer-process-local and restarts at 1 after a cross-site navigation,
+//     so ids from two documents collide and a stale one resolves cleanly to a
+//     different element. Membership is what makes an id mean what it meant, and
+//     it also stops an id the snapshot filtered out -- or dropped at the reply
+//     budget -- being actionable: the model never saw it and the card never
+//     named it;
+//   - has an AX snapshot named a document at all;
+//   - is the browser still showing that document (the loaderId ALONE, never
+//     with the URL: `history.pushState` moves the URL on every SPA without
+//     committing a document, and comparing it would refuse an ordinary click on
+//     Gmail -- see confirmSameDocument);
+//   - is that document one we may drive at all (#526).
+//
+// No in-frame digest term, unlike the DOM path, and that absence is measured
+// rather than assumed: `Accessibility.getFullAXTree` exposes no same-origin
+// SUBFRAME nodes, so every id this path can be given is a main-frame id and a
+// subframe digest would have nothing to guard.
+//
+// Errors rather than model-facing result strings, which is this file's existing
+// convention for every AX failure -- unlike the DOM path's refuseStaleElement,
+// whose "not found" message shape predates it.
+//
+// It returns the identity it just read, INCLUDING the frame id, so a caller
+// that then needs an isolated world mints it for the document that was checked
+// rather than reading the frame tree a second time and racing itself.
+func refuseStaleAXElement(cdp *cdpClient, backendID int64) (pageIdentity, error) {
+	cdp.axMu.Lock()
+	before := cdp.axIdentity
+	known := cdp.axIDs[backendID]
+	gen := cdp.axGen
+	cdp.axMu.Unlock()
+
+	if before.loaderID == "" {
+		return pageIdentity{}, fmt.Errorf("element %d cannot be addressed: no accessibility snapshot has named "+
+			"this page. Take a browser_ax_snapshot first", backendID)
+	}
+	if !known {
+		return pageIdentity{}, fmt.Errorf("element %d is not one the last browser_ax_snapshot returned, so it "+
+			"cannot be acted on; take a fresh browser_ax_snapshot and use an id from it", backendID)
+	}
+	now, _, err := cdp.frameTreeState(cdpDefaultTimeout)
+	if err != nil {
+		return pageIdentity{}, fmt.Errorf("could not confirm which page the browser is showing, so nothing was done: %w", err)
+	}
+	if err := refuseLocalIdentity(now); err != nil {
+		return pageIdentity{}, err
+	}
+	if now.loaderID == "" || now.loaderID != before.loaderID {
+		return pageIdentity{}, fmt.Errorf("the page navigated to a new document, so element %d from the previous "+
+			"accessibility snapshot no longer exists; take a fresh browser_ax_snapshot", backendID)
+	}
+	// LAST, so nothing can land after it: a concurrent AX snapshot replaces the
+	// id set while this call is starting, and the identity check above cannot
+	// see that when the document has not changed. The DOM path's generation
+	// check exists for the same window and sits in the same place.
+	cdp.axMu.Lock()
+	moved := cdp.axGen != gen
+	cdp.axMu.Unlock()
+	if moved {
+		return pageIdentity{}, fmt.Errorf("a new accessibility snapshot replaced element %d while this call was "+
+			"starting; take a fresh browser_ax_snapshot", backendID)
+	}
+	return now, nil
+}
+
+// axWorldContext is the isolated world the AX path resolves nodes into, minted
+// once per document (#602). The snapshot's world is deliberately not reused --
+// see the axWorldLoader field.
+func (c *cdpClient) axWorldContext(frameID, loaderID string) (float64, error) {
+	c.axWorldMu.Lock()
+	defer c.axWorldMu.Unlock()
+	if c.axWorldLoader == loaderID && c.axWorldCtx != 0 {
+		return c.axWorldCtx, nil
+	}
+	raw, err := c.sendOnTimeout(c.sessionID, "Page.createIsolatedWorld", map[string]any{
+		"frameId":             frameID,
+		"worldName":           "jarvis-ax",
+		"grantUniveralAccess": false,
+	}, elementWorldMintTimeout)
+	if err != nil {
+		return 0, fmt.Errorf("could not create the isolated world this element is addressed in: %w", err)
+	}
+	var world struct {
+		ExecutionContextID float64 `json:"executionContextId"`
+	}
+	if err := json.Unmarshal(raw, &world); err != nil || world.ExecutionContextID == 0 {
+		return 0, fmt.Errorf("the browser did not return an isolated world for this element")
+	}
+	c.axWorldLoader = loaderID
+	c.axWorldCtx = world.ExecutionContextID
+	return world.ExecutionContextID, nil
+}
+
+// forgetAXWorld drops the cached world so the next call mints a fresh one.
+//
+// The DOM twin needs no such method: `forgetSnapshotElements` clears it on
+// every snapshot failure, and a snapshot is required before every DOM action,
+// so a dead context self-heals. Nothing requires an AX snapshot before an AX
+// action, so without this a world destroyed while its loaderId held -- a
+// session re-attach, a `Runtime.disable` -- would leave set_value failing on
+// that document until a navigation.
+func (c *cdpClient) forgetAXWorld() {
+	c.axWorldMu.Lock()
+	c.axWorldLoader = ""
+	c.axWorldCtx = 0
+	c.axWorldMu.Unlock()
 }
 
 // axIdentityField bounds a page-controlled value that a CALLER COMPARES.
@@ -380,8 +523,20 @@ func makeBrowserAXClickHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
+		// The id must still belong to the document it was read from, and that
+		// document must be one we may drive (#602). Before anything is
+		// scrolled, let alone clicked.
+		if _, err := refuseStaleAXElement(cdp, int64(backendID)); err != nil {
+			return nil, err
+		}
+
 		// Best effort; a hidden element will fail at the box-model step with
 		// a precise error.
+		//
+		// NOTE this scrolls, which invalidates the DOM snapshot's coordinates
+		// without changing any loaderId -- the case #603 handles for every
+		// geometry mutation, including this one, through the scroll position
+		// armed in `__jarvis_dom`.
 		_, _ = cdp.send("DOM.scrollIntoViewIfNeeded", map[string]any{"backendNodeId": int64(backendID)})
 
 		raw, err := cdp.send("DOM.getBoxModel", map[string]any{"backendNodeId": int64(backendID)})
@@ -415,6 +570,48 @@ func makeBrowserAXClickHandler(cfg *SidecarConfig) RPCHandler {
 	}
 }
 
+// axSetValueScript is the function `browser_ax_set_value` runs on the resolved
+// node, in an isolated world. Named rather than inline so the ORDER of its
+// terms can be asserted: the refusal has to come before the write, which is
+// what makes it a guard rather than a report (#602).
+//
+// FOCUS IS ASKED OF THE NODE'S OWN ROOT, not of its document, and that is the
+// one place this cannot copy the DOM path. `document.activeElement` RETARGETS
+// to the shadow HOST, so for a node inside a shadow tree
+// `ownerDocument.activeElement === this` is always false even when focus landed
+// exactly where it should -- measured: focusing an `<input>` inside an open
+// shadow root left `ownerDocument.activeElement` as the custom element while
+// the shadow root's own `activeElement` was the input. The DOM snapshot never
+// sees such a node (`querySelectorAll` does not pierce shadow roots) so its
+// check is right as written; the AX tree DOES pierce, and asking the document
+// here would have refused every web-component form field -- Salesforce
+// Lightning, Shoelace, Ionic, Vaadin -- with a message telling the model to
+// take a snapshot that cannot help.
+//
+// `getRootNode()` is the document for an ordinary node, so the honest path is
+// unchanged. The `this.shadowRoot` term after it answers a different question
+// (this node is itself a host whose shadow tree holds focus) and stays.
+const axSetValueScript = `function(v) {
+	if (!this.isConnected) return JSON.stringify({refused: 'detached'});
+	this.focus();
+	const root = this.getRootNode();
+	const scope = root && 'activeElement' in root ? root : (this.ownerDocument || document);
+	if (scope.activeElement !== this) return JSON.stringify({refused: 'not_focused'});
+	if (this.shadowRoot && this.shadowRoot.activeElement) return JSON.stringify({refused: 'not_focused'});
+	const proto = this.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
+	const desc = Object.getOwnPropertyDescriptor(proto, 'value');
+	if (desc && desc.set && (this.tagName === 'INPUT' || this.tagName === 'TEXTAREA')) {
+		desc.set.call(this, v);
+	} else if (this.isContentEditable) {
+		this.textContent = v;
+	} else {
+		this.value = v;
+	}
+	this.dispatchEvent(new Event('input', {bubbles: true}));
+	this.dispatchEvent(new Event('change', {bubbles: true}));
+	return JSON.stringify({value: this.value !== undefined ? this.value : this.textContent, tag: this.tagName});
+}`
+
 // makeBrowserAXSetValueHandler sets a form control's value by
 // backend_node_id via the DOM node itself (focus + value + input/change
 // events), reading the value back for verification.
@@ -434,8 +631,53 @@ func makeBrowserAXSetValueHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
-		raw, err := cdp.send("DOM.resolveNode", map[string]any{"backendNodeId": int64(backendID)})
+		// Same document check the click path makes (#602), before a value is
+		// written anywhere. Its reading is reused for the world below.
+		identity, err := refuseStaleAXElement(cdp, int64(backendID))
 		if err != nil {
+			return nil, err
+		}
+
+		// RESOLVED INTO AN ISOLATED WORLD, not the page's own (#602).
+		//
+		// `DOM.resolveNode` with no executionContextId hands back an object in
+		// the page's main world, and `Runtime.callFunctionOn` then runs the
+		// function below there -- where the page controls the prototypes the
+		// function reads through. Measured: with the page having redefined
+		// `Node.prototype.isConnected` and `Document.prototype.activeElement`,
+		// the main world reported `isConnected:false, focused:false` for the
+		// very element it was about to write into, while an isolated-world
+		// resolve of the same backendNodeId reported the truth. Putting the new
+		// focus check in the main world would have been a check the page
+		// answers. (The pre-existing `HTMLInputElement.prototype` value-setter
+		// read has the same shape and the same fix.)
+		//
+		// The world is the MAIN FRAME's, which is sound because every id this
+		// path can be given is a main-frame id: measured,
+		// Accessibility.getFullAXTree exposes no same-origin subframe nodes.
+		//
+		// That premise is load-bearing and the fallback is NOT a refusal --
+		// also measured: `DOM.resolveNode` of a same-origin subframe node into
+		// the MAIN frame's isolated world succeeds, so if the AX snapshot ever
+		// starts emitting subframe nodes, this would run the script in the
+		// main frame's world with `this` from a child document. Still
+		// isolated, and `getRootNode().activeElement` is still the child's, so
+		// the outcome is safe -- but whether frame A's value setter accepts a
+		// receiver from frame B is then the thing to measure.
+		contextID, err := cdp.axWorldContext(identity.frameID, identity.loaderID)
+		if err != nil {
+			return nil, err
+		}
+
+		raw, err := cdp.send("DOM.resolveNode", map[string]any{
+			"backendNodeId":      int64(backendID),
+			"executionContextId": contextID,
+		})
+		if err != nil {
+			// The cached world is the likeliest thing to have gone, and nothing
+			// else clears it, so drop it: the next call mints a fresh one
+			// rather than failing here for the life of the document.
+			cdp.forgetAXWorld()
 			return nil, fmt.Errorf("element %d could not be resolved — it is gone; take a fresh browser_ax_snapshot: %w", int64(backendID), err)
 		}
 		var resolved struct {
@@ -454,25 +696,33 @@ func makeBrowserAXSetValueHandler(cfg *SidecarConfig) RPCHandler {
 
 		fnRaw, err := cdp.send("Runtime.callFunctionOn", map[string]any{
 			"objectId": resolved.Object.ObjectID,
-			"functionDeclaration": `function(v) {
-				this.focus();
-				const proto = this.tagName === 'TEXTAREA' ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-				const desc = Object.getOwnPropertyDescriptor(proto, 'value');
-				if (desc && desc.set && (this.tagName === 'INPUT' || this.tagName === 'TEXTAREA')) {
-					desc.set.call(this, v);
-				} else if (this.isContentEditable) {
-					this.textContent = v;
-				} else {
-					this.value = v;
-				}
-				this.dispatchEvent(new Event('input', {bubbles: true}));
-				this.dispatchEvent(new Event('change', {bubbles: true}));
-				return JSON.stringify({value: this.value !== undefined ? this.value : this.textContent, tag: this.tagName});
-			}`,
-			"arguments":     []map[string]any{{"value": value}},
-			"returnByValue": true,
+			// FOCUS IS VERIFIED BEFORE THE VALUE IS WRITTEN (#602, #592's
+			// measured predicate on the AX path).
+			//
+			// This is the AX twin of #592: it writes a value into an element
+			// the model named, and nothing confirmed that the element it lands
+			// on is the one that was reviewed. An isolated world alone does not
+			// close that -- worlds share the DOM AND ITS EVENTS, so the page's
+			// own `focus` listener still runs when `this.focus()` is called and
+			// can move focus wherever it likes. #592 measured the consequence
+			// on the DOM path: the script reported success while the approved
+			// text landed in the page's chosen input.
+			//
+			// Same three terms as the DOM focus check, for the same measured
+			// reasons: `isConnected` first (focusing a detached node is a
+			// no-op and the write would follow whatever still had focus),
+			// `activeElement` in the element's OWN document (for anything
+			// inside a frame the top document's activeElement is the frame),
+			// and EXACT equality with no shadow root holding focus.
+			//
+			// REFUSES rather than writing: a value written into an element that
+			// could not take focus is a write nobody reviewed.
+			"functionDeclaration": axSetValueScript,
+			"arguments":           []map[string]any{{"value": value}},
+			"returnByValue":       true,
 		})
 		if err != nil {
+			cdp.forgetAXWorld()
 			return nil, fmt.Errorf("set_value failed: %w", err)
 		}
 		var fnRes struct {
@@ -492,6 +742,17 @@ func makeBrowserAXSetValueHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		verify := map[string]any{}
 		_ = json.Unmarshal([]byte(fnRes.Result.Value), &verify)
+		// The focus check above refused, so NOTHING was written. Said as an
+		// error, because a model that reads "success" here would move on.
+		if refused, _ := verify["refused"].(string); refused != "" {
+			if refused == "detached" {
+				return nil, fmt.Errorf("element %d is no longer in the page, so nothing was typed; "+
+					"take a fresh browser_ax_snapshot", int64(backendID))
+			}
+			return nil, fmt.Errorf("element %d did not take focus, so nothing was typed -- the page moved "+
+				"focus elsewhere, or the element is covered or disabled; take a fresh browser_ax_snapshot "+
+				"and check the element is the one you mean", int64(backendID))
+		}
 		// The readback is read AFTER the page's own `input`/`change` listeners
 		// have run, so a listener chooses what comes back here -- and it was
 		// unbounded, which is the dropped-reply bug again on the path that

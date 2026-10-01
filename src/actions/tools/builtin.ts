@@ -1018,6 +1018,94 @@ function resolveBrowserTarget(params: Record<string, unknown>, tool: string): st
 }
 
 /**
+ * Bind a reviewed browser call to the surface it was reviewed on (#602).
+ *
+ * #495 bound an approval to the reviewed snapshot so that what the user
+ * approved is what happens, and `createBrowserTools` -- the background agent's
+ * set -- sets a guard on every one of its tools. The main registry set one only
+ * on `browser_upload_file`, and `ApprovalManager.createRequest` falls back to
+ * `() => true` when a gated tool has none, so `browser_click`, `browser_type`
+ * and `browser_hover` had no binding at all: exactly the tools that act on the
+ * reviewed surface.
+ *
+ * THE ASYMMETRY WAS NOT A COPY-PASTE OMISSION, which is why this is not the
+ * background set's guard. Every tool there is bound to one `BrowserController`
+ * and can only run locally. These tools are dual-routed: when
+ * `resolveBrowserTarget` finds a sidecar -- named in `target`, or chosen by
+ * `autoTargetForCapability` with nothing named -- the call runs on THAT
+ * browser, and the local controller's epoch says nothing about it. On a
+ * sidecar-only machine the local controller is never connected, so the
+ * background set's guard would refuse every remote browser call outright.
+ *
+ * So the routing decision is made ONCE, here, at review time -- the same
+ * moment and the same async context the tool would have resolved it in -- and
+ * never again from inside the returned closure. Re-resolving at execution time
+ * would read a live sidecar inventory minutes or hours later, and through an
+ * `AsyncLocalStorage` machine scope that is absent on the deferred executor's
+ * context, so the two answers could differ with nothing having changed. (The
+ * same reasoning `pebble-narration.ts` gives for not calling the router off the
+ * tool path.) A router that throws degrades to the unbound guard rather than to
+ * a dead approval: `execute` will refuse the call itself, with a reason.
+ *
+ * REMAINING GAP, deliberate and recorded: a reviewed REMOTE call is still
+ * unbound. The sidecar has its own `elemGen` and its own document checks at use
+ * time, but nothing in this process can read them synchronously, and the
+ * arguments -- including `target` -- are already compared byte for byte by
+ * `getUiExecutionRegistry`.
+ */
+function browserCallGuard(
+  tool: string,
+  opts: { bindDocument?: boolean } = {},
+): (params: Record<string, unknown>) => (() => boolean) {
+  return (params) => {
+    let reviewedRoute: string | null;
+    try {
+      reviewedRoute = resolveBrowserTarget(params, tool);
+    } catch {
+      // Fails CLOSED, matching `createRequest`'s own catch ("a failed subject
+      // capture must not create an executable approval"). The only thing that
+      // throws here is a MachineScope refusing the dispatch, and the deferred
+      // executor carries no scope -- so `execute` would re-resolve without the
+      // fence and run the call the scope refused.
+      return () => false;
+    }
+    // A LAZY CONNECTION IS NOT A MISSING SURFACE. `navigate`, `scroll`,
+    // `press_key` and `evaluate` all start with `ensureConnected` and need no
+    // prior snapshot, so on a cold daemon they are reviewed with nothing
+    // connected and connect when they run. Requiring a live connection at
+    // review for those produced a card that was already dead: the user clicked
+    // Approve and got "its original UI session or reviewed subject is no
+    // longer available" for a call that would have worked. The
+    // element-addressed tools are the opposite -- they cannot work without the
+    // snapshot that minted their ids, so for them a cold browser at review
+    // really does mean nothing was reviewed.
+    const mayConnectLazily = !opts.bindDocument;
+    const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
+    return () => {
+      // The ROUTE is compared, never used to pick one. Reviewed local and
+      // executed remote is a change of machine, not just of surface: the card
+      // named element [5] from the local snapshot, and id 5 on the sidecar is
+      // a different element. Re-resolving here is safe precisely because the
+      // answer is only ever tested for equality -- an absent machine scope or
+      // a sidecar that connected in between fails the approval closed instead
+      // of silently retargeting it.
+      let nowRoute: string | null;
+      try {
+        nowRoute = resolveBrowserTarget(params, tool);
+      } catch {
+        return false;
+      }
+      if (nowRoute !== reviewedRoute) return false;
+      // Remote: nothing in this process holds the reviewed surface. The
+      // sidecar runs its own document and generation checks at use time, and
+      // the arguments (including `target`) are already compared byte for byte
+      // by `getUiExecutionRegistry`.
+      return local ? local() : true;
+    };
+  };
+}
+
+/**
  * Say when a remote read reached a page and still got no site playbook.
  *
  * #583 was invisible for exactly this reason: a sidecar-routed browser silently
@@ -1077,6 +1165,7 @@ function reportSkippedPlaybook(tool: string, target: string, read: SidecarPageRe
 
 export const browserNavigateTool: ToolDefinition = {
   name: 'browser_navigate',
+  captureApprovalGuard: browserCallGuard('browser_navigate'),
   description: 'Navigate the browser to a URL. Returns page text content and a list of interactive elements with [id] numbers you can reference in browser_click and browser_type. Optionally specify a "target" sidecar to use a remote browser. By default the browser opens visibly so the user can watch and interact; set "headless" to true to run it hidden in the background (useful for research, or when the user is focused on something else and a popping browser window would be intrusive).',
   category: 'browser',
   parameters: {
@@ -1155,6 +1244,7 @@ export const browserSnapshotTool: ToolDefinition = {
 
 export const browserClickTool: ToolDefinition = {
   name: 'browser_click',
+  captureApprovalGuard: browserCallGuard('browser_click', { bindDocument: true }),
   description: 'Click an interactive element on the page by its [id] from the last browser_navigate or browser_snapshot. Supports right-click (button: "right", opens context menus) and double-click (double: true).',
   category: 'browser',
   parameters: {
@@ -1203,6 +1293,7 @@ export const browserClickTool: ToolDefinition = {
 
 export const browserHoverTool: ToolDefinition = {
   name: 'browser_hover',
+  captureApprovalGuard: browserCallGuard('browser_hover', { bindDocument: true }),
   description: 'Hover the mouse over an element by its [id]. Use this to reveal hover-only UI (message action toolbars, dropdown triggers, tooltips). After hovering, take a browser_snapshot to see the revealed elements, then click them without moving the mouse elsewhere first.',
   category: 'browser',
   parameters: {
@@ -1234,6 +1325,7 @@ export const browserHoverTool: ToolDefinition = {
 
 export const browserPressKeyTool: ToolDefinition = {
   name: 'browser_press_key',
+  captureApprovalGuard: browserCallGuard('browser_press_key'),
   description: 'Press a key or key combination in the browser page (sent to the focused element). Examples: "Enter", "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter", "Ctrl+Shift+M". Use for in-app keyboard shortcuts, menu navigation, and committing edits. Note: browser-reserved shortcuts (Ctrl+N, Ctrl+T, Ctrl+1-9) are intercepted by Chrome and never reach the page — use in-page UI for those actions instead.',
   category: 'browser',
   parameters: {
@@ -1265,6 +1357,7 @@ export const browserPressKeyTool: ToolDefinition = {
 
 export const browserTypeTool: ToolDefinition = {
   name: 'browser_type',
+  captureApprovalGuard: browserCallGuard('browser_type', { bindDocument: true }),
   description: 'Type text into an input element by its [id]. IMPORTANT: by default this REPLACES the element\'s existing content (it is cleared first). Set append to true to keep existing content and add at the end. Set submit to true to press Enter after typing (useful for search forms).',
   category: 'browser',
   parameters: {
@@ -1468,6 +1561,7 @@ export const browserUploadFileTool: ToolDefinition = {
 
 export const browserScrollTool: ToolDefinition = {
   name: 'browser_scroll',
+  captureApprovalGuard: browserCallGuard('browser_scroll'),
   description: 'Scroll the page up or down. Use this when you need to see content below the fold. After scrolling, use browser_snapshot to see the new content.',
   category: 'browser',
   parameters: {
@@ -1509,6 +1603,7 @@ export const browserScrollTool: ToolDefinition = {
 
 export const browserEvaluateTool: ToolDefinition = {
   name: 'browser_evaluate',
+  captureApprovalGuard: browserCallGuard('browser_evaluate'),
   description: 'Execute JavaScript in the browser page context. Use this for advanced interactions when the standard tools are not enough.',
   category: 'browser',
   parameters: {
@@ -1734,8 +1829,20 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       },
     },
   ];
+  // Every tool here is bound to THIS controller and can only run locally, so
+  // the guard is the controller's own -- no routing term, unlike the main
+  // registry's `browserCallGuard`.
+  //
+  // The element-addressed three bind the SURFACE as well (#602): an approval
+  // reviewed against one snapshot must not execute against another, and a
+  // snapshot of the same document re-numbers every id while the loaderId holds.
+  const elementAddressed = new Set(['browser_click', 'browser_type', 'browser_hover']);
   for (const tool of tools) {
-    tool.captureApprovalGuard = () => ctrl.captureApprovalGuard(tool.name === 'browser_navigate');
+    const bindDocument = elementAddressed.has(tool.name);
+    // Same rule as the main registry: everything that connects lazily may be
+    // reviewed against a cold browser, and only the element-addressed tools
+    // genuinely require the snapshot that minted their ids.
+    tool.captureApprovalGuard = () => ctrl.captureApprovalGuard(!bindDocument, { bindDocument });
   }
   return tools;
 }
