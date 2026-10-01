@@ -105,6 +105,10 @@ import {
   unplacedLabel, type NarrationRouting, type PebbleNarration,
 } from "./pebble-narration.ts";
 import { remoteBrowserNarration } from "../actions/browser/remote-element-point.ts";
+import {
+  logSafeLabel, MAX_POINT_COORD, PEBBLE_SCREEN_SPACE, pointingGuidance, pointTagRegex,
+} from "./pebble-point-prompt.ts";
+import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
 /** Sentences synthesized at once for one sidecar's Pebble speech (see runResponseCycle). */
@@ -2666,11 +2670,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       type ScreenshotInfo = {
         base64: string;
         mediaType: string;
-        // Scale factors: pixels-on-actual-screen ÷ pixels-in-sent-image.
-        // The LLM picks coordinates in the (downscaled) image; we
-        // multiply its (x, y) by these before dispatching pebble.point_at
-        // so the pebble lands at the real-screen position. =1 when the
-        // image wasn't resized.
+        // Scale factors: capture-native pixels per sent-image pixel. The
+        // model picks coordinates in the (downscaled) image; we multiply by
+        // these before dispatching pebble.point_at. =1 when the image was not
+        // resized.
+        //
+        // CAPTURE-NATIVE, not "real-screen" (#604): orig_* is the pixel size
+        // of whatever `platformCaptureScreen` wrote, read off that image's own
+        // header, so it is backing pixels on a Retina Mac and primary-monitor
+        // pixels on Windows. That is not the space the pebble eases in. The
+        // multiply site has the per-platform detail and the reason no
+        // conversion is applied.
         scaleX: number;
         scaleY: number;
         origWidth: number;
@@ -2805,33 +2815,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             '',
           );
         }
-        sections.push(
-          '# Pointing at things on the user\'s screen — REQUIRED for "where" / "show me" requests',
-          'Emit a tag of the form `[POINT:<x>,<y>:<short label>]` anywhere in your reply to fly the pebble to that screen coordinate. The daemon strips these tags before display + TTS, dispatches a pebble.point_at RPC, and the pebble eases to the position with the label shown in its bubble for ~3.5 seconds. Coordinates are virtual-screen pixels.',
-          '',
-          '**When the user asks a spatial question, the daemon attaches a screenshot of their current screen as the FIRST content block of the user message.** Use the actual pixels in that image to pick coordinates — read button labels, identify positions, find the exact target the user is asking about. Do NOT fall back to remembered coordinates from prior turns; ground every estimate in the current screenshot.',
-          '',
-          '**Coordinate space — read it off the grid.** The attached screenshot has a labelled coordinate grid overlay — light vermilion hairlines every 100 px and labelled major lines every 200 px ("x=200", "y=400" …). Pick coordinates in the *image* coordinate space using the grid as your reference frame. Do NOT eyeball pixel positions — find the gridlines that bracket the target element, then interpolate. For a button sitting just left of the "x=1500" gridline at roughly half the distance to "x=1400", you write `x=1450`. Use the same approach for y. The daemon scales your image-space coords back to real-screen pixels before dispatching the pebble, so if you see the close button just left of the "x=1580, y=10" intersection, emit `[POINT:1578,12:close]`.',
-          '',
-          '**Common coordinate mistakes to avoid:**',
-          '- Outputting "real screen" coordinates (e.g. (3792, 29) for a 4K screen) — the LLM sees the SHRUNK image, so coordinates must be in shrunk-image space. The daemon does the upscale.',
-          '- Putting coordinates near the centre of the image when the user asked about a corner element. Read the grid: top-right means high x AND low y.',
-          '- Reusing example coordinates from these instructions verbatim instead of measuring from the actual screenshot.',
-          '',
-          '**Required for any request matching:** "where is X", "where do I click for X", "show me X", "point to X", "guide me to X". A reply without the tag for these is wrong — describing the location verbally is not enough; the pebble must actually move.',
-          '',
-          '**Emit ONE point per request, not a multi-step walkthrough** — unless the user explicitly asks for steps ("walk me through", "show me each step"). If the user asks "how to open a terminal" you point at ONE primary control (the Terminal menu), not three sequential ones.',
-          '',
-          '**Each request is independent.** Do NOT carry over coordinates or labels from earlier turns; pick fresh ones based on what the user is asking about RIGHT NOW.',
-          '',
-          'Estimating coordinates: use the foreground-app context above and your knowledge of typical UIs. The user\'s desktop coordinate space starts at (0, 0) top-left. A maximized window on a 1920×1080 screen has its close button near (1895, 8). Browser tab close ≈ right edge of the active tab. Editors typically have their main menu bar around y=10–30. When in doubt, your best guess is fine — the user can re-ask.',
-          '',
-          'Examples (do not reuse these coordinates verbatim — they\'re illustrative):',
-          '  user: "where do I click to publish?" → "Top-right of the workflows panel. [POINT:<x>,<y>:publish]"',
-          '  user: "show me where to close this window" → "Top-right of the title bar. [POINT:<x>,<y>:close]"',
-          '',
-          'Replace `<x>,<y>` with your actual estimate. The text is spoken; the [POINT:..] tag is consumed by the daemon and never shown.',
+        // The [POINT:..] contract, and the one name for the space it lands
+        // in, live in pebble-point-prompt.ts (#604). Extracted because the
+        // space claim is a model-facing contract and nothing here could test
+        // a string literal inside this closure.
+        //
+        // The pebble's OS decides which unit the no-image branch names, and
+        // that branch is the one dispatched UNSCALED, so a wrong unit there is
+        // a pointer off by the display's scale factor. `null` for an
+        // unrecognised or absent `os` is a real case (offline or older
+        // sidecar) and names all three rather than guessing one.
+        const pebbleOs = osFamily(
+          sidecarManager.listSidecars().find((s) => s.id === sidecarId)?.os,
         );
+        sections.push(...pointingGuidance(pebbleOs));
         return sections.join('\n');
       };
 
@@ -3349,7 +3346,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         machineScoped: !!getMachineScope(),
         // A host that refuses local browser calls cannot be the machine that
         // serves one, whatever the inventory says. Read here rather than in
-        // pebble-narration.ts, which imports nothing on purpose.
+        // pebble-narration.ts, which imports only a zero-import leaf, on
+        // purpose (#611) -- so every decision there stays a pure function of
+        // what this object hands it.
         localBrowserEnabled: !isLocalBrowserDisabled() && !isNoLocalTools(),
         args,
       });
@@ -3391,6 +3390,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             // Only a LOCAL desktop_snapshot fills that cache, so a
             // sidecar-routed click lands here and narrates without a pointer.
             if (!bounds) return { kind: 'unplaced', reason: `no local snapshot cached desktop element [${id}]` };
+            // PEBBLE_SCREEN_SPACE, by the platform controllers that fill the
+            // cache (#604): Win32 UIA rects are physical virtual-screen px
+            // under the same PerMonitorV2 awareness GetCursorPos reports in,
+            // macOS AX position/size are Cocoa points, and xdotool geometry is
+            // X11 px. Equal to the pebble's space on Windows, and on Linux
+            // wherever GDK's scale factor is 1. On macOS equal in UNIT but not
+            // guaranteed in ORIGIN: the pebble flips y against
+            // `NSScreen.screens[0]`, so on a multi-display Mac with unequal
+            // heights the two can disagree about where y=0 is. Named rather
+            // than converted for the same reason as the capture path: there is
+            // no scale-factor helper in the tree to convert with, and no
+            // display geometry reported to compute an origin from.
+            //
+            // This is the PRE-ACTION approval path -- the pebble that says
+            // "this is what you are approving" before a desktop_click -- so
+            // the caveat is recorded rather than rounded off.
             return {
               kind: 'point',
               x: Math.round(bounds.x + bounds.width / 2),
@@ -3502,7 +3517,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // the screen position with a label callout. Tags arriving across
       // chunk boundaries are handled because we only match closed tags
       // (the `]` terminator must be present).
-      const POINT_TAG_RE = /\[POINT:(-?\d+),(-?\d+):([^\]]+)\]/g;
+      // Built from the pattern that ships beside the text teaching it, so a
+      // reword of the contract and the matcher that enforces it cannot drift
+      // (#604). Its own instance: a /g regex carries lastIndex.
+      const POINT_TAG_RE = pointTagRegex();
       const stripPointTags = (
         text: string,
         seen: Set<string>,
@@ -3733,12 +3751,49 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               `scale ${autoShot.scaleX.toFixed(2)}x — ${autoShot.base64.length} base64 chars`,
             );
           }
-          // POINT coordinates emitted by the LLM are in the SENT-image
-          // coordinate space (the downscaled JPEG). Scale them up to
-          // the actual virtual-screen pixels before dispatching to the
-          // sidecar so the pebble lands at the real button.
+          // POINT coordinates emitted by the model are in the SENT-image
+          // coordinate space (the downscaled, grid-overlaid JPEG). Scaling
+          // them by orig/sent puts them in CAPTURE-NATIVE pixels -- the space
+          // of whatever `platformCaptureScreen` wrote, since `capture_screen`
+          // reports orig_width by decoding that image's header and asks the OS
+          // nothing (sidecar/handlers.go).
+          //
+          // THAT IS NOT `PEBBLE_SCREEN_SPACE`, which is what pebble.point_at
+          // consumes, and the gap is #604's first two bullets (see
+          // pebble-point-prompt.ts for the full per-platform table):
+          //
+          //   Linux    equal at GDK scale 1; off by the scale factor above it.
+          //   Windows  equal at 100% DPI. The capture is PRIMARY-MONITOR-ONLY
+          //            and its origin is the primary's top-left, which IS
+          //            virtual (0,0), so the two share an origin and no offset
+          //            belongs here -- adding one would move every pointer by
+          //            the width of a display placed to the left. Above 100%
+          //            DPI they differ by the monitor's scale.
+          //   macOS    OFF BY THE BACKING FACTOR. `screencapture -x` writes
+          //            backing pixels and the pebble eases in Cocoa points, so
+          //            this lands ~2x out on a Retina display.
+          //
+          // NAMED, NOT CONVERTED, deliberately. No factor is derivable from
+          // anything the sidecar reports: `capture_screen` carries no `space`
+          // or scale field, `platformGetScreenSize` is a hardcoded 1920x1080
+          // stub on darwin and linux, there is no display-geometry RPC, and the
+          // only backing-scale read in the tree is a C file-static in
+          // region_select_darwin.go. #590 removed a devicePixelRatio multiply
+          // for being wrong on two of three platforms; a guessed factor here
+          // would repeat that. Closing it needs a `space` (or scale) field on
+          // the capture reply, the way #591 put one on browser_element_point.
           const pointScaleX = autoShot?.scaleX ?? 1;
           const pointScaleY = autoShot?.scaleY ?? 1;
+          // NOTE the asymmetry, which is not a typo: the scale follows
+          // `autoShot`, the image follows `opts.image ?? autoShot`. A T19
+          // region capture therefore ships an image with NO scale and NO crop
+          // origin -- `opts.image` is `{base64, mediaType}` only, and the
+          // region path never reports where the crop sat (its callback is
+          // `onCapture([]byte, int, int)` and `region.captured` sends just an
+          // id and a size). So that image is unplaceable, which is why
+          // `pointingGuidance` case 3 tells the model to answer in words
+          // rather than emit a tag it cannot ground. Plumbing a crop origin
+          // through is its own change.
           const imageInput = opts?.image ?? autoShot;
           // Multi-modal path — image either explicitly supplied (T19
           // region capture) or auto-captured (T9). Else regular text.
@@ -3776,10 +3831,53 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // cancel the pending hops instead of flying the pebble around after
           // it's already returned to idle.
           const pointTimers: ReturnType<typeof setTimeout>[] = [];
+          // Whether any coordinate the model emits can be placed on screen at
+          // all. True only for an auto-capture, which is the one image whose
+          // scale we know -- and, because `grid := compact` in the sidecar's
+          // handler, also the only one carrying the grid the model is told to
+          // measure against.
+          //
+          // THE DAEMON DECIDES THIS, not the prompt. `pointingGuidance` case 3
+          // asks the model not to emit a tag it cannot ground, but a prompt is
+          // a courtesy and this is the control: a region crop reaches the model
+          // as an ordinary first-content-block image, and if it points anyway
+          // -- through plain non-compliance, or because text inside the crop
+          // encouraged it -- the coordinates would be crop-relative and fly the
+          // pebble to a confident, wrong place with the label asserting it is
+          // the answer. The user asked precisely because they did not know.
+          const placeableFrame = !!autoShot;
           const onPoint = (rawX: number, rawY: number, label: string) => {
-            // Scale image-space coords back to virtual-screen pixels.
+            if (!placeableFrame && opts?.image) {
+              console.log(
+                '[ambient-ui] dropped POINT in an unplaceable frame '
+                + `(region crop has no reported origin or scale) label="${logSafeLabel(label)}"`,
+              );
+              // No bubble amendment, and that is the difference from the
+              // tool-narration path. There, `unplacedLabel` exists because a
+              // confident label would otherwise stand over a pebble that never
+              // moved. Here the reply itself is the answer: the tag is stripped
+              // and the surrounding text is still spoken, so the user gets the
+              // location in words, which is exactly what case 3 asks for.
+              // Touching the pebble state mid-stream would fight the speaking
+              // state machine for no gain.
+              return;
+            }
+            // Image space -> capture-native pixels. See the pointScaleX
+            // comment for why that is not PEBBLE_SCREEN_SPACE everywhere and
+            // why no conversion is applied here (#604).
             const x = Math.round(rawX * pointScaleX);
             const y = Math.round(rawY * pointScaleY);
+            // Bounded before dispatch, matching the bound the SIDECAR-measured
+            // coordinate has carried since #591. The pebble stores the point in
+            // an atomic.Int32, so an oversized value truncates and WRAPS into
+            // range -- a confident pointer at an arbitrary spot, which is worse
+            // than one parked harmlessly off-screen. The model-authored
+            // coordinate was the only one of the two left unbounded.
+            if (!Number.isFinite(x) || !Number.isFinite(y)
+              || Math.abs(x) > MAX_POINT_COORD || Math.abs(y) > MAX_POINT_COORD) {
+              console.warn(`[ambient-ui] dropped out-of-range POINT (${x},${y})`);
+              return;
+            }
             const delay = pointDelayMs;
             pointDelayMs += 4000; // 3.5 s hold + small overlap
             pointTimers.push(setTimeout(() => {
@@ -3793,9 +3891,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               });
             }, delay));
             const scaledNote = (pointScaleX !== 1 || pointScaleY !== 1)
-              ? ` (raw ${rawX},${rawY} × scale ${pointScaleX.toFixed(2)},${pointScaleY.toFixed(2)})`
+              ? ` (raw ${rawX},${rawY} x scale ${pointScaleX.toFixed(2)},${pointScaleY.toFixed(2)})`
               : '';
-            console.log(`[ambient-ui] point @ (${x},${y}) label="${label}" delay=${delay}ms${scaledNote}`);
+            // The space is in the line because a misplaced pebble is otherwise
+            // indistinguishable from a model that guessed badly, and these two
+            // numbers are the only record of which frame they were meant in.
+            // The label is model-authored, so it is neutralised first -- this
+            // line is the audit record for exactly the misplacement above, and
+            // a label that can inject a newline can forge a second line of it.
+            console.log(`[ambient-ui] point @ (${x},${y}) -> ${PEBBLE_SCREEN_SPACE} label="${logSafeLabel(label)}" delay=${delay}ms${scaledNote}`);
           };
           for await (const event of stream) {
             if (ctrl.cancelled) {
@@ -4299,7 +4403,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
         // Frame the question for the LLM: include the original voice
         // text plus a hint that the image is the user's pointer.
-        const promptText = `${userText}\n\n(I've attached a screenshot of the area I selected on screen. Look at the image and answer based on what's shown there.)`;
+        // The "cannot point at it" clause matters as much as the rest (#604):
+        // this crop carries no record of where it sat on screen, so there is
+        // no frame to convert a coordinate from. It is `pointingGuidance` case
+        // 3, restated next to the question it applies to, because instruction
+        // following degrades with distance from the directive. The daemon
+        // drops a tag here regardless -- see `placeableFrame` -- so this spares
+        // the user a refusal rather than being the thing that prevents one.
+        const promptText = `${userText}\n\n(I've attached a screenshot of only the area I selected on screen. Look at the image and answer based on what's shown there. I selected just part of the screen, so you cannot point at it - tell me in words instead of emitting a [POINT:..] tag.)`;
         // Mark the cycle active and keep the pendingRegion entry until the
         // finally — together these make a concurrent duplicate capture a no-op
         // and guarantee state is torn down on every exit (success, error, or

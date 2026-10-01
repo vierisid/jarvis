@@ -17,11 +17,9 @@ name: Docker Build
 on:
   # No `paths:` on the push trigger, unlike the PR one below. The smoke check
   # guards a runtime class -- a service that stops bootstrapping -- that no
-  # build-time path filter can predict: the Dockerfile COPYs src/, ui/, bin/,
-  # roles/ and scripts/, so a change in any of them can break the container
-  # while touching none of the filtered paths. One cache-warm run per merge to
-  # main is the cheap place to catch that. The PR filter stays narrow so this
-  # does not put a multi-minute image build on nearly every PR.
+  # build-time path filter can predict with certainty, so every merge to main
+  # runs it once, cache-warm. The PR filter below is wide but still a filter:
+  # a merge of something it does not list would otherwise never be checked.
   push:
     branches: [main]
   pull_request:
@@ -32,11 +30,30 @@ on:
       - "package.json"
       - ".github/workflows/docker-build.yml"
       - ".github/scripts/docker-smoke.sh"
-  # The smoke check guards a runtime class (a service that stops bootstrapping)
-  # that the paths filter above will never trigger, since those are all
-  # build-time inputs. Manual dispatch makes it runnable against any ref
-  # without widening the filter to `src/**`, which would put a multi-minute
-  # image build on nearly every PR.
+      # The image prebuilds the workflow runtime (#613), so a source change can
+      # fail the image build without touching the Dockerfile -- and the build's
+      # own assertion that every piece is on the content-hash fast path is
+      # exactly the thing worth catching before a merge, not after. Deliberately
+      # the whole tree rather than a hand list: the prebuild's cache key reaches
+      # outside src/workflows (PATCHED_VENDOR_SOURCES escapes into
+      # src/workflows/runtime, src/lib and src/util, and pieceHash() reads
+      # src/actions/action-outcome.ts). The rest is every path the image copies
+      # or compiles: src/, bin/, roles/ and tsconfig.json into the runtime
+      # layer, scripts/ into the build stages, and ui/, which `bun build`
+      # compiles during the build.
+      #
+      # This is the expensive half of the trade, and it is taken on purpose: a
+      # PR touching src/ now pays an image build. The alternative -- a narrow
+      # filter plus manual dispatch -- leaves a window where a PR breaks the
+      # prebuild and only the post-merge push run says so.
+      - "src/**"
+      - "scripts/**"
+      - "ui/**"
+      - "bin/**"
+      - "roles/**"
+      - "tsconfig.json"
+  # Manual dispatch, so the container check can be run against any ref without
+  # waiting for a qualifying path change.
   workflow_dispatch:
 
 # One in-flight image build per ref; never cancel main, whose run is the
