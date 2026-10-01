@@ -3346,7 +3346,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         machineScoped: !!getMachineScope(),
         // A host that refuses local browser calls cannot be the machine that
         // serves one, whatever the inventory says. Read here rather than in
-        // pebble-narration.ts, which imports nothing on purpose.
+        // pebble-narration.ts, which imports only a zero-import leaf, on
+        // purpose (#611) -- so every decision there stays a pure function of
+        // what this object hands it.
         localBrowserEnabled: !isLocalBrowserDisabled() && !isNoLocalTools(),
         args,
       });
