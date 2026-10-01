@@ -18,7 +18,8 @@ export type FactOptions = {
 export class FactInputError extends Error {
   constructor(message: string, public status = 400) { super(message); }
 }
-export function factText(value: unknown, name: string, limit = 4000): string {
+export const FACT_TEXT_LIMIT = 4000;
+export function factText(value: unknown, name: string, limit = FACT_TEXT_LIMIT): string {
   if (typeof value !== 'string' || !value.trim() || value.length > limit) throw new FactInputError(`${name} must be nonempty text up to ${limit} characters`);
   return value.trim();
 }

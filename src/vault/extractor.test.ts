@@ -4,6 +4,7 @@ import {
   buildExtractionPrompt,
   parseExtractionResponse,
   extractAndStore,
+  extractGoalCompletion,
   type ExtractionResult,
 } from './extractor.ts';
 import { createEntity, findEntities } from './entities.ts';
@@ -495,6 +496,29 @@ describe('Vault Extractor', () => {
       expect(bobs).toHaveLength(1);
       expect(bobs[0]!.source).toBe('llm_extraction');
       expect(findFacts({ subject_id: bobs[0]!.id })).toHaveLength(1);
+    });
+
+    test('never resolves a conversation entity to a goal completion record', async () => {
+      extractGoalCompletion({ id: 'goal-1', title: 'Ship v2', level: 'task', score: 1, status: 'completed',
+        estimated_hours: null, actual_hours: 0, created_at: Date.now(), completed_at: Date.now(), tags: [] }, 'event-1');
+      const [completion] = findEntities({ source: 'goal_completion' });
+      expect(completion).toMatchObject({ name: 'Goal completed: Ship v2', type: 'event' });
+      const completionFacts = findFacts({ subject_id: completion!.id }).length;
+
+      await runExtraction({
+        entities: [{ name: 'Ship v2', type: 'concept' }, { name: 'Goal completed: Ship v2', type: 'event' }],
+        facts: [
+          { subject: 'Ship v2', predicate: 'owner_is', object: 'Alice', confidence: 1.0 },
+          { subject: 'Goal completed: Ship v2', predicate: 'celebrated_with', object: 'Cake', confidence: 1.0 },
+        ],
+        relationships: [],
+        commitments: [],
+      });
+
+      expect(findFacts({ subject_id: completion!.id })).toHaveLength(completionFacts);
+      const extracted = findEntities({ source: 'llm_extraction' });
+      expect(extracted.map(e => e.name).sort()).toEqual(['Goal completed: Ship v2', 'Ship v2']);
+      for (const entity of extracted) expect(findFacts({ subject_id: entity.id })).toHaveLength(1);
     });
   });
 });

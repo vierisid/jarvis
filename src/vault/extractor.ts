@@ -1,7 +1,8 @@
 import type { LLMManager } from '../llm/manager.ts';
+import { getDb } from './schema.ts';
 import { createHash } from 'node:crypto';
 import { createEntity, findEntities } from './entities.ts';
-import { createFact } from './facts.ts';
+import { createFact, FACT_TEXT_LIMIT } from './facts.ts';
 import { createRelationship } from './relationships.ts';
 import { createCommitment } from './commitments.ts';
 import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
@@ -238,8 +239,8 @@ export async function extractAndStore(
         continue;
       }
 
-      // Check if entity already exists
-      const existing = findEntities({ name, type });
+      // Check if entity already exists. Goal completion records are not conversation subjects.
+      const existing = findEntities({ name, type }).filter(entity => entity.source !== 'goal_completion');
 
       if (existing.length > 0) {
         // Use existing entity ID
@@ -342,78 +343,84 @@ export function extractGoalCompletion(goal: {
   created_at: number;
   completed_at: number | null;
   tags: string[];
-}): void {
-  try {
-    // Create or find entity for this goal
-    const existing = findEntities({ name: goal.title, type: 'concept' });
-    let entityId: string;
+}, completionEventId?: string): void {
+  // One event entity per completion episode. A distinct name and type keep it out of
+  // conversation entity resolution and name-based fact lookups for the goal's concept.
+  const existing = getDb().query(`SELECT id FROM entities WHERE source = 'goal_completion'
+    AND json_extract(properties, '$.goal_id') = ?
+    AND json_extract(properties, '$.completion_event_id') IS ?`).all(goal.id, completionEventId ?? null) as { id: string }[];
+  let entityId: string;
 
-    if (existing.length > 0) {
-      entityId = existing[0]!.id;
-    } else {
-      const entity = createEntity('concept', goal.title, {
-        goal_id: goal.id,
-        goal_level: goal.level,
-      }, 'goal_completion');
-      entityId = entity.id;
-    }
+  if (existing.length > 0) {
+    entityId = existing[0]!.id;
+  } else {
+    const entity = createEntity('event', `Goal ${goal.status}: ${goal.title}`, {
+      goal_id: goal.id,
+      goal_level: goal.level,
+      completion_event_id: completionEventId ?? null,
+    }, 'goal_completion');
+    entityId = entity.id;
+  }
 
-    // Store performance facts
-    createFact(entityId, 'goal_final_score', goal.score.toFixed(2), {
+  // Store performance facts
+  createFact(entityId, 'goal_final_score', goal.score.toFixed(2), {
+    confidence: 1.0,
+    source: 'goal_completion',
+  });
+
+  createFact(entityId, 'goal_outcome', goal.status, {
+    confidence: 1.0,
+    source: 'goal_completion',
+  });
+
+  createFact(entityId, 'goal_level', goal.level, {
+    confidence: 1.0,
+    source: 'goal_completion',
+  });
+
+  if (goal.estimated_hours !== null) {
+    createFact(entityId, 'estimated_hours', goal.estimated_hours.toString(), {
       confidence: 1.0,
       source: 'goal_completion',
     });
+  }
 
-    createFact(entityId, 'goal_outcome', goal.status, {
+  if (goal.actual_hours > 0) {
+    createFact(entityId, 'actual_hours', goal.actual_hours.toFixed(1), {
       confidence: 1.0,
       source: 'goal_completion',
     });
+  }
 
-    createFact(entityId, 'goal_level', goal.level, {
+  // Time to complete
+  if (goal.completed_at) {
+    const durationDays = Math.ceil((goal.completed_at - goal.created_at) / 86400000);
+    createFact(entityId, 'days_to_complete', durationDays.toString(), {
       confidence: 1.0,
       source: 'goal_completion',
     });
+  }
 
-    if (goal.estimated_hours !== null) {
-      createFact(entityId, 'estimated_hours', goal.estimated_hours.toString(), {
+  // Estimation accuracy
+  if (goal.estimated_hours !== null && goal.actual_hours > 0) {
+    const accuracy = (goal.estimated_hours / goal.actual_hours).toFixed(2);
+    createFact(entityId, 'estimation_accuracy', accuracy, {
+      confidence: 1.0,
+      source: 'goal_completion',
+    });
+  }
+
+  // Preserve the compact legacy form when it fits. A valid goal can contain
+  // 100 tags of 512 characters each, so larger lists need individual facts to
+  // avoid rolling back the whole completion projection on the fact text limit.
+  if (goal.tags.length > 0) {
+    const joined = goal.tags.join(', ');
+    const compact = joined.length <= FACT_TEXT_LIMIT;
+    for (const value of compact ? [joined] : goal.tags) {
+      createFact(entityId, compact ? 'goal_tags' : 'goal_tag', value, {
         confidence: 1.0,
         source: 'goal_completion',
       });
     }
-
-    if (goal.actual_hours > 0) {
-      createFact(entityId, 'actual_hours', goal.actual_hours.toFixed(1), {
-        confidence: 1.0,
-        source: 'goal_completion',
-      });
-    }
-
-    // Time to complete
-    if (goal.completed_at) {
-      const durationDays = Math.ceil((goal.completed_at - goal.created_at) / 86400000);
-      createFact(entityId, 'days_to_complete', durationDays.toString(), {
-        confidence: 1.0,
-        source: 'goal_completion',
-      });
-    }
-
-    // Estimation accuracy
-    if (goal.estimated_hours !== null && goal.actual_hours > 0) {
-      const accuracy = (goal.estimated_hours / goal.actual_hours).toFixed(2);
-      createFact(entityId, 'estimation_accuracy', accuracy, {
-        confidence: 1.0,
-        source: 'goal_completion',
-      });
-    }
-
-    // Tags
-    if (goal.tags.length > 0) {
-      createFact(entityId, 'goal_tags', goal.tags.join(', '), {
-        confidence: 1.0,
-        source: 'goal_completion',
-      });
-    }
-  } catch (err) {
-    console.error('[Extractor] Failed to extract goal completion:', err);
   }
 }

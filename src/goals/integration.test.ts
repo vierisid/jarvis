@@ -215,7 +215,7 @@ test('extractGoalCompletion creates entity with facts', () => {
   extractGoalCompletion(completedGoal);
 
   // Verify entity was created
-  const entities = findEntities({ name: 'Build REST API', type: 'concept' });
+  const entities = findEntities({ name: 'Goal completed: Build REST API', type: 'event' });
   expect(entities.length).toBe(1);
   expect(entities[0]!.source).toBe('goal_completion');
 
@@ -247,7 +247,7 @@ test('extractGoalCompletion handles failed goals', () => {
     tags: [],
   });
 
-  const entities = findEntities({ name: 'Learn Rust', type: 'concept' });
+  const entities = findEntities({ name: 'Goal failed: Learn Rust', type: 'event' });
   expect(entities.length).toBe(1);
 
   const facts = findFacts({ subject_id: entities[0]!.id });

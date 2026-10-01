@@ -7,7 +7,7 @@
 
 import type { Goal, GoalLevel } from './types.ts';
 import * as vault from '../vault/goals.ts';
-import { getDb } from '../vault/schema.ts';
+import { getGoalApplication } from './application-service.ts';
 import { planProposal, validateProposal, type GoalProposal } from './proposal.ts';
 import { enumeration, GOAL_LEVELS, invalid, nextGoalLevel, text as goalText, timezone } from './validation.ts';
 export type { GoalProposal } from './proposal.ts';
@@ -135,18 +135,7 @@ export class NLGoalBuilder {
    * Create goal hierarchy from a confirmed proposal.
    */
   createFromProposal(input: unknown, parentId?: string): Goal[] {
-    const proposal = validateProposal(input);
-    if (parentId !== undefined) goalText(parentId, 'parent_id', true, 512);
-    return getDb().transaction(() => {
-      const parent = this.resolveParent(parentId ?? proposal.parent_id);
-      const plan = planProposal(proposal, parent, Date.now());
-      const created: Goal[] = [];
-      for (const node of plan) {
-        const parent_id = node.parentIndex === null ? parent?.id : created[node.parentIndex]!.id;
-        created.push(vault.createGoal(node.title, node.level, { ...node.options, parent_id }));
-      }
-      return created;
-    }).immediate();
+    return getGoalApplication().createFromProposal(input, parentId);
   }
 
   private resolveParent(parentId?: string): Goal | null {

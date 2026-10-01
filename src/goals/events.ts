@@ -8,6 +8,7 @@ export type GoalEventType =
   | 'goal_created'
   | 'goal_updated'
   | 'goal_scored'
+  | 'goal_activity_recorded'
   | 'goal_status_changed'
   | 'goal_completed'
   | 'goal_failed'
@@ -21,6 +22,9 @@ export type GoalEventType =
   | 'replan_triggered';
 
 export type GoalEvent = {
+  /** Stable delivery identity and ordered replay cursor, assigned on commit. */
+  eventId?: string;
+  sequence?: number;
   type: GoalEventType;
   goalId?: string;
   data: Record<string, unknown>;
