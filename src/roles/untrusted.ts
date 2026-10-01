@@ -876,17 +876,46 @@ export function markUntrustedToolResult(name: string, category: string | undefin
  * error string, a rejected reply echoed back. Cap and frame it exactly as the
  * same text was framed when it was returned instead of thrown, so moving a
  * tool to typed failures cannot quietly hand the model unframed content.
+ *
+ * CAP THEN FRAME, which is the whole reason this function exists rather than
+ * each dispatch slicing and then calling the wrapper itself. The frame is drawn
+ * around text that has already been cut, so the result is never a block whose
+ * close delimiter was truncated off the end. #608's first design inverted that
+ * -- it framed inside the thrown message, leaving the cap downstream -- and an
+ * inverted order is how a half-open block reaches a model.
+ *
+ * `outsideFailure` is the declaration-gated half, added by #608. Framing here is
+ * normally decided by `isUntrustedSourceTool`, i.e. by the tool's NAME, and that
+ * test is false for `manage_workflow` on purpose: #595 argued against adding it
+ * to `UNTRUSTED_TOOL_NAMES` because the set also drives `outsideReach`,
+ * `FRAMED_ACTORS` and the tool filter's I1 union repair. But its throw paths DO
+ * carry outside text -- `assertVersionReady` and `assertCodeStepsAllowed`
+ * interpolate step names written by the composer LLM or by the versions API --
+ * so the tool declares `failureIsOutsideContent` on its definition and the
+ * dispatch passes it here. A declaration moves nothing else: the name set is
+ * untouched, so the filter, the taint predicate and the actor classes are too.
+ *
+ * It is deliberately NOT a second function. A dispatch that has to choose
+ * between two framing helpers is a dispatch that can choose wrong, and the
+ * caller already knows which of its two branches it is on.
  */
 export function markUntrustedToolFailure(
   name: string,
   category: string | undefined,
   message: string,
   maxChars: number,
+  outsideFailure = false,
 ): string {
   const capped = message.length > maxChars
     ? message.slice(0, maxChars) + `\n... (truncated, was ${message.length} chars)`
     : message;
-  return markUntrustedToolResult(name, category, capped);
+  if (!outsideFailure) return markUntrustedToolResult(name, category, capped);
+  // Same two policies `markUntrustedToolResult` applies, for the same reasons:
+  // an empty failure is reported as empty rather than as an empty block, and a
+  // tool that is framed by name is not framed twice.
+  if (capped.length === 0) return capped;
+  if (isUntrustedSourceTool(name, category)) return wrapUntrusted(capped, name);
+  return wrapUntrusted(capped, `${name} failure`);
 }
 
 /**

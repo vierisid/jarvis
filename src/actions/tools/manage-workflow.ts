@@ -169,6 +169,38 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "that grants the permission, by design.",
     ].join("\n"),
     category: "automation",
+    /**
+     * This tool's THROW paths carry outside text, so the dispatch frames a
+     * failure as data before the model reads it (#608). The matching half of
+     * `framedForModel` below, which frames the nine actions that RETURN.
+     *
+     * The three that matter are `run`, `enable` and `publish`:
+     * `assertVersionReady` raises a `WorkflowReadinessError` whose message
+     * interpolates `i.node`, a step name read back out of the stored graph
+     * (`workflows/db/repos/flow-readiness.ts`), and `assertCodeStepsAllowed`
+     * raises `refusalMessage(flowId, intent, stepNames)` from the same graph
+     * (`workflows/db/repos/flow-code-steps.ts`). Those names are written by the
+     * composer LLM or by a `POST /api/workflows/:id/versions` body -- the same
+     * writer class as the `metadata` #598 capped.
+     *
+     * Declared for the WHOLE tool rather than for those three actions, which is
+     * the same rule #559 set and #598 followed for the returns: framing that
+     * depends on which branch a tool took is the hazard, not the fix. A
+     * parameter error pays a preamble it does not need; that is the cost of not
+     * having the frame depend on a code path.
+     *
+     * WHAT THIS DOES NOT DO: it does not make the tool throw anything different.
+     * The message is byte-identical, which is why the ~15 `rejects.toThrow`
+     * assertions across `manage-workflow.test.ts`, `flow-code-steps.test.ts` and
+     * `workflow-readiness.test.ts` are untouched, and why `trapErrors` in
+     * `workflows/api/routes.ts` still maps a `WorkflowReadinessError` to its own
+     * 4xx with the raw `e.message`. Framing a throw by catching it and returning
+     * the text -- the shape #607 assumed this fix would take -- would have turned
+     * a failure into a success value for every caller, including the workflow
+     * runtime, where a rejection is how a step is marked failed. Framing at the
+     * model boundary instead costs none of that.
+     */
+    failureIsOutsideContent: true,
     parameters: {
       action: {
         type: "string",

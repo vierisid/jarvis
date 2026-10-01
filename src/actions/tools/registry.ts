@@ -95,6 +95,66 @@ export type ToolDefinition = {
    * params unchanged when there is nothing to pin.
    */
   freezeArguments?: (params: Record<string, unknown>) => Record<string, unknown>;
+  /**
+   * Trusted declaration, never accepted from model input: this tool's FAILURE
+   * text can carry content from outside the conversation, so the dispatch frames
+   * it as data before the model reads it (#608).
+   *
+   * Why a declaration and not a name. Framing is normally decided by
+   * `UNTRUSTED_TOOL_NAMES` in roles/untrusted.ts, and #595 argued specifically
+   * against adding `manage_workflow` to that set: it also drives `outsideReach`,
+   * `FRAMED_ACTORS` and the tool filter's I1 union repair, so membership moves
+   * three things that have nothing to do with framing an error string. This flag
+   * moves exactly one.
+   *
+   * Why the FAILURE only. A tool whose ordinary RESULT is outside content
+   * belongs in the name set, where the filter and the taint predicate can see
+   * it. This is for the narrower case: a tool whose success path is its own
+   * text, but whose refusals quote stored or remote data --
+   * `manage_workflow`'s `run` / `enable` / `publish`, whose readiness and
+   * code-step refusals interpolate step names written by the composer LLM or by
+   * the versions API.
+   *
+   * WHERE IT IS HONOURED -- five model boundaries, all of them a point where a
+   * failure string is about to become prompt text:
+   *
+   *   - `agents/orchestrator.ts`, the text dispatch's two failure branches;
+   *   - the same file's realtime dispatch;
+   *   - the same file's inline approval gate, which frames what
+   *     `authority/deferred-executor.ts` hands back;
+   *   - `agents/sub-agent-runner.ts`'s own dispatch;
+   *   - and that file's `governedText`, for a governed or approved call. The
+   *     last two are defence in depth as the code stands, since no flagged tool
+   *     is in a scoped sub-agent registry today.
+   *
+   * WHERE IT DELIBERATELY IS NOT. Everything that writes a row or faces an
+   * operator keeps the RAW text: `workflows/runtime/effect-boundary.ts`'s
+   * `workflow_effect.error`, `workflows/runner/handler.ts`'s
+   * `flow_run.failed_step`, `approval_requests.execution_result` (bounded and
+   * defanged by `boundedReceiptText` instead), the dashboard's `[EXECUTED]`
+   * notification, the chat-channel relay, the approval execute route's HTTP
+   * body, and the HTTP routes' `trapErrors`. A frame carries a per-message
+   * nonce (#567), so a stored or broadcast one is a stale boundary and a cut one
+   * is an unterminated block.
+   *
+   * That split is why the frame is drawn at each boundary and never inside the
+   * executor that produces the string: `deferred-executor`'s one value feeds a
+   * model AND four non-model consumers, so framing it there put a live nonce in
+   * all five.
+   *
+   * Frame where a model reads; never where something writes a row or a person
+   * reads.
+   *
+   * ONE ACCEPTED COST. `execute` below rewraps a plain Error as
+   * `Tool '<name>' execution failed: ...` before any dispatch sees it, so that
+   * repo-authored prefix ends up INSIDE the block, disclaimed along with the text
+   * it precedes. That is the same trade `manage-workflow.ts` takes for its `note`
+   * field, and the alternative -- framing only part of a message -- is the
+   * branch-dependent framing #559 warns against. The direction that must never
+   * happen is the opposite one, and it cannot: the only text outside the block is
+   * what the dispatch itself puts there.
+   */
+  failureIsOutsideContent?: true;
   /** Capture a read-only check of the UI session/subject a person will review.
    * The returned guard lives only until this approval is resolved; it must
    * never reconnect or select a replacement subject when validation fails. */
@@ -197,6 +257,15 @@ export class ToolRegistry {
 
     if (typeof tool.parameters !== 'object' || tool.parameters === null) {
       throw new Error(`Tool '${tool.name}' must have a parameters object`);
+    }
+
+    // The declared type is `?: true`, and the dispatches compare with `=== true`
+    // so a truthy-but-not-true value cannot frame on one branch and not another
+    // -- that is the branch-dependent framing #559 warns about. Rejecting the
+    // value at registration removes the hazard class instead of relying on six
+    // call sites staying strict.
+    if (tool.failureIsOutsideContent !== undefined && tool.failureIsOutsideContent !== true) {
+      throw new Error(`Tool '${tool.name}' may only set failureIsOutsideContent to true`);
     }
 
     for (const [paramName, paramDef] of Object.entries(tool.parameters)) {

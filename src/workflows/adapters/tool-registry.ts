@@ -81,12 +81,27 @@ export class JarvisToolRegistryAdapter implements PieceToolRegistry {
     //   - STILL OPEN, and still without its own issue: an author-composed
     //     `jarvis-ask` prompt can interpolate a step result.
     //     docs/WORKFLOW_AUTOMATION.md lists it and says so.
-    //   - STILL OPEN, filed by #598 as the one thing it left: the THROW paths of
-    //     `manage_workflow`'s `run`, `enable` and `publish` carry step names
-    //     from `flow-readiness.ts` and `flow-code-steps.ts`, which the composer
-    //     LLM or an uncapped versions-API body wrote. Framing a throw means
-    //     catching it and returning the text, which changes what
-    //     `registry.execute` promises; see the enumeration on `framedForModel`.
+    //   - CLOSED by #608: the THROW paths of `manage_workflow`'s `run`, `enable`
+    //     and `publish` carry step names from `flow-readiness.ts` and
+    //     `flow-code-steps.ts`, which the composer LLM or a versions-API body
+    //     wrote. #598 predicted this would mean catching the throw and returning
+    //     the text, which would have changed what `registry.execute` promises --
+    //     and on THIS path would have turned a failing step into a succeeding
+    //     one. It did not: the tool declares `failureIsOutsideContent` on its
+    //     definition (actions/tools/registry.ts) and each MODEL boundary frames
+    //     the message, cap first. The thrown message is byte-identical, so a
+    //     rejection is still a rejection here, `effect-boundary` still marks the
+    //     step failed, and the ~15 `rejects.toThrow` assertions are untouched.
+    //     Again NOT in `UNTRUSTED_TOOL_NAMES`, so nothing here changes.
+    //
+    //     THE BOUNDARY LIST THIS COMMENT TURNS ON now has five entries, and they
+    //     are enumerated on `failureIsOutsideContent` rather than here: the text
+    //     and realtime dispatches, the inline approval gate, the sub-agent
+    //     dispatch, and `governedText`. What matters for THIS file's decision is
+    //     the other half of that split -- every consumer that writes a row or
+    //     faces a person keeps the raw message, including `workflow_effect.error`
+    //     and `flow_run.failed_step` on this very path, so no per-message nonce
+    //     is ever persisted by a workflow.
     //
     // WHY THE VALUE MUST NOT BE STRINGIFIED. It becomes a durable EFFECT
     // RECEIPT: service-backends.ts passes it to `effects.invoke` as the result a

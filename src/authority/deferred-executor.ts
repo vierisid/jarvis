@@ -86,8 +86,13 @@ export class DeferredExecutor {
    * The same execution, reporting whether this call held the claim. A caller
    * that must not report a lost claim as a run (the execute route) reads
    * `claimed`; `result` is the receipt text, or why nothing ran.
+   *
+   * `failed` is set only when the TOOL threw, and exists so a caller with a
+   * model in front of it can frame that text as data without re-reading the row
+   * (#608). It is deliberately not set for the `blocked` branches: those strings
+   * are repo-authored, so there is nothing to disclaim.
    */
-  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string }> {
+  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string; failed?: boolean }> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
       return { claimed: false, result: `Error: Request ${requestId} not found or not in approved state` };
@@ -246,6 +251,19 @@ export class DeferredExecutor {
 
       return { claimed: true, result };
     } catch (err) {
+      // RAW, and framed nowhere in this method (#608). This one string has six
+      // consumers and only two of them are a model: the row below, the
+      // `onResult` notification (which `daemon/index.ts` broadcasts over the
+      // dashboard WS and relays to a chat channel), the HTTP body of
+      // `/api/authority/approvals/:id/execute`, and the value returned to the
+      // orchestrator's inline gate. Framing here put a live per-message nonce
+      // and an unterminated block into the first three -- the HTTP route
+      // reachably, since `applyExecutionResolution` resolves a restart-orphaned
+      // INLINE approval without checking `execution_mode`.
+      //
+      // So the frame is drawn by the consumer that has a model, and this stays
+      // the raw text every other consumer wants. `failed` below is what lets
+      // that consumer tell a failure from a success without re-reading the row.
       const errorStr = `Error executing ${request.tool_name}: ${err instanceof Error ? err.message : String(err)}`;
       // The receipt: the tool threw. The call was dispatched, so a partial
       // effect is possible; the row is executed with a failed outcome.
@@ -255,7 +273,7 @@ export class DeferredExecutor {
       // a step name, a remote error or a stderr tail of unbounded length.
       this.approvalManager.markExecuted(requestId, boundedReceiptText(errorStr, RECEIPT_MAX_CHARS), 'failed');
       this.onResult?.(requestId, request, errorStr);
-      return { claimed: true, result: errorStr };
+      return { claimed: true, result: errorStr, failed: true };
     }
   }
 

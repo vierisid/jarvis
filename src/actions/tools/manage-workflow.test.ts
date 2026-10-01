@@ -14,6 +14,7 @@ import type { ToolDefinition } from "./registry.ts";
 import { getFlowVersion, getLatestDraft, setSampleDataEntry } from "../../workflows/db/repos/flow-version.ts";
 import { updateRun } from "../../workflows/db/repos/flow-run.ts";
 import {
+  UNTRUSTED_CLOSE,
   UNTRUSTED_OPEN,
   unsafeUntrustedNoncesForTests,
   untrustedClose,
@@ -273,6 +274,31 @@ describe("manage_workflow tool", () => {
     expect(all).toHaveLength(3);
     const capped = (await call("list_runs", { limit: 1 })) as unknown[];
     expect(capped).toHaveLength(1);
+  });
+
+  /**
+   * #608. The tool DECLARES that its failures carry outside content, and the
+   * declaration is the whole mechanism: the thrown message stays byte-identical,
+   * which is why the ~15 `rejects.toThrow` assertions here, in
+   * `flow-code-steps.test.ts` and in `workflow-readiness.test.ts` are untouched,
+   * and why `trapErrors` in `workflows/api/routes.ts` still serves the raw
+   * `e.message` over HTTP. Framing happens at the model boundaries only --
+   * asserted through the real dispatch in `agents/untrusted-results.test.ts`.
+   *
+   * Pinned here because the two halves can drift apart silently: the flag
+   * without the unframed throw would mean a nonce in the run record, and the
+   * unframed throw without the flag is the #608 bug.
+   */
+  test("the tool declares its failures as outside content, and still throws raw", async () => {
+    expect(tool.failureIsOutsideContent).toBe(true);
+    // No frame in the message itself, on either kind of failure path: a
+    // parameter error, and a resolution error carrying a caller-supplied ref.
+    for (const params of [{}, { flow: "no-such-flow" }]) {
+      const err = await tool.execute({ action: "run", ...params }).then(() => null, (e: Error) => e);
+      expect(err).toBeInstanceOf(Error);
+      expect(err!.message).not.toContain(UNTRUSTED_OPEN);
+      expect(err!.message).not.toContain(UNTRUSTED_CLOSE);
+    }
   });
 
   /**

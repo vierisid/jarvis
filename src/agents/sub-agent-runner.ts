@@ -350,10 +350,25 @@ function boundedResult(raw: unknown): { text: string; trailer: string } {
   return { text: result, trailer };
 }
 
-/** Turn the dispatch's answer for a governed call into the tool's result. */
-function governedText(ctx: AuthorityContext, toolCall: LLMToolCall, toolCategory: string, governed: Exclude<GovernedToolResult, { kind: 'paused' }>): { text: string; failed?: boolean } {
+/**
+ * Turn the dispatch's answer for a governed call into the tool's result.
+ *
+ * `outsideFailure` is the tool's `failureIsOutsideContent` declaration, passed
+ * in because this function has no registry (#608). It is DEFENCE IN DEPTH as the
+ * code stands: the only tool that declares the flag is registered on the primary
+ * registry alone, and every sub-agent registry is built by
+ * `createScopedToolRegistry` from `BUILTIN_TOOLS`, which does not contain it. So
+ * no flagged tool reaches this path today -- but this is the governed/approved
+ * failure branch of a sub-agent dispatch, i.e. a model boundary, and the moment
+ * a flagged tool is scoped to a sub-agent it would be the original #608 bug
+ * verbatim. Wiring the flag through now costs a parameter.
+ */
+function governedText(ctx: AuthorityContext, toolCall: LLMToolCall, toolCategory: string, governed: Exclude<GovernedToolResult, { kind: 'paused' }>, outsideFailure = false): { text: string; failed?: boolean } {
   if (governed.kind === 'denied') return { text: denialText(toolCall.name, governed.reason), failed: true };
-  if (governed.kind === 'failed') return { text: markUntrustedToolFailure(toolCall.name, toolCategory, governed.result, MAX_TOOL_RESULT_CHARS), failed: true };
+  if (governed.kind === 'failed') {
+    return { text: markUntrustedToolFailure(toolCall.name, toolCategory, governed.result, MAX_TOOL_RESULT_CHARS,
+      outsideFailure === true), failed: true };
+  }
   if (isTaintSourceTool(toolCall.name, toolCategory)) ctx.taint.add(toolCall.name);
   const governedBounded = boundedResult(governed.result);
   return { text: markUntrustedToolResult(toolCall.name, toolCategory, governedBounded.text) + governedBounded.trailer };
@@ -472,7 +487,8 @@ async function executeTool(
         return { paused: { toolCall, sequence, actionCategory, toolCategory, principal, reason: decision.reason, approval: governed.approval } };
       }
       audit(governed.kind === 'denied' ? 'denied' : 'approval_required', governed.kind === 'executed');
-      return governedText(authorityCtx, toolCall, toolCategory, governed);
+      return governedText(authorityCtx, toolCall, toolCategory, governed,
+        tool?.failureIsOutsideContent === true);
     }
   }
 
@@ -486,12 +502,26 @@ async function executeTool(
   } catch (err) {
     audit?.('allowed', false);
     // Same reasoning as the orchestrator: a typed failure is a tool result.
+    const failing = registry.get(toolCall.name);
     if (err instanceof ActionOutcomeError) {
-      const category = registry.get(toolCall.name)?.category;
+      const category = failing?.category;
       if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
-      return { text: markUntrustedToolFailure(toolCall.name, category, err.message, MAX_TOOL_RESULT_CHARS), failed: true };
+      return { text: markUntrustedToolFailure(toolCall.name, category, err.message, MAX_TOOL_RESULT_CHARS,
+        failing?.failureIsOutsideContent === true), failed: true };
     }
-    return { text: `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`, failed: true };
+    const message = err instanceof Error ? err.message : String(err);
+    // And the same for a plain Error on a tool that declares its failures as
+    // outside content (#608). Defence in depth as the code stands, like
+    // `governedText` above: no flagged tool is in a scoped sub-agent registry
+    // today, because `createScopedToolRegistry` builds from `BUILTIN_TOOLS` and
+    // the only flagged tool is registered on the primary registry alone. This is
+    // still a model boundary, so it is wired rather than left to be rediscovered.
+    // Every other tool keeps this line unchanged.
+    if (failing?.failureIsOutsideContent === true) {
+      return { text: `Error executing ${toolCall.name}: `
+        + markUntrustedToolFailure(toolCall.name, failing.category, message, MAX_TOOL_RESULT_CHARS, true), failed: true };
+    }
+    return { text: `Error executing ${toolCall.name}: ${message}`, failed: true };
   }
 }
 
@@ -763,7 +793,8 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
         throw new GovernedDispatchError(err instanceof Error ? err.message : String(err), err);
       }
       if (governed.kind === 'paused') return finish({ success: true, response: '', terminationReason: 'paused', paused: { ...pending, approval: governed.approval } });
-      record(pending.toolCall, governedText(authorityCtx, pending.toolCall, pending.toolCategory, governed));
+      record(pending.toolCall, governedText(authorityCtx, pending.toolCall, pending.toolCategory, governed,
+        toolRegistry.get(pending.toolCall.name)?.failureIsOutsideContent === true));
       // A checkpoint written before `offered` existed: if this run's model is
       // never filtered (the gate, not this turn's text, decides that), it
       // was offered everything and nothing needs checking. Otherwise what was

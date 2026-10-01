@@ -134,9 +134,19 @@ describe('#609: the call sites that persist a receipt', () => {
     mgr.approve(req.id, 'dashboard');
     return req;
   };
-  const executor = (mgr: ApprovalManager, run: () => Promise<string>) => {
+  /**
+   * `flagged` makes the registry report a tool that declares
+   * `failureIsOutsideContent` (#608). The stub used to return `undefined` for
+   * every lookup, which meant it could never see the flag -- and that is why the
+   * row-versus-return split below went untested while the first #608 attempt
+   * framed into a value four non-model consumers share.
+   */
+  const executor = (mgr: ApprovalManager, run: () => Promise<string>, flagged = false) => {
     const ex = new DeferredExecutor(mgr, new AuditTrail());
-    ex.setToolRegistry({ get: () => undefined, execute: run } as unknown as ToolRegistry);
+    const def = flagged
+      ? { name: 'manage_workflow', category: 'automation', failureIsOutsideContent: true }
+      : undefined;
+    ex.setToolRegistry({ get: () => def, execute: run } as unknown as ToolRegistry);
     return ex;
   };
 
@@ -155,6 +165,43 @@ describe('#609: the call sites that persist a receipt', () => {
     expect(row.length).toBeLessThanOrEqual(RECEIPT_MAX);
     expect(row).not.toContain(UNTRUSTED_OPEN);
     expect(row).not.toContain(UNTRUSTED_CLOSE);
+  });
+
+  /**
+   * #608's own correction, pinned. The executor's failure string has SIX
+   * consumers and only one of them is a model: the row below, the `onResult`
+   * notification (which the daemon broadcasts over the dashboard WS and relays
+   * to a chat channel), the HTTP body of `/api/authority/approvals/:id/execute`,
+   * and the value returned to the orchestrator's inline gate.
+   *
+   * So nothing here frames. The frame is drawn by the one consumer that has a
+   * model -- `agents/orchestrator.ts`'s inline gate, asserted in
+   * `agents/untrusted-results.test.ts` -- and this asserts the other half: a
+   * flagged tool's failure leaves this method with no delimiter of any kind, so
+   * no non-model consumer can be handed a live per-message nonce or a cut block.
+   */
+  test('a flagged tool\'s failure leaves the executor unframed, for every consumer', async () => {
+    const mgr = new ApprovalManager();
+    const req = approved(mgr);
+    const notified: string[] = [];
+    const ex = executor(mgr, async () => { throw new Error('STEP ' + 'Z'.repeat(9_000)); }, true);
+    ex.setResultCallback((_id, _req, result) => notified.push(result));
+    const receipt = await ex.executeApprovedWithReceipt(req.id);
+
+    expect(receipt.failed).toBe(true);
+    // The returned value: raw, so the model boundary can frame it itself.
+    expect(receipt.result).not.toContain(UNTRUSTED_OPEN);
+    expect(receipt.result).not.toContain(UNTRUSTED_CLOSE);
+    expect(receipt.result.startsWith('Error executing manage_workflow: ')).toBe(true);
+    // The notification consumer sees the same raw text, so the operator still
+    // reads the error rather than 200 characters of framing boilerplate.
+    expect(notified).toHaveLength(1);
+    expect(notified[0]).toBe(receipt.result);
+    expect(notified[0]!.slice(0, 200)).toContain('STEP ');
+    // And the row is bounded and carries no delimiter either.
+    const row = mgr.getRequest(req.id)!.execution_result!;
+    expect(row.length).toBeLessThanOrEqual(RECEIPT_MAX);
+    expect(row).not.toContain(UNTRUSTED_OPEN);
   });
 
   test('the failure receipt is bounded too, which it never was', async () => {
