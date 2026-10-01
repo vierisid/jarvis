@@ -35,16 +35,39 @@ func axNodesWith(count int, name, value string) []axNode {
 	return nodes
 }
 
+// axReplyBytes is what the brain actually measures: the marshalled reply, in
+// the units `MAX_JSON_SIZE` counts.
+//
+// Measuring THIS, and not the budget function, is the point. An earlier version
+// of this test summed `axElementCost` and compared it to `axReplyBudget` --
+// production arithmetic against its own production constant, which can only
+// agree with itself. It passed while a page of ampersands built a 3.8 MB reply,
+// because the cost function estimated raw bytes and Go's encoder escapes `<`,
+// `>` and `&` to six each.
+func axReplyBytes(t *testing.T, elements []map[string]any) int {
+	t.Helper()
+	raw, err := json.Marshal(map[string]any{
+		"provider":      "cdp",
+		"url":           "https://mail.example.com/u/0/#inbox",
+		"title":         "Inbox",
+		"element_count": len(elements),
+		"elements":      elements,
+		"captured_at":   int64(1764000000000),
+	})
+	if err != nil {
+		t.Fatalf("marshal reply: %v", err)
+	}
+	return len(raw)
+}
+
+const maxJSONSize = 2 * 1024 * 1024
+
 func TestAXReplySizeIsBounded(t *testing.T) {
 	// Five thousand links is a big table, not an attack. Unbounded, that reply
 	// crossed the brain's 2 MB cap and the model got nothing at all.
 	out := buildAXElements(axNodesWith(5000, "Open the message from Jane", ""))
-	spent := 0
-	for _, el := range out {
-		spent += axElementCost(el)
-	}
-	if spent > axReplyBudget {
-		t.Fatalf("emitted an estimated %d bytes, budget is %d", spent, axReplyBudget)
+	if got := axReplyBytes(t, out); got > maxJSONSize {
+		t.Fatalf("the reply is %d bytes, over the %d cap that drops it", got, maxJSONSize)
 	}
 	if len(out) >= 5000 {
 		t.Fatalf("all %d elements were emitted, so nothing is bounding the reply", len(out))
@@ -64,16 +87,14 @@ func TestAXReplySizeIsBounded(t *testing.T) {
 func TestAXPayloadIsBounded(t *testing.T) {
 	// Each element carries the biggest value the per-field cap allows.
 	out := buildAXElements(axNodesWith(2000, strings.Repeat("n", 100), strings.Repeat("v", axMaxValue*2)))
-	spent := 0
 	for _, el := range out {
 		value, _ := el["value"].(string)
 		if got := len([]rune(value)); got > axMaxValue {
 			t.Fatalf("a value of %d characters survived the %d cap", got, axMaxValue)
 		}
-		spent += axElementCost(el)
 	}
-	if spent > axReplyBudget {
-		t.Fatalf("emitted an estimated %d bytes, budget is %d", spent, axReplyBudget)
+	if got := axReplyBytes(t, out); got > maxJSONSize {
+		t.Fatalf("the reply is %d bytes, over the %d cap that drops it", got, maxJSONSize)
 	}
 	// The budget has to bite here: 2000 x (100 + 1000) is well past it, so a
 	// test that passed with every element emitted would prove nothing.
@@ -82,6 +103,22 @@ func TestAXPayloadIsBounded(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatal("the budget must still emit what fits")
+	}
+}
+
+// TestAXReplySizeIsBoundedForEscapedText is the case the estimate could not
+// see: every character the page chose is one Go's encoder writes as six bytes.
+func TestAXReplySizeIsBoundedForEscapedText(t *testing.T) {
+	for _, fill := range []string{"&", "<", ">"} {
+		out := buildAXElements(axNodesWith(2000, strings.Repeat(fill, 100), strings.Repeat(fill, axMaxValue)))
+		got := axReplyBytes(t, out)
+		if got > maxJSONSize {
+			t.Fatalf("a page of %q built a %d byte reply, over the %d cap that drops it whole",
+				fill, got, maxJSONSize)
+		}
+		if len(out) == 0 {
+			t.Fatalf("a page of %q emitted nothing", fill)
+		}
 	}
 }
 

@@ -17,6 +17,7 @@ import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { BrowserController } from '../src/actions/browser/session.ts';
+import { formatSnapshot } from '../src/actions/tools/builtin.ts';
 
 const CHROMIUM_CANDIDATES = [
   process.env.CHROME_PATH,
@@ -57,18 +58,26 @@ const proc = Bun.spawn([
   'about:blank',
 ], { stdout: 'ignore', stderr: 'ignore' });
 
+/**
+ * Print what the MODEL sees, through the real formatter.
+ *
+ * This used to hand-roll a third rendering with its own limits (text 2500,
+ * attrs 90, element text 60, every element rather than the formatter's 80) --
+ * so the output a template author captured was not the output the model gets,
+ * and an author could reference an [id] the model never receives. #597 made
+ * the two real formatters produce identical text and exported `formatSnapshot`
+ * for the test that holds them to it; using it here deletes the third copy.
+ *
+ * `--full-text` still shows the untruncated page text, as an EXTRA section
+ * after the rendering rather than inside it, so what the model sees stays
+ * verbatim.
+ */
 function printSnapshot(snap: Awaited<ReturnType<BrowserController['snapshot']>>) {
-  console.log(`Page: ${snap.title}`);
-  console.log(`URL: ${snap.url}`);
-  console.log('--- Page Text ---');
-  console.log(fullText ? snap.text : snap.text.slice(0, 2500));
-  console.log(`--- Interactive Elements (${snap.elements.length}) ---`);
-  for (const el of snap.elements) {
-    const attrs = Object.entries(el.attrs)
-      .filter(([k]) => k !== 'id' || el.attrs[k]!.length < 40)
-      .map(([k, v]) => `${k}="${v!.slice(0, 90)}"`)
-      .join(' ');
-    console.log(`[${el.id}] ${el.tag}${el.text ? ` "${el.text.slice(0, 60)}"` : ''} ${attrs}`);
+  console.log(formatSnapshot(snap));
+  if (fullText) {
+    console.log('');
+    console.log('--- Full Page Text (capture only; the model sees the truncated block above) ---');
+    console.log(snap.text);
   }
 }
 

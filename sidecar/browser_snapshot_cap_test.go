@@ -138,9 +138,6 @@ func TestSnapshotTitleCapKeepsReplyUsable(t *testing.T) {
 	}
 }
 
-// TestRenderedCapsLeaveOrdinaryValuesAlone is the other half of #597: nothing
-// under a cap may gain a marker, because all 100 webapp templates are written
-// against the uncapped rendering.
 // TestRenderedLinesCannotBeForgedByThePage: a page's own title and labels are
 // single-line fields, so a newline in one of them must not become a line of the
 // rendering. Nothing escapes the untrusted block either way; the point is that
@@ -171,6 +168,9 @@ func TestRenderedLinesCannotBeForgedByThePage(t *testing.T) {
 	}
 }
 
+// TestRenderedCapsLeaveOrdinaryValuesAlone is the other half of #597: nothing
+// under a cap may gain a marker, because all 100 webapp templates are written
+// against the uncapped rendering.
 func TestRenderedCapsLeaveOrdinaryValuesAlone(t *testing.T) {
 	// Right at the cap, and one past it.
 	for _, tc := range []struct {

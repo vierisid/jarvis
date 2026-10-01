@@ -73,16 +73,14 @@ const axMaxPathDepth = 6
 // Page-controlled bounds on one AX reply (#597). See buildAXElements' tail for
 // why a per-value cap alone was not a bound, and the use site for axMaxValue.
 //
-// axReplyBudget is the estimated JSON size of the emitted element list. 900 KB
-// leaves room for Go's encoder escaping `<`, `>` and `&` to six bytes each and
-// still sits comfortably under the brain's 2 MB cap. It is reached only by a
-// page with thousands of controls, where the alternative is the whole reply
-// being dropped.
+// axReplyBudget is the MEASURED JSON size of the emitted element list -- see
+// axElementCost, which marshals rather than estimating. 900 KB of elements
+// leaves the rest of the reply a wide margin under the brain's 2 MB cap
+// (MAX_JSON_SIZE), and is reached only by a page with thousands of controls,
+// where the alternative is the whole reply being dropped.
 const (
-	axMaxValue           = 1000
-	axReplyBudget        = 900000
-	axElementFixedCost   = 400
-	axPathEntryFixedCost = 40
+	axMaxValue    = 1000
+	axReplyBudget = 900000
 )
 
 // makeBrowserAXSnapshotHandler returns the accessibility-tree snapshot:
@@ -483,7 +481,12 @@ func buildAXElements(nodes []axNode) []map[string]any {
 	// a usable surface where a dropped reply is nothing at all.
 	spent := 0
 	for i, el := range out {
-		spent += axElementCost(el)
+		cost, err := axElementCost(el)
+		if err != nil {
+			out = out[:i]
+			break
+		}
+		spent += cost
 		if spent > axReplyBudget {
 			out = out[:i]
 			break
@@ -492,20 +495,26 @@ func buildAXElements(nodes []axNode) []map[string]any {
 	return out
 }
 
-// axElementCost estimates the JSON bytes one emitted element costs. The fixed
-// term covers the keys and the id/role/sig/ordinal values; the rest is the
-// page-controlled text, counted in bytes because that is what the cap counts.
-func axElementCost(el map[string]any) int {
-	name, _ := el["name"].(string)
-	value, _ := el["value"].(string)
-	cost := axElementFixedCost + len(name) + len(value)
-	if path, ok := el["path"].([]map[string]any); ok {
-		for _, p := range path {
-			pathName, _ := p["name"].(string)
-			cost += axPathEntryFixedCost + len(pathName)
-		}
+// axElementCost is the JSON bytes one emitted element costs, MEASURED rather
+// than estimated.
+//
+// An estimate was wrong in both directions and wrong in the direction that
+// matters. Go's encoder escapes `<`, `>` and `&` to six bytes each, so 600
+// inputs each holding a thousand ampersands -- trivial to author, and exactly
+// the page #597 is about -- measured 4.5x an estimate built from raw byte
+// lengths: a 900 KB budget passed a 3.8 MB reply, which the brain then dropped
+// whole, which is the bug. The same estimate was 15% PESSIMISTIC for ordinary
+// ASCII, so it also cost honest pages capacity.
+//
+// One extra Marshal of an element is microseconds, and it cannot disagree with
+// the encoder that writes the reply, because it IS that encoder. The `+ 1` is
+// the comma that joins it to the array.
+func axElementCost(el map[string]any) (int, error) {
+	raw, err := json.Marshal(el)
+	if err != nil {
+		return 0, err
 	}
-	return cost
+	return len(raw) + 1, nil
 }
 
 // makeBrowserAXClickHandler clicks an element by backend_node_id: scroll it
