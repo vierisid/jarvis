@@ -4,7 +4,7 @@ Dashboard writes previously changed Vault rows without the events, immediate hea
 recalculation or completion memory provided by chat's GoalService. All production
 goal writers now use `getGoalApplication()` for the current Vault connection.
 `GoalService` retains scheduling and delegates mutations to that application service.
-Proposal confirmation reuses C5 validation from PR #599, which must land first.
+Proposal confirmation reuses the C5 validation from PR #599.
 
 ## Write contract
 
@@ -42,6 +42,9 @@ separate acknowledgements. Completion facts, the entity identified by goal ID an
 completion event ID, and the memory acknowledgement commit in one transaction.
 A partial memory write rolls back and remains pending. Same-title goals and
 separate completion episodes cannot overwrite each other's completion memory.
+Each episode is an `event` entity named `Goal <outcome>: <title>`, so conversation
+extraction and name-based fact lookups never resolve to it instead of the goal's
+`concept`, and conversation extraction never attaches facts to a completion record.
 The saved snapshot permits recovery even after the goal has been edited or deleted.
 Tag lists retain the existing joined `goal_tags` fact when they fit the 4,000-character
 fact limit. Larger accepted lists become individual `goal_tag` facts, each within
@@ -50,8 +53,11 @@ lets pending snapshots recover without changing the goal or truncating its tags.
 
 The daemon retries at startup, after successful application transactions and every
 30 seconds, including when autonomous goal rhythms are disabled. Each pass handles
-at most 100 pending records per consumer. Failed completion records do not starve
-later records. Broadcasts preserve event order and stop at a failed callback.
+at most 100 pending records per consumer. A flush after an application transaction
+only attempts completion records that have never failed; a record that failed is
+retried by the 30 second worker, so it cannot slow or spam every later goal write.
+Failed completion records do not starve later records. Broadcasts preserve event
+order and stop at a failed callback, retrying from that event on the next flush.
 Delivery diagnostics retain a bounded error in the outbox and log only event IDs.
 
 Broadcast delivery is at least once to the daemon callback. A crash between the
@@ -66,7 +72,8 @@ GET /api/goals/events?after=0&limit=100
 
 The response is `{ events, nextCursor }`. Events include `eventId`, `sequence` and
 `completionMemory` (`not_required`, `pending`, or `recorded`). `after` must be a
-nonnegative safe integer; `limit` is 1 through 100. Save the cursor only after
+nonnegative safe integer; `limit` is 1 through 100. Omitted values default to 0 and
+100; a blank value is rejected. Save the cursor only after
 processing a record, and deduplicate side effects by event ID. This endpoint is a
 replay contract; it does not automatically make new external consumers idempotent.
 
@@ -76,7 +83,10 @@ Schema initialization adds the outbox without changing existing rows. Previously
 missed events or completion memories are not inferred or backfilled. Existing
 completion facts are retained. A code rollback can leave the new table in place;
 an older binary ignores it, but cannot deliver pending C9 events until upgraded
-again. The event history currently has no automatic retention pruning.
+again. The worker prunes events once they are fully delivered and 180 days old,
+up to 1,000 per pass. Pending broadcasts and pending completion memories are never
+pruned. A replay consumer offline longer than the retention window must resync
+from the goal data endpoints; sequences are never reused.
 
 Tests exercise the real dashboard handlers and chat tool, C4/C5 integration,
 checked-result rollback, SQLite failure injection, file-backed restart recovery,

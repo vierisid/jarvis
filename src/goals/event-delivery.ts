@@ -4,14 +4,16 @@ import { extractGoalCompletion } from '../vault/extractor.ts';
 import type { Goal } from './types.ts';
 import type { GoalEvent } from './events.ts';
 
+/** Fully delivered events stay replayable for this long; pending records are never pruned. */
+export const GOAL_EVENT_RETENTION_MS = 180 * 24 * 60 * 60 * 1000;
 type EventRow = {
   sequence: number; event_id: string; event: string; completion_goal: string | null;
   memory_delivered_at: number | null; broadcast_delivered_at: number | null;
 };
 export function queueGoalEvent(event: GoalEvent, completion?: Goal): void {
   const eventId = generateId();
-  getDb().run('INSERT INTO goal_events (event_id, event, completion_goal) VALUES (?, ?, ?)',
-    [eventId, JSON.stringify({ ...event, eventId }), completion ? JSON.stringify(completion) : null]);
+  getDb().run('INSERT INTO goal_events (event_id, event, completion_goal, created_at) VALUES (?, ?, ?, ?)',
+    [eventId, JSON.stringify({ ...event, eventId }), completion ? JSON.stringify(completion) : null, Date.now()]);
 }
 function payload(row: EventRow): GoalEvent {
   return { ...JSON.parse(row.event), eventId: row.event_id, sequence: row.sequence };
@@ -34,7 +36,7 @@ export class GoalEventDelivery {
     const attempt = () => {
       try { if (getDb() !== this.db) { this.stop(); return; } }
       catch { this.stop(); return; }
-      try { this.flush(); }
+      try { this.flush(); this.prune(); }
       catch { console.warn('[Goals] Delivery unavailable; pending events will be retried.'); }
     };
     attempt();
@@ -42,12 +44,17 @@ export class GoalEventDelivery {
     this.timer.unref();
   }
   stop(): void { if (this.timer) clearInterval(this.timer); this.timer = null; }
-  flush(): void {
+  /**
+   * Request-path flushes pass retryFailed = false so a completion record that keeps
+   * failing is retried by the worker, not by every later goal write.
+   */
+  flush(retryFailed = true): void {
     // Never announce a write before the outermost caller has committed it.
     if (this.flushing || this.db.inTransaction) return;
     this.flushing = true;
     try {
-      const pendingMemory = this.db.query('SELECT * FROM goal_events WHERE completion_goal IS NOT NULL AND memory_delivered_at IS NULL ORDER BY attempts, sequence LIMIT 100').all() as EventRow[];
+      const pendingMemory = this.db.query(`SELECT * FROM goal_events WHERE completion_goal IS NOT NULL AND memory_delivered_at IS NULL
+        ${retryFailed ? '' : 'AND attempts = 0'} ORDER BY attempts, sequence LIMIT 100`).all() as EventRow[];
       for (const row of pendingMemory) {
         try {
           this.db.transaction(() => {
@@ -68,6 +75,14 @@ export class GoalEventDelivery {
         }
       }
     } finally { this.flushing = false; }
+  }
+  /** Drops delivered history past the retention window, a bounded batch per pass. */
+  prune(now = Date.now()): number {
+    if (this.db.inTransaction) return 0;
+    return this.db.run(`DELETE FROM goal_events WHERE sequence IN (SELECT sequence FROM goal_events
+      WHERE created_at < ? AND broadcast_delivered_at IS NOT NULL
+        AND (completion_goal IS NULL OR memory_delivered_at IS NOT NULL)
+      ORDER BY sequence LIMIT 1000)`, [now - GOAL_EVENT_RETENTION_MS]).changes;
   }
   private failed(eventId: string, error: unknown): void {
     this.db.run('UPDATE goal_events SET attempts = attempts + 1, last_error = ? WHERE event_id = ?',

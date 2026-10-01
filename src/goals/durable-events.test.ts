@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import * as vault from '../vault/goals.ts';
 import { getGoalApplication } from './application-service.ts';
-import { readGoalEvents } from './event-delivery.ts';
+import { GOAL_EVENT_RETENTION_MS, GoalEventDelivery, readGoalEvents } from './event-delivery.ts';
+import { findEntities } from '../vault/entities.ts';
 import { GoalService } from './service.ts';
 import { DailyRhythm } from './rhythm.ts';
 import { getGoalReviewRecord } from './review-evidence.ts';
@@ -244,4 +245,54 @@ test('completion tags recover the full original snapshot after restart without d
   getGoalApplication().flushEvents();
   expect(completionFacts(goal.id)).toEqual(facts);
   expect(completionEntities(goal.id)).toHaveLength(1);
+});
+
+function attempts(eventId: string) {
+  return (getDb().query('SELECT attempts FROM goal_events WHERE event_id = ?').get(eventId) as { attempts: number }).attempts;
+}
+
+test('a failing completion record is retried by the worker, not by every later goal write', () => {
+  const goal = vault.createGoal('Poison completion', 'task', { status: 'active' });
+  failMemory();
+  getGoalApplication().updateStatus(goal.id, 'completed');
+  const pending = readGoalEvents().find(event => event.type === 'goal_completed')!;
+  expect(attempts(pending.eventId!)).toBe(1);
+  getGoalApplication().createGoal('Later write', 'task');
+  getGoalApplication().scoreGoal(goal.id, 0.4, 'Later score');
+  expect(attempts(pending.eventId!)).toBe(1);
+  getGoalApplication().flushEvents();
+  expect(attempts(pending.eventId!)).toBe(2);
+  getDb().run('DROP TRIGGER fail_memory');
+  getGoalApplication().flushEvents();
+  expect(readGoalEvents().find(event => event.eventId === pending.eventId)?.completionMemory).toBe('recorded');
+  expect(completionEntities(goal.id)).toHaveLength(1);
+});
+
+test('retention prunes only fully delivered history and never reuses a sequence', () => {
+  failMemory();
+  const app = getGoalApplication();
+  const [old, unbroadcast, recent] = ['Old delivered', 'Old pending broadcast', 'Recent delivered'].map(title => app.createGoal(title, 'task'));
+  app.createGoal('Old pending memory', 'task', { status: 'completed' });
+  const before = readGoalEvents();
+  expect(before.at(-1)?.completionMemory).toBe('pending');
+  const now = Date.now();
+  getDb().run('UPDATE goal_events SET created_at = ?, broadcast_delivered_at = ?', [now - GOAL_EVENT_RETENTION_MS - 1, now]);
+  getDb().run("UPDATE goal_events SET broadcast_delivered_at = NULL WHERE json_extract(event, '$.goalId') = ?", [unbroadcast!.id]);
+  getDb().run("UPDATE goal_events SET created_at = ? WHERE json_extract(event, '$.goalId') = ?", [now, recent!.id]);
+  const delivery = new GoalEventDelivery(getDb());
+  expect(delivery.prune(now)).toBe(1);
+  expect(readGoalEvents().map(event => event.goalId)).toEqual(before.filter(event => event.goalId !== old!.id).map(event => event.goalId));
+  expect(delivery.prune(now)).toBe(0);
+  getDb().run('DROP TRIGGER fail_memory');
+  app.createGoal('After prune', 'task');
+  expect(readGoalEvents().at(-1)!.sequence).toBeGreaterThan(before.at(-1)!.sequence!);
+});
+
+test('completion records never shadow the goal name for conversation memory', () => {
+  const goal = vault.createGoal('Learn Spanish', 'task', { status: 'active' });
+  getGoalApplication().updateStatus(goal.id, 'completed');
+  expect(findEntities({ name: 'Learn Spanish' })).toEqual([]);
+  expect(findEntities({ source: 'goal_completion' })).toEqual([
+    expect.objectContaining({ name: 'Goal completed: Learn Spanish', type: 'event' }),
+  ]);
 });

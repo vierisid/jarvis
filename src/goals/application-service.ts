@@ -25,8 +25,8 @@ export class GoalApplicationService {
   setEventCallback(callback: (event: GoalEvent) => void): void { this.delivery.setCallback(callback); }
   startDelivery(): void { this.delivery.start(); }
   stopDelivery(): void { this.delivery.stop(); }
-  flushEvents(): void {
-    try { this.delivery.flush(); }
+  flushEvents(retryFailed = true): void {
+    try { this.delivery.flush(retryFailed); }
     catch { console.warn('[Goals] Delivery unavailable; committed events remain pending.'); }
   }
   /** Nested callers persist events but only the outermost successful boundary delivers them. */
@@ -34,7 +34,7 @@ export class GoalApplicationService {
     if (getDb() !== this.db) throw new Error('Goal application belongs to a closed vault connection');
     const outer = this.db.inTransaction;
     const result = this.db.transaction(operation).immediate();
-    if (!outer) this.flushEvents();
+    if (!outer) this.flushEvents(false);
     return result;
   }
   recordEvent(event: GoalEvent, completion?: Goal): void {

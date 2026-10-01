@@ -4089,8 +4089,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: (req: Request) => {
         try {
           const params = new URL(req.url).searchParams;
-          const after = goalNumber(Number(params.get('after') ?? 0), 'after', 0, Number.MAX_SAFE_INTEGER, true);
-          const limit = goalNumber(Number(params.get('limit') ?? 100), 'limit', 1, 100, true);
+          // An absent parameter takes its default; a present but blank one is invalid, not 0.
+          const param = (name: string, fallback: number) => {
+            const raw = params.get(name);
+            return raw === null ? fallback : raw.trim() ? Number(raw) : NaN;
+          };
+          const after = goalNumber(param('after', 0), 'after', 0, Number.MAX_SAFE_INTEGER, true);
+          const limit = goalNumber(param('limit', 100), 'limit', 1, 100, true);
           const events = readGoalEvents(after, limit);
           return json({ events, nextCursor: events.at(-1)?.sequence ?? after });
         } catch (err) {
@@ -4237,6 +4242,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
       },
     },
+
     '/api/goals/:id/status': {
       POST: async (req: Request) => {
         try {
@@ -4252,6 +4258,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
       },
     },
+
     '/api/goals/:id/health': {
       POST: async (req: Request) => {
         try {

@@ -239,8 +239,8 @@ export async function extractAndStore(
         continue;
       }
 
-      // Check if entity already exists
-      const existing = findEntities({ name, type });
+      // Check if entity already exists. Goal completion records are not conversation subjects.
+      const existing = findEntities({ name, type }).filter(entity => entity.source !== 'goal_completion');
 
       if (existing.length > 0) {
         // Use existing entity ID
@@ -344,8 +344,9 @@ export function extractGoalCompletion(goal: {
   completed_at: number | null;
   tags: string[];
 }, completionEventId?: string): void {
-  // Create or find entity for this goal
-  const existing = getDb().query(`SELECT id FROM entities WHERE type = 'concept'
+  // One event entity per completion episode. A distinct name and type keep it out of
+  // conversation entity resolution and name-based fact lookups for the goal's concept.
+  const existing = getDb().query(`SELECT id FROM entities WHERE source = 'goal_completion'
     AND json_extract(properties, '$.goal_id') = ?
     AND json_extract(properties, '$.completion_event_id') IS ?`).all(goal.id, completionEventId ?? null) as { id: string }[];
   let entityId: string;
@@ -353,7 +354,7 @@ export function extractGoalCompletion(goal: {
   if (existing.length > 0) {
     entityId = existing[0]!.id;
   } else {
-    const entity = createEntity('concept', goal.title, {
+    const entity = createEntity('event', `Goal ${goal.status}: ${goal.title}`, {
       goal_id: goal.id,
       goal_level: goal.level,
       completion_event_id: completionEventId ?? null,

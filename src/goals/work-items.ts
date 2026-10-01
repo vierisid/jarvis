@@ -1,6 +1,6 @@
-import { getGoalApplication } from './application-service.ts';
 /** Durable Today work, extending commitments instead of creating another task identity. */
 import { getDb, generateId } from '../vault/schema.ts';
+import { getGoalApplication } from './application-service.ts';
 import { createCommitment, getCommitment } from '../vault/commitments.ts';
 import * as goals from '../vault/goals.ts';
 import { getFlow } from '../workflows/db/repos/flow.ts';

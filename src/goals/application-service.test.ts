@@ -100,7 +100,7 @@ test('goal event replay exposes ordered cursors and rejects invalid paging', asy
   expect(rest.events).toHaveLength(1);
   expect(rest.events[0]).toMatchObject({ type: 'goal_completed', completionMemory: 'recorded' });
   expect(rest.nextCursor).toBeGreaterThan(page.nextCursor);
-  for (const query of ['after=-1', 'after=NaN', 'after=1.5', 'limit=101', 'limit=0']) {
+  for (const query of ['after=-1', 'after=NaN', 'after=1.5', 'after=', 'after=%20', 'limit=101', 'limit=0', 'limit=']) {
     expect((await api('/api/goals/events?' + query, undefined, 'GET')).status).toBe(400);
   }
 });
