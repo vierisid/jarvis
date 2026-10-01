@@ -49,7 +49,8 @@ const browserSnapshotScript = `(() => {
   };
   collectFrames(document, 0, 0, 0);
 
-  for (const frame of frames) {
+  for (let fi = 0; fi < frames.length; fi++) {
+    const frame = frames[fi];
     const doc = frame.doc;
     const win = doc.defaultView || window;
     const inFrame = doc !== document;
@@ -81,6 +82,7 @@ const browserSnapshotScript = `(() => {
       if (inFrame) attrs.iframe = 'true';
       els.push({
         _el: el,
+        _fi: fi,
         tag,
         text,
         attrs,
@@ -103,7 +105,62 @@ const browserSnapshotScript = `(() => {
   // per-context. globalThis is here to tell a reader the script is not meant
   // for the page's world.
   globalThis.__jarvis_elements = els.map(e => e._el);
-  els.forEach((el, i) => { el.id = i + 1; delete el._el; });
+
+  // WHAT WAS TRUE WHEN THESE IDS WERE HANDED OUT, so a use-time guard can tell
+  // that the thing an id names has changed while every field the frame tree
+  // reports stayed put (#603).
+  //
+  // Three parts, each answering something no other check can see:
+  //
+  //   __jarvis_points   where each element WAS, in the same top-page viewport
+  //                     space and the same rounding the click dispatches at.
+  //                     Comparing the element's live centre to this is the
+  //                     exact question -- "is the coordinate still where the
+  //                     element is" -- where comparing the window's scroll
+  //                     offset is only a proxy for it, and a bad one in both
+  //                     directions: a position: fixed consent banner or a
+  //                     sticky header does not move when the window scrolls
+  //                     (so the proxy refuses a click that would have been
+  //                     perfectly good), while an overflow: auto list
+  //                     scrolling its own contents -- Gmail's message list,
+  //                     Linear's issue list, a virtualised table, a chat log
+  //                     -- moves every element inside it without touching
+  //                     window.scrollY at all (so the proxy misses the
+  //                     commonest staleness there is). Reflow from a
+  //                     late-loading banner, a settling lazy image, a window
+  //                     resize and a zoom change are all missed by the proxy
+  //                     and caught by this.
+  //   __jarvis_frames   which frame each element came from, so a frame that
+  //                     rewrites itself invalidates only ITS OWN elements. The
+  //                     app's own same-origin iframes churn constantly (a
+  //                     Google Docs or Gmail compose editor lives in one), and
+  //                     a cross-origin ad frame is never collected here at all,
+  //                     so "some frame changed" would refuse typing into the
+  //                     editor because a sibling frame reloaded.
+  //   __jarvis_dom      each frame's documentElement, body and scroll offset.
+  //                     The first two are how a REPLACED document is detected:
+  //                     document.open()/write() replaces both while the
+  //                     loaderId and the URL both hold (measured), and a
+  //                     Turbo-style whole-body swap replaces the body alone
+  //                     (measured), while pushState and an innerHTML re-render
+  //                     anywhere in the tree touch neither (measured) -- which
+  //                     is what makes this safe on every ordinary SPA click.
+  //                     The scroll offset stays as the FALLBACK for an element
+  //                     whose own node the page has since replaced, where
+  //                     there is no live rect to compare.
+  globalThis.__jarvis_points = els.map(e => [e.x, e.y]);
+  globalThis.__jarvis_frames = els.map(e => e._fi);
+  els.forEach((el, i) => { el.id = i + 1; delete el._el; delete el._fi; });
+
+  globalThis.__jarvis_dom = frames.map(f => {
+    const w = f.doc.defaultView;
+    return [
+      f.doc.documentElement,
+      f.doc.body,
+      w ? Math.round(w.scrollX || 0) : 0,
+      w ? Math.round(w.scrollY || 0) : 0
+    ];
+  });
 
   let bodyText = (document.body && document.body.innerText) || '';
   for (const frame of frames) {
@@ -431,7 +488,12 @@ func (c *cdpClient) snapshotElementFor(id int) (snapshotElement, bool) {
 //
 // The document comparison is the loaderId ALONE -- see confirmSameDocument for
 // why the URL term would refuse an ordinary click on every SPA.
-func refuseStaleElement(cdp *cdpClient, id int) (snapshotElement, float64, string, error) {
+//
+// `usesCoordinates` says whether this caller will DISPATCH AT the stored
+// coordinate (click, hover) or only use the id to find its element ref
+// (type). It decides whether a scroll since the snapshot is disqualifying:
+// a scroll moves every coordinate and invalidates no ref (#603).
+func refuseStaleElement(cdp *cdpClient, id int, usesCoordinates bool) (snapshotElement, float64, string, error) {
 	el, found := cdp.snapshotElementFor(id)
 	if !found {
 		return snapshotElement{}, 0, fmt.Sprintf("Error: Element [%d] not found. Run browser_snapshot first.", id), nil
@@ -470,6 +532,38 @@ func refuseStaleElement(cdp *cdpClient, id int) (snapshotElement, float64, strin
 		return snapshotElement{}, 0, fmt.Sprintf(
 			"Error: Element [%d] cannot be addressed any more. Run browser_snapshot first.", id), nil
 	}
+	// The DOCUMENT may also have been replaced WITHOUT a new loaderId, and the
+	// page may have scrolled (#603). Neither moves anything the frame tree
+	// reports, so the terms above cannot see either one; both leave every
+	// coordinate describing where an element used to be.
+	//
+	// Scoped exactly like the frame digest: a top-document change refuses every
+	// id, a subframe change refuses only ids taken from a subframe. Without
+	// that scoping a same-origin ad iframe rewriting itself on a timer would
+	// refuse clicks on the main document -- page-triggerable denial of the
+	// whole action path.
+	switch cdp.domGeneration(ctx, id-1) {
+	case "gone":
+		return snapshotElement{}, 0, fmt.Sprintf(
+			"Error: Element [%d] cannot be addressed any more. Run browser_snapshot first.", id), nil
+	case "busy":
+		return snapshotElement{}, 0, fmt.Sprintf(
+			"Error: The page was too busy to confirm where element [%d] is, so nothing was done. Try again.",
+			id), nil
+	case "dom":
+		return snapshotElement{}, 0, fmt.Sprintf(
+			"Error: The page replaced the document element [%d] came from, so it no longer exists. "+
+				"Run browser_snapshot first.", id), nil
+	case "moved":
+		// Only a caller that DISPATCHES AT the coordinate cares: see
+		// `usesCoordinates` on this function and the sentinel's own docblock.
+		if usesCoordinates {
+			return snapshotElement{}, 0, fmt.Sprintf(
+				"Error: Element [%d] has moved since the snapshot, so its position can no longer be trusted. "+
+					"Run browser_snapshot first.", id), nil
+		}
+	}
+
 	// LAST, so nothing can land after it: a concurrent snapshot of the SAME
 	// document re-mints every coordinate AND re-arms the world, leaving the
 	// loaderId untouched -- so the identity check above cannot see it, and
@@ -483,6 +577,145 @@ func refuseStaleElement(cdp *cdpClient, id int) (snapshotElement, float64, strin
 				"Run browser_snapshot first.", id), nil
 	}
 	return el, ctx, "", nil
+}
+
+// domGenerationScript asks the isolated world what has changed for ONE element
+// since the snapshot handed out its id (#603).
+//
+// PER ELEMENT, not per page, because the answer differs per element and the
+// coarse version was wrong in both directions: a page-wide scroll comparison
+// refuses a click on a `position: fixed` consent banner that has not moved,
+// and misses an `overflow: auto` list that has scrolled every element inside
+// it without touching `window.scrollY`. See the arming block above.
+//
+// TWO VERDICTS, because they invalidate different things and the callers use
+// different things:
+//
+//	'dom'    this element's own document, or the top document, was REPLACED.
+//	         Every ref and every coordinate in it is stale, so every caller
+//	         refuses -- including `browser_type`, which holds a ref.
+//	'moved'  the element is still there and is no longer where the id says.
+//	         Only a caller that DISPATCHES AT the coordinate cares:
+//	         `browser_type` reaches its element through the ref and never
+//	         reads the coordinate, and typing scrolls the caret into view, so
+//	         refusing it here would make the second type into one
+//	         contenteditable refuse itself.
+//
+// 'ok' is "nothing that matters to this id has changed"; 'gone' is "the world
+// holds no reading for this id", which every caller refuses.
+//
+// The index is interpolated the way the focus script interpolates it. Keep in
+// step with `domGenerationScript` in src/actions/browser/session.ts.
+func domGenerationScriptFor(index int) string {
+	return fmt.Sprintf(`(() => {
+  const dom = globalThis.__jarvis_dom;
+  const pts = globalThis.__jarvis_points;
+  const fis = globalThis.__jarvis_frames;
+  const i = %d;
+  if (!dom || !dom.length || !pts || !fis) return 'gone';
+  const frameIntact = (k) => {
+    const entry = dom[k];
+    if (!entry) return false;
+    const root = entry[0];
+    // A frame with no documentElement was never bindable: it contributed no
+    // element and no coordinate, so it cannot invalidate one.
+    if (!root) return true;
+    const doc = root.ownerDocument;
+    const win = doc && doc.defaultView;
+    if (!doc || !win) return false;
+    if (doc.documentElement !== root) return false;
+    if (doc.body !== entry[1]) return false;
+    return true;
+  };
+  // The top document always matters: an element in a frame is positioned by it.
+  if (!frameIntact(0)) return 'dom';
+  const fi = fis[i];
+  if (typeof fi !== 'number' || !dom[fi] || !pts[i]) return 'gone';
+  if (fi !== 0 && !frameIntact(fi)) return 'dom';
+  const el = globalThis.__jarvis_elements && globalThis.__jarvis_elements[i];
+  if (el && el.isConnected) {
+    // The element's centre in TOP-PAGE viewport space: the same quantity the
+    // snapshot stored, walked back up through the same frame offsets.
+    let w = el.ownerDocument.defaultView, ox = 0, oy = 0, hops = 0;
+    while (w && w.frameElement && hops++ < 10) {
+      const fr = w.frameElement.getBoundingClientRect();
+      ox += fr.x; oy += fr.y;
+      w = w.frameElement.ownerDocument.defaultView;
+    }
+    if (w && !w.frameElement) {
+      const r = el.getBoundingClientRect();
+      const x = Math.round(ox + r.x + r.width / 2);
+      const y = Math.round(oy + r.y + r.height / 2);
+      // One pixel of tolerance for sub-pixel layout, which is also the most a
+      // click can be off by and still land on the same place.
+      return (Math.abs(x - pts[i][0]) <= 1 && Math.abs(y - pts[i][1]) <= 1) ? 'ok' : 'moved';
+    }
+  }
+  // The node the snapshot held is gone or cannot be placed. That does NOT by
+  // itself make the coordinate wrong -- an ordinary SPA re-render replaces
+  // nodes constantly while the thing on screen stays put -- so fall back to
+  // the frame's scroll offset, which is what the coarse check used to be.
+  const entry = dom[fi];
+  const root = entry[0];
+  const win = root && root.ownerDocument && root.ownerDocument.defaultView;
+  if (!win) return 'gone';
+  return (Math.round(win.scrollX || 0) === entry[2] && Math.round(win.scrollY || 0) === entry[3]) ? 'ok' : 'moved';
+})()`, index)
+}
+
+// domGeneration runs that script in the world the element refs live in.
+//
+// Fails CLOSED: a read that errors, a world that has gone, or an unexpected
+// answer all come back as 'gone', which every caller treats as a refusal. A
+// renderer blocked by an `alert()` therefore costs an action rather than
+// allowing a stale one.
+//
+// DELIBERATELY NOT inside `confirmSameDocument`. That function is
+// browser-process-only (`Page.getFrameTree`), which is what makes it safe
+// under `browser_element_point`'s 700 ms budget; this is renderer-served and
+// an `alert()` can block it, so it belongs to the ACTION paths, which have no
+// such budget, and not to the coordinate reply that a narration races.
+// domSentinelTimeout bounds the sentinel's own read.
+//
+// It is RENDERER-SERVED, which is new for the click and hover paths: before
+// #603 those touched only the browser process and could not be held up by the
+// page's main thread at all. Inheriting cdpDefaultTimeout's 30 seconds would
+// mean a janked page -- or a modal `alert()`, which nothing here dismisses --
+// parked a click for half a minute before refusing it. Long enough that a
+// merely slow page still answers, short enough that a blocked one is reported
+// as blocked.
+const domSentinelTimeout = 4 * time.Second
+
+// domGeneration runs the sentinel in the world the element refs live in, for
+// one element index.
+//
+// Fails CLOSED in two distinguishable ways: "gone" (the world holds no reading
+// for this id) and "busy" (the renderer did not answer in time, which is
+// RETRYABLE and must not tell the model to take a snapshot the same renderer
+// will not serve either).
+func (c *cdpClient) domGeneration(contextID float64, index int) string {
+	raw, err := c.sendOnTimeout(c.sessionID, "Runtime.evaluate", map[string]any{
+		"contextId":     contextID,
+		"returnByValue": true,
+		"expression":    domGenerationScriptFor(index),
+	}, domSentinelTimeout)
+	if err != nil {
+		return "busy"
+	}
+	var parsed struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return "gone"
+	}
+	switch parsed.Result.Value {
+	case "ok", "dom", "moved":
+		return parsed.Result.Value
+	default:
+		return "gone"
+	}
 }
 
 // focusStillOnElement reports whether the element the snapshot called `id`

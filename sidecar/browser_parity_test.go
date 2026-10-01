@@ -238,9 +238,17 @@ func TestBrowserHandlerParityIntegration(t *testing.T) {
 		t.Fatalf("docs editor text = %q, want %q", docsText, "Hello Docs and more")
 	}
 
-	// ── scroll reports pixels like the daemon ──
+	// ── scroll reports pixels like the daemon, and says the ids are gone ──
+	//
+	// Both halves drop the coordinate map on a scroll (#603): every coordinate
+	// described where an element used to be, and nothing a document check can
+	// see had changed. The sentence is part of the parity contract, so it is
+	// compared exactly -- src/actions/browser/session.ts `scroll()` returns
+	// this same string.
 	scrollOut := callHandler(t, scroll, withHeadless(map[string]any{"direction": "down", "amount": float64(250)}))
-	if scrollOut != "Scrolled down by 250px" {
+	const wantScroll = "Scrolled down by 250px. Element ids from the previous snapshot no longer apply " +
+		"-- take a browser_snapshot before acting on one."
+	if scrollOut != wantScroll {
 		t.Fatalf("unexpected scroll output: %s", scrollOut)
 	}
 

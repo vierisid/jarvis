@@ -123,10 +123,25 @@ func refuseLocalIdentity(id pageIdentity) error {
 // assertSamePage refuses when the attached page has committed a different
 // document since `before` was taken -- the read raced a navigation, and whatever
 // was read may have come from a page nobody checked.
+//
+// AN EMPTY loaderId IS NEVER EQUAL TO ANYTHING, including another empty one
+// (#603). It used to be: two empty ids compared equal, so a frame tree that
+// named no document passed this guard, and three call sites each had to
+// remember to refuse an unnamed document separately -- `takePageSnapshot` does,
+// `browserPageResult` does, and the screenshot and evaluate handlers did not.
+// A guard that cannot tell which document it is looking at has nothing to
+// offer, so the refusal is a property of the helper now and not of whoever
+// remembered. It costs nothing legitimate: even `about:blank` reports a
+// non-empty loaderId once it has committed (measured), so a nameless main
+// frame is a pre-commit initial document or a half-filled reply.
 func (c *cdpClient) assertSamePage(before pageIdentity) error {
 	now, err := c.pageIdentityNow()
 	if err != nil {
 		return fmt.Errorf("could not confirm the page did not change while it was read: %w", err)
+	}
+	if before.loaderID == "" || now.loaderID == "" {
+		return fmt.Errorf("the browser did not name the document it was showing, so the result cannot be " +
+			"attributed to a page and is discarded; try again")
 	}
 	if now.loaderID != before.loaderID || now.url != before.url {
 		return fmt.Errorf("the page navigated to %s while it was being read, so the result is discarded; "+

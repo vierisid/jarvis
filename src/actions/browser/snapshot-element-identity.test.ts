@@ -62,6 +62,12 @@ type FakeOptions = {
   /** The main frame's URL, for the local-content refusal. */
   url?: string;
   /**
+   * What the per-element sentinel reports (#603): 'ok', 'dom' (the element's
+   * document was replaced), 'moved' (it is no longer where its id says) or
+   * 'gone'. Default: nothing that matters to the id has changed.
+   */
+  domGeneration?: () => string;
+  /**
    * Refuse the NARRATION world only, as a page with no committed frame would.
    * Scoped to that world because #592 made the snapshot mint one of its own and
    * refuse outright when it cannot, so refusing both would leave nothing
@@ -150,6 +156,11 @@ function fakeChrome(opts: FakeOptions): Fake {
         // Run the real expression against that window, the way Chrome would.
         const value = new Function('window', `return (${expr})`)(win);
         return { result: { value } };
+      }
+      // The document-generation sentinel (#603). Routed before the snapshot
+      // script, which also mentions `__jarvis_dom` (it arms it).
+      if (expr.includes('globalThis.__jarvis_dom;')) {
+        return { result: { value: opts.domGeneration ? opts.domGeneration() : 'ok' } };
       }
       // The snapshot script itself -- it ASSIGNS the ref array, where the focus
       // and focus-verification reads only index it.

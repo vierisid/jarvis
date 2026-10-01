@@ -950,8 +950,9 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 
 		id := int(elemID)
 		// The coordinates are only this click's honest input while the document
-		// they were measured in is still the one on screen (#592).
-		el, _, refusal, err := refuseStaleElement(cdp, id)
+		// they were measured in is still the one on screen (#592) and the page
+		// has not scrolled under them (#603) -- hence `usesCoordinates`.
+		el, _, refusal, err := refuseStaleElement(cdp, id, true)
 		if err != nil {
 			return nil, err
 		}
@@ -995,7 +996,10 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		id := int(elemID)
-		el, contextID, refusal, err := refuseStaleElement(cdp, id)
+		// NOT a coordinate user: the typing reaches the element through the ref
+		// the snapshot stashed, so a scroll since then does not make this call
+		// wrong -- and typing itself scrolls the caret into view (#603).
+		el, contextID, refusal, err := refuseStaleElement(cdp, id, false)
 		if err != nil {
 			return nil, err
 		}
@@ -1278,10 +1282,36 @@ func makeBrowserScrollHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("scroll failed: %w", err)
 		}
 
+		// EVERY COORDINATE THE SNAPSHOT HANDED OUT NOW DESCRIBES WHERE AN
+		// ELEMENT USED TO BE (#603).
+		//
+		// Scrolling moves every element and changes nothing the frame tree
+		// reports, so no document check could see it: the map stayed live and
+		// clickable, and a click after a scroll dispatched a trusted mouse
+		// event at the previous viewport's geometry -- reachable with no page
+		// involvement at all, just two tool calls.
+		//
+		// Dropped here as well as covered by the use-time sentinel, because the
+		// two reach different readers. The sentinel compares each element's
+		// LIVE position and so covers every geometry change for the paths that
+		// ask it (click, hover), including the ones no tool announces. This
+		// drop reaches the readers that deliberately do NOT run it:
+		// browser_element_point, which answers a pebble coordinate under a
+		// 700 ms budget. It covers THIS scroll only -- a paging key and
+		// browser_ax_click's scrollIntoViewIfNeeded drop the map themselves for
+		// the same reason, and a page scrolling itself reaches neither, so the
+		// pebble can still be a scroll behind on a page that moves on a timer.
+		//
+		// The model is already told to re-snapshot after scrolling, by this
+		// tool's own description and by all 100 webapp templates.
+		cdp.forgetSnapshotElements()
+
 		// Wait for lazy-loaded content (matches the daemon)
 		time.Sleep(500 * time.Millisecond)
 
-		return &RPCResult{Result: fmt.Sprintf("Scrolled %s by %dpx", direction, int(scrollAmount))}, nil
+		return &RPCResult{Result: fmt.Sprintf("Scrolled %s by %dpx. Element ids from the previous snapshot "+
+			"no longer apply -- take a browser_snapshot before acting on one.",
+			direction, int(scrollAmount))}, nil
 	}
 }
 

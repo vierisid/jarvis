@@ -106,6 +106,32 @@ func (fb *fakeBrowser) answerFrameTree(mainURL string) cdpCommand {
 	return cmd
 }
 
+// answerDomGeneration answers the per-element sentinel every ACTION guard now
+// runs in the isolated world (#603): "ok", "dom" (the element's document was
+// replaced), "moved" (it is no longer where its id says) or anything else,
+// which the caller reads as "gone".
+//
+// Asserting that it IS that evaluate, and that it carries a contextId, for the
+// reason expectIsolatedWorld asserts its own: the sentinel is only unforgeable
+// while it is read from the world the page cannot write.
+func (fb *fakeBrowser) answerDomGeneration(value string) cdpCommand {
+	fb.t.Helper()
+	cmd := fb.nextCommand()
+	if cmd.Method != "Runtime.evaluate" {
+		fb.t.Fatalf("expected the document-generation sentinel, got %q", cmd.Method)
+	}
+	if cmd.Params["contextId"] == nil {
+		fb.t.Fatal("the document-generation sentinel was evaluated in the page's own main world")
+	}
+	if expr, _ := cmd.Params["expression"].(string); !strings.Contains(expr, "__jarvis_dom") {
+		fb.t.Fatalf("expected the document-generation sentinel, got: %s", expr)
+	}
+	fb.write(map[string]any{"id": cmd.ID, "result": map[string]any{
+		"result": map[string]any{"type": "string", "value": value},
+	}})
+	return cmd
+}
+
 // noCommandWithin asserts the client sends nothing for a while: the point of a
 // refusal is that the read never happens.
 func (fb *fakeBrowser) noCommandWithin(d time.Duration) {

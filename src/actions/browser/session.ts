@@ -86,7 +86,8 @@ const SNAPSHOT_SCRIPT = `(() => {
   };
   collectFrames(document, 0, 0, 0);
 
-  for (const frame of frames) {
+  for (let fi = 0; fi < frames.length; fi++) {
+    const frame = frames[fi];
     const doc = frame.doc;
     const win = doc.defaultView || window;
     const inFrame = doc !== document;
@@ -122,6 +123,7 @@ const SNAPSHOT_SCRIPT = `(() => {
       if (inFrame) attrs.iframe = 'true';
       els.push({
         _el: el,
+        _fi: fi,
         tag,
         text,
         attrs,
@@ -144,7 +146,62 @@ const SNAPSHOT_SCRIPT = `(() => {
   // per-context. globalThis is here to tell a reader the script is not meant
   // for the page's world.
   globalThis.__jarvis_elements = els.map(e => e._el);
-  els.forEach((el, i) => { el.id = i + 1; delete el._el; });
+
+  // WHAT WAS TRUE WHEN THESE IDS WERE HANDED OUT, so a use-time guard can tell
+  // that the thing an id names has changed while every field the frame tree
+  // reports stayed put (#603).
+  //
+  // Three parts, each answering something no other check can see:
+  //
+  //   __jarvis_points   where each element WAS, in the same top-page viewport
+  //                     space and the same rounding the click dispatches at.
+  //                     Comparing the element's live centre to this is the
+  //                     exact question -- "is the coordinate still where the
+  //                     element is" -- where comparing the window's scroll
+  //                     offset is only a proxy for it, and a bad one in both
+  //                     directions: a position: fixed consent banner or a
+  //                     sticky header does not move when the window scrolls
+  //                     (so the proxy refuses a click that would have been
+  //                     perfectly good), while an overflow: auto list
+  //                     scrolling its own contents -- Gmail's message list,
+  //                     Linear's issue list, a virtualised table, a chat log
+  //                     -- moves every element inside it without touching
+  //                     window.scrollY at all (so the proxy misses the
+  //                     commonest staleness there is). Reflow from a
+  //                     late-loading banner, a settling lazy image, a window
+  //                     resize and a zoom change are all missed by the proxy
+  //                     and caught by this.
+  //   __jarvis_frames   which frame each element came from, so a frame that
+  //                     rewrites itself invalidates only ITS OWN elements. The
+  //                     app's own same-origin iframes churn constantly (a
+  //                     Google Docs or Gmail compose editor lives in one), and
+  //                     a cross-origin ad frame is never collected here at all,
+  //                     so "some frame changed" would refuse typing into the
+  //                     editor because a sibling frame reloaded.
+  //   __jarvis_dom      each frame's documentElement, body and scroll offset.
+  //                     The first two are how a REPLACED document is detected:
+  //                     document.open()/write() replaces both while the
+  //                     loaderId and the URL both hold (measured), and a
+  //                     Turbo-style whole-body swap replaces the body alone
+  //                     (measured), while pushState and an innerHTML re-render
+  //                     anywhere in the tree touch neither (measured) -- which
+  //                     is what makes this safe on every ordinary SPA click.
+  //                     The scroll offset stays as the FALLBACK for an element
+  //                     whose own node the page has since replaced, where
+  //                     there is no live rect to compare.
+  globalThis.__jarvis_points = els.map(e => [e.x, e.y]);
+  globalThis.__jarvis_frames = els.map(e => e._fi);
+  els.forEach((el, i) => { el.id = i + 1; delete el._el; delete el._fi; });
+
+  globalThis.__jarvis_dom = frames.map(f => {
+    const w = f.doc.defaultView;
+    return [
+      f.doc.documentElement,
+      f.doc.body,
+      w ? Math.round(w.scrollX || 0) : 0,
+      w ? Math.round(w.scrollY || 0) : 0
+    ];
+  });
 
   // Get visible text (top document first, then same-origin frames), clean up whitespace.
   // document.body can be null on challenge/error pages (WAF "checking your browser"
@@ -165,6 +222,107 @@ const SNAPSHOT_SCRIPT = `(() => {
     elements: els
   };
 })()`;
+
+/**
+ * Asks the isolated world what has changed for ONE element since the snapshot
+ * handed out its id (#603).
+ *
+ * PER ELEMENT, not per page, because the answer differs per element and the
+ * coarse version was wrong in both directions: a page-wide scroll comparison
+ * refuses a click on a `position: fixed` consent banner that has not moved, and
+ * misses an `overflow: auto` list that has scrolled every element inside it
+ * without touching `window.scrollY`. See the arming block in SNAPSHOT_SCRIPT.
+ *
+ * TWO VERDICTS, because they invalidate different things and the callers use
+ * different things: 'dom' (this element's own document, or the top document,
+ * was REPLACED - every ref and coordinate in it is stale, so every caller
+ * refuses, `type()` included) and 'moved' (the element is still there and is no
+ * longer where the id says - only a caller that DISPATCHES AT the coordinate
+ * cares, and `type()` reaches its element through the ref). 'ok' is "nothing
+ * that matters to this id changed"; 'gone' is "the world holds no reading for
+ * this id".
+ *
+ * Mirrors `domGenerationScriptFor` in sidecar/browser_snapshot.go; change both.
+ */
+const domGenerationScript = (index: number) => `(() => {
+  const dom = globalThis.__jarvis_dom;
+  const pts = globalThis.__jarvis_points;
+  const fis = globalThis.__jarvis_frames;
+  const i = ${index};
+  if (!dom || !dom.length || !pts || !fis) return 'gone';
+  const frameIntact = (k) => {
+    const entry = dom[k];
+    if (!entry) return false;
+    const root = entry[0];
+    // A frame with no documentElement was never bindable: it contributed no
+    // element and no coordinate, so it cannot invalidate one.
+    if (!root) return true;
+    const doc = root.ownerDocument;
+    const win = doc && doc.defaultView;
+    if (!doc || !win) return false;
+    if (doc.documentElement !== root) return false;
+    if (doc.body !== entry[1]) return false;
+    return true;
+  };
+  // The top document always matters: an element in a frame is positioned by it.
+  if (!frameIntact(0)) return 'dom';
+  const fi = fis[i];
+  if (typeof fi !== 'number' || !dom[fi] || !pts[i]) return 'gone';
+  if (fi !== 0 && !frameIntact(fi)) return 'dom';
+  const el = globalThis.__jarvis_elements && globalThis.__jarvis_elements[i];
+  if (el && el.isConnected) {
+    // The element's centre in TOP-PAGE viewport space: the same quantity the
+    // snapshot stored, walked back up through the same frame offsets.
+    let w = el.ownerDocument.defaultView, ox = 0, oy = 0, hops = 0;
+    while (w && w.frameElement && hops++ < 10) {
+      const fr = w.frameElement.getBoundingClientRect();
+      ox += fr.x; oy += fr.y;
+      w = w.frameElement.ownerDocument.defaultView;
+    }
+    if (w && !w.frameElement) {
+      const r = el.getBoundingClientRect();
+      const x = Math.round(ox + r.x + r.width / 2);
+      const y = Math.round(oy + r.y + r.height / 2);
+      // One pixel of tolerance for sub-pixel layout, which is also the most a
+      // click can be off by and still land on the same place.
+      return (Math.abs(x - pts[i][0]) <= 1 && Math.abs(y - pts[i][1]) <= 1) ? 'ok' : 'moved';
+    }
+  }
+  // The node the snapshot held is gone or cannot be placed. That does NOT by
+  // itself make the coordinate wrong -- an ordinary SPA re-render replaces
+  // nodes constantly while the thing on screen stays put -- so fall back to
+  // the frame's scroll offset, which is what the coarse check used to be.
+  const entry = dom[fi];
+  const root = entry[0];
+  const win = root && root.ownerDocument && root.ownerDocument.defaultView;
+  if (!win) return 'gone';
+  return (Math.round(win.scrollX || 0) === entry[2] && Math.round(win.scrollY || 0) === entry[3]) ? 'ok' : 'moved';
+})()`;
+
+/**
+ * What the sentinel says about one id: nothing that matters changed ('ok'), the
+ * document it came from was replaced ('dom'), it is no longer where the id says
+ * ('moved'), the world holds no reading for it ('gone'), or the renderer did
+ * not answer in time ('busy', which is RETRYABLE).
+ */
+type DomGeneration = 'ok' | 'dom' | 'moved' | 'gone' | 'busy';
+
+/**
+ * How long the sentinel's own read may take. It is the only renderer-served
+ * term on the click and hover paths, which before #603 could not be held up by
+ * the page's main thread at all, so it does not inherit the 30-second default:
+ * a janked page or a modal dialog is reported as busy instead of parking a
+ * click for half a minute. Mirrors `domSentinelTimeout` in the sidecar.
+ */
+const DOM_SENTINEL_TIMEOUT_MS = 4000;
+
+/**
+ * Whether a key moves the viewport when the page has not taken it for something
+ * else (#603). Keep in step with `scrollsThePage` in sidecar/browser_input.go.
+ */
+function scrollsThePage(key: string): boolean {
+  return key === 'PageDown' || key === 'PageUp' || key === 'Home' || key === 'End';
+}
 
 /**
  * A digest of every frame's loaderId in a `Page.getFrameTree` reply (#592).
@@ -641,7 +799,7 @@ export class BrowserController {
    * Fails closed on a read that throws: an action whose document cannot be
    * confirmed does not happen.
    */
-  private async refuseIfDocumentMoved(elementId: number): Promise<string | null> {
+  private async refuseIfDocumentMoved(elementId: number, usesCoordinates: boolean): Promise<string | null> {
     if (!this.elementDoc.loaderId) {
       return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
     }
@@ -651,24 +809,136 @@ export class BrowserController {
     } catch {
       return `Error: Could not confirm the browser is still on the page element [${elementId}] came from, so nothing was done. Take a browser_snapshot and try again.`;
     }
-    // Local content is not acted on either, decided on the reading just taken
-    // so it costs no extra round trip. The sidecar's `refuseStaleElement` does
-    // the same; without it this half would be the only action path that will
-    // click on a `file:` page, with only the request guard behind it (#526).
-    if (isLocalContentUrl(now.url)) {
-      this.forgetSnapshotElements();
-      return `Error: Refusing to act on ${now.url.slice(0, 200)}: the browser does not drive local files.`;
+    const moved = this.documentMovedReason(elementId, now);
+    if (moved) {
+      // Drop the map on the way out for the two terms that mean the ids are
+      // dead, so the next call fails the same way without another round trip
+      // and nothing stale is left clickable. A FRAME that moved leaves the
+      // main document's ids usable, so that one does not clear.
+      if (moved.fatal) this.forgetSnapshotElements();
+      return `Error: ${moved.reason}`;
     }
-    if (!now.loaderId || now.loaderId !== this.elementDoc.loaderId) {
-      // Drop the map on the way out, so the next call fails the same way
-      // without another round trip, and nothing stale is left clickable.
+    // AND THE DOCUMENT MAY HAVE BEEN REPLACED WITHOUT A NEW loaderId, or the
+    // page may have scrolled (#603). Neither moves anything the frame tree
+    // reports, so none of the terms above can see them, and both leave every
+    // coordinate describing where an element used to be.
+    //
+    // Asked LAST, because it is the only renderer-served term here: everything
+    // above comes from the browser process and cannot be blocked by a busy or
+    // modal page, so the cheap terms refuse first.
+    const generation = await this.domGeneration(elementId);
+    if (generation === 'gone') {
       this.forgetSnapshotElements();
-      return `Error: The page navigated to a new document, so element [${elementId}] from the previous snapshot no longer exists. Take a browser_snapshot first.`;
+      return `Error: Element [${elementId}] cannot be addressed any more. Take a browser_snapshot first.`;
     }
-    if (this.elementInFrame.has(elementId) && now.frameStamp !== this.elementDoc.frameStamp) {
-      return `Error: Element [${elementId}] came from a frame, and a frame in this page has since navigated, so its position can no longer be trusted. Take a browser_snapshot first.`;
+    if (generation === 'busy') {
+      // Retryable, and said so: telling the model to take a snapshot would send
+      // it at a renderer that will not serve that either.
+      return `Error: The page was too busy to confirm where element [${elementId}] is, so nothing was done. Try again.`;
+    }
+    if (generation === 'dom') {
+      this.forgetSnapshotElements();
+      return `Error: The page replaced the document element [${elementId}] came from, so it no longer exists. Take a browser_snapshot first.`;
+    }
+    // 'moved' concerns only a caller that DISPATCHES AT the coordinate: see
+    // `usesCoordinates` and the sentinel's own docblock.
+    if (generation === 'moved' && usesCoordinates) {
+      return `Error: Element [${elementId}] has moved since the snapshot, so its position can no longer be trusted. Take a browser_snapshot first.`;
     }
     return null;
+  }
+
+  /**
+   * THE DOCUMENT-IDENTITY DECISION, in one place (#603), for the terms that
+   * come out of a frame-tree reading.
+   *
+   * Pure: it decides, it does not act. That is deliberate and not tidiness --
+   * `refuseIfDocumentMoved` both clears the coordinate map and (through
+   * `readFrameState`) writes `lastReportedUrl`, which is the value
+   * `browser_upload_file`'s card and its use-time origin check compare. The
+   * pebble narration shares this decision and must do neither: it runs on the
+   * `tool_call` event, BEFORE the action it previews, and a cosmetic read that
+   * cleared the map would turn the real click's accurate "the page navigated"
+   * into "element not found".
+   *
+   * The rule itself, and why each term is the shape it is:
+   *   - the loaderId must be non-empty and unchanged. The URL is deliberately
+   *     NOT compared: `history.pushState` rewrites `frameTree.frame.url` while
+   *     the loaderId holds (measured), and that is how every SPA navigates, so
+   *     comparing it would refuse an ordinary click on Gmail, Linear and the
+   *     cell-to-cell moves `webapp-templates/gsheets.yaml` tells the model to
+   *     reuse an id across;
+   *   - local content is never acted on (#526), decided on the reading just
+   *     taken so it costs no extra round trip;
+   *   - an id taken from a same-origin SUBFRAME is held to the whole tree's
+   *     digest, because a child can commit a document while the main frame's
+   *     loaderId never moves (measured). Scoped to in-frame ids: an unrelated
+   *     advertising iframe reloading must not refuse a main-document click.
+   *
+   * `fatal` says whether the ids are dead (so the caller may drop them) or
+   * merely untrustworthy for this one id.
+   */
+  private documentMovedReason(
+    elementId: number,
+    now: { url: string; loaderId: string; frameStamp: string },
+  ): { reason: string; fatal: boolean } | null {
+    if (isLocalContentUrl(now.url)) {
+      return {
+        reason: `Refusing to act on ${now.url.slice(0, 200)}: the browser does not drive local files.`,
+        fatal: true,
+      };
+    }
+    if (!this.elementDoc.loaderId || !now.loaderId || now.loaderId !== this.elementDoc.loaderId) {
+      return {
+        reason: `The page navigated to a new document, so element [${elementId}] from the previous snapshot no longer exists. Take a browser_snapshot first.`,
+        fatal: true,
+      };
+    }
+    if (this.elementInFrame.has(elementId) && now.frameStamp !== this.elementDoc.frameStamp) {
+      return {
+        reason: `Element [${elementId}] came from a frame, and a frame in this page has since navigated, so its position can no longer be trusted. Take a browser_snapshot first.`,
+        fatal: false,
+      };
+    }
+    return null;
+  }
+
+  /**
+   * What has changed for one element since the snapshot handed out its id
+   * (#603). Asked in the isolated world the element refs live in.
+   *
+   * Fails CLOSED in two distinguishable ways: 'gone' (no reading for this id)
+   * and 'busy' (the renderer did not answer inside the sentinel's own budget),
+   * which is RETRYABLE and must not tell the model to take a snapshot the same
+   * renderer will not serve either.
+   *
+   * Never mints a world: a world is minted by `snapshot()` alone, so a missing
+   * one means there is no snapshot to trust. Mirrors `domGeneration` in
+   * sidecar/browser_snapshot.go.
+   */
+  private async domGeneration(elementId: number): Promise<DomGeneration> {
+    const world = this.elementWorld;
+    if (!world || world.loaderId !== this.elementDoc.loaderId) return 'gone';
+    try {
+      const contextId = await world.contextId;
+      if (contextId === null) return 'gone';
+      // Raced against its own budget rather than the CDP client's 30 seconds:
+      // a blocked renderer must cost a retry, not half a minute.
+      const read = this.cdp.send('Runtime.evaluate', {
+        contextId,
+        expression: domGenerationScript(elementId - 1),
+        returnByValue: true,
+      });
+      const timeout = new Promise<'busy'>((resolve) => {
+        setTimeout(() => resolve('busy'), DOM_SENTINEL_TIMEOUT_MS).unref?.();
+      });
+      const result = await Promise.race([read, timeout]);
+      if (result === 'busy') return 'busy';
+      const value = (result as { result?: { value?: unknown } })?.result?.value;
+      return value === 'ok' || value === 'dom' || value === 'moved' ? value : 'gone';
+    } catch {
+      return 'gone';
+    }
   }
 
   /**
@@ -1095,21 +1365,26 @@ export class BrowserController {
       // action path reads.
       const url = String(tree?.frameTree?.frame?.url ?? '');
       const frameStamp = frameTreeStamp(tree?.frameTree);
-      // The snapshot's ids describe one document. An empty `elementDoc` is the
-      // same answer as a mismatched one: nothing reviewed is on screen, so
-      // there is no point to preview.
-      if (!this.elementDoc.loaderId || loaderId !== this.elementDoc.loaderId) return 'moved';
-      // The browser does not drive local files, so the action will refuse here
-      // too. The URL itself is never returned or logged from this path.
-      if (isLocalContentUrl(url)) return 'moved';
-      // A subframe can commit a new document while the main frame's loaderId
-      // never moves, which leaves an in-frame coordinate describing a document
-      // that no longer exists. Scoped to in-frame ids, matching the action: an
-      // unrelated advertising iframe reloading must not cost a main-document
-      // element its pointer.
-      if (this.elementInFrame.has(elementId) && frameStamp !== this.elementDoc.frameStamp) {
-        return 'moved';
-      }
+      // THE SAME DECISION THE ACTION MAKES, from this one reading: empty or
+      // changed loaderId, local content, and -- for an in-frame id -- a moved
+      // frame digest (#603 moved these three into `documentMovedReason` so the
+      // two halves cannot drift apart).
+      //
+      // The DECISION only. This path must not clear the coordinate map or
+      // write `lastReportedUrl`, which is why it does not call
+      // `refuseIfDocumentMoved` itself: a cosmetic narration that cleared the
+      // map would turn the real click's accurate "the page navigated" into
+      // "element not found", and `lastReportedUrl` is what the upload card and
+      // its use-time origin check compare.
+      //
+      // It also does NOT ask the renderer for the DOM generation the action
+      // asks for. A narration is abandoned upstream after 1200 ms and a
+      // renderer-served read is exactly what a modal `alert()` blocks, so the
+      // pointer would be lost to a page being busy. The gap that leaves -- a
+      // pebble pointing confidently at a position a `document.write` has
+      // invalidated -- is closed from the other side for the common case:
+      // `scroll()` drops the ids outright.
+      if (this.documentMovedReason(elementId, { url, loaderId, frameStamp })) return 'moved';
       // One isolated world per document, not per narration: createIsolatedWorld
       // mints a fresh world (and a fresh V8 context) on every call however the
       // name is reused, and nothing disposes them. The loaderId changes on
@@ -1174,8 +1449,9 @@ export class BrowserController {
       return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
     }
     // The coordinates are only the click's input while the document they were
-    // measured in is still the one on screen (#592).
-    const moved = await this.refuseIfDocumentMoved(elementId);
+    // measured in is still the one on screen (#592) and the page has not
+    // scrolled under them (#603) -- hence `usesCoordinates`.
+    const moved = await this.refuseIfDocumentMoved(elementId, true);
     if (moved) return moved;
 
     const button = options.button === 'right' ? 'right' : 'left';
@@ -1229,7 +1505,8 @@ export class BrowserController {
     if (!coords) {
       return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
     }
-    const moved = await this.refuseIfDocumentMoved(elementId);
+    // Hover dispatches at the stored coordinate too.
+    const moved = await this.refuseIfDocumentMoved(elementId, true);
     if (moved) return moved;
 
     // Approach from a nearby point so mouseenter/mouseover always fire,
@@ -1279,6 +1556,17 @@ export class BrowserController {
     });
     await this.cdp.send('Input.dispatchKeyEvent', { type: 'keyUp', ...base });
 
+    // A PAGING KEY SCROLLS when nothing has swallowed it, which moves every
+    // coordinate the snapshot handed out with nothing any document check able
+    // to see it (#603). The action paths notice at use time; the pebble's
+    // coordinate readers deliberately do not run that sentinel, so the map is
+    // dropped here rather than leaving them pointing at a pre-scroll position.
+    //
+    // Only the paging keys: Enter, Tab and the arrows are what a model presses
+    // while working through a list it has already snapshotted, and clearing on
+    // those would break "press Enter, then click [5]" for a cosmetic pointer.
+    if (scrollsThePage(parsed.key)) this.forgetSnapshotElements();
+
     // Let the app react (menu open, mode switch, etc.)
     await Bun.sleep(300);
     await this.noteCurrentPage();
@@ -1315,7 +1603,10 @@ export class BrowserController {
     // focus script. Only the element's IDENTITY comes from the ref below, not
     // from any coordinate.
     void coords;
-    const moved = await this.refuseIfDocumentMoved(elementId);
+    // NOT a coordinate user, which is what `false` says: the typing reaches the
+    // element through its ref, so a scroll since the snapshot does not make
+    // this call wrong -- and typing itself scrolls the caret into view (#603).
+    const moved = await this.refuseIfDocumentMoved(elementId, false);
     if (moved) return moved;
 
     // The world the refs live in, and it must be THIS document's world. No
@@ -1556,9 +1847,35 @@ export class BrowserController {
     const pixels = direction === 'down' ? scrollAmount : -scrollAmount;
 
     await this.evaluate(`window.scrollBy(0, ${pixels})`);
+
+    // EVERY COORDINATE THE SNAPSHOT HANDED OUT NOW DESCRIBES WHERE AN ELEMENT
+    // USED TO BE (#603).
+    //
+    // Scrolling moves every element and changes nothing the frame tree
+    // reports, so no document check could see it: the map stayed live and
+    // clickable, and a click after a scroll dispatched a trusted mouse event
+    // at the previous viewport's geometry. Reachable with no page involvement
+    // at all -- just two tool calls in the order the templates recommend.
+    //
+    // Dropped here as well as covered by the use-time sentinel, because the two
+    // reach different readers. The sentinel compares each element's LIVE
+    // position and so covers every geometry change for the paths that ask it
+    // (click, hover), including the ones no tool announces. This drop reaches
+    // the readers that deliberately do not run it -- `snapshotElementPoint` and
+    // `viewportScreenOrigin`, which answer the pebble's position under a
+    // latency budget. It covers THIS scroll only: a paging key drops the map
+    // itself for the same reason, and a page scrolling itself reaches neither,
+    // so the pebble can still be a scroll behind on a page that moves on a
+    // timer.
+    //
+    // The model is already told to re-snapshot after scrolling, by this tool's
+    // own description and by all 100 webapp templates.
+    this.forgetSnapshotElements();
+
     await Bun.sleep(500); // Wait for lazy-loaded content
 
-    return `Scrolled ${direction} by ${scrollAmount}px`;
+    return `Scrolled ${direction} by ${scrollAmount}px. Element ids from the previous snapshot no longer apply `
+      + '-- take a browser_snapshot before acting on one.';
   }
 
   /**
@@ -1734,14 +2051,16 @@ export class BrowserController {
    * that one catches "the page moved since".
    *
    * KNOWN CONSEQUENCE, stated because it is user-visible: anything that
-   * re-snapshots between the review and the execution blocks the approval,
-   * with "its original UI session or reviewed subject is no longer available"
-   * rather than a retryable error. Two shapes reach it -- a DEFERRED approval
-   * left pending while the same turn carries on with another
-   * `browser_snapshot` or a `browser_navigate` (which snapshots internally),
-   * and a second agent acting through the same module-level controller. NOT
-   * the parallel-tool shape: this orchestrator awaits each tool call in turn,
-   * so a snapshot and a click in one message always complete in order.
+   * re-snapshots OR DROPS the ids between the review and the execution blocks
+   * the approval, with "its original UI session or reviewed subject is no
+   * longer available" rather than a retryable error. Three shapes reach it --
+   * a DEFERRED approval left pending while the same turn carries on with
+   * another `browser_snapshot` or a `browser_navigate` (which snapshots
+   * internally); the same turn carrying on with a `browser_scroll` or a paging
+   * key, which drop the ids outright (#603); and a second agent acting through
+   * the same module-level controller. NOT the parallel-tool shape: this
+   * orchestrator awaits each tool call in turn, so a snapshot and a click in
+   * one message always complete in order.
    *
    * It is the same trade the sidecar's `elemGen` check already makes, the
    * message names something the user can act on, and the alternative is

@@ -533,11 +533,15 @@ func makeBrowserAXClickHandler(cfg *SidecarConfig) RPCHandler {
 		// Best effort; a hidden element will fail at the box-model step with
 		// a precise error.
 		//
-		// NOTE this scrolls, which invalidates the DOM snapshot's coordinates
-		// without changing any loaderId -- the case #603 handles for every
-		// geometry mutation, including this one, through the scroll position
-		// armed in `__jarvis_dom`.
+		// THIS SCROLLS, by definition, which moves every coordinate the DOM
+		// snapshot handed out while changing nothing any document check reports
+		// (#603). The action paths would notice at use time -- their sentinel
+		// compares each element's live position -- but the pebble's coordinate
+		// readers deliberately do not run it, so the map is dropped here
+		// instead of leaving them pointing at a pre-scroll position. The AX
+		// ids are unaffected: a backendNodeId is re-resolved live.
 		_, _ = cdp.send("DOM.scrollIntoViewIfNeeded", map[string]any{"backendNodeId": int64(backendID)})
+		cdp.forgetSnapshotElements()
 
 		raw, err := cdp.send("DOM.getBoxModel", map[string]any{"backendNodeId": int64(backendID)})
 		if err != nil {

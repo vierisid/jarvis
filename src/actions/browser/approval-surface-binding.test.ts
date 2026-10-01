@@ -71,8 +71,10 @@ function fakeChrome(): Fake {
           },
         };
       }
-      // The document-generation sentinel check (#603) and anything else the
-      // controller asks the elements world: answer "unchanged".
+      // The document-generation sentinel check (#603): nothing replaced, and
+      // nothing scrolled. Its own cases are covered in
+      // snapshot-element-identity.test.ts, where the fake can move the DOM.
+      if (expr.includes('__jarvis_dom')) return { result: { value: 'ok' } };
       return { result: { value: 'ok' } };
     }
     return {};

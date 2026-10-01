@@ -78,6 +78,8 @@ func TestBrowserTypeFocusesThroughTheIsolatedWorld(t *testing.T) {
 		t.Fatalf("first command = %q, want the document guard's Page.getFrameTree", c.Method)
 	}
 	fb.frameTreeReplyFull(c.ID, "https://app.example.com/", "L1", "https://app.example.com")
+	// Nothing replaced and nothing scrolled since the snapshot (#603).
+	fb.answerDomGeneration("ok")
 
 	// Then the focus script, in the world.
 	c = fb.nextCommand()
@@ -163,6 +165,8 @@ func TestBrowserTypeRefusesWhenTheElementDidNotTakeFocus(t *testing.T) {
 
 	c := fb.nextCommand()
 	fb.frameTreeReplyFull(c.ID, "https://app.example.com/", "L1", "https://app.example.com")
+	// Nothing replaced and nothing scrolled since the snapshot (#603).
+	fb.answerDomGeneration("ok")
 
 	c = fb.nextCommand()
 	fb.write(map[string]any{"id": c.ID, "result": map[string]any{
@@ -188,6 +192,8 @@ func TestBrowserTypeRefusesADetachedElement(t *testing.T) {
 
 	c := fb.nextCommand()
 	fb.frameTreeReplyFull(c.ID, "https://app.example.com/", "L1", "https://app.example.com")
+	// Nothing replaced and nothing scrolled since the snapshot (#603).
+	fb.answerDomGeneration("ok")
 
 	c = fb.nextCommand()
 	fb.write(map[string]any{"id": c.ID, "result": map[string]any{
@@ -213,6 +219,8 @@ func TestBrowserTypeDoesNotFallBackToACoordinateClick(t *testing.T) {
 
 	c := fb.nextCommand()
 	fb.frameTreeReplyFull(c.ID, "https://app.example.com/", "L1", "https://app.example.com")
+	// Nothing replaced and nothing scrolled since the snapshot (#603).
+	fb.answerDomGeneration("ok")
 
 	c = fb.nextCommand()
 	fb.write(map[string]any{"id": c.ID, "result": map[string]any{
@@ -238,6 +246,8 @@ func TestBrowserTypeReportsFocusLostDuringTheInsert(t *testing.T) {
 
 	c := fb.nextCommand()
 	fb.frameTreeReplyFull(c.ID, "https://app.example.com/", "L1", "https://app.example.com")
+	// Nothing replaced and nothing scrolled since the snapshot (#603).
+	fb.answerDomGeneration("ok")
 	c = fb.nextCommand()
 	fb.write(map[string]any{"id": c.ID, "result": map[string]any{
 		"result": map[string]any{"type": "string", "value": "ok"},
@@ -269,6 +279,8 @@ func TestBrowserTypeRefusesWhenFocusIsLostBeforeTheInsert(t *testing.T) {
 
 	c := fb.nextCommand()
 	fb.frameTreeReplyFull(c.ID, "https://app.example.com/", "L1", "https://app.example.com")
+	// Nothing replaced and nothing scrolled since the snapshot (#603).
+	fb.answerDomGeneration("ok")
 
 	// The focus script is happy...
 	c = fb.nextCommand()
@@ -380,6 +392,11 @@ func TestBrowserClickStillWorksForAMainDocumentElementWhenAFrameNavigates(t *tes
 			}}},
 		}},
 	})
+	// The sentinel answers per ELEMENT (#603): a frame rewriting itself leaves
+	// an element outside it alone, so a main-document id is unaffected.
+	// Scoping it any coarser would hand any page with an iframe a way to deny
+	// every click.
+	fb.answerDomGeneration("ok")
 
 	for i := 0; i < 3; i++ {
 		c = fb.nextCommand()
@@ -527,6 +544,8 @@ func TestBrowserClickStillWorksAfterASameDocumentUrlChange(t *testing.T) {
 	c := fb.nextCommand()
 	// A DIFFERENT url, the SAME loaderId -- history.pushState.
 	fb.frameTreeReplyFull(c.ID, "https://app.example.com/spa/view/2", "L1", "https://app.example.com")
+	// The DOM is untouched and nothing scrolled: a pushState changes neither.
+	fb.answerDomGeneration("ok")
 
 	// The click proceeds: three mouse events at the stored coordinates.
 	for i := 0; i < 3; i++ {
