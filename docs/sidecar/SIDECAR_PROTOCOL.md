@@ -361,9 +361,18 @@ before. With it, `result` is an object:
 | `loader_id` | that document's loaderId, which changes on every commit |
 
 **`page_url` and `loader_id` travel as a pair, or not at all.** The sidecar omits
-both unless the frame tree named the document (a non-empty `loaderId`) and
-`assertSamePage` confirmed the same document after the read. The brain refuses a
-`page_url` that arrives without a `loader_id`, and requires both to be strings.
+both unless `assertSamePage` confirmed the same document after the read, and the
+brain refuses a `page_url` that arrives without a `loader_id`, requiring both to
+be strings.
+
+An **empty `loaderId` is no longer an omission, it is a refusal.** It used to
+mean "the frame tree did not name the document, so send the bare string", which
+left it to each caller to remember -- and two of them (screenshot, evaluate)
+never did. Emptiness is now a property of `assertSamePage` itself: no usable
+document identity means no read, for every caller, rather than a read whose
+identity is quietly missing. This costs no legitimate read, because a freshly
+launched tab reports a non-empty `loaderId` once it has committed (measured, and
+`about:blank` included).
 That pair is what carries the guarantee across the wire: the brain cannot redo
 the same-document check itself -- that would be another round-trip, at a
 different instant, to the machine making the claim -- so it refuses what it
@@ -400,7 +409,8 @@ do). Enrollment is the control there.
 | new | new | identity travels; the playbook is resolved from the confirmed URL |
 | new | old | the flag is an unknown param and is ignored; the reply is the bare string, so `pageUrl` is null, no playbook is resolved, and the brain logs one line saying so |
 | old | new | the old brain never sends the flag, so it keeps receiving the bare string; nothing JSON-stringifies a snapshot into a model's context |
-| new | new, nameless document or over-long field | the identity is omitted; same as "new + old" |
+| new | new, over-long field | the identity is omitted; same as "new + old" |
+| new | new, nameless document (empty `loaderId`) | the READ is refused; there is no reply to omit the identity from |
 
 The failure direction is always the same one: no playbook, never a wrong one.
 
@@ -497,11 +507,25 @@ samples. Layers 1 and 2 are what refuse a page-chosen destination with no race
 at all.
 
 **Scope.** All of the above is about `browser_type`. `browser_ax_set_value` is a
-second typing path with its own id space, reached only by `ui_act`; it still
-runs in the page's main world through a page-replaceable value setter and has no
-document guard. The #592 *reference* defect does not exist there
-(`backendNodeId` is browser-side and fails closed after a navigation), but it is
-not covered by any of this.
+second typing path with its own id space, reached only by `ui_act`. As of #602
+it is no longer the exception it was: it resolves its node into an **isolated
+world** rather than the page's main world, so a page-replaceable value setter no
+longer sees it, and it carries a document guard of its own.
+
+Its focus check cannot copy the DOM path's, and the reason is worth recording:
+`document.activeElement` **retargets** to the shadow host, so
+`ownerDocument.activeElement === this` is always false for a field inside a
+shadow root even when focus landed correctly -- an early version of this guard
+refused every shadow-DOM form field. The check asks `getRootNode()` instead and
+falls back to the owner document for an ordinary node.
+
+The #592 *reference* defect never existed on this path (`backendNodeId` is
+browser-side and fails closed after a navigation), but the #603 *identity*
+defect did, and the AX ids have their own answer to it: a `backendNodeId` is
+renderer-local and restarts at 1 after a cross-site navigation, so ids from two
+documents collide and a stale one resolves cleanly to a different element
+(measured). A document check alone could never have made an AX id mean what it
+meant.
 
 **The coordinate-click fallback is gone.** Ask when `not_found` was reachable
 before: overwhelmingly when a navigation had replaced the document and wiped the
@@ -518,10 +542,18 @@ the connection and the approval epoch, not the document -- still held. The read
 paths have checked their document since #526/#579; the action paths did not.
 
 `browser_click`, `browser_type` and `browser_hover` now all read the frame tree
-first and refuse unless the document matches. `browser_scroll` and
-`browser_press_key` take no element id and are unchanged, and
-`browser_upload_file` already gated on a `loaderId` and an origin of its own --
-it is the model the other three now follow.
+first and refuse unless the document matches, and `browser_upload_file` already
+gated on a `loaderId` and an origin of its own -- it is the model the other
+three follow.
+
+`browser_scroll` and `browser_press_key` take no element id, but they are **not**
+unchanged: both gained a guard, and both now **retire** the element ids, because
+moving the viewport is exactly what makes a coordinate minted against the old
+scroll position wrong. A key is classified by whether it scrolls the page
+(`scrollsThePage`), and when it does the reply says so in the same sentence every
+id-dropping tool uses. The direction of the error is deliberate: a key that might
+not have scrolled still retires the ids, which costs a snapshot rather than a
+click at the wrong place.
 
 **The comparison is the `loaderId` alone, deliberately without the URL.**
 `history.pushState` rewrites `frameTree.frame.url` while the loaderId holds
@@ -541,10 +573,30 @@ advertising iframe reloading does not refuse a click on a main-document element.
 
 ### What did not change
 
-The ids are still 1-based, minted in the same document order, and the snapshot's
-**rendered text is byte-identical** -- which is what keeps all 100 webapp
-templates and every formatter test valid. The daemon and the sidecar run the
-same script and the same checks; the two are required to stay identical.
+The ids are still 1-based, minted in the same document order, and the daemon and
+the sidecar still run the same script and the same checks; the two are required
+to stay identical.
+
+The **rendered text is no longer byte-identical to what shipped before #597**,
+and the three differences are all cases where the two sides had silently
+drifted apart rather than agreed:
+
+- **Both sides count code points** for all four cuts. Go sliced page text by
+  bytes and the daemon by UTF-16 units, so a CJK page showed ~666 characters
+  remotely against 2000 locally, and either side could cut a character in half.
+- **Element text is escaped the same way.** A button labelled `Say "hello"`
+  rendered escaped remotely and raw locally, and Go's `%q` also escaped the
+  private-use glyphs an icon font uses (Material Icons ligatures are ordinary
+  button text) where `JSON.stringify` emits them raw.
+- **Control characters are stripped** from every single-line page-controlled
+  value, because a page could put a `\n` in its own `document.title` or an
+  `aria-label` and forge a `URL:` line or an extra `[2] BUTTON: ...` line inside
+  the rendered snapshot.
+
+Caps themselves change nothing under the cap. What keeps the two sides honest is
+no longer two independent `toContain` suites -- those are what let the drift
+above happen -- but a golden fixture in `sidecar/testdata/`, rendered by Go and
+byte-compared by a Bun test.
 
 ## `browser_element_point`: where a snapshot element is on the screen
 
