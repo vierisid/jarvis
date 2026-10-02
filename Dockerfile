@@ -6,13 +6,15 @@
 # native addons left after sharp was dropped — so this is just the default,
 # not a constraint; Alpine is a fair option if an image-size push wants it.
 #
-# Build:   docker build -t jarvis .
-# Build with version: docker build --build-arg VERSION=0.3.1 -t jarvis .
+# Build:   docker build --build-arg VERSION=0.3.1 -t jarvis .
+#          VERSION is REQUIRED and has no default; see the stamp step below for
+#          why. For a throwaway local image, any semver will do: 0.0.0-dev.
 # Run:     docker run -p 3142:3142 -v jarvis-data:/data -e JARVIS_API_KEY=sk-... jarvis
 #
 # ─────────────────────────────────────────────────────────────────────
 
-# Build arg: pass the release version (e.g. 0.3.1) to stamp package.json
+# Build arg: the release version (e.g. 0.3.1) stamped into package.json.
+# Deliberately NO default -- see the stamp step in the build stage.
 ARG VERSION
 
 # ─── Stage 1: Install dependencies ─────────────────────────────────
@@ -41,11 +43,54 @@ COPY roles/ roles/
 COPY scripts/ scripts/
 COPY tsconfig.json ./
 
-# Stamp release version into package.json if provided
+# Stamp the release version into package.json. REQUIRED, and no longer skipped
+# when absent (#625).
+#
+# What the old `if [ -n "$VERSION" ]; then ... fi` cost us: docker-build.yml
+# passed no build-arg, so the guard was false on every CI build and this step
+# never ran. The image CI smoked therefore carried whatever version happened to
+# be committed to package.json, while every published image carries the tag's
+# version -- CI was proving a different artifact healthy. (Note the premise in
+# #625 is wrong in one detail: the version was never EMPTY, it was stale. There
+# is no "unknown" branch for a consumer to take, so nothing was exercising one.)
+# Worse, the skip meant the stamp COMMAND ran in no CI job at all (the RUN layer
+# executed on every build; the `if` simply took its false branch), so a break in
+# it could only ever surface as a failed release.
+#
+# A default would NOT fix that. It would make a caller who OMITS the build-arg
+# build successfully with a placeholder, and the registry tags come from a
+# completely separate path (docker/metadata-action, off the git tag), so
+# deleting the `build-args:` line from release-exec.yml would publish
+# ghcr.io/...:v1.2.3 containing a package.json that says something else, green
+# and silent. No default plus a hard failure covers BOTH omission and an
+# explicit `--build-arg VERSION=`, which is why the version is required here.
+# The cost is that a bare `docker build .` now fails; it fails loudly, naming
+# the flag, which is the trade.
+#
+# Stamped with bun rather than `bunx npm version`: bunx resolves and downloads
+# the npm package from the registry at build time, at whatever `latest` is. That
+# was tolerable while this step only ran during a release; making it
+# unconditional would have put an unpinned registry fetch in the path of every
+# PR image build. bun is already in the image, so this needs no network.
+#
+# The regex enforces semver including the no-leading-zero rule, so it rejects
+# everything `npm version` rejects. It differs deliberately in one direction:
+# `npm version` accepts a leading `v` and normalises it away, this does not.
+# Every caller already passes `${RELEASE_TAG#v}`, and a `v` arriving here means
+# something upstream stopped stripping it, which is worth failing on.
+#
+# `${VERSION:-}` rather than `$VERSION`: `set -u` is in effect, and a declared
+# ARG with no value may not be exported into the RUN environment at all, in
+# which case a bare dereference would abort with "unbound variable" and this
+# message -- the one that names the flag -- would never print for the omission
+# case, which is the common one.
 ARG VERSION
-RUN if [ -n "$VERSION" ]; then \
-      bunx npm version "$VERSION" --no-git-tag-version --allow-same-version; \
-    fi
+RUN set -eu; \
+    [ -n "${VERSION:-}" ] || { \
+      echo "VERSION build-arg is required and was empty. Pass --build-arg VERSION=<semver>." >&2; \
+      exit 1; \
+    }; \
+    VERSION="$VERSION" bun -e 'const v = process.env.VERSION; if (!/^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$/.test(v)) throw new Error("VERSION is not semver: " + v); const f = "package.json"; const p = await Bun.file(f).json(); p.version = v; await Bun.write(f, JSON.stringify(p, null, 2) + String.fromCharCode(10)); console.log("stamped package.json version " + v)'
 
 # Copy ONNX wake-word models and WASM runtime from node_modules into ui/public/
 RUN mkdir -p ui/public/openwakeword/models ui/public/ort && \

@@ -93,6 +93,15 @@ jobs:
       # reusing this build instead of rebuilding in a second job or shipping the
       # image between jobs as a multi-hundred-MB artifact. `load` forces the
       # docker exporter, which is single-platform -- already true here.
+      #
+      # VERSION is passed, and is now REQUIRED by the Dockerfile (#625). Before,
+      # this workflow passed nothing, the Dockerfile's stamp step skipped itself,
+      # and the image smoked here carried whatever version was committed to
+      # package.json rather than a release's -- so CI proved a slightly
+      # different artifact healthy, and the stamp instruction itself ran in no CI
+      # job at all. 0.0.0-ci is deliberately recognisable as not-a-release, and
+      # it is never pushed anywhere: push: false, and this workflow has no
+      # registry login.
       - name: Build Docker image (validate)
         uses: docker/build-push-action@v6
         with:
@@ -102,6 +111,7 @@ jobs:
           push: false
           load: true
           tags: ${{ env.IMAGE_TAG }}
+          build-args: VERSION=0.0.0-ci
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
