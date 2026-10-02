@@ -308,6 +308,115 @@ describe('ui_act postcondition parsing', () => {
   });
 });
 
+describe('ui_act\'s gate intent reduces the page text it quotes (#631)', () => {
+  beforeEach(() => resetUiSnapshots());
+
+  /**
+   * The gate for the sole element of a one-element snapshot.
+   *
+   * `idOf` is no use here: these names carry newlines on purpose, so the line
+   * that prints one is not the line that carries its `[id]`. The id is read
+   * off the first `[n]` the snapshot prints instead.
+   */
+  async function gateFor(name: string, action: unknown = 'click') {
+    const calls: Call[] = [];
+    setSidecarManagerRef(fakeManager([[el(1, name)]], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'desktop' }) as string;
+    const id = Number(snap.match(/\[(\d+)\] Button/)![1]);
+    const gate = uiActTool.authorityGate!({ element_id: id, action });
+    if (!gate) throw new Error('ui_act returned no gate for a click');
+    return gate;
+  }
+
+  /** The sentence must still END with its warning, whatever the value was. */
+  const CLOSES = 'UI labels do not prove what an action will do.';
+
+  it('caps an element name so it cannot run on past the sentence', async () => {
+    // A page can name an element anything. Unreduced, this pushed the warning
+    // that closes the sentence off the end of the card a person reads: the same
+    // input measured 5179 characters before the fix.
+    const long = `Save${'x'.repeat(5000)}`;
+    const gate = await gateFor(long);
+    expect(gate.intent!.length).toBeLessThan(400);
+    expect(gate.intent).not.toContain('x'.repeat(200));
+    expect(gate.intent!.endsWith(CLOSES)).toBe(true);
+  });
+
+  it('drops the control characters forCard leaves behind', async () => {
+    // `forCard` strips the bidi and zero-width class and collapses `\s`, which
+    // leaves raw C0 and DEL. Escaped rather than dropped they would also expand
+    // six-fold (`\u001b` is six characters for one), so the 80-char cap would
+    // not bound what a reader sees. Dropped, the cap means what it says.
+    const gate = await gateFor(`Save${'\u001b'.repeat(500)}\u0001\u007f`);
+    expect(gate.intent!.length).toBeLessThan(300);
+    expect(gate.intent).toContain('"Save"');
+    expect(gate.intent).not.toContain('\u001b');
+    expect(gate.intent).not.toContain('\\u001b');
+    // Quoted on both sides, so nothing can forge the end of the value.
+    expect(gate.intent).toMatch(/element \[\d+\] ".*" on /);
+    expect(gate.intent!.endsWith(CLOSES)).toBe(true);
+  });
+
+  it('keeps a verb when the action reduces to nothing', async () => {
+    // A single zero-width character is TRUTHY, so a `|| 'click'` applied before
+    // the reduction would not fire and the sentence would lose its verb.
+    const gate = await gateFor('Send', '​');
+    expect(gate.intent!.startsWith('Review click on ')).toBe(true);
+  });
+
+  it('drops the bidi overrides that reorder a card, and collapses the layout', async () => {
+    // A right-to-left override survives a length cap untouched and renders the
+    // rest of the sentence in another order.
+    const hostile = 'Delete\n\n\n  all‮messages';
+    const gate = await gateFor(hostile);
+    expect(gate.intent).not.toContain('‮');
+    expect(gate.intent).toContain('Delete all');
+    // No ESCAPED newline either: the whitespace is collapsed before quoting,
+    // so the card shows one line rather than a `\n`-littered one. (Asserting
+    // the raw character would be tautological here -- JSON.stringify escapes
+    // it regardless -- so the real assertion is on the escape.)
+    expect(gate.intent).not.toContain('\\n');
+  });
+
+  it('caps the target, which is the model\'s own string when no sidecar matches', async () => {
+    const calls: Call[] = [];
+    setSidecarManagerRef(fakeManager([[el(1, 'Send')]], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'desktop', target: `pc${'y'.repeat(5000)}` }) as string;
+    const gate = uiActTool.authorityGate!({ element_id: idOf(snap, 'Send'), action: 'click' });
+    expect(gate!.intent!.length).toBeLessThan(400);
+    expect(gate!.intent).not.toContain('y'.repeat(200));
+    // The target is NOT quoted, so here a raw newline really would scroll the
+    // verb out of view, and the collapse is the only thing stopping it.
+    expect(gate!.intent).not.toContain('\n');
+    expect(gate!.intent!.endsWith(CLOSES)).toBe(true);
+  });
+
+  it('reduces the action too, which the enum does not yet constrain here', async () => {
+    // `validateParameters` enforces the enum inside `execute`, i.e. AFTER the
+    // card is built and shown, so at gate time `action` is just a string the
+    // model wrote. It leads the sentence, so an unreduced one pushed the
+    // closing warning off exactly as the element name did.
+    const gate = await gateFor('Send', `click${'z'.repeat(5000)}`);
+    expect(gate.intent!.length).toBeLessThan(400);
+    expect(gate.intent).not.toContain('z'.repeat(200));
+    expect(gate.intent!.endsWith(CLOSES)).toBe(true);
+  });
+
+  // Both classes have to reach the fallback: `forCard` removes the first, and
+  // this module's own CARD_CONTROLS the second. Before that strip an all-C0
+  // target was still non-empty, no fallback fired, and the card read "on .".
+  for (const [label, target] of [
+    ['zero-width', '​​'],
+    ['C0 control', '\u0001\u0002'],
+  ] as const) it(`names the machine when a ${label} target reduces to nothing`, async () => {
+    const calls: Call[] = [];
+    setSidecarManagerRef(fakeManager([[el(1, 'Send')]], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'desktop', target }) as string;
+    const gate = uiActTool.authorityGate!({ element_id: idOf(snap, 'Send'), action: 'click' });
+    expect(`${label}:${gate!.intent!.includes('on (unnamed machine).')}`).toBe(`${label}:true`);
+  });
+});
+
 describe('advertised actions exist', () => {
   beforeEach(() => resetUiSnapshots());
 

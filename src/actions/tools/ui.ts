@@ -22,6 +22,57 @@ import { resolveRef } from '../../structural/resolver.ts';
 import { recordPerception } from '../../structural/telemetry.ts';
 import type { SemanticNode, SemanticSurface } from '../../structural/types.ts';
 import { uiEffectHints } from '../../authority/ui-intent';
+import { forCard } from '../../util/card-text.ts';
+
+/**
+ * Cap for the two free-text values in `ui_act`'s gate sentence (#631).
+ *
+ * 80, the sibling convention for a value in the MIDDLE of a card sentence
+ * (src/sites/builder-tools.ts states the rule): the 600-char budget is for a
+ * value placed last, where there is nothing after it to impersonate. Both
+ * values here are mid-sentence on purpose -- the warning that UI labels do not
+ * prove what an action will do has to stay after them -- so they take the short
+ * cap, which is the one that stops a value forging an ending.
+ */
+const UI_CARD_VALUE = 80;
+
+/**
+ * Control characters `forCard` does not remove, dropped here.
+ *
+ * `forCard` strips the `Cf`/bidi/zero-width class and collapses `\s`, which
+ * leaves raw C0 (minus the whitespace ones) and DEL untouched -- so a name of
+ * `\u0001\u0001` survives it non-empty and renders as nothing on the card, and a
+ * `\u001b` sequence renders as terminal junk or disappears. Removed rather than
+ * escaped, for the reason `card-text.ts` gives for the invisibles it drops: a
+ * card is prose for a person, and no legitimate element name or machine name
+ * needs a control character in it. `roles/untrusted.ts`'s `IGNORABLE` makes the
+ * same call for the same characters.
+ *
+ * Local to this module on purpose. It belongs in `forCard` -- every sibling gate
+ * that puts a reduced value into card prose UNQUOTED has the same hole -- but
+ * that is 17 other call sites and a separate change.
+ */
+const CARD_CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
+
+/** One value for the gate sentence: reduced, de-controlled, capped. */
+function cardPlain(value: unknown): string {
+  return forCard(String(value ?? '').replace(CARD_CONTROLS, ''), UI_CARD_VALUE);
+}
+
+/**
+ * The same, quoted, for a value a reader needs to see the edges of.
+ *
+ * Reducing BEFORE quoting is what keeps the quotes balanced: a `"` or a `\` in
+ * the value cannot break out of them, and there is no second cut that could drop
+ * the closing one. It also makes the cap honest. `JSON.stringify` expands what it
+ * escapes, and with the controls already gone the only escapes left are `"` and
+ * `\` at two characters each, so 80 kept characters render as at most 162 -- not
+ * the near-500 a `\u001b`-dense name would have produced had they been escaped
+ * rather than dropped.
+ */
+function cardValue(value: unknown): string {
+  return JSON.stringify(cardPlain(value));
+}
 
 const ACT_RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
 /** Below this the surface is mostly canvas/custom-drawn and vision wins. */
@@ -251,7 +302,37 @@ export const uiActTool: ToolDefinition = {
     return { actionCategory: 'control_app',
       actionCategories: [...hints, ...(entry.kind === 'browser' ? ['access_browser' as const] : [])],
       confirm: 'always',
-      intent: `Review ${String(params.action || 'click')} on ${entry.kind} element [${params.element_id}] ${JSON.stringify(entry.node.name)} on ${entry.target}. Business effect unknown beyond UI hints${hints.length ? ` (${hints.join(', ')})` : ''}; inspect the current screen and arguments. UI labels do not prove what an action will do.`,
+      // EVERY interpolated value is reduced, like every sibling gate (#631).
+      // The person reads this sentence on the approval card, and
+      // `deferred-executor`'s blocked branches put it in
+      // `approval_requests.execution_result`. Where each one comes from:
+      //
+      //   node.name  an accessibility element's name -- text off a web page or
+      //              an app window. Quoted as well as reduced.
+      //   target     `canonicalTarget` falls back to the raw `target` the model
+      //              wrote when no sidecar matches it, so this is not ours
+      //              either. Unquoted, hence the fallback: a target made only
+      //              of invisible characters survives the caller's `.trim()`
+      //              and would otherwise leave "on . Business effect...".
+      //   action     the MODEL's own string, and not enum-checked yet at this
+      //              point: `validateParameters` runs inside `execute`, which
+      //              is after the card is built and shown. An out-of-enum
+      //              action cannot execute, but it could run on past the
+      //              sentence here, which is the same defect as the other two.
+      //
+      // Both fallbacks come AFTER the reduction, not before it. `params.action`
+      // of a single zero-width character is truthy, so a `|| 'click'` in front
+      // would not fire and the reduction would then leave the sentence with no
+      // verb at all; the same for a target of invisibles leaving "on .".
+      //
+      // NOT reduced, on purpose: `element_id` is a number or the `addressed`
+      // lookup above returned nothing, and `hints` is a closed `ActionCategory`
+      // enum out of `uiEffectHints`. `entry.title` and `entry.url` reach that
+      // function and nothing else, so they never land in this string.
+      //
+      // The hints are computed on the RAW name, before the cap, so a long label
+      // cannot drop a `make_payment` or `delete_data` raise by being cut.
+      intent: `Review ${cardPlain(params.action) || 'click'} on ${entry.kind} element [${params.element_id}] ${cardValue(entry.node.name)} on ${cardPlain(entry.target) || '(unnamed machine)'}. Business effect unknown beyond UI hints${hints.length ? ` (${hints.join(', ')})` : ''}; inspect the current screen and arguments. UI labels do not prove what an action will do.`,
     };
   },
   parameters: {

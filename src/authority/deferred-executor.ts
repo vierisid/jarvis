@@ -30,8 +30,14 @@ export type ExecutionResultCallback = (requestId: string, request: ApprovalReque
  * that is the point: a bound that only some branches apply is a bound the next
  * branch forgets. Two of them do interpolate outside-derived text -- a
  * per-call gate's `intent`, which for `ui_act` is built from an accessibility
- * element's name (`actions/tools/ui.ts`, which does not reduce it through
- * `forCard` the way other intents do) -- so this is not only hygiene.
+ * element's name (`actions/tools/ui.ts`) -- so this is not only hygiene.
+ *
+ * That `intent` IS reduced at its source since #631: `ui_act` was the one gate
+ * whose values skipped `forCard`, and it no longer is. This bound is therefore
+ * no longer the only thing standing between a page's text and this column --
+ * but it stays load-bearing all the same, because it is the bound that holds
+ * for a gate written next year by someone who has not read #631, and because
+ * `forCard` is a cap on a VALUE while this is a cap on the whole row.
  *
  * It belongs on `ApprovalManager.markExecuted`, which owns the column, rather
  * than on each caller. That is a coordination cost and not a design preference:
