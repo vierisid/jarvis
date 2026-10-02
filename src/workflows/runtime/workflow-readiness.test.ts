@@ -3,7 +3,7 @@ import { compileWorkflow } from './workflow-readiness';
 import { PieceCatalog, propsToInputSchema } from './piece-catalog';
 import { validateCronExpression, CronScheduler } from '../../lib/cron-scheduler';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../db';
-import { configureWorkflowReadiness, versionReadiness } from '../db/repos/flow-readiness';
+import { configureWorkflowReadiness, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
 import { createFlow, getFlow, setPublishedVersion, updateFlowStatus } from '../db/repos/flow';
 import { createDraftVersion, getFlowVersion, updateDraftVersion, setSampleInputEntry } from '../db/repos/flow-version';
 import { publishFlowVersion } from '../db/repos/flow-publication';
@@ -461,4 +461,103 @@ test('review R3: ordinary array row contracts reject known missing and invalid f
     expect(result.issues).toEqual([]);
     expect(result.runtimeChecks.some(c => c.guard === 'piece-input')).toBe(true);
   }
+});
+
+
+/**
+ * #633. `WorkflowReadinessError`'s message joined EVERY issue with `'; '`, and
+ * each issue carried `node` -- `raw.name` kept verbatim -- plus a `path` built
+ * from caller-supplied JSON keys.
+ *
+ * The filed title says the issue list is "bounded by graph breadth, not by the
+ * 100-node limit", and that part is wrong: `compileWorkflow`'s `issue()` does
+ * clamp the issue COUNT at 100. What was unbounded is each issue's CONTENT, so
+ * ONE issue could carry as much text as the 4 MB version-write body allowed
+ * into a node name. Both halves are pinned below, because capping the list
+ * without capping the fields would have fixed nothing.
+ *
+ * Defence in depth at the source: #608 already caps this where a model reads it
+ * and #609 bounds the body that writes the names.
+ */
+test('#633: a readiness message is bounded by its own caps, not by the graph', () => {
+  // One node, one enormous name. `compileWorkflow` is called with NO context,
+  // so the PIECE node has no catalog to resolve against and raises a `PIECE`
+  // issue carrying its whole name -- which is the point: a 50,000-character
+  // name of pure letters is a perfectly VALID identifier and raises nothing on
+  // its own, so the issue has to come from somewhere else for this to be a
+  // test of anything. The code is asserted so the mechanism is pinned rather
+  // than incidental.
+  const huge = 'n'.repeat(50_000);
+  const single = compileWorkflow(graph({ ...step(), name: huge }));
+  const singleError = new WorkflowReadinessError(single);
+  expect(single.issues.map(i => i.code)).toContain('PIECE');
+  expect(single.issues[0]!.node).toBe(huge);
+  // Before the fix this was ~50,000 characters for one issue.
+  expect(singleError.message.length).toBeLessThan(1_500);
+  // The node is still identifiable from what survives.
+  expect(singleError.message).toContain('nnnnnnnnnn');
+  // And the structured list the 422 body carries is NOT cut -- a client reads
+  // that, and #608 caps the model-facing copy separately.
+  expect(singleError.readiness.issues[0]!.node.length).toBe(50_000);
+
+  // Now the breadth half: a ROUTER visits every child, so each child past the
+  // 100-node limit raises its own LIMIT issue with its own name.
+  const children: any[] = [];
+  const branches: any[] = [];
+  for (let i = 0; i < 150; i++) {
+    children.push({ ...step(), name: `${'c'.repeat(300)}${i}` });
+    branches.push({ branchType: 'FALLBACK', branchName: `b${i}` });
+  }
+  const router: any = { name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_ALL_MATCH', branches }, children };
+  const wide = compileWorkflow(graph(router));
+  const wideError = new WorkflowReadinessError(wide);
+  // Many issues raised, and the message names only the first few of them.
+  expect(wide.issues.length).toBeGreaterThan(10);
+  expect(wideError.message.length).toBeLessThan(12_000);
+  expect(wideError.message).toMatch(/; and \d+ more issues$/);
+  // The count the note reports cannot exceed 90, because `issue()` clamps the
+  // list at 100 whatever the graph's width.
+  const omitted = Number(/and (\d+) more issues$/.exec(wideError.message)![1]);
+  expect(omitted).toBeLessThanOrEqual(90);
+  expect(omitted).toBe(wide.issues.length - 10);
+  // Every issue still reaches the structured list.
+  expect(wideError.readiness.issues.length).toBe(wide.issues.length);
+});
+
+/**
+ * The same caps close an amplification one level up. `contextFor().workflow()`
+ * embeds a NESTED flow's first issue into the calling flow's issue MESSAGE, and
+ * `workflow()` recurses 16 levels deep, so without a cut one
+ * `readiness.issues[].message` -- in the 422 BODY, not just in `Error.message`
+ * -- could carry 16 different flows' worth of verbatim stored graph text.
+ *
+ * It saturates rather than accumulating: each level's return value is cut again
+ * when it becomes the level above's `first.message`.
+ */
+test('#633: a nested workflow binding cannot amplify a stored node name', () => {
+  // A LEADING DIGIT is what makes this name fail the identifier pattern, which
+  // is what produces an issue whose `node` is the whole 40,000-character
+  // string. A long name of pure letters is a perfectly valid identifier and
+  // raises nothing -- so without the digit this test would assert on an empty
+  // readiness and pass whatever the code did.
+  const long = `9${'z'.repeat(40_000)}`;
+  const target = draft(graph({ ...step(), name: long }));
+  const binding: any = {
+    name: 'call_child', type: 'PIECE',
+    settings: { pieceName: 'test', actionName: 'child', input: { flow: target.flow.id } },
+  };
+  const host = draft(graph(binding));
+  const readiness = versionReadiness(host.flow.id, host.version.id);
+
+  // Non-vacuous: the host really does raise a WORKFLOW_BINDING issue about the
+  // target, so there really is a nested message to amplify.
+  const nested = readiness.issues.find(issue => issue.code === 'WORKFLOW_BINDING');
+  expect(nested).toBeDefined();
+  expect(nested!.message).toContain('Target workflow is not ready');
+  expect(nested!.message).toContain('zzzzzzzzzz');
+
+  // The 40,000-character name does not arrive verbatim, at either layer.
+  expect(nested!.message).not.toContain(long);
+  expect(nested!.message.length).toBeLessThan(1_500);
+  expect(new WorkflowReadinessError(readiness).message.length).toBeLessThan(2_000);
 });

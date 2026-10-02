@@ -13,11 +13,75 @@ export function configureWorkflowReadiness(context: ReadinessServices): void {
   services.set(getWorkflowDb(), context);
 }
 
+/**
+ * How many issues the thrown MESSAGE names before it summarizes (#633).
+ *
+ * The in-repo pattern for exactly this is `flow-code-steps.ts`'s
+ * `MAX_NAMED_STEPS = 6`. 10 rather than 6 because the full list survives
+ * untouched on `this.readiness`, which `workflows/api/routes.ts` spreads into
+ * the 422 body -- so this string is a summary for a log, a thrown message and a
+ * notification, not the only copy. 10 is enough to see a pattern.
+ *
+ * The omission note can never say more than 90, because `compileWorkflow`'s
+ * `issue()` already clamps `issues` at 100 entries however wide the graph is.
+ */
+const MAX_MESSAGE_ISSUES = 10;
+
+/**
+ * Per-field cuts for one issue in that message (#633).
+ *
+ * The filed title -- "bounded by graph breadth, not by the 100-node limit" --
+ * is wrong about the mechanism: `issue()` in `runtime/workflow-readiness.ts`
+ * does clamp the issue COUNT at 100. What was unbounded is each issue's
+ * CONTENT. `node` is `raw.name` kept verbatim, `path` is built up as
+ * `${path}.${key}` from caller-supplied JSON keys, and some messages
+ * interpolate a reference name or the expression evaluator's error. So a single
+ * issue could carry ~4 MB, which is what `VERSION_WRITE_MAX_BODY_BYTES` allows
+ * into the graph in the first place. Capping the list without capping the
+ * fields would have fixed nothing.
+ *
+ * `node` at 120: the number `runtime/effect-boundary.ts` already uses for an
+ * unvalidated step name on its way into a durable row. A node name that is
+ * LEGITIMATE must match `/^[a-zA-Z_][a-zA-Z0-9_]*$/` for the flow to run at
+ * all, so real ones are `step_1` and `send_email`.
+ *
+ * `path` and `message` at 512. These are defence-in-depth numbers and NOT
+ * claims to admit every legitimate value: a path's length is not bounded by the
+ * depth-64 cap, because that bounds the number of SEGMENTS while each segment
+ * is an unbounded caller-supplied key. 512 is simply generous -- the longest
+ * fixed message in `workflow-readiness.ts` is about 110 characters.
+ *
+ * Worst case 10 x (120 + 512 + 512 + 6) plus the note, so ~11.5 KB against the
+ * ~4 MB one issue could reach before.
+ *
+ * DEFENCE IN DEPTH, deliberately, and sized for it: #608 already caps this
+ * where a model reads it (`markUntrustedToolFailure` cuts then frames) and
+ * #609 bounds the request body that writes the names. This is the source.
+ */
+const MAX_ISSUE_NODE_CHARS = 120;
+const MAX_ISSUE_PATH_CHARS = 512;
+const MAX_ISSUE_MESSAGE_CHARS = 512;
+
+const cut = (value: string, max: number) => value.length > max ? `${value.slice(0, max)}...` : value;
+
+/** One issue as the message renders it, with each field bounded. */
+function issueLine(issue: { node: string; path: string; message: string }): string {
+  return `${cut(issue.node, MAX_ISSUE_NODE_CHARS)} (${cut(issue.path, MAX_ISSUE_PATH_CHARS)}): `
+    + cut(issue.message, MAX_ISSUE_MESSAGE_CHARS);
+}
+
 export class WorkflowReadinessError extends Error {
   readonly code = 'WORKFLOW_NOT_READY';
   readonly status = 422;
   constructor(readonly readiness: WorkflowReadiness) {
-    super(readiness.issues.map(i => `${i.node} (${i.path}): ${i.message}`).join('; '));
+    // `this.readiness` keeps every issue, untouched: the 422 body carries the
+    // structured list and that is what a client should read. Only the MESSAGE
+    // is bounded. Note the `'; '` join is not a parseable separator and never
+    // was -- `workflow-readiness.ts`'s "Piece catalog is unavailable; readiness
+    // cannot be verified" contains one -- so nothing may try to split it back.
+    const shown = readiness.issues.slice(0, MAX_MESSAGE_ISSUES).map(issueLine).join('; ');
+    const omitted = readiness.issues.length - Math.min(readiness.issues.length, MAX_MESSAGE_ISSUES);
+    super(omitted > 0 ? `${shown}; and ${omitted} more issue${omitted > 1 ? 's' : ''}` : shown);
     this.name = 'WorkflowReadinessError';
   }
 }
@@ -67,7 +131,21 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
       const readiness = compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget));
       cache.set(id, readiness);
       const first = readiness.issues[0];
-      return first ? `Target workflow is not ready: ${first.node} (${first.path}): ${first.message}` : null;
+      // Bounded with the same cuts the thrown message uses (#633), because this
+      // is where the amplification lived: the string returned here becomes a
+      // WORKFLOW_BINDING issue's `message` in the CALLER's readiness, and
+      // `workflow()` recurses up to 16 levels, each level embedding the level
+      // below's first issue. Unbounded, one `readiness.issues[].message` -- in
+      // the 422 BODY, not just in `Error.message` -- could carry 16 flows'
+      // worth of verbatim stored graph text.
+      //
+      // It SATURATES rather than accumulating, which is the honest description:
+      // level k's ~1.2 KB return value is itself cut to 512 when it becomes
+      // level k-1's `first.message`, so the whole chain stays around 1.2 KB
+      // whatever the depth. The cost is that detail from below the first level
+      // or two of nesting is dropped from the string -- the nested flow's own
+      // `/readiness` is where that detail lives.
+      return first ? `Target workflow is not ready: ${issueLine(first)}` : null;
     },
   };
 }
