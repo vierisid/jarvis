@@ -7,7 +7,7 @@
  * src/workflows/activepieces/packages/shared/src/lib/automation/flow-run/execution/flow-execution.ts
  */
 
-import type { Database } from "bun:sqlite";
+import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getRunCancellation, type RunCancellation } from "./run-cancellation";
 import { getRunMachineBinding, type RunMachineBinding } from "./run-machine-binding";
 import { getWorkflowDb, DEFAULT_IDS } from "../index";
@@ -288,39 +288,80 @@ export interface ListRunsOptions {
   offset?: number;
 }
 
+/**
+ * A page of runs, newest first.
+ *
+ * ORDER BY `created DESC, rowid DESC`, and the tiebreak is the whole point
+ * (#636). `created` is a millisecond timestamp with no uniqueness, so two runs
+ * created in the same millisecond had no defined order between them.
+ *
+ * WHAT THAT ACTUALLY COST, measured rather than assumed, because the filed
+ * symptom and the real one turned out not to be the same thing:
+ *
+ *   - THE LISTING WAS BACKWARDS for same-millisecond runs. With no tiebreak
+ *     SQLite's sorter leaves equal keys in scan order, so `created DESC`
+ *     returned a block of same-millisecond rows OLDEST first. A flow that
+ *     enqueued 120 runs inside one millisecond showed the 50 OLDEST of them on
+ *     the first page of a listing whose whole contract is "newest first". That
+ *     is the reproducible defect, and it is what the tests pin.
+ *   - SKIP AND REPEAT ACROSS PAGES, which the issue leads with, is NOT fixed by
+ *     a tiebreak, and was not reproducible without one either: measured both
+ *     ways on a static table, paging returns every row exactly once. What
+ *     breaks OFFSET paging is a row inserted or deleted BETWEEN two page reads,
+ *     and that is true under any total order -- a new newest-first row shifts
+ *     every later row down by one, so page 2 repeats page 1's last entry. Only
+ *     keyset pagination fixes that, and it needs the route to hand back a
+ *     cursor. So this makes the order DEFINED; it does not make OFFSET paging
+ *     concurrency-safe, and saying otherwise would be false comfort.
+ *
+ * The defined order is worth having on its own terms even so: SQL guarantees
+ * nothing about equal keys, so the old query's page-to-page consistency was an
+ * accident of this planner that an index on `created`, a spilled sort or a
+ * version bump could take away silently.
+ *
+ * #609 is what made any of it matter: once `GET /api/workflows/:id/runs`
+ * clamped `limit` to 100, paging became the only way to read past 100 runs.
+ *
+ * `rowid` rather than `id`, which is the other obvious tiebreak and is also
+ * total (`id` is the PRIMARY KEY). `id` is `apId()`, i.e. nanoid, so ordering
+ * by it would break same-millisecond ties at RANDOM -- total and stable, which
+ * is all paging strictly needs, but it would replace today's de-facto
+ * insertion order with noise in the listing a user reads. `flow_run` is an
+ * ordinary rowid table (`id TEXT PRIMARY KEY`, not WITHOUT ROWID), so `rowid`
+ * is unique, never reused while rows live, and ascends with insertion: it is
+ * total AND chronological, which is what "newest first" is supposed to mean.
+ *
+ * ONE query rather than the four near-identical branches this replaces. The
+ * four each carried their own copy of the ORDER BY, which is four places for a
+ * tiebreak to be added to three of them. Only literal SQL fragments are
+ * concatenated; every value stays a bound parameter.
+ *
+ * Still OFFSET paging, so cost stays O(offset) and there is no index on
+ * `created` to help (`schema.ts` indexes `flow_id`, `status`, `project_id`,
+ * `start_time`, `parent_run_id`). Unchanged by this, since the sort was a full
+ * sort of the filtered set before too. Keyset pagination would fix both, and
+ * wants the route to hand back a cursor -- which `rowid` is not meant to be,
+ * so that is a separate change.
+ */
 export function listRuns(opts: ListRunsOptions = {}): FlowRun[] {
   const limit = opts.limit ?? 50;
   const offset = opts.offset ?? 0;
 
-  // Manually compose a small WHERE clause; flow_id and status are the only filters.
-  if (opts.flowId !== undefined && opts.status !== undefined) {
-    return db()
-      .query<FlowRunRow, [string, FlowRunStatus, number, number]>(
-        `SELECT * FROM flow_run WHERE flow_id = ? AND status = ? ORDER BY created DESC LIMIT ? OFFSET ?`,
-      )
-      .all(opts.flowId, opts.status, limit, offset)
-      .map(rowToRun);
-  }
+  const filters: string[] = [];
+  const args: SQLQueryBindings[] = [];
   if (opts.flowId !== undefined) {
-    return db()
-      .query<FlowRunRow, [string, number, number]>(
-        `SELECT * FROM flow_run WHERE flow_id = ? ORDER BY created DESC LIMIT ? OFFSET ?`,
-      )
-      .all(opts.flowId, limit, offset)
-      .map(rowToRun);
+    filters.push("flow_id = ?");
+    args.push(opts.flowId);
   }
   if (opts.status !== undefined) {
-    return db()
-      .query<FlowRunRow, [FlowRunStatus, number, number]>(
-        `SELECT * FROM flow_run WHERE status = ? ORDER BY created DESC LIMIT ? OFFSET ?`,
-      )
-      .all(opts.status, limit, offset)
-      .map(rowToRun);
+    filters.push("status = ?");
+    args.push(opts.status);
   }
+  const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
   return db()
-    .query<FlowRunRow, [number, number]>(
-      `SELECT * FROM flow_run ORDER BY created DESC LIMIT ? OFFSET ?`,
+    .query<FlowRunRow, SQLQueryBindings[]>(
+      `SELECT * FROM flow_run${where} ORDER BY created DESC, rowid DESC LIMIT ? OFFSET ?`,
     )
-    .all(limit, offset)
+    .all(...args, limit, offset)
     .map(rowToRun);
 }

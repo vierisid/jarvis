@@ -1884,11 +1884,19 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // clamp a negative `limit` reached SQLite verbatim as well, where
           // `LIMIT -1` means no limit at all.
           //
-          // Paging past the ceiling works -- `offset` has no upper bound -- but
-          // `listRuns` orders by `created DESC`, a millisecond timestamp with no
-          // tiebreak, so two runs created in the same millisecond can be skipped
-          // or repeated across pages. Pre-existing, and now reachable because
-          // paging is the only way past 100; filed rather than fixed here.
+          // Paging past the ceiling works -- `offset` has no upper bound -- and
+          // it is now STABLE: `listRuns` orders by `created DESC, rowid DESC`
+          // (#636), where it used to order by `created DESC` alone, a
+          // millisecond timestamp with no tiebreak, so two runs created in the
+          // same millisecond could be skipped or repeated across a page
+          // boundary.
+          //
+          // This response is still a bare ARRAY with no `nextOffset`, unlike
+          // the `/readiness` sibling, so a client has to page by incrementing
+          // `offset` until it gets a short page. Deliberately left: adding it
+          // means `ok({ items, nextOffset })`, and `ui/`'s two consumers
+          // (`useWorkflowsData.ts`, `useFlowRuns.ts`) read this as an array.
+          // Filed as its own change, with the response shape as its subject.
           const { limit, offset } = clampPage(params, 50);
           const opts: { flowId: string; status?: FlowRunStatus; limit: number; offset: number } = {
             flowId: id,

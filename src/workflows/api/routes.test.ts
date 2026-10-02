@@ -2415,3 +2415,120 @@ describe("#635: the sample-data map is bounded as a whole, by every writer", () 
     );
   });
 });
+
+/**
+ * #636. `listRuns` ordered by `created DESC` alone -- a millisecond timestamp
+ * with no uniqueness -- so same-millisecond runs had no defined order.
+ *
+ * The REPRODUCIBLE consequence, which is what the first test pins, is not the
+ * one the issue leads with: with no tiebreak SQLite leaves equal sort keys in
+ * scan order, so a block of same-millisecond runs came back OLDEST first and
+ * the first page of a "newest first" listing showed the oldest runs in the
+ * block. `createFlowRun` stamps `created` from `Date.now()`, so a tight loop --
+ * or a trigger enqueueing a batch -- puts the whole block in one millisecond.
+ *
+ * Skip-and-repeat across pages, which the issue leads with, is a separate
+ * matter: it is NOT fixed by a tiebreak and was not reproducible without one.
+ * Measured both ways on a static table, paging returns every row exactly once
+ * either way; what breaks OFFSET paging is a write BETWEEN two page reads, and
+ * that is true of any total order. The paging tests below therefore passed
+ * before this change too, and are kept as property guards rather than as
+ * regression tests -- labelled so nobody mistakes them for proof of a fix.
+ * See `listRuns`' own docblock.
+ */
+describe("#636: run ordering is defined, so a page means something", () => {
+  async function flowWithRuns(count: number): Promise<{ flowId: string; ids: string[] }> {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const version = createDraftVersion({
+      flowId: flow.id, displayName: "paged",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    });
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      ids.push(createFlowRun({ flowId: flow.id, flowVersionId: version.id, triggeredBy: `run_${i}` }).id);
+    }
+    return { flowId: flow.id, ids };
+  }
+
+  const page = async (id: string, query: string) =>
+    ((await callJson(
+      routes["/api/workflows/:id/runs"]?.GET,
+      reqWithParams("GET", `http://x/api/workflows/${id}/runs${query}`, { id }),
+    )).body as Array<{ id: string; created: number }>);
+
+  /**
+   * THE regression test. Fails before the fix, where the first page carried the
+   * OLDEST runs of the same-millisecond block instead of the newest.
+   */
+  test("same-millisecond runs come back newest first, not oldest first", async () => {
+    const { flowId, ids } = await flowWithRuns(120);
+    // Non-vacuous: the block really is tied on `created`, so there really is an
+    // order for SQL to have left undefined.
+    const all = await page(flowId, "?limit=100");
+    expect(new Set(all.map((run) => run.created)).size).toBeLessThan(all.length);
+    // The newest 40 of the 120, in reverse insertion order.
+    const first = await page(flowId, "?limit=40");
+    expect(first.map((run) => run.id)).toEqual([...ids].reverse().slice(0, 40));
+  });
+
+  test("the repo-level order is insertion order reversed, which `id DESC` would not have given", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun, listRuns } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const version = createDraftVersion({
+      flowId: flow.id, displayName: "ordered",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    });
+    const a = createFlowRun({ flowId: flow.id, flowVersionId: version.id, triggeredBy: "a" });
+    const b = createFlowRun({ flowId: flow.id, flowVersionId: version.id, triggeredBy: "b" });
+    const c = createFlowRun({ flowId: flow.id, flowVersionId: version.id, triggeredBy: "c" });
+    // `rowid DESC` is chronological. `id DESC` is `apId()`, i.e. nanoid, so it
+    // would have ordered these three at random -- total, but not newest-first.
+    expect(listRuns({ flowId: flow.id }).map((run) => run.id)).toEqual([c.id, b.id, a.id]);
+  });
+
+  /** PROPERTY GUARD, not a regression test: this held before the fix too. */
+  test("paging an unchanged table covers every run exactly once", async () => {
+    const total = 120;
+    const { flowId } = await flowWithRuns(total);
+    const seen: string[] = [];
+    for (let offset = 0; offset < total; offset += 40) {
+      seen.push(...(await page(flowId, `?limit=40&offset=${offset}`)).map((run) => run.id));
+    }
+    expect(seen).toHaveLength(total);
+    expect(new Set(seen).size).toBe(total);
+  });
+
+  /** PROPERTY GUARD, not a regression test: this held before the fix too. */
+  test("re-reading a page gives the same page, and adjacent pages do not overlap", async () => {
+    const { flowId } = await flowWithRuns(90);
+    const first = (await page(flowId, "?limit=30&offset=0")).map((run) => run.id);
+    const second = (await page(flowId, "?limit=30&offset=30")).map((run) => run.id);
+    expect((await page(flowId, "?limit=30&offset=0")).map((run) => run.id)).toEqual(first);
+    expect(first.filter((runId) => second.includes(runId))).toEqual([]);
+  });
+
+  test("the filter combinations the four old query branches covered still work", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun, listRuns } = await import("../db/repos/flow-run");
+    const one = createFlow();
+    const two = createFlow();
+    const vOne = createDraftVersion({ flowId: one.id, displayName: "one" });
+    const vTwo = createDraftVersion({ flowId: two.id, displayName: "two" });
+    createFlowRun({ flowId: one.id, flowVersionId: vOne.id, status: "SUCCEEDED" });
+    createFlowRun({ flowId: one.id, flowVersionId: vOne.id, status: "FAILED" });
+    createFlowRun({ flowId: two.id, flowVersionId: vTwo.id, status: "SUCCEEDED" });
+    expect(listRuns().length).toBe(3);
+    expect(listRuns({ flowId: one.id }).length).toBe(2);
+    expect(listRuns({ flowId: one.id, status: "FAILED" }).length).toBe(1);
+    expect(listRuns({ status: "SUCCEEDED" }).length).toBe(2);
+    // The composed WHERE concatenates only literal fragments, so a filter value
+    // that looks like SQL stays a bound parameter and matches nothing.
+    expect(listRuns({ flowId: `' OR 1=1 --` }).length).toBe(0);
+  });
+});
