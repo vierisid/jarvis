@@ -49,6 +49,15 @@ jobs:
               # a change to how they invoke it must re-run its tests.
               - '.github/workflows/sidecar-release.yml'
               - '.github/workflows/installer-release.yml'
+              # These two gate this job's retried step, so an edit to either
+              # must re-run the job it guards -- otherwise a PR that touched
+              # only the guard would ship it unexecuted. Named individually
+              # rather than '.github/scripts/**': the directory also holds
+              # docker-smoke.sh, which has nothing to do with the sidecar, and
+              # this filter also gates sidecar-build-darwin on a macos runner
+              # that bills at 10x.
+              - '.github/scripts/chromium-test-partition.sh'
+              - '.github/scripts/chromium-tests.go'
             # The daemon lifecycle (lock acquire/release, autostart service
             # definitions) is the one TypeScript area with behaviour that only
             # exists on macOS: the launchd agent is installed with KeepAlive, so
@@ -148,11 +157,28 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
     env:
-      # One literal for the `-skip`/`-run` pair below. They partition the
-      # package between an unretried step and a retried one, so they must stay
-      # in sync: drift would leave the flaky test running un-retried in the
-      # first step while the second matches nothing and passes vacuously.
-      PARITY_TEST: '^TestBrowserHandlerParityIntegration$'
+      # One literal for the `-skip`/`-run` pair below. They partition the module
+      # between an unretried step and a retried one, and sharing a single regex
+      # is what makes them exact complements: `go test` runs a test iff it
+      # matches -run and does NOT match -skip, so two patterns could leave a
+      # test running in both steps or in neither.
+      #
+      # Matched by RESERVED SHAPE, not by a list of names, for the same reason
+      # X_HOTKEY_TESTS below is. This used to be the single literal
+      # `^TestBrowserHandlerParityIntegration$`, and by the time #639 was filed
+      # there were FOUR Chromium-driving tests with three of them in the
+      # un-retried step: two from #637 and one, TestBrowserFileGuardIntegration,
+      # that had been there since it was written. A hand-kept list drifts every
+      # time a test is added, silently, and that is the whole defect.
+      #
+      # `TestBrowser<Thing>Integration` is the reserved shape for a test that
+      # drives a real headless Chromium. Membership is not taken on trust:
+      # chromium-test-partition.sh derives the set independently from the source
+      # (which tests call the Chromium launcher probe) and fails unless it is
+      # EXACTLY this pattern's `go test -list` result. So a new Chromium test
+      # that ignores the convention fails CI by name rather than landing in the
+      # un-retried step.
+      CHROMIUM_TESTS: '^TestBrowser.*Integration$'
       # The X-dependent hotkey tests, enforced as a set so a skip cannot pass
       # for a run (#588).
       #
@@ -211,9 +237,10 @@ jobs:
           set -euo pipefail
           go vet ./...
           go build ./...
-          # The browser parity test is split out and retried; everything else
-          # runs once so a real regression still fails fast.
-          go test -skip "$PARITY_TEST" ./...
+          # The Chromium-driving tests are split out and retried; everything
+          # else runs once so a real regression still fails fast. Same regex as
+          # the -run step below, which is what makes the two exact complements.
+          go test -skip "$CHROMIUM_TESTS" ./...
 
       # ─── The X-dependent hotkey tests, which used to skip here ──────
       # #578 added tests that contend two X connections for the same key and
@@ -306,8 +333,8 @@ jobs:
           # Fail loudly if the prefix stops matching the expected number of
           # tests -- a rename, a removal, or a NEW sibling nobody counted:
           # `go test -run` with no match prints "no tests to run" and exits 0,
-          # which would make this whole step a no-op. Same guard the browser
-          # parity step uses.
+          # which would make this whole step a no-op. Same guard the Chromium
+          # integration step uses.
           #
           # -list's own failure is separated out, because `|| true` on the
           # pipeline would otherwise turn "the package does not compile" into
@@ -370,37 +397,107 @@ jobs:
             kill "$XVFB_PID" 2>/dev/null || true
           fi
 
-      # TestBrowserHandlerParityIntegration drives a real headless Chromium over
-      # the CDP pipe, and on a loaded runner that races: the observed CI flakes
-      # are "attach to page: CDP timeout for Target.getTargets" (Chromium not
-      # answering CDP inside the 30s budget) and a profile-dir cleanup losing to
-      # a still-dying Chrome. Both clear on a re-run, so give it up to 3
-      # attempts. -count=1 keeps the test cache from returning the failure.
-      - name: Browser parity integration test (retried, cgo)
+      # ─── The Chromium-driving tests, retried (#639) ─────────────────
+      # These drive a real headless Chromium over the CDP pipe, and on a loaded
+      # runner that races: the observed CI flakes are "attach to page: CDP
+      # timeout for Target.getTargets" (Chromium not answering CDP inside the
+      # 30s budget) and a profile-dir cleanup losing to a still-dying Chrome.
+      # Both clear on a re-run, so give them up to 3 attempts. -count=1 keeps
+      # the test cache from returning the failure.
+      #
+      # ./... rather than `.`, to match the -skip step. The two must cover the
+      # same package set or a Chromium test added in a subpackage would be
+      # skipped there and never run here. All four live in the root package
+      # today; the other packages simply match nothing.
+      #
+      # The four now share one test binary and therefore the process-global
+      # activeCDP. Each does `defer closeActiveCDP()` and none calls
+      # t.Parallel(), so they run strictly one at a time -- but that
+      # co-residency is new, and it is the first thing to suspect if this step
+      # starts failing in a way a single test does not reproduce.
+      - name: Chromium integration tests (retried, cgo)
         working-directory: sidecar
         env:
           CGO_ENABLED: "1"
         run: |
           set -euo pipefail
-          # Fail loudly if the pattern stops matching (a rename): `go test -run`
-          # with no match prints "no tests to run" and exits 0, which would turn
-          # this whole step into a no-op.
-          listed=$(go test -list "$PARITY_TEST" . | grep -c '^Test' || true)
-          if [ "$listed" -ne 1 ]; then
-            echo "::error::PARITY_TEST ($PARITY_TEST) matched $listed tests, expected 1"
+          # Generalises the guard this replaces, which asserted the pattern
+          # matched exactly 1 test. That number was hand-maintained, and the
+          # reason it mattered is unchanged: `go test -run` with no match prints
+          # "no tests to run" and exits 0, so a pattern that stops matching
+          # turns this whole step into a vacuous pass.
+          #
+          # The script asserts the pattern's `go test -list` set is EXACTLY the
+          # set it derives from the source (the tests that call the Chromium
+          # launcher probe), and that the set is non-empty. Set equality rather
+          # than a count, because a count cannot see a swap.
+          # Its last line is `count=<n>`, reused below as the number of tests
+          # that must actually PASS. One source of truth, and one fewer package
+          # build than asking `go test -list` a second time. A non-integer here
+          # means the script changed shape, and the PASS assertion below would
+          # silently evaporate, so it fails closed -- the same reasoning as
+          # X_HOTKEY_TEST_COUNT's validation above.
+          # Captured rather than streamed so `count=` can be read back, but
+          # printed on the failure path too: `set -e` would otherwise abort the
+          # step with only the script's stderr in the log, losing the two
+          # summary lines that say what each side of the comparison contained.
+          if ! partition=$(../.github/scripts/chromium-test-partition.sh "$CHROMIUM_TESTS"); then
+            printf '%s\n' "$partition"
             exit 1
           fi
+          printf '%s\n' "$partition"
+          expected=$(printf '%s\n' "$partition" | sed -n 's/^count=//p')
+          case "$expected" in
+            ''|*[!0-9]*)
+              echo "::error::chromium-test-partition.sh did not report a numeric count (got '$expected')"
+              exit 1 ;;
+          esac
+          if [ "$expected" -lt 1 ]; then
+            echo "::error::chromium-test-partition.sh reported a count of $expected; refusing to assert against nothing"
+            exit 1
+          fi
+
           for attempt in 1 2 3; do
-            if go test -count=1 -run "$PARITY_TEST" .; then
+            log="${RUNNER_TEMP:-/tmp}/chromium-tests.${attempt}.log"
+            set +e
+            go test -v -count=1 -run "$CHROMIUM_TESTS" ./... 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+
+            if [ "$status" -eq 0 ]; then
+              # A green `go test` is not yet a pass. Every one of these tests
+              # opens with `if _, err := findChromiumExecutable(cfg); err != nil
+              # { t.Skipf(...) }`, so a runner image that stops shipping Chrome
+              # would make this step report four skips and exit 0 -- the #588
+              # lesson, applied to the flake class instead of the display.
+              #
+              # ANCHORED at column zero on purpose, unlike the X-hotkey step,
+              # which greps unanchored precisely to catch subtest skips. Here
+              # the opposite is wanted: TestBrowserFileGuardIntegration skips
+              # individual subtests when its test server lands on a port Chrome
+              # treats as a blocked DevTools port, which is legitimate and
+              # non-deterministic. Only a WHOLE test skipping is the failure.
+              if grep -q '^--- SKIP' "$log"; then
+                echo "::error::a Chromium integration test was SKIPPED outright. go test reports that as success, so this step would have gone green without driving a browser at all -- check that Chrome is still present on the runner."
+                grep '^--- SKIP' "$log"
+                exit 1
+              fi
+              passed=$(grep -c '^--- PASS' "$log" || true)
+              if [ "$passed" -ne "$expected" ]; then
+                echo "::error::expected $expected Chromium integration test(s) to PASS, saw $passed"
+                exit 1
+              fi
+              echo "all $passed Chromium integration test(s) executed against a real browser"
               exit 0
             fi
+
             if [ "$attempt" -eq 3 ]; then
-              echo "::error::browser parity test failed after 3 attempts"
+              echo "::error::Chromium integration tests failed after 3 attempts"
               exit 1
             fi
             # Settle before retrying: a previous attempt's Chromium may still be
             # tearing down, which is one of the races this retry exists for.
-            echo "::warning::browser parity test failed (attempt $attempt/3), retrying"
+            echo "::warning::Chromium integration tests failed (attempt $attempt/3), retrying"
             sleep 10
           done
 
@@ -460,11 +557,11 @@ jobs:
           set -euo pipefail
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
           pattern='^(TestMainPebbleDrawStaysInsideCrop|TestHotkeys.*|TestHresultText.*|TestPickLaunchedWindow.*|TestVkScanShiftState.*|TestKeyEventsForRune.*|TestSingleInstanceMutex.*|TestIsBlockedPath.*|TestPathWithin|TestDefaultBlockedPaths.*|TestStripWindowsPathPrefix|TestJunction.*|TestCaseFoldingOnDisk)$'
-          # Same reason as the parity test above: `go test -run` with no match
-          # prints "no tests to run" and exits 0. A floor rather than an exact
-          # count, so each group can grow without editing this, but a rename
-          # that empties one still fails here instead of quietly skipping every
-          # windows-only test we have.
+          # Same reason as the Chromium integration step above: `go test -run`
+          # with no match prints "no tests to run" and exits 0. A floor rather
+          # than an exact count, so each group can grow without editing this,
+          # but a rename that empties one still fails here instead of quietly
+          # skipping every windows-only test we have.
           listed=$(go test -list "$pattern" . | grep -c '^Test' || true)
           if [ "$listed" -lt 10 ]; then
             echo "::error::windows test pattern matched $listed tests, expected at least 10"
