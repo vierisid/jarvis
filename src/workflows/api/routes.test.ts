@@ -2035,3 +2035,383 @@ describe("#632: a version patch picks its fields instead of spreading the body",
     expect(getFlowVersionUiMeta(versionId).positions).toEqual({ trigger: { x: 1, y: 2 } });
   });
 });
+
+/**
+ * #635. Four routes parsed an unbounded body and only then applied a cap --
+ * the two sample routes, which had a per-ENTRY cap that could not run until
+ * `req.json()` had already materialized the caller's object graph, and the two
+ * connections routes, which had no post-parse cap of any kind.
+ *
+ * Three separate resources are bounded here and each has its own test below:
+ * the request BODY, the map's KEYS (which arrive in the URL and no body cap can
+ * reach), and the map's TOTAL (which made the per-entry cap close to useless).
+ */
+describe("#635: the sample-data and connections routes bound their ingress", () => {
+  async function draftVersion(): Promise<{ id: string; versionId: string }> {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const flow = createFlow();
+    const version = createDraftVersion({
+      flowId: flow.id,
+      displayName: "bounded",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    });
+    return { id: flow.id, versionId: version.id };
+  }
+
+  const sampleData = (id: string, versionId: string, stepName: string, body: unknown) =>
+    callJson(
+      routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/${id}/versions/${versionId}/sample-data/${encodeURIComponent(stepName)}`,
+        { id, versionId, stepName },
+        body,
+      ),
+    );
+
+  const sampleInput = (id: string, versionId: string, stepName: string, body: unknown) =>
+    callJson(
+      routes["/api/workflows/:id/versions/:versionId/sample-input/:stepName"]?.PATCH,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/${id}/versions/${versionId}/sample-input/${encodeURIComponent(stepName)}`,
+        { id, versionId, stepName },
+        body,
+      ),
+    );
+
+  test("an oversized sample-data body is refused before it is parsed", async () => {
+    const { id, versionId } = await draftVersion();
+    // Over the 2,000,000 body cap but NOT a legal fixture either way, which is
+    // the point: the refusal happens before `JSON.parse` sees it.
+    const huge = { output: { blob: "x".repeat(2_100_000) } };
+    const over = await sampleData(id, versionId, "step_a", huge);
+    expect(over.status).toBe(413);
+    expect((over.body as { error: string }).error).toMatch(/request body too large; the limit is 2000000 bytes/);
+    expect((await sampleInput(id, versionId, "step_a", { input: { blob: "x".repeat(2_100_000) } })).status).toBe(413);
+  });
+
+  /**
+   * The declared-size half of `readWriteBody`: nothing is read off the socket
+   * for an obviously oversized request.
+   */
+  test("a content-length over the cap is refused with no body read at all", async () => {
+    const { id, versionId } = await draftVersion();
+    const req = new Request(`http://x/api/workflows/${id}/versions/${versionId}/sample-data/step_a`, {
+      method: "PATCH",
+      body: JSON.stringify({ output: { ok: true } }),
+      headers: { "Content-Type": "application/json", "Content-Length": "9999999" },
+    }) as Request & { params: Record<string, string> };
+    req.params = { id, versionId, stepName: "step_a" };
+    // `Content-Length` is a forbidden header name in the fetch spec, which
+    // browsers strip. Asserted so this test cannot pass vacuously if the
+    // runtime ever starts stripping it -- the point is the DECLARED size path,
+    // and the body here is tiny.
+    expect(req.headers.get("content-length")).toBe("9999999");
+    const { status } = await callJson(
+      routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH,
+      req,
+    );
+    expect(status).toBe(413);
+  });
+
+  /**
+   * The cap is derived FROM the per-entry cap, so the two must not collide. A
+   * body that carries an over-the-per-entry-cap fixture has to be told its
+   * FIXTURE is too big -- the actionable sentence -- and not that its request
+   * was. Any body cap at or below ~307 KB would flip this.
+   */
+  test("an over-the-per-entry-cap fixture still gets the per-entry message, not the body one", async () => {
+    const { id, versionId } = await draftVersion();
+    const { status, body } = await sampleData(id, versionId, "step_a", {
+      output: { blob: "x".repeat(300 * 1024) },
+    });
+    expect(status).toBe(413);
+    expect((body as { error: string }).error).toMatch(/exceeds 262144 bytes/);
+    expect((body as { error: string }).error).not.toMatch(/request body too large/);
+  });
+
+  test("a legal fixture at the per-entry ceiling still succeeds through the new reader", async () => {
+    const { id, versionId } = await draftVersion();
+    // Just under 256 KB serialized, the largest legitimate single fixture.
+    const blob = "y".repeat(256 * 1024 - 64);
+    const { status, body } = await sampleData(id, versionId, "step_a", { output: { blob } });
+    expect(status).toBe(200);
+    expect((body as { sampleData: Record<string, { blob: string }> }).sampleData.step_a!.blob.length).toBe(blob.length);
+  });
+
+  /**
+   * `{}` still clears, which is the documented way and what the existing
+   * "null/missing output clears the entry" test sends. What changed is that a
+   * malformed or absent body no longer silently deletes the entry.
+   */
+  test("a malformed or absent body is a 400 instead of silently clearing the entry", async () => {
+    const { id, versionId } = await draftVersion();
+    const { setSampleDataEntry } = await import("../db/repos/flow-version");
+    setSampleDataEntry(versionId, "step_a", { keep: 1 });
+
+    const malformed = new Request(`http://x/api/workflows/${id}/versions/${versionId}/sample-data/step_a`, {
+      method: "PATCH",
+      body: "{not json",
+      headers: { "Content-Type": "application/json" },
+    }) as Request & { params: Record<string, string> };
+    malformed.params = { id, versionId, stepName: "step_a" };
+    expect((await callJson(routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH, malformed)).status).toBe(400);
+
+    // A body that parses but is not an object used to clear the entry too.
+    expect((await sampleData(id, versionId, "step_a", [1, 2, 3])).status).toBe(400);
+
+    // The entry survived all of that.
+    const { getFlowVersion } = await import("../db/repos/flow-version");
+    expect(getFlowVersion(versionId)!.sampleData).toEqual({ step_a: { keep: 1 } });
+
+    // And `{}` still clears, unchanged.
+    expect((await sampleData(id, versionId, "step_a", {})).status).toBe(200);
+    expect(getFlowVersion(versionId)!.sampleData).toBeNull();
+  });
+
+  /**
+   * `stepName` rides in the URL PATH, so no body cap can reach it. A
+   * multi-kilobyte map key arrives on a request with a two-byte body.
+   */
+  test("an over-long stepName is refused, and a realistic one is not", async () => {
+    const { id, versionId } = await draftVersion();
+    const long = "s".repeat(121);
+    const over = await sampleData(id, versionId, long, { output: { x: 1 } });
+    expect(over.status).toBe(413);
+    expect((over.body as { error: string }).error).toMatch(/stepName is 121 characters; the limit is 120/);
+    expect((await sampleInput(id, versionId, long, { input: { x: 1 } })).status).toBe(413);
+    // At the boundary, and for an ordinary name, nothing changes.
+    expect((await sampleData(id, versionId, "s".repeat(120), { output: { x: 1 } })).status).toBe(200);
+    expect((await sampleData(id, versionId, "send_email", { output: { x: 1 } })).status).toBe(200);
+  });
+
+  /**
+   * `__proto__` as a map key assigns to `Object.prototype`'s setter rather than
+   * creating an own property, so the write silently stored nothing and reported
+   * 200 -- and on an empty map it cleared the column.
+   */
+  test("a reserved stepName is refused rather than silently storing nothing", async () => {
+    const { id, versionId } = await draftVersion();
+    for (const reserved of ["__proto__", "prototype", "constructor"]) {
+      const refused = await sampleData(id, versionId, reserved, { output: { x: 1 } });
+      expect(refused.status).toBe(400);
+      expect((refused.body as { error: string }).error).toMatch(/is reserved/);
+      expect((await sampleInput(id, versionId, reserved, { input: { x: 1 } })).status).toBe(400);
+    }
+    const { getFlowVersion } = await import("../db/repos/flow-version");
+    expect(getFlowVersion(versionId)!.sampleData).toBeNull();
+  });
+
+  test("the connections routes refuse an oversized body before parsing it", async () => {
+    const r = createWorkflowRoutes();
+    const over = await callJson(
+      r["/api/workflows/connections"]?.POST,
+      plainReq("POST", "http://x/api/workflows/connections", {
+        externalId: "big", displayName: "big", type: "SECRET_TEXT", pieceName: "gmail",
+        value: { secret_text: "x".repeat(300 * 1024) },
+      }),
+    );
+    expect(over.status).toBe(413);
+    expect((over.body as { error: string }).error).toMatch(/request body too large; the limit is 262144 bytes/);
+  });
+
+  /**
+   * POST used a BARE `req.json()`, so a malformed body threw a SyntaxError that
+   * matched none of `trapErrors`' patterns and came back as a 500 carrying the
+   * JSON parser's own message.
+   */
+  test("a malformed connections body is a 400, not a 500", async () => {
+    const r = createWorkflowRoutes();
+    const malformed = new Request("http://x/api/workflows/connections", {
+      method: "POST", body: "{not json", headers: { "Content-Type": "application/json" },
+    });
+    const { status, body } = await callJson(r["/api/workflows/connections"]?.POST, malformed);
+    expect(status).toBe(400);
+    expect((body as { error: string }).error).toMatch(/body must be valid JSON/);
+  });
+
+  test("a connections PATCH status is checked instead of cast into the column", async () => {
+    const r = createWorkflowRoutes();
+    const created = await callJson(
+      r["/api/workflows/connections"]?.POST,
+      plainReq("POST", "http://x/api/workflows/connections", {
+        externalId: "rotatable", displayName: "rotatable", type: "SECRET_TEXT",
+        pieceName: "gmail", value: { secret: "k" },
+      }),
+    );
+    const connectionId = (created.body as { id: string }).id;
+    const patch = (b: unknown) =>
+      callJson(
+        r["/api/workflows/connections/:id"]?.PATCH,
+        reqWithParams("PATCH", `http://x/api/workflows/connections/${connectionId}`, { id: connectionId }, b),
+      );
+    const bad = await patch({ status: "TOTALLY_FINE" });
+    expect(bad.status).toBe(400);
+    expect((bad.body as { error: string }).error).toMatch(/status must be ACTIVE\|MISSING\|ERROR/);
+    expect((await patch({ status: "ERROR" })).status).toBe(200);
+    expect(((await patch({ status: "ERROR" })).body as { status: string }).status).toBe("ERROR");
+  });
+});
+
+/**
+ * #635, the other half: the per-entry cap bounded ONE fixture and nothing
+ * bounded the map, so 100 entries at the per-entry ceiling is 25.3 MB in a
+ * column `rowToFlowVersion` parses on every version read.
+ *
+ * Enforced in the repo rather than at the route because `withOwnedFlowVersion`
+ * wraps the setters in one transaction, so the check is atomic with the
+ * read-modify-write it guards -- and because the route is not the only writer.
+ */
+describe("#635: the sample-data map is bounded as a whole, by every writer", () => {
+  async function draft(): Promise<string> {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const flow = createFlow();
+    return createDraftVersion({
+      flowId: flow.id,
+      displayName: "mapped",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    }).id;
+  }
+
+  test("the entry COUNT is capped, which a byte cap alone does not do", async () => {
+    const versionId = await draft();
+    const { setSampleDataEntry, SAMPLE_DATA_MAP_MAX_ENTRIES } = await import("../db/repos/flow-version");
+    for (let i = 0; i < SAMPLE_DATA_MAP_MAX_ENTRIES; i++) {
+      setSampleDataEntry(versionId, `step_${i}`, { i });
+    }
+    // Tiny values, so nothing here is near the byte cap -- only the count is.
+    expect(() => setSampleDataEntry(versionId, "one_too_many", { i: -1 })).toThrow(
+      /sampleData would hold 101 entries; the limit is 100/,
+    );
+    // Overwriting an existing key is not a new entry, so it still works.
+    expect(() => setSampleDataEntry(versionId, "step_0", { i: 999 })).not.toThrow();
+  });
+
+  test("the map TOTAL is capped across entries that each pass the per-entry cap", async () => {
+    const versionId = await draft();
+    const { setSampleDataEntry, SAMPLE_DATA_MAP_MAX_BYTES } = await import("../db/repos/flow-version");
+    // Each entry is ~200 KB, comfortably inside the 256 KB per-entry cap, so
+    // nothing below is refused for being an oversized fixture.
+    const chunk = { blob: "z".repeat(200 * 1024) };
+    let written = 0;
+    let refusal: string | null = null;
+    for (let i = 0; i < 40; i++) {
+      try { setSampleDataEntry(versionId, `step_${i}`, chunk); written++; }
+      catch (e) { refusal = (e as Error).message; break; }
+    }
+    // It stopped, and it stopped for the MAP and not for the entry.
+    expect(refusal).toMatch(/would total \d+ bytes; the limit is 4194304/);
+    expect(refusal).toMatch(/Clear the sample data for steps you are not testing/);
+    // Non-vacuous: it got a useful way in before refusing.
+    expect(written).toBeGreaterThan(15);
+    const { getFlowVersion } = await import("../db/repos/flow-version");
+    expect(JSON.stringify(getFlowVersion(versionId)!.sampleData).length).toBeLessThanOrEqual(SAMPLE_DATA_MAP_MAX_BYTES);
+  });
+
+  /**
+   * A row written before the caps existed is never migrated, so its author has
+   * to be able to get out from under it. "The new total is under the cap" as a
+   * rule would have permitted only deletion -- replacing a huge entry with a
+   * merely large one would have been refused for making the row SMALLER.
+   *
+   * The write below leaves the map at ~6 MB, still OVER the 4 MiB cap, which is
+   * what makes this test consult the exemption clause instead of passing
+   * because the result happens to be small. Deleting
+   * `&& length > current.length` from `sampleMapRefusal` makes it fail.
+   */
+  test("a shrinking write is allowed even while the map is still over the cap", async () => {
+    const versionId = await draft();
+    const { getWorkflowDb } = await import("../db/index");
+    const { setSampleDataEntry, getFlowVersion, SAMPLE_DATA_MAP_MAX_BYTES } =
+      await import("../db/repos/flow-version");
+    const legacy = { step_a: { blob: "q".repeat(9_000_000) }, step_b: { blob: "k".repeat(5_000_000) } };
+    getWorkflowDb().run(`UPDATE flow_version SET sample_data = ? WHERE id = ?`, [JSON.stringify(legacy), versionId]);
+
+    expect(() => setSampleDataEntry(versionId, "step_a", { blob: "q".repeat(1_000_000) })).not.toThrow();
+    const after = JSON.stringify(getFlowVersion(versionId)!.sampleData).length;
+    // Smaller than it was, and STILL over the cap -- so the clause was the only
+    // thing that let this through.
+    expect(after).toBeLessThan(14_000_000);
+    expect(after).toBeGreaterThan(SAMPLE_DATA_MAP_MAX_BYTES);
+
+    // And the exemption is not a way to GROW: a write that makes the still-over
+    // -cap map bigger is refused, so grow/shrink alternation cannot climb.
+    expect(() => setSampleDataEntry(versionId, "step_c", { blob: "z".repeat(1_000_000) })).toThrow(
+      /would total \d+ bytes; the limit is 4194304/,
+    );
+  });
+
+  /**
+   * The COUNT dimension needs the same exemption, and getting this wrong made
+   * an over-count row a one-way trap: with an unconditional count check,
+   * deleting one of 150 entries yields 149, which is still over 100, so every
+   * single-entry write including a clear answered 413.
+   *
+   * `sampleInput` is the one that mattered: its route family has only a PATCH,
+   * so there is no DELETE and no `replaceSampleInput` to clear it whole.
+   */
+  test("an over-count map can still be shrunk one entry at a time", async () => {
+    const versionId = await draft();
+    const { getWorkflowDb } = await import("../db/index");
+    const { setSampleDataEntry, setSampleInputEntry, getFlowVersion } =
+      await import("../db/repos/flow-version");
+    const legacy: Record<string, unknown> = {};
+    for (let i = 0; i < 150; i++) legacy[`step_${i}`] = { i };
+    getWorkflowDb().run(
+      `UPDATE flow_version SET sample_data = ?, sample_input = ? WHERE id = ?`,
+      [JSON.stringify(legacy), JSON.stringify(legacy), versionId],
+    );
+
+    // Deleting is allowed, though 149 is still over the 100-entry cap.
+    expect(() => setSampleDataEntry(versionId, "step_0", null)).not.toThrow();
+    expect(Object.keys(getFlowVersion(versionId)!.sampleData!).length).toBe(149);
+    // Overwriting an existing key is allowed too: it adds no entry.
+    expect(() => setSampleDataEntry(versionId, "step_1", { i: 999 })).not.toThrow();
+    // Adding a NEW key to an over-count map is still refused.
+    expect(() => setSampleDataEntry(versionId, "brand_new", { i: 1 })).toThrow(
+      /would hold 150 entries; the limit is 100/,
+    );
+    // Same for sampleInput, which has no whole-map clear to fall back on.
+    expect(() => setSampleInputEntry(versionId, "step_0", null)).not.toThrow();
+    expect(() => setSampleInputEntry(versionId, "brand_new", { i: 1 })).toThrow(
+      /would hold 150 entries; the limit is 100/,
+    );
+  });
+
+  /**
+   * The writer that makes the map cap matter: it writes one entry per step of
+   * the run in a single call, after every successful run. Capping only the
+   * hand-edit path would have left this able to build the 25 MB map, and would
+   * have falsified the function's own promise that auto-capture can never
+   * produce an entry the user could not have saved by hand.
+   */
+  test("auto-capture stops at the map cap instead of growing past it", async () => {
+    const versionId = await draft();
+    const { mergeRunOutputsIntoSampleData, getFlowVersion, SAMPLE_DATA_MAP_MAX_BYTES } =
+      await import("../db/repos/flow-version");
+    // 40 steps x ~200 KB: every entry passes the per-entry cap, the map does not.
+    const runSteps: Record<string, unknown> = {};
+    for (let i = 0; i < 40; i++) runSteps[`step_${i}`] = { output: { blob: "w".repeat(200 * 1024) } };
+
+    const { written, skipped } = mergeRunOutputsIntoSampleData(versionId, runSteps);
+    expect(written.length).toBeGreaterThan(15);
+    expect(written.length).toBeLessThan(40);
+    expect(skipped.length).toBe(40 - written.length);
+    expect(skipped[0]!.reason).toMatch(/map is at its 4194304-byte \/ 100-entry limit/);
+    expect(JSON.stringify(getFlowVersion(versionId)!.sampleData).length).toBeLessThanOrEqual(SAMPLE_DATA_MAP_MAX_BYTES);
+  });
+
+  test("sampleInput is bounded by the same pair", async () => {
+    const versionId = await draft();
+    const { setSampleInputEntry, SAMPLE_DATA_MAP_MAX_ENTRIES } = await import("../db/repos/flow-version");
+    for (let i = 0; i < SAMPLE_DATA_MAP_MAX_ENTRIES; i++) {
+      setSampleInputEntry(versionId, `step_${i}`, { i });
+    }
+    expect(() => setSampleInputEntry(versionId, "one_too_many", { i: -1 })).toThrow(
+      /sampleInput would hold 101 entries; the limit is 100/,
+    );
+  });
+});

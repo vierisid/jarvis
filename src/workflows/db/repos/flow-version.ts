@@ -10,6 +10,7 @@
 
 import type { Database } from "bun:sqlite";
 import { getWorkflowDb } from "../index";
+import { FlowVersionRequestError } from "./flow-version-ownership";
 import { apId } from "../ids";
 import { touchFlow } from "./flow";
 import { assertLiveDraftReady, graphReadiness } from './flow-readiness';
@@ -400,12 +401,118 @@ export function setEngineTriggerState(
 }
 
 /**
+ * Ceiling on the WHOLE `sample_data` / `sample_input` map (#635).
+ *
+ * `SAMPLE_DATA_ENTRY_MAX_BYTES` in `api/routes.ts` has always bounded one
+ * fixture and nothing bounded the map, which made the per-entry cap close to
+ * useless: 100 entries at the per-entry ceiling is 26,214,400 characters, or
+ * about 25 MiB, in a column `rowToFlowVersion` `JSON.parse`s on EVERY version
+ * read -- and `listVersions` does up to 50 rows per call. `JSON.parse` measured
+ * ~1 ms per MB on this runtime (17.5 ms at 16.5 MB), so that is a ~25 ms parse
+ * per row and over a second for one listing.
+ *
+ * 4,194,304 is 16x the per-entry cap, and it is stated as that relationship on
+ * purpose so it cannot be mistaken for a coincidence with
+ * `VERSION_WRITE_MAX_BODY_BYTES`'s 4,000,000, which answers a different
+ * question. It admits 100 entries of 40 KB each -- 5x the 8.1 KB a realistic
+ * Gmail fixture measured -- or 15 entries at the full per-entry ceiling (16
+ * would be 4,194,304 characters of VALUES alone, before the keys and
+ * punctuation), and costs ~4 ms to parse. The refusal is also ACTIONABLE in a way the version
+ * cap's is not: "clear the sample data for steps you are not testing" is
+ * something an author can do, where "shrink your step graph" is not. That is
+ * what makes a tighter number acceptable here.
+ *
+ * MEASURED ON THE SERIALIZED MAP, keys included -- `JSON.stringify(map).length`
+ * and not the sum of the entries. Only that bounds the key text, and the keys
+ * are caller-controlled: `stepName` arrives in a URL path and is never checked
+ * against the graph.
+ */
+export const SAMPLE_DATA_MAP_MAX_BYTES = 4_194_304;
+
+/**
+ * Ceiling on the NUMBER of entries in either map (#635).
+ *
+ * Not "the number of entries that can ever be read" -- that would be a wrong
+ * derivation, because nothing ties a key to a node, so a map of 100 junk keys
+ * reads none of them. It is the ceiling on the LEGITIMATE population: an entry
+ * is keyed by a step name, a graph above 100 nodes can be saved but can never
+ * run (`runtime/workflow-readiness.ts` raises a `LIMIT` issue past it and
+ * `assertVersionReady` gates publish, enable and run on readiness), so no
+ * runnable flow has more than 100 steps to hold fixtures for.
+ *
+ * It is the count half of a pair. The byte cap above bounds total size; this
+ * bounds unbounded ACCUMULATION of entries, which a byte cap alone permits for
+ * small values, and the route's own `stepName` length cap bounds each key. All
+ * three are needed because `stepName` is unvalidated caller input.
+ */
+export const SAMPLE_DATA_MAP_MAX_ENTRIES = 100;
+
+/**
+ * The map caps, applied to a proposed next map (#635).
+ *
+ * SHRINKING IS NEVER REFUSED, and the rule is deliberately not "the new total
+ * is under the cap". A row written before these caps existed is left alone --
+ * no migration, the same rule #609 set for oversized version rows -- so its
+ * author must be able to get out from under it, and that means a write that
+ * REDUCES the total is allowed even while the total is still over. A rule of
+ * "under the cap" would have permitted only deletion, so replacing a 10 MB
+ * entry with a 1 KB one would have been refused for making the row smaller.
+ */
+function sampleMapRefusal(
+  column: "sampleData" | "sampleInput",
+  next: Record<string, unknown>,
+  current: { entries: number; length: number },
+): FlowVersionRequestError | null {
+  // BOTH dimensions carry the exemption, and the count one is not decoration.
+  // Nothing bounded the count before this, and `stepName` is unvalidated caller
+  // input, so a row holding 150 entries is reachable. With an unconditional
+  // count check, DELETING one of them yields 149, which is still over 100, so
+  // every single-entry write to that row -- including a clear -- answered 413
+  // and the row could never be shrunk one key at a time. `sampleInput` would
+  // have been strictly unrecoverable, because its route family has only a
+  // PATCH: there is no `replaceSampleInput` and no DELETE to clear it whole.
+  //
+  // `>` and not `>=` on the current value, on both dimensions, so that
+  // OVERWRITING a key in an over-cap row is allowed too. An overwrite changes
+  // neither the count nor necessarily the size, and refusing it would be the
+  // same trap one step removed.
+  const entries = Object.keys(next).length;
+  if (entries > SAMPLE_DATA_MAP_MAX_ENTRIES && entries > current.entries) {
+    return new FlowVersionRequestError(
+      `${column} would hold ${entries} entries; the limit is ${SAMPLE_DATA_MAP_MAX_ENTRIES}`,
+      413,
+    );
+  }
+  const length = entries === 0 ? 0 : JSON.stringify(next).length;
+  if (length > SAMPLE_DATA_MAP_MAX_BYTES && length > current.length) {
+    return new FlowVersionRequestError(
+      `${column} would total ${length} bytes; the limit is ${SAMPLE_DATA_MAP_MAX_BYTES}. `
+      + `Clear the sample data for steps you are not testing`,
+      413,
+    );
+  }
+  return null;
+}
+
+/** What a stored map column currently costs, for the exemption above. */
+function sampleMapCurrent(stored: string | null): { entries: number; length: number } {
+  if (!stored) return { entries: 0, length: 0 };
+  try {
+    return { entries: Object.keys(JSON.parse(stored) as Record<string, unknown>).length, length: stored.length };
+  } catch {
+    // An unreadable column cannot be measured, so it cannot grant an
+    // exemption. The caller's own parse would have thrown first anyway.
+    return { entries: 0, length: stored.length };
+  }
+}
+
+/**
  * Update one entry in the per-version `sampleData` map. Editable on
  * DRAFT versions only (locked versions are immutable to user edits).
  * Pass `null` for `output` to remove the step's entry. Returns the updated
  * version.
  *
- * The full-map setter (`replaceSampleData`) below covers bulk updates;
+ * The full-map setter (`replaceSampleData`) below is clear-only in practice;
  * this one is the editor's per-step save path.
  */
 export function setSampleDataEntry(
@@ -426,6 +533,12 @@ export function setSampleDataEntry(
   } else {
     current[stepName] = output;
   }
+  // The map caps (#635). Checked here and not at the route because
+  // `withOwnedFlowVersion` wraps this in one transaction, so the check is
+  // atomic with the read-modify-write it guards; a route-level pre-read of the
+  // current map would be TOCTOU.
+  const refusal = sampleMapRefusal("sampleData", current, sampleMapCurrent(existing.sample_data));
+  if (refusal) throw refusal;
   const json = Object.keys(current).length === 0 ? null : JSON.stringify(current);
   const updated = now();
   db().run(`UPDATE flow_version SET sample_data = ?, updated = ? WHERE id = ?`, [
@@ -465,6 +578,9 @@ export function setSampleInputEntry(
   } else {
     current[stepName] = input;
   }
+  // Same caps, same reason, same column family as `setSampleDataEntry` (#635).
+  const refusal = sampleMapRefusal("sampleInput", current, sampleMapCurrent(existing.sample_input));
+  if (refusal) throw refusal;
   const json = Object.keys(current).length === 0 ? null : JSON.stringify(current);
   const updated = now();
   db().run(`UPDATE flow_version SET sample_input = ?, updated = ? WHERE id = ?`, [
@@ -483,6 +599,12 @@ export function setSampleInputEntry(
  * per-step PATCH endpoint (`SAMPLE_DATA_ENTRY_MAX_BYTES` in routes.ts) so
  * auto-capture can never produce a sampleData entry the user couldn't
  * have saved by hand. Anything larger is dropped with a warn.
+ *
+ * KEEP IN SYNC with `SAMPLE_DATA_ENTRY_MAX_BYTES` in `api/routes.ts`. They are
+ * independent copies of one number, nothing enforces the equality, and
+ * `SAMPLE_DATA_MAP_MAX_BYTES` below states a hard 16x relationship to it -- so
+ * if one moves and the other does not, that relationship silently becomes a
+ * coincidence.
  */
 export const SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES = 256 * 1024;
 
@@ -519,6 +641,10 @@ export function mergeRunOutputsIntoSampleData(
     ? (JSON.parse(existing.sample_data) as Record<string, unknown>)
     : {};
   let mutated = false;
+  // What the stored map already costs, plus what each accepted entry adds.
+  // No shrink exemption here, unlike `sampleMapRefusal`: auto-capture only ever
+  // ADDS entries, so a row already over the cap simply stops growing.
+  let total = existing.sample_data?.length ?? 0;
 
   for (const [stepName, raw] of Object.entries(runSteps)) {
     if (stepName in current) {
@@ -550,6 +676,36 @@ export function mergeRunOutputsIntoSampleData(
       });
       continue;
     }
+    // The MAP caps apply to auto-capture too (#635), and this is the writer
+    // that makes them matter: it writes one entry per step of the run in a
+    // single call, so a wide flow with large step outputs is how the ~25 MiB
+    // map actually gets built. Capping only the hand-edit path would also have
+    // falsified this function's own promise above -- that auto-capture can
+    // never produce a sampleData entry the user could not have saved by hand.
+    //
+    // A SKIP rather than a throw, because that is this function's existing
+    // contract: the run already SUCCEEDED, capture is best effort, and the
+    // caller logs `skipped`. Checked per entry so a full map stops growing
+    // instead of discarding the whole capture.
+    //
+    // The running total is accumulated rather than re-serialized per step: a
+    // `JSON.stringify` of the whole candidate map inside the loop would be
+    // quadratic, and this path runs after every successful run.
+    //
+    // The key is measured with `JSON.stringify` and not `stepName.length`, so a
+    // key needing escapes is counted at what it actually costs. An appended
+    // entry adds the quoted key, a colon, the value and a comma, which is
+    // exactly this; the FIRST entry has no comma, so this over-counts by one
+    // character there. Over-counting is the safe direction for a cap.
+    const entryCost = JSON.stringify(stepName).length + serialized.length + 2;
+    if (
+      Object.keys(current).length >= SAMPLE_DATA_MAP_MAX_ENTRIES
+      || total + entryCost > SAMPLE_DATA_MAP_MAX_BYTES
+    ) {
+      skipped.push({ stepName, reason: `sampleData map is at its ${SAMPLE_DATA_MAP_MAX_BYTES}-byte / ${SAMPLE_DATA_MAP_MAX_ENTRIES}-entry limit` });
+      continue;
+    }
+    total += entryCost;
     current[stepName] = output;
     written.push(stepName);
     mutated = true;
@@ -568,6 +724,11 @@ export function mergeRunOutputsIntoSampleData(
 
 /**
  * Replace the entire sample-data map. Pass `null` to clear. DRAFT-only.
+ *
+ * CLEAR-ONLY in practice: the single caller is the sample-data DELETE route,
+ * which always passes `null`. It still carries the map caps (#635) so that the
+ * next caller to pass DATA cannot reopen what the other two writers close --
+ * the signature permits a full map and nothing but this check would bound it.
  */
 export function replaceSampleData(
   id: string,
@@ -577,6 +738,10 @@ export function replaceSampleData(
   if (!existing) throw new Error(`replaceSampleData: not found (id=${id})`);
   if (existing.state === "LOCKED") {
     throw new Error(`replaceSampleData: version ${id} is LOCKED`);
+  }
+  if (data) {
+    const refusal = sampleMapRefusal("sampleData", data, sampleMapCurrent(existing.sample_data));
+    if (refusal) throw refusal;
   }
   const json = data && Object.keys(data).length > 0 ? JSON.stringify(data) : null;
   const updated = now();

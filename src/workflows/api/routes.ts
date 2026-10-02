@@ -82,6 +82,7 @@ import {
   getConnection,
   listConnections,
   upsertConnection,
+  type AppConnectionStatus,
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
@@ -128,18 +129,52 @@ export type WorkflowRouteMap = Record<string, RouteMethods>;
  * were wrong and it is corrected rather than left, because #609 nearly derived
  * a request-body cap from it: `SQLITE_MAX_LENGTH` defaults to 1e9 and not 1MB,
  * and 100 x 256KB is 25.6MB either way. The cap is a PER-ENTRY bound on what
- * one fixture may cost; nothing bounds the map's total, which is a real gap and
- * not something this number was ever sized for.
+ * one fixture may cost. The map's TOTAL is bounded separately, by
+ * `SAMPLE_DATA_MAP_MAX_BYTES` and `SAMPLE_DATA_MAP_MAX_ENTRIES` in
+ * `db/repos/flow-version.ts` (#635) -- in the repo rather than here, because
+ * that is where the read-modify-write they guard is atomic.
  *
- * The two sample-data routes also still `req.json()` an unbounded body and only
- * then apply this per-entry cap -- the same "the cap can only run after the
- * caller's object graph is already materialized" problem `readWriteBody` exists
- * to avoid, and a one-line fix now that the reader takes its cap as an argument.
- * Seen and left on purpose: #609's subject is the two VERSION routes, and a
- * sample-data body deserves the same measurement this one got rather than an
- * inherited number.
+ * KEEP IN SYNC with `SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES` in
+ * `db/repos/flow-version.ts`, which is an independent copy of this number for
+ * the auto-capture writer. Nothing enforces the equality, and
+ * `SAMPLE_DATA_MAP_MAX_BYTES` states a hard 16x relationship to it.
+ *
+ * Despite the name this counts UTF-16 code units, not bytes: the check is
+ * `JSON.stringify(output).length`. Left as it is because it is the unit the
+ * refusal reports, and `SAMPLE_DATA_MAX_BODY_BYTES` below is derived from it
+ * with that in mind.
  */
 const SAMPLE_DATA_ENTRY_MAX_BYTES = 256 * 1024;
+
+/**
+ * Longest `stepName` the two sample routes will accept (#635).
+ *
+ * `stepName` arrives in the URL PATH and becomes a KEY in the version's
+ * sample-data map, and nothing checked it: not its length, and not against the
+ * graph. So the map's keys were an unbounded resource that no body cap can
+ * reach -- a multi-kilobyte key rides in on a request with a two-byte body, and
+ * 100 keys of 40 KB each is 4 MB of pure key text within every other cap here.
+ *
+ * 120 is the number `runtime/effect-boundary.ts` already uses for exactly this
+ * value: an engine-supplied step name that is not validated on that path, cut
+ * before it reaches a durable audit row. A node name that is LEGITIMATE has to
+ * match `/^[a-zA-Z_][a-zA-Z0-9_]*$/` for the flow to be runnable at all, so
+ * real names are `step_1` and `send_email`.
+ *
+ * LENGTH ONLY, and not that identifier pattern, which was the other half of the
+ * suggestion. Readiness is the one authority on whether a node name is legal,
+ * and it reports a bad one as an issue rather than refusing the save -- so a
+ * draft can hold a name this route would reject. Sample data is edited exactly
+ * then, mid-rename, and refusing the write here would make this route a second
+ * and stricter name validator than the one that decides runnability. The
+ * resource problem is key SIZE; that is what this bounds.
+ *
+ * 413 and not 414 (URI Too Long), which is the literal match for an over-long
+ * path segment: every other size refusal in this file answers 413
+ * (`FLOW_DISPLAY_NAME_MAX_CHARS`, `metadataRejection`, `readWriteBody`), and
+ * consistency inside one file is worth more here than the more precise code.
+ */
+const SAMPLE_DATA_STEP_NAME_MAX_CHARS = 120;
 
 /**
  * Ingress budgets for `POST /api/webhooks/waitpoints/:id`, the one route in
@@ -244,7 +279,8 @@ const FLOW_WRITE_MAX_BODY_BYTES = 262_144;
  * -- because the body is a cast rather than a schema -- whatever else
  * `updateDraftVersion` accepts, including `backupFiles`, a filename ->
  * file-CONTENT map that no shipped caller writes and that nothing else bounds.
- * `sample_data` does NOT: it has its own routes and its own per-entry cap.
+ * `sample_data` does NOT: it has its own routes, its own per-entry cap, its own
+ * body cap and its own map caps (#635).
  *
  * WHAT BOUNDS A LEGITIMATE GRAPH: 100 nodes. `runtime/workflow-readiness.ts`
  * raises a `LIMIT` issue past it and `assertVersionReady` gates publish, enable
@@ -307,6 +343,74 @@ const FLOW_WRITE_MAX_BODY_BYTES = 262_144;
  * why the number is measured against the table above rather than chosen.
  */
 export const VERSION_WRITE_MAX_BODY_BYTES = 4_000_000;
+
+/**
+ * Ceiling on a SAMPLE-DATA write body -- `PATCH .../sample-data/:stepName` and
+ * `PATCH .../sample-input/:stepName` (#635).
+ *
+ * Both routes used to `req.json()` an unbounded body and only THEN apply
+ * `SAMPLE_DATA_ENTRY_MAX_BYTES`, which is the "the cap can only run once the
+ * caller's object graph is already materialized" problem `readWriteBody` exists
+ * to avoid. #609 left them out because its subject was the two VERSION routes
+ * and said a sample-data body deserves its own measurement rather than an
+ * inherited number. This is that measurement.
+ *
+ * WHY NOT `FLOW_WRITE_MAX_BODY_BYTES` (262,144), which is the tempting reuse:
+ * an existing test forbids it. `routes.test.ts`'s "PATCH rejects an output that
+ * exceeds the per-entry size cap" sends a ~307 KB body and asserts 413 with the
+ * route's OWN message, `/exceeds .* bytes/`. Any body cap at or below ~307,250
+ * would answer that request with `readWriteBody`'s "too large" instead, so the
+ * caller would be told its request was too big rather than that its FIXTURE
+ * was -- which is the more useful of the two sentences and the one the test
+ * pins. So this cap must sit above the per-entry cap by a real margin, not
+ * beside it.
+ *
+ * DERIVED from the per-entry cap, since that is what decides whether a body is
+ * legitimate; this one only decides parse cost. A legal payload is 262,144 code
+ * units of `JSON.stringify(output)`. Three factors separate that from the
+ * request body, measured on this runtime at the per-entry ceiling:
+ *
+ *   fixture                              serialized   compact body   pretty(2)
+ *   Gmail message (few big strings)          260,249        260,260     260,609
+ *   Notion blocks (many small objects)       260,377        260,388     468,324
+ *   log dump (one big string)                263,124        263,135     263,155
+ *
+ *   - envelope: `{"output":` + `}` is +11 characters. Negligible.
+ *   - PRETTY-PRINTING: up to 1.80x, on the many-small-objects shape. A script
+ *     or `curl` caller pretty-prints; the editor sends compact.
+ *   - MULTIBYTE: `readWriteBody`'s first check compares `content-length`, which
+ *     is UTF-8 BYTES, against this number, while its second compares
+ *     `text.length`, which is UTF-16 code units. A maximal BMP CJK payload
+ *     measures 262,139 code units and 786,406 bytes: 3.00x. A cap that does not
+ *     clear 3x the code-unit size refuses a legal CJK fixture at the declared-
+ *     size check, before a byte is read.
+ *
+ * 262,144 x 1.80 x 3.00 = 1,415,577. Rounded up: 2,000,000, a 41% margin. That
+ * product is itself an over-estimate -- ASCII structure and CJK content cannot
+ * both be maximised in one document -- so it errs safe.
+ *
+ * WHAT IT STILL REFUSES, stated because the honest claim is narrower than "no
+ * legal payload is refused". Pretty-printing is NOT bounded by 1.80x in
+ * general: indentation grows with nesting depth and sample data has no nesting
+ * cap of its own (the depth-64 bound in `runtime/workflow-readiness.ts` is on a
+ * step graph's inputs, not on a fixture). A legal payload nested ~30 deep and
+ * pretty-printed, or one escaped `\uXXXX` character by character (measured at
+ * exactly 6.00x) and then pretty-printed, exceeds this. So the guarantee is:
+ * no body a shipped client produces is refused, and no plausibly hand-written
+ * one either. A body that needs 8x its payload in whitespace and escapes is
+ * padding, and it is told the limit.
+ *
+ * PARSE COST on this runtime, so "a bigger number is still a bound" is shown
+ * rather than asserted: 259 KB 0.07 ms, 518 KB 0.48 ms, 1 MB 0.95 ms,
+ * 2 MB 1.88 ms, 4 MB 4.00 ms, 16.5 MB 17.50 ms. Linear, ~1.9 ms at the cap,
+ * against no bound at all before this.
+ *
+ * NOT the version routes' 4,000,000, and the difference is the point: that one
+ * is sized against a 100-node step graph plus its `uiMeta` orphan twins, and
+ * this one against a single fixture with a 256 KB payload ceiling. Reusing it
+ * would have been the guess #598 refused to make.
+ */
+const SAMPLE_DATA_MAX_BODY_BYTES = 2_000_000;
 
 /**
  * Read and parse a write body, refusing an oversized one before it costs
@@ -460,6 +564,37 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
 };
 
 const isStatus = (v: unknown): v is FlowStatus => v === "ENABLED" || v === "DISABLED";
+
+/** The three values `app_connection.status` may hold, for the PATCH check. */
+const CONNECTION_STATUSES: readonly AppConnectionStatus[] = ["ACTIVE", "MISSING", "ERROR"];
+
+/**
+ * The refusal for a sample-data `stepName` this route will not use as a map
+ * key, or null (#635). Returns the Response rather than throwing, the shape
+ * `metadataRejection` uses.
+ */
+function sampleStepNameRefusal(stepName: string): Response | null {
+  // The three names that are not a step name but a prototype slot. Refused for
+  // the same reason `metadataRejection` refuses them in this file, and it is
+  // the SAME authority rather than a stricter one: `runtime/workflow-readiness.ts`
+  // already lists `connections`, `__proto__`, `prototype` and `constructor` as
+  // reserved, so no legal graph has a node by these names.
+  //
+  // It also closes a silent no-op. `current[stepName] = output` on a
+  // `JSON.parse` result invokes `Object.prototype.__proto__`'s SETTER rather
+  // than creating an own property, so `PATCH .../sample-data/__proto__`
+  // answered 200 having stored nothing -- and on an empty map it wrote the
+  // column to NULL. Nothing was polluted (`JSON.stringify` walks own
+  // enumerable keys only), but the caller was told its fixture was saved.
+  if (["__proto__", "prototype", "constructor"].includes(stepName)) {
+    return err(`stepName "${stepName}" is reserved`);
+  }
+  if (stepName.length <= SAMPLE_DATA_STEP_NAME_MAX_CHARS) return null;
+  return err(
+    `stepName is ${stepName.length} characters; the limit is ${SAMPLE_DATA_STEP_NAME_MAX_CHARS}`,
+    413,
+  );
+}
 
 export interface CreateWorkflowRoutesOptions {
   /**
@@ -900,7 +1035,25 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
       POST: (req) =>
         trapErrors(async () => {
-          const body = (await req.json()) as {
+          // Bounded before the parse (#635). Not named by the issue, folded in
+          // because it is the same class and strictly worse: unlike the sample
+          // routes this one had no post-parse cap of ANY kind, and `value` is
+          // `JSON.stringify`'d, encrypted and stored.
+          //
+          // `FLOW_WRITE_MAX_BODY_BYTES` rather than a measured number of its
+          // own, which is the one reuse in this file that answers the same
+          // question the budget was sized for: a small structured row. The
+          // largest realistic `value` is a Google service-account JSON key
+          // (~2.3 KB) or a PEM key and chain (~3-10 KB), so 256 KB is over 25x
+          // the largest real one and a measured figure here would be false
+          // precision.
+          //
+          // This also fixes a 500. A bare `req.json()` threw a `SyntaxError` on
+          // a malformed body, whose message matches none of `trapErrors`'
+          // patterns, so the caller got a 500 carrying the JSON parser's text.
+          const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
+          if ("error" in read) return read.error;
+          const body = read.body as {
             externalId?: string;
             displayName?: string;
             type?: AppConnectionType;
@@ -968,11 +1121,27 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const existing = getConnection(id);
           if (!existing) return err("connection not found", 404);
-          const body = (await req.json().catch(() => ({}))) as {
+          // Bounded before the parse, same budget and same reasoning as the
+          // POST above (#635). The `.catch(() => ({}))` it replaces turned a
+          // malformed body into a silent 200 no-op; it is a 400 now.
+          const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
+          if ("error" in read) return read.error;
+          const body = read.body as {
             displayName?: string;
             value?: Record<string, unknown>;
-            status?: "ACTIVE" | "MISSING" | "ERROR";
+            status?: unknown;
           };
+          // Checked rather than cast. `value` and `displayName` either side of
+          // it are both validated and this one was not, so a bogus status
+          // reached SQLite -- where `app_connection`'s own
+          // `CHECK(status IN ('ACTIVE','MISSING','ERROR'))` refused it and
+          // `trapErrors` turned the constraint violation into a 500 carrying
+          // SQLite's text. So nothing bad was ever STORED; what this fixes is
+          // the answer, from a 500 to a 400 that names the three values.
+          if (body.status !== undefined && !CONNECTION_STATUSES.includes(body.status as AppConnectionStatus)) {
+            return err(`status must be ${CONNECTION_STATUSES.join("|")} if provided`);
+          }
+          const status = body.status as AppConnectionStatus | undefined;
           if (
             body.value !== undefined &&
             (body.value === null || typeof body.value !== "object" || Array.isArray(body.value))
@@ -1000,7 +1169,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             pieceName: existing.pieceName,
             pieceVersion: existing.pieceVersion,
             value: body.value ?? existing.value,
-            ...(body.status ? { status: body.status } : {}),
+            ...(status ? { status } : {}),
           });
           return ok({
             id: merged.id,
@@ -1430,7 +1599,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // The version's `sampleData` map (stepName -> output) feeds the engine's
     // "test from here" path so a step's preceding outputs resolve without
     // re-running the chain. Editable per-step via this PATCH; the entire map
-    // can be replaced or cleared via the PUT below.
+    // can be cleared via the DELETE below.
     //
     // DRAFT-only: locked versions are immutable to user edits. The repo
     // enforces; the route just surfaces errors with a clear message.
@@ -1440,7 +1609,26 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id, versionId, stepName } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
-          const body = (await req.json().catch(() => ({}))) as { output?: unknown };
+          const badName = sampleStepNameRefusal(stepName);
+          if (badName) return badName;
+          // Bounded BEFORE the parse (#635). The per-entry cap below can only
+          // run once `req.json()` has already materialized the caller's object
+          // graph, in the one process that serves this API, the dashboard and
+          // the agent runtime -- which is exactly what `readWriteBody` exists
+          // to avoid.
+          //
+          // BEHAVIOUR CHANGE. The `.catch(() => ({}))` this replaces meant a
+          // malformed or ABSENT body became `{}`, so `output` fell to `null`
+          // and the step's entry was silently CLEARED with a 200. A body that
+          // parsed to a non-object (`[1,2,3]`) did the same, and `null` or `5`
+          // threw a TypeError that `trapErrors` turned into a 500. All four are
+          // a 400 now. Sending `{}` still clears, which is the documented way
+          // (`output: undefined` is the same as null) and what every shipped
+          // caller and the existing test do -- but a request that said nothing
+          // no longer deletes data.
+          const read = await readWriteBody(req, SAMPLE_DATA_MAX_BODY_BYTES);
+          if ("error" in read) return read.error;
+          const body = read.body as { output?: unknown };
           // `output: null` clears the entry; `output: undefined` (missing
           // key) is the same as null. Anything else stores as the entry.
           const output = body.output === undefined ? null : body.output;
@@ -1463,8 +1651,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
       DELETE: (req) =>
         trapErrors(() => {
-          // Clear all sample-data entries on this version. Sugar over the
-          // per-step PATCH with null when the UI's "reset all" action fires.
+          // Clear ALL sample-data entries on this version, for the editor's
+          // "reset all" action. Not sugar over the per-step PATCH -- it
+          // replaces the whole map rather than one key -- and it ignores
+          // `stepName` entirely, which is why no name check runs here: no key
+          // is written.
           const { id, versionId } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
@@ -1482,7 +1673,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id, versionId, stepName } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
-          const body = (await req.json().catch(() => ({}))) as { input?: unknown };
+          const badName = sampleStepNameRefusal(stepName);
+          if (badName) return badName;
+          // Bounded before the parse, same cap and same behaviour change as
+          // the sample-data PATCH above (#635).
+          const read = await readWriteBody(req, SAMPLE_DATA_MAX_BODY_BYTES);
+          if ("error" in read) return read.error;
+          const body = read.body as { input?: unknown };
           // `input: null` clears; `input: undefined` (missing) same as null.
           // Anything else is stored; must be a plain object since it
           // replaces the step's `settings.input` shape at runtime.
