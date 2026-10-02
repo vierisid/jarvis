@@ -471,11 +471,17 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
  * What is left, deliberately. Two operator-facing cuts read the RAW result and
  * are not model boundaries, so they keep a dangling open line and that is the
  * right call: `daemon/index.ts`'s `[EXECUTED]` notification and the approval
- * execute route in `daemon/api-routes.ts`. And `runtime/piece-effects.ts`'s
- * `bound()` cuts a governed piece's input strings to 512 for review -- a flow
- * author can wire this tool's framed result into one with `{{ }}` -- but that
- * projection feeds the re-authorize digest, so changing it invalidates
- * in-flight approvals and wants its own issue rather than a change here.
+ * execute route in `daemon/api-routes.ts`.
+ *
+ * The third item here used to be `runtime/piece-effects.ts`'s `bound()`, which
+ * cuts a governed piece's input strings to 512 for review -- a flow author can
+ * wire this tool's framed result into one with `{{ }}`. That is now CLOSED by
+ * #634, on the daemon side, by `runtime/piece-effect-receipt.ts`. The
+ * invalidation cost this comment worried about was real and was paid: a pending
+ * governed-piece approval whose input carries a marker spelling, or ill-formed
+ * UTF-16, fails its `requestDigest` fence on resume and its run must be
+ * restarted. Every other projection is byte-identical, which
+ * `governed-pieces.test.ts` pins against a fixed digest.
  */
 const FRAMED_PAYLOAD_MAX_CHARS = 4000;
 

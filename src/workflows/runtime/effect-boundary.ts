@@ -76,9 +76,18 @@ export class WorkflowEffectBoundary {
    */
   auditRefusal(input: { context: WorkflowEffectContext; toolName: string; category: ActionCategory }): void {
     try {
-      // The step name is engine-supplied provenance and is not validated on this
-      // path, so it is bounded before it reaches the audit row.
-      const step = (input.context.stepName ?? 'unknown step').slice(0, 120);
+      // The step name is engine-supplied provenance and is not validated on
+      // this path -- `resolveEffectContext`'s graph check has not run, because
+      // this is the refusal that happens before an effect record can exist --
+      // so it is bounded before it reaches the audit row.
+      //
+      // `boundedReceiptText` and not a bare `.slice(0, 120)` (#634). This is
+      // the same defect as `bound()`'s: `<<<UNTRUSTED_CONTENT` is 20
+      // characters, so a 120-character cut comfortably keeps an open delimiter
+      // and drops the close, into a durable audit row a person reads. It was
+      // also, embarrassingly, the line #634's own reasoning cited as the
+      // precedent for the number 120.
+      const step = boundedReceiptText(input.context.stepName ?? 'unknown step', 120);
       this.deps.auditTrail?.log({ agent_id: `workflow:${input.context.runId}`,
         agent_name: `Workflow ${input.context.runId} / ${step}`,
         tool_name: input.toolName, action_category: input.category,

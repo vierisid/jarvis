@@ -46,6 +46,7 @@ import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
+import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
@@ -553,7 +554,17 @@ export function buildSandboxServiceBackends(
     // The connection is stripped on the engine side before the input is sent;
     // stripping it again here means neither path can put a credential into the
     // durable record or the approval card.
-    const input = sanitizePieceInput(req.input);
+    //
+    // Then the framing delimiters are neutralised (#634). `bound()` cuts every
+    // string to 512 characters, and a cut through a framed `UNTRUSTED_CONTENT`
+    // block keeps the open delimiter and drops the close -- which goes on to
+    // disclaim whatever the approval card renders after it. This is the ONLY
+    // site that defangs, deliberately: nothing is durable before this point, so
+    // the engine's copy of `sanitizePieceInput` does not need to change and
+    // `piece-effects.ts` stays free of the import the engine bundle would have
+    // to start tracking. See `piece-effect-receipt.ts` for the whole argument,
+    // including which in-flight approvals a changed projection invalidates.
+    const input = defangPieceProjection(sanitizePieceInput(req.input));
     const tool = governedPieceToolDefinition(resolved);
     const capability = (() => {
       try { return toolEffectCapability(tool); }

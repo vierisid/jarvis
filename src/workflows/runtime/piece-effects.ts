@@ -399,6 +399,28 @@ const MAX_DEPTH = 5;
  * Bound one value for review. Deterministic: the same input always produces
  * the same projection, so the digest the approval was granted against still
  * matches when the step re-authorizes on resume.
+ *
+ * The string cut below can land INSIDE a framed `UNTRUSTED_CONTENT` block --
+ * `manage_workflow` frames its own return and a `{{ }}` expression can wire
+ * that into a governed piece's input -- which would keep the open delimiter and
+ * drop the close. That is neutralised by `defangPieceProjection` in
+ * `piece-effect-receipt.ts`, applied on the DAEMON side only (#634). It is not
+ * done here on purpose: this file is compiled into the engine bundle and must
+ * keep type-only imports, and no piece PROJECTION is durable before the
+ * daemon's pass, so the daemon is the sufficient place. Doing it in both would
+ * also be safe, but only at the cost of registering `roles/untrusted.ts` in
+ * `PATCHED_VENDOR_SOURCES`, which would make every edit to that file -- a
+ * comment included -- invalidate every cached engine bundle. That file carries
+ * the full argument.
+ *
+ * Note that the `[N more characters]` count is NOT reliable today, for a reason
+ * unrelated to that: `sanitizePieceInput` is applied twice, once in the engine
+ * and once in the daemon, and the string branch is not idempotent -- the second
+ * pass re-cuts the first pass's output and re-counts, so the number a card
+ * shows for a long string is the length of the note rather than the overflow.
+ * Filed separately, because fixing it changes the projection for EVERY string
+ * over 512 characters and so invalidates far more in-flight approvals than
+ * #634's own fix does.
  */
 function bound(value: unknown, depth: number): unknown {
   if (typeof value === 'string') {

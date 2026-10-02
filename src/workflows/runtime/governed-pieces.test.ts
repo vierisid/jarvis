@@ -25,6 +25,9 @@ import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
 import { GOVERNED_PIECE_ADAPTERS, governedPieceToolName, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
+import { defangPieceProjection } from './piece-effect-receipt';
+import { digest } from './effect-context';
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
 import { authorizePieceDispatch } from './piece-effect-guard';
 import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
@@ -431,4 +434,144 @@ describe('every verified piece is gated', () => {
       });
     }
   }
+});
+
+
+/**
+ * #634. `bound()` cuts every string in a governed piece's input to 512
+ * characters, and `manage_workflow` is the one tool that FRAMES its own return
+ * -- so a `{{ }}` expression wiring that return into a piece's input put a cut
+ * through an `UNTRUSTED_CONTENT` block, keeping the open delimiter and dropping
+ * the close. That projection becomes `workflow_effect.arguments`, is copied to
+ * `approval_requests.tool_arguments` and is rendered on the approval card,
+ * where a dangling open line disclaims whatever follows it.
+ *
+ * The fix is on the DAEMON side only (`piece-effect-receipt.ts`), because
+ * nothing is durable before the daemon's pass and `piece-effects.ts` is
+ * compiled into the engine bundle under a type-only-imports rule.
+ */
+describe('#634: a stored piece projection can never hold half a framed block', () => {
+  /** What a prior `manage_workflow` step hands a `{{ }}` expression. */
+  const framed = () => wrapUntrusted(`${'payload line\n'.repeat(200)}`, 'manage_workflow');
+
+  test('a cut through a framed block leaves no live delimiter at any cut point', () => {
+    const block = framed();
+    // Non-vacuous: the projection alone DOES keep the open delimiter and lose
+    // the close -- that is the defect. Checked for BOTH shapes, because in
+    // production `sanitizePieceInput` runs twice (engine, then daemon) and the
+    // value the defang actually receives is the two-pass one.
+    const onePass = sanitizePieceInput({ message: block }) as { message: string };
+    const twoPass = sanitizePieceInput(onePass) as { message: string };
+    for (const undefanged of [onePass, twoPass]) {
+      expect(undefanged.message).toContain(UNTRUSTED_OPEN);
+      expect(undefanged.message).not.toContain(UNTRUSTED_CLOSE);
+    }
+
+    // The daemon's pass is what makes the stored value safe.
+    const stored = defangPieceProjection(twoPass) as { message: string };
+    expect(stored.message).not.toContain(UNTRUSTED_OPEN);
+    expect(stored.message).not.toContain(UNTRUSTED_CLOSE);
+    // The preamble survives as prose, so the row still says this is data.
+    expect(stored.message).toContain('UNTRUSTED-CONTENT');
+    // And the "how much was hidden" note is still there -- re-cutting with
+    // `boundedReceiptText` would have eaten it.
+    expect(stored.message).toContain('more characters]');
+
+    // Every cut point, not just 512: wherever the block is sliced, nothing live
+    // survives. This is the property the issue is actually about.
+    //
+    // Offsets are taken FROM the delimiter, not from 0. `wrapUntrusted` puts a
+    // preamble in front of the payload, so the open delimiter does not start at
+    // index 0 -- a loop over small absolute indices would slice a prefix with no
+    // token in it at all and assert nothing. Pinned so this stays true.
+    const opensAt = block.indexOf(UNTRUSTED_OPEN);
+    expect(opensAt).toBeGreaterThan(100);
+    for (const k of [-1, 0, 1, 5, UNTRUSTED_OPEN.length - 1, UNTRUSTED_OPEN.length, UNTRUSTED_OPEN.length + 1, 400]) {
+      const cut = defangPieceProjection({ m: block.slice(0, opensAt + k) }) as { m: string };
+      expect(cut.m).not.toContain(UNTRUSTED_OPEN);
+      expect(cut.m).not.toContain(UNTRUSTED_CLOSE);
+    }
+  });
+
+  test('it reaches the durable record and the approval card, not just the helper', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const pending = await f.authorize({ ...SEND_INPUT, body: framed() });
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    const card = f.approvals.getRequest(approvalId)!;
+    for (const stored of [JSON.stringify(effect.arguments), card.tool_arguments]) {
+      expect(stored).not.toContain(UNTRUSTED_OPEN);
+      expect(stored).not.toContain(UNTRUSTED_CLOSE);
+    }
+    // The target the card renders its sentence from inherits the fix, because
+    // it is built from the same defanged value.
+    expect(JSON.stringify(effect.target)).not.toContain(UNTRUSTED_OPEN);
+  });
+
+  /**
+   * THE DIGEST CONTRACT. `bound()`'s docblock requires determinism because
+   * `effect-boundary.ts`'s `requestDigest` is recomputed from this projection
+   * on every resume; a changed projection makes a pending approval fail with
+   * "Workflow effect changed since it was recorded".
+   *
+   * So an UNCHANGED input must keep its digest. The literal below was computed
+   * against the pre-#634 code path and is pinned here, so this fails if the
+   * projection of ordinary content ever moves again -- whether the cause is
+   * `bound()`, `defangPieceProjection` or `canonicalJson`.
+   */
+  test('an unchanged input keeps the exact digest it had before #634', () => {
+    // Deliberately ORDINARY: no marker spelling, no ill-formed UTF-16, and no
+    // surrogate pair straddling index 512. Those are the only two classes the
+    // fix is allowed to move.
+    const fixtureInput = {
+      to: 'ops@example.com',
+      subject: 'Nightly reconciliation report',
+      at_cap: 'a'.repeat(512),
+      body: 'The reconciliation run completed with 4 mismatches. '.repeat(80),
+      attachments: ['ledger.csv', 'diff.txt'],
+      meta: { retries: 2, dryRun: false, tags: ['nightly', 'finance'] },
+      auth: { access_token: 'must-never-appear' },
+    };
+    const projected = defangPieceProjection(sanitizePieceInput(fixtureInput));
+    expect(digest(projected)).toBe('6663ca45610250b4ff5efece2a3c06d21f87c7e6313239b3780c8098d5d7fe45');
+    // The parts that digest covers, spelled out so a failure above is readable
+    // rather than just a hex mismatch.
+    const shown = projected as Record<string, string>;
+    expect(shown.at_cap!.length).toBe(512);
+    expect(shown.body!.endsWith('... [3648 more characters]')).toBe(true);
+    expect('auth' in projected).toBe(false);
+    // Still deterministic across calls, which is the original contract.
+    expect(digest(defangPieceProjection(sanitizePieceInput(fixtureInput)))).toBe(digest(projected));
+  });
+
+  /**
+   * The two classes that DO move, named so the invalidation cost is written
+   * down rather than discovered on resume.
+   */
+  test('only a marker spelling and ill-formed UTF-16 change the projection', () => {
+    const plain = { a: 'ordinary text', b: 'x'.repeat(2000) };
+    expect(defangPieceProjection(sanitizePieceInput(plain))).toEqual(sanitizePieceInput(plain));
+
+    // 1. the BARE TOKEN, which is wider than the delimiter and is the class a
+    // reader is most likely to under-count. `markerPattern()` matches
+    // `UNTRUSTED_CONTENT` alone, so ordinary content that merely MENTIONS it --
+    // a SQL column, a JSON key, a filename -- is rewritten too, and its durable
+    // row is no longer byte-exact.
+    const marked = { a: `hello ${UNTRUSTED_OPEN} there` };
+    expect(defangPieceProjection(sanitizePieceInput(marked))).not.toEqual(sanitizePieceInput(marked));
+    const mentions = { q: 'SELECT untrusted_content FROM pages' };
+    expect((defangPieceProjection(sanitizePieceInput(mentions)) as { q: string }).q)
+      .toBe('SELECT untrusted-content FROM pages');
+
+    // 2. ill-formed UTF-16 in the kept prefix.
+    const lone = { a: `bad \ud800 surrogate` };
+    expect(defangPieceProjection(sanitizePieceInput(lone))).not.toEqual(sanitizePieceInput(lone));
+    expect((defangPieceProjection(sanitizePieceInput(lone)) as { a: string }).a).toContain('\ufffd');
+
+    // A marker AFTER the kept prefix cannot move anything, because what is kept
+    // is byte-exact before the first matched span.
+    const late = { a: `${'y'.repeat(600)}${UNTRUSTED_OPEN}` };
+    expect(defangPieceProjection(sanitizePieceInput(late))).toEqual(sanitizePieceInput(late));
+  });
 });
