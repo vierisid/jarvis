@@ -471,6 +471,14 @@ export function pruneEngineBundleCache(opts?: PruneOptions): PruneResult {
   // A shared root is built and owned by the host, read-only to us and shared
   // between tenants. Deleting from it is never ours to do; enforce that here
   // rather than relying on every caller to know it.
+  //
+  // ENV ONLY, where the rest of the daemon is config-first: a shared root set
+  // through `workflows.engine_dir` alone is invisible to this guard. Safe only
+  // because `root` defaults to the per-user BUNDLE_ROOT and production never
+  // passes one (see PruneOptions.root, which says "tests"). If a caller ever
+  // does pass a root, this must take the resolved
+  // `SharedRuntimePaths.engineCacheRoot` instead -- which is what
+  // `resolveSharedRuntimePaths` exists to make the whole daemon agree on.
   const shared = process.env["JARVIS_ENGINE_CACHE_ROOT"]?.trim();
   if (shared && resolve(shared) === root) {
     return { deleted: [], kept: [], freedBytes: 0 };

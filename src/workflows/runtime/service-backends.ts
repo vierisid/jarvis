@@ -43,7 +43,7 @@ import { cancellableWorkflowService } from "./cancellation";
 import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { getWorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
-import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
@@ -411,6 +411,29 @@ export function buildSandboxServiceBackends(
         if (GATED_TOOL_NAMES.has(call.toolCall.name)) {
           return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} is only approvable through its typed adapter; call it as a flow step, not from a delegated agent.` };
         }
+        // #638. The two checks above gate on SET MEMBERSHIP, and the sets do
+        // not cover this route's third case: a call whose approval has to stay
+        // bound to a live UI surface. `ui_act` is the live example -- it sits in
+        // `REVIEWED_UI_TOOLS` and in NONE of bounded/opaque/gated, so it passes
+        // both checks above, where `toolsInvoke` is closed for it because that
+        // route calls `toolEffectCapability` and this one never does.
+        //
+        // It was not reachable: `sub-agent-runner.ts` refuses any call whose
+        // gate says `confirm === 'always'` before a sub-agent's tool call ever
+        // reaches `governedTools`, and `rawUiGate` says exactly that for all 14
+        // members of the set. So this is defence in depth, not a plugged hole --
+        // but the thing standing between this route and an unbound UI approval
+        // was a gate in another subsystem, keyed on a different property, for a
+        // reason unrelated to binding, and nothing here said so.
+        //
+        // Asked as a predicate rather than by widening OPAQUE_TOOLS: the two
+        // sets then have to agree by hand, and they already disagree by exactly
+        // this one name. See `surfaceBoundRefusal` for why `rawUiGate` is the
+        // signal (it carries the `get_value` read carve-out, which must still
+        // be allowed here).
+        const unboundable = surfaceBoundRefusal(
+          registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+        if (unboundable) return { kind: 'denied', reason: unboundable };
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
@@ -421,9 +444,30 @@ export function buildSandboxServiceBackends(
             // The sub-agent's gate may have substituted an approval for a
             // level shortfall; judge it here the same way, or the approval it
             // asked for could never be granted.
+            //
+            // And `confirm: 'always'` is carried through, not just read for its
+            // floor (#638). The boundary writes it into the approval CONTEXT,
+            // which is the only rung `approvalNeedsClick` reads, so dropping it
+            // here let a card the gate said needs a deliberate click be
+            // satisfied by voice or by auto-approval. `toolsInvoke` has always
+            // passed it; this route read `gate.confirm` for `aboveLevelFloor`
+            // and discarded the `'always'` itself.
+            //
+            // A no-op today, deliberately stated so nobody reads it as a
+            // migration: `'always'` is refused upstream in `sub-agent-runner.ts`
+            // and now again by the refusal above, and no other tool reaching
+            // this route resolves to it (`write_file`'s is `'above_level'`,
+            // measured). So no in-flight approval changes shape. It is here so
+            // that if either refusal is ever relaxed, the card that results
+            // still demands the click its gate asked for.
             ...(() => {
               const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
-              return gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {};
+              return {
+                ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
+                ...(gate.confirm === 'always'
+                  ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } }
+                  : {}),
+              };
             })(),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.

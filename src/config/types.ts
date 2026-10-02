@@ -358,7 +358,21 @@ export type WorkflowConfig = {
    * wins when both are set.
    */
   /** Dir holding prebuilt engine bundles as `<hash>/main.js` — consulted
-   * before building into `~/.jarvis/cache/engine`. */
+   * before building into `~/.jarvis/cache/engine`.
+   *
+   * EACH BUNDLE MUST SHIP ITS `main.js.sha256` (#624). `main.js` from here is
+   * spawned as the workflow engine with the daemon's authority, and the
+   * directory name hashes build INPUTS, not output, so the digest beside it is
+   * the only thing that makes the store content-addressed in fact rather than
+   * in name. A bundle with no manifest, or one whose bytes do not match it, is
+   * refused: the daemon logs `[engine] shared bundle REFUSED reason=...` and
+   * builds its own copy instead. Both of jarvis's own publishers
+   * (`scripts/build-shared-runtime.ts`, the Docker image) write it
+   * unconditionally; a host publishing these trees by other means (rsync,
+   * tarball, a fleet builder) has to carry the `.sha256` files too, or every
+   * tenant on the host silently stops using the shared bundle and pays a
+   * ~47 MB staging install — which in a container with no egress means
+   * workflow features start disabled. */
   engine_dir?: string;
   /** Dir with a ready-made pieces catalog (`node_modules/@activepieces/...`).
    * Pieces here are usable without installing; a piece installed via the

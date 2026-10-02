@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -1418,14 +1419,23 @@ func (c *SidecarClient) readLoop(ctx context.Context) error {
 		}
 
 		// Run handler in goroutine to not block the read loop
-		go func(id string, h RPCHandler, params map[string]any) {
-			result, err := h(params)
-			if err != nil {
-				c.sendResult(ctx, id, nil, handlerRPCError(err))
-				return
-			}
-			c.sendResult(ctx, id, result, nil)
-		}(req.ID, handler, req.Params)
+		go func(id, method string, h RPCHandler, params map[string]any) {
+			// The REPLY path is the one thing runRPCHandler's own recover
+			// cannot cover, because it is what that recover uses to answer.
+			// Containing it here leaves the request pending rather than
+			// answered -- the brain's RPC timeout then reports it as
+			// `may_have_occurred`, which is the same conclusion and is still
+			// better than taking the process down with every other pending
+			// request on it.
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[sidecar] RPC reply for %s (%s) panicked, request left unanswered: %v\n%s",
+						method, id, r, debug.Stack())
+				}
+			}()
+			result, rpcErr := runRPCHandler(method, h, params)
+			c.sendResult(ctx, id, result, rpcErr)
+		}(req.ID, req.Method, handler, req.Params)
 	}
 }
 
@@ -1455,6 +1465,56 @@ func handlerRPCError(err error) *rpcError {
 		code = coded.code
 	}
 	return &rpcError{Code: code, Message: err.Error()}
+}
+
+// handlerPanicCode is the RPC error code for a handler that panicked (#623).
+//
+// It is deliberately NOT one of the daemon's not-started codes
+// (NOT_STARTED_RPC_CODES in src/actions/tools/sidecar-route.ts). A recovered
+// panic cannot claim nothing happened: the handler may have clicked, typed or
+// written a file and then panicked on the next line, so the daemon's generic
+// classification -- `may_have_occurred` -- is the only honest one, and that is
+// what an unlisted code already gets. It is its own code rather than
+// HANDLER_ERROR so that a sidecar bug is distinguishable, in a brain-side log
+// or outcome, from an error a handler chose to return.
+const handlerPanicCode = "HANDLER_PANIC"
+
+// runRPCHandler runs one RPC handler and returns what to reply with.
+//
+// A panic becomes a coded error instead of reaching the goroutine's top frame
+// (#623). Every handler's params arrive over the wire and handlers do a lot of
+// `params["x"].(string)`-style access, so without this a single malformed
+// request was not a refusal but a process-ending panic: the read loop cannot
+// recover from another goroutine's panic, so the whole sidecar went down and
+// the brain saw the socket drop rather than an error it could map. The pending
+// request is answered here because the caller still holds its id.
+//
+// Same containment shape as goSafeObserver (observers.go), and the reason
+// `elementPointClock`'s nil guard exists (browser_element_point.go) -- that
+// guard stays: this makes a panic survivable, not free.
+//
+// The panic VALUE is logged with its stack and is NOT put in the reply. A
+// panic message can quote wire data back (`strconv` and type-assertion panics
+// both do), and the daemon interpolates this message into text a model and a
+// user read. The protocol's own rule for refusals applies: the brain
+// classifies on the code and the sidecar keeps the detail in its log.
+func runRPCHandler(method string, h RPCHandler, params map[string]any) (result *RPCResult, rpcErr *rpcError) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[sidecar] RPC handler %s panicked: %v\n%s", method, r, debug.Stack())
+			result, rpcErr = nil, &rpcError{
+				Code: handlerPanicCode,
+				Message: fmt.Sprintf("the %s handler crashed on this machine; the action may or may not have "+
+					"taken effect - verify the current state before retrying, and report this: the stack is in "+
+					"the sidecar's log", method),
+			}
+		}
+	}()
+	res, err := h(params)
+	if err != nil {
+		return nil, handlerRPCError(err)
+	}
+	return res, nil
 }
 
 func (c *SidecarClient) sendResult(ctx context.Context, rpcID string, result *RPCResult, rpcErr *rpcError) {

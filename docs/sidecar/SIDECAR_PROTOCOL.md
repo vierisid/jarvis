@@ -171,18 +171,75 @@ Sent when a sidecar finishes executing an RPC request.
 }
 ```
 
-Error case:
+Error case. `error` is an OBJECT, never a bare string: the brain classifies on
+the `code` and never by parsing the message (#594's rule), and
+`src/sidecar/validator.ts` rejects a frame whose `error` has no string `code`
+and `message`.
 
 ```json
 {
   "payload": {
     "rpc_id": "rpc-uuid-123",
-    "success": false,
-    "error": "Command not found: foobar",
-    "duration_ms": 12
+    "error": { "code": "HANDLER_ERROR", "message": "Command not found: foobar" }
   }
 }
 ```
+
+(`success` and `duration_ms` appear in the success example above for
+readability; `sendResult` writes only `rpc_id` plus one of `result` / `error`.)
+
+#### The three codes every method can send
+
+Per-method refusals are documented beside their methods (see
+`browser_element_point`'s table). These three come from the dispatch itself, so
+any method can produce them:
+
+| Code | Meaning | How the brain reads the effect |
+|---|---|---|
+| `METHOD_NOT_FOUND` | this sidecar has no such method, i.e. it is older than this brain | not started; reported as "sidecar too old" (#605) |
+| `HANDLER_ERROR` | the handler returned an error and did not choose a code | **may have occurred** |
+| `HANDLER_PANIC` | the handler **crashed** -- see below (#623) | **may have occurred** |
+
+A handler picks its own code by returning a `codedError` (`sidecar/client.go`).
+A code the brain lists in `NOT_STARTED_RPC_CODES`
+(`src/actions/tools/sidecar-route.ts`) means the request was refused before
+anything happened; every other code, listed or not, is classified
+`may_have_occurred`. So a NEW code needs no brain change to be reported
+honestly -- it needs one only to be reported as *not started*, and that claim
+has to be earned.
+
+#### `HANDLER_PANIC`
+
+Handler params arrive over the wire and handlers do a lot of
+`params["x"].(string)`-style access. Until #623 the dispatch ran every handler
+in a bare goroutine with no `recover()`, so a nil map, an index out of range or
+a type assertion on a field the brain sent in an unexpected shape took the whole
+sidecar process down -- the read loop cannot recover another goroutine's panic.
+The brain saw the connection drop, not a refusal it could map. The dispatch now
+recovers and answers the pending request with this code.
+
+Two properties of that reply are deliberate:
+
+- **It is NOT a not-started code.** A recovered panic cannot establish that
+  nothing happened: the handler may have clicked, typed or written a file and
+  then panicked on the next line. The message tells the model to verify the
+  current state rather than to assume a refusal.
+- **The panic value is not in the message.** It is logged with its stack on the
+  sidecar. Panic text quotes the offending value back (a type-assertion panic
+  names the dynamic type, `strconv` panics quote the input), and the brain
+  interpolates this message into text a model and a user read -- the same reason
+  `refuseLocalContent`'s URL stays out of the brain's log lines.
+
+A `HANDLER_PANIC` is a sidecar bug, not a user error. It is its own code rather
+than `HANDLER_ERROR` so that it is distinguishable from an error a handler chose
+to return.
+
+One case stays unanswered rather than coded: a panic in the REPLY path itself,
+which is what the recover would otherwise use to answer. That is contained and
+logged too, and the request then falls to the brain's RPC timeout
+(`SIDECAR_TIMEOUT`), which already reports `may_have_occurred` -- the same
+conclusion, reached the slow way, and still better than losing the connection
+and every other request in flight on it.
 
 ### `rpc_progress` — RPC intermediate progress
 

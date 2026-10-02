@@ -95,6 +95,22 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   registry.register({ name: 'run_skill', category: 'automation', description: 'Synthetic skill replay', parameters: {},
     authorityGate: () => ({ actionCategory: 'send_email', intent: 'click Send (sends email)' }),
     execute: async () => { effects++; return 'replayed'; } });
+  // #638, signal one: the real `ui_act` name, so `rawUiGate` judges it as a raw
+  // UI action requiring mandatory review. In NONE of bounded/opaque/gated,
+  // which is the shape that passes this route's two set checks.
+  registry.register({ name: 'ui_act', category: 'ui', description: 'Synthetic UI action', parameters: {},
+    captureApprovalGuard: () => () => true,
+    execute: async () => { effects++; return 'clicked'; } });
+  // #638, signal two: a tool that declares it binds a live subject but that
+  // nobody registered in `REVIEWED_UI_TOOLS`. This is the case with NO upstream
+  // protection -- `rawUiGate` says nothing about it, so `gate.confirm` is not
+  // 'always' and `sub-agent-runner.ts` lets it through to this route. Its
+  // category is governed in the tests below, so it would otherwise take a card
+  // and a waitpoint with no surface in the record.
+  registry.register({ name: 'tap_widget', category: 'ui', description: 'Synthetic unregistered surface tool', parameters: {},
+    authorityGate: () => ({ actionCategory: 'control_app', intent: 'tap a widget' }),
+    captureApprovalGuard: () => () => true,
+    execute: async () => { effects++; return 'tapped'; } });
   const authority = new AuthorityEngine({ default_level: opts.authority?.default_level ?? 10,
     governed_categories: (opts.authority?.governed_categories ?? ['write_data']) as any, overrides: (opts.authority?.overrides ?? []) as any,
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
@@ -345,6 +361,81 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(f.effects()).toBe(0);
     expect(f.approvals.getPending()).toEqual([]);
     expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
+  });
+
+  /**
+   * #638. Why a surface-bound approval must never reach this boundary.
+   *
+   * A workflow waitpoint is designed to wait; `ui_act`'s element ids come from
+   * a process-local counter that restarts at 1; and its own in-execute checks
+   * compare the CURRENT entry for an id against ITSELF -- so after a restart
+   * every one of them passes while the id names a different element on a
+   * different surface. `captureApprovalGuard`'s object-identity test is the
+   * control that catches that, and the boundary cannot hold one: its record is
+   * durable and that closure is not.
+   *
+   * The dispatch recheck cannot stand in. `validateTarget` on this route
+   * compares severity and only refuses a call that got STRICTER; once the
+   * addressed entry is gone `uiActTool.authorityGate` returns null and the
+   * recomputed category is LOWER. It is blind in the one direction the failure
+   * takes.
+   *
+   * These two tests pin the two signals separately, because only one of them
+   * has no upstream equivalent -- see each.
+   */
+  test('a raw UI action is refused by this route itself, not only by the sub-agent gate (#638)', async () => {
+    const ids = createRun();
+    const f = backends(ids, { script: [{ call: 'ui_act', args: { element_id: 7, action: 'click' } }, 'finish'],
+      authority: { governed_categories: ['control_app'] } });
+    const done = await f.delegate({ requiredTools: ['ui_act'] });
+    expect(done.status).toBe('completed');
+    // LAYERING, stated rather than hidden: `sub-agent-runner.ts` refuses this
+    // first, because `rawUiGate` makes it `confirm: 'always'` and a sub-agent
+    // may not request a confirmation. That is why #638 was never exploitable.
+    // The assertion accepts either refusal and insists only on the outcome,
+    // so it stays meaningful if the upstream gate is ever relaxed -- which is
+    // the whole reason the route now refuses independently.
+    expect(done.toolCalls[0]!.error).toMatch(
+      /^\[(AUTHORITY|APPROVAL) DENIED\] ui_act\b.*(Sub-agents cannot request approvals|live UI surface)/);
+    expect(f.effects()).toBe(0);
+    expect(f.approvals.getPending()).toEqual([]);
+    expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
+  });
+
+  test('a tool that declares a surface binding nobody registered is refused HERE, with nothing upstream to catch it (#638)', async () => {
+    // The case with no other defence. `tap_widget` carries a
+    // `captureApprovalGuard` and is absent from `REVIEWED_UI_TOOLS`, so
+    // `rawUiGate` says nothing, `gate.confirm` is not 'always', and the
+    // sub-agent gate passes it straight through. Its category is governed, so
+    // before this refusal it took an approval card and a MANUAL waitpoint with
+    // no surface anywhere in the record.
+    const ids = createRun();
+    const f = backends(ids, { script: [{ call: 'tap_widget', args: { widget: 'Pay' } }, 'finish'],
+      authority: { governed_categories: ['control_app'] } });
+    const done = await f.delegate({ requiredTools: ['tap_widget'] });
+    expect(done.status).toBe('completed');
+    expect(done.toolCalls[0]!.error).toMatch(/^\[APPROVAL DENIED\] tap_widget: Unsupported workflow capability/);
+    expect(done.toolCalls[0]!.error).toMatch(/cannot stay bound to the screen it was reviewed against/);
+    // The three things that must not exist: no dispatch, no durable record for
+    // the call, and above all no CARD -- a pending card is a click the user can
+    // spend on an action nothing is holding the surface for.
+    expect(f.effects()).toBe(0);
+    expect(f.approvals.getPending()).toEqual([]);
+    expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
+  });
+
+  test('the refusal does not catch the reads this route legitimately carries (#638)', async () => {
+    // Non-over-refusal, in the direction the obvious fix got wrong: calling
+    // `toolEffectCapability` here, as the other two routes do, would also have
+    // refused `ui_snapshot` and `list_sidecars` -- reads with no surface to bind
+    // and no reason to be denied. The predicate is narrower on purpose, and
+    // keyed on `rawUiGate` so even `ui_act`'s own `get_value` read survives it.
+    const ids = createRun();
+    const f = backends(ids, { script: [{ call: 'read_file', args: { path: '/tmp/synthetic' } }, 'finish'] });
+    const done = await f.delegate({ requiredTools: ['read_file'] });
+    expect(done.status).toBe('completed');
+    expect(done.toolCalls[0]!.error).toBeUndefined();
+    expect(String(done.toolCalls[0]!.result)).toContain('contents');
   });
 
   test('a required tool that failed with a typed outcome is not completed', async () => {

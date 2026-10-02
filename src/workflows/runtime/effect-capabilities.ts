@@ -8,6 +8,7 @@ import type { SidecarCapability } from '../../sidecar/types';
 import { resolve } from 'node:path';
 import { policyHome } from '../../actions/tools/file-path-policy';
 import { getMachineScope } from '../../actions/machine-scope';
+import { rawUiGate, REVIEWED_UI_TOOLS } from '../../authority/ui-intent';
 
 /**
  * Tools whose effect is bounded enough to describe a review target (a sidecar
@@ -53,6 +54,80 @@ const RESERVED_TARGET_KEYS = new Set(['tool', 'capability', 'sidecarId', 'select
 export const BOUNDED_TOOL_NAMES: ReadonlySet<string> = BOUNDED_TOOLS;
 export const OPAQUE_TOOL_NAMES: ReadonlySet<string> = OPAQUE_TOOLS;
 export const GATED_TOOL_NAMES: ReadonlySet<string> = GATED_TOOLS;
+
+/**
+ * Why this call cannot be approved through the boundary at all, or null.
+ *
+ * #638, and DEFENCE IN DEPTH rather than a plugged hole -- stated plainly
+ * because the issue reads as the latter and the distinction is the whole value
+ * of this function.
+ *
+ * WHAT IS REAL. An approval that acts on a live SURFACE is bound, on the
+ * interactive path, by `captureApprovalGuard`: a closure holding the CDP
+ * connection, the approval epoch and -- for an element-addressed tool -- the
+ * document and the generation of the id map (#602). The boundary cannot hold
+ * one. It is durable by design: a record parks on a MANUAL waitpoint for hours
+ * and is rechecked on resume through `validateTarget`, which gets the frozen
+ * arguments and the recorded target and nothing else. A closure does not cross
+ * that gap, and what it closes over does not survive a restart --
+ * `ApprovalManager.reconcileAfterRestart` clears `uiExecutions` outright, which
+ * is why the chat path refuses a UI card whose binding is gone. So the boundary
+ * must never be the thing that approves a surface-bound call.
+ *
+ * WHAT WAS NOT REACHABLE, and why this is not a vulnerability fix. The two
+ * routes into the boundary refuse these calls already, by different means, and
+ * neither means is stated anywhere near the other:
+ *
+ *   - `toolsInvoke` calls `toolEffectCapability`, which throws for every
+ *     browser/desktop action name (OPAQUE) and for `ui_act` (no declared
+ *     Authority action).
+ *   - the delegated sub-agent route gates on set membership and calls
+ *     `toolEffectCapability` not at all -- so `ui_act`, which sits in
+ *     `REVIEWED_UI_TOOLS` and in NONE of bounded/opaque/gated, passes both of
+ *     its checks. It is nonetheless refused, three files away, by
+ *     `sub-agent-runner.ts`: "a call the person must confirm cannot be made by
+ *     a sub-agent at all" fires for `gate.confirm === 'always'`, and
+ *     `rawUiGate` returns exactly that for every member of
+ *     `REVIEWED_UI_TOOLS` (measured, all 14).
+ *
+ * So the delegate route's protection against the one name the sets disagree on
+ * is incidental -- it depends on a gate in another subsystem, keyed on a
+ * different property, for a reason that has nothing to do with binding. That is
+ * the fragility worth closing: this makes the refusal local, explicit, and
+ * independent of all three.
+ *
+ * TWO SIGNALS, covering the two drift directions:
+ *
+ *   - `rawUiGate(toolName, params)` -- the authoritative judgement of "this is
+ *     a raw UI action requiring mandatory review". Used rather than
+ *     `REVIEWED_UI_TOOLS.has(name)` so its carve-out comes along for free:
+ *     `ui_act` with `action: 'get_value'` is a READ, is not reviewed, and must
+ *     not be refused here either.
+ *   - a declared `captureApprovalGuard` on a tool that is NOT in
+ *     `REVIEWED_UI_TOOLS` -- a tool saying for itself that reviewing it is not
+ *     enough, which nobody registered. Empty today (every guarded tool is in
+ *     the set, measured) and the only signal that would survive someone adding
+ *     a guarded tool and forgetting `ui-intent.ts`. Scoped to names outside the
+ *     set precisely so it cannot re-refuse the read above.
+ *
+ * NOT the same refusal as `OPAQUE_TOOLS`. Opaque means "a category cannot
+ * describe what this will do"; this means "what this acts on cannot be bound
+ * across a waitpoint". `ui_act` is only ever the second.
+ */
+export function surfaceBoundRefusal(
+  tool: ToolDefinition | undefined,
+  toolName: string,
+  params: Record<string, unknown>,
+): string | null {
+  const reviewedRawUi = rawUiGate(toolName, params) !== null;
+  const declaresUnregisteredGuard = typeof tool?.captureApprovalGuard === 'function'
+    && !REVIEWED_UI_TOOLS.has(toolName);
+  if (!reviewedRawUi && !declaresUnregisteredGuard) return null;
+  return `Unsupported workflow capability: ${toolName} acts on a live UI surface, and an approval that waits on a `
+    + `workflow waitpoint cannot stay bound to the screen it was reviewed against -- the browser can reconnect, `
+    + `navigate or be a different machine by the time it resumes. Use a typed governed adapter whose target carries `
+    + `the reviewed subject, or run it from chat where the approval is answered against the screen it names.`;
+}
 
 function pinnedSidecar(capability: SidecarCapability, requested: unknown): { sidecarId: string | null; selection: string; machineBinding?: unknown } {
   const scope = getMachineScope();

@@ -134,14 +134,30 @@ describe("engine bundle build", () => {
       delete process.env.JARVIS_ENGINE_CACHE_ROOT;
     });
 
-    test("a prebuilt shared bundle is found WITHOUT any staging dir precondition", async () => {
-      // Multi-tenant hosting seeds the bundle read-only under the shared
-      // root; discovery must not require the per-user 47MB staging install.
-      const root = resolve(tmpdir(), `shared-engine-${Date.now()}`);
+    /** A shared root the way a host actually builds one: bundle + manifest. */
+    const seedSharedBundle = (root: string, body = "// prebuilt"): { hash: string; bundleDir: string } => {
       const hash = bundleHash();
       const bundleDir = resolve(root, hash);
       mkdirSync(bundleDir, { recursive: true });
-      writeFileSync(resolve(bundleDir, "main.js"), "// prebuilt");
+      writeFileSync(resolve(bundleDir, "main.js"), body);
+      writeFileSync(resolve(bundleDir, "main.js.sha256"),
+        createHash("sha256").update(body).digest("hex") + "\n");
+      return { hash, bundleDir };
+    };
+
+    test("a prebuilt shared bundle is found WITHOUT any staging dir precondition", async () => {
+      // Multi-tenant hosting seeds the bundle read-only under the shared
+      // root; discovery must not require the per-user 47MB staging install.
+      //
+      // The fixture carries `main.js.sha256` because a shared root without one
+      // is no longer a shared root (#624) -- both producers in this tree write
+      // it unconditionally (Dockerfile, scripts/build-shared-runtime.ts). The
+      // property THIS test pins is unchanged: no staging dir is created and
+      // `buildEngineBundle()` still short-circuits. `findSharedBundle requires
+      // the manifest` below holds the old fixture shape and asserts the
+      // opposite outcome, so neither test can pass vacuously.
+      const root = resolve(tmpdir(), `shared-engine-${Date.now()}`);
+      const { hash, bundleDir } = seedSharedBundle(root);
       try {
         process.env.JARVIS_ENGINE_CACHE_ROOT = root;
         const found = findCachedBundle();
@@ -169,6 +185,143 @@ describe("engine bundle build", () => {
       } finally {
         rmSync(root, { recursive: true, force: true });
       }
+    });
+
+    /**
+     * #624. The shared root is a HOST-owned tree, read-only to the tenant and
+     * shared between tenants, and `main.js` out of it is spawned as the
+     * workflow engine with the daemon's authority. Verification used to run
+     * only `if (existsSync(manifestPath))`, so deleting the manifest was
+     * strictly cheaper than forging the digest -- the check was disabled by
+     * removing the thing that enabled it.
+     *
+     * All three refusal shapes now miss, and all three are logged: a silent
+     * degradation in a hosted container costs every tenant a ~47 MB staging
+     * install and conceals why.
+     */
+    describe("the shared bundle is never executed unverified (#624)", () => {
+      const withWarnings = <T,>(body: () => T): { value: T; warnings: string[] } => {
+        const warnings: string[] = [];
+        const original = console.warn;
+        console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+        try {
+          return { value: body(), warnings };
+        } finally {
+          console.warn = original;
+        }
+      };
+
+      /**
+       * A refusal resolves to NOTHING, not to the per-user copy.
+       *
+       * `toBe(null)` and not "a path outside the shared root": answering a
+       * failed integrity check by adopting `<BUNDLE_ROOT>/<hash>/main.js` would
+       * degrade from an unverified HOST-owned bundle to an unverified
+       * TENANT-WRITABLE one, which is the wrong direction in the multi-tenant
+       * shape this root exists for -- and `bundleHash()` is computable by
+       * anyone who can read the install, so the path is predictable. The
+       * assertion is also non-vacuous precisely because a developer machine
+       * usually HAS a warm per-user cache: before this change these calls
+       * returned it.
+       */
+      const refusedResolvesToNothing = (seed: (bundleDir: string) => void, reason: string) => {
+        const root = resolve(tmpdir(), `shared-engine-${reason}-${Date.now()}`);
+        const bundleDir = resolve(root, bundleHash());
+        mkdirSync(bundleDir, { recursive: true });
+        seed(bundleDir);
+        try {
+          process.env.JARVIS_ENGINE_CACHE_ROOT = root;
+          const { value: found, warnings } = withWarnings(() => findCachedBundle());
+          expect(found).toBe(null);
+          expect(warnings.length).toBe(1);
+          expect(warnings[0]).toContain(`reason=${reason}`);
+          expect(warnings[0]).toContain(root);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      };
+
+      test("an absent manifest is a REFUSAL, not a pass", () => {
+        refusedResolvesToNothing(
+          (dir) => writeFileSync(resolve(dir, "main.js"), "// unverified"),
+          "manifest_absent");
+      });
+
+      test("a manifest that does not match the bytes is a REFUSAL, and says so", () => {
+        // Never exercised by this suite before: the old fixture wrote no
+        // manifest at all, so the mismatch branch had no coverage either.
+        refusedResolvesToNothing((dir) => {
+          writeFileSync(resolve(dir, "main.js"), "// swapped after the manifest was written");
+          writeFileSync(resolve(dir, "main.js.sha256"),
+            createHash("sha256").update("// what the host built").digest("hex") + "\n");
+        }, "digest_mismatch");
+      });
+
+      test("a manifest naming a digest of the wrong LENGTH does not pass by prefix", () => {
+        // A truncated manifest (a half-written file, a bad layer pull) must not
+        // satisfy the comparison. Full-string equality is the property; this
+        // pins it so a future `startsWith`/`includes` cannot creep in.
+        const body = "// prebuilt";
+        refusedResolvesToNothing((dir) => {
+          writeFileSync(resolve(dir, "main.js"), body);
+          writeFileSync(resolve(dir, "main.js.sha256"),
+            createHash("sha256").update(body).digest("hex").slice(0, 32) + "\n");
+        }, "digest_mismatch");
+      });
+
+      test("a refusal warns every time, so a recurrence is not swallowed", () => {
+        // A memo keyed on path+reason would print once and then hide exactly
+        // the two cases an operator needs: the same failure recurring after a
+        // repair, and a tree swapped under a long-lived daemon.
+        const root = resolve(tmpdir(), `shared-engine-repeat-${Date.now()}`);
+        const bundleDir = resolve(root, bundleHash());
+        mkdirSync(bundleDir, { recursive: true });
+        writeFileSync(resolve(bundleDir, "main.js"), "// unverified");
+        try {
+          process.env.JARVIS_ENGINE_CACHE_ROOT = root;
+          const { warnings } = withWarnings(() => {
+            findCachedBundle(); findCachedBundle(); findCachedBundle();
+          });
+          expect(warnings.length).toBe(3);
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      test("a manifest's contents never reach the log line verbatim", () => {
+        // The premise of the whole check is that something may have written
+        // into this tree, and the refusal is logged. A manifest holding a
+        // newline and a forged line must not be able to print one.
+        const root = resolve(tmpdir(), `shared-engine-injection-${Date.now()}`);
+        const bundleDir = resolve(root, bundleHash());
+        mkdirSync(bundleDir, { recursive: true });
+        writeFileSync(resolve(bundleDir, "main.js"), "// prebuilt");
+        writeFileSync(resolve(bundleDir, "main.js.sha256"),
+          "deadbeef\n[engine] shared bundle verified, all good\n");
+        try {
+          process.env.JARVIS_ENGINE_CACHE_ROOT = root;
+          const { value: found, warnings } = withWarnings(() => findCachedBundle());
+          if (found) expect(found.bundlePath.startsWith(root)).toBe(false);
+          expect(warnings.length).toBe(1);
+          expect(warnings[0]).not.toContain("all good");
+          expect(warnings[0]).not.toContain("\n");
+          expect(warnings[0]).toContain("<not a sha256 digest>");
+        } finally {
+          rmSync(root, { recursive: true, force: true });
+        }
+      });
+
+      test("the per-user cache still needs no manifest", () => {
+        // Same uid, locally built: BUNDLE_ROOT is explicitly out of scope, and
+        // the fix must not have made the local fallback require a digest it
+        // never writes. `buildEngineBundle` writes main.js + main.js.meta.json
+        // and no .sha256, so asserting the absence of a manifest writer is the
+        // check that keeps this honest.
+        const localBuilder = readFileSync(resolve(import.meta.dir, "build.ts"), "utf8");
+        expect(localBuilder.includes('bundlePath + ".meta.json"')).toBe(true);
+        const manifestWrites = localBuilder.match(/writeFileSync\([^)]*\.sha256/gu);
+        expect(manifestWrites).toBe(null);
+      });
     });
   });
 
