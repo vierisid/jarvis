@@ -155,8 +155,10 @@ cleanup() {
   [ -n "$TMPDIR_SMOKE" ] && rm -rf "$TMPDIR_SMOKE"
   exit "$status"
 }
-# INT/TERM as well as EXIT: GitHub cancels a job with SIGINT then SIGTERM, and
-# this workflow sets cancel-in-progress for non-main refs.
+# INT/TERM as well as EXIT: GitHub cancels a job with SIGINT then SIGTERM.
+# docker-build.yml sets cancel-in-progress for non-main refs, so cancellation
+# is routine there; release-exec.yml, the other caller, has no concurrency
+# group, so for it this covers a manual cancel rather than an automatic one.
 trap cleanup EXIT INT TERM
 
 # --- lifecycle -------------------------------------------------------

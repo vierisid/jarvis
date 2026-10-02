@@ -6,13 +6,15 @@
 # native addons left after sharp was dropped — so this is just the default,
 # not a constraint; Alpine is a fair option if an image-size push wants it.
 #
-# Build:   docker build -t jarvis .
-# Build with version: docker build --build-arg VERSION=0.3.1 -t jarvis .
+# Build:   docker build --build-arg VERSION=0.3.1 -t jarvis .
+#          VERSION is REQUIRED and has no default; see the stamp step below for
+#          why. For a throwaway local image, any semver will do: 0.0.0-dev.
 # Run:     docker run -p 3142:3142 -v jarvis-data:/data -e JARVIS_API_KEY=sk-... jarvis
 #
 # ─────────────────────────────────────────────────────────────────────
 
-# Build arg: pass the release version (e.g. 0.3.1) to stamp package.json
+# Build arg: the release version (e.g. 0.3.1) stamped into package.json.
+# Deliberately NO default -- see the stamp step in the build stage.
 ARG VERSION
 
 # ─── Stage 1: Install dependencies ─────────────────────────────────
@@ -41,11 +43,54 @@ COPY roles/ roles/
 COPY scripts/ scripts/
 COPY tsconfig.json ./
 
-# Stamp release version into package.json if provided
+# Stamp the release version into package.json. REQUIRED, and no longer skipped
+# when absent (#625).
+#
+# What the old `if [ -n "$VERSION" ]; then ... fi` cost us: docker-build.yml
+# passed no build-arg, so the guard was false on every CI build and this step
+# never ran. The image CI smoked therefore carried whatever version happened to
+# be committed to package.json, while every published image carries the tag's
+# version -- CI was proving a different artifact healthy. (Note the premise in
+# #625 is wrong in one detail: the version was never EMPTY, it was stale. There
+# is no "unknown" branch for a consumer to take, so nothing was exercising one.)
+# Worse, the skip meant the stamp COMMAND ran in no CI job at all (the RUN layer
+# executed on every build; the `if` simply took its false branch), so a break in
+# it could only ever surface as a failed release.
+#
+# A default would NOT fix that. It would make a caller who OMITS the build-arg
+# build successfully with a placeholder, and the registry tags come from a
+# completely separate path (docker/metadata-action, off the git tag), so
+# deleting the `build-args:` line from release-exec.yml would publish
+# ghcr.io/...:v1.2.3 containing a package.json that says something else, green
+# and silent. No default plus a hard failure covers BOTH omission and an
+# explicit `--build-arg VERSION=`, which is why the version is required here.
+# The cost is that a bare `docker build .` now fails; it fails loudly, naming
+# the flag, which is the trade.
+#
+# Stamped with bun rather than `bunx npm version`: bunx resolves and downloads
+# the npm package from the registry at build time, at whatever `latest` is. That
+# was tolerable while this step only ran during a release; making it
+# unconditional would have put an unpinned registry fetch in the path of every
+# PR image build. bun is already in the image, so this needs no network.
+#
+# The regex enforces semver including the no-leading-zero rule, so it rejects
+# everything `npm version` rejects. It differs deliberately in one direction:
+# `npm version` accepts a leading `v` and normalises it away, this does not.
+# Every caller already passes `${RELEASE_TAG#v}`, and a `v` arriving here means
+# something upstream stopped stripping it, which is worth failing on.
+#
+# `${VERSION:-}` rather than `$VERSION`: `set -u` is in effect, and a declared
+# ARG with no value may not be exported into the RUN environment at all, in
+# which case a bare dereference would abort with "unbound variable" and this
+# message -- the one that names the flag -- would never print for the omission
+# case, which is the common one.
 ARG VERSION
-RUN if [ -n "$VERSION" ]; then \
-      bunx npm version "$VERSION" --no-git-tag-version --allow-same-version; \
-    fi
+RUN set -eu; \
+    [ -n "${VERSION:-}" ] || { \
+      echo "VERSION build-arg is required and was empty. Pass --build-arg VERSION=<semver>." >&2; \
+      exit 1; \
+    }; \
+    VERSION="$VERSION" bun -e 'const v = process.env.VERSION; if (!/^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$/.test(v)) throw new Error("VERSION is not semver: " + v); const f = "package.json"; const p = await Bun.file(f).json(); p.version = v; await Bun.write(f, JSON.stringify(p, null, 2) + String.fromCharCode(10)); console.log("stamped package.json version " + v)'
 
 # Copy ONNX wake-word models and WASM runtime from node_modules into ui/public/
 RUN mkdir -p ui/public/openwakeword/models ui/public/ort && \
@@ -60,8 +105,54 @@ RUN mkdir -p ui/public/openwakeword/models ui/public/ort && \
        node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs \
        ui/public/ort/
 
-# Build the dashboard UI bundle
-RUN bun build ui/index.html --outdir ui/dist
+# Build the dashboard UI bundle.
+#
+# `bun run build:ui`, not a second copy of the command (#622). The hand-rolled
+# `bun build ui/index.html --outdir ui/dist` that used to be here omitted
+# ui/pebble.html, which package.json's build:ui has built since #249, so from
+# #249 onward the image shipped without ui/dist/pebble.html while the npm
+# tarball (prepublishOnly, which calls build:ui) had it. ui-autobuild.ts could
+# not repair the gap either: it only fires when ui/dist/index.html is MISSING,
+# and this step had already written that. Same shape as #613: a package script
+# duplicated in the Dockerfile drifts silently, and the drift is the defect.
+#
+# Note `bun run build:ui` also runs `prebuild:ui` -> `copy:models`, bun's
+# pre-script hook, which is a byte-identical duplicate of the explicit model
+# copy above -- same eight files, same order. So that RUN no longer provides the
+# fail-fast it was keeping: a vanished model now fails HERE instead, with cp's
+# own message naming the file, because `bun run` propagates a pre-hook's
+# non-zero exit and `set -eu` is on.
+#
+# It is kept for one narrower reason: it is the only thing that asserts those
+# models are present if `prebuild:ui` is ever dropped from package.json, in
+# which case the image would otherwise ship a model-less ui/public silently.
+# The cost is a second ~41 MB layer in this stage (the production stage re-COPYs
+# the directory, so nothing is duplicated in the shipped image). Deleting it in
+# favour of an explicit presence assertion would be a fair follow-up; it is not
+# done here because this Dockerfile cannot be built in the environment this
+# change was made in.
+#
+# The assertion derives what it demands from the build:ui script itself rather
+# than naming the documents again: a second list here would re-create exactly
+# the drift this change removes, and a new entrypoint added to build:ui is
+# required in ui/dist automatically. It fails closed three ways: build:ui naming
+# no .html at all, build:ui naming an entrypoint this cannot map to a ui/dist
+# document (a nested one, say ui/pages/x.html, whose output path it cannot
+# predict), and a document the bundler did not emit.
+#
+# No backslash anywhere in the bun expression, on purpose: `\` is the
+# Dockerfile escape character, so a regex written with \/ or \. would be
+# mangled before sh ever saw it. Character classes do the same job.
+RUN set -eu; \
+    bun run build:ui; \
+    docs=$(bun -e 'const p = await Bun.file("package.json").json(); const s = (p.scripts || {})["build:ui"] || ""; const all = s.split(" ").filter((t) => t.endsWith(".html")); if (all.length === 0) throw new Error("build:ui names no .html entrypoint: " + s); const flat = all.filter((t) => /^ui[/][A-Za-z0-9._-]+[.]html$/.test(t)); if (flat.length !== all.length) throw new Error("build:ui names an entrypoint this check cannot map to a ui/dist document: " + all.filter((t) => !flat.includes(t)).join(", ")); console.log(flat.map((t) => t.slice(3)).join(" "))'); \
+    for doc in $docs; do \
+      [ -f "ui/dist/$doc" ] || { \
+        echo "build:ui did not emit ui/dist/$doc, which it names as an entrypoint" >&2; \
+        exit 1; \
+      }; \
+      echo "ui/dist has $doc"; \
+    done
 
 # ─── Stage 3: Prebuild the workflow runtime ────────────────────────
 #
