@@ -292,11 +292,11 @@ FLOOR is computed by the §3 rule; the column shows what it evaluates to today.
 | `commitments` | tasks | write_data | 302 | **fetch** | 1420 | DROP |
 | `manage_goals` | goals | write_data | 302 | replay | 1405 | DROP |
 | `research_queue` | productivity | read_data | 100 | **fetch** | 859 | DROP |
-| `desktop_click` | desktop | control_app | 505 | inert | 1131 | DROP |
+| `desktop_click` | desktop | control_app | 505 | **framed** | 1131 | DROP |
 | `desktop_type` | desktop | control_app | 505 | inert | 549 | DROP |
 | `desktop_press_keys` | desktop | control_app | 505 | inert | 556 | DROP |
-| `desktop_launch_app` | desktop | control_app | 505 | inert | 1322 | DROP |
-| `desktop_focus_window` | desktop | control_app | 505 | inert | 427 | DROP |
+| `desktop_launch_app` | desktop | control_app | 505 | **framed** | 1322 | DROP |
+| `desktop_focus_window` | desktop | control_app | 505 | **framed** | 427 | DROP |
 | `write_file` | file-ops | write_data | 302 | inert | 555 | DROP |
 | `set_clipboard` | general | write_data | 302 | inert | 414 | DROP |
 | `get_system_info` | general | read_data | 100 | inert | 360 | **FLOOR** |
@@ -347,9 +347,20 @@ Notes on the non-obvious rows:
   are taint-marking, which delegation shares with the screenshot tools.
 - **`list_directory` is `fetch`.** Filenames are attacker-authored strings
   (anything in a downloads directory) and the model chooses the path.
-- **`desktop_click` and friends are `inert`** - they act and return a status,
-  they cannot read. They are droppable on rank: at 505 they are exactly the
-  "privileged tools" #483 asks be filtered rather than kept.
+- **The desktop actuators split two ways (#629).** `desktop_type` and
+  `desktop_press_keys` are `inert`: they act and reply with the model's own
+  arguments echoed back. `desktop_click`, `desktop_launch_app` and
+  `desktop_focus_window` are **`framed`**, because each reports at least one
+  field the target machine wrote - a UIA ValuePattern value from
+  `action: 'get_value'`, a window title, a launch probe's stderr. All five were
+  `inert` until #629, on the premise that an actuator cannot read; that premise
+  was false for those three.
+  All five stay droppable on rank: at 505 they are exactly the "privileged
+  tools" #483 asks be filtered rather than kept. Framing the three moved nothing
+  else in this filter - the rank clause already made them invariant triggers,
+  rank already excluded them from the floor, and all three are in
+  `FRAMED_ACTORS`, so `isFramedPerception` is unchanged and the I1 repair
+  restores the same set it did before.
 
 ---
 

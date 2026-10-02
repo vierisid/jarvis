@@ -178,14 +178,27 @@ const INERT_TOOLS: ReadonlySet<string> = new Set([
   // [APPROVED]/[DENIED]/[EXPIRED]/[PENDING]; no user-supplied note reaches
   // the returned string.
   'request_approval',
-  // Desktop actuators: they act and return a status, they cannot read. They
-  // are NOT floor-eligible -- at rank 505 they fail `isFloorEligible` -- but
-  // they are correctly `inert` because they bring nothing in.
-  'desktop_click',
+  // The two desktop actuators that really are inert: they act and return a
+  // status, and the status is ours or the model's own arguments echoed back --
+  // `{success, chars}` on Windows and `{success: true}` elsewhere for
+  // type_text, `{success, keys}` for press_keys plus our own `xdotool_combo`
+  // conversion of those keys on Linux. Nothing the target machine wrote, on
+  // any of the three platforms. They are NOT floor-eligible -- at rank 505 they fail
+  // `isFloorEligible` -- but they are correctly `inert` because they bring
+  // nothing in. Their FAILURE text can carry remote bytes, which is a
+  // `failureIsOutsideContent` declaration on each tool and deliberately not a
+  // reach change (#629).
+  //
+  // desktop_click, desktop_launch_app and desktop_focus_window USED to be
+  // listed here on the same reasoning, and it was wrong about them: each
+  // returns at least one field the target machine authored -- a UIA
+  // ValuePattern value, a window title, a probe's stderr -- so all three are
+  // framed by name since #629 and this set no longer decides their reach.
+  // `isUntrustedSourceTool` is tested before `INERT_TOOLS` in `outsideReach`,
+  // so leaving them here would have been three unreachable entries asserting
+  // the opposite of the truth.
   'desktop_type',
   'desktop_press_keys',
-  'desktop_launch_app',
-  'desktop_focus_window',
 ]);
 
 /**
@@ -359,6 +372,46 @@ const FRAMED_ACTORS: ReadonlySet<string> = new Set([
   'site_github_push',
   'site_git_commit',
   'site_create_project',
+  // Framed since #629, for the fields their replies carry (a UIA
+  // ValuePattern value, a window title, a launch probe's stderr). All three
+  // ACT, and membership here is "framed, minus a named list" with no rank
+  // test, so without these entries the I1 repair would force-add a raw
+  // `control_app`/505 desktop mutation -- clicking or launching on a paired
+  // machine -- to every filtered turn that retains any trigger. That is the
+  // accidental capability grant this list exists to prevent.
+  //
+  // desktop_click is the one worth arguing, because it is the closest thing
+  // here to a reader: `get_value` is a read, and `expand` /
+  // `scroll_into_view` are the only way to make collapsed content appear in
+  // the next desktop_snapshot. That is the argument that keeps `ui_act` IN
+  // the union, and it does not carry over, because `ui_act` is already in
+  // the union and dispatches the SAME three actions to the SAME `click_element`
+  // RPC. So without this entry the desktop surface still keeps framed eyes
+  // (desktop_snapshot, desktop_find_element, desktop_list_windows,
+  // ui_snapshot) and a framed hand that can read (ui_act), and there is no
+  // reading route a model substitutes toward by losing it. Two things make
+  // that safer than it sounds: `get_value` is a sidecar-only action on BOTH
+  // tools -- desktop_click's local branch in actions/tools/desktop.ts accepts
+  // only click/double_click/right_click/focus, so losing desktop_click from
+  // the union removes no reading capability ui_act does not lose with it --
+  // and the I1 repair restores ALL framed perception in one step, so ui_snapshot
+  // comes back with ui_act and the id-minting pair cannot be split. (ui_act
+  // does require a connected sidecar where desktop_click has a local
+  // fallback; immaterial here, since that fallback cannot read either.)
+  // Excluding a framed tool from the union is always safe by the rule the
+  // invariant rests on.
+  //
+  // NOT justified by `rawUiGate` forcing a card on these three, although it
+  // does: `isInvariantTrigger` at the bottom of this file calls that "luck,
+  // not an invariant", and a reason this module disclaims further down is not
+  // a reason to admit a tool to the always-restored set.
+  //
+  // None of the three leaves `isInvariantTrigger`, unlike #559's site tools:
+  // all three are `control_app` (505), so the rank clause holds them there
+  // whatever their reach.
+  'desktop_click',
+  'desktop_launch_app',
+  'desktop_focus_window',
 ]);
 
 /**

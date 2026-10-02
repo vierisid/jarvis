@@ -64,11 +64,19 @@ const EXPECTED: Record<string, OutsideReach> = {
   write_file: 'inert',
   set_clipboard: 'inert',
   get_system_info: 'inert',
-  desktop_click: 'inert',
+  // #629: these three report a field the target machine wrote -- a UIA
+  // ValuePattern value, a window title, a launch probe's stderr -- so they are
+  // framed by name and in FRAMED_ACTORS, which keeps them out of the perception
+  // union below. They stay invariant triggers on rank (control_app, 505).
+  desktop_click: 'framed',
+  desktop_launch_app: 'framed',
+  desktop_focus_window: 'framed',
+  // Still inert, and now examined rather than assumed: type_text and press_keys
+  // reply with the model's own arguments and our own conversion of them. Only
+  // their failure text carries remote bytes, and that is a
+  // `failureIsOutsideContent` declaration, which does not move the reach.
   desktop_type: 'inert',
   desktop_press_keys: 'inert',
-  desktop_launch_app: 'inert',
-  desktop_focus_window: 'inert',
 };
 
 describe('reach classification coverage', () => {
@@ -115,7 +123,13 @@ describe('reach classification coverage', () => {
   });
 
   test('the framed actors are excluded from the perception set', () => {
-    for (const n of ['browser_upload_file', 'run_skill', 'record_skill']) {
+    // The three desktop actuators join since #629. Without the FRAMED_ACTORS
+    // entries, framing them would have made the I1 repair force-add a raw
+    // control_app/505 desktop mutation to every filtered turn that keeps a
+    // trigger. (site_run_command and the three site actors are framed too, but
+    // are not in BUILTIN_TOOLS; the daemon-registered table below covers them.)
+    for (const n of ['browser_upload_file', 'run_skill', 'record_skill',
+      'desktop_click', 'desktop_launch_app', 'desktop_focus_window']) {
       const t = BUILTIN_TOOLS.find((x) => x.name === n)!;
       expect(`${n}:${outsideReach(t)}`).toBe(`${n}:framed`);
       expect(`${n}:${isFramedPerception(t)}`).toBe(`${n}:false`);

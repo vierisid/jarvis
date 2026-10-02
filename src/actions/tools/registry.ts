@@ -123,9 +123,13 @@ export type ToolDefinition = {
    *   - the same file's inline approval gate, which frames what
    *     `authority/deferred-executor.ts` hands back;
    *   - `agents/sub-agent-runner.ts`'s own dispatch;
-   *   - and that file's `governedText`, for a governed or approved call. The
-   *     last two are defence in depth as the code stands, since no flagged tool
-   *     is in a scoped sub-agent registry today.
+   *   - and that file's `governedText`, for a governed or approved call. Those
+   *     last two were defence in depth when #608 wired them, because the only
+   *     flagged tool was registered on the primary registry alone. They are
+   *     LIVE since #629: `desktop_type`, `desktop_press_keys` and
+   *     `desktop_screenshot` declare the flag and are in `BUILTIN_TOOLS`, which
+   *     is what `createScopedToolRegistry` builds a sub-agent registry from, so
+   *     a sub-agent allowed the `desktop` tools gets all three.
    *
    * WHERE IT DELIBERATELY IS NOT. Everything that writes a row or faces an
    * operator keeps the RAW text: `workflows/runtime/effect-boundary.ts`'s

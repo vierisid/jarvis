@@ -159,6 +159,37 @@ describe('classification', () => {
     expect(r.repaired).not.toContain('browser_upload_file');
   });
 
+  test('#629: framing the three desktop actuators moved nothing in this filter', () => {
+    // The fallout the issue asked to be priced, pinned so a later edit cannot
+    // undo it quietly. All three are `control_app` (505), so the rank clause --
+    // not the reach -- is what makes them triggers; framing them is therefore
+    // inert here, unlike #559's site tools, two of which stopped being
+    // triggers.
+    for (const n of ['desktop_click', 'desktop_launch_app', 'desktop_focus_window']) {
+      const t = byName(n);
+      expect(`${n}:reach=${outsideReach(t)}`).toBe(`${n}:reach=framed`);
+      expect(`${n}:trigger=${isInvariantTrigger(t)}`).toBe(`${n}:trigger=true`);
+      expect(`${n}:rank>${PERCEPTION_RANK_CEILING}=${authorityRank(t) > PERCEPTION_RANK_CEILING}`)
+        .toBe(`${n}:rank>${PERCEPTION_RANK_CEILING}=true`);
+      // FRAMED_ACTORS keeps them out of the set the repair restores, so none
+      // is force-added to a turn that asked for nothing of the kind.
+      expect(`${n}:perception=${isFramedPerception(t)}`).toBe(`${n}:perception=false`);
+      // Framed is tested before INERT_TOOLS, so none can be floor-eligible;
+      // they were already excluded on rank anyway.
+      expect(`${n}:floor=${isFloorEligible(t)}`).toBe(`${n}:floor=false`);
+    }
+  });
+
+  test('#629: the repair does not force-add a desktop actuator to a shell turn', () => {
+    const r = normalizeToolSet(A, [...A.filter(isFloorEligible), byName('run_command')]);
+    for (const n of ['desktop_click', 'desktop_launch_app', 'desktop_focus_window']) {
+      expect(`${n}:repaired=${r.repaired.includes(n)}`).toBe(`${n}:repaired=false`);
+    }
+    // Not vacuous: the repair did fire and did restore the framed readers.
+    expect(r.repaired).toContain('desktop_snapshot');
+    expect(r.repaired).toContain('ui_act');
+  });
+
   test('every above-access_browser tool is a trigger, framed or not', () => {
     // The clause that stops `FLOOR + desktop actuators, no perception` from
     // being invariant-clean.

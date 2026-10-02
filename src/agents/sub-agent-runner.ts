@@ -354,14 +354,13 @@ function boundedResult(raw: unknown): { text: string; trailer: string } {
  * Turn the dispatch's answer for a governed call into the tool's result.
  *
  * `outsideFailure` is the tool's `failureIsOutsideContent` declaration, passed
- * in because this function has no registry (#608). It is DEFENCE IN DEPTH as the
- * code stands: the only tool that declares the flag is registered on the primary
- * registry alone, and every sub-agent registry is built by
- * `createScopedToolRegistry` from `BUILTIN_TOOLS`, which does not contain it. So
- * no flagged tool reaches this path today -- but this is the governed/approved
- * failure branch of a sub-agent dispatch, i.e. a model boundary, and the moment
- * a flagged tool is scoped to a sub-agent it would be the original #608 bug
- * verbatim. Wiring the flag through now costs a parameter.
+ * in because this function has no registry (#608). It was DEFENCE IN DEPTH when
+ * #608 wired it -- the only flagged tool was on the primary registry alone --
+ * and it is LOAD-BEARING since #629: `desktop_type`, `desktop_press_keys` and
+ * `desktop_screenshot` declare the flag and live in `BUILTIN_TOOLS`, which is
+ * exactly what `createScopedToolRegistry` builds from, so a sub-agent allowed
+ * the `desktop` tools reaches this branch with a flagged tool. The parameter
+ * #608 paid for is what stops that being the original #608 bug verbatim.
  */
 function governedText(ctx: AuthorityContext, toolCall: LLMToolCall, toolCategory: string, governed: Exclude<GovernedToolResult, { kind: 'paused' }>, outsideFailure = false): { text: string; failed?: boolean } {
   if (governed.kind === 'denied') return { text: denialText(toolCall.name, governed.reason), failed: true };
@@ -511,12 +510,11 @@ async function executeTool(
     }
     const message = err instanceof Error ? err.message : String(err);
     // And the same for a plain Error on a tool that declares its failures as
-    // outside content (#608). Defence in depth as the code stands, like
-    // `governedText` above: no flagged tool is in a scoped sub-agent registry
-    // today, because `createScopedToolRegistry` builds from `BUILTIN_TOOLS` and
-    // the only flagged tool is registered on the primary registry alone. This is
-    // still a model boundary, so it is wired rather than left to be rediscovered.
-    // Every other tool keeps this line unchanged.
+    // outside content (#608). No longer hypothetical, like `governedText` above:
+    // `createScopedToolRegistry` builds from `BUILTIN_TOOLS`, and since #629 the
+    // three flagged desktop tools are in it, so a sub-agent allowed the
+    // `desktop` tools reaches this line with a flagged tool. Every other tool
+    // keeps it unchanged.
     if (failing?.failureIsOutsideContent === true) {
       return { text: `Error executing ${toolCall.name}: `
         + markUntrustedToolFailure(toolCall.name, failing.category, message, MAX_TOOL_RESULT_CHARS, true), failed: true };

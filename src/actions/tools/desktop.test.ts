@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, test, expect, describe } from 'bun:test';
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { setNoLocalTools } from './local-tools-guard.ts';
+import { isUntrustedSourceTool } from '../../roles/untrusted.ts';
 import {
   DESKTOP_TOOLS,
   __resetLocalDesktopStateForTests,
@@ -177,6 +178,36 @@ describe('DESKTOP_TOOLS', () => {
     for (const tool of DESKTOP_TOOLS) {
       expect(tool.parameters.target).toBeDefined();
       expect(tool.parameters.target!.type).toBe('string');
+    }
+  });
+
+  test('#629: every desktop tool is framed, by exactly one of the two mechanisms', () => {
+    // With a `target` all nine dispatch through `routeToSidecarAction`, whose
+    // throws carry the reply a remote machine sent. So each one needs either a
+    // place in `UNTRUSTED_TOOL_NAMES` (whole result framed, for the ones whose
+    // SUCCESS reply carries a field the target machine wrote) or a
+    // `failureIsOutsideContent` declaration (failure text only). Exactly one:
+    // declaring the flag on a name-framed tool would be redundant, and having
+    // neither is the gap #629 reported.
+    const byName = new Map(DESKTOP_TOOLS.map((t) => [t.name, t]));
+    const expected: Record<string, 'name' | 'declaration'> = {
+      desktop_snapshot: 'name',
+      desktop_find_element: 'name',
+      desktop_list_windows: 'name',
+      desktop_click: 'name',
+      desktop_launch_app: 'name',
+      desktop_focus_window: 'name',
+      desktop_type: 'declaration',
+      desktop_press_keys: 'declaration',
+      desktop_screenshot: 'declaration',
+    };
+    expect(Object.keys(expected).sort()).toEqual(DESKTOP_TOOLS.map((t) => t.name).sort());
+    for (const [name, how] of Object.entries(expected)) {
+      const tool = byName.get(name)!;
+      const framedByName = isUntrustedSourceTool(tool.name, tool.category);
+      const declared = tool.failureIsOutsideContent === true;
+      expect(`${name}:name=${framedByName}`).toBe(`${name}:name=${how === 'name'}`);
+      expect(`${name}:declared=${declared}`).toBe(`${name}:declared=${how === 'declaration'}`);
     }
   });
 

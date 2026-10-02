@@ -411,10 +411,57 @@ export const desktopClickTool: ToolDefinition = {
   },
 };
 
+/**
+ * Why the three tools below declare this and their siblings do not (#629).
+ *
+ * The declaration frames a tool's THROWN failure text and moves nothing else;
+ * `UNTRUSTED_TOOL_NAMES` frames the whole result and also drives `outsideReach`,
+ * `FRAMED_ACTORS`, the tool filter's I1 repair and the taint predicate. The
+ * right mechanism is decided by what the SUCCESS reply carries, and these three
+ * carry nothing from the target machine: `{success, chars}` on Windows and
+ * `{success: true}` elsewhere for type_text, `{success, keys}` for press_keys
+ * plus our own `xdotool_combo` conversion of those keys on Linux -- the
+ * model's own arguments and our own rendering of them -- and, for
+ * capture_screen, an image on the local branch and a reply of our own
+ * measurements (`{captured, bytes, mime, width, height, ...}` plus the base64
+ * the manager staples on) over the sidecar. No remote text on either.
+ *
+ * Their FAILURES are a different matter, and the reason all nine of these tools
+ * need something: with a `target` they dispatch through `routeToSidecarAction`,
+ * and `dispatchToSidecar` throws an `ActionOutcomeError` whose message carries
+ * the reply the remote machine sent or a `SidecarRPCError`'s text. That reaches
+ * the model, and until this declaration nothing framed it.
+ *
+ * TAINT, which this mechanism does not touch: `markUntrustedToolFailure` never
+ * reaches `isTaintSourceTool`, so desktop_type and desktop_press_keys frame
+ * their failure text and leave the turn clean. Decided, not overlooked. The
+ * only outside bytes they can deliver are a refusal's prose, the turn is
+ * tainted already whenever one of these follows a snapshot, and both tools
+ * raise an approval card on every call via `REVIEWED_UI_TOOLS` -- so taint
+ * would add a second gate behind a first one for text that says why a
+ * keystroke did not land. desktop_screenshot is the exception and taints,
+ * through `TAINT_ONLY_TOOLS`, because what it delivers is a picture of the
+ * screen.
+ *
+ * desktop_screenshot takes this route rather than the name set for two reasons
+ * beyond its success reply. It is `read_data` (rank 100), so
+ * `outsideReach === 'fetch'` is the ONLY clause making it an invariant trigger:
+ * framing it by name would flip that to false and stop the one tool that most
+ * needs to force the framed readers to stay from doing so. And it is not an
+ * actor, so it would land in `isFramedPerception` and the I1 repair would
+ * force-add a screenshot tool to every filtered turn. Taint is already settled
+ * for it by `TAINT_ONLY_TOOLS`, so the declaration is all that was missing.
+ *
+ * desktop_click, desktop_launch_app and desktop_focus_window go the other way,
+ * by name; see `UNTRUSTED_TOOL_NAMES` in roles/untrusted.ts for the fields that
+ * decide it. Framing by name covers their failures too, so they do not also
+ * declare this -- `markUntrustedToolFailure` wraps a name-framed tool once.
+ */
 export const desktopTypeTool: ToolDefinition = {
   name: 'desktop_type',
   description: 'Type text into a UI element. Optionally provide an element_id to click and focus it first. Without element_id, types into whatever is currently focused.',
   category: 'desktop',
+  failureIsOutsideContent: true,
   parameters: {
     target: {
       type: 'string',
@@ -466,6 +513,7 @@ export const desktopPressKeysTool: ToolDefinition = {
   name: 'desktop_press_keys',
   description: 'Press a keyboard shortcut or key combination. Keys are pressed simultaneously (e.g., "ctrl,s" for save, "alt,f4" to close). Single keys also work: "enter", "tab", "escape".',
   category: 'desktop',
+  failureIsOutsideContent: true,
   parameters: {
     target: {
       type: 'string',
@@ -535,6 +583,7 @@ export const desktopScreenshotTool: ToolDefinition = {
   name: 'desktop_screenshot',
   description: 'Take a screenshot of the entire desktop or a specific window. The image is sent directly to the AI for visual analysis. Useful for complex UIs, graphics apps, or when the element tree is insufficient.',
   category: 'desktop',
+  failureIsOutsideContent: true,
   parameters: {
     target: {
       type: 'string',

@@ -89,11 +89,54 @@ describe('isUntrustedSourceTool', () => {
     expect(out.indexOf(UNTRUSTED_CLOSE)).toBeLessThan(out.indexOf(close));
   });
 
-  test('the agent\'s own actions are not wrapped', () => {
+  test('the agent\'s own actions are not wrapped by name', () => {
     expect(isUntrustedSourceTool('run_command', 'terminal')).toBe(false);
     expect(isUntrustedSourceTool('write_file', 'file-ops')).toBe(false);
-    expect(isUntrustedSourceTool('desktop_click', 'desktop')).toBe(false);
     expect(isUntrustedSourceTool('request_approval', 'authority')).toBe(false);
+    // `desktop_click` stood here until #629, on the premise that an actuator
+    // returns a status of our own. The premise was false for it -- see the
+    // #629 block below -- so the two actuators for which it IS true stand in
+    // its place, and the test keeps asserting what it always meant.
+    expect(isUntrustedSourceTool('desktop_type', 'desktop')).toBe(false);
+    expect(isUntrustedSourceTool('desktop_press_keys', 'desktop')).toBe(false);
+  });
+
+  /**
+   * #629. Six `desktop_*` tools reached the model with no boundary while three
+   * of their siblings on the identical path were framed. The split is by what
+   * each SUCCESS reply carries, because a `success: false` reply is turned into
+   * a throw by `dispatchToSidecar` and so is a failure path either way.
+   */
+  describe('#629: the desktop actuators that report a field the target machine wrote', () => {
+    test('the three that carry one are framed by name, and all three taint', () => {
+      // `taints=true` also proves none of the three is in TAINT_EXEMPT_TOOLS,
+      // which `isTaintSourceTool` tests FIRST and which would therefore undo
+      // the taint half of this decision silently.
+      for (const name of ['desktop_click', 'desktop_launch_app', 'desktop_focus_window']) {
+        expect(`${name}:framed=${isUntrustedSourceTool(name, 'desktop')}`).toBe(`${name}:framed=true`);
+        expect(`${name}:taints=${isTaintSourceTool(name, 'desktop')}`).toBe(`${name}:taints=true`);
+      }
+    });
+
+    test('the two whose reply is our own text are neither framed nor tainting', () => {
+      // type_text replies {success, chars} / {success:true}; press_keys replies
+      // {success, keys, xdotool_combo} -- the model's own arguments and our own
+      // conversion of them. Their FAILURES are framed by a
+      // `failureIsOutsideContent` declaration instead, which moves nothing in
+      // the filter or the taint predicate.
+      for (const name of ['desktop_type', 'desktop_press_keys']) {
+        expect(`${name}:framed=${isUntrustedSourceTool(name, 'desktop')}`).toBe(`${name}:framed=false`);
+        expect(`${name}:taints=${isTaintSourceTool(name, 'desktop')}`).toBe(`${name}:taints=false`);
+      }
+    });
+
+    test('desktop_screenshot stays unframed and keeps tainting', () => {
+      // It is `read_data`, so `outsideReach === 'fetch'` is the only clause
+      // making it an invariant trigger; framing it by name would flip that to
+      // false. Taint was already settled for it by TAINT_ONLY_TOOLS.
+      expect(isUntrustedSourceTool('desktop_screenshot', 'desktop')).toBe(false);
+      expect(isTaintSourceTool('desktop_screenshot', 'desktop')).toBe(true);
+    });
   });
 });
 
