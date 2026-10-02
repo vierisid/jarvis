@@ -1,7 +1,21 @@
 import { getWorkflowDb } from "../index";
 
+/**
+ * A refusal the route layer answers verbatim. `trapErrors` in
+ * `workflows/api/routes.ts` maps it to `status` with this message, so a repo
+ * that knows exactly why it refused does not have to be re-diagnosed from a
+ * 500 by a regex over the message.
+ *
+ * 413 joined 400 and 404 for the sample-data map caps (#635). Those are
+ * enforced in `flow-version.ts` rather than at the route because that is where
+ * the read-modify-write they guard is atomic -- `withOwnedFlowVersion` wraps it
+ * in one transaction, and a route-level pre-read of the current map would be
+ * TOCTOU. That does mean `flow-version.ts` now raises two error vocabularies:
+ * this class where it knows the status, and plain `Error` everywhere else,
+ * which `trapErrors` still maps by regex.
+ */
 export class FlowVersionRequestError extends Error {
-  constructor(message: string, readonly status: 400 | 404) {
+  constructor(message: string, readonly status: 400 | 404 | 413) {
     super(message);
     this.name = "FlowVersionRequestError";
   }

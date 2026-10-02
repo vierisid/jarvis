@@ -1890,3 +1890,148 @@ describe("#609: the runs listing clamps its limit", () => {
     expect(((await list(id, "?offset=-5&limit=2")).body as unknown[]).length).toBe(2);
   });
 });
+
+/**
+ * #632. `PATCH /api/workflows/:id/versions/:versionId` did
+ * `const { uiMeta, ...versionPatch } = body` on a body that is a CAST and not a
+ * schema, and forwarded everything left over to `updateDraftVersion` -- which
+ * accepted `updatedBy`, `notes` and `backupFiles`.
+ *
+ * `updatedBy` is the authorization half: it is an attribution column and the
+ * route has no caller identity, so a caller could claim someone else edited the
+ * draft. `backupFiles` is a filename -> file-CONTENT map that
+ * `flow-version-adapter` reads into the engine operation payload and that no
+ * shipped caller writes.
+ *
+ * Non-vacuous by construction: each of the three columns is seeded with a
+ * DISTINCT prior value first, so the assertions below say "unchanged" and not
+ * merely "still the insert default". Reverting either half of the fix (the
+ * route's allowlist, or the three fields' removal from
+ * `UpdateDraftVersionInput` and from its UPDATE) makes them fail.
+ */
+describe("#632: a version patch picks its fields instead of spreading the body", () => {
+  async function seededDraft(): Promise<{ id: string; versionId: string }> {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { getWorkflowDb } = await import("../db/index");
+    const flow = createFlow();
+    const version = createDraftVersion({
+      flowId: flow.id,
+      displayName: "attributed",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+      updatedBy: "original-author",
+    });
+    getWorkflowDb().run(
+      `UPDATE flow_version SET notes = ?, backup_files = ? WHERE id = ?`,
+      [JSON.stringify([{ id: "note_1", text: "mine" }]), JSON.stringify({ "keep.js": "original" }), version.id],
+    );
+    return { id: flow.id, versionId: version.id };
+  }
+
+  const patch = (id: string, versionId: string, body: unknown) =>
+    callJson(
+      routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/${id}/versions/${versionId}`, { id, versionId }, body),
+    );
+
+  async function columns(versionId: string) {
+    const { getWorkflowDb } = await import("../db/index");
+    return getWorkflowDb()
+      .query<{ notes: string; backup_files: string | null; updated_by: string | null }, [string]>(
+        `SELECT notes, backup_files, updated_by FROM flow_version WHERE id = ?`,
+      )
+      .get(versionId)!;
+  }
+
+  test("updatedBy, notes and backupFiles are not writable through the route", async () => {
+    const { id, versionId } = await seededDraft();
+    const before = await columns(versionId);
+    expect(before.updated_by).toBe("original-author");
+
+    const { status } = await patch(id, versionId, {
+      displayName: "renamed by someone else",
+      trigger: { name: "trigger", type: "EMPTY" },
+      updatedBy: "attacker",
+      notes: [{ id: "note_2", text: "theirs" }],
+      backupFiles: { "index.js": "require('child_process').exec('id')" },
+    });
+    // The patch SUCCEEDS: the extra keys are ignored rather than refused, so a
+    // client still sending a field it used to be allowed to send is not broken.
+    expect(status).toBe(200);
+
+    const after = await columns(versionId);
+    expect(after.updated_by).toBe("original-author");
+    expect(JSON.parse(after.notes)).toEqual([{ id: "note_1", text: "mine" }]);
+    expect(JSON.parse(after.backup_files!)).toEqual({ "keep.js": "original" });
+  });
+
+  test("the fields that ARE on the allowlist still apply", async () => {
+    const { id, versionId } = await seededDraft();
+    const { status, body } = await patch(id, versionId, {
+      displayName: "renamed",
+      trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" },
+      connectionIds: ["conn_a"],
+      agentIds: ["agent_a"],
+    });
+    expect(status).toBe(200);
+    expect((body as { displayName: string }).displayName).toBe("renamed");
+    expect((body as { connectionIds: string[] }).connectionIds).toEqual(["conn_a"]);
+    expect((body as { agentIds: string[] }).agentIds).toEqual(["agent_a"]);
+    expect((body as { trigger: { displayName: string } }).trigger.displayName).toBe("Manual");
+  });
+
+  /**
+   * `connectionIds` and `agentIds` were cast-only, and they are
+   * `JSON.stringify`'d into columns `rowToFlowVersion` hands back TYPED as
+   * `string[]` -- so the cast was a claim the whole read side believed.
+   */
+  test("connectionIds and agentIds are checked, not cast", async () => {
+    const { id, versionId } = await seededDraft();
+    expect((await patch(id, versionId, { connectionIds: { a: 1 } })).status).toBe(400);
+    expect((await patch(id, versionId, { agentIds: "agent_a" })).status).toBe(400);
+    expect((await patch(id, versionId, { agentIds: ["ok", 7] })).status).toBe(400);
+    expect((await patch(id, versionId, { connectionIds: [] })).status).toBe(200);
+  });
+
+  /**
+   * The other half of the same route's body. `uiMeta` is forwarded wholesale to
+   * `upsertFlowVersionUiMeta`, which took `positions` on trust while
+   * `getFlowVersionUiMeta` has always refused a non-object on the way out -- so
+   * a bad layout was stored and then silently discarded on every load.
+   */
+  /**
+   * The POST sibling has no transaction around `createDraftVersion` and
+   * `upsertFlowVersionUiMeta`, so once the shape check started throwing, a
+   * malformed `uiMeta` would have created the draft and THEN answered 400. That
+   * is not cosmetic: a new draft becomes the LATEST draft, which is the version
+   * an ENABLED flow with nothing published actually runs, so a refused request
+   * would have promoted a live draft.
+   */
+  test("a refused uiMeta on POST does not leave a draft version behind", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { listVersions } = await import("../db/repos/flow-version");
+    const flow = createFlow();
+    const post = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions"]?.POST,
+        reqWithParams("POST", `http://x/api/workflows/${flow.id}/versions`, { id: flow.id }, b),
+      );
+    const refused = await post({ displayName: "bad layout", trigger: { name: "trigger", type: "EMPTY" }, uiMeta: { schema: 1, positions: "nope", orphans: [] } });
+    expect(refused.status).toBe(400);
+    expect((refused.body as { error: string }).error).toMatch(/uiMeta.positions must be an object/);
+    // Nothing was created.
+    expect(listVersions(flow.id)).toHaveLength(0);
+    // And a good one still works.
+    expect((await post({ displayName: "good layout", trigger: { name: "trigger", type: "EMPTY" }, uiMeta: { schema: 1, positions: {}, orphans: [] } })).status).toBe(201);
+    expect(listVersions(flow.id)).toHaveLength(1);
+  });
+
+  test("uiMeta is shape-checked on the way in, the way it already was on the way out", async () => {
+    const { id, versionId } = await seededDraft();
+    expect((await patch(id, versionId, { uiMeta: { schema: 1, positions: "nope", orphans: [] } })).status).toBe(400);
+    expect((await patch(id, versionId, { uiMeta: { schema: 1, positions: {}, orphans: {} } })).status).toBe(400);
+    expect((await patch(id, versionId, { uiMeta: { schema: 1, positions: { trigger: { x: 1, y: 2 } }, orphans: [] } })).status).toBe(200);
+    const { getFlowVersionUiMeta } = await import("../db/repos/flow-version-ui-meta");
+    expect(getFlowVersionUiMeta(versionId).positions).toEqual({ trigger: { x: 1, y: 2 } });
+  });
+});

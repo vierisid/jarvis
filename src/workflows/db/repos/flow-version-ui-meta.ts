@@ -20,6 +20,7 @@
  */
 
 import { getWorkflowDb } from "../index";
+import { FlowVersionRequestError } from "./flow-version-ownership";
 
 export const UI_META_SCHEMA_VERSION = 1;
 
@@ -73,7 +74,49 @@ export function getFlowVersionUiMeta(versionId: string): FlowVersionUiMeta {
   }
 }
 
+/**
+ * The refusal for a malformed `uiMeta`, or null (#632).
+ *
+ * Exported so a ROUTE can ask BEFORE it writes anything else.
+ * `POST /api/workflows/:id/versions` calls `createDraftVersion` and then
+ * `upsertFlowVersionUiMeta`, with no transaction around the pair -- so once
+ * this check started throwing, a malformed `uiMeta` would have created the
+ * draft row and THEN answered 400. That is not cosmetic: a new draft becomes
+ * the latest draft, which is the version an ENABLED flow with nothing
+ * published actually runs, so a refused request would have promoted a live
+ * draft. The PATCH sibling is inside `withOwnedFlowVersion`'s transaction and
+ * rolls back, but the POST is not, and the route file holds itself to
+ * "checked before the transaction" elsewhere for exactly this reason.
+ *
+ * `upsertFlowVersionUiMeta` still applies it as a backstop, so a caller that
+ * forgets cannot store a shape the reader will refuse.
+ */
+export function uiMetaRefusal(meta: FlowVersionUiMeta): FlowVersionRequestError | null {
+  if (meta.positions !== undefined && !isPlainObject(meta.positions)) {
+    return new FlowVersionRequestError("uiMeta.positions must be an object of stepName -> {x, y}", 400);
+  }
+  if (meta.orphans !== undefined && !Array.isArray(meta.orphans)) {
+    return new FlowVersionRequestError("uiMeta.orphans must be an array of step nodes", 400);
+  }
+  return null;
+}
+
+/**
+ * Write a version's sidecar.
+ *
+ * The two shape checks are NOT cosmetic and they are not new policy: they are
+ * the ones `getFlowVersionUiMeta` above already applies on the way OUT (#632).
+ * Both version routes pass `body.uiMeta` through as a CAST of a request body,
+ * so before this the write side took `meta.positions ?? {}` on trust and
+ * `JSON.stringify`'d whatever arrived -- a string, a number, an array -- into
+ * the column, and the read side then silently replaced it with `{}` forever.
+ * The asymmetry was the tell: a value the reader refuses to believe has no
+ * business being stored. Refusing it here instead means a caller is told,
+ * rather than having its layout quietly discarded on the next load.
+ */
 export function upsertFlowVersionUiMeta(versionId: string, meta: FlowVersionUiMeta): void {
+  const refusal = uiMetaRefusal(meta);
+  if (refusal) throw refusal;
   const stamped: FlowVersionUiMeta = {
     schema: UI_META_SCHEMA_VERSION,
     positions: meta.positions ?? {},

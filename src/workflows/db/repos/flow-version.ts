@@ -164,15 +164,50 @@ export interface CreateDraftVersionInput {
   updatedBy?: string | null;
 }
 
+/**
+ * What a draft patch may change. The set is deliberately smaller than the
+ * row (#632).
+ *
+ * `notes`, `backupFiles` and `updatedBy` were here, and the one caller --
+ * `PATCH /api/workflows/:id/versions/:versionId` -- reached them by SPREADING
+ * a cast request body, so an API caller could write all three. They are gone
+ * from this interface AND from the UPDATE below, so the capability no longer
+ * exists at this layer rather than merely being unused by the route. The
+ * route's own allowlist is then belt-and-braces instead of the only control.
+ *
+ *   - `updatedBy` is an attribution column. The route has no caller identity
+ *     to put in it, so a caller-supplied value was simply a claim about who
+ *     edited someone else's draft. Nothing is substituted: `createDraftVersion`
+ *     is also never called with `updatedBy` by any non-test caller, so
+ *     `flow_version.updated_by` is already permanently NULL in this product and
+ *     this change does not make it so. A server-side constant like "api" would
+ *     look like attribution while identifying no principal, which reads as
+ *     evidence and is worse than NULL. Real attribution needs the authn the
+ *     route module's header says does not exist yet.
+ *   - `backupFiles` is a filename -> file-CONTENT map. No in-repo caller writes
+ *     it; `runner/engine-runtime/flow-version-adapter.ts` READS it into the
+ *     engine operation payload, so a writable one let an API caller stash
+ *     arbitrary content under arbitrary filenames in the row that feeds the
+ *     engine, bounded only by the request-body cap.
+ *   - `notes` is the vendored activepieces canvas-note array, typed
+ *     `unknown[]` with no validation, `JSON.parse`d on every
+ *     `rowToFlowVersion` and therefore up to 50 times per `listVersions` call.
+ *     Our editor keeps its layout in `uiMeta` / `flow_version_ui_meta`
+ *     instead. If canvas notes are ever wanted they want their own route with
+ *     their own schema, the way `uiMeta` got one.
+ *
+ * `valid` stays, and stays IGNORED: the UPDATE always recomputes it from
+ * `graphReadiness`. It is kept because many callers pass it and dropping it
+ * would be churn, not because it does anything -- see the comment at the
+ * recomputation. The route does not forward it, for that reason.
+ */
 export interface UpdateDraftVersionInput {
   displayName?: string;
   trigger?: FlowTriggerNode | Record<string, unknown>;
+  /** Accepted and discarded; activation recomputes readiness. */
   valid?: boolean;
   agentIds?: string[];
   connectionIds?: string[];
-  notes?: unknown[];
-  backupFiles?: Record<string, string> | null;
-  updatedBy?: string | null;
 }
 
 const LATEST_SCHEMA_VERSION = "20"; // matches packages/shared/src/lib/automation/flows/flow-version.ts
@@ -300,31 +335,24 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
     connection_ids: patch.connectionIds
       ? JSON.stringify(patch.connectionIds)
       : existing.connection_ids,
-    notes: patch.notes ? JSON.stringify(patch.notes) : existing.notes,
-    backup_files:
-      patch.backupFiles !== undefined
-        ? patch.backupFiles
-          ? JSON.stringify(patch.backupFiles)
-          : null
-        : existing.backup_files,
-    updated_by: patch.updatedBy !== undefined ? patch.updatedBy : existing.updated_by,
     updated: now(),
   };
 
+  // `notes`, `backup_files` and `updated_by` are NOT in this SET list (#632).
+  // Leaving them out is the enforcement: a patch cannot write them even if a
+  // future caller finds a way to put them on the input object, because no
+  // statement here assigns them.
   db().run(
     `UPDATE flow_version SET
-      display_name = ?, trigger = ?, valid = ?, updated_by = ?,
-      agent_ids = ?, connection_ids = ?, notes = ?, backup_files = ?, updated = ?
+      display_name = ?, trigger = ?, valid = ?,
+      agent_ids = ?, connection_ids = ?, updated = ?
      WHERE id = ?`,
     [
       next.display_name,
       next.trigger,
       next.valid,
-      next.updated_by,
       next.agent_ids,
       next.connection_ids,
-      next.notes,
-      next.backup_files,
       next.updated,
       id,
     ],

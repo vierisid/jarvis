@@ -49,6 +49,7 @@ import {
   setSampleDataEntry,
   setSampleInputEntry,
   updateDraftVersion,
+  type UpdateDraftVersionInput,
 } from "../db/repos/flow-version";
 import { publishFlowVersion } from "../db/repos/flow-publication";
 import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
@@ -56,6 +57,7 @@ import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
+  uiMetaRefusal,
   upsertFlowVersionUiMeta,
   type FlowVersionUiMeta,
 } from "../db/repos/flow-version-ui-meta";
@@ -1301,6 +1303,17 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // reached the column that becomes a flow's model-facing `name` (#598).
           const named = validDisplayName(body.displayName);
           if ("error" in named) return named.error;
+          // `uiMeta` is checked BEFORE the insert, not after (#632). There is
+          // no transaction around the two writes below, so a malformed `uiMeta`
+          // checked inside `upsertFlowVersionUiMeta` would have created the
+          // draft row and then answered 400 -- and a new draft becomes the
+          // LATEST draft, which is the version an ENABLED flow with nothing
+          // published actually runs. A refused request must not promote a live
+          // draft. Same rule as `displayName` above.
+          if (body.uiMeta) {
+            const refusal = uiMetaRefusal(body.uiMeta);
+            if (refusal) return err(refusal.message, refusal.status);
+          }
           const version = createDraftVersion({
             flowId: id,
             displayName: named.name,
@@ -1330,17 +1343,50 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const body = read.body as {
             displayName?: string;
             trigger?: Record<string, unknown>;
-            valid?: boolean;
-            connectionIds?: string[];
-            agentIds?: string[];
+            connectionIds?: unknown;
+            agentIds?: unknown;
             uiMeta?: FlowVersionUiMeta;
           };
+          // PICKED, never spread (#632). This used to be
+          // `const { uiMeta, ...versionPatch } = body` on a body that is a CAST
+          // and not a schema, so every remaining key went to
+          // `updateDraftVersion` -- which accepted `updatedBy` (an attribution
+          // column, letting a caller claim someone else edited the draft),
+          // `backupFiles` (a filename -> file-CONTENT map no shipped caller
+          // writes) and `notes`. All three are gone from
+          // `UpdateDraftVersionInput` and from its UPDATE as well, so this
+          // allowlist is the second of two controls rather than the only one.
+          //
+          // `valid` is deliberately NOT forwarded even though the repo still
+          // accepts it: the UPDATE always recomputes it from `graphReadiness`,
+          // so forwarding it would advertise a writable field that is not one.
+          //
+          // BEHAVIOUR CHANGE, stated because it is not only a tightening: the
+          // three dropped fields are IGNORED rather than refused, so a client
+          // still sending one keeps working -- but `connectionIds`, `agentIds`
+          // and `uiMeta` now answer 400 for a shape that used to be stored and
+          // then silently misread. No shipped caller sends those shapes
+          // (`ui/src/v2/rooms/workflows/useWorkflowEditor.ts` sends exactly
+          // `displayName`, `trigger` and `uiMeta`).
+          const versionPatch: UpdateDraftVersionInput = {};
+          if (body.trigger !== undefined) versionPatch.trigger = body.trigger;
+          // Checked rather than cast, for the reason #598 gave for `metadata`:
+          // these are `JSON.stringify`'d straight into columns that
+          // `rowToFlowVersion` hands back TYPED as `string[]`, so a bare cast
+          // is a claim the whole read side believes.
+          for (const [key, raw] of [["connectionIds", body.connectionIds], ["agentIds", body.agentIds]] as const) {
+            if (raw === undefined) continue;
+            if (!Array.isArray(raw) || raw.some((entry) => typeof entry !== "string")) {
+              return err(`${key} must be an array of strings if provided`);
+            }
+            versionPatch[key] = raw as string[];
+          }
           // `displayName` is OPTIONAL on a patch, so it is validated only when
           // present -- but it used to reach `updateDraftVersion` with no
           // validation at all, which made this the loosest of the three writers
           // of a flow's model-facing `name` (#598). Checked before the
           // transaction, so a bad name cannot half-apply a patch.
-          const { uiMeta, ...versionPatch } = body;
+          const uiMeta = body.uiMeta;
           if (body.displayName !== undefined) {
             const named = validDisplayName(body.displayName);
             if ("error" in named) return named.error;
