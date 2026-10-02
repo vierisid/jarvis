@@ -49,14 +49,40 @@ jobs:
       - run: bun test
       - run: bunx tsc --noEmit
 
-  # ─── Gate: validate Docker build before publishing anything ────
-  # Runs a no-push multi-arch build so a broken Dockerfile fails the entire
-  # release (npm, GitHub Release, Docker push) rather than just one job.
+  # ─── Gate: build AND RUN the image before publishing anything ──
+  # A no-push multi-arch build so a broken Dockerfile fails the entire release
+  # (npm, GitHub Release, Docker push) rather than just one job, and then the
+  # same container smoke check docker-build.yml runs on PRs.
+  #
+  # The run half is #621. This gate used to build only, and a successful build
+  # was all it proved -- which is why #613 and #614 both shipped: both built
+  # cleanly and failed only at runtime, and both were found by an outside
+  # reporter. The release path was the weaker of the two checks while being the
+  # one that matters. See .github/scripts/docker-smoke.sh for what it asserts.
   build-docker:
     needs: test
     runs-on: ubuntu-latest
+    # The workflow-level block is contents: write + packages: write, and a job
+    # without its own `permissions:` inherits it. This job neither pushes an
+    # image nor writes to the repo, and it now EXECUTES the image it built, so
+    # it takes the narrowest scope instead: a container escape here would
+    # otherwise land in a job whose runner holds a publish-capable token.
+    # persist-credentials: false below is the other half -- nothing after the
+    # checkout runs git, so the token has no reason to be on disk.
+    permissions:
+      contents: read
+    # Multi-arch (arm64 under QEMU) plus a second single-arch build plus three
+    # smoke phases. docker-build.yml allows 30 for the single-arch half alone.
+    # Generous on purpose: a too-tight bound on a release gate turns a slow
+    # release into a failed one, and the default is 6 hours.
+    timeout-minutes: 90
+    env:
+      # Run-scoped, matching docker-build.yml, and removed by name at the end.
+      GATE_IMAGE_TAG: jarvis:release-gate-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
 
       - name: Extract version from tag
         id: version
@@ -78,6 +104,82 @@ jobs:
           build-args: VERSION=${{ steps.version.outputs.VERSION }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # This job runs the image on the runner's own architecture only, so the
+      # smoke check below covers linux/amd64 ONLY. arm64 stays build-validated
+      # by the step above and is never started. Starting it IS possible -- the
+      # QEMU handlers installed above are exactly what would make a foreign-arch
+      # container execute -- and is declined rather than impossible: it is very
+      # slow, and a QEMU-emulated boot is not what an arm64 user executes, so a
+      # pass there would prove less than it appears to. An arm64-only runtime
+      # defect is a gap this gate does not close, deliberately.
+      #
+      # `load: true` is what puts the image in dockerd's image store so
+      # docker-smoke.sh can run it: setup-buildx-action's docker-container
+      # driver otherwise leaves the result in the BuildKit cache only. `load`
+      # forces the single-platform docker exporter, which is why this cannot
+      # just be added to the multi-arch step above.
+      #
+      # cache-from WITHOUT cache-to, and that is load-bearing. The step above
+      # and publish-docker both export `type=gha,mode=max` with no `scope:`, so
+      # all three builds share one cache scope. Adding a third export that
+      # covers only amd64 risks leaving that scope covering only amd64, and
+      # publish-docker's multi-arch build would then rebuild the arm64 leg --
+      # i.e. produce published layers this gate never ran. (Not the engine
+      # bundle: the `workflows` stage is pinned to BUILDPLATFORM and both legs
+      # COPY from it, so it is in the amd64 graph and an arm64 rebuild reuses
+      # it. The exposure is the arm64 `deps`/`build` stages, which are not
+      # pinned.) Reading the cache is all this step needs anyway: it shares one
+      # buildx builder with the step above, whose amd64 result is a local cache
+      # hit, and cache-from is the fallback if that result came from the remote
+      # cache in the first place.
+      - name: Build the amd64 image again, loaded, so it can be run
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64
+          push: false
+          load: true
+          tags: ${{ env.GATE_IMAGE_TAG }}
+          build-args: VERSION=${{ steps.version.outputs.VERSION }}
+          cache-from: type=gha
+
+      # Runs with no DRY_RUN condition on purpose: a dry run exists to rehearse
+      # the release, and skipping the only check that starts the image would
+      # make the rehearsal quieter than the real thing.
+      #
+      # SMOKE_CONTAINER_PORT is deliberately unset: the image EXPOSEs 3142 and
+      # defaults to it, which is the script's own default.
+      #
+      # What this proves, stated narrowly so nobody reads more into a green
+      # gate: an amd64 image built from this Dockerfile and this cache state
+      # boots healthy, answers /health unauthenticated, logs no startup
+      # failure, and does it again over a written volume. It does NOT prove byte
+      # identity with the manifest publish-docker pushes -- that is a separate
+      # build in a separate job, with no digest carried between them. Closing
+      # that needs a build-once/push-by-digest restructure, which is filed
+      # separately and is not what #621 asked for.
+      - name: Smoke-test the image (run it like a user does)
+        env:
+          # Unique per run AND per re-run, so a retry cannot collide with a
+          # leftover container or volume from the attempt before it.
+          SMOKE_PREFIX: jarvis-release-smoke-${{ github.run_id }}-${{ github.run_attempt }}
+        run: ./.github/scripts/docker-smoke.sh "$GATE_IMAGE_TAG"
+
+      # The script removes the containers and volumes it created, by name, in
+      # its own EXIT trap, and deliberately leaves the image to its caller.
+      # By exact tag: no prune.
+      #
+      # `|| true` so a cleanup problem cannot redden an otherwise green gate,
+      # which does mean a leak goes unreported: if the script is SIGKILLed its
+      # trap never runs, the leftover container holds the image, and this rm
+      # fails silently. Acceptable because every runner here is a GitHub-hosted
+      # ephemeral VM that is destroyed with the job. On a self-hosted runner
+      # this would need to report what it could not remove.
+      - name: Remove the image tag this job loaded
+        if: always()
+        run: docker image rm "$GATE_IMAGE_TAG" || true
 
   # ─── Sidecar release (reusable, versioned from sidecar/VERSION) ─
   # Builds + publishes the sidecar at its own version, gated behind the Docker
