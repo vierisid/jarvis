@@ -788,12 +788,18 @@ func (c *cdpClient) snapshotGeneration() uint64 {
 // coincidentally equal loaderId is not the same page.
 //
 // Both halves out of one round trip because the callers need both and the
-// budget is tight: a narration's coordinate is raced against 1200 ms upstream
-// (src/daemon/index.ts), so a second frame-tree read to learn the same thing
-// twice would be a quarter of the budget spent on nothing. It also makes the
-// two values provably consistent -- an identity and a digest read a beat apart
-// could describe different moments, which is the class of bug this whole
-// change is about.
+// budget is tight -- and the number to size against is the TIGHTEST caller's,
+// not the brain's 1200 ms narration race this comment used to cite. Five of the
+// six callers pass cdpDefaultTimeout and are not what makes a second read
+// expensive. The sixth is browser_element_point.go, which since #610 takes
+// elementPointBudget (900 ms) at entry for all four of its reads together and
+// caps any one of them at elementPointReadTimeout (700 ms). Against that, a
+// second frame-tree read to learn the same thing twice is up to ~78% of the
+// budget rather than a quarter of it, and -- with elementPointMinRead at 20 ms
+// -- two reads that slow leave too little behind for the rest to be issued at
+// all. It also makes the two values provably consistent: an identity and a
+// digest read a beat apart could describe different moments, which is the class
+// of bug this whole change is about.
 func (c *cdpClient) frameTreeState(timeout time.Duration) (pageIdentity, string, error) {
 	raw, err := c.sendOnTimeout(c.sessionID, "Page.getFrameTree", nil, timeout)
 	if err != nil {

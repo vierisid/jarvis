@@ -3992,11 +3992,30 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 void (async () => {
                   await setState(sidecarId, 'working', label);
                   // The RESOLUTION step is bounded on purpose: this exists to
-                  // land before the action, and the CDP reads behind it each
-                  // carry a 30s timeout. A pointer that arrives after the click
-                  // is worse than none. It does not bound the label write above
-                  // it, which is its own RPC; a write that late is suppressed by
-                  // the generation guard instead.
+                  // land before the action, and a pointer that arrives after
+                  // the click is worse than none.
+                  //
+                  // The 30s CDP timeout this used to cite is the LOCAL browser
+                  // path's, and it was never this path's whole story. Of the two
+                  // local readers, `snapshotElementPoint` is a synchronous map
+                  // read (`actions/browser/session.ts`) that issues no command
+                  // and bounds nothing, while `viewportScreenOrigin` sends up to
+                  // three -- a frame tree, an isolated world, an evaluate in it
+                  // -- each inheriting the hardcoded 30s per-send timeout in
+                  // `actions/browser/cdp.ts`. So the local worst case is nearer
+                  // 90s than 30s, and this race is the only thing bounding it.
+                  //
+                  // On the SIDECAR route -- the default install -- the reads
+                  // behind `remoteElementPoint` are bounded on the far side
+                  // instead, by the element-point handler's own
+                  // `elementPointBudget` of 900ms (#610), which cuts each read to
+                  // what the budget has left and refuses one outright with less
+                  // than `elementPointMinRead` (20ms) to go. There this race is a
+                  // backstop rather than the bound.
+                  //
+                  // It does not bound the label write above it, which is its own
+                  // RPC; a write that late is suppressed by the generation guard
+                  // instead.
                   let budget: ReturnType<typeof setTimeout> | undefined;
                   const narration = await Promise.race([
                     resolveToolNarration(sidecarId, tcName, tcArgs),
