@@ -31,9 +31,12 @@ blocked; unclassified local controller exceptions remain unknown.
 
 Classification does not inspect arbitrary returned text for `Error:`. A
 window title can legitimately contain that text. A native negative receipt
-(`success: false`) is a failure the handler reported about itself, and the
-whole reply travels in the message so the pid and the handler's own note are
-not lost.
+(`success: false`) is a failure the handler reported about itself, and nothing
+in the reply is lost: the pid and the handler's own note both survive. Since
+#627 they survive as PROSE rather than as the whole serialised reply -- what
+the handler said leads the sentence and the remaining fields follow it as
+bounded `key=value` pairs -- because the old spelling buried the one field the
+model needed inside a struct.
 
 `window_visible: null` is deliberately NOT a failure. The sidecar sets it
 beside `success: true` for "the process is alive and I could not look for its

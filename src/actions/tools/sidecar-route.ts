@@ -249,6 +249,138 @@ function sidecarStanding(sidecar: SidecarInfo): {
 }
 
 /**
+ * Fields a sidecar handler uses to say what went wrong, most specific first.
+ *
+ * A CLOSED list in a fixed order, because the handlers are not uniform: Linux
+ * `focus_window` reports `{success:false, pid, error: <the error Go returned>}`
+ * while `launch_app`'s negative probes report `{success:false, pid, note: <why
+ * no window appeared>}` (sidecar/desktop_linux.go). `message` sits between them
+ * for a handler that spells it the third way.
+ *
+ * How much of this is really the REMOTE machine's words varies, and the
+ * difference is worth knowing before trusting a field: `runWithTimeout` builds
+ * its error with `cmd.Output()` and never reads `ExitError.Stderr`, so
+ * `focus_window`'s `error` is "exit status 1" rather than anything xdotool
+ * said. `runProbe` keeps stderr deliberately, which is why `launch_app`'s note
+ * genuinely does quote another process. Treated alike regardless: which handler
+ * on which OS answered is not something this function can see.
+ *
+ * Order, not a search for the longest value: `error` is the field a handler
+ * uses when it has a cause to report, and a reply carrying both should be read
+ * for that rather than for a note explaining what to do next. A sidecar can
+ * therefore demote a real cause into `note` by also sending a bland `error` --
+ * which is no worse than before, since one that lies in a field could equally
+ * have lied in the whole blob, and the `note` is still carried in the tail. The
+ * three known sentence fields get the full budget there for that reason.
+ */
+const REPLY_FAILURE_FIELDS = ['error', 'message', 'note'] as const;
+
+/** Longest remote string carried into one of these messages. */
+const MAX_REPLY_FIELD_CHARS = 600;
+
+/** Longest remote string carried as an incidental trailing `key=value` pair. */
+const MAX_REPLY_TAIL_CHARS = 120;
+
+/** Longest key NAME rendered in the tail; a key is a label, not a payload. */
+const MAX_REPLY_KEY_CHARS = 40;
+
+/** Most trailing pairs rendered, so the field count cannot be the payload. */
+const MAX_REPLY_TAIL_PAIRS = 12;
+
+/** Longest whole description this builds, tail and all. */
+const MAX_REPLY_DESCRIPTION_CHARS = 1200;
+
+/** Cut a remote string to a budget, saying so rather than cutting silently. */
+function boundRemote(s: string, max: number): string {
+  return s.length > max ? `${s.slice(0, max)}... (truncated, was ${s.length} chars)` : s;
+}
+
+/**
+ * What a negative reply says failed, in prose, with its remaining fields after
+ * it (#627).
+ *
+ * The old spelling was `JSON.stringify(reply)`, which is correct about losing
+ * nothing and wrong about everything else: a `{success:false, error:"..."}`
+ * reached the model as a serialised struct with the one field it needed buried
+ * inside it. So the handler's own sentence leads, and the rest of the reply
+ * follows as `[pid=7]` instead of being dropped -- the issue asks only for the
+ * readable field, but the pid and the note surviving together was a deliberate
+ * earlier decision on this path and prose keeps both.
+ *
+ * TYPE-CHECKED, not cast, for the reason `readSidecarPageReply` states below:
+ * the value came from `JSON.parse` on another machine, through a validator that
+ * preserves arrays and objects verbatim (sidecar/validator.ts), so an
+ * `{error: ["..."]}` would coerce into a sentence under a `string` annotation
+ * TypeScript erases at runtime. A non-string `error` is therefore not read as
+ * the sentence; it goes in the tail as the value it is.
+ *
+ * BOUNDED IN TOTAL, not per field. Every remote string is cut, AND so are the
+ * key names, the number of pairs and the finished sentence -- because each of
+ * those is separately attacker-chosen: a reply of five thousand small keys, one
+ * twenty-thousand-element array value, or one twenty-thousand-character key
+ * name each produced tens of kilobytes from per-field caps alone. The reply
+ * itself is only soft-limited, by the websocket's payload ceiling.
+ *
+ * Downstream caps exist but are not a substitute: `markUntrustedToolFailure`
+ * cuts the model-facing copy at `MAX_TOOL_RESULT_CHARS`, and nothing cuts the
+ * copies that get logged or stored. (It would also be the wrong cut to rely on
+ * here -- `describeMachine` is at the START of this message and there is no
+ * remedy clause after the interpolation, so an end-truncation would take this
+ * text rather than the sentence around it.)
+ *
+ * NOT a machine-readable rendering, and not pretending to be one. A remote
+ * machine can put `[pid=1]` or a truncation marker inside its own `error`
+ * string and have it render indistinguishably from the real tail, and a key
+ * name containing `=` can manufacture a pair. `JSON.stringify` was unambiguous
+ * by construction and this is not. Accepted because the consumer is a model
+ * reading a framed block for a sentence, the worst outcome is a misattributed
+ * field, and the thing actually acted on -- the code, status and effect triple
+ * -- is not built from this string at all.
+ *
+ * Still only a READABILITY change: the caller's triple is untouched, which is
+ * what #605 established and #620 verified. The try/catch is what makes that
+ * structural rather than circumstantial -- this runs inside `dispatchToSidecar`'s
+ * `try`, so a throw here would be relabelled `SIDECAR_OUTCOME_UNKNOWN` by the
+ * catch below and silently change the outcome. `JSON.stringify` cannot throw on
+ * a `JSON.parse` product, so this is a guard against a future caller rather than
+ * a live bug.
+ *
+ * And it does NOT frame the text -- framing this path is #629's subject, and it
+ * happens at the model boundary. Which means this helper must not be reused in
+ * front of a PERSON without a `forCard`-style reduction: dropping the old
+ * `JSON.stringify` also dropped its incidental escaping, so newlines, C0 and
+ * bidi characters now reach the string as themselves.
+ */
+function describeReplyFailure(reply: Record<string, unknown>): string {
+  try {
+    return boundRemote(replyFailureSentence(reply), MAX_REPLY_DESCRIPTION_CHARS);
+  } catch {
+    return '(the reply could not be rendered)';
+  }
+}
+
+function replyFailureSentence(reply: Record<string, unknown>): string {
+  const field = REPLY_FAILURE_FIELDS.find((f) => typeof reply[f] === 'string' && (reply[f] as string).trim().length > 0);
+  // No sentence to read: carry the struct, with the budget the sentence would
+  // have had rather than the tail's, since it is now the whole diagnosis.
+  if (!field) return boundRemote(JSON.stringify(reply), MAX_REPLY_DESCRIPTION_CHARS);
+  const said = boundRemote((reply[field] as string).trim(), MAX_REPLY_FIELD_CHARS);
+  // `success` is the flag that selected this branch, so repeating it says
+  // nothing; the consumed field is already the sentence.
+  const entries = Object.entries(reply).filter(([k]) => k !== field && k !== 'success');
+  const rest = entries.slice(0, MAX_REPLY_TAIL_PAIRS).map(([k, v]) => {
+    // A field the issue is about keeps the sentence budget even when it lost
+    // the sentence; anything else is incidental context and gets the short one.
+    const budget = (REPLY_FAILURE_FIELDS as readonly string[]).includes(k)
+      ? MAX_REPLY_FIELD_CHARS : MAX_REPLY_TAIL_CHARS;
+    const rendered = typeof v === 'string' ? boundRemote(v, budget) : boundRemote(JSON.stringify(v), budget);
+    return `${boundRemote(k, MAX_REPLY_KEY_CHARS)}=${rendered}`;
+  });
+  if (entries.length > rest.length) rest.push(`(+${entries.length - rest.length} more fields)`);
+  return rest.length > 0 ? `${said} [${rest.join(', ')}]` : said;
+}
+
+/**
  * One dispatch, with every check and every refusal the two public wrappers
  * share. Only the success path yields `kind: 'reply'`, so a caller that reads a
  * field off the reply is looking at something a sidecar actually sent.
@@ -335,8 +467,10 @@ async function dispatchToSidecar(
     }
 
     // A structured negative receipt is a failure the handler reported about
-    // itself, so it is an outcome rather than a value -- and the whole reply
-    // is carried so the pid and the handler's own note are not lost.
+    // itself, so it is an outcome rather than a value -- and nothing in the
+    // reply is lost: what the handler SAID leads the sentence and every other
+    // field follows it, so the pid and the handler's own note both survive
+    // without the model having to read a failure out of a struct (#627).
     //
     // `window_visible: null` is deliberately NOT one of these. The sidecar
     // sets it alongside `success: true` for "the process is alive and I could
@@ -347,7 +481,7 @@ async function dispatchToSidecar(
     if (typedErrors && result && typeof result === 'object') {
       const reply = result as Record<string, unknown>;
       if (reply.success === false) {
-        return fail('error', 'SIDECAR_ACTION_FAILED', `Error [${describeMachine(sidecar)}]: "${method}" reported failure: ${JSON.stringify(reply)}`, 'may_have_occurred');
+        return fail('error', 'SIDECAR_ACTION_FAILED', `Error [${describeMachine(sidecar)}]: "${method}" reported failure: ${describeReplyFailure(reply)}`, 'may_have_occurred');
       }
     }
 

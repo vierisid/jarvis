@@ -20,6 +20,23 @@ const mac: SidecarInfo = {
   capabilities: ["terminal", "desktop"],
 };
 
+/**
+ * Await a call that must REJECT, and hand back the error.
+ *
+ * `.catch((e) => e)` would turn an unexpected RESOLVE into
+ * `expect(undefined).toMatchObject(...)`, which reads as a shape mismatch
+ * rather than as "this was supposed to throw".
+ */
+async function rejection(call: () => Promise<unknown>): Promise<any> {
+  try {
+    const out = await call();
+    throw new Error(`expected a rejection, got: ${JSON.stringify(out)}`);
+  } catch (e) {
+    if (e instanceof Error && e.message.startsWith('expected a rejection')) throw e;
+    return e;
+  }
+}
+
 describe('typed desktop outcomes', () => {
   for (const tool of DESKTOP_TOOLS) test(`${tool.name}: offline prevents dispatch`, async () => {
     let calls = 0;
@@ -76,12 +93,94 @@ describe('typed desktop outcomes', () => {
     expect(JSON.parse(await routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop'))).toEqual(reply);
   });
 
-  test('a reported failure carries the whole reply so the pid and note survive', async () => {
+  test('a reported failure leads with what the handler said, pid and note both surviving', async () => {
+    // #627: this used to be `JSON.stringify(reply)`, so the one field the model
+    // needed arrived inside a serialised struct. The note now leads the
+    // sentence and the pid follows it -- the earlier decision that neither is
+    // lost still holds, it is just no longer a struct.
     setSidecarManagerRef(stubManager([mac], async () => ({ success: false, pid: 7, note: 'no window appeared' })));
-    await expect(routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop')).rejects.toMatchObject({
-      outcome: { status: 'error', code: 'SIDECAR_ACTION_FAILED', effect: 'may_have_occurred',
-        message: expect.stringContaining('no window appeared') },
-    });
+    const err = await rejection(() => routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop'));
+    expect(err.outcome).toMatchObject({ status: 'error', code: 'SIDECAR_ACTION_FAILED', effect: 'may_have_occurred' });
+    const msg = err.outcome.message as string;
+    expect(msg).toContain('reported failure: no window appeared');
+    expect(msg).toContain('pid=7');
+    // Not a serialised struct any more, and not carrying the flag that
+    // selected this branch.
+    expect(msg).not.toContain('"success"');
+    expect(msg).not.toContain('{"');
+  });
+
+  test('`error` is preferred over `note`, which is how Linux focus_window reports', async () => {
+    // sidecar/desktop_linux.go's handleFocusWindow returns
+    // {success:false, pid, error: <xdotool stderr>}.
+    setSidecarManagerRef(stubManager([mac], async () => ({ success: false, pid: 9, error: 'xdotool: no such window', note: 'try again' })));
+    const err = await rejection(() => routeToSidecarAction(mac.id, 'focus_window', {}, 'desktop'));
+    expect(err.outcome.message).toContain('reported failure: xdotool: no such window');
+    expect(err.outcome.message).toContain('note=try again');
+  });
+
+  test('a reply with nothing readable still carries the whole object', async () => {
+    // The fallback, and the reason it has to stay: `window_visible: false` with
+    // no sentence beside it is all some negative probes send.
+    setSidecarManagerRef(stubManager([mac], async () => ({ success: false, window_visible: false })));
+    const err = await rejection(() => routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop'));
+    expect(err.outcome).toMatchObject({ status: 'error', code: 'SIDECAR_ACTION_FAILED', effect: 'may_have_occurred' });
+    expect(err.outcome.message).toContain('"window_visible":false');
+  });
+
+  test('a non-string error field is not read as the sentence', async () => {
+    // The reply is JSON from another machine and the validator preserves arrays
+    // verbatim, so a `string` annotation TypeScript erases would have coerced
+    // this into the sentence.
+    setSidecarManagerRef(stubManager([mac], async () => ({ success: false, error: ['injected'], note: 'the real note' })));
+    const err = await rejection(() => routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop'));
+    expect(err.outcome.message).toContain('reported failure: the real note');
+    expect(err.outcome.message).toContain('error=["injected"]');
+  });
+
+  test('one long remote field cannot push the rest of the sentence out', async () => {
+    setSidecarManagerRef(stubManager([mac], async () => ({ success: false, error: 'z'.repeat(50_000), pid: 3 })));
+    const err = await rejection(() => routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop'));
+    const msg = err.outcome.message as string;
+    expect(msg.length).toBeLessThan(1500);
+    expect(msg).toContain('truncated, was 50000 chars');
+    expect(msg).toContain('pid=3');
+  });
+
+  /**
+   * Each of these produced tens of kilobytes from per-field caps alone, because
+   * the field COUNT, the key NAMES and a non-string VALUE are all separately
+   * chosen by whatever is on the other end of the socket.
+   */
+  for (const [label, reply] of [
+    ['a reply with thousands of fields',
+      { success: false, error: 'nope', ...Object.fromEntries(Array.from({ length: 5000 }, (_, i) => [`k${i}`, i])) }],
+    ['a huge non-string value',
+      { success: false, error: 'nope', frames: Array.from({ length: 20_000 }, (_, i) => i) }],
+    ['a huge key name',
+      { success: false, error: 'nope', ['k'.repeat(20_000)]: 1 }],
+  ] as const) test(`${label} is bounded in total`, async () => {
+    setSidecarManagerRef(stubManager([mac], async () => reply));
+    const err = await rejection(() => routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop'));
+    const msg = err.outcome.message as string;
+    expect(`${label}:${msg.length < 1500}`).toBe(`${label}:true`);
+    // Bounded, not emptied: the sentence the handler sent still leads.
+    expect(msg).toContain('reported failure: nope');
+    // And the triple is still the one #605 established -- the bound must not
+    // have been bought by letting the helper throw into the catch below it.
+    expect(err.outcome).toMatchObject({ status: 'error', code: 'SIDECAR_ACTION_FAILED', effect: 'may_have_occurred' });
+  });
+
+  test('a demoted sentence field keeps the full budget in the tail', async () => {
+    // A sidecar can push the real cause into `note` by also sending a bland
+    // `error`. The order still prefers `error`, but `note` is not cut to the
+    // incidental 120 the way an unrelated field is.
+    const cause = 'c'.repeat(400);
+    setSidecarManagerRef(stubManager([mac], async () => ({ success: false, error: 'operation completed', note: cause, other: 'o'.repeat(400) })));
+    const err = await rejection(() => routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop'));
+    const msg = err.outcome.message as string;
+    expect(msg).toContain(`note=${cause}`);
+    expect(msg).toContain('other=' + 'o'.repeat(120) + '... (truncated, was 400 chars)');
   });
 
   test('data containing the word Error is not classified as a failed action', async () => {
