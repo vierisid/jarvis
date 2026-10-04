@@ -1722,14 +1722,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           if (!getFlow(id)) return err("flow not found", 404);
-          const raw = await req.text();
           let body: { enabled?: unknown } = {};
-          if (raw.trim()) {
-            try { body = JSON.parse(raw); }
-            catch { return err("code-steps body must be valid JSON", 400); }
-            if (!body || typeof body !== "object" || Array.isArray(body)) {
-              return err("code-steps body must be a JSON object", 400);
-            }
+          const contentLength = Number(req.headers.get("content-length") ?? "0");
+          if (contentLength > 0 || req.headers.get("content-type")?.includes("json")) {
+            const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
+            if ("error" in read) return read.error;
+            body = read.body as { enabled?: unknown };
           }
           if (typeof body.enabled !== "boolean") {
             return err('enabled must be a boolean ({"enabled": true} permits CODE steps for this flow)', 400);
@@ -1748,14 +1746,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           // Default semantic: lock the latest draft and set it as published.
           // Body can override with `{ versionId }` for explicit selection.
-          const raw = await req.text();
           let body: { versionId?: unknown } = {};
-          if (raw.trim()) {
-            try { body = JSON.parse(raw); }
-            catch { return err("publish body must be valid JSON", 400); }
-            if (!body || typeof body !== "object" || Array.isArray(body)) {
-              return err("publish body must be a JSON object", 400);
-            }
+          const contentLength = Number(req.headers.get("content-length") ?? "0");
+          if (contentLength > 0 || req.headers.get("content-type")?.includes("json")) {
+            const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
+            if ("error" in read) return read.error;
+            body = read.body as { versionId?: unknown };
           }
           if (body.versionId !== undefined && (typeof body.versionId !== "string" || !body.versionId.trim())) {
             return err("versionId must be a non-empty string", 400);
@@ -1773,15 +1769,19 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const flow = getFlow(id);
           if (!flow) return err("flow not found", 404);
-          const body = (await req
-            .json()
-            .catch(() => ({}))) as {
+          let body: {
             environment?: RunEnvironment;
             triggeredBy?: string;
             stepNameToTest?: string;
             payload?: Record<string, unknown>;
             workItemId?: string;
-          };
+          } = {};
+          const contentLength = Number(req.headers.get("content-length") ?? "0");
+          if (contentLength > 0 || req.headers.get("content-type")?.includes("json")) {
+            const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
+            if ("error" in read) return read.error;
+            body = read.body as typeof body;
+          }
           // Linked work runs on the version and input frozen by its decision,
           // so no other field may accompany it.
           if (body.workItemId !== undefined) {
