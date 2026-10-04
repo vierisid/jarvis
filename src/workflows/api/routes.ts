@@ -1723,8 +1723,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           if (!getFlow(id)) return err("flow not found", 404);
           let body: { enabled?: unknown } = {};
-          const contentLength = Number(req.headers.get("content-length") ?? "0");
-          if (contentLength > 0 || req.headers.get("content-type")?.includes("json")) {
+          if (req.body !== null) {
             const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
             if ("error" in read) return read.error;
             body = read.body as { enabled?: unknown };
@@ -1747,8 +1746,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // Default semantic: lock the latest draft and set it as published.
           // Body can override with `{ versionId }` for explicit selection.
           let body: { versionId?: unknown } = {};
-          const contentLength = Number(req.headers.get("content-length") ?? "0");
-          if (contentLength > 0 || req.headers.get("content-type")?.includes("json")) {
+          if (req.body !== null) {
             const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
             if ("error" in read) return read.error;
             body = read.body as { versionId?: unknown };
@@ -1776,8 +1774,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             payload?: Record<string, unknown>;
             workItemId?: string;
           } = {};
-          const contentLength = Number(req.headers.get("content-length") ?? "0");
-          if (contentLength > 0 || req.headers.get("content-type")?.includes("json")) {
+          if (req.body !== null) {
             const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
             if ("error" in read) return read.error;
             body = read.body as typeof body;
