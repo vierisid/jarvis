@@ -13,7 +13,7 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
+import type { FlowRun, FlowRunsPage, FlowRunStatus } from "./useWorkflowsData";
 import { cancellationMessage } from "./useWorkflowsData";
 
 const TERMINAL_STATUSES = new Set<FlowRunStatus>([
@@ -70,8 +70,8 @@ export function useFlowRuns(flowId: string | null): FlowRunsState {
         setError(`GET runs -> ${res.status}`);
         return;
       }
-      const list = (await res.json()) as FlowRun[];
-      setRuns(list);
+      const page = (await res.json()) as FlowRunsPage;
+      setRuns(page.items);
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));

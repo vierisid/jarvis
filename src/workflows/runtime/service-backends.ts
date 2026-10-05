@@ -45,7 +45,8 @@ import { getWorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
-import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
+import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
+  resolveGovernedPieceAction } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
@@ -601,9 +602,24 @@ export function buildSandboxServiceBackends(
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
     const resolved = resolveGovernedPieceAction(req.piece, req.action);
     if (!resolved) return { governed: false };
+    // The action becomes `tool_name`: the audit row, the effect record, the
+    // approval row and the card's `Action:` line (#651). Refused, not reported
+    // ungoverned -- `governed: false` would let the engine run the piece with
+    // no gate at all -- and refused before anything durable exists, under a
+    // label that carries none of the name. Why validate rather than rewrite,
+    // and why this invalidates nothing in flight: `isWellFormedPieceActionName`.
+    if (!isWellFormedPieceActionName(resolved.action)) {
+      effects.auditRefusal({ context: ctx,
+        toolName: governedPieceToolName(resolved.adapter.catalogId, '[malformed action name]'),
+        category: resolved.category });
+      throw new Error(`Governed piece ${resolved.adapter.catalogId} was asked to run a malformed action name; dispatch refused`);
+    }
     // The connection is stripped on the engine side before the input is sent;
     // stripping it again here means neither path can put a credential into the
-    // durable record or the approval card.
+    // durable record or the approval card. This pass keeps what the engine's
+    // pass produced instead of re-cutting it, so the card's counts are the
+    // engine's and not the length of the engine's notes (#651) -- see
+    // `reprojectPieceInput` for which pending approvals that invalidated.
     //
     // Then the framing delimiters are neutralised (#634). `bound()` cuts every
     // string to 512 characters, and a cut through a framed `UNTRUSTED_CONTENT`
@@ -614,7 +630,7 @@ export function buildSandboxServiceBackends(
     // `piece-effects.ts` stays free of the import the engine bundle would have
     // to start tracking. See `piece-effect-receipt.ts` for the whole argument,
     // including which in-flight approvals a changed projection invalidates.
-    const input = defangPieceProjection(sanitizePieceInput(req.input));
+    const input = defangPieceProjection(reprojectPieceInput(req.input));
     const tool = governedPieceToolDefinition(resolved);
     const capability = (() => {
       try { return toolEffectCapability(tool); }

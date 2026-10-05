@@ -265,6 +265,17 @@ describe('#609: the call sites that persist a receipt', () => {
    */
   test('the set of boundedReceiptText callers is pinned', () => {
     expect(filesContaining('boundedReceiptText(', ['roles/untrusted.ts'])).toEqual([
+      // NOT a persist site itself, unlike the three below, and the entry says so
+      // deliberately rather than implying parity with them. The one call here is
+      // inside `boundedApprovalLabel` (#651), which writes nothing: when
+      // `formatApprovalMessage` renders the result into a card's Action:/Agent:
+      // lines it reaches Telegram/Discord and no column at all. The persistence
+      // happens when `workflows/runtime/effect-boundary.ts` calls the same
+      // helper, into `approval_requests.agent_name`, `approval_requests.context`
+      // (`stepName`) and `audit_trail.agent_name` -- LABEL columns cut to 512
+      // and 120, not the receipt column. The `boundedReceiptText` calls already
+      // in that file are the receipt write, pinned on its own line below.
+      'authority/approval-delivery.ts',
       // approval_requests.execution_result, every branch
       'authority/deferred-executor.ts',
       // a delegation step's tool trace -> flow_version.sample_data

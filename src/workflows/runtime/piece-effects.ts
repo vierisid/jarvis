@@ -400,6 +400,42 @@ export function governedPieceToolName(catalogId: string, action: string): string
   return `piece:${catalogId}/${action}`;
 }
 
+/**
+ * Longest action name the daemon will put in a `tool_name` (#651).
+ *
+ * Measured, not picked: the longest of the 329 names in
+ * `GOVERNED_PIECE_ADAPTERS` is `google_calendar_list_recurring_event_instances`
+ * at 46 characters, and the longest of the 127 distinct action names found in
+ * the 1324 cached `@activepieces/piece-*` package versions (660 packages) of a
+ * local bun install cache -- the first `name:` literal after each
+ * `createAction(` -- is 41. 128 is a little under three times the longest, so
+ * an upstream action added after the tables were written still fits, while a
+ * name of any length can no longer ride into four durable rows and a chat
+ * message.
+ */
+export const PIECE_ACTION_NAME_MAX_CHARS = 128;
+
+/**
+ * Every one of those names uses only `[A-Za-z0-9_-]`, so that is the
+ * alphabet, and it is what makes a name inert on the card: no line break to
+ * forge a field with, no `<` to open a frame with.
+ */
+const PIECE_ACTION_NAME = /^[A-Za-z0-9_-]+$/u;
+
+/**
+ * True for an action name that can label an approval card as it stands.
+ *
+ * VALIDATE, NOT TRANSFORM, on purpose. `tool_name` is fenced: a resume compares
+ * the recorded `toolName` with the one rebuilt from the request, so rewriting
+ * a name would invalidate its in-flight approval. Every name an honest run can
+ * reach already passes -- readiness requires an action the catalog names and
+ * the engine looks the action up on the piece before it asks -- so refusing
+ * the rest changes no recorded `toolName` and invalidates nothing.
+ */
+export function isWellFormedPieceActionName(action: string): boolean {
+  return action.length <= PIECE_ACTION_NAME_MAX_CHARS && PIECE_ACTION_NAME.test(action);
+}
+
 const MAX_STRING = 512;
 const MAX_ARRAY = 25;
 const MAX_KEYS = 40;
@@ -423,18 +459,24 @@ const MAX_DEPTH = 5;
  * comment included -- invalidate every cached engine bundle. That file carries
  * the full argument.
  *
- * Note that the `[N more characters]` count is NOT reliable today, for a reason
- * unrelated to that: `sanitizePieceInput` is applied twice, once in the engine
- * and once in the daemon, and the string branch is not idempotent -- the second
- * pass re-cuts the first pass's output and re-counts, so the number a card
- * shows for a long string is the length of the note rather than the overflow.
- * Filed separately, because fixing it changes the projection for EVERY string
- * over 512 characters and so invalidates far more in-flight approvals than
- * #634's own fix does.
+ * `slack` is for a value that is ALREADY a projection (#651). The engine
+ * projects the resolved input and the daemon projects what the engine sent, and
+ * a projection is one slot over each cap -- a string is 512 characters plus its
+ * `... [N more characters]` note, an array 25 items plus its `[N more items]`
+ * marker, an object 40 keys plus `omittedFields`. Without slack the daemon's
+ * pass cut that slot as overflow and re-counted, so every note on the card
+ * described the note before it: `[26 more characters]` for a 10,000-character
+ * string, `[1 more items]` for 100 items, `omittedFields: 1` for 50 keys (and a
+ * real field lost to make room). With slack a value inside that envelope is
+ * kept as it stands, so the second pass is the identity on the first pass's
+ * output, and a value outside it -- an engine that did not cut -- is cut
+ * exactly as the first pass would cut it, with an accurate count of what this
+ * pass received. It is a wider envelope, never no envelope.
  */
-function bound(value: unknown, depth: number): unknown {
+function bound(value: unknown, depth: number, slack = false): unknown {
   if (typeof value === 'string') {
-    return value.length <= MAX_STRING ? value : `${value.slice(0, MAX_STRING)}... [${value.length - MAX_STRING} more characters]`;
+    if (value.length <= (slack ? MAX_PROJECTED_STRING : MAX_STRING)) return value;
+    return `${value.slice(0, MAX_STRING)}${moreCharacters(value.length - MAX_STRING)}`;
   }
   if (value === null || typeof value !== 'object') return value;
   // A file attachment is bytes, not fields. Rendering it key by key would put
@@ -444,31 +486,76 @@ function bound(value: unknown, depth: number): unknown {
   if (value instanceof Date) return value.toISOString();
   if (depth >= MAX_DEPTH) return '[nested value omitted]';
   if (Array.isArray(value)) {
-    const items = value.slice(0, MAX_ARRAY).map(item => bound(item, depth + 1));
+    if (slack && value.length <= MAX_ARRAY + 1) return value.map(item => bound(item, depth + 1, slack));
+    const items = value.slice(0, MAX_ARRAY).map(item => bound(item, depth + 1, slack));
     if (value.length > MAX_ARRAY) items.push(`[${value.length - MAX_ARRAY} more items]`);
     return items;
   }
   const out: Record<string, unknown> = {};
   const keys = Object.keys(value as Record<string, unknown>).sort();
-  for (const key of keys.slice(0, MAX_KEYS)) {
+  const keep = slack && keys.length <= MAX_KEYS + 1 ? keys.length : MAX_KEYS;
+  for (const key of keys.slice(0, keep)) {
     if (key === PIECE_AUTH_PROPERTY) continue;
-    out[key] = bound((value as Record<string, unknown>)[key], depth + 1);
+    out[key] = bound((value as Record<string, unknown>)[key], depth + 1, slack);
   }
   // Never drop fields silently: a reviewer has to see that the card is
   // showing less than the step will send.
-  if (keys.length > MAX_KEYS) out.omittedFields = keys.length - MAX_KEYS;
+  if (keys.length > keep) out.omittedFields = keys.length - keep;
   return out;
 }
 
+function moreCharacters(overflow: number): string {
+  return `... [${overflow} more characters]`;
+}
+
 /**
- * Strip the resolved connection and bound the rest. Called on the engine side
- * before the input leaves the subprocess AND again on the daemon side, so a
- * credential cannot reach the authorize route, the durable effect record or
- * the approval card by either path.
+ * Longest string the first pass can emit: the 512-character prefix plus the
+ * longest note. A JavaScript string is under 2^31 code units in every engine
+ * this runs on, so the overflow count has at most ten digits.
+ */
+const MAX_PROJECTED_STRING = MAX_STRING + moreCharacters(2 ** 31).length;
+
+/**
+ * Strip the resolved connection and bound the rest. The ENGINE's pass, on the
+ * resolved input, before it leaves the subprocess -- so a credential cannot
+ * reach the authorize route.
  */
 export function sanitizePieceInput(input: unknown): Record<string, unknown> {
   if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
   return bound(input, 0) as Record<string, unknown>;
+}
+
+/**
+ * The DAEMON's pass, on what the engine sent: strip the connection again and
+ * bound again, so neither the durable effect record nor the approval card can
+ * carry a credential or an unbounded value whatever the engine did.
+ *
+ * Unlike `sanitizePieceInput` it leaves a value inside a projection's envelope
+ * as it stands (see `slack` on `bound()`), so for an honest engine
+ * `reprojectPieceInput(sanitizePieceInput(x))` deep-equals
+ * `sanitizePieceInput(x)` and every count on the card is the engine's (#651).
+ *
+ * WHAT THIS MOVED, which is the cost #634's own docblock warns about. The
+ * daemon's projection used to be `sanitizePieceInput` twice, so it differs from
+ * this one exactly where the engine's pass left a count -- an input holding a
+ * string over 512 characters at any depth, or an array over 25 items or an
+ * object over 40 keys nested less than five levels deep. A governed-piece approval of such an input
+ * that is still PENDING at upgrade was granted against the old projection's
+ * `requestDigest`; when its run resumes, `effect-boundary.ts` recomputes the
+ * digest from this projection, it does not match, and the step fails with
+ * "Workflow effect changed since it was recorded; start a new run for new
+ * arguments or version". The user starts a new run and gets a card whose
+ * counts are right. The same holds for an engine retry, inside one run, of a
+ * step whose authorization was recorded before the upgrade. Nothing is executed
+ * against a projection nobody approved, and an input with no count in it --
+ * the common case -- has the same projection and digest as before. (So do a
+ * few inputs WITH a count, where the old second pass happened to reproduce the
+ * first: a string exactly 24 characters over, an array of exactly 26 items, a
+ * 41-key object whose `omittedFields` sorts last and is 1. Those stay valid.)
+ */
+export function reprojectPieceInput(input: unknown): Record<string, unknown> {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) return {};
+  return bound(input, 0, true) as Record<string, unknown>;
 }
 
 /**
@@ -482,7 +569,10 @@ export function governedPieceTarget(resolved: ResolvedPieceAction, input: Record
   for (const prop of resolved.adapter.targetProps) {
     const value = input[prop];
     if (value === undefined || value === null || value === '') continue;
-    target[prop] = bound(value, MAX_DEPTH - 2);
+    // With slack: `input` is the daemon's projection, so a count already in it
+    // is kept rather than re-counted (#651). The depth start still trims a
+    // target to two levels below the prop, which is a choice, not a cap.
+    target[prop] = bound(value, MAX_DEPTH - 2, true);
   }
   return target;
 }

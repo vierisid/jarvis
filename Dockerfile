@@ -17,13 +17,44 @@
 # Deliberately NO default -- see the stamp step in the build stage.
 ARG VERSION
 
+# ─── Stage 0: A version-neutral package.json ───────────────────────
+#
+# #647. Every release commit changes exactly one thing in package.json: its
+# `version` (release.yml bumps it, and the tag's VERSION is stamped in at the
+# end of the build stage anyway). Copied straight from the context, that one
+# field invalidated `bun install`, every build-stage step after it and the
+# workflow prebuild on every release, so a release could reuse none of the
+# cache PR and main builds leave behind. Measured on a simulated release
+# (tracked tree, package.json bumped, VERSION matching): `bun install` re-ran
+# (20.1s), so did build:ui, the model copy and build:workflows (9.0s).
+#
+# So the stages that only need package.json's OTHER fields take this copy,
+# with the version pinned to 0.0.0. COPY --from is keyed on content, so a
+# version bump produces the same bytes and everything downstream stays a
+# cache hit; only this RUN and the stamp re-execute. Nothing upstream of the
+# stamp reads the version (bun.lock does not record the root package's
+# version, `bun install --frozen-lockfile` passes against this copy, and the
+# piece/engine content hashes do not cover it -- the production stage's
+# assertion below would fail the build if they did).
+#
+# Pinned to BUILDPLATFORM like the `workflows` stage, which copies from it: a
+# target-platform stage here would make that stage per-architecture again.
+FROM --platform=$BUILDPLATFORM oven/bun:1 AS manifest
+
+WORKDIR /app
+COPY package.json ./
+RUN bun -e 'const p = await Bun.file("package.json").json(); p.version = "0.0.0"; await Bun.write("package.json", JSON.stringify(p, null, 2) + String.fromCharCode(10))'
+
 # ─── Stage 1: Install dependencies ─────────────────────────────────
 FROM oven/bun:1 AS deps
 
 WORKDIR /app
 
-# Copy only dependency manifests for layer caching
-COPY package.json bun.lock ./
+# Copy only dependency manifests for layer caching. package.json comes from
+# the `manifest` stage, version-neutral, so a release's version bump does not
+# re-run the install.
+COPY --from=manifest /app/package.json ./
+COPY bun.lock ./
 # scripts/ holds the postinstall helper (ensure-bun.cjs) referenced by package.json
 COPY scripts/ scripts/
 
@@ -42,55 +73,6 @@ COPY bin/ bin/
 COPY roles/ roles/
 COPY scripts/ scripts/
 COPY tsconfig.json ./
-
-# Stamp the release version into package.json. REQUIRED, and no longer skipped
-# when absent (#625).
-#
-# What the old `if [ -n "$VERSION" ]; then ... fi` cost us: docker-build.yml
-# passed no build-arg, so the guard was false on every CI build and this step
-# never ran. The image CI smoked therefore carried whatever version happened to
-# be committed to package.json, while every published image carries the tag's
-# version -- CI was proving a different artifact healthy. (Note the premise in
-# #625 is wrong in one detail: the version was never EMPTY, it was stale. There
-# is no "unknown" branch for a consumer to take, so nothing was exercising one.)
-# Worse, the skip meant the stamp COMMAND ran in no CI job at all (the RUN layer
-# executed on every build; the `if` simply took its false branch), so a break in
-# it could only ever surface as a failed release.
-#
-# A default would NOT fix that. It would make a caller who OMITS the build-arg
-# build successfully with a placeholder, and the registry tags come from a
-# completely separate path (docker/metadata-action, off the git tag), so
-# deleting the `build-args:` line from release-exec.yml would publish
-# ghcr.io/...:v1.2.3 containing a package.json that says something else, green
-# and silent. No default plus a hard failure covers BOTH omission and an
-# explicit `--build-arg VERSION=`, which is why the version is required here.
-# The cost is that a bare `docker build .` now fails; it fails loudly, naming
-# the flag, which is the trade.
-#
-# Stamped with bun rather than `bunx npm version`: bunx resolves and downloads
-# the npm package from the registry at build time, at whatever `latest` is. That
-# was tolerable while this step only ran during a release; making it
-# unconditional would have put an unpinned registry fetch in the path of every
-# PR image build. bun is already in the image, so this needs no network.
-#
-# The regex enforces semver including the no-leading-zero rule, so it rejects
-# everything `npm version` rejects. It differs deliberately in one direction:
-# `npm version` accepts a leading `v` and normalises it away, this does not.
-# Every caller already passes `${RELEASE_TAG#v}`, and a `v` arriving here means
-# something upstream stopped stripping it, which is worth failing on.
-#
-# `${VERSION:-}` rather than `$VERSION`: `set -u` is in effect, and a declared
-# ARG with no value may not be exported into the RUN environment at all, in
-# which case a bare dereference would abort with "unbound variable" and this
-# message -- the one that names the flag -- would never print for the omission
-# case, which is the common one.
-ARG VERSION
-RUN set -eu; \
-    [ -n "${VERSION:-}" ] || { \
-      echo "VERSION build-arg is required and was empty. Pass --build-arg VERSION=<semver>." >&2; \
-      exit 1; \
-    }; \
-    VERSION="$VERSION" bun -e 'const v = process.env.VERSION; if (!/^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$/.test(v)) throw new Error("VERSION is not semver: " + v); const f = "package.json"; const p = await Bun.file(f).json(); p.version = v; await Bun.write(f, JSON.stringify(p, null, 2) + String.fromCharCode(10)); console.log("stamped package.json version " + v)'
 
 # Copy ONNX wake-word models and WASM runtime from node_modules into ui/public/
 RUN mkdir -p ui/public/openwakeword/models ui/public/ort && \
@@ -154,6 +136,77 @@ RUN set -eu; \
       echo "ui/dist has $doc"; \
     done
 
+# Stamp the release version into package.json. REQUIRED, and no longer skipped
+# when absent (#625).
+#
+# Placement (#647): this is the LAST instruction of the build stage on
+# purpose, and it stamps the version-neutral copy from the `manifest` stage,
+# so the result is the committed package.json with the release's version.
+# Nothing above reads package.json's version -- the model copy does not, and
+# build:ui bundles ui/ (which imports no package.json) and reads only the
+# `scripts` field for its assertion -- and the only consumer is the
+# production stage's `COPY --from=build /app/package.json`. Stamped earlier,
+# every new VERSION re-ran the model copy and the UI build.
+#
+# Measured with real builds against the cache of a VERSION=0.0.0-ci build:
+# with this placement and the `manifest` stage, a simulated release
+# (package.json bumped, matching VERSION) re-ran only the manifest RUN and
+# this one; deps, the model copy, build:ui and build:workflows were CACHED.
+# Placement alone was not enough: the release commit's version bump reached
+# deps through package.json and re-ran everything from `bun install` on.
+# The shipped image is the same either way; the later production layers
+# (from the package.json COPY on) change with every VERSION regardless.
+#
+# What the old `if [ -n "$VERSION" ]; then ... fi` cost us: docker-build.yml
+# passed no build-arg, so the guard was false on every CI build and this step
+# never ran. The image CI smoked therefore carried whatever version happened to
+# be committed to package.json, while every published image carries the tag's
+# version -- CI was proving a different artifact healthy. (Note the premise in
+# #625 is wrong in one detail: the version was never EMPTY, it was stale. There
+# is no "unknown" branch for a consumer to take, so nothing was exercising one.)
+# Worse, the skip meant the stamp COMMAND ran in no CI job at all (the RUN layer
+# executed on every build; the `if` simply took its false branch), so a break in
+# it could only ever surface as a failed release.
+#
+# A default would NOT fix that. It would make a caller who OMITS the build-arg
+# build successfully with a placeholder, and the registry tags come from a
+# completely separate path (docker/metadata-action, off the git tag), so
+# deleting the `build-args:` line from release-exec.yml would publish
+# ghcr.io/...:v1.2.3 containing a package.json that says something else, green
+# and silent. No default plus a hard failure covers BOTH omission and an
+# explicit `--build-arg VERSION=`, which is why the version is required here.
+# The cost is that a bare `docker build .` now fails; it fails loudly, naming
+# the flag, which is the trade.
+#
+# Stamped with bun rather than `bunx npm version`: bunx resolves and downloads
+# the npm package from the registry at build time, at whatever `latest` is. That
+# was tolerable while this step only ran during a release; making it
+# unconditional would have put an unpinned registry fetch in the path of every
+# PR image build. bun is already in the image, so this needs no network.
+#
+# The regex enforces semver's shape, including the no-leading-zero rule on
+# major.minor.patch, and admits no shell metacharacters. It is NOT the release's
+# tag control (#644): it is looser than `npm version` on pre-release
+# identifiers (it takes `1.2.3-01`) and still admits build metadata, both of
+# which release-exec.yml's validate-tag job rejects before a release build
+# starts. It is stricter in one direction: `npm version` accepts a leading `v`
+# and normalises it away, this does not. Release builds pass validate-tag's
+# `version` output, which has the `v` stripped, so a `v` arriving here means
+# something upstream stopped stripping it, which is worth failing on.
+#
+# `${VERSION:-}` rather than `$VERSION`: `set -u` is in effect, and a declared
+# ARG with no value may not be exported into the RUN environment at all, in
+# which case a bare dereference would abort with "unbound variable" and this
+# message -- the one that names the flag -- would never print for the omission
+# case, which is the common one.
+ARG VERSION
+RUN set -eu; \
+    [ -n "${VERSION:-}" ] || { \
+      echo "VERSION build-arg is required and was empty. Pass --build-arg VERSION=<semver>." >&2; \
+      exit 1; \
+    }; \
+    VERSION="$VERSION" bun -e 'const v = process.env.VERSION; if (!/^(0|[1-9][0-9]*)[.](0|[1-9][0-9]*)[.](0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?([+][0-9A-Za-z.-]+)?$/.test(v)) throw new Error("VERSION is not semver: " + v); const f = "package.json"; const p = await Bun.file(f).json(); p.version = v; await Bun.write(f, JSON.stringify(p, null, 2) + String.fromCharCode(10)); console.log("stamped package.json version " + v)'
+
 # ─── Stage 3: Prebuild the workflow runtime ────────────────────────
 #
 # `bun run build:workflows` compiles the vendored Jarvis pieces into
@@ -195,7 +248,10 @@ WORKDIR /app
 # path produces (`prepublishOnly`, which runs with it present), and keeps a
 # future piece that uses the `@/*` alias from building everywhere but here.
 # Nothing in the piece hash covers it, so a difference would be invisible.
-COPY package.json tsconfig.json ./
+# package.json from the `manifest` stage, version-neutral, so a release's
+# version bump does not re-run the prebuild (#647).
+COPY --from=manifest /app/package.json ./
+COPY tsconfig.json ./
 COPY scripts/ scripts/
 COPY src/ src/
 

@@ -30,7 +30,7 @@ The runtime guarantees:
 
 What it deliberately is NOT:
 
-- Not multi-tenant. One daemon, one user. No projects table beyond a hardcoded `default-project` row.
+- Not multi-tenant. One daemon, one user. No projects table: every row carries the constant `DEFAULT_IDS.project` (`jrv_proj_default`).
 - Not distributed. The job queue is SQLite-backed; the worker concurrency is 1 by default.
 - Not a marketplace. The set of installable pieces is the curated catalog under `src/workflows/pieces-library/` plus the Jarvis-authored pieces in the vendored tree. Users cannot side-load arbitrary npm packages.
 
@@ -249,8 +249,8 @@ This is the model boundary the decision above defers the frame to, and
 
 Four things about it are load bearing:
 
-- **One block per action, not `wrapUntrusted` per field.** `list_runs` returns up
-  to 25 runs, each with its own `failedStep`; an empty block costs 229
+- **One block per action, not `wrapUntrusted` per field.** `list_runs` returns
+  25 runs by default, each with its own `failedStep`; an empty block costs 229
   characters of preamble and delimiters with a one-character label, and 267 with
   the label this action passes, so 25 of them come to ~6,675 before a single
   character of payload -- past the 6000-character dispatch cap. And a framed
@@ -300,11 +300,11 @@ the more routine exposure of the two.
 
 `summarizeFlow`'s `metadata` and `name` ride on `list`, `create`, `enable`,
 `disable`, `publish` and `compose`. `metadata` is a raw `JSON.parse` of a column
-that `workflows/api/routes.ts` writes unvalidated and uncapped, as are a run's
-`triggeredBy` and `environment`, so whatever an API caller put there arrived as
+that `workflows/api/routes.ts` wrote unvalidated and uncapped (bounded since by
+#598, and a run's `triggeredBy` and `environment` by #649), so whatever an API caller put there arrived as
 trusted-looking tool output on every `list` -- a far more frequent call than
 `get_run`. `name` is a `displayName`, and not simply operator-written either:
-two of its three writers are that same uncapped `POST /api/workflows` body and
+two of its three writers were that same uncapped `POST /api/workflows` body and
 the composer LLM's own `displayName` on `compose`.
 
 All six now return **one framed block wrapping the action's JSON**, which is
@@ -331,7 +331,8 @@ Three things about #598 are load bearing beyond the frame itself:
   `content-length` and then on the read text before anything is parsed, the way
   the waitpoint ingress does it -- the two version routes still parse unbounded
   and are left for their own issue, because they carry the whole step graph and a
-  limit sized for a flow row would be a guess there.
+  limit sized for a flow row would be a guess there. (#609 has since bounded them
+  at a measured 4,000,000 bytes; see "Request limits" under "API surface".)
   On the way out, `summarizeFlow` withholds a `metadata` over 512 characters
   behind a **sibling** `metadataOmitted: { chars }`, and truncates a `name` over
   200 characters behind a sibling `nameTruncated: { chars }`.
@@ -369,8 +370,10 @@ Three things about #598 are load bearing beyond the frame itself:
   silent, which is exactly what a truncation that ate the counters would have
   undone. The flow listing route's `limit` is clamped to 100 for the related
   reason that `serializeFlow` emits every row's full, unmigrated metadata.
-- **The throw paths are the one thing left open**, and are now filed rather than
-  unlisted. `assertVersionReady` / `assertFlowReady` raise a
+- **The throw paths were the one thing left open** here, and #628 has since
+  closed them: `manage_workflow` declares `failureIsOutsideContent`, and the
+  orchestrator frames and caps its failure text where the model reads it. The
+  original reasoning, kept for the record: `assertVersionReady` / `assertFlowReady` raise a
   `WorkflowReadinessError` interpolating a step name, and
   `assertCodeStepsAllowed` raises `refusalMessage(flowId, intent, stepNames)`;
   step names come from the composer LLM or an uncapped
@@ -381,7 +384,12 @@ Three things about #598 are load bearing beyond the frame itself:
   changes what `registry.execute` promises and contradicts a dozen deliberate
   `rejects.toThrow` assertions.
 
-One residual worth knowing, and it is a **truncation** hazard rather than a
+One residual this section recorded, now resolved: both slice sites below go
+through `boundedReceiptText` (`roles/untrusted.ts`), which rewrites the
+delimiters to their inert spelling before it cuts, so no prefix of those rows can
+hold half a block (#609). What follows is the original analysis.
+
+It was a **truncation** hazard rather than a
 boundary one. Two consumers persist a 2000-character prefix of a tool result,
 which lands *inside* a ~4300-character framed return: it keeps the open
 delimiter and drops the close.
@@ -419,13 +427,11 @@ block, and a per-message nonce cannot be replayed into closing a fresh one. It
 is not a regression either, since those rows carry the same captured output
 today with no frame at all.
 
-Fixing it properly means truncating without halving a block at the two
-`slice(0, 2000)` call sites. That needs its own issue, because the helper would
-have to **locate** an open line, which `roles/untrusted-import-guard.test.ts`
-forbids in production code for good reason (#560) -- the argument for an
-exception is that it only ever deletes a suffix and never treats a located
-boundary as trustworthy, so a forged open line in a payload costs at most a
-truncated payload, never a moved boundary.
+Fixing it properly meant truncating without halving a block at the two
+`slice(0, 2000)` call sites. The fix that landed does not **locate** an open
+line at all -- it defangs every delimiter and then cuts -- so it needed no
+exception to the rule `roles/untrusted-import-guard.test.ts` enforces against
+locating one in production code (#560).
 
 ### `jarvis-ask` answers with a typed outcome
 
@@ -729,7 +735,8 @@ a full run.
 |        - /v1/worker/{project,app-connections}                                |
 |        - /v1/store-entries, /v1/step-files, /v1/waitpoints                   |
 |        - /v1/engine/populated-flows, /v1/logs/:runId                         |
-|        - /v1/jarvis/{llm,tools,notify,context,agent,events,workflows}        |
+|        - /v1/jarvis/{llm,tools,notify,context,agent,events,workflows,        |
+|          pieces}                                                             |
 |                                                                              |
 |    runner/                                                                   |
 |      handler.ts: RUN_FLOW JobHandler                                         |
@@ -793,8 +800,16 @@ src/workflows/
                                 routes expect
     piece-catalog.ts            Engine-extracted catalog + on-disk cache at
                                 `~/.jarvis/cache/piece-metadata.json`
-    piece-input.ts              Sample-input override clone applied before
-                                handing inputs to the engine
+    piece-input.ts              Typed input-field schema shared by the catalog,
+                                the editor and the composer
+    effect-boundary.ts          Authority boundary every workflow effect passes
+    effect-capabilities.ts      Maps a tool to its bounded Authority category
+    piece-effects.ts            Governed-piece adapter table and projection
+                                (compiled into the engine bundle)
+    piece-effect-receipt.ts     Daemon-only defang of that projection
+    machine-binding.ts          Pins a run to one computer and connection
+    safe-expression.ts          The `{{ }}` expression evaluator
+    workflow-readiness.ts       Readiness: what makes a version runnable
     cancellation.ts             Dispatch fence: assert / scope / abort helpers
                                 every run's next action is checked against
     cancellation-signals.ts     In-process bus that wakes the active executor
@@ -805,13 +820,16 @@ src/workflows/
     test-fixtures-drift.test.ts Drift test: rebuild catalog vs committed fixture
 
   sandbox-api/                  Loopback HTTP+WS API the engine subprocess hits
-    server.ts                   Bootstraps Fastify + socket.io on 127.0.0.1
-    config.ts                   Random-port + bearer-token engine token
+    server.ts                   Bun.serve HTTP listener for the engine; starts
+                                the socket.io RPC server (worker-rpc.ts)
+    config.ts                   Side-file locations (`~/.jarvis/workflow-files/`,
+                                `~/.jarvis/workflow-logs/`, `JARVIS_WORKFLOW_DATA_DIR`)
     engine-token.ts             Token mint + verify (engine -> daemon auth)
     sandbox-registry.ts         Maps sandboxId -> runId/flowId for /v1 routes
     rpc.ts + worker-rpc.ts      WorkerContract bridge (engine -> daemon RPC)
     routes/                     One file per /v1 surface:
-      connections.ts            Encrypted app_connection CRUD
+      connections.ts            Read-only connection resolve for the engine
+                                (`/v1/worker/app-connections/:externalId`)
       files.ts                  /v1/step-files binary uploads/downloads
       flows.ts                  /v1/engine/populated-flows (resolves a runtime
                                 version + execution context for the engine)
@@ -820,11 +838,15 @@ src/workflows/
       jarvis-events.ts          /v1/jarvis/events -> event buffer poll
       jarvis-llm.ts             /v1/jarvis/llm    -> LLMManager.chat
       jarvis-notify.ts          /v1/jarvis/notify -> ChannelService + desktop
+      jarvis-pieces.ts          /v1/jarvis/pieces/authorize -> governed-piece admission
+      effect-context.ts         (helper, no route) reads a request's step name
+                                and execution path headers
       jarvis-tools.ts           /v1/jarvis/tools  -> ToolRegistry.invoke
       jarvis-workflows.ts       /v1/jarvis/workflows -> workflow runner
       logs.ts                   /v1/logs/:runId zstd execution-state backup
       store.ts                  /v1/store-entries (engine's KV store)
-      waitpoints.ts             /v1/waitpoints + /api/webhooks/waitpoints/:id
+      waitpoints.ts             `/v1/waitpoints` (the public resume route,
+                                `/api/webhooks/waitpoints/:id`, is in api/routes.ts)
 
   runner/                       Things that run a flow
     handler.ts                  RUN_FLOW JobHandler -- the worker's entry point
@@ -833,8 +855,9 @@ src/workflows/
                                 is content-addressed; cache lives in
                                 `~/.jarvis/cache/engine/<hash>/`
       build-pieces.ts           Walks packages/pieces/jarvis/* and esbuilds each
-                                into `~/.jarvis/cache/pieces/<hash>/<short>/`.
-                                Content-hash skip on rebuild.
+                                into its own `dist/` (`dist/src/index.js`).
+                                Content-hash skip on rebuild via
+                                `dist/.source-hash`.
       engine-runtime.ts         Spawns + warms the engine subprocess; manages
                                 the single-slot pool with 5min idle TTL
       engine-flow-executor.ts   Implements FlowExecutor by routing every step
@@ -849,21 +872,32 @@ src/workflows/
     triggers/
       manager.ts                Coordinator: enable/disable a flow's triggers,
                                 routes to cron / webhook / engine
-      cron.ts                   5-field cron + `@every 10s` sub-minute parser
+      cron.ts                   Re-export shim over `src/lib/cron-scheduler.ts`
+                                (5-field cron + `@every 10s`)
       webhook.ts                `/api/webhooks/<flowId>` registry
 
   queue/                        SQLite-backed job queue
-    worker.ts                   WorkflowWorker: drains jobs, calls handler.ts
+    worker.ts                   `Worker`: drains jobs, calls handler.ts
     retry-policy.ts             One attempt per RUN_FLOW job + operator guidance
     queue.test.ts               Drain semantics + race-tolerant terminal-status
 
   db/                           Persistence
     schema.ts                   All SQLite tables (flow, flow_version,
-                                flow_run, workflow_run_cancellation,
-                                app_connection, store_entry, waitpoint,
+                                flow_version_ui_meta, flow_run,
+                                workflow_run_cancellation,
+                                workflow_run_machine_binding,
+                                workflow_effect, workflow_delegation,
+                                workflow_composition, app_connection,
+                                trigger_event, store_entry, waitpoint,
                                 workflow_file, workflow_job)
     encryption.ts               AES-256-GCM at-rest for app_connection.value
-    repos/                      One file per table; thin CRUD over kysely
+    repos/                      Thin CRUD over bun:sqlite, mostly one file per
+                                table, plus flow-readiness, flow-publication,
+                                flow-code-steps and flow-version-ownership
+    flow-graph.ts               Whole-graph walk of a version (every edge) and
+                                the CODE-step scan the publish gate uses
+    credential-migration.ts     Converts legacy credential rows to the bound
+                                envelope
 
   api/                          HTTP routes mounted under /api/workflows/*
     routes.ts                   Route table + handlers (see "API surface" below)
@@ -872,8 +906,9 @@ src/workflows/
     catalog.ts                  Tiered registry (Verified / Community)
     catalog-generated.ts        Auto-synced from npm (do not edit)
     catalog-overrides.ts        Hand-maintained verified set + pins
-    installer.ts                Writes ~/.jarvis/pieces/installed.json, runs
-                                bun install, extracts metadata
+    installer.ts                Writes ~/.jarvis/pieces/installed.json and runs
+                                bun install (metadata is re-extracted by the
+                                routes' `onPieceLibraryChanged` callback)
     reconciler.ts               Idempotent reconcile (install/uninstall delta)
 
   credentials/                  JarvisConnectionSource adapters that bridge
@@ -882,13 +917,19 @@ src/workflows/
     google-source.ts            jarvis:google -> existing Google OAuth tokens
     telegram-source.ts          jarvis:telegram -> daemon's bot token
 
-  jarvis-pieces/                Daemon-side service shims invoked by /v1/jarvis
-    agent-delegator.ts          Backs jarvis-agent.delegate (M7 sub-agent loop)
+  adapters/                     Daemon-side service shims invoked by /v1/jarvis
+    agent-delegator.ts          Backs jarvis-agent.delegate
+    m7-agent-delegator.ts       The M7 sub-agent loop behind it
     context-provider.ts         Backs jarvis-context (vault/awareness reads)
     llm-client.ts               Backs jarvis-ask via LLMManager.chat
     notifier.ts                 Backs jarvis-notify -- per-channel routing
     tool-registry.ts            Backs jarvis-tool -- invoke a Jarvis tool
     workflow-runner.ts          Backs jarvis-trigger.run_workflow
+
+  jarvis-pieces/
+    types.ts                    Shared types for the Jarvis pieces' services
+
+  evaluation/                   Workflow-quality evaluation harness
 
 ui/src/v2/rooms/workflows/      The visual editor and runs panel
   WorkflowsRoom.tsx             List view; run history; new workflow
@@ -928,10 +969,10 @@ When the daemon starts, `src/workflows/runtime/engine-bootstrap.ts` runs in para
 
 1. `buildEngineBundle()` checks `~/.jarvis/cache/engine/<hash>/main.js`. If the hash matches current sources, returns immediately. Otherwise rebuilds (~700ms cold) and caches.
 2. `buildAllJarvisPieces()` walks `packages/pieces/jarvis/*` and esbuilds each piece into its dist dir. Unchanged pieces skip on hash hit (~2ms each).
-3. `SandboxApi.listen()` binds a random port on `127.0.0.1` and starts Fastify + socket.io.
+3. `SandboxApi.start()` binds a random port on `127.0.0.1` with `Bun.serve` and starts the socket.io RPC server beside it.
 4. `EngineRuntime.acquire()` is left to the worker (lazy spawn on first job). The pool holds one warm engine after release; idle TTL evicts after 5 min.
-5. `PieceCatalog.build()` runs `EXTRACT_PIECE_METADATA` for every known piece (Jarvis + installed community). Failures don't block successful entries: partial cache writes persist what extracted. The cache key includes `CATALOG_SCHEMA_VERSION` so daemon-side projection changes invalidate it.
-6. The bootstrap returns an `{ engineRuntime, pieceCatalog, sandboxApi }` triple that the daemon hands to `WorkflowWorker`, `TriggerManager`, and the API routes.
+5. `buildPieceCatalog()` runs `EXTRACT_PIECE_METADATA` for every known piece (Jarvis + installed community). Failures don't block successful entries: partial cache writes persist what extracted. The cache key includes `CATALOG_SCHEMA_VERSION` so daemon-side projection changes invalidate it.
+6. The bootstrap returns `{ api, runtime, catalog, failures, bundleHash, catalogCacheKey, shutdown }`, which the daemon hands to the queue `Worker`, `TriggerManager` and the API routes.
 
 If bootstrap fails (e.g. esbuild error in a piece), the daemon logs a warning and falls back to "no workflows" mode -- the rest of Jarvis comes up clean. The Workflows room shows an empty-catalog notice.
 
@@ -940,10 +981,10 @@ If bootstrap fails (e.g. esbuild error in a piece), the daemon logs a warning an
 Following a single run from a user click to a SUCCEEDED row:
 
 1. User clicks **Run** in the editor. UI calls `POST /api/workflows/:id/run`.
-2. `flowRunRepo.create()` writes a `flow_run` row in QUEUED state; `jobQueueRepo.enqueue()` adds a `RUN_FLOW` job.
+2. `createFlowRun()` writes a `flow_run` row in QUEUED state; `enqueue()` adds a `RUN_FLOW` job.
 3. The worker drains the job. `RUN_FLOW` resolves the flow version, materializes any CODE pieces onto disk, then calls `EngineFlowExecutor.executeFlow()`.
 4. `EngineRuntime.acquire()` either picks up the warm engine or spawns a fresh one. Spawn passes `AP_SANDBOX_WS_PORT` + an engine token in env.
-5. The engine subprocess imports the populated flow's pieces (Jarvis pieces via dev-pieces resolution, community pieces via `node_modules`), runs the trigger payload through each step, and streams `WorkerNotify.updateStepProgress` events back over the WS for every step boundary.
+5. The engine subprocess imports the populated flow's pieces (Jarvis pieces via dev-pieces resolution, community pieces via `node_modules`), runs the trigger payload through each step, and streams `WorkerContract.updateStepProgress` events back over the WS for every step boundary.
 6. The UI's runs panel polls `/api/workflows/:id/runs` adaptively (faster while a run is RUNNING). The overlay on the canvas reflects the latest step status.
 7. On terminal status, the engine sends `WorkerContract.updateRunProgress(SUCCEEDED|FAILED|PAUSED)` plus `uploadRunLog` (zstd execution-state). The handler updates the row and releases the engine back to the pool.
 
@@ -1028,7 +1069,7 @@ For the community-pieces curation flow (how a piece reaches the Verified tier, s
 
 | Source | How it's wired |
 |---|---|
-| `schedule` (legacy alias `cron`) | Routed to `CronScheduler`. Supports the standard 5-field cron plus a `@every Ns` sub-minute extension. Job ID is `{flowId}:{triggerName}`. |
+| `schedule` | Routed to `CronScheduler`. Supports the standard 5-field cron plus a `@every Ns` sub-minute extension. Job ID is `flow:{flowId}`. |
 | `webhook` | Routed to `WebhookManager`. Registers `/api/webhooks/<flowId>`. GET and POST both fire; pieces that need HMAC verify inside their handler. |
 | Engine-managed (anything else) | The piece's trigger logic runs in the engine. `EXECUTE_TRIGGER_HOOK(ON_ENABLE)` returns either `scheduleOptions` (registered with `CronScheduler`) or `listeners` (registered with `WebhookManager`). On disable, `EXECUTE_TRIGGER_HOOK(ON_DISABLE)` runs first; persistent state clears even if the engine call fails. |
 
@@ -1040,33 +1081,83 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 
 | Method | Path | Purpose |
 |---|---|---|
-| GET | `/api/workflows` | List flows |
-| POST | `/api/workflows` | Create flow |
-| GET | `/api/workflows/:id` | Get flow + latest version |
-| PATCH | `/api/workflows/:id` | Rename / publish status |
+| GET | `/api/workflows` | List flows. `?status=ENABLED\|DISABLED`, `?limit` (default 100, max 100), `?offset`. Bare array |
+| POST | `/api/workflows` | Create a flow and its first draft. `{ displayName, externalId?, metadata? }` |
+| GET | `/api/workflows/readiness` | Readiness of every ENABLED flow's executable version. `?limit` (default 100, max 100), `?offset`; answers `{ items, nextOffset }` |
+| GET | `/api/workflows/:id` | Flow + latest draft + published version + the editable version's `uiMeta` |
+| PATCH | `/api/workflows/:id` | Enable / disable (`status`) and set `metadata`. Renaming is a version write, not this |
 | DELETE | `/api/workflows/:id` | Delete flow + cascade |
 | GET | `/api/workflows/:id/versions` | Version history |
-| POST | `/api/workflows/:id/versions` | New draft version |
-| GET | `/api/workflows/:id/versions/:vid` | Get version |
-| POST | `/api/workflows/:id/versions/:vid/lock` | Freeze a draft (DRAFT -> LOCKED). Does not publish and does not refresh triggers |
-| POST | `/api/workflows/:id/versions/:vid/sample-data/:step` | Set per-step sample output |
-| POST | `/api/workflows/:id/versions/:vid/sample-input/:step` | Set per-step sample input override |
-| POST | `/api/workflows/:id/publish` | Publish latest draft (403 when the version has a CODE step and CODE is off for the flow) |
-| POST | `/api/workflows/:id/code-steps` | Grant or revoke this flow's CODE-step permission (`{"enabled": bool}`) |
-| POST | `/api/workflows/:id/run` | Enqueue run; accepts `stepNameToTest` for run-from-here |
-| GET | `/api/workflows/:id/runs` | Run history |
+| POST | `/api/workflows/:id/versions` | New draft version. `{ displayName, trigger?, uiMeta? }` |
+| GET | `/api/workflows/:id/versions/:vid` | Get version + its `uiMeta` |
+| PATCH | `/api/workflows/:id/versions/:vid` | Edit a draft: `displayName`, `trigger`, `connectionIds`, `agentIds`, `uiMeta` (picked, not spread; other keys are ignored). Refused for a LOCKED version, today as a 500 |
+| GET | `/api/workflows/:id/versions/:vid/readiness` | Readiness report for one version |
+| POST | `/api/workflows/:id/versions/:vid/lock` | Freeze a draft (DRAFT -> LOCKED). Gated on readiness (422 with the readiness report); may answer with `osWarnings`. Does not publish and does not refresh triggers |
+| PATCH | `/api/workflows/:id/versions/:vid/sample-data/:step` | Set one step's sample output, `{ output }`; `output` absent or null removes the entry |
+| DELETE | `/api/workflows/:id/versions/:vid/sample-data/:step` | Clear the version's WHOLE sample-data map. `:step` is required by the path and ignored |
+| PATCH | `/api/workflows/:id/versions/:vid/sample-input/:step` | Set one step's sample input override, `{ input }` (a JSON object; absent or null removes it) |
+| POST | `/api/workflows/:id/publish` | Publish the latest draft, or `{ versionId }` (403 when the version has a CODE step and CODE is off for the flow) |
+| POST | `/api/workflows/:id/code-steps` | Grant or revoke this flow's CODE-step permission (`{"enabled": bool}`, required) |
+| POST | `/api/workflows/:id/run` | Enqueue a run, 202. `{ environment?, triggeredBy?, stepNameToTest?, payload? }`, or `{ workItemId }` alone |
+| GET | `/api/workflows/:id/runs` | Run history, newest first. `?status`, `?limit` (default 50, max 100), `?offset`; answers `{ items, nextOffset }` |
+| GET | `/api/workflow-runs/:runId` | One run, including its machine binding and cancellation |
+| GET | `/api/workflow-runs/:runId/effects` | The run's governed effect records, `{ runId, effects }` |
+| GET | `/api/workflow-runs/:runId/waitpoints` | The run's active waitpoints with resume URLs |
+| POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |
 | GET | `/api/workflows/pieces` | Engine-extracted catalog |
 | GET | `/api/workflows/pieces/library` | Catalog of installable community pieces |
 | POST | `/api/workflows/pieces/library/:id/install` | Install or update a community piece |
 | DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
-| GET | `/api/workflows/connections` | List connections (no secrets) |
-| POST | `/api/workflows/connections` | Create / update connection (encrypted) |
-| DELETE | `/api/workflows/connections/:id` | Delete + revoke |
+| GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
+| POST | `/api/workflows/connections` | Create, or replace by `(pieceName, externalId)`, a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }` |
+| PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap |
+| DELETE | `/api/workflows/connections/:id` | Delete the stored connection. Revokes nothing at the provider |
 | GET | `/api/workflows/triggers` | Active trigger registrations |
 | GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
-| ANY | `/api/webhooks/:flowId` | Engine-managed webhook trigger fan-in |
+| GET, POST | `/api/webhooks/:flowId` | Engine-managed webhook trigger fan-in (503 when webhooks are not enabled in the build) |
 | POST | `/api/webhooks/waitpoints/:id` | Resume a paused flow (idempotent: 410 on second hit) |
-| POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |
+
+### Pagination
+
+The three paged listings clamp `limit` to 1..100 (a negative, fractional or
+non-numeric value lands inside that range rather than reaching SQLite) and
+floor `offset` at 0. `/readiness` and `/:id/runs` answer `{ items, nextOffset }`:
+`nextOffset` is the `offset` of the next page when this page came back full,
+and `null` when it came back short. A full last page therefore costs one extra,
+empty request. `GET /api/workflows` is still a bare array.
+
+This is offset paging. Runs are ordered `created DESC, rowid DESC`, a total
+order, so paging an unchanged table visits every run once. Under concurrent
+inserts it is not stable: a new run shifts every later page down by one, so the
+next page repeats the previous page's last run. Only a keyset cursor fixes that.
+The natural key for this order is the pair `(created, rowid)`, but `flow_run`
+has a TEXT primary key, so its `rowid` is implicit and `VACUUM` may renumber it,
+which would silently invalidate a cursor a client holds; and `flow_run.id` is a
+nanoid, not time-sortable. A cursor therefore needs its own stable column.
+
+### Request limits
+
+Every write route under `/api/workflows` that reads a body reads it through one
+bounded reader: the declared `content-length` is checked before anything is
+read, the text is checked again after, and both answer **413** naming the limit.
+A body that is not a JSON object answers 400. The public waitpoint resume route
+has its own reader with the same two size checks, but it tolerates a body that
+is not JSON (it resumes with `{}`); a body that IS JSON must be an object. Where a route accepts no body (`/publish`, `/run`, `/code-steps`), an
+empty or whitespace-only body reads as `{}`.
+
+| Route | Body cap | Other limits |
+|---|---|---|
+| `POST /api/workflows`, `PATCH /api/workflows/:id` | 262,144 bytes | `displayName` required on POST, at most 512 characters (413). `metadata` a JSON object or null, at most 16,384 characters serialized (413), no `__proto__` / `constructor` / `prototype` key (400). `status` must be `ENABLED` or `DISABLED` (400) |
+| `POST /api/workflows/:id/versions`, `PATCH .../versions/:vid` | 4,000,000 bytes | `displayName` at most 512 characters (413). `uiMeta` shape-checked (400). PATCH only: `connectionIds` / `agentIds` arrays of strings (400), at most 100 entries each and 256 characters an entry (413); the POST ignores both |
+| `PATCH .../sample-data/:step`, `PATCH .../sample-input/:step` | 2,000,000 bytes | `:step` at most 120 characters (413) and not `__proto__` / `prototype` / `constructor` (400). One entry at most 262,144 characters serialized (413). The whole map at most 100 entries and 4,194,304 characters serialized, keys included (413); a write that shrinks an over-limit map is always allowed. A LOCKED version is refused, today as a 500 (the repo throws a plain `Error`) |
+| `POST /api/workflows/:id/publish` | 262,144 bytes | Empty, `{}` or `{ versionId }` with a non-empty string (400 otherwise) |
+| `POST /api/workflows/:id/code-steps` | 262,144 bytes | `enabled` must be a boolean (400) |
+| `POST /api/workflows/:id/run` | 1,000,000 bytes | `environment` must be `PRODUCTION` or `TESTING` (400). `triggeredBy` a string of at most 200 characters (400). `workItemId` must come alone (400) |
+| `POST /api/workflows/connections` | 262,144 bytes | `externalId`, `displayName`, `type`, `pieceName` required; `value` an object; `value` must carry what its `type` needs (`access_token` for OAuth types, `username` + `password` for `BASIC_AUTH`, `secret` or `value` for `SECRET_TEXT`) (400) |
+| `PATCH /api/workflows/connections/:id` | 262,144 bytes | `status` must be `ACTIVE`, `MISSING` or `ERROR` (400). `displayName` a non-empty string, `value` an object that passes the same per-type check (400). The type cannot change. A rename leaves the stored ciphertext untouched |
+| `POST /api/webhooks/waitpoints/:id` | 1,000,000 bytes | Rate limited: 60 a minute per waitpoint, 30 a minute for unknown ids, 600 a minute overall |
+
+### Version ownership
 
 Every `/api/workflows/:id/versions/:vid` route requires `:vid` to be a version
 of `:id`. A wrong-parent, missing or unknown version returns 404 without
@@ -1136,17 +1227,17 @@ Notable behaviors a contributor should know:
 - LOOP body and ROUTER branches render as indented sub-graphs on the canvas. The tree-aware auto-layout distributes router branches symmetrically around the parent.
 - Inputs accept `{{step.field}}` templates and render them as chips inline.
 - The variable picker opens on input focus and lists predecessor outputs (drawn from `outputSample`). Drag-to-insert or click-to-insert; the chip is placed at the caret.
-- Per-step sample input override is stored in `flow_version_ui_meta.sample_input` and applied by `piece-input.ts` before sending inputs to the engine. Used by the "test this step" affordance.
+- Per-step sample input override is stored in `flow_version.sample_input`; a run-from-here (`stepNameToTest`) passes it to the engine as `sampleInputOverride`, which replaces that step's `settings.input` (`engine-flow-executor.ts`). Used by the "test this step" affordance.
 - Right-click on a node opens delete + error-handling options. Right-click on the canvas opens add-piece. Background tap dismisses popovers.
 - Connection picker auto-fills the first available connection for the piece's auth type.
-- The runs panel polls adaptively (250ms while a run is RUNNING, 5s when idle).
+- The editor's runs panel (`useFlowRuns.ts`) polls adaptively: every 2s while any run is QUEUED, RUNNING or PAUSED, every 8s otherwise, and not at all while the tab is hidden. The room-level list (`useWorkflowsData.ts`) polls every 8s.
 
 ### Routine requests tab
 
 `RoutineRequestsPanel.tsx` is a fourth tab beside Flows, Connections and Library. It
 lists the automation proposals awareness has saved and the drafts they turned into,
-reading `/api/awareness/routines` and `/api/awareness/compositions`. The legacy overlay
-(`ui/overlay.html`) reaches the same endpoints.
+reading `/api/awareness/routines` (and `/api/goals` for the goal picker). The legacy
+overlay (`ui/overlay.html`) reads `/api/awareness/compositions` instead.
 
 Accepting a proposal (`POST /api/awareness/suggestions/:id/accept`) does not compose
 inline. It saves the user-confirmed request as one row in `suggestion_composition_jobs`
@@ -1209,7 +1300,7 @@ Knobs (env var wins over the `workflows` config section):
 Three test layers, run from cheap to expensive:
 
 1. **Unit + integration tests** -- the bulk. Cover repos, queue, tree algebra, composer parser, catalog projection, drift, etc. Run with `bun test src/workflows/`.
-2. **Engine-extract tests against real pieces** -- gated. Set `JARVIS_GATED_REAL_PIECE_TESTS=1` to opt in. They actually install a piece (e.g. Gmail) and run `EXTRACT_PIECE_METADATA` against it; useful in CI but pricey locally.
+2. **Engine-extract tests against real pieces** -- gated. Set both `JARVIS_TEST_ENGINE_BUILD=1` and `JARVIS_TEST_ENGINE_EXTRACT_PIECE=1` to opt in (`src/workflows/pieces-library/engine-extract.test.ts`). They actually install a piece (e.g. Gmail) and run `EXTRACT_PIECE_METADATA` against it; useful in CI but pricey locally.
 3. **End-to-end engine tests** -- gated by `JARVIS_TEST_ENGINE_BUILD=1`. Build the engine bundle, spawn it, run real flows from BEGIN to terminal status. Includes the RESUME-from-paused suite (`end-to-end-resume.test.ts`) and the Phase L plumbing smoke (`end-to-end-l.test.ts`).
 
 The drift test (`runtime/test-fixtures-drift.test.ts`) compares the live engine-extracted catalog against a committed snapshot. If you change a piece's surface, regenerate the fixture and commit it.
@@ -1225,7 +1316,7 @@ The drift test (`runtime/test-fixtures-drift.test.ts`) compares the live engine-
 | Upgrade Activepieces | Edit `UPSTREAM_PIN_*` constants, run `sync-activepieces.ts`, fix any drift the patch layer reports | [`UPSTREAM.md`](../src/workflows/activepieces/UPSTREAM.md) |
 | Add a new `/v1/jarvis/*` service | Add a route file under `sandbox-api/routes/`, wire it into `server.ts`, wire the backend into `service-backends.ts` | (this file -- "Source tree map") |
 | Bump the catalog projection | Bump `CATALOG_SCHEMA_VERSION` in `piece-catalog.ts` so existing caches invalidate | (this file -- "Build, cache, and sync") |
-| Run the engine-extract test against a real piece | `JARVIS_GATED_REAL_PIECE_TESTS=1 bun test src/workflows/runner/engine-runtime/extract-piece-metadata.test.ts` | (this file -- "Testing") |
+| Run the engine-extract test against a real piece | `JARVIS_TEST_ENGINE_BUILD=1 JARVIS_TEST_ENGINE_EXTRACT_PIECE=1 bun test src/workflows/pieces-library/engine-extract.test.ts` | (this file -- "Testing") |
 | Add a new connection source for `jarvis:*` external ids | Implement a `JarvisConnectionSource`, register in `src/workflows/credentials/adapter.ts` | (this file -- "Source tree map") |
 | Debug a stuck or weird run | Inspect `flow_run.status` + `waitpoint` rows (a run stuck PAUSED has an unresumed one), then `~/.jarvis/workflow-logs/<runId>.bin` for the engine's last execution state | (this file -- "Persistence and encryption") |
 

@@ -29,20 +29,20 @@
  * small file and should not pay for this one.
  *
  * So the defang lives on the DAEMON side only, and that is sufficient rather
- * than a compromise. `sanitizePieceInput` runs twice -- once in the engine
- * (`piece-effect-guard.ts`, before the authorize POST) and again in the daemon
- * (`service-backends.ts`) -- and NOTHING is durable before the daemon's pass:
+ * than a compromise. The input is bounded twice -- by `sanitizePieceInput` in the
+ * engine (`piece-effect-guard.ts`, before the authorize POST) and by
+ * `reprojectPieceInput` in the daemon (`service-backends.ts`) -- and NOTHING is durable before the daemon's pass:
  * `effect-boundary.invoke` is the only writer. A stale engine bundle therefore
  * cannot reopen the hole, and no coordinated rebuild is needed to deploy this.
  *
  * WHY `defangDelimiters` AND NOT `boundedReceiptText`, which is the helper the
  * issue names. `boundedReceiptText` bundles a cut with the defang, and this
  * site must not cut again: `bound()` has already produced
- * `prefix512 + "... [N more characters]"`, about 538 characters, and re-cutting
+ * `prefix512 + "... [N more characters]"`, at most 544 characters, and re-cutting
  * at 512 would eat the note that tells a reviewer the card shows less than the
  * step will send. `defangDelimiters` alone is the right half of that helper
  * here, and its stated precondition is already satisfied -- it asks callers to
- * cut first, and every string reaching this function has been cut to ~538 by
+ * cut first, and every string reaching this function has been cut to 544 or less by
  * `bound()`, so the span-map scan is bounded by construction.
  *
  * DETERMINISTIC, which `bound()`'s own docblock requires because the digest an
@@ -90,9 +90,9 @@
  *
  * One length note, since it is the only place a length change propagates: the
  * defang can SHORTEN a string, because the span path drops a matched span's
- * interior invisibles. `governedPieceTarget` re-bounds after this runs, so for
- * an invisible-split token the target's own `[N more characters]` count shifts
- * too. Still inside class (1); no new invalidation class.
+ * interior invisibles. `governedPieceTarget` bounds again after this runs, but
+ * with the slack a projection is allowed (#651), so a string the defang
+ * shortened is still inside the envelope and keeps the count it had.
  *
  * `governedPieceTarget` inherits the fix for free, because
  * `service-backends.ts` builds its target from the value this function
@@ -104,8 +104,9 @@ import { defangDelimiters } from '../../roles/untrusted';
 /**
  * Defang every string in an already-bounded piece projection.
  *
- * The input is `bound()`'s output, so its shape is bounded too -- at most 40
- * keys, depth 5, 25 array items, strings of ~538 characters -- which is what
+ * The input is `bound()`'s output, so its shape is bounded too -- at most 41
+ * keys, depth 5, 26 array items (each cap plus the slot for its count), strings
+ * of at most 544 characters -- which is what
  * makes this walk safe without a budget of its own. Objects are rebuilt in
  * their existing key order, so nothing about the projection's identity changes
  * beyond the string contents.

@@ -17,6 +17,17 @@ import { createWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { canonicalJson, digest, resolveEffectContext, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
 import { substituteAboveLevel } from '../../authority/tool-action-map';
+import { boundedApprovalLabel } from '../../authority/approval-delivery';
+
+/**
+ * A flow name on a card or an audit row: the same 512 the HTTP routes cap a
+ * `displayName` at (`FLOW_DISPLAY_NAME_MAX_CHARS`), so any name those routes
+ * accept renders whole and only a name written by a path that does not cap it
+ * is shortened.
+ */
+const WORKFLOW_NAME_LABEL_MAX_CHARS = 512;
+/** A step name on a card or an audit row: the 120 `auditRefusal` already uses. */
+const WORKFLOW_STEP_LABEL_MAX_CHARS = 120;
 
 export interface WorkflowAuthorityDependencies {
   authorityEngine?: AuthorityEngine; auditTrail?: AuditTrail; emergencyController?: EmergencyController;
@@ -87,7 +98,12 @@ export class WorkflowEffectBoundary {
       // and drops the close, into a durable audit row a person reads. It was
       // also, embarrassingly, the line #634's own reasoning cited as the
       // precedent for the number 120.
-      const step = boundedReceiptText(input.context.stepName ?? 'unknown step', 120);
+      //
+      // `boundedApprovalLabel` (which wraps `boundedReceiptText`) since #651,
+      // so the label is also one line: on this path the step name is the raw
+      // `X-Jarvis-Step-Name` header, and a header can carry a vertical tab,
+      // a form feed or a NEL even though it cannot carry CR or LF.
+      const step = boundedApprovalLabel(input.context.stepName ?? 'unknown step', WORKFLOW_STEP_LABEL_MAX_CHARS);
       this.deps.auditTrail?.log({ agent_id: `workflow:${input.context.runId}`,
         agent_name: `Workflow ${input.context.runId} / ${step}`,
         tool_name: input.toolName, action_category: input.category,
@@ -126,8 +142,18 @@ export class WorkflowEffectBoundary {
     // The trail names who was judged: the workflow itself, or the sub-agent a
     // delegated call was judged as.
     const judged = input.principal ? ` / as ${input.principal.agentRoleId} (level ${input.principal.agentAuthorityLevel})` : '';
+    // Labels a human judges from, bounded and kept to one line (#651), the
+    // same helper the refusal path above uses.
+    // The flow name is capped at 512 on the HTTP routes but not on the agent
+    // path, where `compose` takes it from the composer model's own output, and
+    // no path keeps a line break out of it. The step name is the graph's node
+    // name, which readiness requires to be an identifier but does not cap.
+    // Labels only: `record.stepName` itself is fenced identity -- the effect id
+    // is digested over it -- so it stays exactly what the graph holds.
+    const flowLabel = boundedApprovalLabel(resolved.version.displayName, WORKFLOW_NAME_LABEL_MAX_CHARS);
+    const stepLabel = boundedApprovalLabel(record.stepName, WORKFLOW_STEP_LABEL_MAX_CHARS);
     const log = (executed: boolean) => audit.log({ agent_id: `workflow:${record.runId}`,
-      agent_name: `Workflow ${resolved.version.displayName} / ${record.stepName} / ${record.id}${judged}`,
+      agent_name: `Workflow ${flowLabel} / ${stepLabel} / ${record.id}${judged}`,
       tool_name: record.toolName, action_category: input.category,
       authority_decision: record.decision === 'denied' ? 'denied' : record.approvalId ? 'approval_required' : 'allowed',
       approval_id: record.approvalId, executed });
@@ -190,11 +216,13 @@ export class WorkflowEffectBoundary {
           // sentence through `confirmation`.
           const intent = typeof record.target.intent === 'string' ? record.target.intent : input.confirmation?.intent;
           request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
-            agentName: `Workflow: ${resolved.version.displayName}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
+            agentName: `Workflow: ${flowLabel}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
             urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: decision.reason,
+            // `stepName` here is a label too: the context is read back only for
+            // `target`, `confirm` and `intent`, and nothing matches on it.
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,
-              stepName: record.stepName, executionPath: record.executionPath, target: record.target,
+              stepName: stepLabel, executionPath: record.executionPath, target: record.target,
               // Mandatory review has to be visible in the context, not only in
               // the decision: `approvalNeedsClick` reads it, so voice and
               // auto-approval cannot satisfy this card.

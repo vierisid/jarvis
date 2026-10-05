@@ -12,6 +12,8 @@ import { queueStats } from "../db/repos/job-queue";
 import { updateFlowMetadata } from "../db/repos/flow";
 import {
   createWorkflowRoutes,
+  FLOW_VERSION_REF_ID_MAX_CHARS,
+  FLOW_VERSION_REF_IDS_MAX_ENTRIES,
   RUN_TRIGGERED_BY_MAX_CHARS,
   WAITPOINT_RESUME_MAX_BODY_BYTES,
   WAITPOINT_RESUME_PER_ID_PER_MINUTE,
@@ -63,6 +65,9 @@ function plainReq(method: string, url: string, body?: unknown): Request {
   }
   return new Request(url, init);
 }
+
+/** `GET /api/workflows/:id/runs`'s body since #652. */
+type RunsPage<T = unknown> = { items: T[]; nextOffset: number | null };
 
 async function callJson(handler: unknown, req: Request | (Request & { params: Record<string, string> })) {
   const fn = handler as (r: Request) => Promise<Response> | Response;
@@ -767,7 +772,7 @@ describe("workflow API: runs", () => {
       reqWithParams("GET", `http://x/api/workflows/${flowId}/runs`, { id: flowId }),
     );
     expect(status).toBe(200);
-    expect(body.length).toBe(2);
+    expect((body as RunsPage).items.length).toBe(2);
   });
 
   test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {
@@ -1247,6 +1252,185 @@ describe("workflow API: connections", () => {
     // Existing value untouched.
     const fresh = getConnection(conn.id);
     expect((fresh?.value as Record<string, string> | undefined)?.["access_token"]).toBe("valid");
+  });
+});
+
+/**
+ * #650. PATCH found its row by id (no project predicate) and then wrote it
+ * through `upsertConnection` with no `projectId`, which resolves its target by
+ * `(DEFAULT_IDS.project, pieceName, externalId)`. For a row outside the
+ * default project that is a different identity tuple, so PATCH did not update
+ * the row it was asked about: it INSERTED a second row in the default project,
+ * re-sealing the first row's decrypted secret under the new row's identity.
+ * The row binding stops a blob being moved; it does not stop a
+ * decrypt-and-reseal, which is what this was.
+ *
+ * `project_id` is a constant in production today, so no live caller reaches
+ * this. The test writes a second project directly, which is exactly the state
+ * the day projects stop being constant.
+ */
+describe("#650: the connections PATCH updates the row it was asked about", () => {
+  const OTHER_PROJECT = "proj_other_650";
+
+  async function seedInOtherProject() {
+    const { upsertConnection } = await import("../db/repos/app-connection");
+    return upsertConnection({
+      projectId: OTHER_PROJECT,
+      externalId: "scoped-650",
+      displayName: "Scoped",
+      type: "SECRET_TEXT",
+      pieceName: "@activepieces/piece-foo",
+      pieceVersion: "0.0.1",
+      value: { secret: "only-in-other-project" },
+    });
+  }
+
+  function patch(id: string, body: unknown) {
+    return callJson(
+      routes["/api/workflows/connections/:id"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/connections/${id}`, { id }, body),
+    );
+  }
+
+  async function allRows() {
+    const { getWorkflowDb } = await import("../db/index");
+    return getWorkflowDb()
+      .query<{ id: string; project_id: string }, []>("SELECT id, project_id FROM app_connection ORDER BY id")
+      .all();
+  }
+
+  test("a displayName-only PATCH keeps the id and copies the secret nowhere", async () => {
+    const { listConnections, getConnection } = await import("../db/repos/app-connection");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const conn = await seedInOtherProject();
+
+    const res = await patch(conn.id, { displayName: "Renamed" });
+    expect(res.status).toBe(200);
+    // The id in the answer is the id in the URL, not a freshly minted one.
+    expect((res.body as { id: string }).id).toBe(conn.id);
+    // Still exactly one row, still in its own project.
+    expect(await allRows()).toEqual([{ id: conn.id, project_id: OTHER_PROJECT }]);
+    // And the default project holds no copy of the secret.
+    expect(listConnections(DEFAULT_IDS.project)).toEqual([]);
+
+    const fresh = getConnection(conn.id);
+    expect(fresh?.displayName).toBe("Renamed");
+    expect(fresh?.projectId).toBe(OTHER_PROJECT);
+    expect(fresh?.value).toEqual({ secret: "only-in-other-project" });
+  });
+
+  test("a value rotation lands on the same row", async () => {
+    const { getConnection } = await import("../db/repos/app-connection");
+    const conn = await seedInOtherProject();
+
+    const res = await patch(conn.id, { value: { secret: "rotated" } });
+    expect(res.status).toBe(200);
+    expect((res.body as { id: string }).id).toBe(conn.id);
+    expect(await allRows()).toEqual([{ id: conn.id, project_id: OTHER_PROJECT }]);
+    expect(getConnection(conn.id)?.value).toEqual({ secret: "rotated" });
+  });
+
+  /**
+   * The same "update the row, do not rewrite it" property, one column over:
+   * the upsert PATCH wrote through kept `owner_id`, `scope` and
+   * `pre_select_for_new_projects` when the input left them out, but wrote
+   * `metadata = NULL`, so every rotation wiped it.
+   */
+  test("a PATCH keeps the row's metadata", async () => {
+    const { upsertConnection, getConnection } = await import("../db/repos/app-connection");
+    const conn = upsertConnection({
+      projectId: OTHER_PROJECT,
+      externalId: "meta-650",
+      displayName: "Meta",
+      type: "SECRET_TEXT",
+      pieceName: "@activepieces/piece-foo",
+      pieceVersion: "0.0.1",
+      value: { secret: "s" },
+      metadata: { region: "eu" },
+    });
+    expect(getConnection(conn.id)?.metadata).toEqual({ region: "eu" });
+
+    const res = await patch(conn.id, { value: { secret: "s2" } });
+    expect(res.status).toBe(200);
+    // On the row itself, or this would pass by missing it.
+    expect((res.body as { id: string }).id).toBe(conn.id);
+    expect(getConnection(conn.id)?.value).toEqual({ secret: "s2" });
+    expect(getConnection(conn.id)?.metadata).toEqual({ region: "eu" });
+  });
+
+  /** A rename is not a rotation: the stored ciphertext is left byte-exact. */
+  test("a displayName-only PATCH does not re-seal the secret", async () => {
+    const conn = await seedInOtherProject();
+    const { getWorkflowDb } = await import("../db/index");
+    const stored = () =>
+      getWorkflowDb().query<{ value: string }, [string]>("SELECT value FROM app_connection WHERE id = ?").get(conn.id)
+        ?.value;
+    const before = stored();
+    expect(before).toBeString();
+
+    const res = await patch(conn.id, { displayName: "Renamed again" });
+    expect(res.status).toBe(200);
+    // On the row itself, or this would pass by missing it.
+    expect((res.body as { id: string }).id).toBe(conn.id);
+    expect(await allRows()).toEqual([{ id: conn.id, project_id: OTHER_PROJECT }]);
+    expect(stored()).toBe(before);
+  });
+
+  /**
+   * The route reads the row, then awaits the body, then writes. A body that
+   * is still streaming holds that window open for as long as the client likes.
+   */
+  function streamingPatch(id: string) {
+    let push!: (body: unknown) => void;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (body) => {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify(body)));
+          controller.close();
+        };
+      },
+    });
+    const req = new Request(`http://x/api/workflows/connections/${id}`, {
+      method: "PATCH",
+      body: stream,
+      headers: { "Content-Type": "application/json" },
+      duplex: "half",
+    } as RequestInit) as Request & { params: { id: string } };
+    req.params = { id };
+    const pending = callJson(routes["/api/workflows/connections/:id"]?.PATCH, req);
+    return { pending, push };
+  }
+
+  test("a DELETE that lands while the body is in flight is not undone", async () => {
+    const conn = await seedInOtherProject();
+    const { pending, push } = streamingPatch(conn.id);
+
+    const deleted = await callJson(
+      routes["/api/workflows/connections/:id"]?.DELETE,
+      reqWithParams("DELETE", `http://x/api/workflows/connections/${conn.id}`, { id: conn.id }),
+    );
+    expect(deleted.status).toBe(200);
+
+    push({ displayName: "Too late" });
+    const res = await pending;
+    expect(res.status).toBe(404);
+    // The deleted secret did not come back under a fresh id.
+    expect(await allRows()).toEqual([]);
+  });
+
+  test("a rename in flight does not write back a secret rotated meanwhile", async () => {
+    const { getConnection } = await import("../db/repos/app-connection");
+    const conn = await seedInOtherProject();
+    const { pending, push } = streamingPatch(conn.id);
+
+    const rotated = await patch(conn.id, { value: { secret: "rotated-meanwhile" } });
+    expect(rotated.status).toBe(200);
+
+    push({ displayName: "Renamed late" });
+    expect((await pending).status).toBe(200);
+    const fresh = getConnection(conn.id);
+    expect(fresh?.displayName).toBe("Renamed late");
+    expect(fresh?.value).toEqual({ secret: "rotated-meanwhile" });
   });
 });
 
@@ -1876,19 +2060,19 @@ describe("#609: the runs listing clamps its limit", () => {
     // Non-vacuous: there are more rows than either the clamp or the default.
     const huge = await list(id, "?limit=100000");
     expect(huge.status).toBe(200);
-    expect((huge.body as unknown[]).length).toBe(100);
+    expect((huge.body as RunsPage).items.length).toBe(100);
     // At the boundary, and below it, the caller gets what it asked for.
-    expect(((await list(id, "?limit=100")).body as unknown[]).length).toBe(100);
-    expect(((await list(id, "?limit=7")).body as unknown[]).length).toBe(7);
-    expect(((await list(id, "")).body as unknown[]).length).toBe(50);
+    expect(((await list(id, "?limit=100")).body as RunsPage).items.length).toBe(100);
+    expect(((await list(id, "?limit=7")).body as RunsPage).items.length).toBe(7);
+    expect(((await list(id, "")).body as RunsPage).items.length).toBe(50);
   });
 
   test("a negative or non-numeric limit lands somewhere sane instead of reaching SQLite", async () => {
     const id = await flowWithRuns(3);
-    expect(((await list(id, "?limit=-1")).body as unknown[]).length).toBe(1);
-    expect(((await list(id, "?limit=abc")).body as unknown[]).length).toBe(3);
-    expect(((await list(id, "?limit=2.9")).body as unknown[]).length).toBe(2);
-    expect(((await list(id, "?offset=-5&limit=2")).body as unknown[]).length).toBe(2);
+    expect(((await list(id, "?limit=-1")).body as RunsPage).items.length).toBe(1);
+    expect(((await list(id, "?limit=abc")).body as RunsPage).items.length).toBe(3);
+    expect(((await list(id, "?limit=2.9")).body as RunsPage).items.length).toBe(2);
+    expect(((await list(id, "?offset=-5&limit=2")).body as RunsPage).items.length).toBe(2);
   });
 });
 
@@ -1992,6 +2176,55 @@ describe("#632: a version patch picks its fields instead of spreading the body",
     expect((await patch(id, versionId, { agentIds: "agent_a" })).status).toBe(400);
     expect((await patch(id, versionId, { agentIds: ["ok", 7] })).status).toBe(400);
     expect((await patch(id, versionId, { connectionIds: [] })).status).toBe(200);
+  });
+
+  /**
+   * #653. Shape-checked but not size-checked: about 1,000,000 single-character
+   * ids (999,995, measured) fit inside `VERSION_WRITE_MAX_BODY_BYTES`, and the
+   * column they land in is `JSON.parse`d on every version read -- 50 rows per
+   * `listVersions`. Measured on this runtime, parsing that column costs ~19 ms,
+   * so a listing of 50 such rows holds the event loop for about a second.
+   */
+  test("connectionIds and agentIds are bounded in count and in entry length", async () => {
+    const { id, versionId } = await seededDraft();
+    const { getFlowVersion } = await import("../db/repos/flow-version");
+    for (const key of ["connectionIds", "agentIds"] as const) {
+      // At the caps: accepted and stored whole.
+      const atCap = Array.from({ length: FLOW_VERSION_REF_IDS_MAX_ENTRIES }, (_, i) =>
+        `${i}`.padEnd(FLOW_VERSION_REF_ID_MAX_CHARS, "x"));
+      const ok = await patch(id, versionId, { [key]: atCap });
+      expect(ok.status).toBe(200);
+      expect(getFlowVersion(versionId)![key]).toEqual(atCap);
+
+      // One entry over the count: refused, and the stored list is untouched.
+      const tooMany = await patch(id, versionId, { [key]: [...atCap, "one-more"] });
+      expect(tooMany.status).toBe(413);
+      expect((tooMany.body as { error: string }).error).toMatch(
+        new RegExp(`${key} has ${FLOW_VERSION_REF_IDS_MAX_ENTRIES + 1} entries; the limit is ${FLOW_VERSION_REF_IDS_MAX_ENTRIES}`),
+      );
+      expect(getFlowVersion(versionId)![key]).toEqual(atCap);
+
+      // One character over on one entry: refused, naming the entry.
+      const tooLong = await patch(id, versionId, { [key]: ["ok", "y".repeat(FLOW_VERSION_REF_ID_MAX_CHARS + 1)] });
+      expect(tooLong.status).toBe(413);
+      expect((tooLong.body as { error: string }).error).toMatch(
+        new RegExp(`${key}\\[1\\] is ${FLOW_VERSION_REF_ID_MAX_CHARS + 1} characters; the limit is ${FLOW_VERSION_REF_ID_MAX_CHARS}`),
+      );
+      expect(getFlowVersion(versionId)![key]).toEqual(atCap);
+
+      // Count before elements: 101 non-strings is a size refusal, so a flood
+      // is refused without the element walk.
+      expect((await patch(id, versionId, { [key]: Array(FLOW_VERSION_REF_IDS_MAX_ENTRIES + 1).fill(7) })).status).toBe(413);
+    }
+
+    // The issue's own construction: a body of single-character ids that the
+    // body cap admits. Refused for its count, not its bytes.
+    const flood = Array.from({ length: 999_995 }, () => "a");
+    const body = JSON.stringify({ connectionIds: flood });
+    expect(body.length).toBeLessThanOrEqual(VERSION_WRITE_MAX_BODY_BYTES);
+    const refused = await patch(id, versionId, { connectionIds: flood });
+    expect(refused.status).toBe(413);
+    expect((refused.body as { error: string }).error).toMatch(/connectionIds has 999995 entries/);
   });
 
   /**
@@ -2458,7 +2691,7 @@ describe("#636: run ordering is defined, so a page means something", () => {
     ((await callJson(
       routes["/api/workflows/:id/runs"]?.GET,
       reqWithParams("GET", `http://x/api/workflows/${id}/runs${query}`, { id }),
-    )).body as Array<{ id: string; created: number }>);
+    )).body as RunsPage<{ id: string; created: number }>).items;
 
   /**
    * THE regression test. Fails before the fix, where the first page carried the
@@ -2531,6 +2764,80 @@ describe("#636: run ordering is defined, so a page means something", () => {
     // The composed WHERE concatenates only literal fragments, so a filter value
     // that looks like SQL stays a bound parameter and matches nothing.
     expect(listRuns({ flowId: `' OR 1=1 --` }).length).toBe(0);
+  });
+});
+
+/**
+ * #652. The runs listing was a bare array, so a client had nothing to page
+ * with. It now answers `{ items, nextOffset }`, the `/readiness` shape, and
+ * `nextOffset` means the same thing there and here: set when the page came back
+ * full, null when it did not.
+ */
+describe("#652: the runs listing says where the next page starts", () => {
+  async function flowWithRuns(count: number, failedEvery = 0): Promise<{ flowId: string; ids: string[] }> {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const version = createDraftVersion({
+      flowId: flow.id, displayName: "paged",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    });
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const status = failedEvery && i % failedEvery === 0 ? "FAILED" : "SUCCEEDED";
+      ids.push(createFlowRun({ flowId: flow.id, flowVersionId: version.id, triggeredBy: `run_${i}`, status }).id);
+    }
+    return { flowId: flow.id, ids };
+  }
+
+  const page = async (id: string, query: string) => {
+    const res = await callJson(
+      routes["/api/workflows/:id/runs"]?.GET,
+      reqWithParams("GET", `http://x/api/workflows/${id}/runs${query}`, { id }),
+    );
+    expect(res.status).toBe(200);
+    return res.body as RunsPage<{ id: string; status: string }>;
+  };
+
+  test("a full page names the next offset and a short one names none", async () => {
+    const { flowId } = await flowWithRuns(5);
+    expect(await page(flowId, "?limit=2")).toMatchObject({ nextOffset: 2 });
+    expect(await page(flowId, "?limit=2&offset=2")).toMatchObject({ nextOffset: 4 });
+    const last = await page(flowId, "?limit=2&offset=4");
+    expect(last.items).toHaveLength(1);
+    expect(last.nextOffset).toBeNull();
+    // The default page: 5 runs under a default of 50 is short.
+    expect(await page(flowId, "")).toMatchObject({ nextOffset: null });
+    // The clamped limit is what the offset steps by, not the one asked for.
+    expect((await page(flowId, "?limit=-3")).nextOffset).toBe(1);
+  });
+
+  test("following nextOffset from the start visits every run once, newest first", async () => {
+    const { flowId, ids } = await flowWithRuns(105);
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const next: RunsPage<{ id: string; status: string }> = await page(flowId, `?limit=40&offset=${offset}`);
+      sizes.push(next.items.length);
+      seen.push(...next.items.map((run) => run.id));
+      offset = next.nextOffset;
+    }
+    expect(sizes).toEqual([40, 40, 25]);
+    expect(seen).toEqual([...ids].reverse());
+  });
+
+  test("a status filter pages within the filter", async () => {
+    // Every third run FAILED: 0, 3, ..., 27 -> 10 of 30.
+    const { flowId, ids } = await flowWithRuns(30, 3);
+    const failed = ids.filter((_, i) => i % 3 === 0).reverse();
+    const first = await page(flowId, "?status=FAILED&limit=6");
+    expect(first.items.map((run) => run.id)).toEqual(failed.slice(0, 6));
+    expect(first.nextOffset).toBe(6);
+    const second = await page(flowId, `?status=FAILED&limit=6&offset=${first.nextOffset}`);
+    expect(second.items.map((run) => run.id)).toEqual(failed.slice(6));
+    expect(second.nextOffset).toBeNull();
   });
 });
 
