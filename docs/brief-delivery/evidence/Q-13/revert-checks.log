@@ -1,0 +1,71 @@
+Revert checks for Q-13: each guarantee removed in turn, its test run, the source restored.
+
+[DETECTED] missing or placeholder recipient no longer blocks
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > a missing or placeholder recipient is never ready, including the empty list readiness accepts [22.67ms]
+[DETECTED] unavailable binding no longer blocks
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > an unavailable account or machine is never ready [22.29ms]
+[DETECTED] preview may claim an effect already happened
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  14 pass 2 fail
+    fails: prepared proposal qualification > an unsafe or inaccurate preview is never ready [20.20ms]
+    fails: prepared proposal qualification > verified output needs a successful run proven to have used this exact version [21.00ms]
+[DETECTED] preview may say "asks first" for an effect that does not ask
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > an unsafe or inaccurate preview is never ready [28.57ms]
+[DETECTED] preview may leave out an effect
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > an unsafe or inaccurate preview is never ready [23.23ms]
+[DETECTED] fingerprint ignores live facts
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > a recheck over unchanged inputs is identical; a relevant change makes the qualification stale [22.22ms]
+[DETECTED] version digest not compared
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > a recheck over unchanged inputs is identical; a relevant change makes the qualification stale [25.39ms]
+[DETECTED] Authority prediction drops approval
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  5 pass 11 fail
+    fails: prepared proposal qualification > a complete proposal is ready and names the exact snapshot it qualified [34.68ms]
+    fails: prepared proposal qualification > a missing or placeholder recipient is never ready, including the empty list readiness accepts [25.02ms]
+    fails: prepared proposal qualification > an unsafe or inaccurate preview is never ready [21.62ms]
+    fails: prepared proposal qualification > verified output needs a successful run proven to have used this exact version [22.02ms]
+    fails: prepared proposal qualification > a recheck over unchanged inputs is identical; a relevant change makes the qualification stale [28.79ms]
+    fails: prepared proposal qualification > job constraints are checked against the graph [21.74ms]
+    fails: prepared proposal qualification > the goal, composition and version must be the ones prepared [20.67ms]
+    fails: prepared proposal qualification > a graph the dry runner supports needs a successful sample of this exact version [26.80ms]
+    fails: Authority predictions match the effect boundary > same decision for every route: sends governed [20.72ms]
+    fails: Authority predictions match the effect boundary > same decision for every route: level allows files but not commands [29.59ms]
+    fails: Authority predictions match the effect boundary > same decision for every route: rule asks before every read [21.99ms]
+[DETECTED] tool above-level substitution dropped
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: Authority predictions match the effect boundary > same decision for every route: level allows files but not commands [30.87ms]
+[DETECTED] tool mandatory review dropped
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  11 pass 5 fail
+    fails: Authority predictions match the effect boundary > same decision for every route: full level, nothing governed [33.47ms]
+    fails: Authority predictions match the effect boundary > same decision for every route: sends governed [30.13ms]
+    fails: Authority predictions match the effect boundary > same decision for every route: level allows files but not commands [28.71ms]
+    fails: Authority predictions match the effect boundary > same decision for every route: override denies messages [26.64ms]
+    fails: Authority predictions match the effect boundary > same decision for every route: rule asks before every read [28.69ms]
+[DETECTED] review_before_effects ignores sends that run unasked
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > an unsafe or inaccurate preview is never ready [40.47ms]
+[DETECTED] supported graph may skip the dry run
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > a graph the dry runner supports needs a successful sample of this exact version [21.14ms]
+[DETECTED] draft version run without effect records counts as proof
+    file: src/awareness/prepared-qualification.ts  test: src/awareness/prepared-qualification.test.ts  exit: 1  15 pass 1 fail
+    fails: prepared proposal qualification > verified output needs a successful run proven to have used this exact version [23.98ms]
+[DETECTED] dry runner keeps its scratch copy
+    file: src/awareness/prepared-dry-run.ts  test: src/awareness/prepared-dry-run.test.ts  exit: 1  1 pass 3 fail
+    fails: prepared dry runner (real engine) > runs the exact version with every service simulated, keeps no run, and its sample backs a Ready preview [2096.49ms]
+    fails: prepared dry runner (real engine) > a step the fixture does not cover fails the run, and that sample keeps the proposal from Ready [2088.88ms]
+    fails: prepared dry runner (real engine) > refuses a graph it cannot simulate before anything is created [1.24ms]
+[DETECTED] dry runner ignores drySupport
+    file: src/awareness/prepared-dry-run.ts  test: src/awareness/prepared-dry-run.test.ts  exit: 1  3 pass 1 fail
+    fails: prepared dry runner (real engine) > refuses a graph it cannot simulate before anything is created [1983.81ms]
+[DETECTED] dry runner invents model replies
+    file: src/awareness/prepared-dry-run.ts  test: src/awareness/prepared-dry-run.test.ts  exit: 1  1 pass 3 fail
+    fails: prepared dry runner (real engine) > runs the exact version with every service simulated, keeps no run, and its sample backs a Ready preview [2215.61ms]
+    fails: prepared dry runner (real engine) > a step the fixture does not cover fails the run, and that sample keeps the proposal from Ready [2186.59ms]
+    fails: prepared dry runner (real engine) > concurrent requests run one at a time, each against its own fixture [4429.32ms]
+
+16 of 16 removals fail their tests.

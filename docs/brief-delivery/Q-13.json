@@ -1,0 +1,102 @@
+{
+  "task": "Q-13",
+  "title": "Qualify a prepared proposal before it says Ready",
+  "date": "2026-10-05",
+  "branch": "brief/q-13",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-q-13",
+  "baseline": "462d955d54014e15ea003b5908860917642e5b34",
+  "baseline_ref": "brief/foundations (D-01 and F-01); Q-13 merges after F-01",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-13.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "validator and dry runner only; preparedOpportunities stays unsupported until F-09 registers a provider that uses them",
+    "release_enabled": false,
+    "publication": "PR #737 open against brief/foundations; https://github.com/vierisid/jarvis/pull/737"
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "page": "81:2",
+    "checkpoint": "no visual changes in Q-13"
+  },
+  "ownership": {
+    "implementer": "Core-quality-line Claude session",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [
+    "F-01 (already in brief/foundations)"
+  ],
+  "enable_after": [],
+  "behavior": [
+    "qualifyPreparedProposal(request, services) returns ready, blocked or review_needed with coded one-line reasons and the exact snapshot judged: proposal revision, flow, version, version digest, bindings and a fingerprint.",
+    "Source access and required account/target: every connection and machine the graph binds must be available, shown on the proposal and unchanged; connection lookups are project-scoped and metadata only.",
+    "Exact version: the live digest(version.trigger), the identity the effect boundary records, must equal the pinned one; versionReadiness must pass; the composition record must be VALIDATED and named by the flow; the goal must be active at the prepared revision.",
+    "Deliveries need a real recipient: an empty list (which readiness accepts), a missing prop or a placeholder blocks.",
+    "Authority behavior is predicted with the effect boundary's own fold for the workflow principal; a refusal blocks; CODE, ungoverned pieces, agents, nested workflows and runtime-gated tools need review.",
+    "Typed job constraints: review_before_effects (used by every opportunity kind), forbid, recipients and unverified.",
+    "Previews: the basis must be backed by evidence; every effect is described once; 'asks first' must match Authority; 'simulated' needs the dry sample to reach the step; 'completed' needs a succeeded effect record from a run proven to be this version.",
+    "recheckQualification returns stale when the fingerprint changes; briefReadiness maps only a current ready qualification to F-01 ready.",
+    "PreparedDryRunner runs the exact version once in the real engine on a fixture with every reachable service simulated, on a scratch copy deleted afterwards, never through the job queue; a graph it supports needs a successful sample before Ready.",
+    "Both modules join the #573 workflow data-plane inventory (src/workflows/adapters/untrusted-reach.test.ts): the qualification module reads only graph, ids, state and effect digests; the dry runner returns its own simulated run's bounded step outputs to a person-facing preview, which a model consumer must frame."
+  ],
+  "acceptance": [
+    {
+      "check": "A missing recipient, unavailable integration or unsafe preview cannot receive Ready",
+      "status": "passed",
+      "evidence": "src/awareness/prepared-qualification.test.ts (recipient, binding, preview, verified-output and dry-sample tests); evidence/Q-13/revert-checks.log"
+    },
+    {
+      "check": "A ready result names the exact qualified snapshot and can be checked again deterministically",
+      "status": "passed",
+      "evidence": "prepared-qualification.test.ts 'a complete proposal is ready...' and 'a recheck over unchanged inputs is identical...'; evidence/Q-13/revert-checks.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "7,758 pass, 84 skip, 9 fail of 7,851 tests across 425 files (local WSL2, code commit 64f92deb). The same 9 fail on brief/foundations 462d955d with Q-13 stashed: git config lint, six Chromium launches and two engine-reaper tests on this machine. Q-13 changes none of those areas.",
+      "log": "evidence/Q-13/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/workflows/adapters/untrusted-reach.test.ts; JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/awareness/prepared-dry-run.test.ts",
+      "result": "27 pass, 0 fail across 2 files; 4 pass, 0 fail through the real engine",
+      "log": "evidence/Q-13/qualification-tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-13/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "passed, exit 0; 100 templates, no errors or warnings",
+      "log": "evidence/Q-13/guards.log"
+    },
+    {
+      "command": "remove each of 16 guarantees in turn and run its test",
+      "result": "16 of 16 removals fail their tests; sources restored",
+      "log": "evidence/Q-13/revert-checks.log"
+    }
+  ],
+  "quick_verify": {
+    "cwd": "/home/vierisid/.cache/codex/jarvis-q-13",
+    "command": "bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts && JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/awareness/prepared-dry-run.test.ts",
+    "expected": "16 pass, then 4 pass; the first engine run builds the bundle and pieces",
+    "screenshot": "not applicable: no visible UI changes"
+  },
+  "migration": "None. No schema, data, route or daemon wiring change; nothing calls the validator until F-09.",
+  "rollback": "Revert the Q-13 commit. No other code references the new modules.",
+  "limitations": [
+    "Only typed constraints are checked; free-text conditions need an unverified constraint.",
+    "Placeholder recipients are a fixed list; recipients computed at run time are checked at dispatch.",
+    "A connection's revision excludes its updated time so token refreshes do not invalidate proposals; re-authorizing a different account under the same row is not detected.",
+    "A dry run shows the version executes on its fixture, not that a real model's draft is good; Q-01 and Q-02 measure that."
+  ],
+  "found": [
+    "Readiness treats an empty required collection as present, so a Gmail send with receiver [] passes readiness. That is deliberate for collections in general; Q-13 blocks it for deliveries and leaves readiness unchanged."
+  ],
+  "next": "F-09 builds its preparedOpportunities provider on this validator and dry runner. Keep the PR unmerged until reviewed."
+}
