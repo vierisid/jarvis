@@ -1,0 +1,236 @@
+{
+  "version": 1,
+  "status": "proposed",
+  "statusNote": "Founder review pending: each expectation and its reason are a proposal until Vieri confirms or edits them with the rubric in next-action-rubric.json.",
+  "now": "2026-10-05T09:00:00.000Z",
+  "conventions": {
+    "times": "Day offsets from now; negative is the past.",
+    "goal": "Defaults: level task, status active, health on_track, created -3, no progress, no dependencies, sort 0, no deadline, escalation none.",
+    "work": "Defaults: mode manual, no goal, created -1, no blocker, no check, no workflow.",
+    "commitment": "Defaults: status pending.",
+    "capacity": "Default 5."
+  },
+  "scenarios": [
+    {
+      "id": "check-finished-run",
+      "situation": "This week's invoice reminders ran and finished. Pricing work is also waiting.",
+      "goals": [
+        { "id": "g1", "title": "Collect overdue invoices", "level": "key_result" },
+        { "id": "g2", "title": "Send invoice reminders", "level": "milestone", "parent": "g1" },
+        { "id": "g3", "title": "Update pricing page" }
+      ],
+      "work": [
+        { "id": "w1", "title": "Send this week's invoice reminders", "goal": "g2", "status": "needs_check", "mode": "workflow", "workflow": "f1:v1", "run": "r1" },
+        { "id": "w2", "title": "Draft the new pricing page", "goal": "g3", "status": "ready" }
+      ],
+      "workflows": { "f1:v1": { "ready": true } },
+      "expect": { "outcome": "recommend", "kind": "check_result", "workItemId": "w1" },
+      "why": "A finished run is not progress until you confirm it. Checking is quick and closes the loop before more work starts."
+    },
+    {
+      "id": "answer-waitpoint",
+      "situation": "The reminder run is paused, waiting for approval to send.",
+      "goals": [{ "id": "g2", "title": "Send invoice reminders" }, { "id": "g3", "title": "Update pricing page" }],
+      "work": [
+        { "id": "w1", "title": "Send this week's invoice reminders", "goal": "g2", "status": "blocked", "blocker": ["waitpoint", "Waiting at approve_send"], "run": "r1" },
+        { "id": "w2", "title": "Draft the new pricing page", "goal": "g3", "status": "ready" }
+      ],
+      "expect": { "outcome": "recommend", "kind": "resolve_blocker", "workItemId": "w1" },
+      "why": "Accepted work is stuck on an answer only the founder can give."
+    },
+    {
+      "id": "failed-run",
+      "situation": "The reminder run failed and nobody has looked at it.",
+      "goals": [{ "id": "g2", "title": "Send invoice reminders" }],
+      "work": [{ "id": "w1", "title": "Send this week's invoice reminders", "goal": "g2", "status": "failed", "blocker": ["run_failure", "Gmail rejected the request"], "run": "r1" }],
+      "expect": { "outcome": "recommend", "kind": "resolve_blocker", "workItemId": "w1" },
+      "why": "A failure nobody has looked at hides whether anything was sent; settle it before planning more."
+    },
+    {
+      "id": "unavailable-integration",
+      "situation": "Accepted follow-up work runs a workflow whose Gmail account is disconnected. Another goal has a startable step.",
+      "goals": [{ "id": "g2", "title": "Follow up with leads" }, { "id": "g3", "title": "Update pricing page" }],
+      "work": [{ "id": "w1", "title": "Send lead follow-ups", "goal": "g2", "status": "ready", "mode": "workflow", "workflow": "f1:v1" }],
+      "workflows": { "f1:v1": { "ready": false, "reason": "send_followup: Connection is not active" } },
+      "expect": { "outcome": "recommend", "kind": "restore_capability", "workItemId": "w1" },
+      "never": [{ "kind": "continue_work", "workItemId": "w1" }],
+      "why": "Running it would fail. Reconnecting the account unblocks work already accepted, which comes before starting something new."
+    },
+    {
+      "id": "decide-proposals",
+      "situation": "This morning's plan proposed two items, one for a goal due in two days.",
+      "goals": [{ "id": "g2", "title": "Send invoice reminders", "deadline": 2 }, { "id": "g3", "title": "Update pricing page" }],
+      "work": [
+        { "id": "w1", "title": "Send this week's invoice reminders", "goal": "g2", "status": "proposed" },
+        { "id": "w2", "title": "Draft the new pricing page", "goal": "g3", "status": "proposed" }
+      ],
+      "expect": { "outcome": "recommend", "kind": "decide_work", "workItemId": "w1" },
+      "why": "Proposals need a yes or no before they are work; the one serving the sooner deadline first."
+    },
+    {
+      "id": "continue-before-starting",
+      "situation": "Accepted reminder work is ready. Another goal has no work yet.",
+      "goals": [{ "id": "g2", "title": "Send invoice reminders" }, { "id": "g3", "title": "Update pricing page" }],
+      "work": [{ "id": "w1", "title": "Send this week's invoice reminders", "goal": "g2", "status": "ready" }],
+      "expect": { "outcome": "recommend", "kind": "continue_work", "workItemId": "w1" },
+      "why": "Finish what was already accepted before adding new work."
+    },
+    {
+      "id": "already-done",
+      "situation": "Reminder work was checked done two days ago, but the goal is still open. A pricing goal has a startable step.",
+      "goals": [{ "id": "g2", "title": "Send invoice reminders" }, { "id": "g3", "title": "Update pricing page" }],
+      "work": [{ "id": "w1", "title": "Send this week's invoice reminders", "goal": "g2", "status": "verified", "check": ["passed", "All 12 reminders sent", -2] }],
+      "expect": { "outcome": "recommend", "kind": "start_step", "goalId": "g3" },
+      "never": [{ "kind": "start_step", "goalId": "g2" }],
+      "why": "Sending the reminders again would duplicate finished work. The useful new step is elsewhere; the open goal gets a review prompt instead."
+    },
+    {
+      "id": "already-done-only",
+      "situation": "Reminder work was checked done two days ago, the goal is still open, and nothing else is active.",
+      "goals": [{ "id": "g2", "title": "Send invoice reminders" }],
+      "work": [{ "id": "w1", "title": "Send this week's invoice reminders", "goal": "g2", "status": "verified", "check": ["passed", "All 12 reminders sent", -2] }],
+      "expect": { "outcome": "recommend", "kind": "review_goal", "goalId": "g2" },
+      "never": [{ "kind": "start_step", "goalId": "g2" }],
+      "why": "The goal looks done; recording that is the next action, not repeating the work."
+    },
+    {
+      "id": "all-steps-complete",
+      "situation": "Every task under the invoice key result is complete, but the key result is still open.",
+      "goals": [
+        { "id": "g1", "title": "Collect overdue invoices", "level": "key_result" },
+        { "id": "g2", "title": "Send invoice reminders", "level": "milestone", "parent": "g1", "status": "completed" },
+        { "id": "g3", "title": "Call the two largest debtors", "level": "milestone", "parent": "g1", "status": "completed" }
+      ],
+      "expect": { "outcome": "recommend", "kind": "review_goal", "goalId": "g1" },
+      "why": "The steps are done; whether the key result is met is a decision, not another task."
+    },
+    {
+      "id": "stale-goal",
+      "situation": "A newsletter goal has had no progress or work for six weeks.",
+      "goals": [{ "id": "g2", "title": "Publish the monthly newsletter", "created": -42 }],
+      "expect": { "outcome": "recommend", "kind": "review_goal", "goalId": "g2" },
+      "never": [{ "kind": "start_step", "goalId": "g2" }],
+      "why": "Six idle weeks suggest the goal no longer matters as stated; ask before adding work to it."
+    },
+    {
+      "id": "stale-and-fresh",
+      "situation": "The newsletter goal is stale; a pricing goal created this week has a startable step.",
+      "goals": [{ "id": "g2", "title": "Publish the monthly newsletter", "created": -42 }, { "id": "g3", "title": "Update pricing page", "created": -2 }],
+      "expect": { "outcome": "recommend", "kind": "start_step", "goalId": "g3" },
+      "never": [{ "kind": "start_step", "goalId": "g2" }],
+      "why": "Live work comes before reviewing a stale goal, and the stale goal never gets a fresh task by default."
+    },
+    {
+      "id": "duplicate-commitment",
+      "situation": "The founder already committed to calling Ana about invoice 1042.",
+      "goals": [{ "id": "g2", "title": "Call Ana about invoice 1042" }, { "id": "g3", "title": "Update pricing page" }],
+      "commitments": [{ "id": "c1", "what": "call Ana about invoice 1042!" }],
+      "expect": { "outcome": "recommend", "kind": "start_step", "goalId": "g3" },
+      "never": [{ "kind": "start_step", "goalId": "g2" }],
+      "why": "Recommending the call again would duplicate an existing commitment."
+    },
+    {
+      "id": "blocked-by-dependency",
+      "situation": "Sending the new price list depends on approving the new prices, which is not done.",
+      "goals": [
+        { "id": "g2", "title": "Send the new price list to customers", "deps": ["g3"] },
+        { "id": "g3", "title": "Approve the new prices" }
+      ],
+      "expect": { "outcome": "recommend", "kind": "start_step", "goalId": "g3" },
+      "never": [{ "kind": "start_step", "goalId": "g2" }],
+      "why": "Blocked work is not executable; the dependency is the useful next step."
+    },
+    {
+      "id": "accepted-work-waits-on-dependency",
+      "situation": "Accepted work on the price-list goal is ready, but that goal waits on approving the new prices.",
+      "goals": [
+        { "id": "g2", "title": "Send the new price list to customers", "deps": ["g3"] },
+        { "id": "g3", "title": "Approve the new prices" }
+      ],
+      "work": [{ "id": "w1", "title": "Email the price list", "goal": "g2", "status": "ready" }],
+      "expect": { "outcome": "recommend", "kind": "start_step", "goalId": "g3" },
+      "never": [{ "kind": "continue_work", "workItemId": "w1" }],
+      "why": "Accepted is not unblocked: the work waits on its goal's dependency, which is the useful step."
+    },
+    {
+      "id": "duplicate-open-work",
+      "situation": "A proposal to draft the partner agreement exists without a goal link; the matching goal has no work of its own.",
+      "goals": [{ "id": "g2", "title": "Draft the partner agreement" }],
+      "work": [{ "id": "w1", "title": "draft the partner agreement", "status": "proposed" }],
+      "expect": { "outcome": "recommend", "kind": "decide_work", "workItemId": "w1" },
+      "never": [{ "kind": "start_step", "goalId": "g2" }],
+      "why": "The existing proposal is the step; deciding it beats creating a second copy."
+    },
+    {
+      "id": "paused-parent",
+      "situation": "The only task belongs to a paused objective.",
+      "goals": [
+        { "id": "g1", "title": "Launch the partner program", "level": "objective", "status": "paused" },
+        { "id": "g2", "title": "Draft the partner agreement", "level": "key_result", "parent": "g1" }
+      ],
+      "expect": { "outcome": "none" },
+      "why": "Paused means not now. With nothing else live, the honest answer is that nothing is waiting."
+    },
+    {
+      "id": "full-queue",
+      "situation": "Five items are running, the daily limit, and a new step is available.",
+      "goals": [{ "id": "g9", "title": "Update pricing page" }],
+      "work": [
+        { "id": "w1", "title": "Reminder batch 1", "status": "running" }, { "id": "w2", "title": "Reminder batch 2", "status": "running" },
+        { "id": "w3", "title": "Lead enrichment", "status": "running" }, { "id": "w4", "title": "Weekly report", "status": "running" },
+        { "id": "w5", "title": "Board deck numbers", "status": "running" }
+      ],
+      "expect": { "outcome": "none" },
+      "why": "Adding a sixth item to a full day is noise; the answer is to let current work finish."
+    },
+    {
+      "id": "full-queue-still-checks",
+      "situation": "The day is full, but one item finished and needs checking.",
+      "goals": [{ "id": "g9", "title": "Update pricing page" }],
+      "work": [
+        { "id": "w1", "title": "Reminder batch 1", "status": "running" }, { "id": "w2", "title": "Reminder batch 2", "status": "running" },
+        { "id": "w3", "title": "Lead enrichment", "status": "running" }, { "id": "w4", "title": "Weekly report", "status": "running" },
+        { "id": "w5", "title": "Board deck numbers", "status": "needs_check", "run": "r5" }
+      ],
+      "expect": { "outcome": "recommend", "kind": "check_result", "workItemId": "w5" },
+      "why": "Checking reduces the load instead of adding to it."
+    },
+    {
+      "id": "no-concrete-step",
+      "situation": "The objective has no tasks under it yet.",
+      "goals": [{ "id": "g1", "title": "Reach 10 paying customers", "level": "objective" }],
+      "expect": { "outcome": "ask", "about": ["g1"] },
+      "why": "Any concrete step would be invented; asking for the first step is more useful."
+    },
+    {
+      "id": "last-attempt-failed",
+      "situation": "The last reminder attempt failed its check: three reminders bounced.",
+      "goals": [{ "id": "g2", "title": "Send invoice reminders" }],
+      "work": [{ "id": "w1", "title": "Send this week's invoice reminders", "goal": "g2", "status": "failed", "check": ["failed", "Three reminders bounced", -1] }],
+      "expect": { "outcome": "ask", "about": ["g2"] },
+      "why": "Repeating a failed attempt blindly wastes effort; the founder decides whether to retry or change the approach."
+    },
+    {
+      "id": "tie-between-goals",
+      "situation": "Two goals with no deadlines, the same health and no order between them each have a startable step.",
+      "goals": [{ "id": "g2", "title": "Update pricing page" }, { "id": "g3", "title": "Write the onboarding email" }],
+      "expect": { "outcome": "ask", "about": ["g2", "g3"] },
+      "why": "Nothing in the data separates them; picking one would be a coin flip presented as advice."
+    },
+    {
+      "id": "deadline-breaks-tie",
+      "situation": "Two startable goals; one is due in three days.",
+      "goals": [{ "id": "g2", "title": "Update pricing page" }, { "id": "g3", "title": "Write the onboarding email", "deadline": 3 }],
+      "expect": { "outcome": "recommend", "kind": "start_step", "goalId": "g3" },
+      "why": "The deadline is the evidence that separates them."
+    },
+    {
+      "id": "nothing-left",
+      "situation": "Every goal is complete and the last item is still running.",
+      "goals": [{ "id": "g2", "title": "Send invoice reminders", "status": "completed" }],
+      "work": [{ "id": "w1", "title": "Final reminder batch", "goal": "g2", "status": "running" }],
+      "expect": { "outcome": "none" },
+      "why": "There is nothing to add; inventing work would be noise."
+    }
+  ]
+}
