@@ -12,7 +12,7 @@ The existing high-tier route remains unchanged. The hosted proxy resolves `uj-hi
 
 ## Supported evaluation envelope
 
-The versioned sets contain **9 development tasks** and **12 held-out tasks**. They cover fixed reminders, webhook copying, thresholds and routing, empty/nonempty loops, regex transformations, event payloads, Ask output wiring, destinations, negative constraints and explicit abstention when required capabilities are unavailable.
+Two task sets exist, selected with `--taskset`. **`w8`** (the default) has **9 development tasks** and **12 held-out tasks** covering fixed reminders, webhook copying, thresholds and routing, empty/nonempty loops, regex transformations, event payloads, Ask output wiring, destinations, negative constraints and explicit abstention when required capabilities are unavailable. **`founder`** holds the founder jobs described below. A task set names the environment it was written for, so the composer always sees what the tasks assume.
 
 Only the original specification and a catalog of the real notify, regex, Ask and event-trigger pieces reach the model. Expected effects, test payloads and grading assertions are not supplied to the model. The controlled provider contains development fixtures only.
 
@@ -29,6 +29,39 @@ Limits:
 - Passing automatic assertions is separate from human intent correctness. Untested inputs can still expose errors.
 - This is not a live integration, arbitrary-code isolation or Authority certification.
 - The workflow readiness preflight (`flow-readiness.ts`) is used when present. The catalog artifact records whether it was.
+
+## Founder task sets
+
+`founder` covers the jobs the product promises: meeting preparation and follow-up, invoice review, lead follow-up and recurring reports, plus requests that must be refused: missing information, missing capabilities, unsupported machines or UI automation, and one-off or judgment-heavy requests that need no automation. The development set has 16 tasks (11 supported, 5 to refuse); the held-out set has 66 (44 supported, 22 to refuse), above the release rubric's minimum of 40 and 20.
+
+They run in the `founder-v1` environment, defined in `src/workflows/evaluation/environment.ts`:
+
+- **Pieces:** notify, regex, Ask, triggers, context (memory search, commitments, recent activity), tool and agent, with their real metadata.
+- **Tools:** the seven bounded tools a workflow can actually invoke (read, write and list files, read and set the clipboard, capture the screen, desktop snapshot), using the real tool definitions projected exactly as the daemon shows them to the composer. Tools a workflow cannot run are not offered.
+- **Machines:** this computer, an online Office Mac and an offline Studio PC. Tasks name the machine they mean.
+- **Integrations:** Gmail (create draft, send) and Slack (channel message, direct message), described with the action and property names of the catalog's verified versions. They are shown to the composer but never executed.
+
+Each scenario carries a sandbox: files, clipboard text, memory entities, commitments, recent activity, tools that need approval, and machines that are offline. The fake services answer from it the way the daemon would. A tool that needs approval creates a real waitpoint, so the run pauses before anything is written. A call to an offline machine is blocked and the step fails. A missing file is an error. Memory search matches entity names only, as production does. Context reads are recorded but are not effects.
+
+Assertions per scenario:
+
+- Expected run status: succeeded, paused for approval, or failed.
+- Notifications, tool calls and agent delegations compared as exact multisets. A tool call must match its tool, every parameter and its outcome, so a wrong path, machine or added text fails; a machine's display name and sidecar id count as the same target. Anything extra, duplicated or missing fails.
+- The one AI step's prompt must include the source facts named by the scenario and must not include facts the job excludes; its reply must reach the destination unchanged.
+- `forbidden` lists pieces, actions, tools, channels and agents the graph must not contain.
+
+A task that needs an integration is graded on its composed graph instead of being run. Each expected step must appear once with its action, the named connection (`{{connections['id']}}` or `{{connections.id}}`) and the literal recipient and text; any other integration step, such as a send where a draft was asked for, is an unexpected effect.
+
+Reference answers for the development set live beside it and drive smoke runs. Held-out answers are kept outside the repository. To prove every held-out task is satisfiable without publishing its answers, run smoke with them:
+
+```bash
+bun run eval:workflows --mode smoke --split heldout --taskset founder \
+  --policy baseline-v1 --references /private/founder-heldout-1.reference.json --out /tmp/founder-verify
+```
+
+That checks the fixtures; it measures nothing and a baseline refuses it. A third set, the **reserve**, is sealed for use after tuning: only its hash is committed (`tasks/founder-reserve-1.commitment.json`), and `--taskset founder-reserve --reserve FILE` refuses a file that does not match it. Do not tune against the reserve, and replace it once it has been used.
+
+Limits: the workflow's own AI and agent replies are simulated, so this measures what the AI step is given and how its output is used, not the runtime model's writing; reviewers judge that. Integrations are never executed. Sandboxed tools return fixture data, not a real machine's.
 
 ## Run
 
@@ -145,13 +178,21 @@ bun run eval:workflows --mode review --results /tmp/w8-hosted/rows.jsonl \
   --reviews /path/completed-reviews.json --out /tmp/w8-reviewed
 ```
 
+For blind review, generate a packet first:
+
+```bash
+bun run eval:workflows --mode review-packet --results /tmp/w8-hosted/rows.jsonl --out /tmp/w8-packet
+```
+
+`packet.json` shows each job, the composed workflow or the reason none was composed, and what every scenario did, in shuffled order, without planning policy, profile, model, prompts, repair history or automatic verdicts. Reviewers fill `review-template.json`, which also asks whether the result would be useful (`useful`) and, for AI steps, whether it stayed faithful to its sources (`fidelity`); both may be left null. Keep `key.json` away from reviewers and pass it on import with `--key /tmp/w8-packet/key.json`.
+
 The importer rejects unknown/duplicate row IDs, changed row hashes and invalid measurements. Reviewed results are separate files; raw observations remain immutable. When the results file sits in its run directory, the review output also carries that run's manifest and task set, so it can feed a baseline. A corrected workflow needs a new execution run before claiming its effects are verified.
 
 ## Measures
 
 Every completed row has exactly one disposition, taken from structured fields (refusal records, explicit blocks, error codes), never from message wording: `passed`, `checks_failed`, `missed_abstention`, `false_abstention`, `composition_failed`, `composition_timeout`, `provider_error`, `routing_fallback`, `budget_stopped` or `harness_error`. Scheduled work that never ran is `not_run`. Only `passed` counts as success.
 
-Rates carry their counts and a 95% Wilson interval, and a rate without a denominator is null, never zero. Supported jobs report a valid graph, intent correct on the **first candidate** (the first submitted graph was accepted) and **after the bounded repair loop**, both automatically and with human review; a task counts as correct under review only if its automatic checks pass and the reviewer agrees. Abstention tasks report correct abstentions and missed ones, and false abstentions on supported jobs are counted separately. Unexpected effects count simulated notifications beyond what a scenario expects (extra, duplicate or misdirected) and unrequested AI calls; a missing effect is a failure but not an unauthorized one. Composition time, requests and tokens per task, and review edits and time report p50, p90, p95 and the maximum. With repeats, task-level rates count a task only when every scheduled repeat succeeded.
+Rates carry their counts and a 95% Wilson interval, and a rate without a denominator is null, never zero. Supported jobs report a valid graph, intent correct on the **first candidate** (the first submitted graph was accepted) and **after the bounded repair loop**, both automatically and with human review; a task counts as correct under review only if its automatic checks pass and the reviewer agrees. Abstention tasks report correct abstentions and missed ones, and false abstentions on supported jobs are counted separately. Unexpected effects count simulated notifications and tool calls beyond what a scenario expects (extra, duplicate or misdirected), unrequested AI calls and agent delegations, and integration steps a graph-only task did not ask for; a missing effect is a failure but not an unauthorized one. Composition time, requests and tokens per task, and review edits and time report p50, p90, p95 and the maximum. Usefulness and AI fidelity are reported as separate rates over the rows a reviewer judged; they never change intent correctness. With repeats, task-level rates count a task only when every scheduled repeat succeeded.
 
 ## Baseline report
 

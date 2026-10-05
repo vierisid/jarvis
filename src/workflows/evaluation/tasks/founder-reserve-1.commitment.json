@@ -1,0 +1,9 @@
+{
+  "schemaVersion": 1,
+  "version": "founder-reserve-1",
+  "sha256": "256440b7e04918a8b5f358da228a1080841c4923e9496cd0fa1e18480e9a277c",
+  "tasks": 36,
+  "supported": 24,
+  "negative": 12,
+  "custody": "Plaintext is kept outside the repository and must not be used for tuning; load it with --taskset founder-reserve --reserve FILE."
+}
