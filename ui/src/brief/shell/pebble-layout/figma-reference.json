@@ -1,0 +1,26 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "page_name": "Brief · Pebble workspace v6.1",
+  "node": "81:212",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "source": "workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-11-pebble-motion-2026-10-01/README.md",
+  "inspected_exports": ["before-81-3.png", "prototype/final-today-rapid-settled.png", "inspector-81-2746-light.png"],
+  "preserved": {
+    "origin": "58px surface at the workspace bottom-right, independent of the reading column",
+    "mark": "30px crop of the official D-02 lockup; never scales or morphs during layout",
+    "conversation": "447px maximum reading column, sharp upper-right corner, no glass",
+    "entry_ms": 320,
+    "exit_ms": 280,
+    "reading": "Fixed endpoint width inside the growing clip; text is not scaled",
+    "composer": "Bottom anchored; independently scrolling response region"
+  },
+  "runtime_adaptations": [
+    "Below 960px of workspace width, the same mounted panel replaces the working viewport. The hidden room is inert and keeps its dimensions and scroll.",
+    "A 360–447px panel leaves at least 498px of inner working width at the split threshold with the current shell padding.",
+    "The shared D-04 controller samples current geometry on reversal; no Figma frame/cache clearing is reproduced.",
+    "A 200/160ms reading fade accompanies the clip reveal/return. OS reduced motion and the review override resolve immediately.",
+    "Native fixed-height artboards become a panel bounded by the available workspace height."
+  ],
+  "scope": "Host and width contract only. Review bodies are explicitly illustrative. Today composition/goal placement is D-07; conversation internals D-12–D-15; live ownership/persistence F-02–F-04/F-25."
+}

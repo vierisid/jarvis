@@ -1,0 +1,39 @@
+{
+  "task": "D-06",
+  "title": "Make Pebble form a place within the workspace",
+  "date": "2026-10-05",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-06",
+  "baseline": "e6219805221976850ed611402abc1b91dcaa09e0",
+  "inspected_main": "2c70cf0fe436834bbd96cb06a7df615ff136f6e5",
+  "stack_base": "brief/d-05",
+  "dependency_prs": ["https://github.com/vierisid/jarvis/pull/733"],
+  "activation_dependencies": ["F-25/navigationCompatibility", "One composition-root conversation binding from F-02–F-04"],
+  "head": {"ref": "brief/d-06", "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-06.json"},
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-06",
+  "preview": "http://localhost:4386/?brief=preview&specimen=pebble#/_brief_preview",
+  "figma": {"file": "eNfKeirIKLZLlZEasrurZa", "node": "81:212", "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded", "extraction": "ui/src/brief/shell/pebble-layout/figma-reference.json"},
+  "owns": ["ui/src/brief/shell/pebble-layout/**", "Optional D-01/D-05 conversation injection and isolated preview", "docs/PRODUCT.md approved design context", "docs/brief-delivery/D-06.*", "docs/brief-delivery/evidence/D-06/**"],
+  "excludes": ["Full room implementations", "Tabs/composer/attachment/response internals", "Live thread or connection ownership", "F/Q providers and persistence", "Live rollout"],
+  "tests": [
+    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 93, "assertions": 2129, "files": 9},
+    {"command": "bunx tsc --noEmit", "result": "pass"},
+    {"command": "bun run build:ui", "result": "pass", "note": "Existing @theme/@tailwind warnings."},
+    {"command": "git diff --check", "result": "pass"}
+  ],
+  "browser_checks": [
+    {"case": "20 settled open/close cycles per Today/canvas/list/detail/form family", "result": "pass", "cycles": 100},
+    {"case": "20 interrupted close/open reversals with sampled intermediate geometry", "result": "pass", "cycles": 20},
+    {"case": "Selected inspector/row, room drafts, conversation draft and independent scroll retention", "result": "pass"},
+    {"case": "Light/Dark, expanded/rail, 390px single-pane container and keyboard return", "result": "pass"},
+    {"case": "Reduced-motion immediate endpoints and no orphaned closed mark above the composer", "result": "pass"}
+  ],
+  "evidence": "evidence/D-06/browser-checks.json",
+  "limitations": ["Room/conversation bodies are isolated illustrative fixtures; production integration is not activated.", "Today compact goal placement belongs to D-07.", "Chromium only; narrow shell specimen is not device/virtual-keyboard emulation.", "No screen-reader certification or measured frame-rate claim.", "OS reduced motion is covered by D-04 tests; the browser used its local reduction control.", "Read current-head GitHub checks for remote CI verdict."],
+  "rollback": "Omit conversation binding or remove Brief opt-in. No migration or domain mutation.",
+  "next": "D-07, separate worktree and PR; not started."
+}

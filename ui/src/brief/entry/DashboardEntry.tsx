@@ -11,6 +11,7 @@ import { NavigationShell } from "../shell/navigation/NavigationShell";
 import { canMountNavigation, type BriefNavigationBinding } from "../shell/navigation/model";
 import "./foundation.css";
 import "../styles/index.css";
+import type { BriefConversationBinding } from "../shell/pebble-layout/PebbleLayout";
 
 function subscribeLocation(changed: () => void) {
   window.addEventListener("hashchange", changed);
@@ -31,22 +32,24 @@ export interface DashboardEntryProps {
   /** F-25 supplies the live navigationCompatibility snapshot and read-only view.
    * No binding means no navigation replacement and no additional API reads. */
   navigation?: BriefNavigationBinding;
+  /** One conversation supplied by the existing owner; no second live thread. */
+  conversation?: BriefConversationBinding;
 }
 
 /** Exactly one root is mounted. No live thread, socket, voice or domain writer here. */
-export function DashboardEntry({ legacy, rooms = BRIEF_ROOMS, Gate = OnboardingGate, navigation }: DashboardEntryProps) {
+export function DashboardEntry({ legacy, rooms = BRIEF_ROOMS, Gate = OnboardingGate, navigation, conversation }: DashboardEntryProps) {
   const href = useSyncExternalStore(subscribeLocation, locationSnapshot, serverSnapshot);
   const entry = resolveBriefEntry(href);
   if (entry.kind === "legacy") return <>{legacy}</>;
   if (entry.kind === "preview") return <FoundationPreview />;
   return (
     <div className="jarvis-v2-root">
-      <Gate><BriefHost route={entry.route} rooms={rooms} navigation={navigation} /></Gate>
+      <Gate><BriefHost route={entry.route} rooms={rooms} navigation={navigation} conversation={conversation} /></Gate>
     </div>
   );
 }
 
-function BriefHost({ route, rooms, navigation }: { route: BriefRoute; rooms: BriefRoomRegistry; navigation?: BriefNavigationBinding }) {
+function BriefHost({ route, rooms, navigation, conversation }: { route: BriefRoute; rooms: BriefRoomRegistry; navigation?: BriefNavigationBinding; conversation?: BriefConversationBinding }) {
   const [sidebar, setSidebar] = useState<"expanded" | "rail">("expanded");
   const [chatOpen, setChatOpen] = useState(false);
   const [theme, setTheme] = useTheme();
@@ -59,7 +62,7 @@ function BriefHost({ route, rooms, navigation }: { route: BriefRoute; rooms: Bri
   const activated = canMountNavigation(shell.mode, navigation);
   return (
     <div className={`brief-root${activated ? "" : " brief-foundation"}`} data-brief-room={route.room} data-brief-theme={theme}>
-      <NavigationShell shell={shell} rooms={rooms} binding={navigation}>
+      <NavigationShell shell={shell} rooms={rooms} binding={navigation} conversation={conversation}>
       {Body ? <Body key={route.room} shell={shell} /> : (
         <section className="brief-foundation__notice" aria-labelledby="brief-unavailable-title">
           <p className="brief-foundation__label">Brief preview</p>

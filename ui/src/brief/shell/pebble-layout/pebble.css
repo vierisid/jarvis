@@ -1,0 +1,27 @@
+/* UI-11. A single clipped surface grows from the fixed workspace corner.
+   Content is never scaled; the work column and conversation remain mounted. */
+.brief-root .brief-pebble-layout { position: relative; display: flex; flex: 1; min-width: 0; min-height: 0; isolation: isolate; }
+.brief-root .brief-pebble-work { display: flex; flex: 1; min-width: 0; min-height: 0; container: brief-work / inline-size; }
+.brief-root .brief-pebble-reserve { flex: none; width: 0; pointer-events: none; }
+.brief-root .brief-pebble-surface { position: absolute; right: var(--pebble-inset); bottom: var(--pebble-inset); width: 58px; height: 58px; z-index: 2; overflow: clip; border: 1px solid var(--brief-card-edge); border-radius: var(--brief-corner-card); background: var(--brief-card); }
+.brief-root .brief-pebble-reading { position: absolute; right: 0; bottom: 0; display: flex; flex-direction: column; outline: none; }
+.brief-root .brief-pebble-content { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 22px; }
+.brief-root .brief-pebble-close { position: absolute; right: 10px; top: 10px; width: 44px; height: 44px; display: grid; place-items: center; z-index: 1; border: 0; padding: 0; background: transparent; color: var(--brief-tertiary); border-radius: var(--brief-corner-control); }
+.brief-root .brief-pebble-close:hover { color: var(--brief-ink); background: var(--brief-recessed); }
+.brief-root .brief-pebble-origin { position: absolute; right: var(--pebble-inset); bottom: var(--pebble-inset); z-index: 3; width: 58px; height: 58px; }
+.brief-root .brief-pebble-opener { width: 58px; height: 58px; display: grid; place-items: center; padding: 0; border: 0; border-radius: var(--brief-corner-card); color: var(--brief-ink); background: transparent; }
+.brief-root .brief-pebble-opener:hover { background: var(--brief-recessed); }
+.brief-root .brief-pebble-mark { position: relative; display: block; width: 30px; height: 30px; overflow: hidden; }
+/* Crop the official lockup's existing mark. No new logo path or shape. */
+.brief-root .brief-pebble-mark .brief-brand { position: absolute; width: 136.31px; height: 38.04px; max-width: none; left: -4.02px; top: -4.02px; }
+.brief-root .brief-pebble-mark .brief-brand img { width: 136.31px; height: 38.04px; max-width: none; }
+.brief-root [data-pebble-available="false"] :is(.brief-pebble-surface,.brief-pebble-origin) { visibility: hidden; opacity: 0; pointer-events: none; }
+.brief-root [data-pebble-open="true"] .brief-pebble-origin { visibility: hidden; opacity: 0; pointer-events: none; }
+.brief-root [data-pebble-layout="single"][data-pebble-open="true"] .brief-pebble-work { visibility: hidden; opacity: 0; pointer-events: none; }
+/* On compact windows the same panel replaces the work viewport; the sidebar and
+   header stay available. Hidden work retains its dimensions, DOM and scroll. */
+.brief-root .brief-pebble-layout[data-pebble-available="true"] .brief-workspace-content { padding-bottom: 110px; }
+@media (max-height: 540px) {
+  .brief-root .brief-pebble-content { padding: 14px; }
+  .brief-root .brief-pebble-close { right: 4px; top: 4px; }
+}
