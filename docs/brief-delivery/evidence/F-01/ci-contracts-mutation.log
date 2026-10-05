@@ -1,0 +1,12 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/brief/contracts.test.ts:
+error: Wire contracts must not import a workflow repository at runtime: ../workflows/db/repos/flow-version.ts
+    at /home/vierisid/.cache/codex/jarvis-f-01/src/brief/contracts.ts:0
+(fail) wire contracts have no runtime workflow repository dependency [57.09ms]
+
+ 0 pass
+ 1 filtered out
+ 1 fail
+Ran 1 test across 1 file. [248.00ms]
