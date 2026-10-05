@@ -125,7 +125,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('');
 
   lines.push('### capture_screen');
-  lines.push('Take a screenshot of the screen. Returns base64-encoded PNG.');
+  lines.push('Take a screenshot of the screen. The image itself is returned for you to look at.');
   if (hasSidecars) lines.push('- `target`: Sidecar name or ID for remote execution');
   lines.push('');
 

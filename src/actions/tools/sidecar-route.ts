@@ -19,6 +19,8 @@ import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
 import { compareSemver, parseSemver } from '../../sidecar/compat.ts';
 import { getMachineScope } from '../machine-scope.ts';
+import type { ToolResult } from './registry.ts';
+import { guardImageSize, type ContentBlock } from '../../llm/provider.ts';
 
 let sidecarManager: SidecarManager | null = null;
 
@@ -591,6 +593,129 @@ export async function routeToSidecar(
 export function routeToSidecarAction(target: string, method: string,
   params: Record<string, unknown>, capability: SidecarCapability): Promise<string> {
   return routeToSidecar(target, method, params, capability, true);
+}
+
+/**
+ * Image types a provider accepts in an image block. A sidecar's `capture_screen`
+ * sends PNG, or JPEG when asked to compact (sidecar/handlers.go); the other two
+ * are the rest of the set every provider here takes. Anything else is refused
+ * rather than forwarded, because the media type goes into the request verbatim
+ * and a provider that rejects it fails the whole turn, not just this tool.
+ */
+const SIDECAR_IMAGE_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif', 'image/webp']);
+
+/**
+ * Strict base64: the alphabet, then at most two pad characters. The length is
+ * checked separately (a multiple of 4), since every encoder on the path pads
+ * (`base64.StdEncoding` in the sidecar, `Buffer#toString('base64')` here) and
+ * a provider rejects an unpadded string.
+ */
+const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * What to ask for when the full-resolution capture is too big to send. These
+ * are the daemon's own ambient-screenshot parameters (`fetchScreenshot` in
+ * daemon/index.ts), chosen there to stay legible to a vision model -- not a
+ * new number. `grid: false` because the sidecar defaults `grid` to `compact`,
+ * and a coordinate overlay drawn over a general-purpose screenshot is noise
+ * the model would read as screen content.
+ */
+const COMPACT_CAPTURE = { compact: true, max_width: 1600, jpeg_quality: 80, grid: false } as const;
+
+type SidecarImage = { mediaType: string; data: string; width: number; height: number; origWidth: number; origHeight: number };
+
+/**
+ * The image a `capture_screen` reply carries, or null.
+ *
+ * `capture_screen` replies with our own measurements (`{captured, bytes, mime,
+ * width, height, orig_width, orig_height}`) and sends the picture as a binary
+ * frame, which `SidecarManager` staples onto the reply as `_binary` -- an inline
+ * descriptor `{type, mime_type, data}`, or a spooled one whose `data` getter
+ * reads the bytes back from disk (sidecar/binary-spool.ts). So `data` is read
+ * exactly once here. This is the same shape the daemon's ambient screenshot
+ * path reads (`fetchScreenshot` in daemon/index.ts).
+ */
+function readSidecarImage(result: unknown): SidecarImage | null {
+  if (!result || typeof result !== 'object') return null;
+  const reply = result as Record<string, unknown>;
+  const binary = reply._binary;
+  if (!binary || typeof binary !== 'object') return null;
+  const desc = binary as Record<string, unknown>;
+  const mediaType = desc.mime_type;
+  if (typeof mediaType !== 'string' || !SIDECAR_IMAGE_TYPES.has(mediaType)) return null;
+  const data = desc.data;
+  if (typeof data !== 'string' || data.length === 0 || data.length % 4 !== 0 || !BASE64_RE.test(data)) return null;
+  const dim = (v: unknown) => (typeof v === 'number' && Number.isInteger(v) && v > 0 ? v : 0);
+  return {
+    mediaType, data, width: dim(reply.width), height: dim(reply.height),
+    origWidth: dim(reply.orig_width), origHeight: dim(reply.orig_height),
+  };
+}
+
+function imageBlock(image: SidecarImage): ContentBlock {
+  return { type: 'image', source: { type: 'base64', media_type: image.mediaType, data: image.data } };
+}
+
+/** Whether the orchestrator would swap this image for a placeholder. */
+function tooBigToSend(image: SidecarImage): boolean {
+  return guardImageSize(imageBlock(image)).type !== 'image';
+}
+
+/**
+ * Route a screenshot to a sidecar and hand the model the PICTURE (#658).
+ *
+ * `routeToSidecar` stringifies the reply, which for `capture_screen` meant the
+ * model received a 6000-character prefix of a JSON blob holding truncated base64
+ * -- no image, and the context spent on noise -- while both tools promise an
+ * image. This returns the same multi-modal result the local branch of
+ * `desktop_screenshot` returns: one line of our own text and an image block.
+ *
+ * Full resolution first, so the model sees what the screen shows whenever it
+ * fits; only a capture `guardImageSize` would replace with a placeholder (a raw
+ * PNG of a large display can pass its 5 MB cap) is retaken compacted, once.
+ * That second capture is a fresh one, so it may show a moment later than the
+ * first -- harmless for a read, and better than no picture.
+ *
+ * The text names only numbers this function validated, never a string from the
+ * reply. A reply with no usable image is a failure, not an empty success: typed
+ * for the desktop tools, a returned message for the legacy text caller. Its
+ * effect is `not_started` because capture_screen changes nothing on the
+ * machine, so there is nothing a retry could repeat.
+ */
+export async function routeScreenshotToSidecar(
+  target: string,
+  params: Record<string, unknown>,
+  typedErrors: boolean,
+): Promise<ToolResult | string> {
+  const fail = (code: string, message: string): string => {
+    if (typedErrors) throw new ActionOutcomeError({ status: 'error', code, message, effect: 'not_started' });
+    return message;
+  };
+  const capture = async (extra: Record<string, unknown>): Promise<SidecarImage | string> => {
+    const out = await dispatchToSidecar(target, 'capture_screen', { ...params, ...extra }, 'screenshot', typedErrors);
+    if (out.kind === 'message') return out.text;
+    return readSidecarImage(out.result)
+      ?? fail('SIDECAR_NO_IMAGE', 'Error: the sidecar answered capture_screen without an image a model provider would accept, so there is nothing to look at. Try again; if it keeps happening the sidecar may need updating.');
+  };
+
+  let image = await capture({});
+  if (typeof image === 'string') return image;
+  let compacted = false;
+  if (tooBigToSend(image)) {
+    compacted = true;
+    image = await capture(COMPACT_CAPTURE);
+    if (typeof image === 'string') return image;
+    if (tooBigToSend(image)) {
+      return fail('SIDECAR_IMAGE_TOO_LARGE', 'Error: the screenshot is too large to send even after compacting it, so there is nothing to look at.');
+    }
+  }
+  // Say when the picture is smaller than the screen, so a size read off it
+  // is not taken for the display's own.
+  const shrunk = compacted && image.origWidth && image.origHeight
+    && (image.origWidth !== image.width || image.origHeight !== image.height)
+    ? `, downscaled from ${image.origWidth}x${image.origHeight} to fit` : '';
+  const size = image.width && image.height ? ` (${image.width}x${image.height}${shrunk})` : '';
+  return { content: [{ type: 'text', text: `Screenshot captured${size}.` }, imageBlock(image)] };
 }
 
 /**

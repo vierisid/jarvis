@@ -12,7 +12,7 @@
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
-import { routeToSidecarAction as routeToSidecar, resolveToolTarget } from './sidecar-route.ts';
+import { routeToSidecarAction as routeToSidecar, routeScreenshotToSidecar, resolveToolTarget } from './sidecar-route.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import type { SidecarCapability } from '../../sidecar/types.ts';
 
@@ -425,9 +425,10 @@ export const desktopClickTool: ToolDefinition = {
  * `{success: true}` elsewhere for type_text, `{success, keys}` for press_keys
  * plus our own `xdotool_combo` conversion of those keys on Linux -- the
  * model's own arguments and our own rendering of them -- and, for
- * capture_screen, an image on the local branch and a reply of our own
- * measurements (`{captured, bytes, mime, width, height, ...}` plus the base64
- * the manager staples on) over the sidecar. No remote text on either.
+ * capture_screen, an image on both branches: since #658 the sidecar branch
+ * returns the image block plus one sentence of our own built from the reply's
+ * validated width and height (`routeScreenshotToSidecar`), where it used to
+ * stringify the whole reply, base64 and all. No remote text on either.
  *
  * Their FAILURES are a different matter, and the reason all nine of these tools
  * need something: with a `target` they dispatch through `routeToSidecarAction`,
@@ -602,7 +603,8 @@ export const desktopScreenshotTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveDesktopTarget(params.target, 'screenshot', 'desktop_screenshot');
     if (target) {
-      return routeToSidecar(target, 'capture_screen', params, 'screenshot');
+      // The picture, as the local branch below returns it (#658).
+      return routeScreenshotToSidecar(target, params, true);
     }
     return executeLocal(async (controller) => {
       let base64: string;

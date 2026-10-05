@@ -6,6 +6,8 @@ import { collectExecutionTargets, resolveToolTarget, routeToSidecar, setSidecarM
 import { routeToSidecarAction } from './sidecar-route.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
+import { captureScreenTool } from './builtin.ts';
+import { isToolResult, type ToolResult } from './registry.ts';
 
 const mac: SidecarInfo = {
   id: "sc-mac",
@@ -594,4 +596,156 @@ describe("resolveToolTarget", () => {
     expect(lines[0]).toContain("auto");
     expect(lines[1]).toContain("desktop_screenshot -> local stack");
   });
+});
+
+/**
+ * #658: a sidecar-routed screenshot must reach the model as a picture.
+ *
+ * The reply below is the real shape: `capture_screen`'s own measurements
+ * (sidecar/handlers.go) with the binary frame stapled on as `_binary` by
+ * SidecarManager. Before the fix both tools returned `JSON.stringify` of it,
+ * so the model got a 6000-character prefix of JSON with truncated base64 in it
+ * and no image.
+ */
+describe('a routed screenshot delivers an image (#658)', () => {
+  const shooter: SidecarInfo = { ...mac, capabilities: ['terminal', 'desktop', 'screenshot'] };
+  const PIXELS = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAwS2OUAAAAABJRU5ErkJggg==';
+  const reply = (binary: unknown) => ({
+    captured: true, bytes: 68, mime: 'image/png', width: 1, height: 1, orig_width: 1, orig_height: 1,
+    _binary: binary,
+  });
+  const screenshotTools = () => [
+    DESKTOP_TOOLS.find((t) => t.name === 'desktop_screenshot')!,
+    captureScreenTool,
+  ];
+
+  for (const name of ['desktop_screenshot', 'capture_screen']) test(`${name} returns an image block, not stringified base64`, async () => {
+    const tool = screenshotTools().find((t) => t.name === name)!;
+    setSidecarManagerRef(stubManager([shooter], async (_id, method) => {
+      expect(method).toBe('capture_screen');
+      return reply({ type: 'inline', mime_type: 'image/png', data: PIXELS });
+    }));
+    const out = await tool.execute({ target: shooter.id });
+    expect(isToolResult(out)).toBe(true);
+    const blocks = (out as ToolResult).content;
+    expect(blocks).toContainEqual({ type: 'image', source: { type: 'base64', media_type: 'image/png', data: PIXELS } });
+    // The text half is our own sentence: no base64, no reply JSON.
+    const text = blocks.filter((b) => b.type === 'text').map((b) => (b as { text: string }).text).join('\n');
+    expect(text).toBe('Screenshot captured (1x1).');
+  });
+
+  test('a reply without dimensions still delivers the image, with no size claimed', async () => {
+    setSidecarManagerRef(stubManager([shooter], async () => ({ captured: true, _binary: { type: 'inline', mime_type: 'image/png', data: PIXELS } })));
+    const out = await captureScreenTool.execute({ target: shooter.id }) as ToolResult;
+    expect(out.content[0]).toEqual({ type: 'text', text: 'Screenshot captured.' });
+    expect(out.content[1]).toMatchObject({ type: 'image' });
+  });
+
+  // A raw PNG of a large display can pass guardImageSize's 5 MB cap, and the
+  // orchestrator then swaps the image for a placeholder -- no picture again. So
+  // an over-cap capture is retaken compacted, once, with the daemon's own
+  // ambient-screenshot parameters and no grid overlay.
+  const OVERSIZE = 'A'.repeat(5 * 1024 * 1024 + 4);
+  test('an over-cap capture is retaken compacted, and the compact one is delivered', async () => {
+    const calls: Record<string, unknown>[] = [];
+    setSidecarManagerRef(stubManager([shooter], async (_id, _method, params) => {
+      calls.push(params);
+      return params.compact
+        ? { ...reply({ type: 'inline', mime_type: 'image/jpeg', data: PIXELS }), width: 1600, height: 900, orig_width: 3840, orig_height: 2160 }
+        : { ...reply({ type: 'inline', mime_type: 'image/png', data: OVERSIZE }), width: 3840, height: 2160, orig_width: 3840, orig_height: 2160 };
+    }));
+    const tool = screenshotTools()[0]!;
+    const out = await tool.execute({ target: shooter.id }) as ToolResult;
+    expect(calls).toHaveLength(2);
+    expect(calls[0]!.compact).toBeUndefined();
+    expect(calls[1]).toMatchObject({ compact: true, max_width: 1600, jpeg_quality: 80, grid: false });
+    expect(out.content).toEqual([
+      { type: 'text', text: 'Screenshot captured (1600x900, downscaled from 3840x2160 to fit).' },
+      { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: PIXELS } },
+    ]);
+  });
+
+  test('a capture still over the cap after compacting is a failure, not a placeholder', async () => {
+    let calls = 0;
+    setSidecarManagerRef(stubManager([shooter], async () => {
+      calls++;
+      return reply({ type: 'inline', mime_type: 'image/png', data: OVERSIZE });
+    }));
+    const err = await rejection(() => screenshotTools()[0]!.execute({ target: shooter.id }));
+    expect(err.outcome).toMatchObject({ status: 'error', code: 'SIDECAR_IMAGE_TOO_LARGE', effect: 'not_started' });
+    expect(calls).toBe(2);
+    const legacy = await captureScreenTool.execute({ target: shooter.id });
+    expect(legacy).toStartWith('Error: the screenshot is too large to send even after compacting it');
+  });
+
+  // The LOCAL branch had the same defect: it returned a JSON string of an
+  // inline descriptor. Driven through a fake `scrot` on PATH (the first thing
+  // localCaptureScreen tries on Linux), so no screen is captured. In a child
+  // process, because Bun's execSync without an explicit env inherits the
+  // environment the process STARTED with, not process.env as edited since.
+  test.skipIf(process.platform !== 'linux')('capture_screen without a sidecar returns an image block too', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-fake-scrot-'));
+    try {
+      const png = join(dir, 'shot.png');
+      writeFileSync(png, Buffer.from(PIXELS, 'base64'));
+      writeFileSync(join(dir, 'scrot'), `#!/bin/sh\nexec /bin/cp '${png}' "$1"\n`, { mode: 0o755 });
+      const builtin = new URL('./builtin.ts', import.meta.url).pathname;
+      const script = `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
+        + `process.stdout.write(JSON.stringify(await captureScreenTool.execute({})));`;
+      const child = Bun.spawnSync(['bun', '-e', script], {
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      });
+      // The child's stderr rides along so a failure there is readable.
+      expect({ exitCode: child.exitCode, stderr: child.stderr.toString() }).toMatchObject({ exitCode: 0 });
+      const out = JSON.parse(child.stdout.toString());
+      expect(out).toEqual({
+        content: [
+          { type: 'text', text: 'Screenshot captured.' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: PIXELS } },
+        ],
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a spooled descriptor is read once, through its getter', async () => {
+    let reads = 0;
+    const spooled = { type: 'inline', mime_type: 'image/jpeg' } as Record<string, unknown>;
+    Object.defineProperty(spooled, 'data', { enumerable: true, get: () => { reads++; return PIXELS; } });
+    setSidecarManagerRef(stubManager([shooter], async () => reply(spooled)));
+    const out = await captureScreenTool.execute({ target: shooter.id }) as ToolResult;
+    expect(out.content[1]).toEqual({ type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: PIXELS } });
+    expect(reads).toBe(1);
+  });
+
+  // The media type and the data go into the provider request verbatim, and a
+  // provider that rejects either fails the whole turn. So a reply that cannot
+  // be an image is a failure of THIS tool, never a malformed block.
+  for (const [label, binary] of [
+    ['no binary at all', undefined],
+    ['a media type no provider takes', { type: 'inline', mime_type: 'text/html', data: PIXELS }],
+    ['data that is not base64', { type: 'inline', mime_type: 'image/png', data: '<script>alert(1)</script>' }],
+    ['empty data', { type: 'inline', mime_type: 'image/png', data: '' }],
+    ['unpadded base64', { type: 'inline', mime_type: 'image/png', data: 'abc' }],
+    ['a Buffer rather than a descriptor', { type: 'inline', mime_type: 'image/png', data: Buffer.from('x') }],
+  ] as const) {
+    test(`desktop_screenshot refuses a reply with ${label}`, async () => {
+      setSidecarManagerRef(stubManager([shooter], async () => reply(binary)));
+      const tool = screenshotTools()[0]!;
+      const err = await rejection(() => tool.execute({ target: shooter.id }));
+      // not_started: a capture changes nothing on the machine.
+      expect(err.outcome).toMatchObject({ status: 'error', code: 'SIDECAR_NO_IMAGE', effect: 'not_started' });
+    });
+    test(`capture_screen reports a reply with ${label} as an error`, async () => {
+      setSidecarManagerRef(stubManager([shooter], async () => reply(binary)));
+      const out = await captureScreenTool.execute({ target: shooter.id });
+      expect(typeof out).toBe('string');
+      expect(out as string).toStartWith('Error: the sidecar answered capture_screen without an image a model provider would accept');
+      expect(out as string).not.toContain('script');
+    });
+  }
 });

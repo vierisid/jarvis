@@ -22,7 +22,7 @@ import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upl
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import {
-  routeToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget,
+  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget,
   type SidecarPageRead,
 } from './sidecar-route.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
@@ -728,11 +728,20 @@ export const captureScreenTool: ToolDefinition = {
   execute: async (params) => {
     const target = params.target as string | undefined;
     const auto = target || autoTargetForCapability('screenshot');
-    if (auto) return routeToSidecar(auto, 'capture_screen', {}, 'screenshot');
+    // An image block, like desktop_screenshot's (#658); stringifying the
+    // reply handed the model truncated base64 instead of a picture.
+    if (auto) return routeScreenshotToSidecar(auto, {}, false);
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
+      // The same shape as the sidecar branch above; a stringified descriptor
+      // reached the model as a truncated prefix of base64, like #658's.
       const base64 = localCaptureScreen();
-      return JSON.stringify({ type: 'inline', mime_type: 'image/png', data: base64 });
+      return {
+        content: [
+          { type: 'text', text: 'Screenshot captured.' },
+          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } },
+        ],
+      } satisfies ToolResult;
     } catch (err) {
       return `Error capturing screen: ${err instanceof Error ? err.message : err}`;
     }
