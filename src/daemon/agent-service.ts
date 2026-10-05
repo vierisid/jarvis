@@ -83,6 +83,7 @@ import { DialogueCompactor } from '../agents/conv/dialogue-compactor.ts';
 import type { ConvTaskEvent } from '../agents/conv/conv-orchestrator.ts';
 import { getRecentConversation, getMessages } from '../vault/conversations.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import type { ScopedChatInput } from '../brief/chat-transport.ts';
 
 export class AgentService implements Service, IAgentService {
   name = 'agent';
@@ -300,6 +301,7 @@ export class AgentService implements Service, IAgentService {
     scope?: TurnToolScope | null,
     // Which chat this is, for matching a paused task back to it (#571).
     contextKey?: string,
+    conversation?: ScopedChatInput,
   ): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
@@ -309,7 +311,7 @@ export class AgentService implements Service, IAgentService {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     try {
-      const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey);
+      const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey, conversation);
       return { stream: trackTurnStream(inner.stream, endTurn), onComplete: inner.onComplete };
     } catch (err) {
       endTurn();
@@ -323,6 +325,7 @@ export class AgentService implements Service, IAgentService {
     siteContext?: string,
     scope?: TurnToolScope | null,
     contextKey?: string,
+    conversation?: ScopedChatInput,
   ): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
@@ -332,7 +335,7 @@ export class AgentService implements Service, IAgentService {
       // AND `scope`, which made a project-scoped chat on every hosted install
       // the pre-#561 state exactly: the generic file and shell tools present,
       // and not even the prompt line that used to be their only restraint.
-      return this.streamMessageConv(text, channel, siteContext, scope, contextKey);
+      return this.streamMessageConv(text, channel, siteContext, scope, contextKey, conversation);
     }
 
     const systemPrompt = this.buildFullSystemPromptParts(channel, text);
@@ -346,7 +349,7 @@ export class AgentService implements Service, IAgentService {
       systemPrompt.dynamic += '\n\n' + scopeSystemNote(scope);
     }
 
-    const stream = this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope);
+    const stream = this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope, conversation);
 
     const onComplete = async (fullText: string): Promise<void> => {
       // Note: orchestrator already adds assistant response to history
@@ -377,6 +380,7 @@ export class AgentService implements Service, IAgentService {
     siteContext?: string,
     scope?: TurnToolScope | null,
     contextKey?: string,
+    conversation?: ScopedChatInput,
   ): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
@@ -391,7 +395,10 @@ export class AgentService implements Service, IAgentService {
       try {
         const identity = self.buildUserIdentityBlock();
         const userProfile = self.buildUserProfileBlock();
-        const recentDialogue = await self.loadRecentDialogue(channel);
+        const recentDialogue = conversation
+          ? (self.dialogueCompactor ? await self.dialogueCompactor.compact(conversation.contextKey, conversation.history) : conversation.history.slice(-10))
+          : await self.loadRecentDialogue(channel);
+        conversation?.signal.throwIfAborted();
         const ambient = self.buildAmbientFactsBlock(text);
 
         // Task lifecycle events go through the listener IN REAL TIME (during
@@ -408,6 +415,7 @@ export class AgentService implements Service, IAgentService {
           scope: scope ?? null,
           ...(contextKey ? { contextKey } : {}),
           ...(siteContext ? { siteContext } : {}),
+          ...(conversation ? { signal: conversation.signal } : {}),
         }, taskListener)) {
           if (event.type === 'text') {
             // Insert a separator so the acknowledgment text doesn't blur into
@@ -838,6 +846,7 @@ export class AgentService implements Service, IAgentService {
         history,
         scope,
         siteContext,
+        contextKey,
       }) => {
         const baseSystem = this.buildFullSystemPromptParts('conv', originalMessage);
         const templateNote = TaskDispatcher.templatePromptFor(template);
@@ -871,6 +880,7 @@ export class AgentService implements Service, IAgentService {
           subsystem,
           history: history as import('../llm/provider.ts').LLMMessage[] | undefined,
           signal,
+          ...(contextKey?.startsWith('brief:') ? { contextKey } : {}),
           scope,
           // Every template but `write` exists to DO something, so a final
           // answer that ran no tools is a model that announced its plan and
