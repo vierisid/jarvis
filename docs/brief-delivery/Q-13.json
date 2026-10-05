@@ -23,7 +23,7 @@
     "checkpoint": "no visual changes in Q-13"
   },
   "ownership": {
-    "implementer": "Core-quality-line Claude session",
+    "implementer": "Core-quality line",
     "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
   },
   "merge_after": [
@@ -31,22 +31,22 @@
   ],
   "enable_after": [],
   "behavior": [
-    "qualifyPreparedProposal(request, services) returns ready, blocked or review_needed with coded one-line reasons and the exact snapshot judged: proposal revision, flow, version, version digest, bindings and a fingerprint.",
-    "Source access and required account/target: every connection and machine the graph binds must be available, shown on the proposal and unchanged; connection lookups are project-scoped and metadata only.",
+    "qualifyPreparedProposal(request, services) returns ready, blocked or review_needed with coded one-line reasons and the exact snapshot judged: proposal revision, flow, version, version digest, bindings and a fingerprint of request plus observed facts.",
+    "Source access and required account/target: every connection and machine the graph binds must be available, shown on the proposal and unchanged. Connection lookups are project-scoped and metadata only. Machines are looked up as dispatch looks them up (sidecars only; id, name, unique partial name) and must offer the tool's capability.",
     "Exact version: the live digest(version.trigger), the identity the effect boundary records, must equal the pinned one; versionReadiness must pass; the composition record must be VALIDATED and named by the flow; the goal must be active at the prepared revision.",
-    "Deliveries need a real recipient: an empty list (which readiness accepts), a missing prop or a placeholder blocks.",
-    "Authority behavior is predicted with the effect boundary's own fold for the workflow principal; a refusal blocks; CODE, ungoverned pieces, agents, nested workflows and runtime-gated tools need review.",
-    "Typed job constraints: review_before_effects (used by every opportunity kind), forbid, recipients and unverified.",
-    "Previews: the basis must be backed by evidence; every effect is described once; 'asks first' must match Authority; 'simulated' needs the dry sample to reach the step; 'completed' needs a succeeded effect record from a run proven to be this version.",
+    "Deliveries need a real recipient, read per action from the verified manifests: an empty list (which readiness accepts), a missing prop or a whole-value placeholder blocks; a reply, saved draft or edit is addressed by the message it continues, a forward is not.",
+    "Authority behavior is predicted with the effect boundary's own fold for the workflow principal, with tool params read as readiness and the engine read them. A refusal blocks; CODE, ungoverned pieces, agents, nested workflows, values computed at run time and time-of-day Authority rules need review.",
+    "Typed job constraints: review_before_effects (every opportunity kind) blocks sends, deletions and other external or irreversible effects that would run unasked, and sends shared third-party writes that run unasked to review; forbid checks every category a step reaches; recipients and unverified.",
+    "Previews: the basis must be backed by evidence; every effect is described once; 'asks first' must match Authority; 'simulated' needs the dry sample to reach the step; 'completed' needs a succeeded effect record and the step's own SUCCEEDED status from a full run proven to be this version.",
     "recheckQualification returns stale when the fingerprint changes; briefReadiness maps only a current ready qualification to F-01 ready.",
-    "PreparedDryRunner runs the exact version once in the real engine on a fixture with every reachable service simulated, on a scratch copy deleted afterwards, never through the job queue; a graph it supports needs a successful sample before Ready.",
-    "Both modules join the #573 workflow data-plane inventory (src/workflows/adapters/untrusted-reach.test.ts): the qualification module reads only graph, ids, state and effect digests; the dry runner returns its own simulated run's bounded step outputs to a person-facing preview, which a model consumer must frame."
+    "PreparedDryRunner runs the exact version once in the real engine on a fixture with every reachable service simulated and no connection resolvable, on a scratch copy deleted afterwards with its run and log file, never through the job queue. Community pieces, CODE and the validate fixture piece are refused. A graph it supports needs a successful sample before Ready.",
+    "Both modules are in the #573 workflow data-plane inventory (src/workflows/adapters/untrusted-reach.test.ts): the qualification module reads graph, ids, states, effect digests and step statuses, never payloads; the dry runner returns its own simulated run's bounded step outputs to a person-facing preview, which a model consumer must frame. effect-capabilities.ts exports the tool-to-capability mapping it already used."
   ],
   "acceptance": [
     {
       "check": "A missing recipient, unavailable integration or unsafe preview cannot receive Ready",
       "status": "passed",
-      "evidence": "src/awareness/prepared-qualification.test.ts (recipient, binding, preview, verified-output and dry-sample tests); evidence/Q-13/revert-checks.log"
+      "evidence": "src/awareness/prepared-qualification.test.ts (recipient, per-action delivery, binding, machine, connection, preview, verified-output and dry-sample tests); src/awareness/prepared-dry-run.test.ts; evidence/Q-13/revert-checks.log"
     },
     {
       "check": "A ready result names the exact qualified snapshot and can be checked again deterministically",
@@ -57,12 +57,12 @@
   "verification": [
     {
       "command": "bun test --preload ./src/test-preload.ts",
-      "result": "7,758 pass, 84 skip, 9 fail of 7,851 tests across 425 files (local WSL2, code commit 64f92deb). The same 9 fail on brief/foundations 462d955d with Q-13 stashed: git config lint, six Chromium launches and two engine-reaper tests on this machine. Q-13 changes none of those areas.",
+      "result": "7,769 pass, 85 skip, 7 fail of 7,861 tests across 425 files (local WSL2, 0dc04964). The 7 also fail on brief/foundations 462d955d with Q-13 stashed: git config lint and six Chromium launch tests on this machine. Q-13 changes none of those areas.",
       "log": "evidence/Q-13/full-suite-summary.log"
     },
     {
-      "command": "bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/workflows/adapters/untrusted-reach.test.ts; JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/awareness/prepared-dry-run.test.ts",
-      "result": "27 pass, 0 fail across 2 files; 4 pass, 0 fail through the real engine",
+      "command": "bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/awareness/prepared-dry-run.test.ts src/workflows/adapters/untrusted-reach.test.ts, then the five runtime suites that use effect-capabilities",
+      "result": "41 pass, 0 fail across 3 files (6 through the real engine); 207 pass, 0 fail across 5 runtime files",
       "log": "evidence/Q-13/qualification-tests.log"
     },
     {
@@ -76,28 +76,55 @@
       "log": "evidence/Q-13/guards.log"
     },
     {
-      "command": "remove each of 16 guarantees in turn and run its test",
-      "result": "16 of 16 removals fail their tests; sources restored",
+      "command": "remove each of 35 guarantees in turn and run its test",
+      "result": "35 of 35 removals fail their tests; sources restored",
       "log": "evidence/Q-13/revert-checks.log"
     }
   ],
   "quick_verify": {
     "cwd": "/home/vierisid/.cache/codex/jarvis-q-13",
     "command": "bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/awareness/prepared-dry-run.test.ts",
-    "expected": "20 pass; the dry-run tests always use the real engine, and the first run builds the bundle and pieces",
+    "expected": "30 pass; the dry-run tests always use the real engine, and the first run builds the bundle and pieces",
     "screenshot": "not applicable: no visible UI changes"
   },
   "migration": "None. No schema, data, route or daemon wiring change; nothing calls the validator until F-09.",
-  "rollback": "Revert the Q-13 commit. No other code references the new modules.",
+  "rollback": "Revert the Q-13 commits. No other code references the new modules, the capability export changes no behavior, and there is no schema or data change.",
   "limitations": [
     "Only typed constraints are checked; free-text conditions need an unverified constraint.",
-    "Placeholder recipients are a fixed list; recipients computed at run time are checked at dispatch.",
+    "Placeholder recipients are whole values from a fixed list; recipients computed at run time are checked at dispatch.",
+    "A delivery outside the verified adapters, or a tool that sends, has no recipient model and needs review.",
+    "A tool step that names no machine is routed at dispatch; that choice is not part of the proposal.",
     "A connection's revision excludes its updated time so token refreshes do not invalidate proposals; re-authorizing a different account under the same row is not detected.",
-    "A dry run shows the version executes on its fixture, not that a real model's draft is good; Q-01 and Q-02 measure that.",
-    "CI's first run on the PR skipped the four real-engine dry-run tests, because they ran before any test had built the engine bundle; they now build it themselves, as evaluation/engine.test.ts does."
+    "A dry run shows the version executes on its fixture, not that a real model's draft is good; Q-01 and Q-02 measure that."
   ],
   "found": [
-    "Readiness treats an empty required collection as present, so a Gmail send with receiver [] passes readiness. That is deliberate for collections in general; Q-13 blocks it for deliveries and leaves readiness unchanged."
+    "Readiness treats an empty required collection as present, so a Gmail send with receiver [] passes readiness. That is deliberate for collections in general; Q-13 blocks it for deliveries and leaves readiness unchanged.",
+    "The engine resolves a {{connections.x}} reference in any step input and interpolates the decrypted credential (checked against the real engine). Readiness blocks this for production, because the connection must belong to the step's piece; the dry runner skips readiness, so it now resolves no connection.",
+    "CI's first run on the PR skipped the four real-engine dry-run tests, because they ran before any test had built the engine bundle; they now build it themselves, as evaluation/engine.test.ts does."
   ],
-  "next": "F-09 builds its preparedOpportunities provider on this validator and dry runner. Keep the PR unmerged until reviewed."
+  "next": "F-09 builds its preparedOpportunities provider on this validator and dry runner. Keep the PR unmerged until reviewed.",
+  "review": {
+    "first_push": "8f1a226e",
+    "result": "An independent code review found 6 blocking and 10 minor issues. All are fixed in 0dc04964; each code fix has a test that fails when it is reverted.",
+    "blocking": [
+      "S1: the dry runner resolved stored credentials, and the validate fixture piece, treated as pure, returns its connection's token",
+      "C1: tool params given as JSON text were judged as {}, so a shell-startup write passed as a plain file write",
+      "C2: a LOCKED version overrode effect records naming an older graph; single-step test runs and dispatch authorization counted as verified completion",
+      "C3: recipients were read per piece, not per action: a forward with no receiver passed and four verified delivery actions could never be Ready",
+      "C4: review_before_effects let third-party writes that reach people, such as calendar invites, run unasked",
+      "T1: several safety claims had no test that failed on revert"
+    ],
+    "minor": [
+      "machine lookup and capability (C5)",
+      "time-of-day Authority rules (C6)",
+      "forbid on every category (C7)",
+      "dry-run log file (C8)",
+      "write_file body computed at run time (C9)",
+      "dry-run tests writing to ~/.jarvis (T2)",
+      "order-dependent parity assertion (T3)",
+      "missing tool reported as an Authority refusal (D1)",
+      "review list in the docs (D2)",
+      "implementer named by tool instead of by line (D3)"
+    ]
+  }
 }
