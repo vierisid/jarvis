@@ -219,6 +219,49 @@ describe('governed piece adapters: gmail', () => {
   });
 });
 
+/**
+ * The actions added between the previously vetted versions and the ones the
+ * catalogue now installs (#664): gmail 0.15.0 -> 0.17.0, slack 0.17.10 ->
+ * 0.21.0, claude 0.4.12 -> 0.7.0. The other five verified pieces kept the same
+ * action set. Unmapped, these took the delete_data fallback, which over-gated
+ * the writes and the reads.
+ */
+describe('governed piece adapters: actions added by the catalogue refresh', () => {
+  const expected: Array<[string, string, ActionCategory]> = [
+    [GMAIL, 'gmail_archive_message', 'write_data'],
+    [GMAIL, 'gmail_get_or_create_label', 'write_data'],
+    [GMAIL, 'gmail_update_label', 'write_data'],
+    [GMAIL, 'gmail_untrash_message', 'write_data'],
+    [GMAIL, 'gmail_trash_message', 'delete_data'],
+    [GMAIL, 'gmail_modify_labels', 'delete_data'],
+    [GMAIL, 'gmail_modify_thread_labels', 'delete_data'],
+    ['@activepieces/piece-slack', 'send_message_to_multiple_users', 'send_message'],
+    ['@activepieces/piece-claude', 'list_models', 'read_data'],
+    ['@activepieces/piece-claude', 'get_model', 'read_data'],
+    ['@activepieces/piece-claude', 'get_message_batch', 'read_data'],
+    ['@activepieces/piece-claude', 'list_message_batches', 'read_data'],
+    ['@activepieces/piece-claude', 'get_message_batch_results', 'read_data'],
+    ['@activepieces/piece-claude', 'count_tokens', 'write_data'],
+    ['@activepieces/piece-claude', 'create_message_batch', 'write_data'],
+    ['@activepieces/piece-claude', 'cancel_message_batch', 'delete_data'],
+    ['@activepieces/piece-claude', 'delete_message_batch', 'delete_data'],
+  ];
+  for (const [piece, action, category] of expected) {
+    test(`${action} is mapped, as ${category}`, () => {
+      expect(resolveGovernedPieceAction(piece, action)).toMatchObject({ known: true, category });
+    });
+  }
+
+  test('a bulk label change names the messages and the labels on the card', async () => {
+    const f = fixture(GMAIL, 'gmail_modify_labels');
+    f.authority.addOverride({ action: 'delete_data', allowed: false });
+    await expect(f.authorize({ message_ids: ['m1', 'm2'], add_label_ids: ['TRASH'] })).rejects.toThrow(/Authority denied/);
+    expect(listWorkflowEffects(f.run.id)[0]!.target).toMatchObject({
+      piece: 'gmail', action: 'gmail_modify_labels', message_ids: ['m1', 'm2'], add_label_ids: ['TRASH'],
+    });
+  });
+});
+
 describe('governed piece adapters: over the wire', () => {
   test('the engine guard reaches the daemon boundary through the real route', async () => {
     const f = fixture(GMAIL, 'send_email');
