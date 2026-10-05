@@ -1,0 +1,12 @@
+Founder task satisfiability, 5 October 2026. Reference answers run through the real composer path, engine and outer worker.
+These runs check the fixtures; they measure no model and a baseline refuses them.
+
+development (repository references, both policies): 32 of 32 rows pass
+held-out (references kept outside the repository, baseline-v1): 66 of 66 rows pass
+reserve (sealed file and references outside the repository, baseline-v1): 36 of 36 rows pass
+reserve file accepted against tasks/founder-reserve-1.commitment.json: task set founder-reserve version founder-reserve-1 sha256 256440b7e04918a8b5f358da228a1080841c4923e9496cd0fa1e18480e9a277c
+
+Fixture faults this caught and fixed before commit: five meeting-prep tasks (three held-out, two reserve) searched memory with the
+whole event title, which production's entity-name substring match could never find; two "starts with" sender conditions (one
+held-out, one reserve), whose references now use an anchored regex because readiness accepts only the operator spelling the engine
+ignores (see the PR).
