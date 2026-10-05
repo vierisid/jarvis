@@ -10,18 +10,20 @@
  *
  *   - every action the new version offers is mapped in the adapter, new ones
  *     included (a contributor may have mapped them already);
- *   - no action the old version had got a more severe upstream classification
+ *   - no action the baseline had got a more severe upstream classification
  *     (READ/SEARCH < WRITE < DESTRUCTIVE), which is the mechanical signal that
  *     an action now does something worse under the same name;
- *   - no action the old version had lost props, the other sign it changed shape.
+ *   - no action the baseline had lost props, the other sign it changed shape.
  *
- * The last two can be cleared by a person: `VERIFIED_UPGRADE_REVIEWED` in
- * `catalog-overrides.ts` records "I read what changed up to this version".
- * Nothing clears the first except mapping the actions, because an unmapped
- * action is gated as the adapter's worst case and the governed-pieces test
- * refuses a catalog that installs one.
+ * The baseline is the installed version, or the version a person signed off in
+ * `VERIFIED_UPGRADE_REVIEWED` when that is newer: a sign-off means "I read what
+ * changed up to here", so a later release is only compared from that point and
+ * does not need a second sign-off for the same change. Nothing clears an
+ * unmapped action except mapping it, because an unmapped action is gated as the
+ * adapter's worst case and the governed-pieces test refuses a catalog that
+ * installs one.
  *
- * Pure: the sync script does the fetching and feeds results in.
+ * Pure: the caller fetches nothing here and feeds results in.
  */
 import { classificationRank, type ManifestResult, type PieceAction, type PieceManifest } from "./piece-manifest";
 
@@ -33,8 +35,11 @@ export type HoldReason =
 
 export interface UpgradeAssessment {
   id: string;
+  /** The installed version. */
   from: string;
   to: string;
+  /** The version the classification and props checks compared from. */
+  baselineVersion: string;
   /** True when the bump may be taken without a person. */
   ok: boolean;
   reasons: HoldReason[];
@@ -47,25 +52,30 @@ export function assessVerifiedUpgrade(input: {
   id: string;
   from: string;
   to: string;
-  /** The installed version's manifest, or null when it could not be had. */
-  baseline: PieceManifest | null;
+  /**
+   * The manifest to compare from (installed, or a newer sign-off), or an
+   * explanation of why it could not be had.
+   */
+  baseline: ManifestResult;
   candidate: ManifestResult;
   isMapped: (action: string) => boolean;
-  /** `VERIFIED_UPGRADE_REVIEWED[id]`, when someone signed off a version. */
-  reviewedVersion?: string;
 }): UpgradeAssessment {
   const { id, from, to } = input;
+  const baselineVersion = input.baseline.kind === "ok" ? input.baseline.manifest.version : from;
   const held = (reasons: HoldReason[], added: string[] = [], removed: string[] = []): UpgradeAssessment =>
-    ({ id, from, to, ok: reasons.length === 0, reasons, added, removed });
+    ({ id, from, to, baselineVersion, ok: reasons.length === 0, reasons, added, removed });
 
   if (input.candidate.kind === "error") {
     return held([{ kind: "unavailable", error: `${to}: ${input.candidate.error}` }]);
   }
-  if (!input.baseline) {
-    return held([{ kind: "unavailable", error: `${from}: no manifest for the installed version to compare against` }]);
+  if (input.baseline.kind === "error") {
+    return held([{ kind: "unavailable", error: `baseline: ${input.baseline.error}` }]);
   }
   const next = input.candidate.manifest.actions;
-  const prev = new Map(input.baseline.actions.map((a) => [a.name, a]));
+  if (next.length === 0) {
+    return held([{ kind: "unavailable", error: `${to}: the package reports no actions` }]);
+  }
+  const prev = new Map(input.baseline.manifest.actions.map((a) => [a.name, a]));
   const nextNames = new Set(next.map((a) => a.name));
   const added = next.filter((a) => !prev.has(a.name)).map((a) => a.name);
   const removed = [...prev.keys()].filter((n) => !nextNames.has(n));
@@ -74,31 +84,50 @@ export function assessVerifiedUpgrade(input: {
   const unmapped = next.filter((a) => !input.isMapped(a.name));
   if (unmapped.length > 0) reasons.push({ kind: "unmapped", actions: unmapped });
 
-  if (input.reviewedVersion !== to) {
-    const raised: Array<{ name: string; from: string; to: string }> = [];
-    const shrunk: Array<{ name: string; removed: string[] }> = [];
-    for (const a of next) {
-      const before = prev.get(a.name);
-      if (!before) continue;
-      const was = classificationRank(before.classification);
-      const now = classificationRank(a.classification);
-      // No upstream classification on the old side is no signal, not a rise:
-      // otherwise the release that first adds them would hold every action.
-      if (was !== null && now !== null && now > was) {
-        raised.push({ name: a.name, from: before.classification!, to: a.classification! });
-      }
-      const lost = before.props.filter((p) => !a.props.includes(p));
-      if (lost.length > 0) shrunk.push({ name: a.name, removed: lost });
+  const raised: Array<{ name: string; from: string; to: string }> = [];
+  const shrunk: Array<{ name: string; removed: string[] }> = [];
+  for (const a of next) {
+    const before = prev.get(a.name);
+    if (!before) continue;
+    const was = classificationRank(before.classification);
+    const now = classificationRank(a.classification);
+    // No upstream classification on the old side is no signal, not a rise:
+    // otherwise the release that first adds them would hold every action.
+    if (was !== null && now !== null && now > was) {
+      raised.push({ name: a.name, from: before.classification!, to: a.classification! });
     }
-    if (raised.length > 0) reasons.push({ kind: "classification-raised", changes: raised });
-    if (shrunk.length > 0) reasons.push({ kind: "props-removed", changes: shrunk });
+    const lost = before.props.filter((p) => !a.props.includes(p));
+    if (lost.length > 0) shrunk.push({ name: a.name, removed: lost });
   }
+  if (raised.length > 0) reasons.push({ kind: "classification-raised", changes: raised });
+  if (shrunk.length > 0) reasons.push({ kind: "props-removed", changes: shrunk });
   return held(reasons, added, removed);
 }
 
-/** Inline-code-safe text: no backticks, no newlines. */
-const code = (s: string) => `\`${s.replace(/[`\r\n]/g, "")}\``;
-const plain = (s: string) => s.replace(/[\r\n]+/g, " ").replace(/[<>]/g, "");
+/**
+ * Order two `x.y.z` versions. A part that is not a number compares as 0, which
+ * only matters for a pre-release tag, and npm's `latest` is never one for these.
+ */
+export function compareVersions(a: string, b: string): number {
+  const pa = a.split(/[.-]/).map((n) => Number.parseInt(n, 10) || 0);
+  const pb = b.split(/[.-]/).map((n) => Number.parseInt(n, 10) || 0);
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return d;
+  }
+  return 0;
+}
+
+/**
+ * Upstream text in the issue goes inside a code span, capped: a description or
+ * classification comes from the package, and outside a span it could add a
+ * heading, an @mention, a cross-reference or a tracking image to an issue the
+ * bot posts. Backticks and line breaks are what would close a span.
+ */
+function code(s: string, max = 200): string {
+  const flat = s.replace(/[`\s]+/g, " ").trim();
+  return `\`${flat.length > max ? `${flat.slice(0, max)}...` : flat}\``;
+}
 
 /**
  * The tracking issue for the held bumps: one section per piece, saying what
@@ -120,10 +149,15 @@ export function renderReviewIssue(
   p();
   p("The adapter table is `GOVERNED_PIECE_ADAPTERS` in `src/workflows/runtime/piece-effects.ts`; " +
     "the sign-off list is `VERIFIED_UPGRADE_REVIEWED` in `src/workflows/pieces-library/catalog-overrides.ts`. " +
-    "Once a piece is cleared, the next sync run takes the bump by itself (or run `bun run scripts/sync-pieces-catalog.ts` and open the PR yourself).");
+    "Land the change in its own PR to main; the next sync run then takes the bump by itself.");
   for (const h of held) {
     p();
     p(`## ${code(h.id)}: ${code(h.from)} -> ${code(h.to)}`);
+    if (h.baselineVersion !== h.from) {
+      p();
+      p(`Compared from the signed-off ${code(h.baselineVersion)}, not the installed version.`);
+    }
+    const signOff = code(`"${h.id}": "${h.to}"`);
     for (const r of h.reasons) {
       p();
       switch (r.kind) {
@@ -133,26 +167,25 @@ export function renderReviewIssue(
             "Give each one a category in the adapter's `categories`, at its worst case, and add any prop that names what it acts on to `targetProps`:");
           p();
           for (const a of r.actions) {
-            const what = a.description ? ` -- ${plain(a.description)}` : "";
-            const props = a.props.length > 0 ? ` Props: ${a.props.map(code).join(", ")}.` : "";
-            p(`- ${code(a.name)} (upstream ${a.classification ?? "unclassified"})${what}${props}`);
+            const what = a.description ? ` -- ${code(a.description)}` : "";
+            const props = a.props.length > 0 ? ` Props: ${a.props.map((x) => code(x, 60)).join(", ")}.` : "";
+            p(`- ${code(a.name, 100)} (upstream ${code(a.classification ?? "unclassified", 40)})${what}${props}`);
           }
           break;
         case "classification-raised":
           p("**Upstream now classifies existing actions as more severe.** The same name may do something worse. " +
-            "Read what changed, fix the category in the adapter if it no longer fits, then add " +
-            `${code(`"${h.id}": "${h.to}"`)} to \`VERIFIED_UPGRADE_REVIEWED\`:`);
+            `Read what changed, fix the category in the adapter if it no longer fits, then add ${signOff} to \`VERIFIED_UPGRADE_REVIEWED\`:`);
           p();
-          for (const c of r.changes) p(`- ${code(c.name)}: ${c.from} -> ${c.to}`);
+          for (const c of r.changes) p(`- ${code(c.name, 100)}: ${code(c.from, 40)} -> ${code(c.to, 40)}`);
           break;
         case "props-removed":
           p("**Existing actions lost props**, so they changed shape. Check the adapter's `targetProps` still name " +
-            `what each acts on, then add ${code(`"${h.id}": "${h.to}"`)} to \`VERIFIED_UPGRADE_REVIEWED\`:`);
+            `what each acts on, then add ${signOff} to \`VERIFIED_UPGRADE_REVIEWED\`:`);
           p();
-          for (const c of r.changes) p(`- ${code(c.name)}: lost ${c.removed.map(code).join(", ")}`);
+          for (const c of r.changes) p(`- ${code(c.name, 100)}: lost ${c.removed.map((x) => code(x, 60)).join(", ")}`);
           break;
         case "unavailable":
-          p(`**The sync could not read the actions:** ${plain(r.error)}. ` +
+          p(`**The sync could not read the actions:** ${code(r.error, 300)}. ` +
             "Usually transient (npm, a slow load), and the next run retries. If it repeats, the package itself needs a look.");
           break;
       }

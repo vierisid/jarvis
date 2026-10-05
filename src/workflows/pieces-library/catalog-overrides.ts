@@ -17,6 +17,8 @@
  *                        broken. Overrides the generated versionRange +
  *                        vettedVersion. Drop the entry once the next upstream
  *                        release fixes the issue.
+ *   - `VERIFIED_UPGRADE_REVIEWED` Sign-offs for verified bumps the sync held
+ *                        for a raised classification or removed props.
  *   - `SIZE_OVERRIDE`    Hand-measured `estimatedSizeMb`. The sync script
  *                        can't probe sizes without doing a real bun install
  *                        per piece (slow + flaky in CI), so verified pieces

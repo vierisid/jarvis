@@ -6,11 +6,21 @@
  * being merged on trust (#664) or held for a human every week.
  *
  * Getting it means running the piece's code: an action list is built at module
- * load, and there is no static manifest in the tarball. So the bundle is loaded
- * in a child process whose environment is PATH and a throwaway HOME, nothing
- * else -- the sync job holds a GITHUB_TOKEN, and deleting it from
- * `process.env` does not stop a spawned child inheriting it. The code being
- * loaded is the same code the catalog would install on a user's machine.
+ * load, and there is no static manifest in the tarball. That code is the same
+ * code the catalog would install on a user's machine, and it is treated as
+ * hostile here:
+ *
+ *   - It runs ONLY in the workflow's `inspect` job, which has a read-only token
+ *     that is never put in an environment, no git credentials on disk, and
+ *     nothing it produces is committed except the manifests JSON, which the
+ *     writing job validates (`verified-sync.ts`). An explicit child env is not
+ *     a boundary on its own: a child can read its parent's environment from
+ *     `/proc/<ppid>/environ`, so the only real protection is that no process in
+ *     that job holds a secret.
+ *   - The child still gets only PATH and a throwaway HOME, runs in the temp
+ *     dir rather than the checkout, and runs in its own session: on timeout
+ *     the whole process group is SIGKILLed, so neither a SIGTERM trap nor a
+ *     detached grandchild outlives it.
  */
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -38,6 +48,8 @@ export type ManifestResult = { kind: "ok"; manifest: PieceManifest } | { kind: "
 /** A hung or hostile module load must not stall the weekly job. */
 const EXTRACT_TIMEOUT_MS = 60_000;
 const FETCH_TIMEOUT_MS = 60_000;
+/** The largest verified bundle today is ~3 MB; anything near this is not a piece. */
+const MAX_TARBALL_BYTES = 50 * 1024 * 1024;
 const EXTRACTOR = resolve(import.meta.dir, "piece-manifest-extract.ts");
 
 /**
@@ -65,7 +77,10 @@ export async function fetchPieceManifest(
     }
     const tarRes = await fetchImpl(tarball, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
     if (!tarRes.ok) return { kind: "error", error: `tarball: HTTP ${tarRes.status}` };
+    const declared = Number(tarRes.headers.get("content-length") ?? "0");
+    if (declared > MAX_TARBALL_BYTES) return { kind: "error", error: `tarball is ${declared} bytes` };
     const bytes = Buffer.from(await tarRes.arrayBuffer());
+    if (bytes.length > MAX_TARBALL_BYTES) return { kind: "error", error: `tarball is ${bytes.length} bytes` };
     const actual = `sha512-${createHash("sha512").update(bytes).digest("base64")}`;
     if (actual !== integrity) return { kind: "error", error: "tarball does not match the registry's integrity" };
 
@@ -81,13 +96,14 @@ export async function fetchPieceManifest(
     };
     // Current releases are one self-contained bundle. Older ones (github 0.7.x,
     // telegram-bot 0.5.x) are plain packages that need their dependencies to
-    // load. Install scripts never run, and the env is the same scrubbed one.
+    // load. Install scripts never run, and a package manager config shipped in
+    // the tarball is removed first so it cannot point the install elsewhere.
     if (Object.keys(pkgJson.dependencies ?? {}).length > 0) {
-      const install = spawnSync(process.execPath, ["install", "--production", "--ignore-scripts", "--no-save"], {
+      for (const f of ["bunfig.toml", ".npmrc", ".yarnrc", ".yarnrc.yml"]) rmSync(join(pkgDir, f), { force: true });
+      const install = runIsolated([process.execPath, "install", "--production", "--ignore-scripts", "--no-save"], {
         cwd: pkgDir,
-        encoding: "utf8",
-        timeout: EXTRACT_TIMEOUT_MS,
-        env: scrubbedEnv(work),
+        home: work,
+        timeoutMs: EXTRACT_TIMEOUT_MS,
       });
       if (install.status !== 0) {
         return { kind: "error", error: `installing dependencies: ${(install.stderr ?? "").trim().slice(-500)}` };
@@ -103,15 +119,15 @@ export async function fetchPieceManifest(
   }
 }
 
-/** Load one piece bundle in a scrubbed child and read its actions. */
-export function extractManifest(entry: string, home: string): ManifestResult {
-  const child = spawnSync(process.execPath, [EXTRACTOR, entry], {
-    encoding: "utf8",
-    timeout: EXTRACT_TIMEOUT_MS,
-    maxBuffer: 16 * 1024 * 1024,
-    env: scrubbedEnv(home),
+/** Load one piece bundle in an isolated child and read its actions. */
+export function extractManifest(entry: string, home: string, opts: { timeoutMs?: number } = {}): ManifestResult {
+  const child = runIsolated([process.execPath, EXTRACTOR, entry], {
+    cwd: home,
+    home,
+    timeoutMs: opts.timeoutMs ?? EXTRACT_TIMEOUT_MS,
   });
   if (child.error) return { kind: "error", error: `extractor: ${child.error.message}` };
+  if (child.signal) return { kind: "error", error: `extractor killed (${child.signal}) after the time limit` };
   if (child.status !== 0) {
     return { kind: "error", error: `extractor exited ${child.status}: ${(child.stderr ?? "").trim().slice(-500)}` };
   }
@@ -124,9 +140,34 @@ export function extractManifest(entry: string, home: string): ManifestResult {
   }
 }
 
-/** An explicit env, never `undefined`: undefined means "inherit". */
-function scrubbedEnv(home: string): Record<string, string> {
-  return { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: home };
+/**
+ * Run a command in its own session (so its process group is its own), with
+ * only PATH and HOME, killed with SIGKILL at the time limit. Afterwards the
+ * whole group is SIGKILLed too, which reaps anything it left running in it.
+ *
+ * A grandchild that starts its own session escapes the group, and nothing at
+ * process level can stop code that tries. That is why this only runs in the
+ * `inspect` job: whatever survives there finds no secret, cannot touch what
+ * gets committed, and is killed by the runner when the job ends.
+ */
+function runIsolated(argv: string[], opts: { cwd: string; home: string; timeoutMs: number }) {
+  const r = spawnSync("setsid", ["--wait", ...argv], {
+    cwd: opts.cwd,
+    encoding: "utf8",
+    timeout: opts.timeoutMs,
+    killSignal: "SIGKILL",
+    maxBuffer: 16 * 1024 * 1024,
+    // An explicit env, never `undefined`: undefined means "inherit".
+    env: { PATH: process.env.PATH ?? "/usr/bin:/bin", HOME: opts.home },
+  });
+  if (r.pid) {
+    try {
+      process.kill(-r.pid, "SIGKILL");
+    } catch {
+      // The group is already empty.
+    }
+  }
+  return r;
 }
 
 /** Upstream classification as a severity, or null when it says nothing. */

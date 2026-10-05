@@ -51,6 +51,38 @@ describe("extractManifest", () => {
     }
   });
 
+  test("the piece's code runs in its temp dir, not the checkout", () => {
+    const { entry, dir } = bundle(`module.exports = { p: { _actions: { a: { name: "cwd:" + process.cwd(), props: {} } } } };`);
+    try {
+      const r = extractManifest(entry, dir);
+      expect(r.kind === "ok" && r.manifest.actions[0]!.name).toBe(`cwd:${dir}`);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /** A hostile package that ignores SIGTERM must not hold the job past the limit. */
+  test("a load that traps SIGTERM and spins is killed at the time limit", () => {
+    const { entry, dir } = bundle(`process.on("SIGTERM", () => {}); const end = Date.now() + 60000; while (Date.now() < end) {}`);
+    try {
+      const started = Date.now();
+      const r = extractManifest(entry, dir, { timeoutMs: 1500 });
+      expect(r.kind).toBe("error");
+      expect(Date.now() - started).toBeLessThan(10_000);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("the same piece exported under two names is one piece", () => {
+    const { entry, dir } = bundle(`const p = { _actions: { a: { name: "a", props: {} } } }; module.exports = { p, alias: p };`);
+    try {
+      expect(extractManifest(entry, dir).kind).toBe("ok");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("a module that throws, or exports no single piece, is an error", () => {
     for (const source of [
       `throw new Error("boom")`,

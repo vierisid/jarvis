@@ -21,8 +21,9 @@ type ActionLike = {
 
 const mod = require(entry) as Record<string, unknown>;
 // A piece module exports the piece next to helpers (auth, clients). The piece
-// is the export that carries an action map.
-const pieces = Object.values(mod).filter(
+// is the export that carries an action map; the same object exported under two
+// names is still one piece.
+const pieces = [...new Set(Object.values(mod))].filter(
   (x): x is { _actions?: Record<string, ActionLike>; actions?: () => Record<string, ActionLike> } =>
     typeof x === "object" && x !== null && ("_actions" in x || typeof (x as { actions?: unknown }).actions === "function"),
 );
