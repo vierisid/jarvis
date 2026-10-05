@@ -12,8 +12,8 @@
 # prebuild stay cache hits. Either property is the kind a later edit undoes
 # without noticing, so this checks the behaviour rather than the layout.
 #
-# How: copy the tracked tree to a temp context, build it with one throwaway
-# version, bump package.json's version in the copy exactly as a release commit
+# How: copy the tracked tree to a temp context, set package.json and VERSION
+# to one throwaway version, bump the version in the copy as a release commit
 # does, build again with that version as VERSION, and judge only the second
 # build.
 #
@@ -99,12 +99,17 @@ build() {
   fi
 }
 
-echo "==> building the tree with VERSION=${WARM_VERSION}"
+set_manifest_version() {
+  jq --arg v "$1" '.version = $v' "$CTX/package.json" >"${WORK}/package.json"
+  mv "${WORK}/package.json" "$CTX/package.json"
+}
+
+echo "==> warming package.json and VERSION=${WARM_VERSION}"
+set_manifest_version "$WARM_VERSION"
 build "$WARM_VERSION"
 
 echo "==> bumping package.json to ${VERSION_ARG}, as a release commit does, and rebuilding"
-jq --arg v "$VERSION_ARG" '.version = $v' "$CTX/package.json" >"${WORK}/package.json"
-mv "${WORK}/package.json" "$CTX/package.json"
+set_manifest_version "$VERSION_ARG"
 build "$VERSION_ARG"
 
 # BuildKit's plain progress names each vertex once ("#12 [build 8/10] RUN ...",
