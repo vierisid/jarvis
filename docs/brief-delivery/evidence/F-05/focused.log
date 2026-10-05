@@ -1,0 +1,39 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-attachments.test.ts:
+[WebSocketServer] Started on unix:/tmp/jarvis-f05-api-eFQHEK/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) real panel authentication protects upload/read/remove/capture and metadata never discloses bytes [212.00ms]
+(pass) missing/default-off providers are unavailable; forged body lengths cannot evade the stream limit [30.55ms]
+
+src/daemon/agent-service-attachments.test.ts:
+[Orchestrator] Tool run_command → [AWAITING_APPROVAL] Request #7eb3bc60 submitted. Action: run_command (execute_command). Reason: outs...
+(pass) attachments reach the real classic model path with isolated history and tool taint [157.62ms]
+[Orchestrator] Tool run_command → [AWAITING_APPROVAL] Request #fe47c9b4 submitted. Action: run_command (execute_command). Reason: outs...
+(pass) attachments reach the real router-first model path with isolated history and tool taint [127.51ms]
+
+src/brief/attachments.test.ts:
+(pass) upload retries and turn retries preserve one canonical ref and original message ownership [117.12ms]
+(pass) cross-conversation and cross-workspace reads, writes and binding fail without partial turns [72.78ms]
+(pass) a remove during decode prevents resurrection and expiry wipes bytes before processing [119.70ms]
+(pass) closing a tab refuses a late upload and does not disturb accepted references [112.45ms]
+(pass) actual decoders accept synthetic text PDF, PNG and JPEG, reject malformed and oversized content [533.33ms]
+(pass) screenshot requires explicit confirmation and available capability; retry uses the same synthetic capture [75.00ms]
+(pass) a mixed invalid batch rolls back the earlier bindings and all canonical message writes [159.82ms]
+
+ui/src/brief/chat/integration.test.ts:
+(pass) real HTTP/WebSocket chat preserves history and attachment ownership (attachments=false) [1022.97ms]
+(pass) real HTTP/WebSocket chat preserves history and attachment ownership (attachments=true) [1069.78ms]
+
+ui/src/brief/chat/attachments.test.ts:
+(pass) failed upload retries with the same identity and switching chats cannot move its result [1.42ms]
+(pass) remove and tab close abort pending uploads and ignore their late responses [1.13ms]
+(pass) reload verifies references, clears accepted files, and exposes expired or missing uploads [0.67ms]
+(pass) a late reference refresh cannot overwrite removal failure or a newer operation [0.64ms]
+(pass) acceptance preserves a file added by another window after the original send [0.38ms]
+(pass) disabled attachment capability and unconfirmed capture dispatch nothing [0.43ms]
+
+ 19 pass
+ 0 fail
+ 153 expect() calls
+Ran 19 tests across 5 files. [4.07s]

@@ -1,0 +1,141 @@
+{
+  "task": "F-05",
+  "title": "Bind attachments to the intended chat turn",
+  "date": "2026-10-05",
+  "branch": "brief/f-05",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-05",
+  "baseline": "72f3078a4857e28ae6738c336f55f2988bf6f31b",
+  "baseline_ref": "origin/brief/f-04",
+  "main_checked": "2c70cf0fe436834bbd96cb06a7df615ff136f6e5",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-05.json"
+  },
+  "status": {
+    "merge": "not_merged",
+    "release_enabled": false,
+    "publication": "Stacked PR against brief/f-04; exact head and remote checks are recorded in its description."
+  },
+  "dependencies": {
+    "merge_after": [
+      "F-01",
+      "F-02",
+      "F-02.1",
+      "F-03",
+      "F-04"
+    ],
+    "enable_after": [
+      "F-02",
+      "F-03",
+      "F-04"
+    ],
+    "reason": "Owner-approved unmerged stack. The implementation consumes conversation lifecycle, canonical turn transport and composer state. D-12 through D-15 own production host and visual affordances."
+  },
+  "activation": {
+    "capability": "chatAttachments",
+    "flags": [
+      "JARVIS_BRIEF_CONVERSATIONS=1",
+      "JARVIS_BRIEF_CHAT_TRANSPORT=1",
+      "JARVIS_BRIEF_CHAT_STATE=1",
+      "JARVIS_BRIEF_CHAT_ATTACHMENTS=1"
+    ],
+    "default": "off",
+    "readiness": "Actual initialized vault provider plus enabled conversation/chatTransport dependencies; browser also requires chatState."
+  },
+  "implementation": [
+    "Authenticated raw upload and metadata/remove routes; capture reuses the selected sidecar capture_screen RPC with explicit confirmation and existing permission checks.",
+    "Additive workspace/conversation-owned attachment records, bounded bytes, expiry validation, removal tombstones and immutable accepted turn binding.",
+    "Atomic turn acceptance and exact attachment-set retry identity; canonical message events/history carry metadata only.",
+    "Composer upload, capture, failure, retry, removal, tab-close and reload states; byte-free persisted references and captured conversation identity.",
+    "Validated document extraction and images reach the scoped multimodal model path with untrusted framing and existing authority taint gating."
+  ],
+  "acceptance": [
+    {
+      "check": "A file from A never reaches B",
+      "status": "passed",
+      "evidence": "Repository/API workspace and conversation rejection, real HTTP/WebSocket adapter isolation, actual AgentService model capture."
+    },
+    {
+      "check": "Retries cannot create duplicate accepted references",
+      "status": "passed",
+      "evidence": "Byte/metadata upload conflicts, identical capture deduplication, exact send attachment identity, one binding/model execution."
+    },
+    {
+      "check": "Unsupported capture and oversized/malformed files fail clearly",
+      "status": "passed",
+      "evidence": "Synthetic PDF/PNG/JPEG decoders, unsupported MIME, corrupt bytes, request stream limits, expiry, aggregate size, absent/denied sidecar."
+    },
+    {
+      "check": "No user screenshot or arbitrary filesystem/permission effects",
+      "status": "passed",
+      "evidence": "Capture uses injected synthetic RPC pixels only; API rejects paths; no permission-grant or capture fallback."
+    },
+    {
+      "check": "Untrusted file instructions do not bypass configured authority",
+      "status": "passed",
+      "evidence": "Real classic/router-first AgentService integration receives multimodal blocks and requires approval before a file-suggested command; no command executes."
+    }
+  ],
+  "verification": {
+    "focused": {
+      "command": "bun test src/brief/attachments.test.ts src/daemon/api-brief-attachments.test.ts src/daemon/agent-service-attachments.test.ts ui/src/brief/chat/attachments.test.ts ui/src/brief/chat/integration.test.ts",
+      "passed": 19,
+      "failed": 0,
+      "files": 5,
+      "log": "docs/brief-delivery/evidence/F-05/focused.log"
+    },
+    "affected": {
+      "command_file": "docs/brief-delivery/evidence/F-05/affected-command.txt",
+      "passed": 306,
+      "failed": 0,
+      "assertions": 2180,
+      "files": 32,
+      "log": "docs/brief-delivery/evidence/F-05/affected.log"
+    },
+    "mutations": {
+      "rejected": 3,
+      "total": 3,
+      "sources_restored": true,
+      "evidence": "docs/brief-delivery/evidence/F-05/mutations.json"
+    },
+    "typescript": "passed: bun x tsc --noEmit",
+    "ui_build": "passed: bun run build:ui (existing @theme/@tailwind warnings)",
+    "browser_bundle": "passed: bun build ui/src/brief/chat/provider.tsx --target=browser; 16 modules, no server runtime imports",
+    "guards": "Normal pre-commit hook required; its result is recorded in the PR description.",
+    "full_suite": "Not run locally; remote CI status is reported separately, never inferred from focused tests."
+  },
+  "manual_checks": {
+    "main_and_open_prs": "Fetched main and open PRs before work; no competing attachment implementation found. F04 test/platform CI passes at the dependency head; its Docker run was cancelled, not passed.",
+    "visual": "Not applicable: service, transport and adapter only; production UI is not mounted here.",
+    "external_effects": "No user data, real model calls, real screenshots, daemon activation or deployment."
+  },
+  "limitations": [
+    "UTF-8 text/Markdown/CSV/JSON and text-bearing PDFs only; no OCR or Office conversion. PNG must be non-interlaced; JPEG supported.",
+    "24-hour content expiry uses lazy cleanup on the next attachment operation. Metadata/tombstones remain; no exact-second idle deletion promise.",
+    "Worker byte/page/text/time bounds do not provide an OS process memory sandbox for PDF parsing.",
+    "Historical messages retain attachment metadata; later turns must reattach files to process their bytes again.",
+    "Ready drafts survive close/reopen; incomplete uploads require reselection after close or reload. A failed cleanup request leaves bounded bytes until expiry.",
+    "Native capture availability depends on connected device capability and existing OS permission; automated tests use synthetic RPC data only.",
+    "Production mounting/menu/chip presentation remains D-line work; F06 is not started."
+  ],
+  "rollback": "Disable chatAttachments and its future UI affordance, preserve additive tables/history, do not replay turns or delete user content.",
+  "quick_verification": "docs/brief-chat-attachments.md",
+  "next_task": "F-06 not started",
+  "review_fixes": {
+    "findings": [
+      "Canonical events, snapshots and history clear consumed references in every window and prevent stale composer writes from resurrecting them. Newer draft files remain.",
+      "Screenshot restore refreshes canonical name, MIME type, size and kind.",
+      "Screenshot capability checks use servesCapability while preserving revoked-device refusal.",
+      "Scope guard accepts multimodal dispatch; runtime fixtures verify site context, scope and conversation for both text and attachment turns."
+    ],
+    "verification": "docs/brief-delivery/evidence/F-05/review-verification.json",
+    "affected": {
+      "passed": 363,
+      "failed": 0,
+      "assertions": 3097,
+      "files": 34
+    },
+    "red_green": "All six new failing cases and the two existing CI guard failures pass after correction. Dropping scope fails both runtime fixtures and the source guard.",
+    "remote_ci": "Exact pushed head and current CI result are recorded in the PR description."
+  }
+}

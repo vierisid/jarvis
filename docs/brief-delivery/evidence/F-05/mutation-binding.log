@@ -1,0 +1,23 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/attachments.test.ts:
+51 |       if (existing.length) {
+52 |         const row = existing[0]!;
+53 |         if (existing.length !== 1 || row.conversationId !== input.conversationId || row.turnId !== input.turnId ||
+54 |             row.requestId !== input.requestId || row.text !== input.text || Boolean(row.speak) !== Boolean(input.speak) ||
+55 |             JSON.stringify(this.attachments.forTurn(row.conversationId, row.turnId).map(ref => ref.attachmentId)) !== JSON.stringify(ids)) {
+56 |           throw new ConversationRequestError('Request identity already used for different input', 409);
+                     ^
+error: Request identity already used for different input
+ status: 409,
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-05/src/vault/chat-turns.ts:56:17)
+      at transaction (bun:sqlite:400:27)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-05/src/brief/attachments.test.ts:37:18)
+(fail) upload retries and turn retries preserve one canonical ref and original message ownership [125.95ms]
+
+ 0 pass
+ 6 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [222.00ms]

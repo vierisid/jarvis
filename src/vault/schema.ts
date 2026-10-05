@@ -4,6 +4,7 @@ import { ensureGoalEventSchema } from './goal-event-schema.ts';
 import { ensureFactSchema } from './fact-schema.ts';
 import { ensureConversationSchema } from './conversation-schema.ts';
 import { ensureChatTurnSchema } from './chat-turn-schema.ts';
+import { ensureChatAttachmentSchema } from './chat-attachment-schema.ts';
 
 let dbInstance: Database | null = null;
 
@@ -335,6 +336,7 @@ function createTables(db: Database): void {
 
   ensureConversationSchema(db);
   ensureChatTurnSchema(db);
+  ensureChatAttachmentSchema(db);
 
   // Content pipeline: items moving through creation stages
   db.run(`

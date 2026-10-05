@@ -5,6 +5,7 @@ import { defaultConversationWorkspace, ensureConversationTab } from './conversat
 export type MessageRole = 'user' | 'assistant' | 'system';
 
 export type ConversationMessage = {
+  attachments?: import('../brief/attachment-contracts').BriefAttachmentRef[];
   id: string;
   conversation_id: string;
   role: MessageRole;

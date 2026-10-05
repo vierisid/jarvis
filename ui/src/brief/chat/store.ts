@@ -6,7 +6,7 @@ import type { ChatTurnRepository } from '../../../../src/vault/chat-turns';
 export type ChatSnapshot = ReturnType<ChatTurnRepository['snapshot']> & { subscribed: boolean };
 export type ChatTurn = BriefTurnRef & { state: BriefTurnState; createdAt: number; assistantMessageId?: string; error?: { code: string; message: string } };
 /** References only. F-05 owns file bytes, upload validation and submission binding. */
-export interface ChatAttachment { attachmentId: string; name: string; size: number; mediaType: string }
+export interface ChatAttachment { attachmentId: string; name: string; size: number; mediaType: string; kind?: 'document' | 'image' | 'screenshot'; state?: 'uploading' | 'ready' | 'failed' | 'removing'; error?: string }
 export interface ChatScroll { top: number; atBottom: boolean }
 export interface ConversationState {
   conversation: BriefConversation;
@@ -50,6 +50,7 @@ export class ConversationStore {
   private storageKey = '';
   private requestErrors = new Map<string, string>();
   private dismissedFailures = new Map<string, string>();
+  private consumedAttachments = new Map<string, Set<string>>();
   constructor(private readonly storage?: StoragePort) {}
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -95,6 +96,7 @@ export class ConversationStore {
     if (this.state.workspaceId !== tabs.workspaceId) {
       this.replay.clear(); this.saved = dictionary();
       this.requestErrors.clear(); this.dismissedFailures.clear();
+      this.consumedAttachments.clear();
       this.state = { ...this.state, workspaceId: tabs.workspaceId, conversations: dictionary(), persistenceError: null };
       this.storageKey = `jarvis.brief.chat.v1.${encodeURIComponent(tabs.workspaceId)}`;
       try {
@@ -170,8 +172,25 @@ export class ConversationStore {
     if (turn) this.dismissedFailures.set(id, turn.turnId);
     this.setError(id, null);
   }
+  acceptAttachments(id: string, ids: string[]) {
+    const chat = this.state.conversations[id]; if (!chat || !ids.length) return;
+    const consumed = this.consumedAttachments.get(id) ?? new Set<string>();
+    for (const attachmentId of ids) consumed.add(attachmentId);
+    this.consumedAttachments.set(id, consumed);
+    let items = chat.attachments;
+    try {
+      const raw = this.storage?.getItem(this.fieldKey(id, 'attachments'));
+      if (raw != null) {
+        const latest = readLocal({ ...emptyLocal(), attachments: JSON.parse(raw) });
+        // Merge the latest saved references before clearing accepted identities.
+        if (latest) items = latest.attachments;
+      }
+    } catch { /* Canonical acceptance still clears this window when storage is unavailable. */ }
+    this.setAttachments(id, items);
+  }
   setAttachments(id: string, attachments: ChatAttachment[]) {
-    this.update(id, { attachments: attachments.map(({ attachmentId, name, size, mediaType }) => ({ attachmentId, name, size, mediaType })) });
+    // Canonical consumption is permanent, including across delayed composer writes.
+    this.update(id, { attachments: attachments.filter(item => !this.consumedAttachments.get(id)?.has(item.attachmentId)).map(({ attachmentId, name, size, mediaType, kind, state, error }) => ({ attachmentId, name, size, mediaType, ...(kind ? { kind } : {}), ...(state ? { state } : {}), ...(error ? { error } : {}) })) });
   }
   setScroll(id: string, scroll: ChatScroll) { this.update(id, { scroll: { top: Math.max(0, Number.isFinite(scroll.top) ? scroll.top : 0), atBottom: scroll.atBottom } }); }
   private update(id: string, patch: Partial<ConversationState>, persist = true) {
@@ -198,6 +217,7 @@ export class ConversationStore {
     const metadata = this.metadata(chat, [event]);
     const { messageSequences: _watermarks, historyIds: _history, ...projected } = project(replay, timestamp);
     this.update(id, { ...metadata, ...projected, sequence: Math.max(chat.sequence, event.sequence) });
+    if (event.payload.kind === 'message') this.acceptAttachments(id, event.payload.message.attachments?.map(ref => ref.attachmentId) ?? []);
     return replay.events.size >= 500;
   }
   applySnapshot(snapshot: ChatSnapshot) {
@@ -224,6 +244,11 @@ export class ConversationStore {
     this.update(id, { ...metadata, ...projected, sequence: Math.max(chat.sequence, snapshot.sequence),
       // A reconnect must not rewind the older-history cursor already consumed by the reader.
       history: chat.history.state === 'idle' ? { state: 'ready', cursor: snapshot.messages.nextCursor } : chat.history });
+    this.acceptAttachments(id, [
+      ...snapshot.messages.items.flatMap(message => message.attachments ?? []),
+      ...snapshot.turns.flatMap(turn => turn.attachments ?? []),
+      ...snapshot.events.flatMap(event => event.payload.kind === 'message' ? event.payload.message.attachments ?? [] : []),
+    ].map(ref => ref.attachmentId));
   }
   private metadata(chat: ConversationState, events: BriefChatEvent[]) {
     const activity = { ...chat.activity }, approvals = { ...chat.approvals }, unread = new Set(chat.unread);
@@ -249,6 +274,7 @@ export class ConversationStore {
     replay.base = { ...replay.base, messages: [...messages.values()].sort(compareMessages) };
     const { messageSequences: _watermarks, historyIds: _history, ...projected } = project(replay, Date.now());
     this.update(id, { ...projected, history: { state: 'ready', cursor: page.nextCursor } }, false);
+    this.acceptAttachments(id, page.items.flatMap(message => message.attachments ?? []).map(ref => ref.attachmentId));
   }
 }
 
@@ -263,7 +289,7 @@ function project(replay: Replay, timestamp: number): Projection {
     if (payload.kind === 'message') {
       const row = payload.message;
       if (event.sequence > (messageSequences.get(row.messageId) ?? 0)) {
-        messages.set(row.messageId, { id: row.messageId, conversation_id: conversationId, role: row.role, content: row.content, created_at: row.createdAt, tool_calls: null });
+        messages.set(row.messageId, { id: row.messageId, conversation_id: conversationId, role: row.role, content: row.content, created_at: row.createdAt, tool_calls: null, ...(row.attachments?.length ? { attachments: row.attachments } : {}) });
         messageSequences.set(row.messageId, event.sequence);
         historyIds.delete(row.messageId);
       }
@@ -298,6 +324,6 @@ function readLocal(value: unknown): LocalState | null {
   if (typeof v.draft !== 'string' || !Array.isArray(v.attachments) || !v.attachments.every(a => a && typeof a.attachmentId === 'string' && typeof a.name === 'string' && typeof a.mediaType === 'string' && Number.isFinite(a.size) && a.size >= 0)
     || !v.scroll || !Number.isFinite(v.scroll.top) || v.scroll.top < 0 || typeof v.scroll.atBottom !== 'boolean'
     || !Array.isArray(v.unread) || !v.unread.every(id => typeof id === 'string') || !Number.isSafeInteger(v.readSequence) || v.readSequence < 0) return null;
-  return { draft: v.draft, attachments: v.attachments.map(a => ({ attachmentId: a.attachmentId, name: a.name, mediaType: a.mediaType, size: a.size })),
+  return { draft: v.draft, attachments: v.attachments.map(a => ({ attachmentId: a.attachmentId, name: a.name, mediaType: a.mediaType, size: a.size, ...(a.kind ? { kind: a.kind } : {}), ...(a.state ? { state: a.state } : {}), ...(a.error ? { error: a.error } : {}) })),
     scroll: { top: v.scroll.top, atBottom: v.scroll.atBottom }, unread: [...new Set(v.unread)], readSequence: v.readSequence };
 }

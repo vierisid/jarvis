@@ -2,18 +2,49 @@ import { expect, test } from 'bun:test';
 import type { BriefChatEvent, BriefChatPayload, BriefConversation } from '../../../../src/brief/contracts';
 import type { ConversationMessage } from '../../../../src/vault/conversations';
 import { ConversationStore, type ChatSnapshot } from './store';
+import type { BriefAttachmentRef } from '../../../../src/brief/attachment-contracts';
 
 const conversation = (id: string, order = 0, workspaceId = 'workspace'): BriefConversation => ({ conversationId: id, workspaceId, title: id, revision: '1', tab: { open: true, order }, lastMessageAt: null });
 const row = (id: string, content: string, created_at = 10): ConversationMessage => ({ id, content, conversation_id: 'a', role: 'assistant', created_at, tool_calls: null });
 const event = (sequence: number, payload: BriefChatPayload, conversationId = 'a'): BriefChatEvent => ({ conversationId, turnId: `turn-${conversationId}`, requestId: `request-${conversationId}`, eventId: `event-${conversationId}-${sequence}`, sequence, payload });
 const snapshot = (sequence: number, content: string, events: BriefChatEvent[] = []): ChatSnapshot => ({ conversationId: 'a', sequence, nextSequence: sequence, hasMore: false, subscribed: true, events,
-  turns: [{ conversationId: 'a', turnId: 'turn-a', requestId: 'request-a', state: 'running', speak: false, userMessageId: 'user-a', assistantMessageId: 'answer', createdAt: 9 }],
+  turns: [{ conversationId: 'a', turnId: 'turn-a', requestId: 'request-a', state: 'running', speak: false, attachments: [], userMessageId: 'user-a', assistantMessageId: 'answer', createdAt: 9 }],
   messages: { items: [row('answer', content)], nextCursor: 'older' } });
 function fixture(storage?: Pick<Storage, 'getItem' | 'setItem'>) {
   const store = new ConversationStore(storage);
   store.restoreTabs({ workspaceId: 'workspace', activeConversationId: 'a', revision: '1', tabs: [conversation('a'), conversation('b', 1)] });
   return store;
 }
+
+for (const source of ['event', 'snapshot-message', 'snapshot-turn', 'history'] as const) test(`canonical ${source} consumes attachments in a stale window and prevents resurrection`, () => {
+  const saved = new Map<string, string>();
+  const storage = { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => { saved.set(key, value); } };
+  const other = fixture(storage);
+  const sent = { attachmentId: 'sent', name: 'sent.txt', mediaType: 'text/plain', size: 3, state: 'ready' as const };
+  const newer = { ...sent, attachmentId: 'newer' };
+  other.setAttachments('a', [sent]);
+  const store = fixture(storage), stale = store.getSnapshot().conversations.a!.attachments;
+  other.setAttachments('a', [sent, newer]);
+  store.setDraft('a', 'Keep my next question');
+  store.setAttachments('b', [{ ...sent, attachmentId: 'b-file' }]);
+  const ref: BriefAttachmentRef = { ...sent, conversationId: 'a', kind: 'document', sha256: 'fixture', expiresAt: Date.now() + 60_000, state: 'accepted', turnId: 'turn-a' };
+  const message: ConversationMessage = { ...row('user-a', 'Sent'), role: 'user', attachments: [ref] };
+  if (source === 'event') store.applyEvent(event(1, { kind: 'message', message: { conversationId: 'a', turnId: 'turn-a', requestId: 'request-a', messageId: message.id, role: 'user', content: message.content, createdAt: message.created_at, attachments: [ref] } }), 10);
+  else if (source === 'history') store.applyHistory('a', { items: [message], nextCursor: null });
+  else {
+    const sync = snapshot(1, 'Reply');
+    if (source === 'snapshot-message') sync.messages.items.push(message);
+    else sync.turns[0]!.attachments = [ref];
+    store.applySnapshot(sync);
+  }
+  expect(store.getSnapshot().conversations.a!.attachments).toEqual([newer]);
+  expect(store.getSnapshot().conversations.a!.draft).toBe('Keep my next question');
+  expect(store.getSnapshot().conversations.b!.attachments[0]?.attachmentId).toBe('b-file');
+  // A delayed composer operation must not resurrect an already bound ID.
+  store.setAttachments('a', [...stale, newer]);
+  expect(store.getSnapshot().conversations.a!.attachments).toEqual([newer]);
+  expect(fixture(storage).getSnapshot().conversations.a!.attachments).toEqual([newer]);
+});
 
 test('out-of-order and duplicate events reconstruct ordered text and never regress a terminal turn', () => {
   const store = fixture(); store.setVisible(true);

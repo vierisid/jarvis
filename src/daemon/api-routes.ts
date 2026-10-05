@@ -146,6 +146,7 @@ export type ApiContext = {
   /** Optional for old callers; F-01 defaults to no installed or enabled features. */
   briefCapabilities?: BriefCapabilities;
   briefConversations?: BriefConversationProvider;
+  briefAttachments?: import('../brief/attachments').BriefAttachmentProvider;
   suggestionComposer?: import('../awareness/suggestion-composer.ts').SuggestionComposer | null;
   /**
    * Daemon process boot time (Date.now() at start). Surfaced via the
@@ -396,7 +397,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),

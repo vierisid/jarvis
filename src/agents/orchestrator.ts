@@ -1016,7 +1016,7 @@ export class AgentOrchestrator {
     // orchestrator serves every chat and a field would let a general turn
     // clear a site turn's scope mid-loop (#561).
     scope?: TurnToolScope | null,
-    conversation?: { history: LLMMessage[]; contextKey: string; signal: AbortSignal },
+    conversation?: { history: LLMMessage[]; contextKey: string; signal: AbortSignal; untrustedSources?: string[] },
   ): AsyncIterable<LLMStreamEvent> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -1025,7 +1025,7 @@ export class AgentOrchestrator {
 
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
-    const turnTaint = new Set<string>();
+    const turnTaint = new Set<string>(conversation?.untrustedSources);
     // The public entry point may leave the scope out; everything below it
     // requires the decision to be explicit, so it is made once here.
     const turnScope = scope ?? null;

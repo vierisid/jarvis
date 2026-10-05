@@ -1,3 +1,4 @@
+import { DraftAttachments, attachmentApi, type AttachmentApi } from './attachments';
 import { isBriefCapabilityEnabled } from '../../../../src/brief/capabilities';
 import type { BriefChatEvent, BriefSendTurn, BriefTurnRef } from '../../../../src/brief/contracts';
 import { uuid } from '../../lib/uuid';
@@ -7,6 +8,7 @@ import { ChatApiError, conversationApi, isMessagePage, type ConversationApi } fr
 import { ConversationStore, type ChatSnapshot } from './store';
 
 export interface ChatClientState {
+  attachmentsEnabled: boolean;
   mode: 'disabled' | 'loading' | 'scoped' | 'legacy' | 'unavailable';
   reason: string | null;
   error: string | null;
@@ -20,7 +22,8 @@ const activeTurn = (state: string) => state === 'queued' || state === 'running';
 /** HTTP mutations are serialized. Streams/history always address their captured conversation ID. */
 export class BriefConversationClient {
   readonly store: ConversationStore;
-  private state: ChatClientState = { mode: 'disabled', reason: null, error: null, connected: false, pending: 0, pendingSends: [] };
+  readonly attachments: DraftAttachments;
+  private state: ChatClientState = { attachmentsEnabled: false, mode: 'disabled', reason: null, error: null, connected: false, pending: 0, pendingSends: [] };
   private listeners = new Set<() => void>();
   private lifetime = new AbortController();
   private generation = 0;
@@ -32,8 +35,10 @@ export class BriefConversationClient {
   private outbox = new Map<string, BriefSendTurn>();
   private queue: Promise<unknown> = Promise.resolve();
   readonly adapter: WebSocketChatAdapter;
-  constructor(private readonly api: ConversationApi = conversationApi(), storage?: Pick<Storage, 'getItem' | 'setItem'>) {
+  constructor(private readonly api: ConversationApi = conversationApi(), storage?: Pick<Storage, 'getItem' | 'setItem'>, files: AttachmentApi = attachmentApi()) {
     this.store = new ConversationStore(storage);
+    this.attachments = new DraftAttachments(this.store, files, () => this.state.mode === 'scoped' && this.state.attachmentsEnabled,
+      id => [...this.outbox.values()].some(input => input.attachmentIds?.includes(id)));
     this.adapter = {
       onOpen: socket => { void this.openSocket(socket); },
       onClose: () => { this.socket = null; this.syncRequests.clear(); this.subscriptions.clear(); this.patch({ connected: false }); },
@@ -50,22 +55,25 @@ export class BriefConversationClient {
     try {
       const capabilities = await this.api.capabilities(this.lifetime.signal);
       if (generation !== this.generation) return;
+      this.patch({ attachmentsEnabled: isBriefCapabilityEnabled(capabilities, 'chatAttachments') });
       if (!canUseChat(capabilities)) { this.patch({ mode: 'legacy', reason: 'Conversation tabs are not enabled on this backend.' }); return; }
       const tabs = await this.api.tabs(this.lifetime.signal);
       if (generation !== this.generation) return;
       if (this.store.getSnapshot().workspaceId !== tabs.workspaceId) { this.checkpoints.clear(); this.outbox.clear(); this.publishOutbox(); }
       this.store.restoreTabs(tabs); this.patch({ mode: 'scoped' });
+      for (const id of this.store.getSnapshot().order) await this.attachments.restore(id, this.lifetime.signal);
     } catch (error) {
       if (generation !== this.generation) return;
       this.failedDiscovery(error);
     }
   }
   stop() {
+    this.attachments.stop();
     this.generation++; this.lifetime.abort(); this.socket = null;
     this.syncRequests.clear(); this.subscriptions.clear();
     for (const id of this.historyRequests.keys()) this.store.setHistoryState(id, 'error', 'Earlier message loading was interrupted.');
     this.historyRequests.clear(); this.queue = Promise.resolve();
-    this.patch({ mode: 'disabled', connected: false, pending: 0 });
+    this.patch({ mode: 'disabled', connected: false, pending: 0, attachmentsEnabled: false });
   }
   private failedDiscovery(error: unknown) {
     if (error instanceof ChatApiError && (error.status === 404 || error.status === 501)) this.patch({ mode: 'legacy', reason: 'This backend supports single chat only.', connected: false });
@@ -78,6 +86,7 @@ export class BriefConversationClient {
       // Recheck readiness on each actual connection, never on room/theme renders.
       const capabilities = await this.api.capabilities(this.lifetime.signal);
       if (generation !== this.generation || this.socket !== socket) return;
+      this.patch({ attachmentsEnabled: isBriefCapabilityEnabled(capabilities, 'chatAttachments') });
       if (!canUseChat(capabilities)) { this.patch({ mode: 'legacy', reason: 'Conversation tabs are no longer enabled.', connected: false }); return; }
       const restore = this.queue.then(async () => {
         if (generation !== this.generation || this.socket !== socket) return;
@@ -152,7 +161,7 @@ export class BriefConversationClient {
   }
   private accepted(requestId: string) {
     const input = this.outbox.get(requestId);
-    if (input) this.store.acceptDraft(input.conversationId, input.text);
+    if (input) { this.store.acceptDraft(input.conversationId, input.text); this.store.acceptAttachments(input.conversationId, input.attachmentIds ?? []); }
     this.outbox.delete(requestId);
     this.publishOutbox();
   }
@@ -189,6 +198,7 @@ export class BriefConversationClient {
     // Persist the neighbor before closing so F-02's first-tab fallback cannot replace it.
     if (state.activeId === id) await this.api.select(next, signal);
     const conversation = await this.api.tab(id, false, signal); if (signal.aborted) return;
+    this.attachments.close(id);
     this.store.putConversation(conversation); this.store.select(next);
     this.syncRequests.delete(id); this.subscriptions.delete(id);
     if (this.state.connected) this.sendFrame('brief_chat_unsubscribe', { conversationId: id });
@@ -197,6 +207,7 @@ export class BriefConversationClient {
     const conversation = await this.api.tab(id, true, signal);
     await this.api.select(id, signal); if (signal.aborted) return;
     this.store.putConversation(conversation, true); this.sync(id, 0);
+    await this.attachments.restore(id, signal);
   });
   async loadOlder(id: string) {
     const chat = this.store.getSnapshot().conversations[id];
@@ -213,10 +224,12 @@ export class BriefConversationClient {
   send(id: string, text: string): BriefTurnRef {
     const chat = this.store.getSnapshot().conversations[id];
     if (this.state.mode !== 'scoped' || !this.state.connected || !this.store.getSnapshot().order.includes(id) || !this.subscriptions.has(id) || this.syncRequests.has(id)) throw new Error('Wait for this conversation to synchronize.');
-    if (!text.trim() || new TextEncoder().encode(text).length > 65_536) throw new Error('Enter a message of at most 65,536 bytes.');
-    if (chat?.attachments.length) throw new Error('Attachment sending is not available yet.');
+    const files = chat?.attachments ?? [];
+    if ((!text.trim() && !files.length) || new TextEncoder().encode(text).length > 65_536) throw new Error('Enter a message of at most 65,536 bytes.');
+    if (files.length && !this.state.attachmentsEnabled) throw new Error('Attachment sending is not available on this backend.');
+    if (files.some(file => file.state !== 'ready')) throw new Error('Finish or remove failed attachment uploads before sending.');
     if (Object.values(chat?.turns ?? {}).some(turn => activeTurn(turn.state)) || [...this.outbox.values()].some(turn => turn.conversationId === id)) throw new Error('This conversation already has an active turn.');
-    const input = { conversationId: id, turnId: uuid(), requestId: uuid(), text, speak: false };
+    const input = { conversationId: id, turnId: uuid(), requestId: uuid(), text, speak: false, ...(files.length ? { attachmentIds: files.map(file => file.attachmentId) } : {}) };
     this.store.dismissError(id);
     this.outbox.set(input.requestId, input);
     this.publishOutbox();
