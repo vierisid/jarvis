@@ -20,9 +20,10 @@
 # have come from the remote gha cache without being materialised locally).
 #
 # Allowed to re-run in the second build: the `manifest` stage (it reads the
-# bumped package.json), the version stamp, and the production stage, whose
-# layers from the stamped package.json COPY on change with every version by
-# design. Every deps/build/workflows step must be CACHED.
+# bumped package.json), the version stamp, and the production steps from the
+# stamped `COPY --from=build /app/package.json` on, which change with every
+# version by design. Every deps/build/workflows step, and every production
+# step before that COPY, must be CACHED.
 #
 # Usage:   .github/scripts/version-stamp-cache.sh [REPO_DIR]
 # Needs:   docker buildx, git, jq (all on GitHub's ubuntu runners; the job
@@ -48,8 +49,9 @@ trap 'rm -rf "$WORK"' EXIT
 STAMP_MARKER='VERSION build-arg is required'
 
 mkdir -p "$CTX"
-# Tracked files only, as CI's checkout has them: a developer's untracked
-# build output must not make the two builds differ or match by accident.
+# Tracked paths only, with their working-tree contents: a developer's
+# untracked build output must not make the two builds differ or match by
+# accident. (In CI the working tree is the checkout.)
 git -C "$REPO" ls-files -z | (cd "$REPO" && tar --null -T - -cf -) | tar -xf - -C "$CTX"
 
 build() {
@@ -77,7 +79,9 @@ ran=()
 stamp_ran=0
 stamp_seen=0
 seen_deps=0 seen_build=0 seen_workflows=0
-while IFS=$'\t' read -r id stage label; do
+pkg_step=""
+prod=()
+while IFS=$'\t' read -r id stage num label; do
   if grep -qE "^${id} CACHED\$" "$LOG"; then
     status=cached
   elif grep -qE "^${id} DONE " "$LOG"; then
@@ -101,7 +105,11 @@ while IFS=$'\t' read -r id stage label; do
   workflows) seen_workflows=$((seen_workflows + 1)) ;;
   esac
   case "$stage" in
-  manifest | production) ;;
+  manifest) ;;
+  production)
+    case "$label" in *"COPY --from=build /app/package.json"*) pkg_step="$num" ;; esac
+    prod+=("${num}"$'\t'"${status}"$'\t'"${short}")
+    ;;
   *) [ "$status" = cached ] || ran+=("${status}: ${short}") ;;
   esac
 done < <(grep -E '^#[0-9]+ \[([a-z0-9/]+ )?(manifest|deps|build|workflows|production) +[0-9]+/[0-9]+\] ' "$LOG" |
@@ -111,9 +119,10 @@ done < <(grep -E '^#[0-9]+ \[([a-z0-9/]+ )?(manifest|deps|build|workflows|produc
     head = substr($0, RSTART + 1, RLENGTH - 2)
     n = split(head, parts, " ")
     stage = (n >= 3) ? parts[n - 1] : parts[1]
+    split(parts[n], frac, "/")
     label = $0
     sub(/^#[0-9]+ /, "", label)
-    print id "\t" stage "\t" label
+    print id "\t" stage "\t" frac[1] "\t" label
   }')
 
 if [ "$stamp_seen" -ne 1 ]; then
@@ -127,6 +136,18 @@ if [ "$seen_deps" -eq 0 ] || [ "$seen_build" -eq 0 ] || [ "$seen_workflows" -eq 
   echo "could not find the steps to judge (deps: ${seen_deps}, build: ${seen_build}, workflows: ${seen_workflows})" >&2
   exit 1
 fi
+# Production steps before the stamped package.json COPY must survive a release.
+if [ -z "$pkg_step" ]; then
+  cat "$LOG" >&2
+  echo "no production 'COPY --from=build /app/package.json' step found to split the production stage on" >&2
+  exit 1
+fi
+for entry in "${prod[@]}"; do
+  IFS=$'\t' read -r num status short <<<"$entry"
+  if [ "$num" -lt "$pkg_step" ] && [ "$status" != cached ]; then
+    ran+=("${status}: ${short}")
+  fi
+done
 if [ "$stamp_ran" -ne 1 ]; then
   echo "the stamp step did not run for a never-before-used VERSION, so this check proved nothing" >&2
   exit 1
