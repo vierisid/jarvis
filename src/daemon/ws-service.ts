@@ -2792,7 +2792,10 @@ function formatApprovalIntent(request: ApprovalRequest): string {
   const engineReason = reason.endsWith('requires user approval')
     || reason.endsWith('is a governed action requiring user approval')
     || reason.includes(TAINT_PROFILE_LABEL);
-  if (reason.length > 0 && !engineReason) return reason;
+  // One line with no format characters (#696): for request_approval this is the
+  // model's own intent, and a bidi override would reorder the headline. Not
+  // cut: this card is where the whole intent can be read.
+  if (reason.length > 0 && !engineReason) return boundedApprovalLabel(reason, reason.length);
   const synthesized = synthesizeApprovalIntent(request);
   return engineReason ? `${synthesized} (${reason})` : synthesized;
 }

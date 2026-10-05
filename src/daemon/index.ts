@@ -56,7 +56,7 @@ import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION 
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
-import { ApprovalDelivery } from "../authority/approval-delivery.ts";
+import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, ApprovalDelivery, approvalNotificationText, boundedApprovalLabel } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
@@ -4765,12 +4765,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // dropped. The impact still rides along in `meta` ("destructive ·
           // delete_data") so the toast reads the risk even when it's approvable.
           const impact = impactFromCategory(req.action_category);
+          // Reduced like the channel card (#696): `reason` can be the model's
+          // own request_approval intent, and this toast has an Approve button.
+          const text = approvalNotificationText(req);
           notifyAll({
             id: req.id,
             kind: 'approval',
-            title: `Approve: ${trayHumanizeTool(req.tool_name)}?`,
-            body: req.reason?.trim() || `${req.agent_name} wants to run ${trayHumanizeTool(req.tool_name)}.`,
-            meta: `${impact} · ${req.tool_name}`,
+            title: text.title,
+            body: text.body,
+            meta: `${impact} · ${boundedApprovalLabel(req.tool_name, APPROVAL_LABEL_DELIVERY_MAX_CHARS)}`,
             destructive: impact === 'destructive',
             actions: [
               { id: 'deny', label: 'Deny' },
@@ -4799,7 +4802,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             id: `done:${req.id}`,
             kind: 'done',
             title: 'Task complete',
-            body: req.reason?.trim() || `${trayHumanizeTool(req.tool_name)} finished.`,
+            body: boundedApprovalLabel(req.reason?.trim() ?? '', APPROVAL_LABEL_DELIVERY_MAX_CHARS) || `${trayHumanizeTool(req.tool_name)} finished.`,
             actions: [
               { id: 'view', label: 'View', primary: true },
               { id: 'dismiss', label: 'Dismiss' },
