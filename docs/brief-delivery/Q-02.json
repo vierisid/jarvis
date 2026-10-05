@@ -24,7 +24,7 @@
     "checkpoint": "UI-35; no visual changes in Q-02"
   },
   "ownership": {
-    "implementer": "Core-quality-line Claude session",
+    "implementer": "Core-quality line",
     "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
   },
   "merge_after": [],
