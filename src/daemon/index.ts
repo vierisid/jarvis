@@ -1,3 +1,5 @@
+import { registerChatAttachments } from '../brief/registrations/chat-attachments';
+import { BriefAttachmentProvider } from '../brief/attachments';
 /**
  * J.A.R.V.I.S. Daemon
  *
@@ -4968,17 +4970,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       send: (client, message) => wsService.getServer().sendToClient(client, message),
       tts: () => wsService.getTTSProvider(),
     });
+    const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
+    if (process.env.JARVIS_BRIEF_CHAT_ATTACHMENTS === '1') briefEnabled.push('chatAttachments');
     if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
       ...registerChatState(briefConversations, briefChatTransport),
+      ...registerChatAttachments(briefAttachments),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefConversations,
+      briefAttachments,
       briefCapabilities,
       daemonStartedAt: Date.now(),
       healthMonitor,

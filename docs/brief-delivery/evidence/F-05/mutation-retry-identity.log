@@ -1,0 +1,53 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/attachments.test.ts:
+35 |   const input = { ...f.input, attachmentIds: ['file'] };
+36 |   expect(f.turns.accept(input).created).toBe(true);
+37 |   expect(f.turns.accept(input).created).toBe(false);
+38 |   expect(f.provider.repository.forTurn(f.a, input.turnId)).toHaveLength(1);
+39 |   expect(f.turns.conversations.messages(f.a).items[0]?.attachments?.[0]).toMatchObject({ attachmentId: 'file', state: 'accepted', turnId: 'turn' });
+40 |   expect(() => f.turns.accept(f.input)).toThrow('identity');
+                                             ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "identity"
+
+Received function did not throw
+Received value: {
+  turn: {
+    turnId: "turn",
+    conversationId: "a5bdc04f-11cc-4a61-b765-fe7b510f6309",
+    requestId: "request",
+    text: "Read this",
+    speak: false,
+    state: "queued",
+    userMessageId: "a93cdbe8-fabf-4cc1-90f0-d68c1c05cffb",
+    assistantMessageId: "90d08583-b3e0-4dfe-8362-6a5627241601",
+    createdAt: 1791235503747,
+    attachments: [
+      {
+        attachmentId: "file",
+        conversationId: "a5bdc04f-11cc-4a61-b765-fe7b510f6309",
+        kind: "document",
+        name: "notes.txt",
+        mediaType: "text/plain",
+        size: 18,
+        sha256: "fc267fc319eb88298199a670ad8485bf5ae8efa2df8ea43de2e92c46ac357132",
+        expiresAt: 1791321903704,
+        state: "accepted",
+        turnId: "turn",
+      }
+    ],
+  },
+  created: false,
+  events: [],
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-05/src/brief/attachments.test.ts:40:41)
+(fail) upload retries and turn retries preserve one canonical ref and original message ownership [129.57ms]
+
+ 0 pass
+ 6 filtered out
+ 1 fail
+ 6 expect() calls
+Ran 1 test across 1 file. [214.00ms]

@@ -7,7 +7,7 @@ const conversation = (id: string, order = 0, workspaceId = 'workspace'): BriefCo
 const row = (id: string, content: string, created_at = 10): ConversationMessage => ({ id, content, conversation_id: 'a', role: 'assistant', created_at, tool_calls: null });
 const event = (sequence: number, payload: BriefChatPayload, conversationId = 'a'): BriefChatEvent => ({ conversationId, turnId: `turn-${conversationId}`, requestId: `request-${conversationId}`, eventId: `event-${conversationId}-${sequence}`, sequence, payload });
 const snapshot = (sequence: number, content: string, events: BriefChatEvent[] = []): ChatSnapshot => ({ conversationId: 'a', sequence, nextSequence: sequence, hasMore: false, subscribed: true, events,
-  turns: [{ conversationId: 'a', turnId: 'turn-a', requestId: 'request-a', state: 'running', speak: false, userMessageId: 'user-a', assistantMessageId: 'answer', createdAt: 9 }],
+  turns: [{ conversationId: 'a', turnId: 'turn-a', requestId: 'request-a', state: 'running', speak: false, attachments: [], userMessageId: 'user-a', assistantMessageId: 'answer', createdAt: 9 }],
   messages: { items: [row('answer', content)], nextCursor: 'older' } });
 function fixture(storage?: Pick<Storage, 'getItem' | 'setItem'>) {
   const store = new ConversationStore(storage);

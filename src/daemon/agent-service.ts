@@ -326,7 +326,8 @@ export class AgentService implements Service, IAgentService {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
-    if (this.convOrchestrator) {
+    // The existing classic path supports multimodal blocks and scoped history.
+    if (this.convOrchestrator && !conversation?.attachmentContent?.length) {
       // Both halves travel now (#571). This branch used to drop `siteContext`
       // AND `scope`, which made a project-scoped chat on every hosted install
       // the pre-#561 state exactly: the generic file and shell tools present,
@@ -345,7 +346,10 @@ export class AgentService implements Service, IAgentService {
       systemPrompt.dynamic += '\n\n' + scopeSystemNote(scope);
     }
 
-    const stream = this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope, conversation);
+    const attachmentTier = conversation?.attachmentContent?.length && this.llmManager.hasConversationTier();
+    const stream = this.orchestrator.streamMessage(systemPrompt, conversation?.attachmentContent?.length
+      ? [...conversation.attachmentContent, { type: 'text', text: text || 'Please examine the attached source material.' }]
+      : text, attachmentTier ? 'conversation' : undefined, conversation?.attachmentContent?.length ? 'chat_orchestrator_image' : undefined, attachmentTier ? 'medium' : undefined, scope, conversation);
 
     const onComplete = async (fullText: string): Promise<void> => {
       // Note: orchestrator already adds assistant response to history
