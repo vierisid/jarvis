@@ -51,7 +51,7 @@ jobs:
       current: ${{ steps.cmp.outputs.current }}
       version: ${{ steps.cmp.outputs.version }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: cmp
         # Read the dispatch input through env (never interpolate untrusted
         # ${{ }} straight into the shell -- it would allow command injection).
@@ -87,8 +87,8 @@ jobs:
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # Track sidecar/go.mod as the single source of the Go version.
           go-version-file: sidecar/go.mod

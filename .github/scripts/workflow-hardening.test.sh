@@ -173,9 +173,9 @@ else
 	no "reports: a read-only workflow that gains a write scope while using tags"
 fi
 expect_caught 'a major tag in a pull_request_target workflow' pinned "$WORKFLOWS/labeler.yml" \
-	'uses: actions/labeler@8558fd74291d67161a8a78ce36a881fa63b766a9' 'uses: actions/labeler@v5'
+	'uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13' 'uses: actions/labeler@v5'
 expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-release.yml" \
-	'uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09' 'uses: actions/checkout@fbc6f39'
+	'uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1' 'uses: actions/checkout@3d3c42e'
 
 echo
 echo "${pass} passed, ${fail} failed"
