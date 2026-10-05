@@ -40,6 +40,15 @@ export interface CatalogDiff {
   removed: GeneratedEntryLike[];
   /** Same id, different npm version. The mechanical, expected change. */
   versionChanged: Array<{ id: string; from: string; to: string }>;
+  /**
+   * The subset of `versionChanged` that moves a verified piece's installed
+   * version. Not mechanical: each verified piece has a governed adapter
+   * (`GOVERNED_PIECE_ADAPTERS` in `src/workflows/runtime/piece-effects.ts`)
+   * whose action table was read at the old version, and an action added
+   * upstream is unmapped until someone reads the new one. #664 merged eight of
+   * these as "safe" and turned `main` red.
+   */
+  verifiedVersionChanged: Array<{ id: string; from: string; to: string }>;
   /** Same id, different SPDX license. A trust/legal signal -- always flagged. */
   licenseChanged: Array<{ id: string; from: string; to: string }>;
   /**
@@ -62,7 +71,15 @@ const byId = (a: { id: string }, b: { id: string }) => a.id.localeCompare(b.id);
 export function diffCatalogs(
   oldEntries: GeneratedEntryLike[],
   newEntries: GeneratedEntryLike[],
-  meta: { oldSha: string; newSha: string },
+  meta: {
+    oldSha: string;
+    newSha: string;
+    /**
+     * Verified ids whose installed version follows the generated one, i.e.
+     * VERIFIED minus VERSION_PIN. Omitted, no bump is treated as governed.
+     */
+    verified?: ReadonlySet<string>;
+  },
 ): CatalogDiff {
   const oldById = new Map(oldEntries.map((e) => [e.id, e]));
   const newById = new Map(newEntries.map((e) => [e.id, e]));
@@ -99,10 +116,14 @@ export function diffCatalogs(
       ? { from: meta.oldSha, to: meta.newSha }
       : null;
 
+  const verified = meta.verified ?? new Set<string>();
+  const verifiedVersionChanged = versionChanged.filter((c) => verified.has(c.id));
+
   return {
     added,
     removed,
     versionChanged,
+    verifiedVersionChanged,
     licenseChanged,
     otherChanged,
     shaChanged,
@@ -112,10 +133,10 @@ export function diffCatalogs(
 }
 
 /**
- * "safe" only when the diff is purely mechanical: version bumps (and the
- * always-changing timestamp, which isn't represented here). The moment a piece
- * is added/removed, a license changes, metadata drifts, or the pinned SHA
- * moves, a human should look.
+ * "safe" only when the diff is purely mechanical: version bumps of unverified
+ * pieces (and the always-changing timestamp, which isn't represented here). The
+ * moment a piece is added/removed, a license changes, metadata drifts, the
+ * pinned SHA moves, or a verified piece's version moves, a human should look.
  */
 export function verdictFor(diff: CatalogDiff): Verdict {
   const needsReview =
@@ -123,6 +144,7 @@ export function verdictFor(diff: CatalogDiff): Verdict {
     diff.removed.length > 0 ||
     diff.licenseChanged.length > 0 ||
     diff.otherChanged.length > 0 ||
+    diff.verifiedVersionChanged.length > 0 ||
     diff.shaChanged !== null;
   return needsReview ? "review" : "safe";
 }
@@ -252,6 +274,22 @@ export function renderReport(
     p();
   }
 
+  if (diff.verifiedVersionChanged.length > 0) {
+    p("### Verified pieces bumped -- re-read their governed adapters");
+    p();
+    p(
+      "Each of these has an action table in `GOVERNED_PIECE_ADAPTERS` " +
+        "(`src/workflows/runtime/piece-effects.ts`) that was read at the old version. " +
+        "Diff the action set at the new version, give every added action a category, " +
+        "and bump the adapter's `vettedVersion`. `governed-pieces.test.ts` fails until you do:",
+    );
+    p();
+    for (const c of diff.verifiedVersionChanged) {
+      p(`- \`${c.id}\` -- \`${c.from}\` -> \`${c.to}\``);
+    }
+    p();
+  }
+
   if (diff.added.length > 0) {
     p("### Added pieces -- review required");
     p();
@@ -378,6 +416,10 @@ function reviewReasons(diff: CatalogDiff): string {
   }
   if (diff.otherChanged.length > 0) {
     parts.push(`${diff.otherChanged.length} metadata change${diff.otherChanged.length === 1 ? "" : "s"}`);
+  }
+  if (diff.verifiedVersionChanged.length > 0) {
+    const n = diff.verifiedVersionChanged.length;
+    parts.push(`${n} verified piece${n === 1 ? "" : "s"} bumped`);
   }
   return parts.join(", ");
 }

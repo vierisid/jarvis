@@ -65,6 +65,7 @@ import {
   type GeneratedEntryLike,
 } from "./lib/catalog-diff";
 import { createNpmClient, resolveVersion } from "./lib/npm-latest";
+import { VERIFIED, VERSION_PIN } from "../src/workflows/pieces-library/catalog-overrides";
 
 /**
  * Activepieces commit walked when generating the list. Keep this in sync
@@ -454,6 +455,9 @@ async function writePrReport(
   const diff = diffCatalogs(previous?.entries ?? [], toGeneratedEntries(found), {
     oldSha: previous?.sha ?? "",
     newSha: PINNED_SHA,
+    // A pinned verified piece installs its pin, so a generated bump moves
+    // nothing it runs.
+    verified: new Set([...VERIFIED].filter((id) => !(id in VERSION_PIN))),
   });
   const lineIndex = buildLineIndex(rendered);
   const { verdict, markdown } = renderReport(diff, {

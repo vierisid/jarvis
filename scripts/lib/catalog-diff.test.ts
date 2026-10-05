@@ -52,6 +52,21 @@ describe("diffCatalogs", () => {
     expect(verdictFor(diff)).toBe("safe");
   });
 
+  test("a verified piece's version bump flips the verdict to review (#664)", () => {
+    const oldE = [entry({ id: "gmail", latestVersion: "0.15.0" }), entry({ id: "acme", latestVersion: "1.0.0" })];
+    const newE = [entry({ id: "gmail", latestVersion: "0.17.0" }), entry({ id: "acme", latestVersion: "1.1.0" })];
+    const diff = diffCatalogs(oldE, newE, { ...meta, verified: new Set(["gmail"]) });
+    expect(diff.verifiedVersionChanged).toEqual([{ id: "gmail", from: "0.15.0", to: "0.17.0" }]);
+    expect(verdictFor(diff)).toBe("review");
+    const { markdown } = renderReport(diff, reportOpts);
+    expect(markdown).toContain("1 verified piece bumped");
+    expect(markdown).toContain("### Verified pieces bumped -- re-read their governed adapters");
+    expect(markdown).toContain("- `gmail` -- `0.15.0` -> `0.17.0`");
+    // An unverified bump alongside it is still just a bump.
+    expect(diffCatalogs(oldE, newE, { ...meta, verified: new Set(["gmail"]) }).versionChanged).toHaveLength(2);
+    expect(verdictFor(diffCatalogs(oldE, newE, { ...meta, verified: new Set(["slack"]) }))).toBe("safe");
+  });
+
   test("an added piece flips the verdict to review", () => {
     const oldE = [entry({ id: "gmail" })];
     const newE = [entry({ id: "gmail" }), entry({ id: "acme-crm", licenseSpdx: "GPL-3.0" })];
