@@ -58,7 +58,18 @@ export type SemanticNode = {
 
 export type SemanticSurface = {
   provider: 'uia' | 'ax' | 'atspi' | 'cdp' | 'cua';
-  root: { app: string; title: string; pid?: number; url?: string };
+  /**
+   * `loaderId` is the DOCUMENT this surface was read from, and only a browser
+   * surface has one (#640).
+   *
+   * It is the identity to compare when asking "is this the same surface I
+   * reviewed": `title` and `url` are `document.title` and `location.href`, both
+   * moved by `history.pushState` without a document ever committing, which is
+   * how every SPA navigates. A desktop provider has no document and leaves this
+   * absent, so a consumer has to decide what to do without one rather than
+   * assume an empty string means "same" -- see `ui_act`'s surface check.
+   */
+  root: { app: string; title: string; pid?: number; url?: string; loaderId?: string };
   nodes: SemanticNode[];
   /** 0–1: named-interactable coverage of the visible surface (Phase 2). */
   coverage: number;
@@ -236,15 +247,43 @@ export function semanticNodeFromCdp(el: CdpAxElement): SemanticNode {
   };
 }
 
-/** Adapt a browser_ax_snapshot result into a surface. */
+/**
+ * Longest `loader_id` accepted off the wire.
+ *
+ * Mirrors `MAX_LOADER_ID_LENGTH` in `actions/tools/sidecar-route.ts`, and is
+ * duplicated rather than imported because this module is a pure adapter with no
+ * daemon imports. Chrome's is a short hex string and the sidecar sends the
+ * browser's own answer, never the page's; this is the daemon not taking that on
+ * trust, which is the standing rule for any field from another machine.
+ */
+const MAX_LOADER_ID_LENGTH = 128;
+
+/**
+ * Adapt a browser_ax_snapshot result into a surface.
+ *
+ * `loader_id` is TYPE-CHECKED and bounded rather than annotated (#640). The
+ * value arrives from `JSON.parse` on another machine, the annotation above is
+ * erased at runtime, and this one is COMPARED -- `ui_act` decides whether to act
+ * on it. An absent, empty, non-string or over-long value yields no loaderId at
+ * all, which is the same thing an older sidecar yields, and the consumer then
+ * falls back to the stricter url+title comparison. Never a coerced empty string:
+ * two absent identities must not compare equal.
+ */
 export function surfaceFromCdp(result: {
   url?: string;
   title?: string;
+  loader_id?: unknown;
   elements: CdpAxElement[];
 }): SemanticSurface {
+  const loaderId = typeof result.loader_id === 'string'
+    && result.loader_id.length > 0
+    && result.loader_id.length <= MAX_LOADER_ID_LENGTH
+    ? result.loader_id
+    : undefined;
   return {
     provider: 'cdp',
-    root: { app: 'browser', title: result.title ?? '', url: result.url },
+    root: { app: 'browser', title: result.title ?? '', url: result.url,
+      ...(loaderId ? { loaderId } : {}) },
     nodes: result.elements.map(semanticNodeFromCdp),
     coverage: 0,
     capturedAt: Date.now(),

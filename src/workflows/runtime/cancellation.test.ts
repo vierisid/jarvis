@@ -12,7 +12,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { cancelFlowRun, getRunCancellation } from "../db/repos/run-cancellation";
-import { withRunCancellation } from "./cancellation";
+import { withRunCancellation, WorkflowCancellationError } from "./cancellation";
+import { checkpointExecution } from "../../actions/execution-scope";
 import { JarvisNotifierAdapter } from "../adapters/notifier";
 import { routePerChannel } from "../../daemon/channel-service";
 import { createWaitpoint } from "../db/repos/waitpoint";
@@ -323,5 +324,84 @@ test.each([false, true])("authenticated sandbox routes reject work after acknowl
       expect(response.status).toBe(409);
     }
     expect(dispatches).toBe(0);
+  } finally { await api.stop(); }
+});
+
+/**
+ * #630. Cancellation raised INSIDE a tool, which is the case the fence outside
+ * `ToolRegistry.execute`'s try does not cover.
+ *
+ * `withExecutionScope` publishes the run's fence into an AsyncLocalStorage
+ * scope, and the deep dispatch points a tool reaches through call
+ * `checkpointExecution()` themselves -- `SidecarManager.dispatchRPC` twice, the
+ * channel adapters, the TTS chunk loop, `ws-service`. Every one of those is
+ * inside `tool.execute`, and that is where cancellation lands for the calls
+ * worth cancelling: the ones awaiting a remote reply. The pre-dispatch fence
+ * only catches a run cancelled before the tool started, which is the case the
+ * tests above already cover.
+ *
+ * The tool that models it below awaits before fencing, on purpose. Cancelling
+ * BEFORE the call would be answered by the pre-dispatch fence outside the try
+ * and would pass with or without the carve-out -- a vacuous test of this
+ * property.
+ */
+test("a cancellation raised inside a running tool keeps its type (#630)", async () => {
+  const run = fixture("RUNNING");
+  const registry = new ToolRegistry();
+  const entered = deferred(), proceed = deferred();
+  registry.register({ name: "remote_effect", description: "synthetic", category: "test", parameters: {},
+    execute: async () => {
+      entered.resolve();
+      await proceed.promise;
+      // Stands in for dispatchRPC's own checkpoint after the await.
+      checkpointExecution();
+      return "unreachable";
+    } });
+  const call = withRunCancellation(run.id, () => registry.execute("remote_effect", {}));
+  await entered.promise;
+  cancelFlowRun(run.id);
+  proceed.resolve();
+  const error = await call.then(() => null, (e: unknown) => e);
+  // The TYPE is the assertion. The MESSAGE passed before this fix too -- the
+  // rewrapped text still contained "canceled" -- which is why the existing
+  // `rejects.toThrow("canceled")` assertions never caught this.
+  expect(error).toBeInstanceOf(WorkflowCancellationError);
+  expect((error as Error).message).not.toContain("execution failed");
+});
+
+/**
+ * #630, the consequence the issue is actually about: the sandbox's 409.
+ *
+ * The run is cancelled while the tool is mid-flight, so the pre-dispatch fence
+ * in `cancellableWorkflowService` has already passed. Before the carve-out the
+ * engine got `500 internal error: Tool 'remote_effect' execution failed: ...`
+ * -- a deliberate stop reported as a brain fault.
+ */
+test("a mid-tool cancellation reaches the engine as 409, not 500 (#630)", async () => {
+  const run = fixture("RUNNING");
+  const registry = new ToolRegistry();
+  const entered = deferred(), proceed = deferred();
+  registry.register({ name: "remote_effect", description: "synthetic", category: "test", parameters: {},
+    execute: async () => { entered.resolve(); await proceed.promise; checkpointExecution(); return "unreachable"; } });
+  const api = new SandboxApi({ services: {
+    credentialResolver: new CredentialResolver(),
+    toolsInvoke: async req => ({ toolName: req.toolName, result: await registry.execute(req.toolName, {}) }),
+  } });
+  await api.start({ port: 0 });
+  const identity = { sandboxId: SandboxRegistry.newSandboxId(), runId: run.id, projectId: run.projectId };
+  const { token, expiresAt } = await api.signer.mint(identity);
+  api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
+  try {
+    const response = fetch(`${api.baseUrl}/v1/jarvis/tools/invoke`, { method: "POST", headers: {
+      Authorization: `Bearer ${token}`, "Content-Type": "application/json",
+    }, body: JSON.stringify({ toolName: "remote_effect", params: {} }) });
+    await entered.promise;
+    cancelFlowRun(run.id);
+    proceed.resolve();
+    const settled = await response;
+    expect(settled.status).toBe(409);
+    const body = await settled.json() as { error?: string };
+    expect(body.error).toContain("was canceled or deleted");
+    expect(body.error).not.toContain("internal error");
   } finally { await api.stop(); }
 });
