@@ -1,0 +1,38 @@
+{
+  "task": "D-04",
+  "title": "Implement shared motion and reduced motion",
+  "date": "2026-10-05",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-04",
+  "baseline": "7f36b52943fdd465bc9854c1165e8d067fc295d5",
+  "inspected_main": "2d2d6f34831897ae14a77f84022e4c7938fec6f3",
+  "stack_base": "brief/d-03",
+  "dependency_prs": ["https://github.com/vierisid/jarvis/pull/715"],
+  "head": {"ref": "brief/d-04", "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-04.json"},
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-04",
+  "preview": "http://localhost:4384/?brief=preview&specimen=motion#/_brief_preview",
+  "figma": {"file": "eNfKeirIKLZLlZEasrurZa", "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded", "node": "531:95191", "extraction": "ui/src/brief/motion/figma-reference.json"},
+  "owns": ["ui/src/brief/motion/**", "ui/src/brief/preview/FoundationPreview.tsx (specimen route/link)", "ui/src/brief/entry/DashboardEntry.test.tsx (preview isolation)", "docs/brief-delivery/D-04.*", "docs/brief-delivery/evidence/D-04/**"],
+  "excludes": ["Production room migration", "Legacy v2 motion/styles", "F/Q behavior and contracts", "Live actions or preferences", "New animation dependencies", "D-05"],
+  "activation": "Isolated preview URL only. No room registration or default routing change.",
+  "tests": [
+    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 63, "files": 7, "assertions": 489},
+    {"command": "bunx tsc --noEmit", "result": "pass"},
+    {"command": "bun run build:ui", "result": "pass", "note": "Existing @theme/@tailwind warnings remain."},
+    {"case": "Cancel before sampling mutation", "result": "rejected", "expected": "Reversal must start at rendered 47.25px, not previous target 120px."},
+    {"case": "Ignore reduced motion mutation", "result": "rejected", "expected": "No second animation may start when reduction is requested."}
+  ],
+  "browser_checks": [
+    {"case": "Light/Dark × wide/compact × standard/reduced, 20 cycles per combination", "result": "pass", "evidence": "evidence/D-04/browser-traces.json.gz"},
+    {"case": "Current rendered position on interruption, stable anchors and no queued animation at rest", "result": "pass", "evidence": "evidence/D-04/browser-summary.json"},
+    {"case": "390px viewport and retained editable draft", "result": "pass", "evidence": "evidence/D-04/browser-summary.json"},
+    {"case": "Live OS preference change", "result": "unit-tested", "note": "Browser traces use the same hook's local reduce-only request; no OS setting was changed."}
+  ],
+  "limitations": ["rAF/WAAPI trace, not DevTools CPU/GPU or a 60fps claim.", "Position continuity is demonstrated; velocity continuity is not claimed.", "Chromium only; no OS-level browser emulation or screen-reader certification.", "Offscreen examples still record DOM animation state; frame intervals do not certify all content was painted.", "Real-room scroll, focus, selection and layout journeys remain for their implementation tasks.", "Read current-head GitHub checks for remote CI verdict."],
+  "rollback": "Revert D-04 and its specimen registration. No migration; D-01/D-02/D-03 remain. Remove Brief query parameters for v2.",
+  "next": "D-05, separate worktree/PR; not started."
+}

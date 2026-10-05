@@ -6,6 +6,7 @@ import type { BriefRoomProps, BriefShellPort } from "../contracts";
 import { legacyHref } from "../entry/route";
 import { StyleSpecimen } from "../styles/StyleSpecimen";
 import { ControlSpecimen } from "../components/controls/ControlSpecimen";
+import { MotionSpecimen } from "../motion/MotionSpecimen";
 
 interface PreviewModel { note: string }
 const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<PreviewModel>("No live provider is connected in this preview."), source: "fixture" }),
@@ -30,7 +31,7 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
-  return specimen === "controls" ? <ControlSpecimen /> : specimen === "styles" ? <StyleSpecimen /> : <FoundationControls />;
+  return specimen === "motion" ? <MotionSpecimen /> : specimen === "controls" ? <ControlSpecimen /> : specimen === "styles" ? <StyleSpecimen /> : <FoundationControls />;
 }
 
 function FoundationControls() {
@@ -50,6 +51,7 @@ function FoundationControls() {
       <PreviewBody shell={shell} />
       <a className="brief-foundation__return" href="?brief=preview&specimen=styles#/_brief_preview">Open style reference</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=controls#/_brief_preview">Try shared controls</a>{" · "}
+      <a className="brief-foundation__return" href="?brief=preview&specimen=motion#/_brief_preview">Try motion reference</a>{" · "}
       <a className="brief-foundation__return" href={legacyHref(window.location.href)}>Return to current dashboard</a>
     </section>
   </main>;
