@@ -12,6 +12,8 @@ import { queueStats } from "../db/repos/job-queue";
 import { updateFlowMetadata } from "../db/repos/flow";
 import {
   createWorkflowRoutes,
+  FLOW_VERSION_REF_ID_MAX_CHARS,
+  FLOW_VERSION_REF_IDS_MAX_ENTRIES,
   RUN_TRIGGERED_BY_MAX_CHARS,
   WAITPOINT_RESUME_MAX_BODY_BYTES,
   WAITPOINT_RESUME_PER_ID_PER_MINUTE,
@@ -2171,6 +2173,55 @@ describe("#632: a version patch picks its fields instead of spreading the body",
     expect((await patch(id, versionId, { agentIds: "agent_a" })).status).toBe(400);
     expect((await patch(id, versionId, { agentIds: ["ok", 7] })).status).toBe(400);
     expect((await patch(id, versionId, { connectionIds: [] })).status).toBe(200);
+  });
+
+  /**
+   * #653. Shape-checked but not size-checked: about 1,000,000 single-character
+   * ids (999,995, measured) fit inside `VERSION_WRITE_MAX_BODY_BYTES`, and the
+   * column they land in is `JSON.parse`d on every version read -- 50 rows per
+   * `listVersions`. Measured on this runtime, parsing that column costs ~19 ms,
+   * so a listing of 50 such rows holds the event loop for about a second.
+   */
+  test("connectionIds and agentIds are bounded in count and in entry length", async () => {
+    const { id, versionId } = await seededDraft();
+    const { getFlowVersion } = await import("../db/repos/flow-version");
+    for (const key of ["connectionIds", "agentIds"] as const) {
+      // At the caps: accepted and stored whole.
+      const atCap = Array.from({ length: FLOW_VERSION_REF_IDS_MAX_ENTRIES }, (_, i) =>
+        `${i}`.padEnd(FLOW_VERSION_REF_ID_MAX_CHARS, "x"));
+      const ok = await patch(id, versionId, { [key]: atCap });
+      expect(ok.status).toBe(200);
+      expect(getFlowVersion(versionId)![key]).toEqual(atCap);
+
+      // One entry over the count: refused, and the stored list is untouched.
+      const tooMany = await patch(id, versionId, { [key]: [...atCap, "one-more"] });
+      expect(tooMany.status).toBe(413);
+      expect((tooMany.body as { error: string }).error).toMatch(
+        new RegExp(`${key} has ${FLOW_VERSION_REF_IDS_MAX_ENTRIES + 1} entries; the limit is ${FLOW_VERSION_REF_IDS_MAX_ENTRIES}`),
+      );
+      expect(getFlowVersion(versionId)![key]).toEqual(atCap);
+
+      // One character over on one entry: refused, naming the entry.
+      const tooLong = await patch(id, versionId, { [key]: ["ok", "y".repeat(FLOW_VERSION_REF_ID_MAX_CHARS + 1)] });
+      expect(tooLong.status).toBe(413);
+      expect((tooLong.body as { error: string }).error).toMatch(
+        new RegExp(`${key}\\[1\\] is ${FLOW_VERSION_REF_ID_MAX_CHARS + 1} characters; the limit is ${FLOW_VERSION_REF_ID_MAX_CHARS}`),
+      );
+      expect(getFlowVersion(versionId)![key]).toEqual(atCap);
+
+      // Count before elements: 101 non-strings is a size refusal, so a flood
+      // is refused without the element walk.
+      expect((await patch(id, versionId, { [key]: Array(FLOW_VERSION_REF_IDS_MAX_ENTRIES + 1).fill(7) })).status).toBe(413);
+    }
+
+    // The issue's own construction: a body of single-character ids that the
+    // body cap admits. Refused for its count, not its bytes.
+    const flood = Array.from({ length: 999_995 }, () => "a");
+    const body = JSON.stringify({ connectionIds: flood });
+    expect(body.length).toBeLessThanOrEqual(VERSION_WRITE_MAX_BODY_BYTES);
+    const refused = await patch(id, versionId, { connectionIds: flood });
+    expect(refused.status).toBe(413);
+    expect((refused.body as { error: string }).error).toMatch(/connectionIds has 999995 entries/);
   });
 
   /**

@@ -361,6 +361,48 @@ const FLOW_WRITE_MAX_BODY_BYTES = 262_144;
 export const VERSION_WRITE_MAX_BODY_BYTES = 4_000_000;
 
 /**
+ * Ceiling on the NUMBER of entries in a version's `connectionIds` or `agentIds`
+ * (#653).
+ *
+ * #632 made both arrays of strings; nothing bounded their size. About 1,000,000
+ * single-character ids (999,995, measured) fit inside
+ * `VERSION_WRITE_MAX_BODY_BYTES`, and the column they land in is `JSON.parse`d
+ * by `rowToFlowVersion` on EVERY version read -- 50 rows per `listVersions`,
+ * and once more per run, since `flow-version-adapter.ts` hands both lists to
+ * the engine. Measured on this runtime, parsing that column costs ~19 ms, so a
+ * listing of 50 such rows held the event loop for close to a second. Same
+ * shape #635 fixed for `sample_data`, one column over: a per-element check
+ * with no cap on the aggregate.
+ *
+ * 100 is the ceiling on the LEGITIMATE population, by the argument
+ * `SAMPLE_DATA_MAP_MAX_ENTRIES` makes: each id names a connection or an agent a
+ * step uses, a piece step authenticates with one connection, and a graph above
+ * 100 nodes can be saved but never run (`runtime/workflow-readiness.ts` raises
+ * `LIMIT` past it and `assertVersionReady` gates publish, enable and run). The
+ * measured population is a single install with one version holding `[]` in
+ * both: no shipped client sends either field (`useWorkflowEditor.ts` sends
+ * `displayName`, `trigger` and `uiMeta`), so this refuses nothing a shipped
+ * caller does.
+ */
+export const FLOW_VERSION_REF_IDS_MAX_ENTRIES = 100;
+
+/**
+ * Ceiling on the length of ONE entry in either list (#653). The count alone
+ * would still let 100 entries of 40 KB each through.
+ *
+ * What an entry names is an id: a row id is a 21-character `apId()`, and the
+ * longest role id under `roles/` (21 files, specialists included) is 20. A
+ * connection's `externalId` is the one free-text case -- the connections POST
+ * takes what its author types -- so this leaves room for a hand-typed one at
+ * roughly twelve times the longest generated id, rather than sizing to the
+ * generated ones exactly.
+ *
+ * WHAT IT BOUNDS, measured: at both caps a column is 25,901 characters and
+ * parses in 0.022 ms, so 50 rows cost about 1.1 ms against ~950 ms before.
+ */
+export const FLOW_VERSION_REF_ID_MAX_CHARS = 256;
+
+/**
  * Ceiling on a SAMPLE-DATA write body -- `PATCH .../sample-data/:stepName` and
  * `PATCH .../sample-input/:stepName` (#635).
  *
@@ -1585,10 +1627,25 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // is a claim the whole read side believes.
           for (const [key, raw] of [["connectionIds", body.connectionIds], ["agentIds", body.agentIds]] as const) {
             if (raw === undefined) continue;
-            if (!Array.isArray(raw) || raw.some((entry) => typeof entry !== "string")) {
+            if (!Array.isArray(raw)) return err(`${key} must be an array of strings if provided`);
+            // And bounded (#653). The count is checked before the elements, so
+            // a flood is refused without being walked. 413, as every other
+            // size refusal in this file.
+            if (raw.length > FLOW_VERSION_REF_IDS_MAX_ENTRIES) {
+              return err(`${key} has ${raw.length} entries; the limit is ${FLOW_VERSION_REF_IDS_MAX_ENTRIES}`, 413);
+            }
+            if (raw.some((entry) => typeof entry !== "string")) {
               return err(`${key} must be an array of strings if provided`);
             }
-            versionPatch[key] = raw as string[];
+            const ids = raw as string[];
+            const longAt = ids.findIndex((entry) => entry.length > FLOW_VERSION_REF_ID_MAX_CHARS);
+            if (longAt !== -1) {
+              return err(
+                `${key}[${longAt}] is ${ids[longAt]!.length} characters; the limit is ${FLOW_VERSION_REF_ID_MAX_CHARS}`,
+                413,
+              );
+            }
+            versionPatch[key] = ids;
           }
           // `displayName` is OPTIONAL on a patch, so it is validated only when
           // present -- but it used to reach `updateDraftVersion` with no
