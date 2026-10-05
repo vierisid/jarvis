@@ -81,6 +81,7 @@ import {
   deleteConnection,
   getConnection,
   listConnections,
+  updateConnectionById,
   upsertConnection,
   type AppConnectionStatus,
   type AppConnectionType,
@@ -1185,23 +1186,31 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ) {
             return err("displayName must be a non-empty string if provided");
           }
+          // Re-read after the body await: `existing` above is a snapshot from
+          // before it, and a DELETE or a POST that changed the type can have
+          // landed in between. Nothing from here to the write yields.
+          const current = getConnection(id);
+          if (!current) return err("connection not found", 404);
           // Apply the same per-type schema check POST runs. Type can't change
-          // via PATCH (rotation, not re-creation), so we use existing.type.
+          // via PATCH (rotation, not re-creation), so we use the row's type.
           // Without this, a rotation could save an OAUTH2 connection with no
           // access_token that POST would have rejected.
           if (body.value !== undefined) {
-            const schemaError = validateConnectionValueShape(existing.type, body.value);
+            const schemaError = validateConnectionValueShape(current.type, body.value);
             if (schemaError) return err(schemaError);
           }
-          const merged = upsertConnection({
-            externalId: existing.externalId,
-            displayName: body.displayName ?? existing.displayName,
-            type: existing.type,
-            pieceName: existing.pieceName,
-            pieceVersion: existing.pieceVersion,
-            value: body.value ?? existing.value,
+          // By id, never by tuple (#650). This wrote through `upsertConnection`,
+          // which finds its target by (project, piece, externalId) with the
+          // project DEFAULTED and inserts on a miss -- so a row outside the
+          // default project got a COPY in the default project, carrying its
+          // decrypted secret re-sealed under the copy's identity. See
+          // `updateConnectionById` for the race this also closes.
+          const merged = updateConnectionById(id, {
+            ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+            ...(body.value !== undefined ? { value: body.value } : {}),
             ...(status ? { status } : {}),
           });
+          if (!merged) return err("connection not found", 404);
           return ok({
             id: merged.id,
             externalId: merged.externalId,

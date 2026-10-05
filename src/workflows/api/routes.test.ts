@@ -1250,6 +1250,185 @@ describe("workflow API: connections", () => {
   });
 });
 
+/**
+ * #650. PATCH found its row by id (no project predicate) and then wrote it
+ * through `upsertConnection` with no `projectId`, which resolves its target by
+ * `(DEFAULT_IDS.project, pieceName, externalId)`. For a row outside the
+ * default project that is a different identity tuple, so PATCH did not update
+ * the row it was asked about: it INSERTED a second row in the default project,
+ * re-sealing the first row's decrypted secret under the new row's identity.
+ * The row binding stops a blob being moved; it does not stop a
+ * decrypt-and-reseal, which is what this was.
+ *
+ * `project_id` is a constant in production today, so no live caller reaches
+ * this. The test writes a second project directly, which is exactly the state
+ * the day projects stop being constant.
+ */
+describe("#650: the connections PATCH updates the row it was asked about", () => {
+  const OTHER_PROJECT = "proj_other_650";
+
+  async function seedInOtherProject() {
+    const { upsertConnection } = await import("../db/repos/app-connection");
+    return upsertConnection({
+      projectId: OTHER_PROJECT,
+      externalId: "scoped-650",
+      displayName: "Scoped",
+      type: "SECRET_TEXT",
+      pieceName: "@activepieces/piece-foo",
+      pieceVersion: "0.0.1",
+      value: { secret: "only-in-other-project" },
+    });
+  }
+
+  function patch(id: string, body: unknown) {
+    return callJson(
+      routes["/api/workflows/connections/:id"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/connections/${id}`, { id }, body),
+    );
+  }
+
+  async function allRows() {
+    const { getWorkflowDb } = await import("../db/index");
+    return getWorkflowDb()
+      .query<{ id: string; project_id: string }, []>("SELECT id, project_id FROM app_connection ORDER BY id")
+      .all();
+  }
+
+  test("a displayName-only PATCH keeps the id and copies the secret nowhere", async () => {
+    const { listConnections, getConnection } = await import("../db/repos/app-connection");
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const conn = await seedInOtherProject();
+
+    const res = await patch(conn.id, { displayName: "Renamed" });
+    expect(res.status).toBe(200);
+    // The id in the answer is the id in the URL, not a freshly minted one.
+    expect((res.body as { id: string }).id).toBe(conn.id);
+    // Still exactly one row, still in its own project.
+    expect(await allRows()).toEqual([{ id: conn.id, project_id: OTHER_PROJECT }]);
+    // And the default project holds no copy of the secret.
+    expect(listConnections(DEFAULT_IDS.project)).toEqual([]);
+
+    const fresh = getConnection(conn.id);
+    expect(fresh?.displayName).toBe("Renamed");
+    expect(fresh?.projectId).toBe(OTHER_PROJECT);
+    expect(fresh?.value).toEqual({ secret: "only-in-other-project" });
+  });
+
+  test("a value rotation lands on the same row", async () => {
+    const { getConnection } = await import("../db/repos/app-connection");
+    const conn = await seedInOtherProject();
+
+    const res = await patch(conn.id, { value: { secret: "rotated" } });
+    expect(res.status).toBe(200);
+    expect((res.body as { id: string }).id).toBe(conn.id);
+    expect(await allRows()).toEqual([{ id: conn.id, project_id: OTHER_PROJECT }]);
+    expect(getConnection(conn.id)?.value).toEqual({ secret: "rotated" });
+  });
+
+  /**
+   * The same "update the row, do not rewrite it" property, one column over:
+   * the upsert PATCH wrote through kept `owner_id`, `scope` and
+   * `pre_select_for_new_projects` when the input left them out, but wrote
+   * `metadata = NULL`, so every rotation wiped it.
+   */
+  test("a PATCH keeps the row's metadata", async () => {
+    const { upsertConnection, getConnection } = await import("../db/repos/app-connection");
+    const conn = upsertConnection({
+      projectId: OTHER_PROJECT,
+      externalId: "meta-650",
+      displayName: "Meta",
+      type: "SECRET_TEXT",
+      pieceName: "@activepieces/piece-foo",
+      pieceVersion: "0.0.1",
+      value: { secret: "s" },
+      metadata: { region: "eu" },
+    });
+    expect(getConnection(conn.id)?.metadata).toEqual({ region: "eu" });
+
+    const res = await patch(conn.id, { value: { secret: "s2" } });
+    expect(res.status).toBe(200);
+    // On the row itself, or this would pass by missing it.
+    expect((res.body as { id: string }).id).toBe(conn.id);
+    expect(getConnection(conn.id)?.value).toEqual({ secret: "s2" });
+    expect(getConnection(conn.id)?.metadata).toEqual({ region: "eu" });
+  });
+
+  /** A rename is not a rotation: the stored ciphertext is left byte-exact. */
+  test("a displayName-only PATCH does not re-seal the secret", async () => {
+    const conn = await seedInOtherProject();
+    const { getWorkflowDb } = await import("../db/index");
+    const stored = () =>
+      getWorkflowDb().query<{ value: string }, [string]>("SELECT value FROM app_connection WHERE id = ?").get(conn.id)
+        ?.value;
+    const before = stored();
+    expect(before).toBeString();
+
+    const res = await patch(conn.id, { displayName: "Renamed again" });
+    expect(res.status).toBe(200);
+    // On the row itself, or this would pass by missing it.
+    expect((res.body as { id: string }).id).toBe(conn.id);
+    expect(await allRows()).toEqual([{ id: conn.id, project_id: OTHER_PROJECT }]);
+    expect(stored()).toBe(before);
+  });
+
+  /**
+   * The route reads the row, then awaits the body, then writes. A body that
+   * is still streaming holds that window open for as long as the client likes.
+   */
+  function streamingPatch(id: string) {
+    let push!: (body: unknown) => void;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        push = (body) => {
+          controller.enqueue(new TextEncoder().encode(JSON.stringify(body)));
+          controller.close();
+        };
+      },
+    });
+    const req = new Request(`http://x/api/workflows/connections/${id}`, {
+      method: "PATCH",
+      body: stream,
+      headers: { "Content-Type": "application/json" },
+      duplex: "half",
+    } as RequestInit) as Request & { params: { id: string } };
+    req.params = { id };
+    const pending = callJson(routes["/api/workflows/connections/:id"]?.PATCH, req);
+    return { pending, push };
+  }
+
+  test("a DELETE that lands while the body is in flight is not undone", async () => {
+    const conn = await seedInOtherProject();
+    const { pending, push } = streamingPatch(conn.id);
+
+    const deleted = await callJson(
+      routes["/api/workflows/connections/:id"]?.DELETE,
+      reqWithParams("DELETE", `http://x/api/workflows/connections/${conn.id}`, { id: conn.id }),
+    );
+    expect(deleted.status).toBe(200);
+
+    push({ displayName: "Too late" });
+    const res = await pending;
+    expect(res.status).toBe(404);
+    // The deleted secret did not come back under a fresh id.
+    expect(await allRows()).toEqual([]);
+  });
+
+  test("a rename in flight does not write back a secret rotated meanwhile", async () => {
+    const { getConnection } = await import("../db/repos/app-connection");
+    const conn = await seedInOtherProject();
+    const { pending, push } = streamingPatch(conn.id);
+
+    const rotated = await patch(conn.id, { value: { secret: "rotated-meanwhile" } });
+    expect(rotated.status).toBe(200);
+
+    push({ displayName: "Renamed late" });
+    expect((await pending).status).toBe(200);
+    const fresh = getConnection(conn.id);
+    expect(fresh?.displayName).toBe("Renamed late");
+    expect(fresh?.value).toEqual({ secret: "rotated-meanwhile" });
+  });
+});
+
 describe("workflow API: waitpoints surface", () => {
   test("GET /api/workflow-runs/:runId/waitpoints lists active waitpoints with resume URLs", async () => {
     const { createFlow } = await import("../db/repos/flow");

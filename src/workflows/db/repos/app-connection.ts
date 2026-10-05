@@ -120,6 +120,10 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
 /**
  * Upsert by (project_id, piece_name, external_id). Creates if absent, updates
  * value/displayName/status if present. Returns the resulting connection.
+ *
+ * `projectId` defaults to the default project, and a tuple that matches no
+ * row INSERTS. So this is not the way to update a row found by id: use
+ * `updateConnectionById`, which cannot insert (#650).
  */
 export function upsertConnection(input: UpsertConnectionInput): AppConnection {
   const projectId = input.projectId ?? DEFAULT_IDS.project;
@@ -193,6 +197,64 @@ export function upsertConnection(input: UpsertConnectionInput): AppConnection {
   const row = getConnection(id);
   if (!row) throw new Error(`upsertConnection: row missing after insert (id=${id})`);
   return row;
+}
+
+export interface UpdateConnectionPatch {
+  displayName?: string;
+  /** Full replacement. Absent leaves the stored ciphertext byte-exact. */
+  value?: Record<string, unknown>;
+  status?: AppConnectionStatus;
+}
+
+/**
+ * Update the row with this id, and only that row. Returns null when it does
+ * not exist; never inserts.
+ *
+ * Written for the connections PATCH (#650), which found its row by id and then
+ * wrote through `upsertConnection` -- a lookup by (project, piece, externalId)
+ * with the project defaulted. For a row outside the default project that tuple
+ * matched nothing, so PATCH inserted a copy in the default project and
+ * re-sealed the decrypted secret under the copy's identity. The row binding
+ * stops a ciphertext being moved; it does not stop a decrypt-and-reseal.
+ *
+ * Passing the row's own project to the upsert would have closed that, but not
+ * the race beside it: the route reads the row, awaits the body, and only then
+ * writes, so a DELETE in that window made the upsert INSERT the deleted secret
+ * back under a fresh id, and a DELETE plus POST made it re-seal the old secret
+ * into the new row. Here the read, the seal and the write are one transaction
+ * keyed by id, and the seal binds to the identity read inside it.
+ *
+ * A patch without `value` does not touch `value` at all, so a rename neither
+ * decrypts nor re-seals the secret, and cannot write back a stale one over a
+ * rotation that landed meanwhile.
+ */
+export function updateConnectionById(id: string, patch: UpdateConnectionPatch): AppConnection | null {
+  return db().transaction(() => {
+    const row = db()
+      .query<AppConnectionRow, [string]>(`SELECT * FROM app_connection WHERE id = ?`)
+      .get(id);
+    if (!row) return null;
+    const sets: string[] = [];
+    const params: Array<string | number> = [];
+    if (patch.displayName !== undefined) {
+      sets.push("display_name = ?");
+      params.push(patch.displayName);
+    }
+    if (patch.status !== undefined) {
+      sets.push("status = ?");
+      params.push(patch.status);
+    }
+    if (patch.value !== undefined) {
+      // Resolve encryption before the write. A key failure must never save JSON.
+      sets.push("value = ?");
+      params.push(encryptBoundJson(patch.value, bindingFor(row)));
+    }
+    sets.push("updated = ?");
+    params.push(now());
+    const result = db().run(`UPDATE app_connection SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
+    if (result.changes !== 1) throw new Error(`updateConnectionById: expected one row, changed ${result.changes}`);
+    return getConnection(id);
+  })();
 }
 
 export function getConnection(id: string): AppConnection | null {
