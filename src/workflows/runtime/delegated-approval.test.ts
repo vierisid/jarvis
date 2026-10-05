@@ -476,6 +476,78 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
   });
 
+  /**
+   * #672. A call that reaches this route and is parked or dispatched leaves a
+   * row under the RUN (`workflow:<runId>`, written by the boundary) beside the
+   * sub-agent gate's row under the child's own id. A call the route REFUSED
+   * left only the child's row -- whose agent id is the spawned sub-agent's and
+   * whose name is the role's, so nothing in it names the run or the step, and
+   * a query for the run's audit (`/api/authority/audit?agentId=workflow:<id>`)
+   * showed the delegation allowed and then nothing. `toolsInvoke` and
+   * `pieceAuthorize` already audit their refusals there.
+   */
+  test('a refusal on this route is audited under the run, beside the sub-agent gate\'s own row (#672)', async () => {
+    for (const [tool, args, governed] of [
+      ['run_command', { command: 'rm -rf /' }, 'execute_command'],
+      ['run_skill', { name: 'gmail-send' }, 'send_email'],
+      ['tap_widget', { widget: 'Pay' }, 'control_app'],
+    ] as const) {
+      getWorkflowDb().run('DELETE FROM audit_trail');
+      const ids = createRun();
+      const f = backends(ids, { script: [{ call: tool, args }, 'finish'], authority: { governed_categories: [governed] } });
+      const done = await f.delegate({ requiredTools: [tool] });
+      expect(done.toolCalls[0]!.error).toMatch(new RegExp(`^\\[APPROVAL DENIED\\] ${tool}: Unsupported workflow capability`));
+      const rows = audit().filter(row => row[1] === tool);
+      expect({ tool, rows }).toEqual({ tool, rows: [
+        [`workflow:${ids.run.id}`, tool, 'denied', false],
+        ['child', tool, 'denied', false],
+      ] });
+      // The run's row names the step, and is in the category the gate judged,
+      // so the two rows describe the same decision.
+      const runRow = getWorkflowDb().query('SELECT agent_name, action_category FROM audit_trail WHERE agent_id = ? AND tool_name = ?')
+        .get(`workflow:${ids.run.id}`, tool) as { agent_name: string; action_category: string };
+      const childRow = getWorkflowDb().query('SELECT action_category FROM audit_trail WHERE agent_id = ? AND tool_name = ?')
+        .get('child', tool) as { action_category: string };
+      expect(runRow.agent_name).toBe(`Workflow ${ids.run.id} / delegate`);
+      expect(runRow.action_category).toBe(childRow.action_category);
+      // Still nothing durable for the refused call itself.
+      expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
+    }
+  });
+
+  /**
+   * #672, the fourth refusal, which the first pass cannot reach (the
+   * sub-agent's own gate denies `confirm: 'always'` first) but a RESUME can:
+   * the runner hands the parked call straight back to this dispatch without
+   * re-running its gate, and writes no row of its own on that path. So before
+   * #672 this refusal left no audit row anywhere. And it is decided on a gate
+   * recomputed now, so the row carries the worse of that and the parked call's
+   * category -- the parked one alone would record a write that was refused as
+   * a command.
+   */
+  test('a resumed call refused for confirmation is audited under the run, at the category that refused it (#672)', async () => {
+    let raised = false;
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => (raised
+      ? { actionCategory: 'execute_command', intent: 'Write a shell startup file', confirm: 'always' }
+      : null) });
+    const parked = await f.delegate();
+    expect(parked.status).toBe('approval_required');
+    raised = true;
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(f.effects()).toBe(0);
+    expect(done.toolCalls[0]!.error).toMatch(/requires the user's explicit confirmation/);
+    const rows = getWorkflowDb().query(
+      'SELECT agent_id, authority_decision, action_category FROM audit_trail WHERE tool_name = ? ORDER BY rowid')
+      .all('write_file') as Array<{ agent_id: string; authority_decision: string; action_category: string }>;
+    expect(rows).toEqual([
+      { agent_id: `workflow:${ids.run.id}`, authority_decision: 'approval_required', action_category: 'write_data' },
+      { agent_id: 'child', authority_decision: 'approval_required', action_category: 'write_data' },
+      { agent_id: `workflow:${ids.run.id}`, authority_decision: 'denied', action_category: 'execute_command' },
+    ]);
+  });
+
   test('the refusal does not catch the reads this route legitimately carries (#638)', async () => {
     // Non-over-refusal, in the direction the obvious fix got wrong: calling
     // `toolEffectCapability` here, as the other two routes do, would also have

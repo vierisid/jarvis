@@ -394,11 +394,49 @@ export function buildSandboxServiceBackends(
       // an approval when the category is governed, dispatched once, and
       // answered from its record when the resumed conversation asks again.
       dispatch: async (registry, call) => {
+        // Every refusal below goes through here, so each one is audited under
+        // the RUN as well (#672). A call this route parks or dispatches gets a
+        // `workflow:<runId>` row from the boundary; one it refuses got only the
+        // sub-agent gate's row, under the spawned child's id and the role's
+        // name, which names neither the run nor the step -- so the run's own
+        // audit showed the delegation allowed and then nothing. `toolsInvoke`
+        // and `pieceAuthorize` audit their refusals the same way.
+        //
+        // On a first pass `sub-agent-runner.ts` also writes the child's row.
+        // On a RESUME it does not: it hands the parked call straight back here
+        // without re-running its gate or writing a row, so for a refusal on
+        // resume this row is the only one -- before #672 there was none. The
+        // `confirm: 'always'` refusal below is reachable in practice only that
+        // way (on a first pass the runner's gate denies it first, short of a
+        // stateful gate changing its answer in the microseconds between the
+        // two calls), when the tool's gate changed while the call was parked.
+        //
+        // The category is the worse of the parked call's (the runner's gate at
+        // park time, which is what the child row says) and the gate recomputed
+        // now, which is what the last refusal decides on. On a first pass the
+        // two are the same; on resume the parked one alone could record a
+        // write that was refused as a command.
+        //
+        // What this does NOT cover, so the rule is "every call that reaches
+        // this route has a row under the run" and not "every sub-agent decision
+        // does": anything the runner decides itself never reaches here -- any
+        // denial by its gate (level, profile, taint, override, context rule),
+        // an off-list refusal, any call it allows outright -- and keeps only
+        // the child's row; and an emergency suspension or an unknown tool name
+        // returns before the runner audits at all, so has no row anywhere.
+        // Closing those needs the runner to know the run, which it does not.
+        const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+        const refusedCategory = severityRank(gate.actionCategory) > severityRank(call.actionCategory)
+          ? gate.actionCategory : call.actionCategory;
+        const refuse = (reason: string) => {
+          effects.auditRefusal({ context: ctx, toolName: call.toolCall.name, category: refusedCategory });
+          return { kind: 'denied' as const, reason };
+        };
         // The same rule as the direct tool piece: a category cannot describe
         // what a script or a click sequence will do, so it is not approvable
         // here either. The agent learns it was refused.
         if (OPAQUE_TOOL_NAMES.has(call.toolCall.name)) {
-          return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.` };
+          return refuse(`Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.`);
         }
         // A gated tool is approvable only THROUGH its adapter, and the adapter
         // runs in `toolsInvoke`, not here. Everything that makes run_skill
@@ -410,7 +448,7 @@ export function buildSandboxServiceBackends(
         // only the tool. Refuse it here rather than approve it unreviewed;
         // a flow step is how a skill runs in a workflow.
         if (GATED_TOOL_NAMES.has(call.toolCall.name)) {
-          return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} is only approvable through its typed adapter; call it as a flow step, not from a delegated agent.` };
+          return refuse(`Unsupported workflow capability: ${call.toolCall.name} is only approvable through its typed adapter; call it as a flow step, not from a delegated agent.`);
         }
         // #638. The two checks above gate on SET MEMBERSHIP, and the sets do
         // not cover this route's third case: a call whose approval has to stay
@@ -434,7 +472,7 @@ export function buildSandboxServiceBackends(
         // be allowed here).
         const unboundable = surfaceBoundRefusal(
           registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
-        if (unboundable) return { kind: 'denied', reason: unboundable };
+        if (unboundable) return refuse(unboundable);
         // And the subsystem rule that was only ever enforced upstream (#638).
         // `sub-agent-runner.ts` refuses `confirm: 'always'` with "a sub-agent
         // may not request a confirmation"; this route is reachable with a
@@ -452,9 +490,9 @@ export function buildSandboxServiceBackends(
         // already-granted approval and park its waitpoint; and it labelled a
         // non-UI tool's card as a UI effect. Denying is the answer the rest of
         // the subsystem already gives, and it needs no new state to be right.
-        const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+        // (`gate` is computed at the top of this dispatch, for the audit row.)
         if (gate.confirm === 'always') {
-          return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.` };
+          return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
