@@ -26,7 +26,7 @@
  * `initWorkflowDb(...)` before routes serve traffic.
  */
 
-import { getWorkflowDb } from '../db';
+import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import {
   createFlow,
   deleteFlow,
@@ -78,8 +78,8 @@ import {
   markWaitpointResumed,
 } from "../db/repos/waitpoint";
 import {
-  deleteConnection,
-  getConnection,
+  deleteConnectionInProject,
+  getConnectionInProject,
   listConnections,
   updateConnectionById,
   upsertConnection,
@@ -715,6 +715,19 @@ export interface CreateWorkflowRoutesOptions {
    */
   credentialResolver?: CredentialResolver;
   /**
+   * The project a request acts in, for the routes that are project-scoped
+   * (today the connections routes, #692). Every one of them reads its project
+   * from here and nowhere else, so a list and a write-by-id can never disagree
+   * about scope.
+   *
+   * Unset in production, which resolves every request to
+   * `DEFAULT_IDS.project`: the workflow store is single-tenant (see
+   * `db/schema.ts`) and an enrolled-device token carries no project, so there
+   * is no per-caller project to read yet. When there is, this is the one place
+   * it goes. Tests set it to act from a second project.
+   */
+  callerProjectId?: (req: Request) => string;
+  /**
    * Callback fired after a successful install/uninstall through the Library
    * routes. The daemon wires this to extract metadata for the new piece via
    * the engine and upsert it into the running `PieceCatalog`, so the flow
@@ -784,6 +797,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
   // process, and one value means the GET's shape and the mutations' guard can
   // never disagree about which mode this install is in.
   const managed = piecesManagedByHost(opts.sharedPiecesDir);
+  // The project a request acts in. See `callerProjectId`.
+  const callerProject = (req: Request): string => opts.callerProjectId?.(req) ?? DEFAULT_IDS.project;
   // OS-fit warnings for a version being locked -- the last point a
   // hand-drawn flow can be told its command will never run where it lands.
   // Empty whenever the verdict would be a guess (no inventory, or a machine
@@ -1085,9 +1100,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // client -- only the metadata (id, externalId, type, displayName,
     // pieceName, etc.) ships out so the dashboard can show what's wired.
     "/api/workflows/connections": {
-      GET: () =>
+      GET: (req) =>
         trapErrors(() => {
-          const list = listConnections().map((c) => ({
+          const list = listConnections(callerProject(req)).map((c) => ({
             id: c.id,
             externalId: c.externalId,
             displayName: c.displayName,
@@ -1154,6 +1169,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const schemaError = validateConnectionValueShape(body.type, body.value);
           if (schemaError) return err(schemaError);
           const conn = upsertConnection({
+            projectId: callerProject(req),
             externalId: body.externalId,
             displayName: body.displayName,
             type: body.type,
@@ -1176,13 +1192,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // Both resolve `:id` inside the caller's project (#692), the same project
+    // the GET lists and the POST writes. They found the row by bare id, so an
+    // id from another project was reachable here while invisible to the list.
+    // A mismatch is a 404, not a 403: to this caller the row does not exist,
+    // and a distinct answer would confirm the id to someone guessing them.
     "/api/workflows/connections/:id": {
       DELETE: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const existing = getConnection(id);
-          if (!existing) return err("connection not found", 404);
-          deleteConnection(id);
+          if (!deleteConnectionInProject(callerProject(req), id)) return err("connection not found", 404);
           return ok({ id, deleted: true });
         }),
       // Update an existing connection in place. Used to rotate OAuth tokens
@@ -1193,7 +1212,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       PATCH: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const existing = getConnection(id);
+          const existing = getConnectionInProject(callerProject(req), id);
           if (!existing) return err("connection not found", 404);
           // Bounded before the parse, same budget and same reasoning as the
           // POST above (#635). The `.catch(() => ({}))` it replaces turned a
@@ -1231,7 +1250,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // Re-read after the body await: `existing` above is a snapshot from
           // before it, and a DELETE or a POST that changed the type can have
           // landed in between. Nothing from here to the write yields.
-          const current = getConnection(id);
+          const current = getConnectionInProject(callerProject(req), id);
           if (!current) return err("connection not found", 404);
           // Apply the same per-type schema check POST runs. Type can't change
           // via PATCH (rotation, not re-creation), so we use the row's type.
@@ -1247,7 +1266,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // default project got a COPY in the default project, carrying its
           // decrypted secret re-sealed under the copy's identity. See
           // `updateConnectionById` for the race this also closes.
-          const merged = updateConnectionById(id, {
+          const merged = updateConnectionById(callerProject(req), id, {
             ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
             ...(body.value !== undefined ? { value: body.value } : {}),
             ...(status ? { status } : {}),

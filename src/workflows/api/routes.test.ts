@@ -1268,9 +1268,19 @@ describe("workflow API: connections", () => {
  * `project_id` is a constant in production today, so no live caller reaches
  * this. The test writes a second project directly, which is exactly the state
  * the day projects stop being constant.
+ *
+ * Since #692 the `:id` routes only reach a row in the caller's project, so
+ * these act AS a caller in the second project. That is the state #650 needs:
+ * the defect was the write defaulting to `DEFAULT_IDS.project`, which differs
+ * from the row's project whoever the caller is, so a regression to the upsert
+ * would still copy the secret into the default project and fail here.
  */
 describe("#650: the connections PATCH updates the row it was asked about", () => {
   const OTHER_PROJECT = "proj_other_650";
+  let scoped: WorkflowRouteMap;
+  beforeEach(() => {
+    scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+  });
 
   async function seedInOtherProject() {
     const { upsertConnection } = await import("../db/repos/app-connection");
@@ -1287,7 +1297,7 @@ describe("#650: the connections PATCH updates the row it was asked about", () =>
 
   function patch(id: string, body: unknown) {
     return callJson(
-      routes["/api/workflows/connections/:id"]?.PATCH,
+      scoped["/api/workflows/connections/:id"]?.PATCH,
       reqWithParams("PATCH", `http://x/api/workflows/connections/${id}`, { id }, body),
     );
   }
@@ -1397,7 +1407,7 @@ describe("#650: the connections PATCH updates the row it was asked about", () =>
       duplex: "half",
     } as RequestInit) as Request & { params: { id: string } };
     req.params = { id };
-    const pending = callJson(routes["/api/workflows/connections/:id"]?.PATCH, req);
+    const pending = callJson(scoped["/api/workflows/connections/:id"]?.PATCH, req);
     return { pending, push };
   }
 
@@ -1406,7 +1416,7 @@ describe("#650: the connections PATCH updates the row it was asked about", () =>
     const { pending, push } = streamingPatch(conn.id);
 
     const deleted = await callJson(
-      routes["/api/workflows/connections/:id"]?.DELETE,
+      scoped["/api/workflows/connections/:id"]?.DELETE,
       reqWithParams("DELETE", `http://x/api/workflows/connections/${conn.id}`, { id: conn.id }),
     );
     expect(deleted.status).toBe(200);
@@ -1431,6 +1441,129 @@ describe("#650: the connections PATCH updates the row it was asked about", () =>
     const fresh = getConnection(conn.id);
     expect(fresh?.displayName).toBe("Renamed late");
     expect(fresh?.value).toEqual({ secret: "rotated-meanwhile" });
+  });
+});
+
+/**
+ * #692. The connections GET listed `DEFAULT_IDS.project` and the POST wrote
+ * there, while DELETE and PATCH found their row by bare id in any project. So
+ * an id that the list never showed could still be deleted or rewritten.
+ * Latent while `project_id` is a constant; these write a second project
+ * directly, which is the state the day it is not.
+ */
+describe("#692: the connections routes share one project scope", () => {
+  const OTHER_PROJECT = "proj_other_692";
+
+  async function seed(projectId: string, externalId: string) {
+    const { upsertConnection } = await import("../db/repos/app-connection");
+    return upsertConnection({
+      projectId,
+      externalId,
+      displayName: "Seeded",
+      type: "SECRET_TEXT",
+      pieceName: "@activepieces/piece-foo",
+      pieceVersion: "0.0.1",
+      value: { secret: `in-${projectId}` },
+    });
+  }
+
+  async function storedRow(id: string) {
+    const { getWorkflowDb } = await import("../db/index");
+    return getWorkflowDb()
+      .query<{ id: string; project_id: string; display_name: string; value: string; updated: number }, [string]>(
+        "SELECT id, project_id, display_name, value, updated FROM app_connection WHERE id = ?",
+      )
+      .get(id);
+  }
+
+  test("PATCH and DELETE answer 404 for an id in another project, and leave it untouched", async () => {
+    const foreign = await seed(OTHER_PROJECT, "foreign-692");
+    const before = await storedRow(foreign.id);
+    expect(before?.project_id).toBe(OTHER_PROJECT);
+
+    for (const body of [{ displayName: "Hijacked" }, { value: { secret: "overwritten" } }]) {
+      const res = await callJson(
+        routes["/api/workflows/connections/:id"]?.PATCH,
+        reqWithParams("PATCH", `http://x/api/workflows/connections/${foreign.id}`, { id: foreign.id }, body),
+      );
+      expect(res).toEqual({ status: 404, body: { error: "connection not found" } });
+    }
+    const del = await callJson(
+      routes["/api/workflows/connections/:id"]?.DELETE,
+      reqWithParams("DELETE", `http://x/api/workflows/connections/${foreign.id}`, { id: foreign.id }),
+    );
+    expect(del.status).toBe(404);
+    expect(del.body.error).toBe("connection not found");
+
+    // Byte-exact: same name, same ciphertext, same timestamp, same project.
+    expect(await storedRow(foreign.id)).toEqual(before);
+
+    // And indistinguishable from an id that exists nowhere, so the answer
+    // does not confirm that a guessed id is real in some other project.
+    const missing = "conn_does_not_exist_692";
+    const missingPatch = await callJson(
+      routes["/api/workflows/connections/:id"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/connections/${missing}`, { id: missing }, { displayName: "x" }),
+    );
+    const missingDel = await callJson(
+      routes["/api/workflows/connections/:id"]?.DELETE,
+      reqWithParams("DELETE", `http://x/api/workflows/connections/${missing}`, { id: missing }),
+    );
+    expect(missingPatch).toEqual({ status: 404, body: { error: "connection not found" } });
+    expect(missingDel).toEqual(del);
+  });
+
+  test("a caller in that project can still PATCH and DELETE the same row", async () => {
+    // The control for the 404s above: they are about the project, not the route.
+    const own = await seed(OTHER_PROJECT, "own-692");
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    const patched = await callJson(
+      scoped["/api/workflows/connections/:id"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/connections/${own.id}`, { id: own.id }, { displayName: "Mine" }),
+    );
+    expect(patched.status).toBe(200);
+    expect((await storedRow(own.id))?.display_name).toBe("Mine");
+    const del = await callJson(
+      scoped["/api/workflows/connections/:id"]?.DELETE,
+      reqWithParams("DELETE", `http://x/api/workflows/connections/${own.id}`, { id: own.id }),
+    );
+    expect(del.status).toBe(200);
+    expect(await storedRow(own.id)).toBeNull();
+  });
+
+  test("GET lists, and POST writes, the caller's project rather than the default", async () => {
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const inDefault = await seed(DEFAULT_IDS.project, "default-692");
+    const inOther = await seed(OTHER_PROJECT, "other-692");
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    const ids = (body: unknown) => (body as { connections: Array<{ id: string }> }).connections.map((c) => c.id);
+
+    const listed = await callJson(
+      scoped["/api/workflows/connections"]?.GET,
+      plainReq("GET", "http://x/api/workflows/connections"),
+    );
+    expect(listed.status).toBe(200);
+    expect(ids(listed.body)).toEqual([inOther.id]);
+
+    const created = await callJson(
+      scoped["/api/workflows/connections"]?.POST,
+      plainReq("POST", "http://x/api/workflows/connections", {
+        externalId: "posted-692",
+        displayName: "Posted",
+        type: "SECRET_TEXT",
+        pieceName: "@activepieces/piece-foo",
+        value: { secret: "s" },
+      }),
+    );
+    expect(created.status).toBe(201);
+    expect((await storedRow((created.body as { id: string }).id))?.project_id).toBe(OTHER_PROJECT);
+
+    // And the default caller still sees only the default project.
+    const defaultList = await callJson(
+      routes["/api/workflows/connections"]?.GET,
+      plainReq("GET", "http://x/api/workflows/connections"),
+    );
+    expect(ids(defaultList.body)).toEqual([inDefault.id]);
   });
 });
 

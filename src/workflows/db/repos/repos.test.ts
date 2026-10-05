@@ -25,9 +25,12 @@ import {
 import { createFlowRun, getFlowRun, listRuns, updateRun } from "./flow-run";
 import {
   deleteConnection,
+  deleteConnectionInProject,
   getConnection,
   getConnectionByExternalId,
+  getConnectionInProject,
   listConnections,
+  updateConnectionById,
   upsertConnection,
 } from "./app-connection";
 
@@ -324,6 +327,45 @@ describe("app-connection repo", () => {
     });
     deleteConnection(c.id);
     expect(getConnection(c.id)).toBeNull();
+  });
+
+  /**
+   * #692, at the repo. The route tests stop a foreign id at the route's first
+   * read, so they would not notice the scope dropped from either of these.
+   */
+  describe("the by-id writers are scoped to a project (#692)", () => {
+    const A = "proj_a_692";
+    const B = "proj_b_692";
+    function seedInB() {
+      return upsertConnection({
+        projectId: B,
+        externalId: "scoped",
+        displayName: "In B",
+        type: "SECRET_TEXT",
+        pieceName: "http",
+        pieceVersion: "1.0.0",
+        value: { secret: "b" },
+      });
+    }
+    const stored = (id: string) =>
+      getWorkflowDb().query<Record<string, unknown>, [string]>("SELECT * FROM app_connection WHERE id = ?").get(id);
+
+    test("another project sees nothing, and changes nothing", () => {
+      const c = seedInB();
+      const before = stored(c.id);
+      expect(getConnectionInProject(A, c.id)).toBeNull();
+      expect(updateConnectionById(A, c.id, { displayName: "x", value: { secret: "a" }, status: "ERROR" })).toBeNull();
+      expect(deleteConnectionInProject(A, c.id)).toBe(false);
+      expect(stored(c.id)).toEqual(before);
+    });
+
+    test("its own project reads, updates and deletes it", () => {
+      const c = seedInB();
+      expect(getConnectionInProject(B, c.id)?.value).toEqual({ secret: "b" });
+      expect(updateConnectionById(B, c.id, { value: { secret: "b2" } })?.value).toEqual({ secret: "b2" });
+      expect(deleteConnectionInProject(B, c.id)).toBe(true);
+      expect(stored(c.id)).toBeNull();
+    });
   });
 });
 

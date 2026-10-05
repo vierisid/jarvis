@@ -1110,8 +1110,8 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | DELETE | `/api/workflows/pieces/library/:id` | Uninstall a community piece |
 | GET | `/api/workflows/connections` | Connections in the default project (no secrets) plus the registered Jarvis sources: `{ connections, jarvisSources }` |
 | POST | `/api/workflows/connections` | Create, or replace by `(pieceName, externalId)`, a connection (encrypted). `{ externalId, displayName, type, pieceName, pieceVersion?, value }` |
-| PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap |
-| DELETE | `/api/workflows/connections/:id` | Delete the stored connection. Revokes nothing at the provider |
+| PATCH | `/api/workflows/connections/:id` | Update that connection in place: `displayName`, `value` (full replacement), `status`. Rotates a token without the delete-then-recreate gap. 404 for an id outside the default project, the same as for an id that does not exist |
+| DELETE | `/api/workflows/connections/:id` | Delete the stored connection. Revokes nothing at the provider. 404 for an id outside the default project, the same as for an id that does not exist |
 | GET | `/api/workflows/triggers` | Active trigger registrations |
 | GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
 | GET, POST | `/api/webhooks/:flowId` | Engine-managed webhook trigger fan-in (503 when webhooks are not enabled in the build) |

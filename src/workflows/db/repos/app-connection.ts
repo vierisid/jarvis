@@ -228,11 +228,17 @@ export interface UpdateConnectionPatch {
  * decrypts nor re-seals the secret, and cannot write back a stale one over a
  * rotation that landed meanwhile.
  */
-export function updateConnectionById(id: string, patch: UpdateConnectionPatch): AppConnection | null {
+export function updateConnectionById(
+  projectId: string,
+  id: string,
+  patch: UpdateConnectionPatch,
+): AppConnection | null {
   return db().transaction(() => {
+    // Scoped to the caller's project (#692): an id from another project is
+    // "not found", exactly as it is to the list that never showed it.
     const row = db()
-      .query<AppConnectionRow, [string]>(`SELECT * FROM app_connection WHERE id = ?`)
-      .get(id);
+      .query<AppConnectionRow, [string, string]>(`SELECT * FROM app_connection WHERE id = ? AND project_id = ?`)
+      .get(id, projectId);
     if (!row) return null;
     const sets: string[] = [];
     const params: Array<string | number> = [];
@@ -251,10 +257,29 @@ export function updateConnectionById(id: string, patch: UpdateConnectionPatch): 
     }
     sets.push("updated = ?");
     params.push(now());
-    const result = db().run(`UPDATE app_connection SET ${sets.join(", ")} WHERE id = ?`, [...params, id]);
+    // The project predicate again, not only on the SELECT: the write carries
+    // its own scope rather than relying on the read one line up staying in
+    // this transaction.
+    const result = db().run(`UPDATE app_connection SET ${sets.join(", ")} WHERE id = ? AND project_id = ?`, [
+      ...params,
+      id,
+      projectId,
+    ]);
     if (result.changes !== 1) throw new Error(`updateConnectionById: expected one row, changed ${result.changes}`);
-    return getConnection(id);
+    return getConnectionInProject(projectId, id);
   })();
+}
+
+/**
+ * The row with this id IN this project, or null. What an API route keyed by
+ * id must use (#692): a bare `getConnection(id)` finds a row in any project,
+ * so a route that lists one project could still read or write another's.
+ */
+export function getConnectionInProject(projectId: string, id: string): AppConnection | null {
+  const row = db()
+    .query<AppConnectionRow, [string, string]>(`SELECT * FROM app_connection WHERE id = ? AND project_id = ?`)
+    .get(id, projectId);
+  return row ? rowToConnection(row) : null;
 }
 
 export function getConnection(id: string): AppConnection | null {
@@ -317,4 +342,13 @@ export function listConnections(
 
 export function deleteConnection(id: string): void {
   db().run(`DELETE FROM app_connection WHERE id = ?`, [id]);
+}
+
+/**
+ * Delete the row with this id in this project. Returns whether a row went, so
+ * a caller can answer 404 from the delete itself rather than from a read
+ * before it (#692).
+ */
+export function deleteConnectionInProject(projectId: string, id: string): boolean {
+  return db().run(`DELETE FROM app_connection WHERE id = ? AND project_id = ?`, [id, projectId]).changes === 1;
 }
