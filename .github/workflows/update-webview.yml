@@ -51,7 +51,7 @@ jobs:
       current: ${{ steps.cmp.outputs.current }}
       version: ${{ steps.cmp.outputs.version }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
       - id: cmp
         # Read the dispatch input through env (never interpolate untrusted
         # ${{ }} straight into the shell -- it would allow command injection).
@@ -87,8 +87,8 @@ jobs:
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd # v5
-      - uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c # v6
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v6
         with:
           # Track sidecar/go.mod as the single source of the Go version.
           go-version-file: sidecar/go.mod
@@ -152,7 +152,7 @@ jobs:
 
       - name: Open / update the bump PR
         id: pr
-        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7
+        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           token: ${{ secrets.WEBVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}
           branch: bot/update-webview-go

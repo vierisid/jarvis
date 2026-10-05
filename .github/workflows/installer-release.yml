@@ -61,7 +61,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       should_release: ${{ steps.v.outputs.should_release }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - id: v
         env:
           GH_TOKEN: ${{ github.token }}
@@ -103,8 +103,8 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -173,7 +173,7 @@ jobs:
       - name: Authenticate to Google Cloud
         id: gcp-auth
         if: steps.winsign.outputs.ready == 'true'
-        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
@@ -195,7 +195,7 @@ jobs:
           SIGN_REQUIRE_TRUSTED_CHAIN: "1"
         run: scripts/sign-windows.sh Jarvis-Setup.exe
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-win32-x64
           path: sidecar/Jarvis-Setup.exe
@@ -208,8 +208,8 @@ jobs:
     env:
       HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
     steps:
-      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
-      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -315,7 +315,7 @@ jobs:
           echo "::warning::Apple signing credentials not configured — shipping an unsigned Install-Jarvis.dmg (Gatekeeper will block it)."
           make dmg-installer
 
-      - uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-darwin
           path: sidecar/dist/macos/Install-Jarvis.dmg
@@ -329,7 +329,7 @@ jobs:
       contents: write
     steps:
       - name: Download built installers
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           pattern: installer-*
           path: artifacts
@@ -350,7 +350,7 @@ jobs:
       # Immutable, per-version — history and rollback.
       - name: Publish versioned release
         if: env.DRY_RUN != 'true'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: installer-v${{ needs.resolve.outputs.version }}
           name: Installer v${{ needs.resolve.outputs.version }}
@@ -365,7 +365,7 @@ jobs:
       # Rolling pointer — the website's permanent download URLs.
       - name: Update installer-latest
         if: env.DRY_RUN != 'true'
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: installer-latest
           name: Installer (latest)

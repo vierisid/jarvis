@@ -86,10 +86,10 @@ jobs:
     # docker build or `docker run` themselves, and the default is 6 hours.
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       # PR check is single-arch for speed; release workflow validates linux/amd64 + linux/arm64.
       #
@@ -112,7 +112,7 @@ jobs:
       # it is never pushed anywhere: push: false, and this workflow has no
       # registry login.
       - name: Build Docker image (validate)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: ./Dockerfile

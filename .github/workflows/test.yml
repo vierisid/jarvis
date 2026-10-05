@@ -47,8 +47,8 @@ jobs:
       daemon-cli: ${{ steps.filter.outputs.daemon-cli }}
       toast: ${{ steps.filter.outputs.toast }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: dorny/paths-filter@v3
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -92,7 +92,7 @@ jobs:
   test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/bun-setup
       - run: bun run scripts/check-no-ee-imports.ts
       - run: bun run scripts/check-migrations.ts
@@ -145,7 +145,7 @@ jobs:
     if: needs.changes.outputs.daemon-cli == 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/bun-setup
       # Scoped to the lifecycle + service-definition files, not all of src/cli.
       # This job exists for the macOS-only behaviour (what launchd's KeepAlive
@@ -215,8 +215,8 @@ jobs:
       X_HOTKEY_TESTS: '^TestLinuxX'
       X_HOTKEY_TEST_COUNT: '8'
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           # Single source of truth for the toolchain — tracks sidecar/go.mod so
           # the build gate can't drift from the declared Go version (GO_VERSION
@@ -573,8 +573,8 @@ jobs:
   sidecar-test-windows:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -615,7 +615,7 @@ jobs:
     if: needs.changes.outputs.toast == 'true'
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - uses: oven-sh/setup-bun@v2
         with:
           # Same pin as .github/actions/bun-setup.
@@ -642,8 +642,8 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -687,7 +687,7 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Parse every plist
         run: |
           set -euo pipefail
@@ -706,7 +706,7 @@ jobs:
   applescript-check:
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
       - name: Compile + probe desktop.applescript
         run: |
           set -euo pipefail
@@ -739,7 +739,7 @@ jobs:
     if: needs.changes.outputs.sidecar == 'true' || github.event_name == 'workflow_dispatch'
     runs-on: macos-latest
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7
 
       - name: Build universal ocr-helper
         working-directory: sidecar
@@ -753,7 +753,7 @@ jobs:
           lipo -info helpers/ocr-helper
 
       - name: Upload helper binary
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@v7
         with:
           name: ocr-helper-darwin
           path: sidecar/helpers/ocr-helper
