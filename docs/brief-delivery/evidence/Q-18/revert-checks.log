@@ -1,0 +1,72 @@
+Revert checks for Q-18 at 594a5a5c: each guarantee removed in turn, its test run, the source restored.
+
+[DETECTED] a new step may duplicate an open commitment or work item
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  30 pass 3 fail
+    fails: founder-review scenarios > duplicate-commitment: The founder already committed to calling Ana about invoice 1042. [0.61ms]
+    fails: next-action planner > excluded options say why they were left out [0.44ms]
+    fails: live observation > reads goals, open work, commitments and workflow readiness, and writes nothing [447.18ms]
+[DETECTED] open work titles no longer count as commitments
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  32 pass 1 fail
+    fails: next-action planner > excluded options say why they were left out [0.64ms]
+[DETECTED] a goal behind a dependency or inactive parent gets a new step
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  30 pass 3 fail
+    fails: founder-review scenarios > blocked-by-dependency: Sending the new price list depends on approving the new prices, which is not done. [0.39ms]
+    fails: founder-review scenarios > paused-parent: The only task belongs to a paused objective. [0.13ms]
+    fails: next-action planner > excluded options say why they were left out [0.45ms]
+[DETECTED] accepted work behind a dependency is offered as doable
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  30 pass 3 fail
+    fails: founder-review scenarios > accepted-work-waits-on-dependency: Accepted work on the price-list goal is ready, but that goal waits on approving the new prices. [0.63ms]
+    fails: next-action planner > excluded options say why they were left out [0.81ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing duplicates open work, and a full day gets no new work [1.77ms]
+[DETECTED] a full day still gets new work
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  30 pass 3 fail
+    fails: founder-review scenarios > full-queue: Five items are running, the daily limit, and a new step is available. [0.43ms]
+    fails: next-action planner > excluded options say why they were left out [0.90ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing duplicates open work, and a full day gets no new work [1.56ms]
+[DETECTED] work checked done is started again
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  30 pass 3 fail
+    fails: founder-review scenarios > already-done: Reminder work was checked done two days ago, but the goal is still open. A pricing goal has a startable step. [0.43ms]
+    fails: founder-review scenarios > already-done-only: Reminder work was checked done two days ago, the goal is still open, and nothing else is active. [0.22ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing duplicates open work, and a full day gets no new work [1.31ms]
+[DETECTED] a goal whose steps are all settled gets a new step
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  32 pass 1 fail
+    fails: founder-review scenarios > all-steps-complete: Every task under the invoice key result is complete, but the key result is still open. [0.43ms]
+[DETECTED] a stale goal gets a new task
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  31 pass 2 fail
+    fails: founder-review scenarios > stale-goal: A newsletter goal has had no progress or work for six weeks. [0.43ms]
+    fails: founder-review scenarios > stale-and-fresh: The newsletter goal is stale; a pricing goal created this week has a startable step. [0.17ms]
+[DETECTED] a failed attempt is retried without asking
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  31 pass 2 fail
+    fails: founder-review scenarios > last-attempt-failed: The last reminder attempt failed its check: three reminders bounced. [0.46ms]
+    fails: next-action planner > questions say what the answer unblocks [0.27ms]
+[DETECTED] a goal with no concrete step gets an invented one
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  31 pass 2 fail
+    fails: founder-review scenarios > no-concrete-step: The objective has no tasks under it yet. [0.42ms]
+    fails: next-action planner > questions say what the answer unblocks [0.42ms]
+[DETECTED] a tie between goals is settled by a coin flip
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  31 pass 2 fail
+    fails: founder-review scenarios > tie-between-goals: Two goals with no deadlines, the same health and no order between them each have a startable step. [0.43ms]
+    fails: next-action planner > questions say what the answer unblocks [0.37ms]
+[DETECTED] work whose workflow cannot run is offered as doable
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  31 pass 2 fail
+    fails: founder-review scenarios > unavailable-integration: Accepted follow-up work runs a workflow whose Gmail account is disconnected. Another goal has a startable step. [0.54ms]
+    fails: live observation > reads goals, open work, commitments and workflow readiness, and writes nothing [362.62ms]
+[DETECTED] starting new work outranks checking finished work
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  30 pass 3 fail
+    fails: founder-review scenarios > check-finished-run: This week's invoice reminders ran and finished. Pricing work is also waiting. [2.33ms]
+    fails: founder-review scenarios > full-queue-still-checks: The day is full, but one item finished and needs checking. [0.24ms]
+    fails: next-action planner > a recommendation names its goal and revision, its evidence, why it beats doing nothing and the runner-up, and when it expires [0.38ms]
+[DETECTED] a failed run nobody settled is not open
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  32 pass 1 fail
+    fails: founder-review scenarios > failed-run: The reminder run failed and nobody has looked at it. [0.85ms]
+[DETECTED] the basis depends on the clock
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  32 pass 1 fail
+    fails: next-action planner > the basis ignores the clock and changes with any input [0.58ms]
+[DETECTED] the expiry ignores the goal deadline
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  32 pass 1 fail
+    fails: next-action planner > a goal deadline inside the window brings the expiry forward [0.44ms]
+[DETECTED] the observer reads work settled long ago
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  32 pass 1 fail
+    fails: live observation > work settled long ago is not read [356.64ms]
+
+17 of 17 removals fail their tests.
