@@ -24,6 +24,38 @@ permissions:
   contents: write
   packages: write
 
+# One release at a time (#645). Two tag pushes, or a push racing a dispatch,
+# used to run side by side: both reached publish-docker, both pushed
+# `:latest` for a non-prerelease, and whichever finished second owned it --
+# not necessarily the higher version. Both also wrote `cache-to: type=gha`
+# into the same scope.
+#
+# Global, not per ref: `:latest` is one pointer for the whole repository, so
+# a group keyed on the tag would let exactly the two runs that matter race.
+# release.yml uses its own group (`release`), so its dispatch of this workflow
+# cannot deadlock against itself.
+#
+# cancel-in-progress: false, because cancelling a half-finished publish (npm
+# out, Docker not) is worse than waiting.
+#
+# queue: max, because the default queue (`single`) holds ONE pending run and
+# cancels it when another is queued: a third release arriving while one runs
+# and one waits would silently drop the waiting one, and release.yml does not
+# watch the run it dispatches. `max` keeps up to 100 pending runs and starts
+# them in order (GitHub docs, workflow-level `concurrency.queue`; changelog
+# 2026-05-07). It is rejected only together with cancel-in-progress: true.
+#
+# Dry runs share the group. They push nothing, but they do build and smoke
+# the image, so a rehearsal can delay a real release by one gate's length --
+# never cancel it, which under `single` it could have.
+#
+# actionlint 1.7.x predates the `queue` key and reports it as unexpected; that
+# is the linter, not this file.
+concurrency:
+  group: release-exec
+  cancel-in-progress: false
+  queue: max
+
 env:
   GO_VERSION: "1.25"
   # Pinned to match test.yml: the jobs below install with --frozen-lockfile,

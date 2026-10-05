@@ -135,6 +135,22 @@ for (const [name, job] of Object.entries(jobs)) {
   if (/\b(always|failure|cancelled)\s*\(/.test(String(job.if ?? "")))
     out.push(name + ": reads validate-tag outputs but can run after a failed gate (if: " + job.if + ")");
 }
+// #645: one publish at a time, queued rather than cancelled. The group must be
+// global for real publishes -- per-ref or per-run context would put two
+// releases in different groups and let them race for :latest again.
+const cc = doc.concurrency;
+if (!cc || typeof cc !== "object") out.push("no workflow-level concurrency block (#645)");
+else {
+  if (cc["cancel-in-progress"] !== false)
+    out.push("concurrency must set cancel-in-progress: false; cancelling a half-finished publish is worse than queueing (got " + JSON.stringify(cc["cancel-in-progress"]) + ")");
+  // An allowlist, not a denylist of contexts: any expression in the group
+  // can split two releases into different groups.
+  if (cc.group !== "release-exec")
+    out.push("concurrency group must be exactly the global release-exec (got " + JSON.stringify(cc.group) + ")");
+  // The default queue holds one pending run and cancels it for the next one.
+  if (cc.queue !== "max")
+    out.push("concurrency must set queue: max, or a third queued release evicts the waiting one (got " + JSON.stringify(cc.queue) + ")");
+}
 const reaches = (j, seen = new Set()) => {
   if (j === "validate-tag") return true;
   if (seen.has(j)) return false;
@@ -381,6 +397,17 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
     if: always()'
 	mutant 'a misspelt output name' \
 		'enable=${{ needs.validate-tag.outputs.prerelease' 'enable=${{ needs.validate-tag.outputs.prerelaese'
+	mutant 'a per-ref concurrency group (#645)' \
+		"group: release-exec" 'group: release-exec-${{ github.ref }}'
+	mutant 'a dry-run-split concurrency group (#645)' \
+		'  group: release-exec
+' "  group: release-exec\${{ inputs.dry_run && '-dry-run' || '' }}
+"
+	mutant 'the default single-pending queue (#645)' \
+		'  queue: max
+' ''
+	mutant 'cancel-in-progress on the publish group (#645)' \
+		'  cancel-in-progress: false' '  cancel-in-progress: true'
 	mutant 'a job no longer downstream of the gate' \
 		'  test:
     needs: validate-tag' '  test:'
