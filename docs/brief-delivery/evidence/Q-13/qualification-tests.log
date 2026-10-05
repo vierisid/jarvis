@@ -1,0 +1,19 @@
+$ bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/workflows/adapters/untrusted-reach.test.ts
+bun test v1.3.6 (d530ed99)
+
+src/awareness/prepared-qualification.test.ts:
+
+ 27 pass
+ 0 fail
+ 120 expect() calls
+Ran 27 tests across 2 files. [857.00ms]
+
+$ JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/awareness/prepared-dry-run.test.ts
+bun test v1.3.6 (d530ed99)
+
+src/awareness/prepared-dry-run.test.ts:
+
+ 4 pass
+ 0 fail
+ 20 expect() calls
+Ran 4 tests across 1 file. [11.58s]

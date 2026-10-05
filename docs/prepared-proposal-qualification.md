@@ -125,4 +125,4 @@ bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.te
 JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/awareness/prepared-dry-run.test.ts
 ```
 
-Expected: 15 pass, then 4 pass. The first engine run builds the bundle and pieces.
+Expected: 16 pass, then 4 pass. The first engine run builds the bundle and pieces.
