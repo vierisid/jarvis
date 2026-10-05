@@ -26,8 +26,9 @@ beforeAll(async () => {
   React = await import("react"); ({ createRoot } = await import("react-dom/client"));
   ({ NavigationShell } = await import("../navigation/NavigationShell"));
   globalThis.ResizeObserver = class implements ResizeObserver {
-    constructor(callback: ResizeObserverCallback) { observe = () => callback([], this); }
-    observe() {} unobserve() {} disconnect() {}
+    constructor(private callback: ResizeObserverCallback) {}
+    observe(target: Element) { if (target.classList.contains("brief-pebble-layout")) observe = () => this.callback([], this); }
+    unobserve() {} disconnect() {}
   };
   HTMLElement.prototype.getBoundingClientRect = function () {
     return this.classList.contains("brief-pebble-layout") ? new DOMRect(232, 76, size.width, size.height) : realRect.call(this);

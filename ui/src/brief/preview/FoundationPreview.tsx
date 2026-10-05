@@ -9,6 +9,7 @@ import { ControlSpecimen } from "../components/controls/ControlSpecimen";
 import { MotionSpecimen } from "../motion/MotionSpecimen";
 import { NavigationSpecimen } from "../shell/navigation/NavigationSpecimen";
 import { PebbleSpecimen } from "../shell/pebble-layout/PebbleSpecimen";
+import { TodaySpecimen } from "../today/preview/TodaySpecimen";
 
 interface PreviewModel { note: string }
 const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<PreviewModel>("No live provider is connected in this preview."), source: "fixture" }),
@@ -33,6 +34,7 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
+  if (specimen === "today") return <TodaySpecimen />;
   return specimen === "pebble" ? <PebbleSpecimen /> : specimen === "navigation" ? <NavigationSpecimen /> : specimen === "motion" ? <MotionSpecimen /> : specimen === "controls" ? <ControlSpecimen /> : specimen === "styles" ? <StyleSpecimen /> : <FoundationControls />;
 }
 
@@ -56,6 +58,7 @@ function FoundationControls() {
       <a className="brief-foundation__return" href="?brief=preview&specimen=motion#/_brief_preview">Try motion reference</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=navigation#/_brief_preview">Try navigation shell</a>{" · "}
       <a className="brief-foundation__return" href="?brief=preview&specimen=pebble#/_brief_preview">Try Pebble workspace</a>{" · "}
+      <a className="brief-foundation__return" href="?brief=preview&specimen=today#/_brief_preview">Try Today composition</a>{" · "}
       <a className="brief-foundation__return" href={legacyHref(window.location.href)}>Return to current dashboard</a>
     </section>
   </main>;
