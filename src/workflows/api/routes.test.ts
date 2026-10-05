@@ -66,6 +66,9 @@ function plainReq(method: string, url: string, body?: unknown): Request {
   return new Request(url, init);
 }
 
+/** `GET /api/workflows/:id/runs`'s body since #652. */
+type RunsPage<T = unknown> = { items: T[]; nextOffset: number | null };
+
 async function callJson(handler: unknown, req: Request | (Request & { params: Record<string, string> })) {
   const fn = handler as (r: Request) => Promise<Response> | Response;
   const res = await fn(req as Request);
@@ -769,7 +772,7 @@ describe("workflow API: runs", () => {
       reqWithParams("GET", `http://x/api/workflows/${flowId}/runs`, { id: flowId }),
     );
     expect(status).toBe(200);
-    expect(body.length).toBe(2);
+    expect((body as RunsPage).items.length).toBe(2);
   });
 
   test("POST /api/workflow-runs/:runId/cancel cancels the queued job", async () => {
@@ -2057,19 +2060,19 @@ describe("#609: the runs listing clamps its limit", () => {
     // Non-vacuous: there are more rows than either the clamp or the default.
     const huge = await list(id, "?limit=100000");
     expect(huge.status).toBe(200);
-    expect((huge.body as unknown[]).length).toBe(100);
+    expect((huge.body as RunsPage).items.length).toBe(100);
     // At the boundary, and below it, the caller gets what it asked for.
-    expect(((await list(id, "?limit=100")).body as unknown[]).length).toBe(100);
-    expect(((await list(id, "?limit=7")).body as unknown[]).length).toBe(7);
-    expect(((await list(id, "")).body as unknown[]).length).toBe(50);
+    expect(((await list(id, "?limit=100")).body as RunsPage).items.length).toBe(100);
+    expect(((await list(id, "?limit=7")).body as RunsPage).items.length).toBe(7);
+    expect(((await list(id, "")).body as RunsPage).items.length).toBe(50);
   });
 
   test("a negative or non-numeric limit lands somewhere sane instead of reaching SQLite", async () => {
     const id = await flowWithRuns(3);
-    expect(((await list(id, "?limit=-1")).body as unknown[]).length).toBe(1);
-    expect(((await list(id, "?limit=abc")).body as unknown[]).length).toBe(3);
-    expect(((await list(id, "?limit=2.9")).body as unknown[]).length).toBe(2);
-    expect(((await list(id, "?offset=-5&limit=2")).body as unknown[]).length).toBe(2);
+    expect(((await list(id, "?limit=-1")).body as RunsPage).items.length).toBe(1);
+    expect(((await list(id, "?limit=abc")).body as RunsPage).items.length).toBe(3);
+    expect(((await list(id, "?limit=2.9")).body as RunsPage).items.length).toBe(2);
+    expect(((await list(id, "?offset=-5&limit=2")).body as RunsPage).items.length).toBe(2);
   });
 });
 
@@ -2688,7 +2691,7 @@ describe("#636: run ordering is defined, so a page means something", () => {
     ((await callJson(
       routes["/api/workflows/:id/runs"]?.GET,
       reqWithParams("GET", `http://x/api/workflows/${id}/runs${query}`, { id }),
-    )).body as Array<{ id: string; created: number }>);
+    )).body as RunsPage<{ id: string; created: number }>).items;
 
   /**
    * THE regression test. Fails before the fix, where the first page carried the
@@ -2761,6 +2764,80 @@ describe("#636: run ordering is defined, so a page means something", () => {
     // The composed WHERE concatenates only literal fragments, so a filter value
     // that looks like SQL stays a bound parameter and matches nothing.
     expect(listRuns({ flowId: `' OR 1=1 --` }).length).toBe(0);
+  });
+});
+
+/**
+ * #652. The runs listing was a bare array, so a client had nothing to page
+ * with. It now answers `{ items, nextOffset }`, the `/readiness` shape, and
+ * `nextOffset` means the same thing there and here: set when the page came back
+ * full, null when it did not.
+ */
+describe("#652: the runs listing says where the next page starts", () => {
+  async function flowWithRuns(count: number, failedEvery = 0): Promise<{ flowId: string; ids: string[] }> {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const version = createDraftVersion({
+      flowId: flow.id, displayName: "paged",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    });
+    const ids: string[] = [];
+    for (let i = 0; i < count; i++) {
+      const status = failedEvery && i % failedEvery === 0 ? "FAILED" : "SUCCEEDED";
+      ids.push(createFlowRun({ flowId: flow.id, flowVersionId: version.id, triggeredBy: `run_${i}`, status }).id);
+    }
+    return { flowId: flow.id, ids };
+  }
+
+  const page = async (id: string, query: string) => {
+    const res = await callJson(
+      routes["/api/workflows/:id/runs"]?.GET,
+      reqWithParams("GET", `http://x/api/workflows/${id}/runs${query}`, { id }),
+    );
+    expect(res.status).toBe(200);
+    return res.body as RunsPage<{ id: string; status: string }>;
+  };
+
+  test("a full page names the next offset and a short one names none", async () => {
+    const { flowId } = await flowWithRuns(5);
+    expect(await page(flowId, "?limit=2")).toMatchObject({ nextOffset: 2 });
+    expect(await page(flowId, "?limit=2&offset=2")).toMatchObject({ nextOffset: 4 });
+    const last = await page(flowId, "?limit=2&offset=4");
+    expect(last.items).toHaveLength(1);
+    expect(last.nextOffset).toBeNull();
+    // The default page: 5 runs under a default of 50 is short.
+    expect(await page(flowId, "")).toMatchObject({ nextOffset: null });
+    // The clamped limit is what the offset steps by, not the one asked for.
+    expect((await page(flowId, "?limit=-3")).nextOffset).toBe(1);
+  });
+
+  test("following nextOffset from the start visits every run once, newest first", async () => {
+    const { flowId, ids } = await flowWithRuns(105);
+    const seen: string[] = [];
+    const sizes: number[] = [];
+    let offset: number | null = 0;
+    while (offset !== null) {
+      const next: RunsPage<{ id: string; status: string }> = await page(flowId, `?limit=40&offset=${offset}`);
+      sizes.push(next.items.length);
+      seen.push(...next.items.map((run) => run.id));
+      offset = next.nextOffset;
+    }
+    expect(sizes).toEqual([40, 40, 25]);
+    expect(seen).toEqual([...ids].reverse());
+  });
+
+  test("a status filter pages within the filter", async () => {
+    // Every third run FAILED: 0, 3, ..., 27 -> 10 of 30.
+    const { flowId, ids } = await flowWithRuns(30, 3);
+    const failed = ids.filter((_, i) => i % 3 === 0).reverse();
+    const first = await page(flowId, "?status=FAILED&limit=6");
+    expect(first.items.map((run) => run.id)).toEqual(failed.slice(0, 6));
+    expect(first.nextOffset).toBe(6);
+    const second = await page(flowId, `?status=FAILED&limit=6&offset=${first.nextOffset}`);
+    expect(second.items.map((run) => run.id)).toEqual(failed.slice(6));
+    expect(second.nextOffset).toBeNull();
   });
 });
 

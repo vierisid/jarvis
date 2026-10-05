@@ -60,6 +60,17 @@ export interface FlowRun {
   updated: number;
 }
 
+/**
+ * `GET /api/workflows/:id/runs`, one page of a flow's runs, newest first.
+ * `nextOffset` is the `offset` of the next page when this one came back full,
+ * and null when it did not (#652). Neither hook pages yet: both show the
+ * newest page only.
+ */
+export interface FlowRunsPage {
+  items: FlowRun[];
+  nextOffset: number | null;
+}
+
 interface ActionResult {
   ok: boolean;
   message: string;
@@ -189,8 +200,8 @@ export function useWorkflowsData() {
     try {
       const res = await fetch(`/api/workflows/${flowId}/runs?limit=50`);
       if (!res.ok) throw new Error(`GET /api/workflows/${flowId}/runs -> ${res.status}`);
-      const list = (await res.json()) as FlowRun[];
-      setRuns((prev) => ({ ...prev, [flowId]: list }));
+      const page = (await res.json()) as FlowRunsPage;
+      setRuns((prev) => ({ ...prev, [flowId]: page.items }));
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     }

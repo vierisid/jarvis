@@ -2000,12 +2000,23 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // same millisecond could be skipped or repeated across a page
           // boundary.
           //
-          // This response is still a bare ARRAY with no `nextOffset`, unlike
-          // the `/readiness` sibling, so a client has to page by incrementing
-          // `offset` until it gets a short page. Deliberately left: adding it
-          // means `ok({ items, nextOffset })`, and `ui/`'s two consumers
-          // (`useWorkflowsData.ts`, `useFlowRuns.ts`) read this as an array.
-          // Filed as its own change, with the response shape as its subject.
+          // `{ items, nextOffset }`, the shape of the `/readiness` sibling
+          // (#652). This was a bare array, so a client had nothing to page
+          // with and had to keep incrementing `offset` until a short page came
+          // back. Same meaning as the sibling's: `nextOffset` is set when the
+          // page came back full, so there may be more, and null when it did
+          // not, so there is none. Its two consumers in `ui/`
+          // (`useWorkflowsData.ts`, `useFlowRuns.ts`) changed with it.
+          //
+          // STILL OFFSET PAGING, on purpose. Under concurrent inserts an offset
+          // page is unstable in any order -- a new newest-first run shifts
+          // every later page down one, so the next page repeats the last item
+          // of this one -- and only a keyset cursor fixes that. The natural key
+          // is the pair `(created, rowid)`, but `flow_run` has a TEXT primary
+          // key, so its `rowid` is implicit and `VACUUM` may renumber it, which
+          // would silently invalidate a cursor a client holds; `id` is a nanoid
+          // and not time-sortable. So a cursor needs its own stable column: its
+          // own design, not a rename of this one.
           const { limit, offset } = clampPage(params, 50);
           const opts: { flowId: string; status?: FlowRunStatus; limit: number; offset: number } = {
             flowId: id,
@@ -2013,7 +2024,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             offset,
           };
           if (status) opts.status = status;
-          return ok(listRuns(opts));
+          const items = listRuns(opts);
+          return ok({ items, nextOffset: items.length === limit ? offset + limit : null });
         }),
     },
 
