@@ -43,7 +43,7 @@ import { cancellableWorkflowService } from "./cancellation";
 import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { getWorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
-import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
@@ -411,6 +411,50 @@ export function buildSandboxServiceBackends(
         if (GATED_TOOL_NAMES.has(call.toolCall.name)) {
           return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} is only approvable through its typed adapter; call it as a flow step, not from a delegated agent.` };
         }
+        // #638. The two checks above gate on SET MEMBERSHIP, and the sets do
+        // not cover this route's third case: a call whose approval has to stay
+        // bound to a live UI surface. `ui_act` is the live example -- it sits in
+        // `REVIEWED_UI_TOOLS` and in NONE of bounded/opaque/gated, so it passes
+        // both checks above, where `toolsInvoke` is closed for it because that
+        // route calls `toolEffectCapability` and this one never does.
+        //
+        // It was not reachable: `sub-agent-runner.ts` refuses any call whose
+        // gate says `confirm === 'always'` before a sub-agent's tool call ever
+        // reaches `governedTools`, and `rawUiGate` says exactly that for all 14
+        // members of the set. So this is defence in depth, not a plugged hole --
+        // but the thing standing between this route and an unbound UI approval
+        // was a gate in another subsystem, keyed on a different property, for a
+        // reason unrelated to binding, and nothing here said so.
+        //
+        // Asked as a predicate rather than by widening OPAQUE_TOOLS: the two
+        // sets then have to agree by hand, and they already disagree by exactly
+        // this one name. See `surfaceBoundRefusal` for why `rawUiGate` is the
+        // signal (it carries the `get_value` read carve-out, which must still
+        // be allowed here).
+        const unboundable = surfaceBoundRefusal(
+          registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+        if (unboundable) return { kind: 'denied', reason: unboundable };
+        // And the subsystem rule that was only ever enforced upstream (#638).
+        // `sub-agent-runner.ts` refuses `confirm: 'always'` with "a sub-agent
+        // may not request a confirmation"; this route is reachable with a
+        // registry and a gate of its own, so it says the same thing itself.
+        //
+        // This closes the third producer of `'always'`, which the predicate
+        // above does not see: `resolveToolGate` manufactures
+        // `confirm: 'always'` when a tool's own `authorityGate` THROWS
+        // (tool-action-map.ts), for any tool, UI or not. The first draft of
+        // this change answered that by FORWARDING `confirmation` into the
+        // boundary instead, which was worse in two ways -- it is recomputed on
+        // every invoke while the stored approval context is frozen at
+        // creation, so a gate that throws only at resume made
+        // `effect-boundary.ts`'s "approval predates required UI review" fail an
+        // already-granted approval and park its waitpoint; and it labelled a
+        // non-UI tool's card as a UI effect. Denying is the answer the rest of
+        // the subsystem already gives, and it needs no new state to be right.
+        const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+        if (gate.confirm === 'always') {
+          return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.` };
+        }
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
@@ -421,10 +465,16 @@ export function buildSandboxServiceBackends(
             // The sub-agent's gate may have substituted an approval for a
             // level shortfall; judge it here the same way, or the approval it
             // asked for could never be granted.
-            ...(() => {
-              const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
-              return gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {};
-            })(),
+            //
+            // `confirm` is read for its FLOOR only, and deliberately not
+            // forwarded as `confirmation` (#638). `confirmation` makes a card
+            // click-only, which is the right shape for a `confirm: 'always'`
+            // gate -- but on this route `'always'` is now denied outright
+            // above, so the only values reaching here are `'above_level'` and
+            // absent, and forwarding would be dead code holding a live hazard
+            // (see the denial's comment). `toolsInvoke` does forward it,
+            // because it is the route that legitimately raises such a card.
+            ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
             prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
