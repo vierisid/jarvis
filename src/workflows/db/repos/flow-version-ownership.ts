@@ -13,9 +13,13 @@ import { getWorkflowDb } from "../index";
  * TOCTOU. That does mean `flow-version.ts` now raises two error vocabularies:
  * this class where it knows the status, and plain `Error` everywhere else,
  * which `trapErrors` still maps by regex.
+ *
+ * 409 joined for a write to a LOCKED version (#693): the four DRAFT-only
+ * writers threw a plain `Error` there, which matches no `trapErrors` pattern,
+ * so editing a published version read to the client as a 500 server fault.
  */
 export class FlowVersionRequestError extends Error {
-  constructor(message: string, readonly status: 400 | 404 | 413) {
+  constructor(message: string, readonly status: 400 | 404 | 409 | 413) {
     super(message);
     this.name = "FlowVersionRequestError";
   }

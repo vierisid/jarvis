@@ -18,10 +18,13 @@ import {
   listVersions,
   lockVersion,
   mergeRunOutputsIntoSampleData,
+  replaceSampleData,
   setSampleDataEntry,
+  setSampleInputEntry,
   SAMPLE_DATA_AUTO_CAPTURE_MAX_BYTES,
   updateDraftVersion,
 } from "./flow-version";
+import { FlowVersionRequestError } from "./flow-version-ownership";
 import { createFlowRun, getFlowRun, listRuns, updateRun } from "./flow-run";
 import {
   deleteConnection,
@@ -161,6 +164,31 @@ describe("flow-version repo", () => {
     expect(locked.state).toBe("LOCKED");
 
     expect(() => updateDraftVersion(draft.id, { displayName: "x" })).toThrow(/LOCKED/);
+  });
+
+  // #693: the four DRAFT-only writers refuse a LOCKED version as a 409
+  // `FlowVersionRequestError`, which `trapErrors` answers verbatim. A plain
+  // Error there read as a 500.
+  test("every DRAFT-only writer refuses a LOCKED version with a 409 request error", () => {
+    const flow = createFlow();
+    const v = createDraftVersion({ flowId: flow.id, displayName: "v" });
+    lockVersion(v.id);
+    const writers: Array<[string, () => unknown]> = [
+      ["updateDraftVersion", () => updateDraftVersion(v.id, { displayName: "x" })],
+      ["setSampleDataEntry", () => setSampleDataEntry(v.id, "s", { x: 1 })],
+      ["setSampleInputEntry", () => setSampleInputEntry(v.id, "s", { x: 1 })],
+      ["replaceSampleData", () => replaceSampleData(v.id, null)],
+    ];
+    for (const [name, write] of writers) {
+      let caught: unknown;
+      try {
+        write();
+      } catch (e) {
+        caught = e;
+      }
+      expect({ name, isRequestError: caught instanceof FlowVersionRequestError }).toEqual({ name, isRequestError: true });
+      expect((caught as FlowVersionRequestError).status).toBe(409);
+    }
   });
 
   test("getLatestDraft returns the most recently updated DRAFT only", async () => {

@@ -1708,10 +1708,12 @@ describe("workflow API: sample data", () => {
     expect(body.error).toMatch(/exceeds .* bytes/);
   });
 
-  test("PATCH on a LOCKED version surfaces an error", async () => {
+  test("PATCH on a LOCKED version is a 409 and writes nothing", async () => {
     const { flow, version } = await setupVersion();
-    const { lockVersion } = await import("../db/repos/flow-version");
+    const { lockVersion, setSampleDataEntry } = await import("../db/repos/flow-version");
+    setSampleDataEntry(version.id, "step_a", { before: true });
     lockVersion(version.id);
+    const before = await flowVersionRow(version.id);
     const r = createWorkflowRoutes();
     const patch = r["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH;
     const { status, body } = await callJson(
@@ -1723,9 +1725,95 @@ describe("workflow API: sample data", () => {
         { output: { x: 1 } },
       ),
     );
-    // The repo throws on LOCKED; trapErrors should surface a 500-style err.
-    expect(status).toBeGreaterThanOrEqual(400);
+    // Exactly 409 (#693). This asserted `>= 400`, which a 500 also passed, so
+    // it never distinguished a conflict from a server fault.
+    expect(status).toBe(409);
     expect(body.error).toMatch(/LOCKED/);
+    expect(await flowVersionRow(version.id)).toEqual(before);
+  });
+});
+
+/** The whole `flow_version` row, for "nothing was written" checks. */
+async function flowVersionRow(id: string) {
+  const { getWorkflowDb } = await import("../db/index");
+  return getWorkflowDb().query<Record<string, unknown>, [string]>("SELECT * FROM flow_version WHERE id = ?").get(id);
+}
+
+/**
+ * #693. The repo's four DRAFT-only writers threw a plain `Error` on a LOCKED
+ * version, whose message matches none of `trapErrors`' patterns, so editing a
+ * published version answered 500. It is a conflict with the version's state,
+ * so 409. The sample-data PATCH case is in "workflow API: sample data" above.
+ */
+describe("#693: writes to a LOCKED version answer 409 and write nothing", () => {
+  async function lockedVersion() {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion, setSampleDataEntry, setSampleInputEntry } = await import(
+      "../db/repos/flow-version"
+    );
+    const { DEFAULT_IDS } = await import("../db/schema");
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const version = createDraftVersion({
+      flowId: flow.id,
+      displayName: "locked-693",
+      trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" } as unknown as Record<string, unknown>,
+    });
+    // Content in both maps, so a write that clears or replaces would show.
+    setSampleDataEntry(version.id, "step_a", { kept: "data" });
+    setSampleInputEntry(version.id, "step_a", { kept: "input" });
+    lockVersion(version.id);
+    return { flowId: flow.id, versionId: version.id, before: await flowVersionRow(version.id) };
+  }
+
+  test("PATCH /versions/:versionId", async () => {
+    const { flowId, versionId, before } = await lockedVersion();
+    const { getFlowVersionUiMeta } = await import("../db/repos/flow-version-ui-meta");
+    const metaBefore = getFlowVersionUiMeta(versionId);
+    const { status, body } = await callJson(
+      routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/${flowId}/versions/${versionId}`,
+        { id: flowId, versionId },
+        { displayName: "renamed", uiMeta: { positions: { trigger: { x: 1, y: 2 } } } },
+      ),
+    );
+    expect(status).toBe(409);
+    expect(body.error).toMatch(/LOCKED/);
+    expect(await flowVersionRow(versionId)).toEqual(before);
+    // The editor layout commits with the content, so it did not land either.
+    expect(getFlowVersionUiMeta(versionId)).toEqual(metaBefore);
+  });
+
+  test("DELETE /sample-data/_all", async () => {
+    const { flowId, versionId, before } = await lockedVersion();
+    const { status, body } = await callJson(
+      routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.DELETE,
+      reqWithParams("DELETE", `http://x/api/workflows/${flowId}/versions/${versionId}/sample-data/_all`, {
+        id: flowId,
+        versionId,
+        stepName: "_all",
+      }),
+    );
+    expect(status).toBe(409);
+    expect(body.error).toMatch(/LOCKED/);
+    expect(await flowVersionRow(versionId)).toEqual(before);
+  });
+
+  test("PATCH /sample-input/:stepName", async () => {
+    const { flowId, versionId, before } = await lockedVersion();
+    const { status, body } = await callJson(
+      routes["/api/workflows/:id/versions/:versionId/sample-input/:stepName"]?.PATCH,
+      reqWithParams(
+        "PATCH",
+        `http://x/api/workflows/${flowId}/versions/${versionId}/sample-input/step_a`,
+        { id: flowId, versionId, stepName: "step_a" },
+        { input: { changed: true } },
+      ),
+    );
+    expect(status).toBe(409);
+    expect(body.error).toMatch(/LOCKED/);
+    expect(await flowVersionRow(versionId)).toEqual(before);
   });
 });
 

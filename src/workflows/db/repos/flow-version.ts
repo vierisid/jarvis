@@ -318,7 +318,9 @@ export function listVersions(flowId: string, limit = 50): FlowVersion[] {
 export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): FlowVersion {
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`updateDraftVersion: not found (id=${id})`);
-  if (existing.state === "LOCKED") throw new Error(`updateDraftVersion: cannot modify LOCKED version (id=${id})`);
+  if (existing.state === "LOCKED") {
+    throw new FlowVersionRequestError(`updateDraftVersion: cannot modify LOCKED version (id=${id})`, 409);
+  }
   // A draft is mutated in place, so writing a CODE step into the draft an
   // ENABLED flow is already running would deploy it without passing publish.
   if (patch.trigger !== undefined) assertCodeStepsAllowedForLiveDraft(existing.flow_id, patch.trigger);
@@ -523,7 +525,7 @@ export function setSampleDataEntry(
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`setSampleDataEntry: not found (id=${id})`);
   if (existing.state === "LOCKED") {
-    throw new Error(`setSampleDataEntry: version ${id} is LOCKED`);
+    throw new FlowVersionRequestError(`setSampleDataEntry: version ${id} is LOCKED`, 409);
   }
   const current = existing.sample_data
     ? (JSON.parse(existing.sample_data) as Record<string, unknown>)
@@ -568,7 +570,7 @@ export function setSampleInputEntry(
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`setSampleInputEntry: not found (id=${id})`);
   if (existing.state === "LOCKED") {
-    throw new Error(`setSampleInputEntry: version ${id} is LOCKED`);
+    throw new FlowVersionRequestError(`setSampleInputEntry: version ${id} is LOCKED`, 409);
   }
   const current = existing.sample_input
     ? (JSON.parse(existing.sample_input) as Record<string, unknown>)
@@ -737,7 +739,7 @@ export function replaceSampleData(
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`replaceSampleData: not found (id=${id})`);
   if (existing.state === "LOCKED") {
-    throw new Error(`replaceSampleData: version ${id} is LOCKED`);
+    throw new FlowVersionRequestError(`replaceSampleData: version ${id} is LOCKED`, 409);
   }
   if (data) {
     const refusal = sampleMapRefusal("sampleData", data, sampleMapCurrent(existing.sample_data));
