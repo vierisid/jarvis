@@ -63,6 +63,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Read-only, written down (#646). Without this every job inherits the
+# repository's default token scope -- read-only today, but a setting outside
+# this file, one toggle away from write. This workflow builds and STARTS a
+# container from the PR's own tree; it pushes nothing and has no registry
+# login, so it needs to read the repository and nothing else.
+permissions:
+  contents: read
+
 jobs:
   docker-build:
     runs-on: ubuntu-latest

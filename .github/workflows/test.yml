@@ -16,6 +16,16 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
+# Read-only, written down (#646). Without this every job inherits the
+# repository's default token scope -- read-only today, but a setting outside
+# this file, one toggle away from write. This workflow runs `bun test`,
+# `go test` and the signing-script tests from the PR's own tree, so the token
+# those jobs can reach should never be able to write. Nothing here needs more:
+# paths-filter lists a PR's files through the API with contents: read on this
+# public repository (it already does under the read-only default).
+permissions:
+  contents: read
+
 env:
   GO_VERSION: "1.25"
 
@@ -99,6 +109,9 @@ jobs:
       # block verbatim against hostile tags and checks the workflow structure
       # that keeps the raw tag out of every other job's shell.
       - run: .github/scripts/release-exec.test.sh
+      # #646: every job's token scope is written down, the publish path holds
+      # nothing by default, and every action it runs is pinned to a commit.
+      - run: .github/scripts/workflow-hardening.test.sh
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xdotool && echo JARVIS_REQUIRE_XDOTOOL_SHIM=1 >> "$GITHUB_ENV" # linux.test.ts runs the real xdotool's argument parsing (#518)
       # --retry=2 (3 attempts per test), NOT a retry around the whole step.
       # Every flake this suite has produced in CI is a per-test hook timing out

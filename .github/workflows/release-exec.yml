@@ -20,9 +20,13 @@ on:
         required: true
         default: "v0.0.0-dry-run"
 
-permissions:
-  contents: write
-  packages: write
+# Nothing by default (#646). The workflow-level block used to be
+# contents: write + packages: write, which every job without its own block
+# inherited -- including `test`, which runs `bun install` (dependency
+# lifecycle scripts) and the whole suite with a token that could push to the
+# repository and the registry. Every job now asks for exactly what it uses,
+# and a job added later starts with no token instead of a write one.
+permissions: {}
 
 # One release at a time (#645). Two tag pushes, or a push racing a dispatch,
 # used to run side by side: both reached publish-docker, both pushed
@@ -196,9 +200,11 @@ jobs:
   test:
     needs: validate-tag
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
-      - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
       # --frozen-lockfile: the release must build from exactly the versions the
@@ -221,11 +227,11 @@ jobs:
   build-docker:
     needs: [validate-tag, test]
     runs-on: ubuntu-latest
-    # The workflow-level block is contents: write + packages: write, and a job
-    # without its own `permissions:` inherits it. This job neither pushes an
-    # image nor writes to the repo, and it now EXECUTES the image it built, so
-    # it takes the narrowest scope instead: a container escape here would
-    # otherwise land in a job whose runner holds a publish-capable token.
+    # This job neither pushes an image nor writes to the repo, and it EXECUTES
+    # the image it built, so it takes the narrowest scope: a container escape
+    # here must not land in a job whose runner holds a publish-capable token.
+    # (Since #646 the workflow-level block is `{}`, so this is what every job
+    # does; it was written when this job was the exception.)
     # persist-credentials: false below is the other half -- nothing after the
     # checkout runs git, so the token has no reason to be on disk.
     permissions:
@@ -239,18 +245,18 @@ jobs:
       # Run-scoped, matching docker-build.yml, and removed by name at the end.
       GATE_IMAGE_TAG: jarvis:release-gate-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           persist-credentials: false
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Build Docker image (validate, no push)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -289,7 +295,7 @@ jobs:
       # hit, and cache-from is the fallback if that result came from the remote
       # cache in the first place.
       - name: Build the amd64 image again, loaded, so it can be run
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -368,13 +374,13 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -431,8 +437,12 @@ jobs:
   github-release:
     needs: [validate-tag, publish-docker, sidecar]
     runs-on: ubuntu-latest
+    # Creating the release (and its generated notes) is a contents write. The
+    # sidecar artifacts come from this same run, which needs no token scope.
+    permissions:
+      contents: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
         with:
           fetch-depth: 0
 
@@ -441,7 +451,7 @@ jobs:
       # built this run.
       - name: Download sidecar binaries
         if: needs.sidecar.outputs.released == 'true'
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           path: artifacts
           pattern: sidecar-*
@@ -481,7 +491,7 @@ jobs:
 
       - name: Create GitHub Release
         if: env.DRY_RUN != 'true'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           tag_name: ${{ needs.validate-tag.outputs.tag }}
           # The commit this run built. Without it, a tag deleted mid-run would
@@ -518,16 +528,16 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@c7c53464625b32c7a7e944ae62b3e17d2b600130 # v3.7.0
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -535,7 +545,7 @@ jobs:
 
       - name: Generate Docker metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
@@ -553,7 +563,7 @@ jobs:
       # validation job, so this build is effectively cache-hit + registry push.
       - name: Build and push Docker image
         if: env.DRY_RUN != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -567,7 +577,7 @@ jobs:
 
       - name: Build Docker image (dry run)
         if: env.DRY_RUN == 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: ./Dockerfile
@@ -593,6 +603,8 @@ jobs:
     needs: [validate-tag, github-release]
     if: ${{ !inputs.dry_run }}
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Get release notes
         id: release

@@ -49,9 +49,9 @@ jobs:
       # Needed by the "Trigger tests" step to dispatch test.yml on the PR branch.
       actions: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: latest
 
@@ -87,7 +87,7 @@ jobs:
       # see "safe to merge" vs "manual review required" at a glance.
       - name: Open PR with catalog changes
         if: steps.sync.outputs.has_changes == 'true'
-        uses: peter-evans/create-pull-request@v7
+        uses: peter-evans/create-pull-request@22a9089034f40e5a961c8808d113e2c98fb63676 # v7.0.11
         with:
           commit-message: "chore: refresh pieces catalog"
           title: "${{ steps.sync.outputs.verdict == 'safe' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}"
