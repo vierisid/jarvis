@@ -32,9 +32,13 @@ export interface ReadinessContext {
 
 const object = (value: unknown): value is Record<string, any> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
+// The engine's operator values. "Starts with" has two spellings that mean the
+// same condition: the engine's value TEXT_START_WITH, which the dashboard saves,
+// and its enum key TEXT_STARTS_WITH, which composed workflows write. The engine
+// accepts both (router-executor.ts) and fails a step on any other unknown operator.
 const OPERATORS = new Set([
   'TEXT_CONTAINS', 'TEXT_DOES_NOT_CONTAIN', 'TEXT_EXACTLY_MATCHES', 'TEXT_DOES_NOT_EXACTLY_MATCH',
-  'TEXT_STARTS_WITH', 'TEXT_ENDS_WITH', 'TEXT_DOES_NOT_START_WITH', 'TEXT_DOES_NOT_END_WITH',
+  'TEXT_START_WITH', 'TEXT_STARTS_WITH', 'TEXT_ENDS_WITH', 'TEXT_DOES_NOT_START_WITH', 'TEXT_DOES_NOT_END_WITH',
   'TEXT_MATCHES_REGEX', 'TEXT_DOES_NOT_MATCH_REGEX', 'LIST_CONTAINS', 'LIST_DOES_NOT_CONTAIN',
   'NUMBER_IS_GREATER_THAN', 'NUMBER_IS_LESS_THAN', 'NUMBER_IS_EQUAL_TO', 'BOOLEAN_IS_TRUE',
   'BOOLEAN_IS_FALSE', 'DATE_IS_AFTER', 'DATE_IS_EQUAL', 'DATE_IS_BEFORE', 'LIST_IS_EMPTY',

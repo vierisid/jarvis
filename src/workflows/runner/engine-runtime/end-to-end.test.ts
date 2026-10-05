@@ -284,6 +284,52 @@ describe("Engine end-to-end (F gate)", () => {
     }, 30_000);
   }
 
+  // "Starts with" has two spellings: the engine's value TEXT_START_WITH (the dashboard's) and its
+  // key name TEXT_STARTS_WITH (a composed workflow's). Through readiness and the real engine, both
+  // must route only a matching prefix; the key name used to match every input.
+  for (const operator of ['TEXT_START_WITH', 'TEXT_STARTS_WITH'] as const) {
+    for (const [from, expected] of [['billing@oak.test', 'matched'], ['ana@cedar.test', 'fallback']] as const) {
+      test.skipIf(skipE2eTests)(`router: ${operator} routes only a matching prefix (${from})`, async () => {
+        const before = llmCalls.length;
+        const ask = (name: string): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt: name } } });
+        const flow = createFlow();
+        const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'router', type: 'ROUTER', settings: {
+          executionType: 'EXECUTE_FIRST_MATCH', branches: [
+            { branchType: 'CONDITION', branchName: 'Billing', conditions: [[{ firstValue: '{{trigger.from}}', operator, secondValue: 'billing@' }]] },
+            { branchType: 'FALLBACK', branchName: 'Otherwise' },
+          ],
+        }, children: [ask('matched'), ask('fallback')] } };
+        createDraftVersion({ flowId: flow.id, displayName: operator, trigger });
+        const req = Object.assign(new Request('http://local/run', { method: 'POST', body: JSON.stringify({ environment: 'TESTING', payload: { from } }) }), { params: { id: flow.id } });
+        const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(req);
+        expect(response.status).toBe(202);
+        const { id } = await response.json() as { id: string };
+        const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } });
+        await worker.drain();
+        expect(getFlowRun(id)!.status).toBe('SUCCEEDED');
+        expect(llmCalls.slice(before).map(call => call.prompt)).toEqual([expected]);
+      }, 45_000);
+    }
+  }
+
+  test.skipIf(skipE2eTests)('router: an operator the engine does not implement fails the step instead of matching', async () => {
+    const before = llmCalls.length;
+    const ask = (name: string): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt: name } } });
+    const flow = createFlow();
+    // Readiness refuses this graph, so run it straight through the engine: the engine must fail closed as well.
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Unknown operator', trigger: { name: 'trigger', type: 'EMPTY', nextAction: {
+      name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [
+        { branchType: 'CONDITION', branchName: 'Typo', conditions: [[{ firstValue: 'ana@cedar.test', operator: 'TEXT_STARTSWITH', secondValue: 'billing@' }]] },
+        { branchType: 'FALLBACK', branchName: 'Otherwise' },
+      ] }, children: [ask('matched'), ask('fallback')] } } });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: 'TESTING' });
+    const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+    try {
+      await expect(handle.executeFlow({ flowVersion: version })).rejects.toThrow('TEXT_STARTSWITH is not supported');
+    } finally { await handle.release(); }
+    expect(llmCalls.slice(before)).toEqual([]);
+  }, 45_000);
+
   test.skipIf(skipE2eTests)(
     "manual trigger + echo action runs to SUCCEEDED",
     async () => {
