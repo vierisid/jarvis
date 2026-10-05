@@ -16,7 +16,7 @@
   "status": {
     "implementation": "verified locally",
     "merge": "not_merged",
-    "publication": "local branch; PR description prepared for brief/foundations",
+    "publication": "PR #714 open against brief/foundations; https://github.com/vierisid/jarvis/pull/714",
     "capability_ready": "conversations provider ready after vault initialization",
     "release_enabled": false
   },
@@ -98,6 +98,11 @@
       "command": "Normal repository commit hook for implementation",
       "result": "All four guards, 23 related tests and TypeScript passed before rebase; implementation patch unchanged after rebase",
       "log": "evidence/F-02/implementation-hook.log"
+    },
+    {
+      "command": "Normal repository commit hook after final rebase (receipt commit 27395db7)",
+      "result": "All four guards and TypeScript passed; documentation-only commit required no related tests",
+      "log": "evidence/F-02/handoff-hook.log"
     }
   ],
   "quick_verify": {
@@ -117,5 +122,5 @@
     "Messages retain the legacy shape without invented turn/request/event IDs.",
     "The environment flag defaults off and has not been set on a running user daemon."
   ],
-  "next": "Owner review/publication against brief/foundations. Keep all PRs unmerged. F-03 is not started."
+  "next": "Independent review and remote CI on PR #714. Keep all PRs unmerged. F-03 is not started."
 }
