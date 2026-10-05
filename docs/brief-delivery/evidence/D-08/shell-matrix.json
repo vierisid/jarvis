@@ -1,0 +1,434 @@
+[
+  {
+    "mode": "light",
+    "rail": false,
+    "chat": false,
+    "summaryHeld": true,
+    "pending": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "confirmed": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "after": {
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  },
+  {
+    "mode": "light",
+    "rail": false,
+    "chat": true,
+    "summaryHeld": true,
+    "pending": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 664.159912109375,
+        "y": 539.6131591796875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "confirmed": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 664.159912109375,
+        "y": 539.6131591796875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "after": {
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 706.0656127929688,
+        "y": 552.07666015625
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  },
+  {
+    "mode": "light",
+    "rail": true,
+    "chat": false,
+    "summaryHeld": true,
+    "pending": {
+      "button": {
+        "height": 33.53422164916992,
+        "width": 110.54024505615234,
+        "x": 673.3313598632812,
+        "y": 540.296142578125
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "confirmed": {
+      "button": {
+        "height": 33.53422164916992,
+        "width": 110.54024505615234,
+        "x": 673.3313598632812,
+        "y": 540.296142578125
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "after": {
+      "button": {
+        "height": 38.66202926635742,
+        "width": 111.85237884521484,
+        "x": 715.323486328125,
+        "y": 555.0629272460938
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  },
+  {
+    "mode": "light",
+    "rail": true,
+    "chat": true,
+    "summaryHeld": true,
+    "pending": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.5403289794922,
+        "x": 611.2666625976562,
+        "y": 539.982421875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "confirmed": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.5403289794922,
+        "x": 611.2666625976562,
+        "y": 539.982421875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "after": {
+      "button": {
+        "height": 38.66202926635742,
+        "width": 111.85237884521484,
+        "x": 653.2191162109375,
+        "y": 553.6912841796875
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  },
+  {
+    "mode": "dark",
+    "rail": false,
+    "chat": false,
+    "summaryHeld": true,
+    "pending": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "confirmed": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "after": {
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  },
+  {
+    "mode": "dark",
+    "rail": false,
+    "chat": true,
+    "summaryHeld": true,
+    "pending": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 664.159912109375,
+        "y": 539.6131591796875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "confirmed": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 664.159912109375,
+        "y": 539.6131591796875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "after": {
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 706.0656127929688,
+        "y": 552.07666015625
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  },
+  {
+    "mode": "dark",
+    "rail": true,
+    "chat": false,
+    "summaryHeld": true,
+    "pending": {
+      "button": {
+        "height": 33.53422164916992,
+        "width": 110.54024505615234,
+        "x": 673.3313598632812,
+        "y": 540.296142578125
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "confirmed": {
+      "button": {
+        "height": 33.53422164916992,
+        "width": 110.54024505615234,
+        "x": 673.3313598632812,
+        "y": 540.296142578125
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "after": {
+      "button": {
+        "height": 38.66202926635742,
+        "width": 111.85237884521484,
+        "x": 715.323486328125,
+        "y": 555.0629272460938
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  },
+  {
+    "mode": "dark",
+    "rail": true,
+    "chat": true,
+    "summaryHeld": true,
+    "pending": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.5403289794922,
+        "x": 611.2666625976562,
+        "y": 539.982421875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "confirmed": {
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.5403289794922,
+        "x": 611.2666625976562,
+        "y": 539.982421875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    "after": {
+      "button": {
+        "height": 38.66202926635742,
+        "width": 111.85237884521484,
+        "x": 653.2191162109375,
+        "y": 553.6912841796875
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  }
+]
