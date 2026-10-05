@@ -1,10 +1,15 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
+import { existsSync, mkdtempSync, readdirSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { initDatabase } from '../vault/schema.ts';
 import { createGoal } from '../vault/goals.ts';
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from '../workflows/db/index.ts';
+import { setEncryptionKey } from '../workflows/db/encryption.ts';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness.ts';
 import { createFlow } from '../workflows/db/repos/flow.ts';
 import { createDraftVersion, type FlowTriggerNode } from '../workflows/db/repos/flow-version.ts';
+import { upsertConnection } from '../workflows/db/repos/app-connection.ts';
 import { createCompositionJournal } from '../workflows/db/repos/workflow-composition.ts';
 import { PieceCatalog, metadataToCatalogEntry } from '../workflows/runtime/piece-catalog.ts';
 import { SandboxApi } from '../workflows/sandbox-api/server.ts';
@@ -17,14 +22,15 @@ import { PreparedDryRunner, type DryFixture } from './prepared-dry-run.ts';
 import { DRY_RUNNER, JOB_CONSTRAINTS, liveQualificationServices, qualifyPreparedProposal, versionDigest, type DrySample, type QualificationRequest } from './prepared-qualification.ts';
 
 const JARVIS = '@jarvispieces/piece-jarvis-';
+const TOKEN = 'synthetic-secret-token-q13';
 
 const step = (name: string, piece: string, actionName: string, input: Record<string, unknown>, nextAction?: FlowTriggerNode): FlowTriggerNode =>
   ({ name, type: 'PIECE', settings: { pieceName: JARVIS + piece, pieceVersion: '0.0.1', actionName, input }, ...(nextAction ? { nextAction } : {}) });
+const manual = (nextAction: FlowTriggerNode): FlowTriggerNode => ({ name: 'trigger', type: 'EMPTY', nextAction });
 /** Read open commitments, draft a reminder with AI, show it to the owner. */
-const reminder: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction:
-  step('commitments', 'context', 'commitments_list', {},
-    step('draft', 'ask', 'ask', { prompt: 'Draft a reminder about {{commitments}}' },
-      step('tell_me', 'notify', 'notify', { message: '{{draft.text}}', channels: ['dashboard'] }))) };
+const reminder = manual(step('commitments', 'context', 'commitments_list', {},
+  step('draft', 'ask', 'ask', { prompt: 'Draft a reminder about {{commitments}}' },
+    step('tell_me', 'notify', 'notify', { message: '{{draft.text}}', channels: ['dashboard'] }))));
 const fixture = (reply?: string): DryFixture => ({ id: 'week-41', payload: {},
   context: { commitments: [{ id: 'c1', what: 'Invoice 1042 is overdue', status: 'pending' }] },
   ...(reply ? { replies: { draft: reply } } : {}) });
@@ -54,10 +60,17 @@ const services = () => liveQualificationServices({ tool: () => null, targets: ()
 // worth what the real engine shows. Both builds are cached by content hash.
 describe('prepared dry runner (real engine)', () => {
   let runner: PreparedDryRunner | null = null;
+  // Run logs land under the workflow data directory: keep them out of ~/.jarvis.
+  const dataDir = mkdtempSync(join(tmpdir(), 'jarvis-q13-dry-'));
+  const previousDataDir = process.env.JARVIS_WORKFLOW_DATA_DIR;
 
   beforeAll(async () => {
+    process.env.JARVIS_WORKFLOW_DATA_DIR = dataDir;
     initDatabase(':memory:');
     initWorkflowDb(':memory:');
+    setEncryptionKey(Buffer.alloc(32, 0x71));
+    upsertConnection({ externalId: 'billing-gmail', pieceName: '@activepieces/piece-gmail', displayName: 'Billing inbox',
+      pieceVersion: '0.0.1', type: 'OAUTH2', value: { access_token: TOKEN } as any });
     const bundle = await buildEngineBundle();
     await buildAllJarvisPieces();
     // Readiness uses the real pieces' metadata, as the daemon does.
@@ -80,9 +93,12 @@ describe('prepared dry runner (real engine)', () => {
   afterAll(async () => {
     await runner?.close();
     closeWorkflowDb();
+    if (previousDataDir === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
+    else process.env.JARVIS_WORKFLOW_DATA_DIR = previousDataDir;
+    rmSync(dataDir, { recursive: true, force: true });
   });
 
-  test('runs the exact version with every service simulated, keeps no run, and its sample backs a Ready preview', async () => {
+  test('runs the exact version with every service simulated, keeps no run or log, and its sample backs a Ready preview', async () => {
     const p = prepare(reminder);
     const before = { flows: count('flow'), versions: count('flow_version') };
     const sample = await runner!.run(p.flow.id, p.version.id, fixture('Ana, invoice 1042 is two weeks overdue.'));
@@ -90,14 +106,32 @@ describe('prepared dry runner (real engine)', () => {
       versionDigest: versionDigest(p.version.trigger), fixtureId: 'week-41', status: 'SUCCEEDED', error: null,
       simulated: [{ step: 'commitments', service: 'context' }, { step: 'draft', service: 'llm' }, { step: 'tell_me', service: 'notify' }] });
     expect(sample.outputs.draft).toMatchObject({ text: 'Ana, invoice 1042 is two weeks overdue.' });
-    expect(sample.outputs.tell_me).toEqual({ delivered: [], failed: [] });
-    // The scratch copy and its run are gone, and the proposal's workflow never ran.
+    // Answered as a delivery succeeds, so later steps behave as in production.
+    expect(sample.outputs.tell_me).toEqual({ delivered: ['dashboard'], failed: [] });
+    // The scratch copy, its run and the run's log file are gone; the proposal's workflow never ran.
     expect({ flows: count('flow'), versions: count('flow_version') }).toEqual(before);
     expect(count('flow_run')).toBe(0);
+    expect(existsSync(join(dataDir, 'workflow-logs')) ? readdirSync(join(dataDir, 'workflow-logs')) : []).toEqual([]);
 
     const qualification = qualifyPreparedProposal(request(p, sample), services());
     expect(qualification.reasons).toEqual([]);
     expect(qualification.verdict).toBe('ready');
+  }, 60_000);
+
+  test('a tool step is answered from the fixture and never touches the machine', async () => {
+    const file = join(dataDir, 'must-not-exist.txt');
+    const p = prepare(manual(step('save', 'tool', 'invoke', { toolName: 'write_file', params: { path: file, content: 'Report' } })));
+    const sample = await runner!.run(p.flow.id, p.version.id, { id: 'tool', payload: {}, tools: { save: { written: true } } });
+    expect(sample).toMatchObject({ status: 'SUCCEEDED', simulated: [{ step: 'save', service: 'tool' }] });
+    expect(existsSync(file)).toBe(false);
+  }, 60_000);
+
+  test('no connection resolves, so a stored credential never reaches a step', async () => {
+    const p = prepare(manual(step('draft', 'ask', 'ask', { prompt: 'Token: {{connections.billing-gmail}}' })));
+    const sample = await runner!.run(p.flow.id, p.version.id, { id: 'leak', payload: {}, replies: { draft: 'unused' } });
+    expect(sample.status).toBe('FAILED');
+    expect(sample.simulated).toEqual([]);
+    expect(JSON.stringify(sample)).not.toContain(TOKEN);
   }, 60_000);
 
   test('a step the fixture does not cover fails the run, and that sample keeps the proposal from Ready', async () => {
@@ -124,12 +158,19 @@ describe('prepared dry runner (real engine)', () => {
   }, 90_000);
 
   test('refuses a graph it cannot simulate before anything is created', async () => {
-    const flows = count('flow');
-    const p = prepare({ name: 'trigger', type: 'EMPTY', nextAction: { name: 'send', type: 'PIECE',
-      settings: { pieceName: '@activepieces/piece-gmail', pieceVersion: '0.0.1', actionName: 'send_email', input: {} } } });
-    await expect(runner!.run(p.flow.id, p.version.id, fixture('unused'))).rejects.toThrow(
-      'The dry runner cannot run this workflow: send uses @activepieces/piece-gmail, which the dry runner cannot simulate');
-    expect(count('flow')).toBe(flows + 1);
+    for (const [trigger, reason] of [
+      [{ name: 'trigger', type: 'EMPTY', nextAction: { name: 'send', type: 'PIECE',
+        settings: { pieceName: '@activepieces/piece-gmail', pieceVersion: '0.0.1', actionName: 'send_email', input: {} } } },
+      'send uses @activepieces/piece-gmail, which the dry runner cannot simulate'],
+      // The plumbing fixture reads a stored credential and the piece store.
+      [manual(step('check', 'validate', 'validate', { storeValue: 'x', auth: '{{connections.billing-gmail}}' })),
+        `check uses ${JARVIS}validate, which the dry runner cannot simulate`],
+    ] as Array<[FlowTriggerNode, string]>) {
+      const flows = count('flow');
+      const p = prepare(trigger);
+      await expect(runner!.run(p.flow.id, p.version.id, fixture('unused'))).rejects.toThrow(`The dry runner cannot run this workflow: ${reason}`);
+      expect(count('flow')).toBe(flows + 1);
+    }
     expect(count('flow_run')).toBe(0);
   });
 });
