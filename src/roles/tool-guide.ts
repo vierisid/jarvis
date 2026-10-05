@@ -231,7 +231,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('Tools:');
   lines.push('- `desktop_list_windows` — list all visible windows (titles, PIDs, positions)');
   lines.push('- `desktop_snapshot` — get the UI element tree of a window. Each element has an [id]. Optional `depth` param to control tree depth (default: 8).');
-  lines.push('- `desktop_click` — click or interact with an element by [id]. Optional `action` param: click (default), double_click, right_click, invoke, toggle, set_value, get_value, expand, collapse, focus. Optional `value` param for set_value.');
+  lines.push('- `desktop_click` — click or interact with an element by [id]. Optional `action` param: click (default), double_click, right_click, invoke, toggle, select, set_value, get_value, expand, collapse, scroll_into_view, focus. Optional `value` param for set_value.');
   lines.push('- `desktop_type` — type text into the focused element. Optional `element_id` to click-focus first.');
   lines.push('- `desktop_press_keys` — press key combos (e.g., "ctrl,s", "alt,f4", "enter")');
   lines.push('- `desktop_find_element` — search for elements by property (name, control_type, class_name, automation_id) without scanning the full tree');
@@ -244,7 +244,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('- After clicking or typing, snapshot again to verify the updated state.');
   lines.push('- An element [id] is valid only until the next `desktop_snapshot` or `desktop_find_element`, and only while the element is unchanged. A click refused because the element changed or the id is stale did nothing: snapshot again and use an id from the new result.');
   lines.push('- Use `desktop_find_element` when you know the element name/type — faster than scanning the full tree.');
-  lines.push('- The `action` param on `desktop_click` supports richer interactions on Windows (invoke, toggle, set_value, expand, collapse). On macOS/Linux, only click, double_click, right_click, and focus are supported.');
+  lines.push('- The `action` param on `desktop_click` supports richer interactions on Windows (invoke, toggle, select, set_value, get_value, expand, collapse, scroll_into_view). On macOS/Linux, only click, double_click, right_click, and focus are supported.');
   lines.push('- `automation_id` in `desktop_find_element` is Windows-only; it is ignored on other platforms.');
   lines.push('');
 

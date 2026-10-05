@@ -16,6 +16,7 @@
  * runtime rejects is worse than no enum at all.
  */
 import { describe, expect, test } from 'bun:test';
+import { readFileSync } from 'node:fs';
 import { ToolRegistry, type ToolDefinition } from './registry.ts';
 import { toolDefToLLMTool } from './builtin.ts';
 import { uiActTool, uiSnapshotTool, parsePostcondition } from './ui.ts';
@@ -183,6 +184,48 @@ describe('advertised values match what the implementation accepts', () => {
     for (const a of ['click', 'set_value', 'get_value']) {
       expect(advertised.has(a)).toBe(true);
     }
+  });
+
+  /**
+   * desktop_click's enum against the sidecar's three dispatchers (#657).
+   *
+   * The enum is a gate (ToolRegistry enforces it), and the accepted set lives in
+   * Go with no shared definition, so the two drifted in BOTH directions with
+   * nothing to notice: the enum advertised `get_text`, which no platform's
+   * switch has a case for, so every call was a guaranteed error. Parsed out of
+   * the Go rather than copied, the way linux.test.ts reads the key tables, so a
+   * case added or removed on either side fails here.
+   *
+   * Each platform's `default:` arm also prints a "supported:" list for the
+   * model, and that list is pinned to the same switch -- Windows' omitted
+   * `get_text` too, which is how the drift was visible in the first place.
+   */
+  test('every desktop_click action is one some sidecar dispatches, and every dispatched one is advertised', () => {
+    const dispatchers = [
+      ['uia_actions_windows.go', 'uiaPerformAction'],
+      ['desktop_linux.go', 'clickElement'],
+      ['desktop_darwin.go', 'clickElement'],
+    ] as const;
+    const accepted = new Set<string>();
+    for (const [file, fn] of dispatchers) {
+      const source = readFileSync(new URL(`../../../sidecar/${file}`, import.meta.url), 'utf-8');
+      const start = source.indexOf(`func ${fn}(`);
+      expect(start).toBeGreaterThanOrEqual(0);
+      const body = source.slice(start, source.indexOf('\n}\n', start));
+      const switchAt = body.indexOf('switch action {');
+      expect(switchAt).toBeGreaterThanOrEqual(0);
+      const arms = body.slice(switchAt);
+      const cases = [...arms.matchAll(/^\s*case ((?:"[a-z_]+",?\s*)+):\s*$/gm)]
+        .flatMap(m => [...m[1]!.matchAll(/"([a-z_]+)"/g)].map(c => c[1]!));
+      expect(cases.length).toBeGreaterThan(0);
+      for (const c of cases) accepted.add(c);
+      const supported = /supported: ([a-z_, ]+)\)/.exec(arms);
+      expect(supported).not.toBeNull();
+      expect(supported![1]!.split(', ').sort()).toEqual([...cases].sort());
+    }
+    expect([...desktopClickTool.parameters.action!.enum!].sort()).toEqual([...accepted].sort());
+    expect(desktopClickTool.parameters.action!.enum).not.toContain('get_text');
+    expect(desktopClickTool.parameters.action!.description).not.toContain('get_text');
   });
 
   test('ui_snapshot kind matches the capture kinds the surface layer takes', () => {

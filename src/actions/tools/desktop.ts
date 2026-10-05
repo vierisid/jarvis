@@ -375,12 +375,15 @@ export const desktopClickTool: ToolDefinition = {
     // The enum is ENFORCED by ToolRegistry, not just advertised, so it is a
     // gate: an action the sidecar gains but this list does not is unreachable
     // from the agent. The accepted set lives in the sidecar (Go), with no
-    // shared TS definition to pin this to, so add new actions in both places.
+    // shared TS definition, so add new actions in both places --
+    // tool-enums.test.ts parses the three Go switches and fails if this list
+    // and their union differ in either direction (#657: `get_text` sat here
+    // for every platform while no switch had a case for it).
     action: {
       type: 'string',
-      description: 'Action to perform (default click). invoke/toggle/select/set_value/get_value/get_text/expand/collapse/scroll_into_view are Windows-only; macOS and Linux support click/double_click/right_click/focus.',
+      description: 'Action to perform (default click). invoke/toggle/select/set_value/get_value/expand/collapse/scroll_into_view are Windows-only; macOS and Linux support click/double_click/right_click/focus.',
       required: false,
-      enum: ['click', 'double_click', 'right_click', 'invoke', 'toggle', 'select', 'set_value', 'get_value', 'get_text', 'expand', 'collapse', 'scroll_into_view', 'focus'],
+      enum: ['click', 'double_click', 'right_click', 'invoke', 'toggle', 'select', 'set_value', 'get_value', 'expand', 'collapse', 'scroll_into_view', 'focus'],
     },
     value: {
       type: 'string',
