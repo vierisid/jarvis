@@ -1,0 +1,127 @@
+{
+  "task": "D-01",
+  "title": "Create an isolated Brief entry and adapter seam",
+  "date": "2026-10-05",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-01",
+  "baseline": "05039c3e90d8670f90527f6c58f0a0ab684024b7",
+  "head": {
+    "ref": "brief/d-01",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-01.json",
+    "note": "The containing commit is the implementation head; a receipt cannot embed its own commit hash."
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-01",
+  "figma": {
+    "file": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "node": "81:3",
+    "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+    "scope": "Infrastructure only; visual parity is not claimed by D-01."
+  },
+  "gates": {
+    "default": "Existing AppShellV2",
+    "preview": "?brief=preview#/_brief_preview",
+    "opt_in": "?brief=1#/brief/<registered-room>",
+    "live_providers": "None supplied. All current registrations show an explicit unavailable fallback.",
+    "onboarding": "Existing gate retained; explicit onboarding query always returns to AppShellV2."
+  },
+  "owns": [
+    "ui/src/main.tsx (one mount)",
+    "ui/src/brief/**",
+    "docs/brief-delivery/D-01.md",
+    "docs/brief-delivery/D-01.json",
+    "docs/brief-delivery/evidence/D-01/**"
+  ],
+  "excludes": [
+    "Domain/API contracts and mutations (F)",
+    "Workflow, awareness, goal or memory algorithms (Q)",
+    "D-02 onward",
+    "Default cutover",
+    "Hosting repository"
+  ],
+  "tests": [
+    {
+      "command": "bun test ui/src/brief",
+      "result": "pass",
+      "tests": 15,
+      "assertions": 179,
+      "files": 2
+    },
+    {
+      "command": "bun test ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "result": "pass",
+      "tests": 20,
+      "assertions": 144,
+      "files": 3
+    },
+    {
+      "command": "bunx tsc --noEmit",
+      "result": "pass"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "note": "Bun reports @theme/@tailwind CSS at-rule warnings in the existing CSS pipeline."
+    },
+    {
+      "command": "bun run check:no-ee",
+      "result": "pass"
+    },
+    {
+      "command": "bun run check:migrations",
+      "result": "pass"
+    },
+    {
+      "command": "bun run lint:templates",
+      "result": "pass",
+      "note": "100 templates; zero errors/warnings."
+    },
+    {
+      "command": "bun run check:package",
+      "result": "pass",
+      "note": "Guard used its Bun tarball fallback because npm produced no parseable file list."
+    }
+  ],
+  "manual_checks": [
+    {
+      "case": "Isolated preview at 1280x800, Light, expanded/closed",
+      "result": "pass",
+      "evidence": "evidence/D-01/preview-light-wide.png"
+    },
+    {
+      "case": "Isolated preview at 390x844, Dark, rail/open",
+      "result": "pass",
+      "evidence": "evidence/D-01/preview-dark-narrow.png"
+    },
+    {
+      "case": "State toggles and Light/Dark return update visible values; no business data displayed",
+      "result": "pass"
+    },
+    {
+      "case": "Keyboard Tab reaches the next button with visible focus",
+      "result": "pass"
+    },
+    {
+      "case": "Preview browser console",
+      "result": "pass",
+      "note": "No errors/warnings observed in the preview."
+    }
+  ],
+  "evidence": [
+    "D-01.md",
+    "evidence/D-01/preview-light-wide.png",
+    "evidence/D-01/preview-dark-narrow.png"
+  ],
+  "limitations": [
+    "Connection-owner preservation is tested with an instrumented legacy root; no live hosted WebSocket, voice, sidecar or OAuth session was exercised.",
+    "Onboarding regression tests and gate ownership are checked; a full real onboarding-to-workflow handoff within future Brief rooms is not implemented or certified.",
+    "Preview toggles demonstrate shell state, not the later sidebar/Pebble layouts or Figma animations.",
+    "The full repository suite and remote CI were not run.",
+    "No deployment, push, PR, real workflow execution or account mutation."
+  ],
+  "rollback": "Remove the brief query parameter to return to the existing dashboard. Revert the D-01 commit for code rollback; no data migration or cleanup is required.",
+  "next": "D-02 in a separate worktree based on D-01; stacked PRs can be developed and reviewed before the foundation merges."
+}
