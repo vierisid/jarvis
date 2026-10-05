@@ -3,7 +3,7 @@
   "base": "1a130247abe5447f23a3881d1015a5f6a377f685",
   "main_checked": "98ad1e70884b665008e1255ee15aa79c82e23dca",
   "source_sha256": {
-    "docs/brief-chat-transport.md": "d6e759fef8f67c6f1129520ff670dfbdfc2f343702f74dd461e53496211ce148",
+    "docs/brief-chat-transport.md": "9b0bf50d20bf7b6dd86c482f32ae70da85bdda98e7b9a20837bf05a722de9727",
     "scripts/check-migrations.ts": "b9194a44b8e949dbdad24d922564fc273a2c3ae893b03c3e0890637d70b6c5dc",
     "src/agents/conv/conv-orchestrator.ts": "0ecd3aa13a9a5bbb76e7fa16e64d57f4dc64ecf3c502c43e4b8607d38ccccebe",
     "src/agents/conv/task-dispatcher.ts": "0142d88652acc27aec423fb0ee5466eccaf2e92c2ef6d0551688b7c114038a5d",
@@ -25,7 +25,9 @@
     "src/vault/chat-turns.test.ts": "d02b06d881aebb8aa19bb8c74d1458fb8dcfdd454428a6f908803f225e42f4b5",
     "src/vault/chat-turns.ts": "397e1b21bfdb266df5b5579f1cdc161a4a7e40f7f416e60f1c5d2c5b513e9db1",
     "src/vault/conversations.ts": "b3785569e21dcabb407d5e063e42f79c288fe75e632c6655c3c3e951fd0c568a",
-    "src/vault/schema.ts": "2c7f217ebbd70c72f39830fc8c6d9b71babe7285495981f04a45e095d6101d9e"
+    "src/vault/schema.ts": "2c7f217ebbd70c72f39830fc8c6d9b71babe7285495981f04a45e095d6101d9e",
+    "src/actions/tools/tool-scope.test.ts": "41a88213607de140d4b1a6c23e37c774a7fa351ed874367712d881ee1b6d9a55"
   },
-  "review": "Scoped only to F-03. Main PR #716 label helper edits are outside these edits; the unmerged parent stack is retained."
+  "review": "Scoped only to F-03. Main PR #716 label helper edits are outside these edits; the unmerged parent stack is retained. CI source-guard correction appends conversation to both exact argument assertions and is mutation-checked for dropped scope.",
+  "review_head": "commit containing docs/brief-delivery/F-03.json, including the CI scope-guard correction"
 }
