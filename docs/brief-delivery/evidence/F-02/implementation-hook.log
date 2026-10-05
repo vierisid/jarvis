@@ -1,0 +1,75 @@
+wsl: Processing /etc/fstab with mount -a failed.
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2322 files).
+[pre-commit] Running 4 related test file(s) (180s timeout)...
+bun test v1.3.6 (d530ed99)
+
+scripts/check-migrations.test.ts:
+(pass) check-migrations contractKind > flags contracting DDL [1.61ms]
+(pass) check-migrations contractKind > flags a unique index (contracting) but not a plain index [0.46ms]
+(pass) check-migrations contractKind > allows additive DDL [0.07ms]
+(pass) check-migrations contractKind > comments do not waive or falsely trip detection [0.04ms]
+(pass) check-migrations contractKind > scanContent reports un-acknowledged contracts but honors the marker [0.56ms]
+
+src/daemon/api-brief-conversations.test.ts:
+(pass) older API callers without a conversation provider receive unsupported without touching a vault [1.41ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-kE4l5M/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) conversation provider is discoverable but explicit lifecycle routes stay disabled by default [32.52ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-yeTJ7E/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) real panel authentication protects all lifecycle writes and there is no delete action [21.31ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-ETrxpW/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) HTTP create/get/rename/tab order/active/close/reopen retain each conversation history [25.99ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-aoP6x5/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) foreign and unknown IDs are hidden through both lifecycle and legacy HTTP readers [25.85ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-EOXAhy/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) HTTP pagination preserves equal-timestamp messages and rejects invalid inputs [23.84ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-s92FrG/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) legacy websocket clients still restore their latest channel chat after explicit chat activity [16.34ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-ULEnqZ/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) provider errors are safe unavailable results and replacing the vault invalidates the provider [14.90ms]
+
+src/vault/conversation-schema.test.ts:
+(pass) migration preserves old histories, adopts rollback-era inserts, and keeps saved tab metadata [265.93ms]
+(pass) open-tab limit rejects extra creation atomically and reopening respects the same bound [16.02ms]
+
+src/vault/conversation-lifecycle.test.ts:
+(pass) explicit chats retain separate identities, messages and tab state across a restart [249.98ms]
+(pass) unknown and foreign IDs are rejected by every scoped operation without changing state [9.50ms]
+(pass) closing a tab preserves messages and metadata; reopening restores its place [9.44ms]
+(pass) renames persist trimmed titles and reject stale revisions without losing another edit [9.17ms]
+(pass) tab ordering keeps closed slots stable and rejects incomplete or duplicate orders atomically [9.92ms]
+(pass) message cursors traverse equal timestamps exactly once and reject cross-chat or malformed reuse [9.14ms]
+(pass) history cursors use a timestamp and ID tie-breaker and are bound to their workspace and filter [9.94ms]
+(pass) legacy channel reuse and history restoration remain separate from explicit Brief chats [11.09ms]
+
+ 23 pass
+ 0 fail
+ 164 expect() calls
+Ran 23 tests across 4 files. [961.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/f-02 92f1f99d] feat(brief): persist workspace-scoped conversation lifecycle
+ 15 files changed, 943 insertions(+), 13 deletions(-)
+ create mode 100644 docs/brief-conversations.md
+ create mode 100644 src/brief/conversation-routes.ts
+ create mode 100644 src/brief/conversations.ts
+ create mode 100644 src/daemon/api-brief-conversations.test.ts
+ create mode 100644 src/vault/conversation-lifecycle.test.ts
+ create mode 100644 src/vault/conversation-lifecycle.ts
+ create mode 100644 src/vault/conversation-schema.test.ts
+ create mode 100644 src/vault/conversation-schema.ts

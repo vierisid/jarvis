@@ -1,0 +1,121 @@
+{
+  "task": "F-02",
+  "title": "Add explicit persistent conversation lifecycle",
+  "date": "2026-10-05",
+  "branch": "brief/f-02",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-02",
+  "initial_baseline": "4130d9e13887cb3b7139cf3962ea0873a525cc9b",
+  "baseline": "462d955d54014e15ea003b5908860917642e5b34",
+  "baseline_ref": "origin/brief/foundations",
+  "implementation_commit": "6c749a55e95b1db08cc60c0977211ca555bd3ef9",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-02.json",
+    "source_hashes": "docs/brief-delivery/evidence/F-02/review.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "publication": "local branch; PR description prepared for brief/foundations",
+    "capability_ready": "conversations provider ready after vault initialization",
+    "release_enabled": false
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-212",
+    "checkpoint": "UI-35; backend lifecycle only, no visible UI change"
+  },
+  "ownership": {
+    "implementer": "Feature-line Codex chat",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [
+    "F-01"
+  ],
+  "enable_after": [],
+  "behavior": [
+    "Explicit create always allocates a new conversation; list/get/rename are bound to the server-owned workspace.",
+    "Open/closed status, order and active tab persist separately from canonical conversation history.",
+    "Close/reopen only changes metadata; no message deletion, stream dispatch or cancellation.",
+    "Stable timestamp-plus-ID cursors cover history and message pagination, including timestamp ties.",
+    "Legacy websocket channel reuse and latest-channel restoration remain operational; explicit chats have no channel.",
+    "Legacy list/message routes exclude foreign workspace rows and return 404 for unknown/foreign per-ID requests.",
+    "Authenticated lifecycle routes are supported but disabled unless JARVIS_BRIEF_CONVERSATIONS=1 at daemon startup."
+  ],
+  "acceptance": [
+    {
+      "check": "Two explicit conversations survive a database restart with independent messages and saved tab state",
+      "status": "passed",
+      "evidence": "conversation-lifecycle.test.ts; evidence/F-02/quick.log"
+    },
+    {
+      "check": "Unknown/foreign IDs are rejected; HTTP routes require panel authentication",
+      "status": "passed",
+      "evidence": "conversation-lifecycle.test.ts; api-brief-conversations.test.ts; evidence/F-02/scope-mutation.log"
+    },
+    {
+      "check": "Close/reopen preserves history and position; active-close fallback persists",
+      "status": "passed",
+      "evidence": "conversation-lifecycle.test.ts; evidence/F-02/close-mutation.log"
+    },
+    {
+      "check": "Old clients restore the latest legacy channel conversation, including within the four-hour reuse window",
+      "status": "passed",
+      "evidence": "conversation-lifecycle.test.ts; api-brief-conversations.test.ts"
+    },
+    {
+      "check": "Tied message timestamps paginate without gaps or duplicates",
+      "status": "passed",
+      "evidence": "conversation-lifecycle.test.ts; evidence/F-02/cursor-mutation.log"
+    },
+    {
+      "check": "Fresh, upgraded and rolled-back old-writer databases preserve history and existing tab metadata",
+      "status": "passed",
+      "evidence": "conversation-schema.test.ts"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test src/vault/conversation-lifecycle.test.ts (before implementation)",
+      "result": "0 pass, 1 fail, missing repository module",
+      "log": "evidence/F-02/red.log"
+    },
+    {
+      "command": "bun test src/vault/conversation-lifecycle.test.ts src/vault/conversation-schema.test.ts src/daemon/api-brief-conversations.test.ts",
+      "result": "18 pass, 0 fail, 150 assertions",
+      "log": "evidence/F-02/quick.log"
+    },
+    {
+      "command": "bun test src/vault src/brief src/daemon/api-brief.test.ts src/daemon/api-brief-conversations.test.ts src/daemon/api-billing.test.ts src/daemon/api-approval-resolution.test.ts src/daemon/api-goal-validation.test.ts src/daemon/api-goal-review.test.ts src/daemon/api-onboarding-hosted.test.ts src/daemon/api-tasks-paused.test.ts src/workflows/adapters/untrusted-reach.test.ts src/roles/untrusted-import-guard.test.ts src/sidecar/panel-sessions.test.ts src/cli/backup.test.ts scripts/check-migrations.test.ts scripts/version-stamp-cache.test.ts",
+      "result": "396 pass, 1 skip, 0 fail across 37 files; 1,919 assertions, after final rebase",
+      "log": "evidence/F-02/tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed after final rebase, exit 0",
+      "log": "evidence/F-02/types.log"
+    },
+    {
+      "command": "Normal repository commit hook for implementation",
+      "result": "All four guards, 23 related tests and TypeScript passed before rebase; implementation patch unchanged after rebase",
+      "log": "evidence/F-02/implementation-hook.log"
+    }
+  ],
+  "quick_verify": {
+    "cwd": "/home/vierisid/.cache/codex/jarvis-f-02",
+    "command": "/home/vierisid/.bun/bin/bun test src/vault/conversation-lifecycle.test.ts src/vault/conversation-schema.test.ts src/daemon/api-brief-conversations.test.ts",
+    "expected": "18 tests pass; isolated database and Unix-socket fixtures; no live account or model calls",
+    "guide": "docs/brief-conversations.md",
+    "screenshot": "not applicable: backend only"
+  },
+  "migration": "Nullable workspace_id plus three metadata tables and two indexes. Existing message rows and old insert shapes remain valid. Legacy history receives closed tab metadata; old-writer rows acquire metadata on the next upgraded startup.",
+  "rollback": "Remove the activation flag. Retain additive tables, IDs and history. Prior code can keep writing legacy conversations. Do not delete history, drop tables or replay effects.",
+  "limitations": [
+    "Full repository F-02 CI has not run; validation is the targeted local suite and normal hooks.",
+    "No live daemon or user database was opened. No model, account, deployment or external effects were exercised.",
+    "The daemon remains one authenticated owner. Internal workspace scoping does not add multi-tenant identity/authentication.",
+    "History/reopen UI belongs to later dashboard work. F-03 transport and cancellation and F-04 client state are not implemented.",
+    "Messages retain the legacy shape without invented turn/request/event IDs.",
+    "The environment flag defaults off and has not been set on a running user daemon."
+  ],
+  "next": "Owner review/publication against brief/foundations. Keep all PRs unmerged. F-03 is not started."
+}

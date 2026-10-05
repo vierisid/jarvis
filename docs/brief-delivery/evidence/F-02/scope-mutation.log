@@ -1,0 +1,36 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/vault/conversation-lifecycle.test.ts:
+49 |   const before = repo.tabs();
+50 |   for (const id of ['unknown', other.conversationId]) {
+51 |     for (const operation of [
+52 |       () => repo.get(id), () => repo.messages(id), () => repo.rename(id, 'No'),
+53 |       () => repo.setOpen(id, false), () => repo.activate(id), () => repo.reorder([id]),
+54 |     ]) expect(operation).toThrow('Conversation not found');
+                              ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "Conversation not found"
+
+Received function did not throw
+Received value: {
+  conversationId: "cc0186fe-e0c6-4368-b064-047845f56f01",
+  workspaceId: "e94c0143-4e97-44f6-bf6c-92eb6c9c1c1b",
+  title: "New chat",
+  revision: "1",
+  tab: {
+    open: true,
+    order: 1,
+  },
+  lastMessageAt: 1791209717213,
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/conversation-lifecycle.test.ts:54:26)
+(fail) unknown and foreign IDs are rejected by every scoped operation without changing state [13.98ms]
+
+ 0 pass
+ 7 filtered out
+ 1 fail
+ 7 expect() calls
+Ran 1 test across 1 file. [119.00ms]

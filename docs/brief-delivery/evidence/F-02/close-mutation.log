@@ -1,0 +1,39 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/vault/conversation-lifecycle.test.ts:
+64 |   const b = repo.create();
+65 |   addMessage(a.conversationId, { role: 'user', content: 'Persist this' });
+66 |   const history = repo.messages(a.conversationId);
+67 |   repo.setOpen(a.conversationId, false);
+68 |   expect(repo.list({ closed: true }).items.map(c => c.conversationId)).toEqual([a.conversationId]);
+69 |   expect(repo.messages(a.conversationId)).toEqual(history);
+                                               ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "items": [
+-     {
+-       "content": "Persist this",
+-       "conversation_id": "3f140f48-81e2-4c48-81a7-cf77f727493a",
+-       "created_at": 1791209716693,
+-       "id": "58e69cd8-3a1d-4bd7-a102-ff07accacbda",
+-       "role": "user",
+-       "tool_calls": null,
+-     },
+-   ],
++   "items": [],
+    "nextCursor": null,
+  }
+
+- Expected  - 10
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/conversation-lifecycle.test.ts:69:43)
+(fail) closing a tab preserves messages and metadata; reopening restores its place [15.23ms]
+
+ 0 pass
+ 7 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [152.00ms]
