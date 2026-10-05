@@ -113,6 +113,8 @@ cancel a newer turn. Closing a tab through F-02 does not delete or cancel a turn
 
 Production uses the existing resource limiter with concurrency **one** for scoped
 generations, at most 32 pending turns, and one pending turn per conversation.
+Cancelled queued work is removed from the limiter immediately, including its
+retained input and controller; it does not wait for the active turn to finish.
 Interleaved tests inject concurrency two to prove routing and context isolation;
 this does not enable concurrent production generation. Classic mode receives
 explicit history and a conversation-specific tool exposure ledger. Router mode
@@ -124,6 +126,9 @@ tool dispatch and rejects late stream/audio chunks. Effects already performed ar
 not undone; outstanding canonical approvals retain their IDs and are resolved by
 the existing authority API. Approval updates use their persisted originating turn,
 independent of whichever tab is currently active.
+Specialist `delegate_task` calls inherit the turn's abort signal through execution
+scope and pass it to their model provider. A cancelled specialist releases the
+generation slot even when the provider ignores the signal; late results are fenced.
 
 Speech is opt-in per send, requires an available TTS provider at admission, and is
 sent only to the originating socket while subscribed. Audio uses the existing
@@ -132,6 +137,10 @@ Synthesis starts after the full text response, so this first version has more
 speech latency than the legacy sentence pipeline. Audio is never persisted or
 replayed. Cancel emits an immediate audio end; a provider may take time to release
 its iterator, but its late chunks are discarded. Reconnecting does not resume audio.
+Unsubscribing, disconnecting or pausing live delivery to catch up replay permanently
+ends that turn's audio delivery. An active stream receives its end frame before
+unsubscription. Returning to the conversation resumes text/events only; audio never
+restarts midway or starts later for a turn whose speech delivery was ended.
 
 Legacy clients keep their existing stream/status shapes and mirroring. Their text,
 progress and thinking/cancellation events exclude opted-in sockets. General system
@@ -148,19 +157,26 @@ cd /home/vierisid/.cache/codex/jarvis-f-03
   src/vault/chat-turns.test.ts \
   src/brief/chat-transport.test.ts \
   src/daemon/agent-service-conversation.test.ts \
-  src/daemon/ws-service-conversation.test.ts
+  src/daemon/ws-service-conversation.test.ts \
+  src/actions/execution-scope.test.ts \
+  src/util/concurrency.test.ts
 ```
 
-Expected: **19 passed, 0 failed**. These use isolated SQLite databases, a real
+Expected: **30 passed, 0 failed**. These use isolated SQLite databases, a real
 authenticated WebSocket listener on a dynamically allocated fixture port, and fake
 model/TTS providers. They cover interleaving, tab switching, one-turn cancellation,
 delayed audio, duplicate sends, stale cancellation, disk restart, reconnect,
 ownership, queue limits, approval identity, both model paths and legacy mirroring.
+Review regressions additionally cover actual specialist cancellation, speech
+subscription changes, 64 queued cancellations, nested signals and limiter handoff.
 No visible UI changed, so no screenshot is applicable.
 
-The final affected run passed 514 tests with one platform skip, including the
-existing site-scope guard updated for the added conversation argument. TypeScript and
-normal commit checks are recorded in `brief-delivery/evidence/F-03/`. Three unsafe
+The review-fix affected run passed 843 tests with one platform skip, including
+workflow cancellation/authority and specialist paths. TypeScript passed. The four
+new transport/delegation regression cases first failed against the reviewed head
+and now pass. Commands and results are in
+`brief-delivery/evidence/F-03/review-fixes.json`; the original checks remain in
+`brief-delivery/evidence/F-03/`. Three unsafe
 mutations failed the routing, history-isolation and terminal-idempotency tests;
 the restored implementation passes. These results do not certify real hosted
 model quality or live microphone playback.

@@ -3,19 +3,19 @@
   "base": "1a130247abe5447f23a3881d1015a5f6a377f685",
   "main_checked": "98ad1e70884b665008e1255ee15aa79c82e23dca",
   "source_sha256": {
-    "docs/brief-chat-transport.md": "9b0bf50d20bf7b6dd86c482f32ae70da85bdda98e7b9a20837bf05a722de9727",
+    "docs/brief-chat-transport.md": "2138c7c1963b1f4862c40ee86e6fc73536d7a98eaa9a2773ef9cddc229908fd9",
     "scripts/check-migrations.ts": "b9194a44b8e949dbdad24d922564fc273a2c3ae893b03c3e0890637d70b6c5dc",
     "src/agents/conv/conv-orchestrator.ts": "0ecd3aa13a9a5bbb76e7fa16e64d57f4dc64ecf3c502c43e4b8607d38ccccebe",
     "src/agents/conv/task-dispatcher.ts": "0142d88652acc27aec423fb0ee5466eccaf2e92c2ef6d0551688b7c114038a5d",
     "src/agents/orchestrator.ts": "7af11fc530d84d3fa3f6ab260b4d2d7c454cfded7b4f2b2777023c62bea0f11a",
     "src/brief/chat-context.ts": "b6d4abb926fef544d43ed044160a88c9282939583e7d5effbd8aebb5b7550443",
-    "src/brief/chat-transport.test.ts": "0d21f90cf12c8febf693cdadfec62fe40a6073f7139b3a8923bc0a0bfbdecc24",
-    "src/brief/chat-transport.ts": "b4215c649760d4b6c4ec98b4e842f8af992589794b73f5ca2b3244b96ea0529e",
+    "src/brief/chat-transport.test.ts": "21bc2b88694ce7ec46bfe76f02c20a1a5043b80f1fc4ac6d719bb7ca3b0ca516",
+    "src/brief/chat-transport.ts": "4e9cd9037a8015c9cf85f41841d08b956d1fc0f4405e500d875039d9bde703a5",
     "src/brief/contracts.ts": "bd7a380a31da525fac90c7cbd5b8871146d1cec6dca55593f859c5e71fa8a07c",
     "src/brief/registrations/chat-transport.ts": "4bd72985959463f714f1438fda5774f156537b0d68b877ca03036bcfa9b69bd8",
     "src/comms/streaming.ts": "9fc2e19e426aee88d3bead14e4899fa4fef573102f11454a743d417e374fe9ff",
     "src/comms/websocket.ts": "c903a71828af2efa1e280068bdd90d805458d832ac5706065eb424ce2e8afa1d",
-    "src/daemon/agent-service-conversation.test.ts": "2b0eccacb35082350e3d8c4a8bfdc57a1d21f930543889aac5002e3a24e09b57",
+    "src/daemon/agent-service-conversation.test.ts": "8b45fccfc87422b023dbc44ab148d20c8d5ece800c8a2d3aa2149dc8b53900c7",
     "src/daemon/agent-service.ts": "5e7be169a119b2aa80b9aa42535bc17403b243d48d949a7b1af468ddf93318f4",
     "src/daemon/index.ts": "ab6ca445efde2ee955460ae094c27de5802df39112b7ff3f251904cbf1a77c00",
     "src/daemon/ws-service-conversation.test.ts": "07e2b95cb9c65c553f6bcb216f1b34ec7aca8fb4dc7e4775ff7effa4432b3b94",
@@ -26,8 +26,14 @@
     "src/vault/chat-turns.ts": "397e1b21bfdb266df5b5579f1cdc161a4a7e40f7f416e60f1c5d2c5b513e9db1",
     "src/vault/conversations.ts": "b3785569e21dcabb407d5e063e42f79c288fe75e632c6655c3c3e951fd0c568a",
     "src/vault/schema.ts": "2c7f217ebbd70c72f39830fc8c6d9b71babe7285495981f04a45e095d6101d9e",
-    "src/actions/tools/tool-scope.test.ts": "41a88213607de140d4b1a6c23e37c774a7fa351ed874367712d881ee1b6d9a55"
+    "src/actions/tools/tool-scope.test.ts": "41a88213607de140d4b1a6c23e37c774a7fa351ed874367712d881ee1b6d9a55",
+    "src/actions/execution-scope.ts": "b49ef797809944b715d06d7f30252bb81ffb7e2933a28de4196b09b2f87289f3",
+    "src/actions/execution-scope.test.ts": "614e374d0eaa0db5f4332e40f2532bb458ac0e43ba44c9f3134ab8c1b3362150",
+    "src/actions/tools/delegate.ts": "4a146539e1963c3e9b225ead801ac1c440e9bfaa54d59056410c584dbe3200a4",
+    "src/agents/sub-agent-runner.ts": "d42bc40eb6dc1cc98de591e14dc19c6d30ec1f12cd8818117a7973bd92c2d373",
+    "src/util/concurrency.ts": "142d0dd9f64207794af7fd785fe4fb4a0a7c92ce9668507d337a297d3d79c296",
+    "src/util/concurrency.test.ts": "9a0679c9dd6d58e1b1515cda596db678d9be3fc2b09a7366bb3968253bef4f0d"
   },
-  "review": "Scoped only to F-03. Main PR #716 label helper edits are outside these edits; the unmerged parent stack is retained. CI source-guard correction appends conversation to both exact argument assertions and is mutation-checked for dropped scope.",
-  "review_head": "commit containing docs/brief-delivery/F-03.json, including the CI scope-guard correction"
+  "review": "F-03 implementation and all three review corrections. Specialist model cancellation, permanent audio delivery termination on unsubscribe, and immediate queued cancellation are covered by reproduced failures and passing regressions.",
+  "review_head": "commit containing docs/brief-delivery/F-03.json including review fixes; evidence/F-03/review-fixes.json records the reviewed parent"
 }

@@ -1,0 +1,74 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/util/concurrency.test.ts:
+(pass) createLimiter > never runs more than the limit at once, and runs everything [9.92ms]
+(pass) createLimiter > a failing call still frees its slot [0.49ms]
+(pass) createLimiter > refuses a limit that is not a positive integer [0.29ms]
+(pass) createLimiter > cancelled waiters settle immediately without releasing the running slot [0.53ms]
+(pass) createLimiter > abort during slot handoff and pre-aborted admission do not leak a slot [0.25ms]
+
+src/daemon/ws-service-conversation.test.ts:
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WSService] Started on port 0
+[WebSocketServer] Client connected. Total clients: 1
+[WSService] Client connected
+[WebSocketServer] Client connected. Total clients: 2
+[WSService] Client connected
+[WebSocketServer] Client connected. Total clients: 3
+[WSService] Client connected
+[WebSocketServer] Received: brief_chat_send undefined
+[WebSocketServer] Received: brief_chat_send undefined
+[WebSocketServer] Received: chat undefined
+[StreamRelay] Stream complete for request: f834780a-96e8-4b96-a967-255df3f255ec
+[WebSocketServer] Stopped
+[WSService] Stopped
+(pass) authenticated WebSocket routing gates the feature, scopes approvals and preserves legacy mirroring [56.99ms]
+
+src/daemon/agent-service-conversation.test.ts:
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+(pass) classic scoped AgentService streams never read or mutate the shared primary history [20.37ms]
+(pass) a cancelled classic turn cannot dispatch a late tool call [13.02ms]
+(pass) router-first AgentService uses explicit history and compaction identity instead of channel history [33.25ms]
+(pass) router task progress and cancellation stay with their conversation during concurrent delegation [17.40ms]
+(pass) task-tier cancellation reaches the in-flight model request [11.91ms]
+[Orchestrator] Executing "delegate_task" with NO authority engine wired: tool calls are ungated and unaudited
+[DelegateTool] Delegating to Fixture: Read A...
+[DelegateTool] Spawned Fixture (60372734-dd89-4dc3-8da6-3e2c7e981e02) with 0 tools
+[SubAgent:Fixture] Error: Turn cancelled
+(pass) cancelling real specialist delegation aborts its model and frees the next conversation [23.87ms]
+
+src/actions/execution-scope.test.ts:
+(pass) nested execution scopes retain both dispatch fences and parent cancellation [0.26ms]
+(pass) concurrent execution scopes never share cancellation signals [0.26ms]
+
+src/brief/chat-transport.test.ts:
+(pass) interleaved streams, tab switch and one cancel isolate text, progress, history and TTS [18.65ms]
+(pass) duplicates, reconnect and stale cancel reconcile the original terminal without another generation [24.08ms]
+(pass) production limiter queues another conversation and a cancelled queued turn never calls the model [12.07ms]
+(pass) disabled transport, malformed frames and unavailable cursors never create turns [23.81ms]
+(pass) cancel ends audio immediately and suppresses a delayed provider chunk and duplicate terminal [18.28ms]
+(pass) model errors persist a sanitized failed terminal and preserve partial output for replay [11.17ms]
+(pass) subscription admission cannot orphan a queued turn and queue admission cannot append messages [51.25ms]
+(pass) resubscribing during speech never resumes a truncated audio stream [22.41ms]
+(pass) leaving before speech starts prevents audio after returning to the conversation [10.00ms]
+(pass) repeated queued cancellation releases retained jobs before the active turn ends [117.03ms]
+
+src/vault/chat-turns.test.ts:
+(pass) request identity commits one user message and rejects conflicting reuse atomically [11.20ms]
+(pass) partial text, terminal state and monotonic events are durable and terminal writes are idempotent [10.83ms]
+(pass) workspace checks protect sends, replay, history, approval association and cancel identities [10.80ms]
+(pass) restart fails interrupted work once, preserves messages and approvals, and never reruns a send [261.70ms]
+(pass) replay pages use stable sequences with transient audio gaps and reject future or malformed cursors [50.17ms]
+(pass) additive transport migration preserves legacy writers and adoption across rollback [17.57ms]
+
+ 30 pass
+ 0 fail
+ 199 expect() calls
+Ran 30 tests across 6 files. [1135.00ms]

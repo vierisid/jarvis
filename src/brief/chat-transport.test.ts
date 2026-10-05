@@ -232,3 +232,69 @@ test('subscription admission cannot orphan a queued turn and queue admission can
     expect(f.conversations.repository.messages(overflow.conversationId).items).toEqual([]);
   } finally { f.transport.stop(); await f.transport.idle(); }
 });
+
+test('resubscribing during speech never resumes a truncated audio stream', async () => {
+  let release!: () => void;
+  const delayed = new Promise<void>(resolve => { release = resolve; });
+  const tts: TTSProvider = { async synthesize() { return Buffer.from(''); }, async *synthesizeStream() {
+    yield Buffer.from('header'); await delayed; yield Buffer.from('tail');
+  } };
+  const f = fixture({ tts }); const owner = f.client(); const a = f.input('audio-switch', true);
+  try {
+    await f.send(owner, 'brief_chat_send', a);
+    f.push(a.turnId, { type: 'text', text: 'Spoken answer' }); f.push(a.turnId, done());
+    await until(() => f.frames.get(owner)!.some(frame => frame.type === 'brief_chat_audio' && (frame.payload as any).phase === 'chunk'));
+    await f.send(owner, 'brief_chat_unsubscribe', { conversationId: a.conversationId });
+    const audio = f.frames.get(owner)!.filter(frame => frame.type === 'brief_chat_audio');
+    expect(audio.map(frame => (frame.payload as any).phase)).toEqual(['start', 'chunk', 'end']);
+    expect(audio.at(-1)!.payload).toMatchObject({ cancelled: true });
+    await f.send(owner, 'brief_chat_subscribe', { conversationId: a.conversationId });
+    release(); await f.transport.idle();
+    expect(f.frames.get(owner)!.filter(frame => frame.type === 'brief_chat_audio')).toEqual(audio);
+    expect(f.transport.repository.get(a).state).toBe('completed');
+  } finally { release(); f.transport.stop(); await f.transport.idle(); }
+});
+
+test('leaving before speech starts prevents audio after returning to the conversation', async () => {
+  let syntheses = 0;
+  const tts: TTSProvider = { async synthesize() { return Buffer.from(''); }, async *synthesizeStream() {
+    syntheses++; yield Buffer.from('audio');
+  } };
+  const f = fixture({ tts }); const owner = f.client(); const a = f.input('before-audio', true);
+  try {
+    await f.send(owner, 'brief_chat_send', a);
+    await f.send(owner, 'brief_chat_unsubscribe', { conversationId: a.conversationId });
+    await f.send(owner, 'brief_chat_subscribe', { conversationId: a.conversationId });
+    f.push(a.turnId, { type: 'text', text: 'Answer' }); f.push(a.turnId, done());
+    await f.transport.idle();
+    expect(syntheses).toBe(0);
+    expect(f.frames.get(owner)!.some(frame => frame.type === 'brief_chat_audio')).toBe(false);
+    expect(f.transport.repository.get(a).state).toBe('completed');
+  } finally { f.transport.stop(); await f.transport.idle(); }
+});
+
+test('repeated queued cancellation releases retained jobs before the active turn ends', async () => {
+  const f = fixture(); const owner = f.client(); const a = f.input('active'), b = f.input('waiting');
+  try {
+    await f.send(owner, 'brief_chat_send', a);
+    for (let i = 0; i < 64; i++) {
+      const queued = { ...b, turnId: `queued-${i}`, requestId: `queued-request-${i}`, text: 'x'.repeat(65_536) };
+      await f.send(owner, 'brief_chat_send', queued);
+      await f.send(owner, 'brief_chat_cancel', identity(queued));
+    }
+    // Inspect retained work, not just DB state: terminal rows no longer count
+    // toward admission, but must not leave closures and input in the limiter.
+    await Bun.sleep(0);
+    const retained = f.transport as unknown as { jobs: Set<unknown>; controllers: Map<string, unknown> };
+    expect(retained.jobs.size).toBe(1);
+    expect(retained.controllers.size).toBe(1);
+    expect(f.transport.repository.pending()).toHaveLength(1);
+    expect(f.inputs.size).toBe(1);
+    const next = { ...b, turnId: 'surviving-turn', requestId: 'surviving-request' };
+    await f.send(owner, 'brief_chat_send', next);
+    f.push(a.turnId, done());
+    await until(() => f.inputs.has(next.turnId));
+    f.push(next.turnId, done()); await f.transport.idle();
+    expect(f.inputs.size).toBe(2);
+  } finally { f.transport.stop(); await f.transport.idle(); }
+});

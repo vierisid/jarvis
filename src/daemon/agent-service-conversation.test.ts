@@ -12,6 +12,14 @@ import type { LLMMessage, LLMOptions, LLMProvider, LLMResponse, LLMStreamEvent }
 import type { RoleDefinition } from '../roles/types.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import type { ScopedChatInput } from '../brief/chat-transport.ts';
+import { BriefChatTransport } from '../brief/chat-transport.ts';
+import { createDelegateTool } from '../actions/tools/delegate.ts';
+import { createBriefCapabilities } from '../brief/registrations/index.ts';
+import { registerChatTransport } from '../brief/registrations/chat-transport.ts';
+import { registerConversations } from '../brief/registrations/conversations.ts';
+import { BriefConversationProvider } from '../brief/conversations.ts';
+import { getDb } from '../vault/schema.ts';
+import type { ServerWebSocket } from 'bun';
 
 afterEach(() => closeDb());
 const role = { id: 'fixture', name: 'Fixture', authority_level: 5, tools: [], sub_roles: [] } as unknown as RoleDefinition;
@@ -156,4 +164,60 @@ test('task-tier cancellation reaches the in-flight model request', async () => {
   const result = pending.then(() => null, error => error);
   await until(() => received !== undefined); abort.abort(new Error('Task stopped'));
   expect(await result).toBeInstanceOf(Error); expect(received!.aborted).toBe(true);
+});
+
+test('cancelling real specialist delegation aborts its model and frees the next conversation', async () => {
+  initDatabase(':memory:', { quiet: true });
+  let specialistSignal: AbortSignal | undefined;
+  let release!: () => void;
+  let startedB = false;
+  const delayed = new Promise<LLMResponse>(resolve => { release = () => resolve(response('Late specialist output')); });
+  const provider: LLMProvider = { name: 'fixture', listModels: async () => [],
+    async chat(_messages, options) {
+      specialistSignal = options?.signal;
+      // Deliberately ignore cancellation here. LLMManager must still stop
+      // waiting, forward the abort, and reject any eventual late response.
+      return delayed;
+    },
+    async *stream(messages) {
+      if (messages.at(-1)?.content === 'Delegate A') {
+        yield { type: 'tool_call', tool_call: { id: 'delegate-a', name: 'delegate_task', arguments: { specialist: 'fixture', task: 'Read A', context: 'A only' } } };
+        yield { type: 'done', response: { ...response(), finish_reason: 'tool_use' } };
+      } else {
+        startedB = true;
+        yield { type: 'text', text: 'Answer B' }; yield { type: 'done', response: response('Answer B') };
+      }
+    },
+  };
+  const service = new AgentService({} as JarvisConfig);
+  const manager = service.getLLMManager(); manager.registerProvider(provider); manager.setTierMap({ medium: { provider: 'fixture' } });
+  const orchestrator = service.getOrchestrator(); orchestrator.setLLMManager(manager);
+  const specialist = { ...role, description: 'Fixture', responsibilities: [], tools: [] };
+  orchestrator.createPrimary({ ...specialist, tools: ['delegation'] });
+  const tools = new ToolRegistry();
+  tools.register(createDelegateTool({ orchestrator, llmManager: manager, specialists: new Map([['fixture', specialist]]) }));
+  orchestrator.setToolRegistry(tools);
+  const conversations = new BriefConversationProvider();
+  const transport = new BriefChatTransport({ db: getDb(), send: () => {}, runner: { ready: () => true,
+    stream: turn => service.streamMessage(turn.text, 'websocket', undefined, null, turn.contextKey, turn),
+  } });
+  const capabilities = createBriefCapabilities([...registerConversations(conversations), ...registerChatTransport(transport)], ['conversations', 'chatTransport']);
+  const socket = {} as ServerWebSocket<unknown>;
+  const a = { conversationId: conversations.repository.create().conversationId, turnId: 'specialist-a', requestId: 'request-a', text: 'Delegate A' };
+  const b = { conversationId: conversations.repository.create().conversationId, turnId: 'waiting-b', requestId: 'request-b', text: 'Answer B' };
+  try {
+    await transport.handle({ type: 'brief_chat_send', payload: a, timestamp: Date.now() }, socket, capabilities);
+    await until(() => specialistSignal !== undefined);
+    await transport.handle({ type: 'brief_chat_send', payload: b, timestamp: Date.now() }, socket, capabilities);
+    expect(startedB).toBe(false);
+    const { text: _text, ...identity } = a;
+    await transport.handle({ type: 'brief_chat_cancel', payload: identity, timestamp: Date.now() }, socket, capabilities);
+    expect(specialistSignal!.aborted).toBe(true);
+    await until(() => startedB);
+    await transport.idle();
+    expect(transport.repository.get(a).state).toBe('cancelled');
+    expect(transport.repository.get(b).state).toBe('completed');
+    release(); await Bun.sleep(0);
+    expect(JSON.stringify(transport.repository.snapshot(a.conversationId, 0))).not.toContain('Late specialist output');
+  } finally { release(); transport.stop(); await transport.idle(); }
 });

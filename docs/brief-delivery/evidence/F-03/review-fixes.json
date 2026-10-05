@@ -1,0 +1,113 @@
+{
+  "task": "F-03",
+  "date": "2026-10-05",
+  "reviewed_head": "dc3e9bb6fdf67002ac72048dcf5cf2eeab9a923f",
+  "pr": "https://github.com/vierisid/jarvis/pull/727",
+  "fixes": [
+    {
+      "id": "R1",
+      "behavior": "The turn signal reaches delegate_task and the specialist model; cancellation releases the generation slot and fences late responses.",
+      "test": "cancelling real specialist delegation aborts its model and frees the next conversation"
+    },
+    {
+      "id": "R2",
+      "behavior": "Leaving a subscription permanently ends that turn's speech delivery; resubscription never receives a truncated stream.",
+      "tests": [
+        "resubscribing during speech never resumes a truncated audio stream",
+        "leaving before speech starts prevents audio after returning to the conversation"
+      ]
+    },
+    {
+      "id": "R3",
+      "behavior": "Cancelling a queued turn removes its waiter immediately and releases retained input/controller without waiting for the active turn.",
+      "test": "repeated queued cancellation releases retained jobs before the active turn ends"
+    }
+  ],
+  "verification": [
+    {
+      "phase": "red",
+      "command": [
+        "bun",
+        "test",
+        "src/brief/chat-transport.test.ts",
+        "src/daemon/agent-service-conversation.test.ts"
+      ],
+      "exit": 1,
+      "pass": 12,
+      "fail": 4,
+      "log": "review-fixes-red.log",
+      "note": "New regressions on the reviewed implementation. All four failed at the relevant behavior assertion."
+    },
+    {
+      "phase": "green",
+      "command": [
+        "bun",
+        "test",
+        "src/vault/chat-turns.test.ts",
+        "src/brief/chat-transport.test.ts",
+        "src/daemon/agent-service-conversation.test.ts",
+        "src/daemon/ws-service-conversation.test.ts",
+        "src/actions/execution-scope.test.ts",
+        "src/util/concurrency.test.ts"
+      ],
+      "exit": 0,
+      "pass": 30,
+      "fail": 0,
+      "assertions": 199,
+      "files": 6,
+      "log": "review-fixes-green.log"
+    },
+    {
+      "phase": "affected",
+      "command": [
+        "bun",
+        "test",
+        "src/vault",
+        "src/brief",
+        "src/agents",
+        "src/actions/execution-scope.test.ts",
+        "src/actions/tools/tool-scope.test.ts",
+        "src/util/concurrency.test.ts",
+        "src/daemon/agent-service-conversation.test.ts",
+        "src/daemon/ws-service-conversation.test.ts",
+        "src/daemon/ws-service-cleanup.test.ts",
+        "src/daemon/ws-service-voice-start.test.ts",
+        "src/comms/streaming.test.ts",
+        "src/comms/websocket.test.ts",
+        "src/daemon/api-brief.test.ts",
+        "src/daemon/api-brief-conversations.test.ts",
+        "src/util/model-exec-env.test.ts",
+        "scripts/check-migrations.test.ts",
+        "src/workflows/runtime/cancellation.test.ts",
+        "src/workflows/runtime/workflow-authority.test.ts",
+        "src/workflows/runtime/delegated-approval.test.ts",
+        "src/workflows/adapters/m7-agent-delegator.test.ts"
+      ],
+      "exit": 0,
+      "pass": 843,
+      "skip": 1,
+      "fail": 0,
+      "assertions": 4132,
+      "files": 66,
+      "note": "Includes existing workflow cancellation/authority, delegated approvals, sub-agent, browser-intent, taint and tool-filter tests. One existing platform-specific keychain skip."
+    },
+    {
+      "phase": "types",
+      "command": [
+        "bun",
+        "x",
+        "--no-install",
+        "tsc",
+        "--noEmit"
+      ],
+      "exit": 0
+    }
+  ],
+  "limits": [
+    "Fake model/TTS providers and isolated databases; no paid or live effects.",
+    "No UI change. Existing flags remain disabled by default.",
+    "TTS providers still may take time to release an iterator, but unsubscribed clients receive no late chunks.",
+    "Existing two-argument execution scopes and limiter calls remain supported."
+  ],
+  "publication": "Same PR and dependency base. Keep unmerged; current-head remote CI is recorded in the PR description."
+}

@@ -51,7 +51,7 @@ export class BriefChatTransport implements BriefProvider {
   readonly repository: ChatTurnRepository;
   private clients = new Map<Client, Set<string>>();
   private controllers = new Map<string, AbortController>();
-  private audioOwners = new Map<string, { turn: ChatTurn; client: Client }>();
+  private audioOwners = new Map<string, { turn: ChatTurn; client: Client; started: boolean }>();
   private jobs = new Set<Promise<void>>();
   private stopped = false;
   private limit: ReturnType<typeof createLimiter>;
@@ -75,7 +75,7 @@ export class BriefChatTransport implements BriefProvider {
     catch { return 'unavailable'; }
   }
   hasClient(client: Client): boolean { return this.clients.has(client); }
-  detach(client: Client): void { this.clients.delete(client); }
+  detach(client: Client): void { this.endClientAudio(client); this.clients.delete(client); }
   async idle(): Promise<void> { await Promise.all([...this.jobs]); }
   stop(): void {
     this.stopped = true;
@@ -123,6 +123,7 @@ export class BriefChatTransport implements BriefProvider {
           // Register only after catching up, synchronously with the final snapshot.
           // No live event can overtake a still-unread replay page on this socket.
           if (!this.clients.has(client)) this.clients.set(client, new Set());
+          if (snapshot.hasMore) this.endClientAudio(client, conversationId);
           this.clients.get(client)!.delete(conversationId);
           if (!snapshot.hasMore) this.subscribe(client, conversationId);
           this.send(client, 'brief_chat_sync', { ...snapshot, subscribed: !snapshot.hasMore }, message.id);
@@ -132,6 +133,7 @@ export class BriefChatTransport implements BriefProvider {
           const data = fields(message.payload, ['conversationId']);
           const conversationId = id(data.conversationId);
           this.repository.conversations.get(conversationId);
+          this.endClientAudio(client, conversationId);
           this.clients.get(client)?.delete(conversationId);
           this.send(client, 'brief_chat_ack', { conversationId, subscribed: false, sequence: this.repository.sequence(conversationId) }, message.id);
           return;
@@ -178,20 +180,30 @@ export class BriefChatTransport implements BriefProvider {
   private schedule(turn: ChatTurn, client: Client): void {
     const controller = new AbortController();
     this.controllers.set(turn.turnId, controller);
-    const job = this.limit(() => this.execute(turn, client, controller)).catch(error => {
-      console.error('[BriefChat] Turn storage became unavailable:', error instanceof Error ? error.name : 'unknown');
+    // Admission owns speech even before synthesis starts. Leaving the chat
+    // removes this entry permanently, so returning cannot join encoded audio
+    // midway or unexpectedly start speech for a turn the user left.
+    if (turn.speak) this.audioOwners.set(turn.turnId, { turn, client, started: false });
+    const job = this.limit(() => this.execute(turn, client, controller), controller.signal).catch(error => {
+      if (!controller.signal.aborted) console.error('[BriefChat] Turn storage became unavailable:', error instanceof Error ? error.name : 'unknown');
     }).finally(() => {
+      this.audioOwners.delete(turn.turnId);
       this.controllers.delete(turn.turnId);
       this.jobs.delete(job);
     });
     this.jobs.add(job);
+  }
+  private endClientAudio(client: Client, conversationId?: string): void {
+    for (const owner of this.audioOwners.values()) {
+      if (owner.client === client && (!conversationId || owner.turn.conversationId === conversationId)) this.endAudio(owner.turn.turnId, true);
+    }
   }
   private endAudio(turnId: string, cancelled: boolean): void {
     const owner = this.audioOwners.get(turnId);
     if (!owner) return;
     this.audioOwners.delete(turnId);
     const { turn, client } = owner;
-    if (!this.clients.get(client)?.has(turn.conversationId)) return;
+    if (!owner.started || !this.clients.get(client)?.has(turn.conversationId)) return;
     this.send(client, 'brief_chat_audio', { conversationId: turn.conversationId, turnId, requestId: turn.requestId,
       sequence: this.repository.nextSequence(turn.conversationId), phase: 'end', cancelled }, turn.requestId);
   }
@@ -206,7 +218,7 @@ export class BriefChatTransport implements BriefProvider {
       } }));
     };
     const audio = (payload: object) => {
-      if (!this.clients.get(client)?.has(turn.conversationId)) return;
+      if (!this.audioOwners.has(turn.turnId) || !this.clients.get(client)?.has(turn.conversationId)) return;
       this.send(client, 'brief_chat_audio', { ...identity, sequence: this.repository.nextSequence(turn.conversationId), ...payload }, turn.requestId);
     };
     try {
@@ -230,12 +242,14 @@ export class BriefChatTransport implements BriefProvider {
         signal.throwIfAborted();
         if (!done) throw new Error('Model stream ended without completion');
         const tts = turn.speak ? this.deps.tts?.() : null;
-        if (tts && fullText) {
-          this.audioOwners.set(turn.turnId, { turn, client });
+        const audioOwner = this.audioOwners.get(turn.turnId);
+        if (tts && fullText && audioOwner) {
+          audioOwner.started = true;
           audio({ phase: 'start' });
           try {
             for await (const chunk of tts.synthesizeStream(fullText)) {
               signal.throwIfAborted();
+              if (!this.audioOwners.has(turn.turnId)) break;
               audio({ phase: 'chunk', data: Buffer.from(chunk).toString('base64') });
             }
           } finally { this.endAudio(turn.turnId, signal.aborted); }
@@ -244,7 +258,7 @@ export class BriefChatTransport implements BriefProvider {
         this.emit(this.repository.finish(turn, 'completed'));
         // Existing knowledge/personality processing stays outside stream completion.
         void onComplete(fullText).catch(error => console.error('[BriefChat] Post-processing failed:', error instanceof Error ? error.name : 'unknown'));
-      })));
+      }, signal)));
     } catch {
       this.endAudio(turn.turnId, signal.aborted);
       this.emit(this.repository.finish(turn, signal.aborted ? 'cancelled' : 'failed', signal.aborted ? undefined : {
