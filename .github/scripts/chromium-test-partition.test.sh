@@ -8,11 +8,16 @@
 # pattern either way. That is the defect the guard exists to catch, one level
 # up (#648).
 #
-# Each fixture is a throwaway Go module, and every case asserts the exit code
-# AND a line that only the intended check prints. Exit code alone is not
-# enough: an empty derived set exits 1 too, so a fixture with no real Chromium
-# test in it would "fail correctly" no matter which check was broken. That is
-# why every failing fixture below also carries one well-formed Chromium test.
+# Each fixture is a throwaway Go module. Two things keep a case from passing for
+# the wrong reason:
+#
+#   - Every failing fixture also carries one well-formed Chromium test. An
+#     empty derived set exits 1 too, so without it a fixture would "fail
+#     correctly" no matter which check was broken.
+#   - A failing case asserts on STDERR only, and names the error header as well
+#     as the test. The guard prints both sets on stdout whatever happens, so a
+#     test name found there proves nothing: a guard that compared counts, or
+#     reported a missing test under the "extra" advice, would still show it.
 set -uo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -39,7 +44,7 @@ no() {
 	[ -n "${2:-}" ] && printf '%s\n' "$2" | sed 's/^/         /'
 }
 
-WORK="$(mktemp -d)"
+WORK="$(mktemp -d)" || exit 1
 trap 'rm -rf "$WORK"' EXIT
 
 # A stub with the real probe's shape. The deriver matches the call by name, so
@@ -58,54 +63,101 @@ fixture() {
 		"$PROBE" "$2" >"${dir}/fixture_test.go"
 }
 
-# expect <description> <fixture> <exit code> <fixed string the output must contain>
-expect() {
-	local out rc
-	out="$("$SCRIPT" "$PATTERN" "${WORK}/$2" 2>&1)"
+# run <fixture>: sets out (stdout), err (stderr) and rc.
+run() {
+	out="$("$SCRIPT" "$PATTERN" "${WORK}/$1" 2>"${WORK}/stderr")"
 	rc=$?
-	if [ "$rc" -ne "$3" ]; then
-		no "$1: exited $rc, want $3" "$out"
-	elif ! grep -qF -- "$4" <<<"$out"; then
-		no "$1: output does not contain '$4'" "$out"
+	err="$(cat "${WORK}/stderr")"
+}
+
+# expect_agree <description> <fixture> <count>: exit 0, last line exactly count=<n>.
+expect_agree() {
+	run "$2"
+	if [ "$rc" -ne 0 ]; then
+		no "$1: exited $rc, want 0" "$out"$'\n'"$err"
+	elif [ "$(printf '%s\n' "$out" | tail -n 1)" != "count=$3" ]; then
+		no "$1: last line is not count=$3" "$out"
 	else
 		ok "$1"
 	fi
 }
 
+# expect_refused <description> <fixture> <fixed string>...: exit 1, and every
+# string appears on stderr.
+expect_refused() {
+	local desc="$1" needle
+	run "$2"
+	shift 2
+	if [ "$rc" -ne 1 ]; then
+		no "${desc}: exited $rc, want 1" "$out"$'\n'"$err"
+		return
+	fi
+	for needle in "$@"; do
+		if ! grep -qF -- "$needle" <<<"$err"; then
+			no "${desc}: stderr does not contain '${needle}'" "$err"
+			return
+		fi
+	done
+	ok "$desc"
+}
+
+# The guard's two mismatch headers, and the indent it lists names under.
+MISSING="the CI pattern ${PATTERN} does not match them"
+EXTRA="the CI pattern ${PATTERN} matches these tests, but none of them calls"
+I='    '
+
 echo "chromium-test-partition.sh (pattern ${PATTERN}):"
 
 fixture agree "$GOOD"
-expect "a correctly named Chromium test agrees with the pattern" agree 0 "count=1"
+expect_agree "a correctly named Chromium test agrees with the pattern" agree 1
 
 fixture empty 'func TestPlain(t *testing.T) {}'
-expect "an empty derived set is refused, not treated as agreement" \
-	empty 1 "Refusing to pass vacuously"
+expect_refused "an empty derived set is refused, not treated as agreement" \
+	empty "Refusing to pass vacuously"
 
 fixture misnamed "$GOOD
 func TestChromiumOffConvention(t *testing.T) { findChromiumExecutable(nil) }"
-expect "a Chromium test named outside the convention is named as missing" \
-	misnamed 1 "TestChromiumOffConvention"
+expect_refused "a Chromium test named outside the convention is reported as missing" \
+	misnamed "$MISSING" "${I}TestChromiumOffConvention"
 
 fixture extra "$GOOD
 func TestBrowserNoChromeIntegration(t *testing.T) {}"
-expect "a pattern match that never calls the probe is named as extra" \
-	extra 1 "TestBrowserNoChromeIntegration"
+expect_refused "a pattern match that never calls the probe is reported as extra" \
+	extra "$EXTRA" "${I}TestBrowserNoChromeIntegration"
+
+# One in, one out: both sets have two members. The guard's own comment says a
+# count is blind to this, so a guard that compared counts must fail here.
+fixture swap "$GOOD
+func TestChromiumOffConvention(t *testing.T) { findChromiumExecutable(nil) }
+func TestBrowserNoChromeIntegration(t *testing.T) {}"
+expect_refused "a swap with equal counts is still a mismatch, in both directions" \
+	swap "$MISSING" "$EXTRA" "${I}TestChromiumOffConvention" "${I}TestBrowserNoChromeIntegration"
 
 # The deriver exits 1 here, so its failure has to reach the script's own error.
 # With `|| true` on the `go run` the derived set comes back empty instead, and
 # only the vacuous-set message is printed.
 fixture helper "$GOOD
 func launch() { findChromiumExecutable(nil) }"
-expect "a probe call in a helper fails the derivation" \
-	helper 1 "::error::deriving the Chromium test set"
+expect_refused "a probe call in a helper fails the derivation" \
+	helper "::error::deriving the Chromium test set" "cannot be attributed"
 
 # Go's test-name rule: Test followed by a lowercase letter is an ordinary
 # function. Read as a test, Testable would be derived and reported as missing
 # from the pattern instead of as an unattributed call.
 fixture testable "$GOOD
 func Testable() { findChromiumExecutable(nil) }"
-expect "Testable is not a test name, so its probe call is unattributed" \
-	testable 1 "cannot be attributed"
+expect_refused "Testable is not a test name, so its probe call is unattributed" \
+	testable "cannot be attributed"
+
+# The probe inside a subtest is still the test's own call. A deriver that did
+# not look inside function literals would derive nothing for this test and
+# report nothing either, and it would run un-retried.
+fixture closure "$GOOD
+func TestUnretriedSubtest(t *testing.T) {
+	t.Run(\"page\", func(t *testing.T) { findChromiumExecutable(nil) })
+}"
+expect_refused "a probe call inside a subtest closure belongs to its test" \
+	closure "$MISSING" "${I}TestUnretriedSubtest"
 
 # The #639 hole. A raw string puts a column-zero func line for a test that is
 # already in the set above a probe call in a misnamed Chromium test. A line scan
@@ -118,8 +170,8 @@ func TestBrowserAIntegration(t *testing.T) {
 \`
 	findChromiumExecutable(nil)
 }"
-expect "a func line inside a raw string does not reattribute a probe call" \
-	rawstring 1 "TestUnretried"
+expect_refused "a func line inside a raw string does not reattribute a probe call" \
+	rawstring "$MISSING" "${I}TestUnretried"
 
 # The file set is what the go tool compiles. A Chromium test excluded by a build
 # constraint can never come back from `go test -list` on this GOOS, so deriving
@@ -128,8 +180,7 @@ fixture constrained "$GOOD"
 printf '//go:build never\n\npackage fixture\n\nimport "testing"\n\n%s\n' \
 	'func TestBrowserBIntegration(t *testing.T) { findChromiumExecutable(nil) }' \
 	>"${WORK}/constrained/never_test.go"
-expect "a Chromium test excluded by a build constraint is not derived" \
-	constrained 0 "count=1"
+expect_agree "a Chromium test excluded by a build constraint is not derived" constrained 1
 
 echo
 echo "${pass} passed, ${fail} failed"

@@ -233,9 +233,10 @@ jobs:
 
       # The guard that keeps a Chromium test out of the un-retried step agrees
       # with the real sidecar whether or not it works, so it gets fixtures of
-      # its own (#648): each one breaks the partition in a way the guard has to
-      # name. Runs before the partition itself so a neutered guard is caught
-      # before anything trusts it. CHROMIUM_TESTS comes from the job env.
+      # its own (#648): most break the partition in a way the guard has to
+      # name, and two are controls it has to pass. Runs before the partition
+      # itself so a neutered guard is caught before anything trusts it.
+      # CHROMIUM_TESTS comes from the job env.
       - name: Test the Chromium partition guard
         run: .github/scripts/chromium-test-partition.test.sh
 
