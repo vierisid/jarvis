@@ -1,0 +1,9 @@
+$ bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts
+bun test v1.4.2 (744846f84)
+
+src/goals/next-action.test.ts:
+
+ 33 pass
+ 0 fail
+ 106 expect() calls
+Ran 33 tests across 1 file. [734.00ms]

@@ -1,0 +1,103 @@
+{
+  "task": "Q-18",
+  "title": "Make the next recommendation worth acting on",
+  "date": "2026-10-05",
+  "branch": "brief/q-18",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-q-18",
+  "baseline": "462d955d54014e15ea003b5908860917642e5b34",
+  "baseline_ref": "brief/foundations (D-01 and F-01); Q-18 has no merge prerequisite",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-18.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "planner, scenarios and rubric only; recommendations stays unsupported until F-13 registers a provider that uses them",
+    "release_enabled": false,
+    "publication": "PR #742 open against brief/foundations; https://github.com/vierisid/jarvis/pull/742",
+    "founder_review": "pending: 23 scenarios and the rubric are proposed; the review packet is evidence/Q-18/review-packet.md"
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "page": "81:2",
+    "checkpoint": "no visual changes in Q-18"
+  },
+  "ownership": {
+    "implementer": "Core-quality line",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [],
+  "enable_after": [],
+  "behavior": [
+    "observeNextAction reads every goal (parents, dependencies, deadline, health, order, latest progress), open work and work settled in the last 7 days, open commitments that are not work items, and the readiness of each workflow version open work runs. It writes nothing.",
+    "planNextAction is a pure function of that snapshot. Candidates rank in a stated order: check a finished result, resolve a blocker, restore what accepted work needs, decide a proposal, continue accepted work, start an unblocked goal step, review a goal; within a kind by deadline, health, goal order and age.",
+    "Doing nothing new is always weighed; it wins when open items reach capacity (default 5) and the best option adds work, or when nothing achievable remains.",
+    "Guards: no step behind an unmet dependency or inactive goal or parent; no step duplicating an open commitment or work item (titles compared ignoring case and punctuation); no repeat of work checked done in the last 7 days; stale goals (14 days without progress or work, or escalation suggesting a stop) get a review prompt.",
+    "It asks instead of guessing when a goal above task level has no task, when the last attempt failed its check, or when two goals' new steps have nothing (deadline, health, order) between them.",
+    "Each result carries the goal and revision, the goal path, evidence references, a rationale against doing nothing and the runner-up, the work item to link or null, an expiry (12 hours or the goal deadline) and a basis digest of every input except the clock; considered lists every alternative and why it lost or was left out."
+  ],
+  "acceptance": [
+    {
+      "check": "Recommendations do not duplicate existing commitments or suggest blocked work as immediately executable",
+      "status": "passed",
+      "evidence": "src/goals/next-action.test.ts (duplicate-commitment, duplicate-open-work, blocked-by-dependency, accepted-work-waits-on-dependency, paused-parent, unavailable-integration scenarios and the cross-scenario property test); evidence/Q-18/revert-checks.log"
+    },
+    {
+      "check": "Reviewers can explain why the chosen action is preferable; low confidence produces a useful question or abstention",
+      "status": "passed pending founder review",
+      "evidence": "Rationale against doing nothing and the runner-up, and considered alternatives with reasons (next-action.test.ts contract tests); questions for no concrete step, a failed last attempt and ties; abstention for full or empty days; evidence/Q-18/review-packet.md for the founder's review"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "7,767 pass, 88 skip, 9 fail of 7,864 tests across 424 files (local WSL2, 594a5a5c). The 9 also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. Q-18 changes none of those areas.",
+      "log": "evidence/Q-18/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts",
+      "result": "33 pass, 0 fail",
+      "log": "evidence/Q-18/next-action-tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-18/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "passed, exit 0; 100 templates, no errors or warnings",
+      "log": "evidence/Q-18/guards.log"
+    },
+    {
+      "command": "remove each of 17 guarantees in turn and run its test",
+      "result": "17 of 17 removals fail their tests; source restored",
+      "log": "evidence/Q-18/revert-checks.log"
+    },
+    {
+      "command": "bun run scripts/next-action-review-packet.ts --out docs/brief-delivery/evidence/Q-18/review-packet.md",
+      "result": "23 of 23 scenarios meet their proposed expectations; packet ready for founder review",
+      "log": "evidence/Q-18/review-packet.md"
+    }
+  ],
+  "quick_verify": {
+    "cwd": "/home/vierisid/.cache/codex/jarvis-q-18",
+    "command": "bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts",
+    "expected": "33 pass",
+    "screenshot": "not applicable: no visible UI changes"
+  },
+  "migration": "None. No schema, data, route or daemon wiring change; nothing calls the planner until F-13.",
+  "rollback": "Revert the Q-18 commits. Nothing references the new module.",
+  "limitations": [
+    "Signals are structured only: goals, work items, commitments, checked results and workflow readiness. Calendar, mail and facts are not read.",
+    "New steps come from the user's own goal titles; a missing step is asked for, never invented.",
+    "Plain commitments count toward the workload and guard against duplicates but are not recommended; F-13 links work items.",
+    "Duplicates are matched on normalized titles; a reworded duplicate is not caught.",
+    "The ranking is a stated preference order, not a measured optimum; the scenarios and rubric await founder review."
+  ],
+  "found": [
+    "The morning plan reads active and overdue goals and yesterday's review summary, but not dependencies, open work or checked results. It never deduplicates against existing commitments and writes its actions straight into work items. Q-18 does not change it; F-13 decides whether What's next? replaces it."
+  ],
+  "next": "F-13 builds its recommendations provider on this planner. The founder reviews the scenario packet. Keep the PR unmerged until reviewed."
+}
