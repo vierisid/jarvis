@@ -1,0 +1,222 @@
+{
+  "method": "Computed browser fonts, nearest opaque-background contrast and horizontal overflow. 200% means local text-only scaling, not browser zoom. Samples with no failures still require the attached visual review.",
+  "checks": [
+    {
+      "case": "dark-wide-100",
+      "theme": "dark",
+      "width": 1274,
+      "textSamples": 85,
+      "minimumFontPx": 12,
+      "minimumTextContrast": 5.30866458790958,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "light-wide-100",
+      "theme": "light",
+      "width": 1274,
+      "textSamples": 85,
+      "minimumFontPx": 12,
+      "minimumTextContrast": 4.769259771348686,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "light-wide-200-compact",
+      "theme": "light",
+      "width": 1274,
+      "textSamples": 85,
+      "minimumFontPx": 24,
+      "minimumTextContrast": 4.769259771348686,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "light-narrow-200-compact",
+      "theme": "light",
+      "width": 384,
+      "textSamples": 85,
+      "minimumFontPx": 24,
+      "minimumTextContrast": 4.769259771348686,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "dark-narrow-200-compact",
+      "theme": "dark",
+      "width": 384,
+      "textSamples": 85,
+      "minimumFontPx": 24,
+      "minimumTextContrast": 5.30866458790958,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "dark-narrow-100-compact",
+      "theme": "dark",
+      "width": 384,
+      "textSamples": 85,
+      "minimumFontPx": 12,
+      "minimumTextContrast": 5.30866458790958,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "dark-medium-100-compact",
+      "theme": "dark",
+      "width": 762,
+      "textSamples": 85,
+      "minimumFontPx": 12,
+      "minimumTextContrast": 5.30866458790958,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "dark-medium-200-compact",
+      "theme": "dark",
+      "width": 762,
+      "textSamples": 85,
+      "minimumFontPx": 24,
+      "minimumTextContrast": 5.30866458790958,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "dark-wide-final",
+      "theme": "dark",
+      "width": 1274,
+      "textSamples": 85,
+      "minimumFontPx": 12,
+      "minimumTextContrast": 5.30866458790958,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    },
+    {
+      "case": "light-wide-final",
+      "theme": "light",
+      "width": 1274,
+      "textSamples": 85,
+      "minimumFontPx": 12,
+      "minimumTextContrast": 4.769259771348686,
+      "contrastFailures": [],
+      "textOverflow": [],
+      "horizontalOverflow": false
+    }
+  ],
+  "nativeComparisons": {
+    "loadedFonts": [
+      "Familjen Grotesk",
+      "Spline Sans Mono"
+    ],
+    "lightMaterials": [
+      {
+        "backingFill": "rgba(0, 0, 0, 0)",
+        "backingRadius": "0px",
+        "border": "rgb(226, 231, 236)",
+        "fill": "rgb(255, 255, 255)",
+        "name": "Contained card",
+        "radius": "14px 0px 14px 14px",
+        "shadow": "none"
+      },
+      {
+        "backingFill": "rgb(237, 241, 245)",
+        "backingRadius": "12px 0px 12px 12px",
+        "border": "rgb(196, 205, 214)",
+        "fill": "rgb(255, 255, 255)",
+        "name": "Raised paper",
+        "radius": "12px 0px 12px 12px",
+        "shadow": "rgba(38, 53, 69, 0.1) 8px 12px 0px 0px"
+      },
+      {
+        "backingFill": "rgba(0, 0, 0, 0)",
+        "backingRadius": "0px",
+        "border": "rgb(215, 222, 229)",
+        "fill": "rgb(255, 255, 255)",
+        "name": "Floating menu",
+        "radius": "10px 0px 10px 10px",
+        "shadow": "rgba(38, 53, 69, 0.12) 3px 5px 0px 0px"
+      },
+      {
+        "backingFill": "rgb(237, 241, 245)",
+        "backingRadius": "12px 0px 12px 12px",
+        "border": "rgb(196, 205, 214)",
+        "fill": "rgb(255, 255, 255)",
+        "name": "Follow-up draft",
+        "radius": "12px 0px 12px 12px",
+        "shadow": "rgba(38, 53, 69, 0.1) 8px 12px 0px 0px"
+      },
+      {
+        "backingFill": "rgba(0, 0, 0, 0)",
+        "backingRadius": "0px",
+        "border": "rgb(226, 231, 236)",
+        "fill": "rgb(255, 255, 255)",
+        "name": "Long values and compact labels",
+        "radius": "14px 0px 14px 14px",
+        "shadow": "none"
+      }
+    ],
+    "darkMaterials": [
+      {
+        "backingFill": "rgba(0, 0, 0, 0)",
+        "backingRadius": "0px",
+        "border": "rgb(39, 44, 51)",
+        "fill": "rgb(26, 29, 34)",
+        "name": "Contained card",
+        "radius": "14px 0px 14px 14px",
+        "shadow": "none"
+      },
+      {
+        "backingFill": "rgb(32, 37, 44)",
+        "backingRadius": "12px 0px 12px 12px",
+        "border": "rgb(66, 75, 88)",
+        "fill": "rgb(39, 44, 52)",
+        "name": "Raised paper",
+        "radius": "12px 0px 12px 12px",
+        "shadow": "rgba(8, 11, 16, 0.28) 8px 12px 0px 0px"
+      },
+      {
+        "backingFill": "rgba(0, 0, 0, 0)",
+        "backingRadius": "0px",
+        "border": "rgb(66, 75, 88)",
+        "fill": "rgb(39, 44, 52)",
+        "name": "Floating menu",
+        "radius": "10px 0px 10px 10px",
+        "shadow": "rgba(8, 11, 16, 0.32) 3px 5px 0px 0px"
+      },
+      {
+        "backingFill": "rgb(32, 37, 44)",
+        "backingRadius": "12px 0px 12px 12px",
+        "border": "rgb(66, 75, 88)",
+        "fill": "rgb(39, 44, 52)",
+        "name": "Follow-up draft",
+        "radius": "12px 0px 12px 12px",
+        "shadow": "rgba(8, 11, 16, 0.28) 8px 12px 0px 0px"
+      },
+      {
+        "backingFill": "rgba(0, 0, 0, 0)",
+        "backingRadius": "0px",
+        "border": "rgb(39, 44, 51)",
+        "fill": "rgb(26, 29, 34)",
+        "name": "Long values and compact labels",
+        "radius": "14px 0px 14px 14px",
+        "shadow": "none"
+      }
+    ],
+    "progress": {
+      "sixOfTen": "Six #2D78FF and four #DEE5EB segments in both Light examples",
+      "heightPx": 6,
+      "gapPx": 4,
+      "corners": "2px 0px 2px 2px",
+      "meaning": "Positive weekly change is separate from completion level."
+    }
+  }
+}
