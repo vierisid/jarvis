@@ -358,7 +358,30 @@ export type WorkflowConfig = {
    * wins when both are set.
    */
   /** Dir holding prebuilt engine bundles as `<hash>/main.js` — consulted
-   * before building into `~/.jarvis/cache/engine`. */
+   * before building into `~/.jarvis/cache/engine`.
+   *
+   * EACH BUNDLE MUST SHIP ITS `main.js.sha256` (#624). `main.js` from here is
+   * spawned as the workflow engine with the daemon's authority, and the
+   * directory name hashes build INPUTS, not output, so the digest beside it is
+   * the only thing that makes the store content-addressed in fact rather than
+   * in name. A bundle with no manifest, or one whose bytes do not match it, is
+   * refused: the daemon logs `[engine] shared bundle REFUSED reason=...` and
+   * builds its own copy instead. Both of jarvis's own publishers
+   * (`scripts/build-shared-runtime.ts`, the Docker image) write it
+   * unconditionally; a host publishing these trees by other means (rsync,
+   * tarball, a fleet builder) has to carry the `.sha256` files too, or every
+   * tenant on the host silently stops using the shared bundle and pays a
+   * ~47 MB staging install -- which in a container with no egress means
+   * workflow features start disabled.
+   *
+   * THE FORMAT, stated because getting it wrong is reported the same way as
+   * corrupt bytes and is the likelier mistake: the file's first
+   * whitespace-delimited token must be the bundle's sha256 as hex, case
+   * ignored. So all of `sha256sum main.js > main.js.sha256` (which writes
+   * `<hash>  main.js`), `sha256sum main.js | cut -d' ' -f1 > ...` and
+   * `shasum -a 256` are accepted as they come. Anything else -- a truncated
+   * digest, several digests, a digest of the wrong file -- is a
+   * `reason=digest_mismatch` refusal. */
   engine_dir?: string;
   /** Dir with a ready-made pieces catalog (`node_modules/@activepieces/...`).
    * Pieces here are usable without installing; a piece installed via the
