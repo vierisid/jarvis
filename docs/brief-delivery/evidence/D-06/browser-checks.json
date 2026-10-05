@@ -1,0 +1,1326 @@
+{
+  "task": "D-06",
+  "environment": "Chromium in-app browser, 1280x720; 390px shell-width specimen is not device emulation",
+  "normalCycles": [
+    {
+      "family": "Today",
+      "cycle": 1,
+      "theme": "light",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 2,
+      "theme": "light",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 3,
+      "theme": "light",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 4,
+      "theme": "light",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 5,
+      "theme": "light",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 6,
+      "theme": "light",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 7,
+      "theme": "light",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 8,
+      "theme": "light",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 9,
+      "theme": "light",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 10,
+      "theme": "light",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 11,
+      "theme": "dark",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 12,
+      "theme": "dark",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 13,
+      "theme": "dark",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 14,
+      "theme": "dark",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 15,
+      "theme": "dark",
+      "workWidth": 1208,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 16,
+      "theme": "dark",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 17,
+      "theme": "dark",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 18,
+      "theme": "dark",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 19,
+      "theme": "dark",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Today",
+      "cycle": 20,
+      "theme": "dark",
+      "workWidth": 1048,
+      "closedActivityY": 685.6666870117188,
+      "openActivityY": 686,
+      "chatScroll": 277.3333435058594,
+      "originHidden": true
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 1,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 2,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 3,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 4,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 5,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 6,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 7,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 8,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 9,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 10,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 11,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 12,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 13,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 14,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 15,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 16,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 17,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 18,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 19,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Canvas/inspector",
+      "cycle": 20,
+      "theme": "dark",
+      "selected": "Draft the follow-up",
+      "inspector": "true",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 1,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 2,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 3,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 4,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 5,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 6,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 7,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 8,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 9,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 10,
+      "theme": "dark",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 11,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 12,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 13,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 14,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 15,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 16,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 17,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 18,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 19,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "List",
+      "cycle": 20,
+      "theme": "light",
+      "selected": "Competitor watch",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 1,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 2,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 3,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 4,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 5,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 6,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 7,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 8,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 9,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 10,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 11,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 12,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 13,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 14,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 15,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 16,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 17,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 18,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 19,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Detail",
+      "cycle": 20,
+      "theme": "light",
+      "roomDraft": "Detail note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 1,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 2,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 3,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 4,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 5,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 6,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 7,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 8,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 9,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 10,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 11,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 12,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 13,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 14,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 15,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 16,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 17,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 18,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 19,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    },
+    {
+      "family": "Form",
+      "cycle": 20,
+      "theme": "light",
+      "roomDraft": "Form note",
+      "chatScroll": 277.3333435058594
+    }
+  ],
+  "rapidReversals": [
+    {
+      "cycle": 1,
+      "exitWidth": 408.8854370117187,
+      "entryWidth": 431.5416870117187,
+      "entryHeight": 524.0521240234375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 2,
+      "exitWidth": 421.1979370117187,
+      "entryWidth": 435.375,
+      "entryHeight": 528.8229370117188,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 3,
+      "exitWidth": 404.0833435058594,
+      "entryWidth": 433.9791870117187,
+      "entryHeight": 527.09375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 4,
+      "exitWidth": 402.0833435058594,
+      "entryWidth": 432.5208435058594,
+      "entryHeight": 525.28125,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 5,
+      "exitWidth": 384.9479370117187,
+      "entryWidth": 422.8020935058594,
+      "entryHeight": 513.1458740234375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 6,
+      "exitWidth": 417.09375,
+      "entryWidth": 427.3958435058594,
+      "entryHeight": 518.8646240234375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 7,
+      "exitWidth": 402.2395935058594,
+      "entryWidth": 432.90625,
+      "entryHeight": 525.7396240234375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 8,
+      "exitWidth": 407.03125,
+      "entryWidth": 435.3958435058594,
+      "entryHeight": 528.8541870117188,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 9,
+      "exitWidth": 369.1666870117187,
+      "entryWidth": 435.3020935058594,
+      "entryHeight": 528.7396240234375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 10,
+      "exitWidth": 389.4583435058594,
+      "entryWidth": 429.9791870117187,
+      "entryHeight": 522.09375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 11,
+      "exitWidth": 416.5520935058594,
+      "entryWidth": 435.0729370117187,
+      "entryHeight": 528.4479370117188,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 12,
+      "exitWidth": 422.2395935058594,
+      "entryWidth": 436.90625,
+      "entryHeight": 530.7396240234375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 13,
+      "exitWidth": 403.2395935058594,
+      "entryWidth": 435.40625,
+      "entryHeight": 528.8646240234375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 14,
+      "exitWidth": 402.3020935058594,
+      "entryWidth": 432.9895935058594,
+      "entryHeight": 525.8541870117188,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 15,
+      "exitWidth": 400.75,
+      "entryWidth": 435.21875,
+      "entryHeight": 528.6354370117188,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 16,
+      "exitWidth": 403.8854370117187,
+      "entryWidth": 428.6041870117187,
+      "entryHeight": 520.375,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 17,
+      "exitWidth": 415.3229370117187,
+      "entryWidth": 426.1041870117187,
+      "entryHeight": 517.2604370117188,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 18,
+      "exitWidth": 400.375,
+      "entryWidth": 437.375,
+      "entryHeight": 531.3229370117188,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 19,
+      "exitWidth": 403.84375,
+      "entryWidth": 430.65625,
+      "entryHeight": 522.9479370117188,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    },
+    {
+      "cycle": 20,
+      "exitWidth": 416.75,
+      "entryWidth": 432.6979370117187,
+      "entryHeight": 525.5,
+      "draft": "Keep this unsent chat draft",
+      "focus": "Conversation draft"
+    }
+  ],
+  "intermediateSampleCount": 1828,
+  "intermediateSamples": [
+    {
+      "open": false,
+      "width": 409.2291870117187,
+      "height": 496.2083435058594
+    },
+    {
+      "open": false,
+      "width": 245.33334350585935,
+      "height": 291.72918701171875
+    },
+    {
+      "open": false,
+      "width": 372.65625,
+      "height": 450.5833435058594
+    },
+    {
+      "open": false,
+      "width": 81.65625,
+      "height": 87.52083587646484
+    },
+    {
+      "open": false,
+      "width": 65.5625,
+      "height": 67.42708587646484
+    },
+    {
+      "open": false,
+      "width": 275.15625,
+      "height": 328.9375
+    },
+    {
+      "open": true,
+      "width": 438.4166870117187,
+      "height": 532.625
+    },
+    {
+      "open": false,
+      "width": 75.30208587646484,
+      "height": 79.58333587646484
+    },
+    {
+      "open": false,
+      "width": 322.375,
+      "height": 387.8541870117187
+    },
+    {
+      "open": false,
+      "width": 95.86458587646484,
+      "height": 105.23958587646484
+    },
+    {
+      "open": false,
+      "width": 356.03125,
+      "height": 429.8333435058594
+    },
+    {
+      "open": false,
+      "width": 59.5625,
+      "height": 59.94791793823242
+    },
+    {
+      "open": false,
+      "width": 75.36458587646484,
+      "height": 79.65625
+    },
+    {
+      "open": false,
+      "width": 260.0625,
+      "height": 310.09375
+    },
+    {
+      "open": false,
+      "width": 356.7083435058594,
+      "height": 430.6875
+    },
+    {
+      "open": true,
+      "width": 418.6354370117187,
+      "height": 507.9479370117187
+    },
+    {
+      "open": false,
+      "width": 322.46875,
+      "height": 387.96875
+    },
+    {
+      "open": false,
+      "width": 88.34375,
+      "height": 95.85417175292967
+    },
+    {
+      "open": true,
+      "width": 418.4479370117187,
+      "height": 507.7083435058594
+    },
+    {
+      "open": false,
+      "width": 290.5,
+      "height": 348.0833435058594
+    },
+    {
+      "open": false,
+      "width": 81.40625,
+      "height": 87.20833587646484
+    },
+    {
+      "open": false,
+      "width": 290.4895935058594,
+      "height": 348.0625
+    },
+    {
+      "open": false,
+      "width": 289.88543701171875,
+      "height": 347.3125
+    },
+    {
+      "open": false,
+      "width": 260.15625,
+      "height": 310.21875
+    },
+    {
+      "open": false,
+      "width": 95.86458587646484,
+      "height": 105.25
+    },
+    {
+      "open": true,
+      "width": 444.2916870117187,
+      "height": 539.9583740234375
+    },
+    {
+      "open": false,
+      "width": 231.0729217529297,
+      "height": 273.9375
+    },
+    {
+      "open": true,
+      "width": 418.3958435058594,
+      "height": 507.6458435058594
+    },
+    {
+      "open": false,
+      "width": 154.4375,
+      "height": 178.3125
+    },
+    {
+      "open": false,
+      "width": 339.09375,
+      "height": 408.6979370117187
+    },
+    {
+      "open": true,
+      "width": 411.9895935058594,
+      "height": 499.65625
+    },
+    {
+      "open": false,
+      "width": 104.23958587646484,
+      "height": 115.6875
+    },
+    {
+      "open": false,
+      "width": 306.1458435058594,
+      "height": 367.6041870117187
+    },
+    {
+      "open": false,
+      "width": 306.22918701171875,
+      "height": 367.7083435058594
+    },
+    {
+      "open": true,
+      "width": 444.2916870117187,
+      "height": 539.9583740234375
+    },
+    {
+      "open": true,
+      "width": 411.9583435058594,
+      "height": 499.6041870117187
+    },
+    {
+      "open": false,
+      "width": 95.97917175292967,
+      "height": 105.38542175292967
+    }
+  ],
+  "narrow": {
+    "open": {
+      "chatDraft": "Narrow draft",
+      "chatScroll": 0,
+      "focus": "Conversation draft",
+      "height": 595.3333740234375,
+      "inspector": "false",
+      "layout": "single",
+      "main": {
+        "bottom": 720.0000457763672,
+        "height": 595.3333740234375,
+        "left": 72,
+        "right": 390,
+        "top": 124.66667175292967,
+        "width": 318,
+        "x": 72,
+        "y": 124.66667175292967
+      },
+      "mainOverflow": false,
+      "mainScroll": 12.666666984558104,
+      "open": "true",
+      "originOpacity": "0",
+      "roomDraft": "",
+      "selected": "Read meeting notes",
+      "surface": {
+        "bottom": 702.0000457763672,
+        "height": 559.3333740234375,
+        "left": 90,
+        "right": 372,
+        "top": 142.6666717529297,
+        "width": 282,
+        "x": 90,
+        "y": 142.6666717529297
+      },
+      "theme": "light",
+      "width": 318
+    },
+    "closed": {
+      "chatDraft": "Narrow draft",
+      "chatScroll": 0,
+      "focus": "Open conversation",
+      "height": 595.3333740234375,
+      "inspector": "false",
+      "layout": "single",
+      "main": {
+        "bottom": 720.0000457763672,
+        "height": 595.3333740234375,
+        "left": 72,
+        "right": 390,
+        "top": 124.66667175292967,
+        "width": 318,
+        "x": 72,
+        "y": 124.66667175292967
+      },
+      "mainOverflow": false,
+      "mainScroll": 12.666666984558104,
+      "open": "false",
+      "originOpacity": "1",
+      "roomDraft": "",
+      "selected": "Read meeting notes",
+      "surface": {
+        "bottom": 702,
+        "height": 58,
+        "left": 314,
+        "right": 372,
+        "top": 644,
+        "width": 58,
+        "x": 314,
+        "y": 644
+      },
+      "theme": "light",
+      "width": 318
+    },
+    "dark": {
+      "chatDraft": "Narrow draft",
+      "chatScroll": 0,
+      "focus": "Conversation draft",
+      "height": 595.3333740234375,
+      "inspector": "false",
+      "layout": "single",
+      "main": {
+        "bottom": 720.0000457763672,
+        "height": 595.3333740234375,
+        "left": 72,
+        "right": 390,
+        "top": 124.66667175292967,
+        "width": 318,
+        "x": 72,
+        "y": 124.66667175292967
+      },
+      "mainOverflow": false,
+      "mainScroll": 12.666666984558104,
+      "open": "true",
+      "originOpacity": "0",
+      "roomDraft": "",
+      "selected": "Read meeting notes",
+      "surface": {
+        "bottom": 702.0000457763672,
+        "height": 559.3333740234375,
+        "left": 90,
+        "right": 372,
+        "top": 142.6666717529297,
+        "width": 282,
+        "x": 90,
+        "y": 142.6666717529297
+      },
+      "theme": "dark",
+      "width": 318
+    }
+  },
+  "reduced": {
+    "open": {
+      "chatDraft": "Narrow draft",
+      "chatScroll": 0,
+      "focus": "Conversation draft",
+      "height": 595.3333740234375,
+      "inspector": "false",
+      "layout": "single",
+      "main": {
+        "bottom": 720.0000457763672,
+        "height": 595.3333740234375,
+        "left": 72,
+        "right": 390,
+        "top": 124.66667175292967,
+        "width": 318,
+        "x": 72,
+        "y": 124.66667175292967
+      },
+      "mainOverflow": false,
+      "mainScroll": 12.666666984558104,
+      "open": "true",
+      "originOpacity": "0",
+      "roomDraft": "",
+      "selected": "Read meeting notes",
+      "surface": {
+        "bottom": 702.0000457763672,
+        "height": 559.3333740234375,
+        "left": 90,
+        "right": 372,
+        "top": 142.6666717529297,
+        "width": 282,
+        "x": 90,
+        "y": 142.6666717529297
+      },
+      "theme": "light",
+      "width": 318
+    },
+    "closed": {
+      "chatDraft": "Narrow draft",
+      "chatScroll": 0,
+      "focus": "Open conversation",
+      "height": 595.3333740234375,
+      "inspector": "false",
+      "layout": "single",
+      "main": {
+        "bottom": 720.0000457763672,
+        "height": 595.3333740234375,
+        "left": 72,
+        "right": 390,
+        "top": 124.66667175292967,
+        "width": 318,
+        "x": 72,
+        "y": 124.66667175292967
+      },
+      "mainOverflow": false,
+      "mainScroll": 12.666666984558104,
+      "open": "false",
+      "originOpacity": "1",
+      "roomDraft": "",
+      "selected": "Read meeting notes",
+      "surface": {
+        "bottom": 702,
+        "height": 58,
+        "left": 314,
+        "right": 372,
+        "top": 644,
+        "width": 58,
+        "x": 314,
+        "y": 644
+      },
+      "theme": "light",
+      "width": 318
+    }
+  },
+  "limitations": [
+    "Review room contents and conversation are illustrative; production rooms and F providers are separate tasks.",
+    "Not screen-reader, touch-device, virtual-keyboard or frame-rate certification.",
+    "DOM measurement poll records intermediate geometry, not full performance traces."
+  ],
+  "sampleNote": "Representative geometry samples retained; intermediateSampleCount reports the full measured polling run."
+}
