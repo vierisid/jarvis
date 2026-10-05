@@ -89,14 +89,15 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'gmail',
     pieceName: '@activepieces/piece-gmail',
-    vettedVersion: '0.15.0',
+    vettedVersion: '0.17.0',
     // Gmail spans read through send to permanent deletion, so no single
     // category describes it. `gmail_delete_draft` deletes permanently and
     // `gmail_stop_watch` changes a mailbox setting; both sit at level 9, so an
     // unmapped Gmail action is gated as a deletion.
     unknownActionCategory: 'delete_data',
     targetProps: ['receiver', 'cc', 'bcc', 'subject', 'reply_to', 'from', 'to',
-      'message_id', 'thread_id', 'draft_id', 'label', 'url', 'method'],
+      'message_id', 'message_ids', 'thread_id', 'draft_id', 'label', 'label_id', 'name',
+      'add_label_ids', 'remove_label_ids', 'url', 'method'],
     categories: {
       read_data: ['gmail_get_mail', 'gmail_search_mail', 'gmail_get_message', 'gmail_search_email',
         'gmail_get_thread', 'gmail_get_draft', 'gmail_list_drafts', 'gmail_list_threads',
@@ -107,12 +108,20 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
       // archived message is still in All Mail.
       write_data: ['create_draft_reply', 'gmail_create_draft', 'gmail_update_draft',
         'gmail_create_label', 'gmail_add_label_to_email', 'gmail_remove_label_from_email',
-        'gmail_archive_email'],
+        'gmail_archive_email', 'gmail_archive_message', 'gmail_get_or_create_label',
+        'gmail_update_label', 'gmail_untrash_message'],
       // Mail leaves the account under the user's own address, including the
       // approval-request action, which is a send that then waits.
       send_email: ['send_email', 'gmail_send_email', 'reply_to_email', 'gmail_reply_to_thread',
         'gmail_send_draft', 'gmail_forward_message', 'request_approval_in_mail'],
-      delete_data: ['gmail_delete_draft', 'custom_api_call'],
+      // Trash is recoverable for 30 days and then Gmail deletes it with no
+      // further action, so it is a deletion on a timer, not an archive. The
+      // two batch label actions take arbitrary label ids, and adding TRASH or
+      // SPAM through them trashes up to 1000 messages, or a whole thread, in
+      // one call. A category is per action, not per input, so they sit at
+      // their worst case. Upstream marks all three WRITE.
+      delete_data: ['gmail_delete_draft', 'gmail_trash_message', 'gmail_modify_labels',
+        'gmail_modify_thread_labels', 'custom_api_call'],
       // Stops push notifications on the mailbox: a mailbox-level setting, and
       // silently disabling it would stop every watch-driven flow.
       modify_settings: ['gmail_stop_watch'],
@@ -121,9 +130,9 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'slack',
     pieceName: '@activepieces/piece-slack',
-    vettedVersion: '0.17.10',
+    vettedVersion: '0.21.0',
     unknownActionCategory: 'delete_data',
-    targetProps: ['channel', 'user', 'userId', 'username', 'email', 'handle', 'ts', 'threadTs',
+    targetProps: ['channel', 'user', 'userId', 'recipients', 'username', 'email', 'handle', 'ts', 'threadTs',
       'text', 'file', 'reaction', 'name', 'query', 'url', 'method'],
     categories: {
       read_data: ['get-file', 'searchMessages', 'slack-find-user-by-email', 'slack-find-user-by-handle',
@@ -141,7 +150,8 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
       send_message: ['send_direct_message', 'send_channel_message', 'request_approval_direct_message',
         'request_approval_message', 'request_action_direct_message', 'request_action_message',
         'slack_post_message', 'slack_send_direct_message', 'slack_schedule_message',
-        'slack_send_ephemeral_message', 'updateMessage', 'slack_update_message'],
+        'slack_send_ephemeral_message', 'updateMessage', 'slack_update_message',
+        'send_message_to_multiple_users'],
       // Workspace content and the bot's own membership: reversible, and
       // scoped to what the caller already has.
       write_data: ['slack-add-reaction-to-message', 'slack_add_reaction', 'slack_remove_reaction',
@@ -162,7 +172,7 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'notion',
     pieceName: '@activepieces/piece-notion',
-    vettedVersion: '0.6.10',
+    vettedVersion: '0.7.3',
     unknownActionCategory: 'delete_data',
     targetProps: ['database_id', 'page_id', 'pageId', 'block_id', 'item_id', 'database_item_id',
       'archived_item_id', 'parent_page_id', 'new_parent_page_id', 'title', 'comment_text', 'url', 'method'],
@@ -185,7 +195,7 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'openai',
     pieceName: '@activepieces/piece-openai',
-    vettedVersion: '0.10.5',
+    vettedVersion: '0.12.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['model', 'prompt', 'text', 'input', 'query', 'fileName', 'purpose', 'url', 'method'],
     categories: {
@@ -201,14 +211,22 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'claude',
     pieceName: '@activepieces/piece-claude',
-    vettedVersion: '0.4.12',
+    vettedVersion: '0.7.0',
     // Only `custom_api_call` reaches this today, and through it the API key
     // reaches every Anthropic endpoint, files and batches included.
     unknownActionCategory: 'delete_data',
-    targetProps: ['model', 'prompt', 'systemPrompt', 'text', 'mode', 'url', 'method'],
+    targetProps: ['model', 'modelId', 'prompt', 'systemPrompt', 'text', 'mode', 'requests',
+      'messageBatchId', 'url', 'method'],
     categories: {
-      write_data: ['ask_claude', 'extract-structured-data'],
-      delete_data: ['custom_api_call'],
+      read_data: ['list_models', 'get_model', 'get_message_batch', 'list_message_batches',
+        'get_message_batch_results'],
+      // Same line as openai's: the prompt leaves the device to a third party,
+      // so even a token count is not a read. A batch is also billable.
+      write_data: ['ask_claude', 'extract-structured-data', 'create_message_batch', 'count_tokens'],
+      // Deleting a batch removes its results for good. Cancelling one stops
+      // in-flight work irreversibly, possibly another workload's on the same
+      // key, which is the reason slack's archive sits here too.
+      delete_data: ['cancel_message_batch', 'delete_message_batch', 'custom_api_call'],
     },
   },
   {
@@ -238,7 +256,7 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'google-calendar',
     pieceName: '@activepieces/piece-google-calendar',
-    vettedVersion: '0.10.3',
+    vettedVersion: '0.12.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['calendar_id', 'calendar_ids', 'event_id', 'eventId', 'title', 'attendees',
       'start_date_time', 'end_date_time', 'start_date', 'end_date', 'location', 'send_updates',
@@ -262,7 +280,7 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'google-drive',
     pieceName: '@activepieces/piece-google-drive',
-    vettedVersion: '0.9.1',
+    vettedVersion: '0.11.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['file_id', 'fileId', 'fileName', 'file_name', 'name', 'folderId', 'folder_id',
       'parent_folder_id', 'parentFolder', 'drive_id', 'user_email', 'role', 'type', 'permission_name',
@@ -290,7 +308,7 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'discord',
     pieceName: '@activepieces/piece-discord',
-    vettedVersion: '0.5.7',
+    vettedVersion: '0.7.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['guild_id', 'channel_id', 'user_id', 'role_id', 'message_id', 'name', 'content',
       'message', 'reason', 'emoji', 'webhook_url', 'url', 'method'],
