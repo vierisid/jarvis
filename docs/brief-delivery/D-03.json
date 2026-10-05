@@ -1,0 +1,37 @@
+{
+  "task": "D-03",
+  "title": "Finish the shared control family",
+  "date": "2026-10-05",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-03",
+  "baseline": "c5386d9d331df5bca2da1cf468aa30132529d958",
+  "stack_base": "brief/d-02",
+  "dependency_prs": ["https://github.com/vierisid/jarvis/pull/703"],
+  "head": {"ref": "brief/d-03", "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-03.json"},
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-03",
+  "figma": {"file": "eNfKeirIKLZLlZEasrurZa", "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded", "sources": ["UI-04 controls", "UI-05 fields/choices", "UI-09 resolved variables"], "extraction": "ui/src/brief/components/controls/figma-reference.json"},
+  "owns": ["ui/src/brief/components/controls.tsx", "ui/src/brief/components/controls/**", "ui/src/brief/preview/FoundationPreview.tsx (specimen route/link)", "ui/src/brief/entry/DashboardEntry.test.tsx (preview isolation)", "docs/brief-delivery/D-03.*", "docs/brief-delivery/evidence/D-03/**"],
+  "excludes": ["D-02 base materials", "Legacy v2 controls/routes", "Live room redesign", "F/Q contracts or behavior", "Authority/account semantics", "D-04 motion system", "Production cutover"],
+  "tests": [
+    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 51, "files": 6, "assertions": 403},
+    {"command": "bunx tsc --noEmit", "result": "pass"},
+    {"command": "bun run build:ui", "result": "pass", "note": "Existing @theme/@tailwind warnings remain."}
+  ],
+  "manual_checks": [
+    {"case": "Both themes, standard/compact and wide/narrow geometry", "result": "pass", "evidence": "evidence/D-03/browser-checks.json"},
+    {"case": "Validation and save retain field/form/button bounds", "result": "pass"},
+    {"case": "Keyboard navigation, disabled skipping and retained tab input", "result": "pass"},
+    {"case": "Tooltip hover/focus/Escape and icon-to-label bridge", "result": "pass"},
+    {"case": "Portaled menu theme, clipping escape, dismissal and ten open/Escape cycles", "result": "pass"},
+    {"case": "Immediate theme-switch text contrast", "result": "pass", "note": "Removed transient color interpolation after observing a contrast dip; final sampled minima Light 6.66:1, Dark 7.96:1."},
+    {"case": "Reduced motion", "result": "specified", "note": "CSS removes local translation/spinner animation; runtime traces remain D-04."}
+  ],
+  "evidence": ["D-03.md", "evidence/D-03/browser-checks.json", "evidence/D-03/light-wide.png", "evidence/D-03/light-focus.png", "evidence/D-03/dark-menu.png", "evidence/D-03/dark-narrow.png"],
+  "limitations": ["Control reference, not completed production rooms.", "No live connections, backend actions or domain policy changes.", "Chromium verification only; older-host body-portal fallback and OS-native select popup not visually certified.", "No screen-reader, OS zoom or reduced-motion runtime certification.", "Full-page screenshot unsupported; viewport evidence retained.", "Read current-head GitHub checks for remote CI verdict."],
+  "rollback": "Revert D-03; D-01/D-02 remain. No migration. Remove brief query parameters to use released v2.",
+  "next": "D-04 in a separate worktree; do not wait for merge to start stacked development."
+}
