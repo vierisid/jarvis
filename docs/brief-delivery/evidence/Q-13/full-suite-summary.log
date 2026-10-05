@@ -1,23 +1,21 @@
-Full suite on brief/q-13 at 64f92deb (local WSL2, JARVIS_TEST_ENGINE_BUILD=1)
+Full suite on brief/q-13 at 0dc04964 (local WSL2)
 $ bun test --preload ./src/test-preload.ts
- 7758 pass
- 84 skip
- 9 fail
- 55452 expect() calls
-Ran 7851 tests across 425 files. [606.24s]
+ 7769 pass
+ 85 skip
+ 7 fail
+ 55555 expect() calls
+Ran 7861 tests across 425 files. [850.21s]
 
 Failures:
-(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [64.86ms]
-(fail) page-writable element refs (#592, integration) > (unnamed) [317.65ms]
-(fail) browser primitives (integration) > (unnamed) [224.22ms]
-(fail) browser local-file lockdown (integration, #521) > (unnamed) [333.88ms]
-(fail) webapp template delivery via browser tools (integration) > (unnamed) [340.20ms]
-(fail) end to end, against a real process > reaps an engine whose owner really did die [55.31ms]
-(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [172.24ms]
-(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [314.31ms]
-(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [358.51ms]
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [97.09ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [5000.37ms]
+(fail) browser primitives (integration) > (unnamed) [618.72ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [552.21ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [559.34ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [522.99ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [551.45ms]
 
-Baseline: the same files on brief/foundations 462d955d with Q-13 stashed
+Baseline: the same test files on brief/foundations 462d955d with Q-13 stashed
 $ bun test --preload ./src/test-preload.ts src/sites/git-config-lint.test.ts src/workflows/runner/engine-runtime/engine-reaper.test.ts src/actions/browser/browser-local-files.test.ts src/actions/browser/browser-primitives.test.ts src/actions/browser/fixtures/headless-chromium.test.ts src/actions/browser/page-writable-element-refs.test.ts src/actions/tools/browser-template-delivery.test.ts
  358 pass
  9 fail
@@ -31,5 +29,4 @@ $ bun test --preload ./src/test-preload.ts src/sites/git-config-lint.test.ts src
 (fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [318.29ms]
 (fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [371.85ms]
 
-All 9 failures also fail on the baseline: git config lint, Chromium launch and engine-reaper tests on this machine. Q-13 changes none of those areas.
-An earlier full run on this branch also failed src/workflows/adapters/untrusted-reach.test.ts (#573 inventory); 64f92deb adds the two reviewed rows and it passes.
+All 7 failures also fail on the baseline: git config lint and Chromium launch tests on this machine. Q-13 changes none of those areas. The two engine-reaper tests that failed in earlier local runs passed here.
