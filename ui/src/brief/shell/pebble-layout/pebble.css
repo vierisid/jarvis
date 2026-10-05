@@ -6,6 +6,11 @@
 .brief-root .brief-pebble-surface { position: absolute; right: var(--pebble-inset); bottom: var(--pebble-inset); width: 58px; height: 58px; z-index: 2; overflow: clip; border: 1px solid var(--brief-card-edge); border-radius: var(--brief-corner-card); background: var(--brief-card); }
 .brief-root .brief-pebble-reading { position: absolute; right: 0; bottom: 0; display: flex; flex-direction: column; outline: none; }
 .brief-root .brief-pebble-content { display: flex; flex-direction: column; flex: 1; min-height: 0; padding: 22px; }
+.brief-root .brief-pebble-companion-viewport { position: absolute; inset: 0; z-index: 1; overflow: clip; pointer-events: none; }
+.brief-root .brief-pebble-companion { position: absolute; top: 32px; right: 38px; min-width: 0; pointer-events: auto; transform: translateY(var(--pebble-work-scroll, 0px)); }
+.brief-root [data-pebble-open="true"] .brief-pebble-companion { right: var(--pebble-inset); transform: none; max-height: max(152px, calc(100% - 280px)); overflow: auto; scrollbar-width: thin; }
+.brief-root [data-pebble-layout="single"] .brief-pebble-companion { right: var(--pebble-inset); }
+.brief-root [data-pebble-layout="single"][data-pebble-open="false"] .brief-pebble-companion { top: var(--pebble-companion-closed-top, 132px); }
 .brief-root .brief-pebble-close { position: absolute; right: 10px; top: 10px; width: 44px; height: 44px; display: grid; place-items: center; z-index: 1; border: 0; padding: 0; background: transparent; color: var(--brief-tertiary); border-radius: var(--brief-corner-control); }
 .brief-root .brief-pebble-close:hover { color: var(--brief-ink); background: var(--brief-recessed); }
 .brief-root .brief-pebble-origin { position: absolute; right: var(--pebble-inset); bottom: var(--pebble-inset); z-index: 3; width: 58px; height: 58px; }

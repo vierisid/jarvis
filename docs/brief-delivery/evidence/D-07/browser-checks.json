@@ -1,0 +1,388 @@
+{
+  "browser": "Chromium in-app",
+  "width": 1200,
+  "cycles": [
+    {
+      "theme": "light",
+      "sidebar": "expanded",
+      "chat": false,
+      "passed": 10,
+      "summaryUnchanged": true,
+      "draftRetained": true,
+      "geometry": {
+        ".brief-pebble-companion": {
+          "h": 313.97918701171875,
+          "w": 306,
+          "x": 856,
+          "y": 96
+        },
+        ".brief-pebble-surface": {
+          "h": 58,
+          "w": 58,
+          "x": 1116,
+          "y": 636
+        },
+        ".brief-today-primary": {
+          "h": 595.3125,
+          "w": 520,
+          "x": 270,
+          "y": 199
+        }
+      }
+    },
+    {
+      "theme": "light",
+      "sidebar": "expanded",
+      "chat": true,
+      "passed": 10,
+      "summaryUnchanged": true,
+      "draftRetained": true,
+      "geometry": {
+        ".brief-pebble-companion": {
+          "h": 161.3229217529297,
+          "w": 368,
+          "x": 806,
+          "y": 182.6666717529297
+        },
+        ".brief-pebble-surface": {
+          "h": 326.01043701171875,
+          "w": 368,
+          "x": 806,
+          "y": 367.9895935058594
+        },
+        ".brief-today-primary": {
+          "h": 595.3125,
+          "w": 492,
+          "x": 270,
+          "y": 199
+        }
+      }
+    },
+    {
+      "theme": "light",
+      "sidebar": "rail",
+      "chat": false,
+      "passed": 10,
+      "summaryUnchanged": true,
+      "draftRetained": true,
+      "geometry": {
+        ".brief-pebble-companion": {
+          "h": 313.97918701171875,
+          "w": 306,
+          "x": 856,
+          "y": 96
+        },
+        ".brief-pebble-surface": {
+          "h": 58,
+          "w": 58,
+          "x": 1116,
+          "y": 636
+        },
+        ".brief-today-primary": {
+          "h": 305.3125,
+          "w": 680,
+          "x": 110,
+          "y": 199
+        }
+      }
+    },
+    {
+      "theme": "light",
+      "sidebar": "rail",
+      "chat": true,
+      "passed": 10,
+      "summaryUnchanged": true,
+      "draftRetained": true,
+      "geometry": {
+        ".brief-pebble-companion": {
+          "h": 161.3229217529297,
+          "w": 447,
+          "x": 727,
+          "y": 182.6666717529297
+        },
+        ".brief-pebble-surface": {
+          "h": 326.01043701171875,
+          "w": 447,
+          "x": 727,
+          "y": 367.9895935058594
+        },
+        ".brief-today-primary": {
+          "h": 595.3125,
+          "w": 573,
+          "x": 110,
+          "y": 199
+        }
+      }
+    },
+    {
+      "theme": "dark",
+      "sidebar": "expanded",
+      "chat": false,
+      "passed": 10,
+      "summaryUnchanged": true,
+      "draftRetained": true,
+      "geometry": {
+        ".brief-pebble-companion": {
+          "h": 313.97918701171875,
+          "w": 306,
+          "x": 856,
+          "y": 96
+        },
+        ".brief-pebble-surface": {
+          "h": 58,
+          "w": 58,
+          "x": 1116,
+          "y": 636
+        },
+        ".brief-today-primary": {
+          "h": 595.3125,
+          "w": 520,
+          "x": 270,
+          "y": 199
+        }
+      }
+    },
+    {
+      "theme": "dark",
+      "sidebar": "expanded",
+      "chat": true,
+      "passed": 10,
+      "summaryUnchanged": true,
+      "draftRetained": true,
+      "geometry": {
+        ".brief-pebble-companion": {
+          "h": 161.3229217529297,
+          "w": 368,
+          "x": 806,
+          "y": 182.6666717529297
+        },
+        ".brief-pebble-surface": {
+          "h": 326.01043701171875,
+          "w": 368,
+          "x": 806,
+          "y": 367.9895935058594
+        },
+        ".brief-today-primary": {
+          "h": 595.3125,
+          "w": 492,
+          "x": 270,
+          "y": 199
+        }
+      }
+    },
+    {
+      "theme": "dark",
+      "sidebar": "rail",
+      "chat": false,
+      "passed": 10,
+      "summaryUnchanged": true,
+      "draftRetained": true,
+      "geometry": {
+        ".brief-pebble-companion": {
+          "h": 313.97918701171875,
+          "w": 306,
+          "x": 856,
+          "y": 96
+        },
+        ".brief-pebble-surface": {
+          "h": 58,
+          "w": 58,
+          "x": 1116,
+          "y": 636
+        },
+        ".brief-today-primary": {
+          "h": 305.3125,
+          "w": 680,
+          "x": 110,
+          "y": 199
+        }
+      }
+    },
+    {
+      "theme": "dark",
+      "sidebar": "rail",
+      "chat": true,
+      "passed": 10,
+      "summaryUnchanged": true,
+      "draftRetained": true,
+      "geometry": {
+        ".brief-pebble-companion": {
+          "h": 161.3229217529297,
+          "w": 447,
+          "x": 727,
+          "y": 182.6666717529297
+        },
+        ".brief-pebble-surface": {
+          "h": 326.01043701171875,
+          "w": 447,
+          "x": 727,
+          "y": 367.9895935058594
+        },
+        ".brief-today-primary": {
+          "h": 595.3125,
+          "w": 573,
+          "x": 110,
+          "y": 199
+        }
+      }
+    }
+  ],
+  "checks": [
+    {
+      "case": "Direct approval",
+      "result": "pass",
+      "detail": "One click from hover dispatched the illustrative request, left the same decision frontmost, and did not open Review. Pending is explicit; pointer departure returned paper to rest.",
+      "geometry": {
+        "before": {
+          "h": 305.3125,
+          "w": 653,
+          "x": 110,
+          "y": 199
+        },
+        "after": {
+          "h": 305.3125,
+          "w": 653,
+          "x": 110,
+          "y": 190.33334350585935
+        }
+      },
+      "note": "Hero width/height stayed fixed. Browser focus/scroll adjusted viewport Y by 8.67px; no queue transition is implemented here."
+    },
+    {
+      "case": "Long document Review after queue insertion",
+      "result": "pass",
+      "reviewBefore": 95.33333587646484,
+      "reviewInfo": {
+        "focused": true,
+        "mainTop": 150.6666717529297,
+        "points": 12,
+        "text": true,
+        "top": 174.9791717529297
+      },
+      "reviewAfter": {
+        "focus": "Review follow-upReview follow-up",
+        "raised": "false",
+        "scroll": 86.66666412353516
+      }
+    },
+    {
+      "case": "New front identity",
+      "result": "pass",
+      "detail": "Invitation can be hovered and Keep draft dispatched directly after the queued follow-up was reviewed."
+    },
+    {
+      "case": "loading",
+      "result": "pass",
+      "text": "Loading your decisions"
+    },
+    {
+      "case": "empty",
+      "result": "pass",
+      "text": "No decisions waiting.Keep your goals in view and choose the next useful step."
+    },
+    {
+      "case": "stale",
+      "result": "pass",
+      "text": "Needs your review2 actionsThe follow-up is ready.\nOne detail needs your eyes.Your email to Alex is drafted.\nConfirm the pilot date before sending.This decision needs refreshing before you act.Review follow-upReview follow-upFollow-up draftTo AlexOur pilot: next stepsWould Thursday, 17 September work for your pilot kickoff?Approve & sendApprove & sendKeep draftKeep draft"
+    },
+    {
+      "case": "unavailable",
+      "result": "pass",
+      "text": "Decisions unavailable.We couldn’t load your decisions. Your work is unchanged.Try againTry again"
+    },
+    {
+      "case": "unknown",
+      "result": "pass",
+      "text": "Check the outcome2 actionsThe follow-up was approved.\nIts outcome needs a check.Sending has not been confirmed.Approval is not confirmation that this action completed. Check the outcome before trying again.Review follow-upReview follow-upFollow-up draftTo AlexOur pilot: next stepsWould Thursday, 17 September work for your pilot kickoff?"
+    },
+    {
+      "case": "390px dark reduced-motion return",
+      "result": "pass",
+      "detail": "Single-pane chat retains the draft and compact goal; Escape restores the same Today paper."
+    },
+    {
+      "case": "Final 390px closed/open return",
+      "result": "pass",
+      "narrow": {
+        "goalBottom": 489.9896087646485,
+        "goalTop": 328.66668701171875,
+        "goalWidth": 282,
+        "greetingBottom": 302.6666717529297,
+        "heroTop": 513.9896240234375
+      },
+      "detail": "Wrapped greeting, goal and hero do not overlap; reduced-motion chat retains draft and Escape returns to opener."
+    },
+    {
+      "case": "Narrow keyboard Review",
+      "result": "pass",
+      "detail": "Enter opens the full review; Escape closes and returns keyboard focus. Both themes checked."
+    },
+    {
+      "case": "Final backing-mask and metadata alignment",
+      "result": "pass",
+      "detail": "Backing sheets remain inside the rounded tray on hover; count remains clear of the raised paper."
+    }
+  ],
+  "finalBuild": "index-r7377f1p.js",
+  "limitations": [
+    "Illustrative supporting cards/conversation only. No live approvals or workflows.",
+    "Chromium, desktop and narrow container layouts. No touch, screen-reader or frame-rate certification.",
+    "Browser focus adjusted the viewport scroll slightly during one click; size/identity remained stable."
+  ],
+  "reviewCorrections": {
+    "build": "index-mw6nr0kc.js",
+    "red": {
+      "wheel": {
+        "before": 0,
+        "after": 0
+      },
+      "tests": {
+        "pass": 9,
+        "fail": 2
+      }
+    },
+    "checks": [
+      {
+        "case": "Desktop closed goal wheel",
+        "goalTop": 2.6666667461395264,
+        "scroll": 180
+      },
+      {
+        "case": "Open chat goal does not scroll Today",
+        "scroll": 180
+      },
+      {
+        "case": "light Escape and fresh-pointer rehover",
+        "passed": 10
+      },
+      {
+        "case": "dark Escape and fresh-pointer rehover",
+        "passed": 10
+      },
+      {
+        "case": "Dark desktop closed goal wheel",
+        "scroll": 150
+      },
+      {
+        "case": "390px first-use Escape returns visible Review",
+        "focused": true,
+        "raised": "false",
+        "reviewBottom": 270.6354217529297,
+        "reviewOpen": false,
+        "reviewTop": 230.6354217529297,
+        "viewportTop": 230.6666717529297,
+        "visibleWithinPixel": true,
+        "note": "Native scroll alignment differs by 0.032 CSS pixels; visibility tolerance is 0.5px."
+      }
+    ],
+    "tests": {
+      "pass": 106,
+      "fail": 0,
+      "assertions": 2745
+    },
+    "limitations": [
+      "Native wheel and keyboard checks in Chromium; no new touch or cross-browser claim.",
+      "Re-hover cycles include fresh pointer movement, as required by the existing stationary-pointer suppression."
+    ]
+  }
+}
