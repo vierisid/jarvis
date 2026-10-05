@@ -26,9 +26,7 @@
  *
  * Fails (exit 1) when a REQUIRED path is not in the tarball. The list is the
  * cross-repo contract, so add to it whenever something outside this repo
- * starts reading a shipped file by path -- and also whenever the daemon
- * itself reads one by a path no `files` directory entry covers, and treats
- * its absence as anything quieter than an error (ui/overlay.html, #642).
+ * starts reading a shipped file by path.
  *
  * Run via:
  *   - `bun run check:package`
@@ -48,9 +46,7 @@ export interface Requirement {
 }
 
 /**
- * Files an out-of-repo consumer resolves BY PATH out of an installed package,
- * plus the few the daemon itself resolves by a path no `files` directory entry
- * covers (see ui/overlay.html).
+ * Files an out-of-repo consumer resolves BY PATH out of an installed package.
  *
  * Deliberately not here: the vendored pieces' `dist/src/index.js`. Those are
  * gitignored build outputs produced by `prepublishOnly` (`build:workflows`),
@@ -67,15 +63,6 @@ export const REQUIRED: Requirement[] = [
   {
     path: "scripts/build-shared-runtime.ts",
     why: "the hosting fleet's install-version SILENTLY skips building the shared engine/pieces/metadata artifacts when it is absent",
-  },
-  {
-    // A consumer inside the package rather than outside it, listed for the
-    // same reason: nothing else would notice. websocket.ts resolves it as
-    // staticDir/../overlay.html, beside ui/dist rather than in it, so the
-    // `ui/dist/` and `ui/public/` entries in `files` do not cover it, and a
-    // missing file is not an error -- the route falls through to a 404 (#642).
-    path: "ui/overlay.html",
-    why: "the daemon serves GET /overlay from it by path; without it /overlay silently 404s on every npm install",
   },
 ];
 

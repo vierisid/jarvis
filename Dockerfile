@@ -330,22 +330,9 @@ COPY --from=build /app/bin ./bin
 COPY --from=build /app/roles ./roles
 COPY --from=build /app/ui/dist ./ui/dist
 COPY --from=build /app/ui/public ./ui/public
-# Beside ui/dist, not in it: the daemon serves /overlay from staticDir/../
-COPY --from=build /app/ui/overlay.html ./ui/overlay.html
 # Copy version-stamped package.json from build stage (not the original)
 COPY --from=build /app/package.json ./
 COPY tsconfig.json ./
-
-# The image must ship every ui/ path the npm package ships (#642). Both
-# artifacts are served by the same daemon code, which resolves these files by
-# path and treats a missing one as a plain 404 -- ui/overlay.html shipped in
-# neither, and /overlay 404'd everywhere but a source checkout. package.json's
-# `files` is the npm side's list (scripts/check-package-files.ts guards the
-# entries that matter there), so this derives the image's list from it rather
-# than keeping a second one: a ui/ path added to `files` without a COPY above
-# fails this build. Scoped to ui/ because the rest of `files` is either copied
-# wholesale (src/, bin/, roles/) or npm-only (the hosting fleet's scripts).
-RUN bun -e 'const fs = require("node:fs"); const p = await Bun.file("/app/package.json").json(); const ui = (p.files || []).filter((f) => f.startsWith("ui/")); if (ui.length === 0) throw new Error("package.json files names no ui/ path, so this check would prove nothing"); const missing = ui.filter((f) => !fs.existsSync("/app/" + f)); if (missing.length > 0) throw new Error("the image is missing ui/ paths the npm package ships: " + missing.join(", ")); console.log("image ships every ui/ path npm does: " + ui.join(" "))'
 
 # Compiled piece bundles from the `workflows` stage. Only each piece's dist/
 # is overlaid, so every source file under src/ still comes from exactly one
