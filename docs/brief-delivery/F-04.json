@@ -15,7 +15,7 @@
     "merge": "not_merged",
     "release_enabled": false,
     "capability": "implemented, supported and default off; provider requires explicit host mounting",
-    "publication": "prepared against brief/f-03; PR URL and exact-head CI recorded in the PR description"
+    "publication": "Open as PR #738 against brief/f-03; review corrections target the existing branch. Exact head and CI are recorded in the PR description."
   },
   "dependencies": {
     "merge_after": ["F-01", "F-02", "F-02.1", "F-03"],
@@ -60,19 +60,25 @@
     }
   ],
   "verification": {
-    "focused": { "command": "bun test ui/src/brief/chat src/brief/registrations/chat-state.test.ts", "passed": 26, "failed": 0 },
+    "focused": { "command": "bun test ui/src/brief/chat src/brief/registrations/chat-state.test.ts", "passed": 35, "failed": 0 },
     "affected": {
       "command": "bun test ui/src/brief ui/src/hooks/useWebSocket.test.ts ui/src/hooks/useWebSocket.realtime-status.test.ts src/brief src/vault/conversation-lifecycle.test.ts src/vault/conversation-schema.test.ts src/vault/chat-turns.test.ts src/daemon/api-brief-conversations.test.ts src/daemon/api-brief.test.ts src/daemon/ws-service-conversation.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts src/workflows/adapters/untrusted-reach.test.ts",
-      "passed": 200, "failed": 0, "assertions": 1537, "files": 22,
-      "log": "docs/brief-delivery/evidence/F-04/affected.log"
+      "passed": 209, "failed": 0, "assertions": 1571, "files": 22,
+      "log": "docs/brief-delivery/evidence/F-04/review-affected.log"
     },
-    "mutations": { "rejected": 4, "total": 4, "evidence": "docs/brief-delivery/evidence/F-04/mutations.json", "sources_restored": true },
+    "mutations": { "rejected": 4, "total": 4, "evidence": "docs/brief-delivery/evidence/F-04/mutations.json", "sources_restored": true, "verified_on": "Original F-04 head fdf9efb2; review fixes have separate red/green evidence below." },
+    "review_regressions": {"cases": 7, "original_head_failures": 7, "fixed_head_passed": 7, "evidence": "docs/brief-delivery/evidence/F-04/review-fixes.json", "red_log": "docs/brief-delivery/evidence/F-04/review-red.log", "green_log": "docs/brief-delivery/evidence/F-04/review-green.log"},
     "ui_build": "passed: bun run build:ui; existing @theme/@tailwind warnings remain",
     "browser_bundle": "passed: bun build ui/src/brief/chat/provider.tsx --target=browser; 14 modules, no server runtime dependencies",
     "typescript": "passed: bun x tsc --noEmit",
     "guards": "Normal commit hook result recorded in the PR description",
     "full_suite": "Not run locally; exact-head remote CI is reported separately"
   },
+  "review_fixes": [
+    "Replay compacts only the delivered event prefix; per-message snapshot watermarks retain missed history without repeated text, and old terminal events unblock cached running turns.",
+    "Atomic field writes preserve drafts, attachment references and scroll across windows; original v1 records remain readable. Acceptance checks for a newer draft saved by another window.",
+    "Turn error codes and messages survive live delivery, replay and daemon restart; latest failure is exposed per conversation, and partial output keeps a failed/cancelled item status."
+],
   "manual_checks": {
     "main_and_open_prs": "Fetched and checked before editing; D/Q feature work is on separate branches. F-03's corrected Tests/Docker checks pass.",
     "visual": "not_applicable: no visible UI change",
@@ -82,6 +88,7 @@
   "limitations": [
     "Production host mounting and tab presentation remain D-12 through D-15 work.",
     "Composer state is device-local, not cross-device; canonical messages and selection stay on the server.",
+    "Windows do not collaboratively edit draft text; the last actual write to the same field wins. New field keys take precedence over retained legacy aggregate records.",
     "Attachment references are retained, but file upload/validation/turn binding remains F-05; sending with refs rejects explicitly.",
     "Scoped text sends use speak=false; scoped voice playback is not activated.",
     "A failed two-step close can leave the neighbor selected while the original tab remains open; state is reconciled and the error is visible.",

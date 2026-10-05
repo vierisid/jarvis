@@ -152,7 +152,7 @@ export class BriefConversationClient {
   }
   private accepted(requestId: string) {
     const input = this.outbox.get(requestId);
-    if (input && this.store.getSnapshot().conversations[input.conversationId]?.draft === input.text) this.store.setDraft(input.conversationId, '');
+    if (input) this.store.acceptDraft(input.conversationId, input.text);
     this.outbox.delete(requestId);
     this.publishOutbox();
   }
@@ -217,7 +217,7 @@ export class BriefConversationClient {
     if (chat?.attachments.length) throw new Error('Attachment sending is not available yet.');
     if (Object.values(chat?.turns ?? {}).some(turn => activeTurn(turn.state)) || [...this.outbox.values()].some(turn => turn.conversationId === id)) throw new Error('This conversation already has an active turn.');
     const input = { conversationId: id, turnId: uuid(), requestId: uuid(), text, speak: false };
-    this.store.setError(id, null);
+    this.store.dismissError(id);
     this.outbox.set(input.requestId, input);
     this.publishOutbox();
     try { this.sendFrame('brief_chat_send', input, input.requestId); }
@@ -240,7 +240,8 @@ function isChatEvent(value: unknown): value is BriefChatEvent {
     case 'message': return !!p.message && p.message.conversationId === v.conversationId && p.message.turnId === v.turnId && p.message.requestId === v.requestId && typeof p.message.messageId === 'string' && typeof p.message.content === 'string' && Number.isFinite(p.message.createdAt) && ['user', 'assistant', 'system'].includes(p.message.role);
     case 'delta': return typeof p.messageId === 'string' && typeof p.text === 'string';
     case 'status': return activeTurn(p.state);
-    case 'terminal': return ['completed', 'failed', 'cancelled'].includes(p.state);
+    case 'terminal': return ['completed', 'failed', 'cancelled'].includes(p.state)
+      && (p.error === undefined || (!!p.error && typeof p.error.code === 'string' && typeof p.error.message === 'string'));
     case 'activity': return !!p.activity && typeof p.activity.activityId === 'string' && typeof p.activity.summary === 'string' && ['started', 'completed', 'failed'].includes(p.activity.phase) && Array.isArray(p.activity.refs);
     case 'approval': return typeof p.approvalId === 'string' && typeof p.status === 'string';
     default: return false;

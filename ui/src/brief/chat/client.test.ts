@@ -14,7 +14,7 @@ async function until(check: () => boolean) {
   const deadline = Date.now() + 2000;
   while (!check()) { if (Date.now() > deadline) throw new Error('Fixture timed out'); await Bun.sleep(1); }
 }
-function fixture() {
+function fixture(storage?: Pick<Storage, 'getItem' | 'setItem'>) {
   initDatabase(':memory:', { quiet: true });
   const repository = new ConversationRepository(getDb());
   const turns = new ChatTurnRepository(getDb());
@@ -25,7 +25,7 @@ function fixture() {
     create: async () => repository.create(), tab: async (id, open) => repository.setOpen(id, open),
     select: async id => repository.activate(id), history: async (id, cursor) => repository.messages(id, { cursor: cursor ?? undefined, limit: 50 }),
   };
-  const client = new BriefConversationClient(api); cleanups.push(() => client.stop());
+  const client = new BriefConversationClient(api, storage); cleanups.push(() => client.stop());
   const sent: WSMessage[] = [];
   const socket = { readyState: 1, send: (data: string) => { sent.push(JSON.parse(data)); } } as WebSocket;
   const receive = (type: string, payload: unknown, id?: string) => client.adapter.onMessage({ type, payload, id, timestamp: 10 });
@@ -211,4 +211,101 @@ test('malformed and delayed sync pages cannot overwrite state or continue an inv
   f.receive('brief_chat_sync', { ...snapshot, subscribed: true }, request.id);
   expect(f.client.store.getSnapshot().activeId).toBeNull();
   expect(f.client.store.getSnapshot().order).toEqual([]);
+});
+
+test('reconnect fills missed history beyond the snapshot tail across replay pages', async () => {
+  const f = fixture(); await f.client.start(); const a = await f.client.add(); await f.open();
+  answer(f, a, 'before');
+  await f.client.loadOlder(a);
+  expect(f.client.store.getSnapshot().conversations[a]?.history.cursor).toBeNull();
+  f.client.adapter.onClose();
+  // The first missed answer spans replay pages and is outside the latest ten messages.
+  for (let i = 0; i < 6; i++) {
+    const input = { conversationId: a, turnId: `offline-${i}`, requestId: `offline-request-${i}`, text: `Offline ${i}` };
+    f.turns.accept(input); f.turns.start(input);
+    for (let chunk = 0; chunk < (i === 0 ? 510 : 1); chunk++) f.turns.text(input, 'x');
+    f.turns.finish(input, 'completed');
+  }
+  f.client.adapter.onOpen(f.socket); await until(() => f.client.getSnapshot().connected);
+  let page = f.sync(a);
+  expect(page.hasMore).toBe(true);
+  while (page.hasMore) page = f.sync(a);
+  const expected = f.repository.messages(a, { limit: 100 }).items;
+  // Older delta events do not carry timestamps, so compare canonical identities,
+  // order, roles and complete text. Snapshot/history rows keep their exact dates.
+  const transcript = (rows: typeof expected) => rows.map(({ id, role, content }) => ({ id, role, content }));
+  expect(transcript(f.client.store.getSnapshot().conversations[a]!.messages)).toEqual(transcript(expected));
+  expect(f.client.store.getSnapshot().conversations[a]?.history.cursor).toBeNull();
+  await f.client.loadOlder(a);
+  f.client.adapter.onClose(); await f.open();
+  expect(transcript(f.client.store.getSnapshot().conversations[a]!.messages)).toEqual(transcript(expected));
+});
+
+test('replay completes an old cached running turn outside the latest fifty turns', async () => {
+  const f = fixture(); await f.client.start(); const a = await f.client.add(); await f.open();
+  const first = f.client.send(a, 'Before disconnect');
+  f.turns.accept({ ...first, text: 'Before disconnect' }).events.forEach(f.emit);
+  f.emit(f.turns.start(first)); f.client.adapter.onClose();
+  f.turns.text(first, 'Finished offline'); f.turns.finish(first, 'completed');
+  for (let i = 0; i < 51; i++) {
+    const input = { conversationId: a, turnId: `later-${i}`, requestId: `later-request-${i}`, text: 'Later' };
+    f.turns.accept(input); f.turns.start(input); f.turns.text(input, 'Done'); f.turns.finish(input, 'completed');
+  }
+  await f.open();
+  expect(f.client.store.getSnapshot().conversations[a]?.turns[first.turnId]?.state).toBe('completed');
+  expect(() => f.client.send(a, 'Can continue')).not.toThrow();
+});
+
+test('failed turn details survive live delivery, reconnect and a daemon restart', async () => {
+  const f = fixture(); await f.client.start(); const a = await f.client.add(); await f.open();
+  const ref = f.client.send(a, 'Fail after partial output');
+  f.turns.accept({ ...ref, text: 'Fail after partial output' }).events.forEach(f.emit);
+  f.emit(f.turns.start(ref)); f.emit(f.turns.text(ref, 'Partial'));
+  const failure = { code: 'generation_failed', message: 'This response could not finish.' };
+  f.emit(f.turns.finish(ref, 'failed', failure));
+  expect(f.client.store.getSnapshot().conversations[a]?.turns[ref.turnId]).toMatchObject({ state: 'failed', error: failure });
+  expect(f.client.store.getSnapshot().conversations[a]?.error).toBe(failure.message);
+  f.client.adapter.onClose(); await f.open();
+  expect(f.client.store.getSnapshot().conversations[a]?.error).toBe(failure.message);
+  const interrupted = f.client.send(a, 'Restart');
+  f.turns.accept({ ...interrupted, text: 'Restart' }).events.forEach(f.emit);
+  f.emit(f.turns.start(interrupted));
+  expect(f.client.store.getSnapshot().conversations[a]?.error).toBeNull();
+  f.client.adapter.onClose(); f.turns.recover(); await f.open();
+  expect(f.client.store.getSnapshot().conversations[a]?.turns[interrupted.turnId]).toMatchObject({ state: 'failed', error: { code: 'interrupted' } });
+  expect(f.client.store.getSnapshot().conversations[a]?.error).toContain('restarted');
+  expect(f.client.store.getSnapshot().conversations[a]?.messages.some(m => m.content === 'Partial')).toBe(true);
+  // Fresh client must reconstruct the errors too, including those only in replay events.
+  await f.client.start(); await f.open();
+  const reloaded = new BriefConversationClient(f.api); cleanups.push(() => reloaded.stop()); await reloaded.start();
+  reloaded.adapter.onOpen(f.socket); await until(() => reloaded.getSnapshot().connected);
+  const request = f.sent.at(-1)!;
+  reloaded.adapter.onMessage({ type: 'brief_chat_sync', id: request.id, timestamp: 10, payload: { ...f.turns.snapshot(a, 0), subscribed: true } });
+  expect(reloaded.store.getSnapshot().conversations[a]?.turns[ref.turnId]).toMatchObject({ error: failure });
+  expect(reloaded.store.getSnapshot().conversations[a]?.error).toContain('restarted');
+});
+
+test('history loaded before subscription is not appended again by older replay pages', async () => {
+  const f = fixture(); await f.client.start(); const a = await f.client.add();
+  for (let i = 0; i < 8; i++) {
+    const input = { conversationId: a, turnId: `history-${i}`, requestId: `history-request-${i}`, text: `Question ${i}` };
+    f.turns.accept(input); f.turns.start(input); f.turns.text(input, `Answer ${i}`); f.turns.finish(input, 'completed');
+  }
+  await f.client.loadOlder(a);
+  await f.open();
+  expect(f.client.store.getSnapshot().conversations[a]?.messages).toEqual(f.repository.messages(a, { limit: 50 }).items);
+});
+
+test('acceptance in a stale window preserves a newer draft saved by another window', async () => {
+  const records = new Map<string, string>();
+  const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); } };
+  const f = fixture(storage); await f.client.start(); const a = await f.client.add(); await f.open();
+  f.client.store.setDraft(a, 'Send this');
+  const second = new BriefConversationClient(f.api, storage); cleanups.push(() => second.stop()); await second.start();
+  const input = f.client.send(a, 'Send this');
+  second.store.setDraft(a, 'New question in the other window');
+  f.turns.accept({ ...input, text: 'Send this' }).events.forEach(f.emit);
+  expect(f.client.store.getSnapshot().conversations[a]?.draft).toBe('New question in the other window');
+  const reloaded = new BriefConversationClient(f.api, storage); cleanups.push(() => reloaded.stop()); await reloaded.start();
+  expect(reloaded.store.getSnapshot().conversations[a]?.draft).toBe('New question in the other window');
 });

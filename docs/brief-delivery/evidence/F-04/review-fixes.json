@@ -1,0 +1,22 @@
+{
+  "reviewed_head": "fdf9efb2af1e0dc02894a50fec06a49bd340eed7",
+  "command": [
+    "/home/vierisid/.bun/bin/bun",
+    "test",
+    "ui/src/brief/chat/client.test.ts",
+    "ui/src/brief/chat/store.test.ts",
+    "ui/src/brief/chat/provider.test.tsx",
+    "-t",
+    "reconnect fills missed|replay completes an old|failed turn details|other windows cannot|legacy drafts remain|an accepted failed|acceptance in a stale"
+  ],
+  "red_exit": 1,
+  "green_exit": 0,
+  "regressions": 7,
+  "sources_restored": true,
+  "source_sha256": {
+    "ui/src/brief/chat/store.ts": "b752e51293462bab864e5a2c090fb28d35d2a5fa8e76ce224f23bca21f809fe9",
+    "ui/src/brief/chat/client.ts": "53817921d704db0de30562a1bc56ecc39daa3a03ec3e837a1cafab2a41d7982d",
+    "ui/src/brief/chat/provider.tsx": "9903f0d622cffe71cab3d8d49f1b468fea6a17ffb61955018dabd4a501722fff",
+    "ui/src/v2/thread/types.ts": "5577a1c0e342a4bd0bcdfac0566fe1c9478717074f911ed957cb32a41faf7b3d"
+  }
+}
