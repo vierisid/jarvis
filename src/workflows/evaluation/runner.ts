@@ -7,7 +7,7 @@ import { fingerprint, snapshotComposition, type PlanningPolicy } from '../../act
 import type { ComposerLlmClient } from '../../actions/tools/workflow-composer';
 import { estimatedCost, type HostedProfile } from './hosted';
 import { staticChecks, passed } from './checks';
-import type { EvaluationRow, EffectExecutor, QualityTask, TransportAttempt, CallTrace } from './types';
+import type { EvaluationRow, EffectExecutor, QualityTask, TransportAttempt, TransportStop, CallTrace } from './types';
 
 export function loadTasks(split: QualityTask['split']): { version: string; sha256: string; tasks: QualityTask[] } {
   if (!['development', 'heldout'].includes(split)) throw new Error('Unknown task split');
@@ -26,12 +26,23 @@ export interface EvaluationOptions {
   manager: LLMManager; engine: EffectExecutor; kind: EvaluationRow['kind']; policy: PlanningPolicy;
   condition?: EvaluationRow['condition']; repeat?: number;
   transport?: TransportAttempt[]; profile?: HostedProfile;
+  /** The provider's refusal log; each row keeps the refusals made during its task. */
+  stops?: TransportStop[];
+  profileIdentity?: EvaluationRow['profile'];
   onEvent?: (event: unknown) => void;
+}
+/** What the model was told apart from the job itself: the system prompt and,
+ * on the tool path, the tool definitions. Repair feedback lives in user turns. */
+function promptFingerprint(call: CallTrace): string {
+  const request = call.request as any;
+  return call.path === 'text' ? fingerprint({ path: 'text', system: request?.system ?? null })
+    : fingerprint({ path: 'tools', tools: request?.tools ?? null,
+      system: (request?.messages ?? []).filter((m: any) => m?.role === 'system').map((m: any) => m.content) });
 }
 export async function evaluateTask(task: QualityTask, opts: EvaluationOptions): Promise<EvaluationRow> {
   const id = randomUUID(), calls: CallTrace[] = [];
   const candidates: EvaluationRow['candidates'] = [];
-  const transportStart = opts.transport?.length ?? 0;
+  const transportStart = opts.transport?.length ?? 0, stopsStart = opts.stops?.length ?? 0;
   const base = createComposerLlmClient(opts.manager);
   let injected = false;
   const condition = opts.condition ?? 'natural';
@@ -76,6 +87,7 @@ export async function evaluateTask(task: QualityTask, opts: EvaluationOptions): 
     provenance: snapshotComposition(deps).provenance, calls, candidates, transport: [], result: null,
     compositionMs: 0, staticChecks: [], aiSteps: null, scenarios: [], intentChecksPassed: false,
     humanIntentCorrect: null, supervision: null, estimatedCostUsd: null, costComplete: false,
+    profile: opts.profileIdentity ?? null, interruptions: [], promptSha256s: [],
   };
   const start = performance.now();
   opts.onEvent?.({ type: 'task_started', id, taskId: task.id, policy: opts.policy, condition });
@@ -83,6 +95,8 @@ export async function evaluateTask(task: QualityTask, opts: EvaluationOptions): 
   catch (error) { row.error = String(error); }
   row.compositionMs = performance.now() - start;
   row.transport = structuredClone(opts.transport?.slice(transportStart) ?? []);
+  row.interruptions = structuredClone(opts.stops?.slice(stopsStart) ?? []);
+  row.promptSha256s = [...new Set(calls.map(promptFingerprint))].sort();
   const cost = estimatedCost(row.transport, opts.profile);
   row.estimatedCostUsd = cost.usd; row.costComplete = cost.complete && cost.usd !== null;
   const checks = staticChecks(task, row.result, row.result?.ok === false && row.result.blocked === true);
