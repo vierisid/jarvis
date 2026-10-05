@@ -151,6 +151,7 @@
 .brief-root .brief-floating:not([popover]) { display: block; }
 .brief-root .brief-floating--menu { z-index: var(--brief-layer-menu); width: max-content; min-width: min(220px, calc(100vw - 16px)); }
 .brief-root .brief-floating--tooltip { z-index: var(--brief-layer-tooltip); width: max-content; }
+.brief-root .brief-floating--tooltip[data-placement="right"] { padding: 0 0 0 24px; }
 .brief-root .brief-tooltip__body { display: block; padding: 8px 10px; max-width: 32ch; border-radius: var(--brief-control-radius); background: #13161A; color: #FFFFFF; font: 400 .75rem/16px var(--brief-sans); overflow-wrap: anywhere; }
 .brief-root .brief-menu__body { padding: 6px; border: 1px solid var(--brief-menu-edge); border-radius: var(--brief-corner-menu); background: var(--brief-menu); box-shadow: 3px 5px 0 var(--brief-menu-shadow); max-height: calc(100dvh - 48px); overflow-y: auto; }
 .brief-root .brief-menu__body button { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 10px; width: 100%; text-align: left; border: 0; border-radius: var(--brief-control-radius); background: transparent; color: var(--brief-ink); font: 400 .875rem/20px var(--brief-sans); }

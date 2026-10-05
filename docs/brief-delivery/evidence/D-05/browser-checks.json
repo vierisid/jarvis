@@ -1,0 +1,334 @@
+{
+  "preview": "http://localhost:4385/?brief=preview&specimen=navigation#/_brief_preview",
+  "scope": "Chromium shell fixtures, not live account pages or D-06 conversation layout",
+  "checks": [
+    {
+      "case": "Dark expanded: ten collapse/expand cycles",
+      "before": {
+        "collapse": {
+          "bottom": 96,
+          "height": 36,
+          "left": 16,
+          "right": 56,
+          "top": 60,
+          "width": 40,
+          "x": 16,
+          "y": 60
+        },
+        "draft": "Keep my meeting follow-up draft",
+        "logo": {
+          "bottom": 61,
+          "height": 37,
+          "left": 17.572917938232422,
+          "right": 55.57291793823242,
+          "top": 24,
+          "width": 38,
+          "x": 17.572917938232422,
+          "y": 24
+        },
+        "nav": [
+          {
+            "label": "Today",
+            "y": 108.66667175292967
+          },
+          {
+            "label": "Workflows",
+            "y": 158.6666717529297
+          },
+          {
+            "label": "Opportunities",
+            "y": 208.6666717529297
+          },
+          {
+            "label": "Needs you",
+            "y": 258.66668701171875
+          },
+          {
+            "label": "Goals",
+            "y": 354.66668701171875
+          },
+          {
+            "label": "Memory",
+            "y": 404.6666870117187
+          },
+          {
+            "label": "Connected workspace",
+            "y": 529.3333740234375
+          },
+          {
+            "label": "Authority & settings",
+            "y": 579.3333740234375
+          }
+        ],
+        "scroll": 308.6666564941406
+      },
+      "after": {
+        "collapse": {
+          "bottom": 96,
+          "height": 36,
+          "left": 16,
+          "right": 56,
+          "top": 60,
+          "width": 40,
+          "x": 16,
+          "y": 60
+        },
+        "draft": "Keep my meeting follow-up draft",
+        "logo": {
+          "bottom": 61,
+          "height": 37,
+          "left": 17.572917938232422,
+          "right": 55.57291793823242,
+          "top": 24,
+          "width": 38,
+          "x": 17.572917938232422,
+          "y": 24
+        },
+        "nav": [
+          {
+            "label": "Today",
+            "y": 108.66667175292967
+          },
+          {
+            "label": "Workflows",
+            "y": 158.6666717529297
+          },
+          {
+            "label": "Opportunities",
+            "y": 208.6666717529297
+          },
+          {
+            "label": "Needs you",
+            "y": 258.66668701171875
+          },
+          {
+            "label": "Goals",
+            "y": 354.66668701171875
+          },
+          {
+            "label": "Memory",
+            "y": 404.6666870117187
+          },
+          {
+            "label": "Connected workspace",
+            "y": 529.3333740234375
+          },
+          {
+            "label": "Authority & settings",
+            "y": 579.3333740234375
+          }
+        ],
+        "scroll": 308.6666564941406,
+        "sidebarWidth": 232
+      }
+    },
+    {
+      "case": "Dark expanded account Profile",
+      "state": {
+        "chat": "true",
+        "focus": "Vieri Balboni, Pro plan. Account menu",
+        "room": "profile"
+      }
+    },
+    {
+      "case": "Dark expanded account Settings",
+      "state": {
+        "chat": "true",
+        "focus": "Vieri Balboni, Pro plan. Account menu",
+        "room": "settings"
+      }
+    },
+    {
+      "case": "Dark expanded account Billing",
+      "state": {
+        "chat": "true",
+        "focus": "Vieri Balboni, Pro plan. Account menu",
+        "room": "billing"
+      }
+    },
+    {
+      "case": "Dark rail account Profile",
+      "state": {
+        "chat": "true",
+        "focus": "Vieri Balboni, Pro plan. Account menu",
+        "room": "profile"
+      }
+    },
+    {
+      "case": "Dark rail account Settings",
+      "state": {
+        "chat": "true",
+        "focus": "Vieri Balboni, Pro plan. Account menu",
+        "room": "settings"
+      }
+    },
+    {
+      "case": "Dark rail account Billing",
+      "state": {
+        "chat": "true",
+        "focus": "Vieri Balboni, Pro plan. Account menu",
+        "room": "billing"
+      }
+    },
+    {
+      "case": "Light rail account Profile",
+      "state": {
+        "room": "profile",
+        "theme": "light"
+      }
+    },
+    {
+      "case": "Light rail account Settings",
+      "state": {
+        "room": "settings",
+        "theme": "light"
+      }
+    },
+    {
+      "case": "Light rail account Billing",
+      "state": {
+        "room": "billing",
+        "theme": "light"
+      }
+    },
+    {
+      "case": "Light expanded account Profile",
+      "state": {
+        "room": "profile",
+        "theme": "light"
+      }
+    },
+    {
+      "case": "Light expanded account Settings",
+      "state": {
+        "room": "settings",
+        "theme": "light"
+      }
+    },
+    {
+      "case": "Light expanded account Billing",
+      "state": {
+        "room": "billing",
+        "theme": "light"
+      }
+    },
+    {
+      "case": "Ten keyboard open/close cycles",
+      "state": {
+        "expanded": "false",
+        "focus": "Vieri Balboni, Pro plan. Account menu"
+      }
+    },
+    {
+      "case": "Count 4 to 99 to 99+",
+      "before": [
+        {
+          "text": "Today",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Workflows",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Opportunities",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Needs you",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Goals",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Memory",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Connected workspace",
+          "width": 140,
+          "x": 62.66666793823242
+        },
+        {
+          "text": "Authority & settings",
+          "width": 140,
+          "x": 62.66666793823242
+        }
+      ],
+      "after": [
+        {
+          "text": "Today",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Workflows",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Opportunities",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Needs you",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Goals",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Memory",
+          "width": 100,
+          "x": 64.66667175292969
+        },
+        {
+          "text": "Connected workspace",
+          "width": 140,
+          "x": 62.66666793823242
+        },
+        {
+          "text": "Authority & settings",
+          "width": 140,
+          "x": 62.66666793823242
+        }
+      ]
+    },
+    {
+      "case": "390px rail",
+      "state": {
+        "contentScrollWidth": 312,
+        "contentWidth": 312,
+        "documentWidth": 390,
+        "preference": "expanded",
+        "sidebar": 72,
+        "viewport": 390
+      }
+    },
+    {
+      "case": "Final build: menu Escape restores origin",
+      "state": {
+        "focus": "Vieri Balboni, Pro plan. Account menu",
+        "open": "false"
+      }
+    }
+  ],
+  "limitations": [
+    "Viewport resize automatically uses rail below 700px; wider preference is retained.",
+    "No screen-reader certification or real account mutation.",
+    "Repeated browser intents verify settled endpoints; true mid-transition position continuity is unit-tested by D-04 and rapid menu reopen is unit-tested here.",
+    "OS reduced motion inherits D-04; the operating system was not changed for this review."
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "page": "81:2",
+  "today": "81:3",
+  "shell_library": "559:118054",
+  "source_exports": [
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-08-sidebar-2026-10-01/README.md",
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-09-shell-2026-10-01/README.md",
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-09-shell-2026-10-01/verified-expanded-light-menu.png"
+  ],
+  "geometry": {
+    "expanded_sidebar": 232, "rail": 72, "mark": 29.056, "mark_center_x": 36,
+    "collapse_target": { "x": 16, "y": 60, "width": 40, "height": 36 },
+    "header": 76, "content_gutter": 38, "reading_max": 1132,
+    "nav_row_height": 42, "nav_label": 14, "badge_slot": 24, "badge_type": 12,
+    "connection_target": 40, "connection_dot": 8, "account_height": 60,
+    "account_menu_width": 200, "account_menu_row": 44
+  },
+  "motion": "D-04 reflow: collapse 320ms / expand 280ms. D-04 reveal for wordmark and account menu: 200ms / 160ms, 6px menu travel, no mount animation. Reduced motion resolves immediately.",
+  "adaptations": [
+    "At widths below 700px use the existing rail and retain the wider sidebar preference; allow internal navigation scrolling on short viewports.",
+    "Official D-02 SVG is cropped into mark/wordmark views at constant scale; it is not recreated.",
+    "Plan, counts, connection and object titles enter through read-only data; fixture values appear only in the explicit review URL.",
+    "No workspace selector, global creation action, secondary header avatar or connection pill."
+  ]
+}

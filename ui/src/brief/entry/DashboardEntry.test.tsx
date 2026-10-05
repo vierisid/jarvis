@@ -116,6 +116,19 @@ test("motion specimen stays isolated and unmounts without live side effects", as
   expect(connections).toBe(1);
 });
 
+test("navigation review uses the production shell without live reads, sockets or account actions", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=navigation#/_brief_preview");
+  expect(host.textContent).toContain("ISOLATED SHELL REVIEW");
+  await click("Vieri Balboni");
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  const billing = [...document.querySelectorAll('[role="menuitem"]')].find(b => b.textContent === "Billing") as HTMLElement;
+  await React.act(async () => billing.click());
+  expect(host.querySelector("h1")?.textContent).toBe("Billing");
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(connections).toBe(1); expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
 test("missing modules give a truthful fallback instead of fabricated empty business data", async () => {
   await mount("http://localhost:4381/?brief=1#/brief/today", {});
   expect(host.textContent).toContain("not available in Brief yet");
