@@ -1,0 +1,26 @@
+wsl: Processing /etc/fstab with mount -a failed.
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2322 files).
+[pre-commit] No test files relate to the staged changes; skipping tests (CI runs the full suite).
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/f-02 27395db7] docs(brief): record F-02 lifecycle verification and handoff
+ 10 files changed, 1160 insertions(+)
+ create mode 100644 docs/brief-delivery/F-02.json
+ create mode 100644 docs/brief-delivery/evidence/F-02/close-mutation.log
+ create mode 100644 docs/brief-delivery/evidence/F-02/cursor-mutation.log
+ create mode 100644 docs/brief-delivery/evidence/F-02/implementation-hook.log
+ create mode 100644 docs/brief-delivery/evidence/F-02/quick.log
+ create mode 100644 docs/brief-delivery/evidence/F-02/red.log
+ create mode 100644 docs/brief-delivery/evidence/F-02/review.json
+ create mode 100644 docs/brief-delivery/evidence/F-02/scope-mutation.log
+ create mode 100644 docs/brief-delivery/evidence/F-02/tests.log
+ create mode 100644 docs/brief-delivery/evidence/F-02/types.log
