@@ -109,6 +109,16 @@
       "evidence/F-01/ci-projection-mutation.log",
       "evidence/F-01/ci-contracts-mutation.log"
     ],
-    "remote_ci": "Awaiting the corrected commit. Separate Docker release-cache failure also present on D-01; not fixed by this boundary-review correction."
+    "remote_ci": "Passed at 49b59ed3: 7,846 tests, 31 skipped, zero failures, plus TypeScript. https://github.com/vierisid/jarvis/actions/runs/37319239538"
+  },
+  "ci_cache_repair": {
+    "source_commit": "2e9d829e415df803703cdd0ff39c46a40c7847c1",
+    "change": "Reuse the exact script and regression tests from the D-01 repair so independent F-01 CI also warms both package.json and VERSION before comparing the version-only rebuild. Required cache-hit assertions remain intact.",
+    "verification": "Old script: 13 pass, 1 fail. Repaired script: 14 pass, zero failures, 86 assertions. The original D-01 Docker run passed at https://github.com/vierisid/jarvis/actions/runs/37321875199; F-01 exact-head CI will rerun after push.",
+    "evidence": [
+      "evidence/F-01/cache-red.log",
+      "evidence/F-01/cache-green.log"
+    ],
+    "limit": "Checks reuse on a warmed builder, not remote cache export/import fidelity. Local Docker daemon unavailable; real BuildKit proof comes from CI."
   }
 }

@@ -1,0 +1,45 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+scripts/version-stamp-cache.test.ts:
+100 |     expect(result.records).toHaveLength(2);
+101 |     expect(result.records.map(record => record.version)).toEqual([
+102 |       "0.0.0-stamp-check.warm.regression", "0.0.0-stamp-check.regression",
+103 |     ]);
+104 |     for (const record of result.records) {
+105 |       expect(record.manifest).toEqual({ ...manifest, version: record.version });
+                                    ^
+error: expect(received).toEqual(expected)
+
+  {
+    "dependencies": {
+      "example": "2.0.0",
+    },
+    "name": "cache-check-fixture",
+-   "version": "0.0.0-stamp-check.warm.regression",
++   "version": "1.2.3",
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-01/scripts/version-stamp-cache.test.ts:105:31)
+(fail) release cache check > warms a fresh manifest as well as VERSION before the version-only comparison [138.91ms]
+(pass) release cache check > accepts platform-prefixed BuildKit output [116.90ms]
+(pass) release cache check > rejects an uncached deps step [126.08ms]
+(pass) release cache check > rejects an uncached build step [119.94ms]
+(pass) release cache check > rejects an uncached workflows step [118.95ms]
+(pass) release cache check > rejects an uncached production step [120.61ms]
+(pass) release cache check > rejects an unknown step outcome [119.21ms]
+(pass) release cache check > requires the version stamp to execute [119.11ms]
+(pass) release cache check > fails closed when required vertex 2 is missing [126.48ms]
+(pass) release cache check > fails closed when required vertex 3 is missing [120.69ms]
+(pass) release cache check > fails closed when required vertex 4 is missing [126.05ms]
+(pass) release cache check > fails closed when required vertex 5 is missing [116.09ms]
+(pass) release cache check > fails closed when required vertex 7 is missing [119.39ms]
+(pass) release cache check > surfaces a build failure and stops before comparison [51.38ms]
+
+ 13 pass
+ 1 fail
+ 84 expect() calls
+Ran 14 tests across 1 file. [1.89s]
