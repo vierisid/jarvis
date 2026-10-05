@@ -1,0 +1,51 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/util/model-exec-env.test.ts:
+(pass) the daemon-secret rule > every listed daemon secret is stripped, in any case [2.54ms]
+(pass) the daemon-secret rule > the sources the header cites are the names on the list [0.12ms]
+(pass) the daemon-secret rule > an unclassified JARVIS_ name is stripped: a future secret fails closed [0.07ms]
+(pass) the daemon-secret rule > settings stay, and no daemon secret is on the settings list [0.72ms]
+(pass) the daemon-secret rule > the engine wiring names are known, internal, and stripped [0.10ms]
+(pass) the daemon-secret rule > the user's shell and desktop survive whole, their own credentials included [0.13ms]
+(pass) the daemon-secret rule > stripping removes exactly the daemon secrets and nothing else [0.27ms]
+(pass) modelExecEnv() > marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off [0.27ms]
+(pass) modelExecEnv() > flags the env key only when this process holds it or inherited the flag [25.99ms]
+(pass) modelExecEnv() > an extra cannot put a daemon secret back, nor can a spread of process.env [0.18ms]
+(pass) modelExecEnv() > an undefined extra removes the key; the result is always an object [0.11ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the scan sees the names it must (not blind) [0.08ms]
+264 |     // The failure prints what to do, not just the names.
+265 |     const fix = unclassified.length === 0 ? null
+266 |       : 'A setting (e.g. JARVIS_BROWSER_NO_SANDBOX from #521): add it to JARVIS_SETTINGS_ENV_NAMES in '
+267 |         + 'src/util/model-exec-env.ts. A secret: DAEMON_SECRET_ENV_NAMES. Set only on processes the daemon '
+268 |         + 'starts itself: JARVIS_INTERNAL_ENV_NAMES.';
+269 |     expect({ unclassified, fix }).toEqual({ unclassified: [], fix: null });
+                                        ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "fix": null,
+-   "unclassified": [],
++   "fix": "A setting (e.g. JARVIS_BROWSER_NO_SANDBOX from #521): add it to JARVIS_SETTINGS_ENV_NAMES in src/util/model-exec-env.ts. A secret: DAEMON_SECRET_ENV_NAMES. Set only on processes the daemon starts itself: JARVIS_INTERNAL_ENV_NAMES.",
++   "unclassified": [
++     "JARVIS_BRIEF_CONVERSATIONS (src/daemon/index.ts)",
++   ],
+  }
+
+- Expected  - 2
++ Received  + 4
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/util/model-exec-env.test.ts:269:35)
+(fail) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [3.04ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the three buckets do not overlap [0.10ms]
+(pass) the model-exec markers (#514) > the key check: 16 hex chars, stable, case-insensitive, and not the key [26.91ms]
+(pass) the model-exec markers (#514) > the marker is exactly "1"; the flag is a check value or an older parent's "1" [0.41ms]
+(pass) the model-exec markers (#514) > modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged [0.10ms]
+(pass) the model-exec markers (#514) > silent for a file-key install, marked or not [0.80ms]
+(pass) the model-exec markers (#514) > warns while the parent's key is missing or a different one is set; silent once it is back [0.46ms]
+(pass) the model-exec markers (#514) > the CLI warns only for a detached start or restart [0.16ms]
+
+ 19 pass
+ 1 fail
+ 199 expect() calls
+Ran 20 tests across 1 file. [984.00ms]

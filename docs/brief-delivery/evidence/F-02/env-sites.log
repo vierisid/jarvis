@@ -1,0 +1,56 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/model-exec-env-sites.test.ts:
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > CONTROL: a spawn that inherits sees every canary, through both spawn APIs [69.33ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > run_command: TerminalExecutor.execute, $SHELL -c [154.20ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > run_command, streaming: TerminalExecutor.stream [113.69ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > desktop_launch_app on Linux: LinuxAppController.launchApp [160.15ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > launch_app on Windows/macOS: the native-exec seam [116.96ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > the browser the model drives: launchChrome [3343.92ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > desktop-bridge, which launches apps for the model: launchSidecar [515.27ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > the PowerShell toast, an interpreter run for model text: sendViaPowerShell [81.71ms]
+
+src/util/subprocess-env.test.ts:
+(pass) filterEnv drops credentials > strips the names the old denylist already caught [0.49ms]
+(pass) filterEnv drops credentials > strips the names the old denylist MISSED [0.13ms]
+(pass) filterEnv drops credentials > an unknown name is dropped even when it looks harmless [0.04ms]
+(pass) filterEnv keeps what the toolchain needs > forwards the six variables a real scaffold was proven to need [0.11ms]
+(pass) filterEnv keeps what the toolchain needs > forwards proxy, TLS-trust and registry configuration [0.11ms]
+(pass) filterEnv keeps what the toolchain needs > forwards the lowercase npm_config_* spelling npm actually exports [0.06ms]
+(pass) filterEnv keeps what the toolchain needs > forwards anchored LC_ locale names but not a lookalike [0.08ms]
+(pass) filterEnv keeps what the toolchain needs > drops undefined values rather than stringifying them [0.04ms]
+(pass) extra additions > are applied on top of the sanitized base [0.04ms]
+(pass) extra additions > an extra is written even when the base supplies the same name (base entry is dropped first) [0.05ms]
+(pass) extra additions > an undefined extra removes the key instead of writing "undefined" [0.07ms]
+(pass) extra additions > a full-env spread cast through extra cannot reinstate the leak [0.05ms]
+(pass) extra additions > an unknown-but-innocuous extra key is dropped rather than trusted [0.03ms]
+(pass) extra additions > a credential-named extra never arrives [0.03ms]
+(pass) extra additions > the model-exec markers (#524) > both arrive when a call site passes them [0.05ms]
+(pass) extra additions > the model-exec markers (#524) > and not when it does not: they are opt-in, like every other extra [0.04ms]
+(pass) extra additions > the model-exec markers (#524) > the exemption is for the extra only -- the same names in the base env are still dropped [0.05ms]
+(pass) extra additions > the model-exec markers (#524) > the exemption does not widen to any other credential-shaped name [0.07ms]
+(pass) extra additions > the model-exec markers (#524) > and not on win32 either, where only the BASE lookup folds case [0.07ms]
+(pass) extra additions > the model-exec markers (#524) > modelExecMarkers is shaped to pass the closed union, not to bypass it [38.83ms]
+(pass) list consistency > no allowlisted name is caught by the backstop denylist [0.29ms]
+(pass) list consistency > the backstop recognises credential-shaped names [0.10ms]
+(pass) list consistency > names this module must never forward, whatever the allowlist says [0.20ms]
+(pass) list consistency > the allowlist is immutable [0.06ms]
+(pass) list consistency > no EXTRA_ENV_KEYS member is caught by the backstop, bar the one documented exemption [0.07ms]
+(pass) list consistency > the model-exec names are spelled the way the marker module defines them [0.13ms]
+(pass) list consistency > EXTRA_ENV_KEYS and the allowlist are disjoint [0.08ms]
+(pass) list consistency > the backstop does not treat trust-anchor paths as secrets [0.03ms]
+(pass) sanitizedEnv > drops a non-allowlisted name taken from the REAL process env [0.20ms]
+(pass) sanitizedEnv > output is a subset of the declared policy [0.13ms]
+(pass) sanitizedEnv > applies extras to the real process env [0.12ms]
+(pass) sanitizedEnv > carries PATH through, so a spawned child can still find its binaries [0.09ms]
+(pass) sanitizedEnv > always returns an object, never undefined [0.09ms]
+(pass) win32 name casing > matches Windows names case-insensitively under win32 [0.05ms]
+(pass) win32 name casing > is case-sensitive on POSIX [0.04ms]
+(pass) win32 name casing > preserves the base spelling on output [0.08ms]
+(pass) win32 name casing > still refuses a credential under win32 casing rules [0.04ms]
+
+ 45 pass
+ 0 fail
+ 140 expect() calls
+Ran 45 tests across 2 files. [4.77s]

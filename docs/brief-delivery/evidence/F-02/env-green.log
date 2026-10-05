@@ -1,0 +1,14 @@
+Final summary excerpt from /tmp/jarvis-f-02-env-green.log; full command is recorded in F-02.json.
+
+(pass) missing modules give a truthful fallback instead of fabricated empty business data [6.98ms]
+(pass) room modules preserve shell state and selected source IDs through navigation [4.28ms]
+(pass) a fixture view cannot accidentally supply live room business data [7.63ms]
+
+1 tests skipped:
+(skip) keychain > JARVIS_HOME is where a fresh install stores its keychain
+
+ 416 pass
+ 1 skip
+ 0 fail
+ 2120 expect() calls
+Ran 417 tests across 38 files. [23.71s]

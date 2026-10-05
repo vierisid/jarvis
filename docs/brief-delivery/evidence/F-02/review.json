@@ -14,11 +14,13 @@
     "src/vault/conversation-schema.test.ts": "849e08bbb39dee5e9b3a9217e56632517352c168735ae4a388f991ceaba762e9",
     "src/vault/conversation-schema.ts": "98096de0f60a8b096b6654908536827185e8969c64654e3daee88ede6d8e0056",
     "src/vault/conversations.ts": "4b992755c6c863041bd75bd28d47df252e6b1dbf48691fef4f08721770877864",
-    "src/vault/schema.ts": "a3a54eeaf2bac60038fad8d32e0310b5e0b859f0823abf911a1f59dfcff6f72d"
+    "src/vault/schema.ts": "a3a54eeaf2bac60038fad8d32e0310b5e0b859f0823abf911a1f59dfcff6f72d",
+    "src/util/model-exec-env.ts": "e3d04b689353cc31e38bdba7ec80588db238658d07fd45873761de50a32a8f9b"
   },
   "source_review": "Primary implementer reviewed the lifecycle repository, migration, routes and legacy integration. Independent PR review pending.",
   "rebase": "git range-diff reports the implementation patch unchanged from 92f1f99d to 6c749a55 after moving onto corrected shared foundations 462d955d.",
   "mutation_checks": "Deleting history on close, reversing the message cursor comparison, and binding every repository to the default workspace each fail their targeted regression. Production source restored before final affected tests.",
   "shared_files": "Additive schema initialization; migration guard registration; Brief route/provider registration; default-workspace filtering in legacy conversation lookups. No WS dispatcher or message writer change.",
-  "evidence_format": "Text logs normalized to LF and stripped of trailing whitespace. Original logs remain in /tmp/jarvis-f-02-*.log."
+  "evidence_format": "Text logs normalized to LF and stripped of trailing whitespace. Original logs remain in /tmp/jarvis-f-02-*.log.",
+  "ci_followup": "The full-suite source inventory caught an unclassified opt-in flag. The flag is now a non-secret setting, preserved across CLI restarts. Existing classification, stripping and real call-site tests remain intact and pass."
 }

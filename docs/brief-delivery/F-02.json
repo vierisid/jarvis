@@ -115,12 +115,32 @@
   "migration": "Nullable workspace_id plus three metadata tables and two indexes. Existing message rows and old insert shapes remain valid. Legacy history receives closed tab metadata; old-writer rows acquire metadata on the next upgraded startup.",
   "rollback": "Remove the activation flag. Retain additive tables, IDs and history. Prior code can keep writing legacy conversations. Do not delete history, drop tables or replay effects.",
   "limitations": [
-    "Full repository F-02 CI has not run; validation is the targeted local suite and normal hooks.",
+    "The initial full F-02 CI ran and caught the missing environment classification. The corrected local selections pass; current-head CI is tracked in the PR description.",
     "No live daemon or user database was opened. No model, account, deployment or external effects were exercised.",
     "The daemon remains one authenticated owner. Internal workspace scoping does not add multi-tenant identity/authentication.",
     "History/reopen UI belongs to later dashboard work. F-03 transport and cancellation and F-04 client state are not implemented.",
     "Messages retain the legacy shape without invented turn/request/event IDs.",
     "The environment flag defaults off and has not been set on a running user daemon."
   ],
-  "next": "Independent review and remote CI on PR #714. Keep all PRs unmerged. F-03 is not started."
+  "next": "Independent review and remote CI on PR #714. Keep all PRs unmerged. F-03 is not started.",
+  "ci_correction": {
+    "failed_head": "3d2617fca9a53090f0a072c3c27872e73cd64e57",
+    "failed_run": "https://github.com/vierisid/jarvis/actions/runs/37326490540",
+    "cause": "The source-derived JARVIS_ environment-name inventory rejected the new JARVIS_BRIEF_CONVERSATIONS setting because its classification was missing.",
+    "fix": "List the opt-in under JARVIS_SETTINGS_ENV_NAMES so CLI restarts preserve it; no secret or internal-process allowlist is changed.",
+    "red": "19 pass, 1 fail in src/util/model-exec-env.test.ts before correction; evidence/F-02/env-red.log",
+    "verification": [
+      {
+        "command": "bun test src/vault src/brief src/daemon/api-brief.test.ts src/daemon/api-brief-conversations.test.ts src/daemon/api-billing.test.ts src/daemon/api-approval-resolution.test.ts src/daemon/api-goal-validation.test.ts src/daemon/api-goal-review.test.ts src/daemon/api-onboarding-hosted.test.ts src/daemon/api-tasks-paused.test.ts src/workflows/adapters/untrusted-reach.test.ts src/roles/untrusted-import-guard.test.ts src/sidecar/panel-sessions.test.ts src/cli/backup.test.ts scripts/check-migrations.test.ts scripts/version-stamp-cache.test.ts src/util/model-exec-env.test.ts",
+        "result": "416 pass, 1 skip, 0 fail across 38 files; 2,120 assertions",
+        "log": "evidence/F-02/env-green.log"
+      },
+      {
+        "command": "bun test src/model-exec-env-sites.test.ts src/util/subprocess-env.test.ts",
+        "result": "45 pass, 0 fail across 2 files; 140 assertions",
+        "log": "evidence/F-02/env-sites.log"
+      }
+    ],
+    "remote": "The initial Docker run passed. Full current-head CI will rerun after the correction is pushed; final results belong in the PR description."
+  }
 }
