@@ -26,6 +26,24 @@ let sidecarManager: SidecarManager | null = null;
  * RPC error codes a sidecar sends for a request it refused before acting
  * (codedError in sidecar/client.go). Every other handler error may follow a
  * partial effect.
+ *
+ * MEMBERSHIP IS A CLAIM, not a label. Listing a code here asserts that the
+ * handler had not acted yet when it produced that code, and the model is
+ * entitled to retry or reword without checking the machine first. So the set
+ * stays a short allow-list and the DEFAULT -- for a code this brain has never
+ * heard of as much as for one it has -- is `may_have_occurred`.
+ *
+ * `HANDLER_PANIC` (#623) is the code that makes the default load-bearing, and
+ * it is deliberately ABSENT here. A recovered panic cannot establish that
+ * nothing happened: `runRPCHandler` (sidecar/client.go) wraps the WHOLE
+ * handler, so the panic may be the type assertion on the first line or the line
+ * after a click, a keystroke or a file write, and the recover sees no
+ * difference. Adding it would turn a crash of unknown effect into a promise
+ * that the machine is untouched -- the one inference the sidecar cannot support
+ * and the one a model acts on. It is not listed, and `sidecar-route.test.ts`
+ * fails if it becomes listed; `rpc_handler_panic_test.go` pins the other half,
+ * that the sidecar's own message carries the uncertainty rather than claiming a
+ * refusal, but it knows nothing about this set.
  */
 const NOT_STARTED_RPC_CODES = new Set(['DESKTOP_INVALID_KEYS']);
 

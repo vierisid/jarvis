@@ -208,11 +208,14 @@ var elementPointNow = time.Now
 // elementPointClock reads that clock, tolerating a nil one.
 //
 // The nil guard is not defensive habit, it is proportionate to the blast
-// radius: the RPC dispatch runs a handler in a bare goroutine with no
-// recover() (sidecar/client.go), so a nil deref here would take the whole
-// sidecar process down rather than fail one narration -- for a decorative
-// pointer. The only writer is a test, and a test that mis-restores the var
-// should cost a wrong clock, not the process.
+// radius. It used to be larger: the RPC dispatch ran a handler in a bare
+// goroutine with no recover(), so a nil deref here took the whole sidecar
+// process down rather than failing one narration -- for a decorative pointer.
+// #623 made that survivable (`runRPCHandler`, sidecar/client.go), not free: a
+// panic now costs the caller a HANDLER_PANIC the brain can only report as
+// "may or may not have taken effect", plus a stack in the log. The only writer
+// is a test, and a test that mis-restores the var should cost a wrong clock,
+// not a coded failure on an unrelated call.
 func elementPointClock() time.Time {
 	if elementPointNow == nil {
 		return time.Now()
