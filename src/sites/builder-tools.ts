@@ -36,6 +36,9 @@ const BLOCKED_SERVER_PATTERNS = /\b(make\s+dev|bun\s+--hot|vite\s*$|next\s+dev|n
  * gets a budget big enough to show the whole thing. Values in the middle of a
  * sentence keep the short cap, because those are the ones that can forge an
  * ending. Whitespace is always collapsed so nothing can scroll the verb away.
+ *
+ * One value is not a label and does not come through here: the command of
+ * `site_run_command`, which `commandForCard` below shows whole (#707).
  */
 function forCard(value: unknown, fallback = '', max = 80): string {
   return cardText(String(value ?? '').trim() ? value : fallback, max);
@@ -61,6 +64,78 @@ const TRAILING = 600;
 function pathForCard(value: unknown, max = 120): string {
   const s = cardText(value, 1_000_000);
   return s.length > max ? `...${s.slice(s.length - (max - 3))}` : s;
+}
+
+/**
+ * The characters a command may be shown verbatim in: printable ASCII and the
+ * space, nothing else (#707 review). Not a denylist of hidden characters,
+ * because what misleads a reviewer is wider than what is invisible: a no-break
+ * space renders as a space but is a word character to sh, so `ls<NBSP>#<NBSP>x;
+ * curl ... | sh` reads as a comment and runs the curl; curly quotes look like
+ * quoting and quote nothing; homoglyphs, combining marks, strong right-to-left
+ * letters and the format characters outside Default_Ignorable all change how
+ * a line reads. Every one of them is outside this set.
+ */
+const COMMAND_PLAIN = /^[\x20-\x7e]*$/;
+/** One UTF-16 unit outside the plain set (no `u` flag: astral characters escape as their surrogate pair). */
+const COMMAND_NOT_PLAIN_UNIT = /[^\x20-\x7e]/g;
+
+/**
+ * The tail of the `site_run_command` card: the command itself, never reduced
+ * (#707).
+ *
+ * A card for a label can afford `forCard`; a card for a command cannot, because
+ * the thing being approved IS the text. Collapsing a line break let a second
+ * line read as part of a `#` comment on the first (`ls # tidy up` then
+ * `curl ... | sh` rendered as one inert line), and a length cap showed a prefix
+ * of a command the shell then ran in full. Both made the card something other
+ * than what the person agreed to.
+ *
+ * So, no cap, and nothing dropped or collapsed:
+ *   - a command made only of printable ASCII is shown verbatim;
+ *   - anything else is shown as ONE escaped string -- `JSON.stringify`, then a
+ *     `\uXXXX` escape for every UTF-16 unit still outside printable ASCII --
+ *     after trusted words that say how many lines it has. Every escape is valid
+ *     JSON, so the string decodes to exactly the command, and an inner `"` is
+ *     escaped, so the value cannot close its own literal.
+ *
+ * Why this keeps the argument of the docblock on `forCard` above rather than
+ * overturning it. Its two worries about a long value were prose appended after
+ * the real sentence and newlines pushing the real verb out of view. The
+ * command is last in this sentence, and no line break reaches the card raw in
+ * either form. (The dashboard appends the Authority engine's own reason in
+ * parentheses after a gate's sentence -- `formatApprovalIntent` -- so on that
+ * surface something does follow it; it is fixed engine wording, it cannot
+ * remove a character of the command, and in the escaped form the closing quote
+ * marks where the command ends.) Its other point -- that cutting the command
+ * is the WORSE failure, because an injected payload is unlikely to be in the
+ * first few words -- is the one the 600-character budget still broke past 600,
+ * and dropping the budget is what honours it. A command too long to read is a
+ * card to deny; a card showing less than will run cannot be judged at all. Nor
+ * is the size a new exposure: the same approval broadcast already carries the
+ * whole command in `tool_arguments`. (A surface that clamps the sentence to a
+ * few lines still shows less; that is the surface's defect, not this text's.)
+ *
+ * Trimmed exactly as `execute` trims it, so the card is what `sh -c` receives.
+ *
+ * WHAT #707 MOVED. The deferred executor refuses an approved call whose gate
+ * intent no longer equals the approved one. So a site_run_command approval
+ * still PENDING at upgrade whose card text changes -- a command holding a run
+ * of whitespace, a tab, a line break, any non-ASCII character, or longer than
+ * 600 characters -- is refused after the person approves it ("what it would do
+ * changed after approval"), and the agent asks again with the new card. A
+ * plain one-line ASCII command of 600 characters or fewer with single spaces
+ * has the same text as before, so its approvals stand.
+ */
+function commandForCard(value: unknown): string {
+  const command = String(value ?? '').trim();
+  if (COMMAND_PLAIN.test(command)) return `run: ${command}`;
+  const lines = command.split('\n').length;
+  const escaped = JSON.stringify(command).replace(COMMAND_NOT_PLAIN_UNIT,
+    (unit) => `\\u${unit.charCodeAt(0).toString(16).toUpperCase().padStart(4, '0')}`);
+  const legend = [lines > 1 ? '\\n is a new line' : '', /[^\x20-\x7e\n\r\t\b\f]/.test(command) ? '\\uXXXX is a character by its code' : '']
+    .filter(Boolean).join(', ');
+  return `run this ${lines > 1 ? `${lines}-line ` : ''}command, as an escaped string${legend ? ` (${legend})` : ''}: ${escaped}`;
 }
 
 /**
@@ -287,10 +362,13 @@ export function createSiteBuilderTools(
        * card read "Site run command" with the command nowhere on it. That
        * makes the one control standing between injected content and a shell
        * unusable at the moment it fires, which is the opposite of the point.
+       *
+       * The same argument is why the command is not reduced like a label
+       * (#707): `commandForCard` shows it whole, line breaks and all.
        */
       authorityGate: (params) => ({
         actionCategory: 'execute_command',
-        intent: `In site project "${forCard(params.project_id)}", run: ${forCard(params.command, '', TRAILING)}`,
+        intent: `In site project "${forCard(params.project_id)}", ${commandForCard(params.command)}`,
       }),
       // Deliberately NOT refused under --no-local-tools (#522): the project
       // lives on this host and there is no sidecar to route to, and refusing

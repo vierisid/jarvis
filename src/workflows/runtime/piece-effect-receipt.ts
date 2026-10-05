@@ -122,10 +122,11 @@ export function defangPieceProjection<T>(value: T, depth = 0): T {
   if (typeof value === 'string') return defangDelimiters(value) as unknown as T;
   if (value === null || typeof value !== 'object') return value;
   if (Array.isArray(value)) return value.map(item => defangPieceProjection(item, depth + 1)) as unknown as T;
-  // A null prototype, so a `__proto__` key could not assign the prototype even
-  // if one reached here. `bound()` cannot emit one -- it assigns onto a plain
-  // object too, so the key becomes the prototype there and never an own
-  // property -- but this makes the safety unconditional rather than inherited.
+  // A null prototype, so an own `__proto__` key is copied as data rather than
+  // assigning the prototype. `bound()` does emit one since #694 -- it defines
+  // keys instead of assigning them, so a field the step sends under that name
+  // is on the card -- and the spread below keeps it, because a spread defines
+  // its properties too.
   const out = Object.create(null) as Record<string, unknown>;
   for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
     out[key] = defangPieceProjection(item, depth + 1);

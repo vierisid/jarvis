@@ -24,7 +24,7 @@ import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
-import { GOVERNED_PIECE_ADAPTERS, governedPieceToolName, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
+import { GOVERNED_PIECE_ADAPTERS, governedPieceTarget, governedPieceToolName, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { digest } from './effect-context';
@@ -311,6 +311,47 @@ describe('the approval card describes the piece action', () => {
     const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
     const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
     expect(ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!)).toContain('Openai - list models');
+  });
+
+  /**
+   * #697. The target values are the step's real input -- a subject or a
+   * recipient a flow wired from an email it read -- and the dashboard sentence
+   * cut them at 80 characters but kept line breaks, controls and bidi
+   * overrides, the same hole #651 closed on the Telegram card.
+   */
+  test('a target value cannot reorder or break the dashboard sentence', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const rlo = String.fromCharCode(0x202e);
+    const pending = await f.authorize({ ...SEND_INPUT,
+      subject: `Q3 invoice${rlo}gpj.exe\r\nNEL${String.fromCharCode(0x85)}LS${String.fromCharCode(0x2028)}VT${String.fromCharCode(0x0b)}end`,
+      receiver: [`finance@example.test\n(approved by finance)`] });
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    const intent = ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!);
+    expect(intent).not.toMatch(/[\p{Cf}\u0000-\u001f\u007f-\u009f\u2028\u2029]/u);
+    expect(intent).toContain('receiver: finance@example.test (approved by finance)');
+    expect(intent).toContain('subject: Q3 invoicegpj.exe NEL LS VT end');
+  });
+
+  test('a target value made only of invisible characters is named as such, not shown blank', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const pending = await f.authorize({ ...SEND_INPUT, subject: `${String.fromCharCode(0x202e)}${String.fromCharCode(0x200b)}` });
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    expect(ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!)).toContain('subject: (invisible characters only)');
+  });
+
+  test('a long target value is still cut at 80 and marked', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const pending = await f.authorize({ ...SEND_INPUT, subject: 's'.repeat(300) });
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    const intent = ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!);
+    expect(intent).toContain(`subject: ${'s'.repeat(80)}...`);
+    expect(intent).not.toContain('s'.repeat(81));
   });
 });
 
@@ -877,5 +918,74 @@ describe('#651: the approval card labels are bounded and single-line', () => {
     // The fenced identity is untouched: the effect is still keyed by the full
     // step name the graph holds, so resume still finds it.
     expect(listWorkflowEffects(f.run.id)[0]!.stepName).toBe(`s${'t'.repeat(5000)}`);
+  });
+});
+
+/**
+ * #694. `JSON.parse` defines `__proto__` as an ordinary own key, and a JSON
+ * prop on a governed piece (a `custom_api_call` body, say) reaches the engine
+ * as `JSON.parse` output, so the piece receives the field. `bound()` used to
+ * write it with `out[key] = ...`, which calls the `__proto__` SETTER: the
+ * projection lost the key with no `omittedFields` marker, so the card and the
+ * digest described an input without a field the step still sends.
+ */
+describe('#694: an own __proto__ key is projected, not dropped', () => {
+  const RAW = '{"subject":"x","body":{"__proto__":{"admin":true},"y":1},"s":{"__proto__":"str"},"n":{"__proto__":null}}';
+  const EXPECTED = '{"body":{"__proto__":{"admin":true},"y":1},"n":{"__proto__":null},"s":{"__proto__":"str"},"subject":"x"}';
+
+  test.each([
+    ['the engine pass', sanitizePieceInput],
+    ['the daemon pass', reprojectPieceInput],
+  ])('%s keeps the key as an own property', (_label, project) => {
+    const projected = project(JSON.parse(RAW)) as Record<string, Record<string, unknown>>;
+    for (const field of ['body', 's', 'n']) {
+      expect(Object.keys(projected[field]!)).toContain('__proto__');
+      // Written as data, not as the prototype: nothing became inherited.
+      expect(Object.getPrototypeOf(projected[field]!)).toBe(Object.prototype);
+    }
+    expect(JSON.stringify(projected)).toBe(EXPECTED);
+  });
+
+  test('at the top level, inside an array item and under a target prop', () => {
+    const projected = sanitizePieceInput(JSON.parse('{"__proto__":1,"a":[{"__proto__":2}],"subject":{"__proto__":3}}'));
+    expect(JSON.stringify(projected)).toBe('{"__proto__":1,"a":[{"__proto__":2}],"subject":{"__proto__":3}}');
+    const resolved = resolveGovernedPieceAction(GMAIL, 'send_email')!;
+    expect(JSON.stringify(governedPieceTarget(resolved, projected).subject)).toBe('{"__proto__":3}');
+  });
+
+  test('the daemon pass is still the identity on the engine pass', () => {
+    const once = sanitizePieceInput(JSON.parse(RAW));
+    expect(JSON.stringify(reprojectPieceInput(JSON.parse(JSON.stringify(once))))).toBe(JSON.stringify(once));
+  });
+
+  test('over the wire, the stored effect, the approval row and the digest carry the key', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const signer = new EngineTokenSigner();
+    const registry = new SandboxRegistry();
+    const identity = { sandboxId: SandboxRegistry.newSandboxId(), runId: f.run.id, projectId: f.run.projectId };
+    const { token } = await signer.mint(identity);
+    registry.register({ ...identity, engineToken: token, expiresAt: Date.now() + 60_000, terminatedAt: null });
+    const api = new SandboxApi({ signer, registry, services: f.backends });
+    await api.start();
+    let reply: Awaited<ReturnType<typeof authorizePieceDispatch>>;
+    try {
+      // The real engine-side client: its own pass, JSON over HTTP, the
+      // daemon's pass and the defang, as production composes them.
+      reply = await authorizePieceDispatch({
+        apiUrl: `${api.baseUrl}/`, engineToken: token, stepName: 'action', executionPath: [],
+        piece: GMAIL, action: 'send_email', input: JSON.parse(RAW),
+      });
+    } finally { await api.stop(); }
+    expect(reply).toMatchObject({ governed: true, dispatch: 'approval_required' });
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    expect(JSON.stringify(effect.arguments)).toBe(EXPECTED);
+    const request = f.approvals.getRequest((reply as { approval: { approvalId: string } }).approval.approvalId)!;
+    expect(request.tool_arguments).toBe(EXPECTED);
+    // The fence is taken over the projection that names the field, so an
+    // approval of it cannot be replayed against one that does not.
+    expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input: JSON.parse(EXPECTED) }));
+    expect(effect.requestDigest).not.toBe(digest({ piece: GMAIL, action: 'send_email',
+      input: { body: { y: 1 }, n: {}, s: {}, subject: 'x' } }));
   });
 });

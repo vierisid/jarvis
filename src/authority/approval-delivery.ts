@@ -53,6 +53,23 @@ export function boundedApprovalLabel(text: string, maxChars: number): string {
  */
 export const APPROVAL_LABEL_DELIVERY_MAX_CHARS = 1024;
 
+/**
+ * The text of the desktop approval notification, which carries Approve and
+ * Deny buttons (`notify.show` to every sidecar, daemon/index.ts). It shows the
+ * same `reason` the channel card does -- for `request_approval`, the model's
+ * own intent -- so it gets the same reduction (#696 review): one line, no
+ * format characters, the delivery backstop.
+ */
+export function approvalNotificationText(request: Pick<ApprovalRequest, 'tool_name' | 'agent_name' | 'reason'>): {
+  title: string; body: string;
+} {
+  const label = (text: string) => boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
+  const words = label(request.tool_name).replace(/[_-]+/g, ' ').trim();
+  const tool = words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Action';
+  const reason = label(request.reason?.trim() ?? '');
+  return { title: `Approve: ${tool}?`, body: reason || `${label(request.agent_name)} wants to run ${tool}.` };
+}
+
 export type ApprovalBroadcaster = {
   broadcastApprovalRequest(request: ApprovalRequest): void;
 };
@@ -95,11 +112,16 @@ export class ApprovalDelivery {
   private formatApprovalMessage(request: ApprovalRequest): string {
     const shortId = request.id.slice(0, 8);
     const label = (text: string) => boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
+    // `reason` too (#696). The Authority engine's reasons are its own wording,
+    // but `request_approval` stores the model's `intent` there verbatim, so a
+    // line break in it forged an `Action:` or `Agent:` line under this one.
+    // Same backstop as the labels: an engine reason is far below it and comes
+    // back byte-exact, and a declared intent is meant to be one line.
     return [
       `[APPROVAL NEEDED]`,
       `Action: ${label(request.tool_name)} (${request.action_category})`,
       `Agent: ${label(request.agent_name)}`,
-      `Reason: ${request.reason}`,
+      `Reason: ${label(request.reason)}`,
       ``,
       `Reply with:`,
       `  approve ${shortId}`,

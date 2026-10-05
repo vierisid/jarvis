@@ -21,6 +21,7 @@ import { approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest, ty
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
+import { boundedApprovalLabel } from '../authority/approval-delivery.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -2792,7 +2793,10 @@ function formatApprovalIntent(request: ApprovalRequest): string {
   const engineReason = reason.endsWith('requires user approval')
     || reason.endsWith('is a governed action requiring user approval')
     || reason.includes(TAINT_PROFILE_LABEL);
-  if (reason.length > 0 && !engineReason) return reason;
+  // One line with no format characters (#696): for request_approval this is the
+  // model's own intent, and a bidi override would reorder the headline. Not
+  // cut: this card is where the whole intent can be read.
+  if (reason.length > 0 && !engineReason) return boundedApprovalLabel(reason, reason.length);
   const synthesized = synthesizeApprovalIntent(request);
   return engineReason ? `${synthesized} (${reason})` : synthesized;
 }
@@ -2858,6 +2862,9 @@ function synthesizeApprovalIntent(request: ApprovalRequest): string {
   }
 }
 
+/** A governed piece's target value in the dashboard sentence: the 80 it always had. */
+const GOVERNED_TARGET_VALUE_MAX_CHARS = 80;
+
 /**
  * "Gmail - send email to finance@example.test, subject: Q3 invoice".
  *
@@ -2884,7 +2891,11 @@ function describeGovernedPieceIntent(pieceId: string, action: string, request: A
     const rendered = Array.isArray(value) ? value.map(item => String(item)).join(', ')
       : value === null || typeof value === 'object' ? undefined : String(value);
     if (!rendered) continue;
-    details.push(`${key.replace(/_/g, ' ')}: ${rendered.length > 80 ? `${rendered.slice(0, 80)}...` : rendered}`);
+    // The step's real input, which a flow can wire from anything it read, so
+    // one line with no format characters before the 80-character cut (#697):
+    // the same reduction #651 gave the Telegram card's labels.
+    const shown = boundedApprovalLabel(rendered, GOVERNED_TARGET_VALUE_MAX_CHARS) || '(invisible characters only)';
+    details.push(`${key.replace(/_/g, ' ')}: ${shown}`);
     if (details.length === 3) break;
   }
   const head = `${label} - ${verb}`;

@@ -472,6 +472,26 @@ const MAX_DEPTH = 5;
  * output, and a value outside it -- an engine that did not cut -- is cut
  * exactly as the first pass would cut it, with an accurate count of what this
  * pass received. It is a wider envelope, never no envelope.
+ *
+ * WHAT #694 MOVED. Keys are defined rather than assigned, so an own
+ * `__proto__` key is projected like any other instead of being swallowed by
+ * the prototype setter. That changes the projection, and so `requestDigest`,
+ * for exactly one class of input: one holding an own `__proto__` key (any
+ * value -- an object, a string, null) in an object `bound()` walks into, i.e.
+ * nested less than five levels deep and among the first 40 keys of its object
+ * in code-unit order. Any governed-piece effect of such an input RECORDED
+ * before the upgrade was recorded against a projection without the field: an
+ * approval still pending, one approved whose run has not resumed yet, or a
+ * step an engine retry re-authorizes (even one that already succeeded -- the
+ * fence runs before the succeeded early return). When it re-authorizes, the
+ * rebuilt engine (this file is in `PATCHED_VENDOR_SOURCES`, so the edit
+ * invalidates every cached engine bundle) sends the field, `effect-boundary.ts`
+ * recomputes the digest, it does not match, and the step fails with "Workflow
+ * effect changed since it was recorded; start a new run for new arguments or
+ * version". For a pending approval that failure comes AFTER the person clicks
+ * approve. A new run records the field in `workflow_effect.arguments`, in
+ * `approval_requests.tool_arguments` and in the digest. Every other input
+ * projects byte-exact as before, so its digest and its approvals are untouched.
  */
 function bound(value: unknown, depth: number, slack = false): unknown {
   if (typeof value === 'string') {
@@ -496,7 +516,15 @@ function bound(value: unknown, depth: number, slack = false): unknown {
   const keep = slack && keys.length <= MAX_KEYS + 1 ? keys.length : MAX_KEYS;
   for (const key of keys.slice(0, keep)) {
     if (key === PIECE_AUTH_PROPERTY) continue;
-    out[key] = bound((value as Record<string, unknown>)[key], depth + 1, slack);
+    // Defined, not assigned (#694). `JSON.parse` makes `__proto__` an own key,
+    // and `out[key] = ...` would call the prototype SETTER for it instead: the
+    // field vanished from the card and the digest, with no `omittedFields`,
+    // while the piece still received it. A plain prototype is kept, so every
+    // other key projects exactly as it did.
+    Object.defineProperty(out, key, {
+      value: bound((value as Record<string, unknown>)[key], depth + 1, slack),
+      enumerable: true, writable: true, configurable: true,
+    });
   }
   // Never drop fields silently: a reviewer has to see that the card is
   // showing less than the step will send.

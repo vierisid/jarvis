@@ -33,6 +33,7 @@ import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
 import { severityRank, stricterCategory } from '../authority/tool-action-map.ts';
 import { fillParams, isSkillAction, resolveArgs, type Skill, type SkillParam, type SkillStep } from './types.ts';
 import { uiEffectHints } from '../authority/ui-intent';
+import { forCard } from '../util/card-text.ts';
 
 export const SKILL_EFFECT_FLOOR: ActionCategory = 'control_app';
 
@@ -91,11 +92,47 @@ function categoryVerb(category: ActionCategory): string {
   }
 }
 
+/**
+ * Caps for unvetted text in the MIDDLE of the run_skill sentence (#706). Every
+ * value here has more sentence after it -- the `(sends email)` this file
+ * appends, the next step, the trailing review notice -- so each takes a short
+ * cap, the one that stops a value forging an ending or pushing the step that
+ * sends thousands of characters down the sentence. It bounds the sentence, not
+ * the surface: a card that clamps to a few lines can still hide a later step,
+ * and the eight-step cap below can drop one; neither is decided here. 80 for a
+ * name or label is the sibling convention
+ * (`CARD_NAME_MAX` in actions/tools/skills.ts, `UI_CARD_VALUE` in ui.ts); 40
+ * for a typed value, a key chord or a URL is the cap `shortValue` always had.
+ */
+const CARD_LABEL_MAX = 80;
+const CARD_VALUE_MAX = 40;
+
+/**
+ * Unvetted text, reduced for the card (#706): `forCard` drops every
+ * Default_Ignorable code point and the C0/DEL/C1 controls, collapses
+ * whitespace and caps with a visible `...`. A bidi override in a recorded
+ * label would otherwise reorder the rest of the line, including a later
+ * `click Send (sends email)`.
+ */
+function cardLabel(v: unknown, max = CARD_LABEL_MAX): string {
+  return forCard(v, max);
+}
+
+/**
+ * The same, inside quotes that cannot be closed from within: `JSON.stringify`
+ * escapes `"` and `\`, so a name such as `x" in Notepad (v9, authored): ...`
+ * stays visibly one quoted value. A look-alike quote (U+201D) is not escaped;
+ * it cannot end the literal, only resemble an end, and the escaped real quote
+ * after it still shows where the value stops. Ordinary text is unchanged.
+ */
+function quotedCardValue(v: unknown, max: number): string {
+  return JSON.stringify(cardLabel(v, max));
+}
+
 function shortValue(v: string | undefined, secret: boolean): string {
   if (v === undefined) return '';
   if (secret) return '[secret]';
-  const one = v.replace(/\s+/g, ' ').trim();
-  return one.length > 40 ? `"${one.slice(0, 37)}..."` : `"${one}"`;
+  return quotedCardValue(v, CARD_VALUE_MAX);
 }
 
 /** Params whose value must never appear on a card or in a log line. */
@@ -121,11 +158,14 @@ export function classifyStep(
 ): StepEffect {
   const ctx = skillContext(skill);
   if (!isSkillAction(step.action)) {
-    return { index, category: UNRESOLVED_STEP_CATEGORY, reached: [UNRESOLVED_STEP_CATEGORY, SKILL_EFFECT_FLOOR], summary: `unknown action "${String(step.action)}"` };
+    return { index, category: UNRESOLVED_STEP_CATEGORY, reached: [UNRESOLVED_STEP_CATEGORY, SKILL_EFFECT_FLOOR],
+      summary: `unknown action ${quotedCardValue(String(step.action), CARD_VALUE_MAX)}` };
   }
   const secret = referencesSecret(step.value, skill.params);
   const filled = step.value !== undefined && !secret ? fillParams(step.value, args) : step.value;
-  const target = step.ref?.name?.trim() || step.ref?.role || 'element';
+  // Display only: the classifier below still judges the raw accessible name.
+  // A name that reduces to nothing (invisibles only) falls back to the role.
+  const target = cardLabel(step.ref?.name) || cardLabel(step.ref?.role) || 'element';
 
   // What the step does beyond controlling the app, if anything.
   const semantics = uiEffectHints(step.action, step.ref?.name ?? '', ctx, filled ?? '');
@@ -140,7 +180,7 @@ export function classifyStep(
       summary = `type ${shortValue(filled, secret)} into ${target}`;
       break;
     case 'press_keys': {
-      summary = `press ${filled ?? ''}`.trim();
+      summary = `press ${cardLabel(filled, CARD_VALUE_MAX)}`.trim();
       break;
     }
     case 'navigate':
@@ -167,6 +207,20 @@ export function classifyStep(
 
 const MAX_INTENT_STEPS = 8;
 
+/**
+ * WHAT #706 MOVED. The sentence is compared after approval: the deferred
+ * executor refuses a call whose gate intent no longer equals the approved one,
+ * and a workflow's run_skill step digests it into the reviewed target. So a
+ * run_skill approval still PENDING at upgrade whose sentence the reduction
+ * changes -- an invisible or control character anywhere in it; a run of
+ * whitespace in the skill name, app, a label or a key; a quote or backslash in
+ * a quoted value (the skill name, a typed value, a URL or app to open, an
+ * unknown action); a name, app or label over 80 characters or
+ * a key over 40 -- is refused when approved ("what it would do changed
+ * after approval" in chat, "Workflow execution target changed after review"
+ * in a workflow), and the person asks again and gets the reduced card. A
+ * sentence made only of ordinary text is byte-exact, so its approvals stand.
+ */
 export function resolveSkillEffect(skill: Skill, callerArgs: Record<string, string>): SkillEffect {
   // The card shows the values the run will actually type: the caller's over
   // the recorded defaults, exactly as the runtime resolves them.
@@ -186,8 +240,9 @@ export function resolveSkillEffect(skill: Skill, callerArgs: Record<string, stri
   const acting = steps.filter((s) => skill.steps[s.index]!.action !== 'wait');
   const shown = acting.slice(0, MAX_INTENT_STEPS).map((s) => s.summary);
   const more = acting.length > MAX_INTENT_STEPS ? `; +${acting.length - MAX_INTENT_STEPS} more steps` : '';
-  const where = skill.app ? ` in ${skill.app}` : '';
+  const app = cardLabel(skill.app);
+  const where = app ? ` in ${app}` : '';
   const requiresReview = acting.some(s => s.uncertain);
-  const intent = `Run skill "${skill.name}"${where} (v${skill.version}, ${skill.provenance}): ${shown.join('; ')}${more}${requiresReview ? '. Business effect unknown for some UI steps; review the current screen and the full procedure before approving.' : ''} UI effect labels are hints, not verified business outcomes.`;
+  const intent = `Run skill ${quotedCardValue(skill.name, CARD_LABEL_MAX)}${where} (v${skill.version}, ${skill.provenance}): ${shown.join('; ')}${more}${requiresReview ? '. Business effect unknown for some UI steps; review the current screen and the full procedure before approving.' : ''} UI effect labels are hints, not verified business outcomes.`;
   return { category, categories, steps, invalid, intent, requiresReview };
 }
