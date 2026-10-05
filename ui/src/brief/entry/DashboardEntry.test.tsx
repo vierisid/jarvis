@@ -95,6 +95,17 @@ test("real Brief entry remains behind the existing onboarding gate", async () =>
   expect(connections).toBe(0);
 });
 
+test("shared-control specimen is isolated from live account and connection effects", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=controls#/_brief_preview");
+  expect(host.textContent).toContain("Shared controls.");
+  expect(host.querySelector('[role="switch"]')).not.toBeNull();
+  await click("Account example");
+  expect(document.querySelector('[role="menu"]')).not.toBeNull();
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(connections).toBe(1); expect(document.querySelector('[role="menu"]')).toBeNull();
+});
+
 test("missing modules give a truthful fallback instead of fabricated empty business data", async () => {
   await mount("http://localhost:4381/?brief=1#/brief/today", {});
   expect(host.textContent).toContain("not available in Brief yet");

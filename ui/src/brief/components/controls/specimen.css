@@ -1,0 +1,33 @@
+.brief-root.brief-control-specimen { min-height: 100dvh; background: var(--brief-canvas); color: var(--brief-ink); padding: 48px clamp(20px, 5vw, 88px); font-family: var(--brief-sans); }
+.brief-control-specimen__header { max-width: 1120px; margin: 0 auto 48px; display: flex; justify-content: space-between; gap: 40px; align-items: start; }
+.brief-control-specimen__header h1 { font-size: clamp(32px, 4vw, 48px); line-height: 1.1; letter-spacing: -.035em; font-weight: 700; margin: 16px 0; }
+.brief-control-specimen__header p { max-width: 46ch; font-size: 15px; line-height: 24px; color: var(--brief-secondary); margin: 0; }
+.brief-control-specimen__header .brief-control-specimen__eyebrow { font: 400 12px/20px var(--brief-mono); }
+.brief-control-specimen__tools { width: 310px; flex: none; display: grid; gap: 8px; }
+.brief-control-specimen__body { max-width: 1120px; margin-inline: auto; }
+.brief-control-specimen__body[data-width="compact"] { max-width: 420px; }
+.brief-control-specimen__body section { padding-block: 28px; border-top: 1px solid var(--brief-card-edge); }
+.brief-control-specimen__caption { display: flex; align-items: baseline; gap: 16px; margin-bottom: 24px; }
+.brief-control-specimen__caption > span { font: 400 12px/20px var(--brief-mono); color: var(--brief-secondary); }
+.brief-control-specimen__caption h2 { font-size: 21px; line-height: 28px; letter-spacing: -.02em; margin: 0; font-weight: 700; }
+.brief-control-specimen__row { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.brief-control-specimen__row p { font-size: 13px; line-height: 20px; color: var(--brief-secondary); margin: 0; }
+.brief-control-specimen__grid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); column-gap: 32px; row-gap: 8px; }
+.brief-control-specimen__body[data-width="compact"] .brief-control-specimen__grid { grid-template-columns: minmax(0,1fr); }
+.brief-control-specimen form > .brief-field { max-width: 720px; }
+.brief-control-specimen__check { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--brief-secondary); }
+.brief-control-specimen__check input { accent-color: var(--brief-ink); width: 18px; height: 18px; }
+.brief-control-specimen__check input:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 3px; }
+.brief-control-specimen__feedback { min-height: 20px; font-size: 13px; color: var(--brief-danger-ink); margin-block: 8px 0; }
+.brief-control-specimen__completed { display: flex; align-items: center; gap: 12px; min-height: 108px; margin: 0; font-size: 15px; line-height: 24px; }
+.brief-control-specimen__completed svg { color: var(--brief-success-text); flex: none; }
+.brief-control-specimen__switches { display: grid; margin-top: 24px; }
+.brief-control-specimen__switches > div { display: flex; gap: 24px; justify-content: space-between; align-items: center; min-height: 60px; border-bottom: 1px solid var(--brief-card-edge); font-size: 14px; }
+.brief-control-specimen__switches > div > span:first-child { max-width: 28ch; }
+.brief-control-specimen__confirmation { min-height: 64px; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; font-size: 14px; margin: 12px 0; }
+.brief-control-specimen__quiet { color: var(--brief-secondary); }
+.brief-control-specimen__clip { overflow: hidden; border: 1px solid var(--brief-card-edge); border-radius: var(--brief-control-radius); padding: 12px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; background: var(--brief-card); margin-bottom: 12px; }
+.brief-control-specimen__clip > span:last-child { font-size: 13px; line-height: 20px; color: var(--brief-secondary); }
+.brief-control-specimen footer { border-top: 1px solid var(--brief-card-edge); padding-top: 24px; }
+.brief-control-specimen footer p { font-size: 14px; line-height: 24px; color: var(--brief-secondary); }
+@media (max-width: 720px) { .brief-control-specimen__header { flex-direction: column; gap: 24px; margin-bottom: 32px; } .brief-control-specimen__tools { width: 100%; max-width: 420px; } .brief-control-specimen__grid { grid-template-columns: minmax(0,1fr); } }
