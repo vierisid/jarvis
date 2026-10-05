@@ -139,10 +139,13 @@ import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback
 import { createBriefRoutes } from '../brief/routes.ts';
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
+import type { BriefConversationProvider } from '../brief/conversations.ts';
+import { defaultConversationWorkspace } from '../vault/conversation-schema.ts';
 
 export type ApiContext = {
   /** Optional for old callers; F-01 defaults to no installed or enabled features. */
   briefCapabilities?: BriefCapabilities;
+  briefConversations?: BriefConversationProvider;
   suggestionComposer?: import('../awareness/suggestion-composer.ts').SuggestionComposer | null;
   /**
    * Daemon process boot time (Date.now() at start). Surfaced via the
@@ -393,7 +396,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
@@ -711,12 +714,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         let rows;
         if (channel && channel !== 'all') {
           rows = db.prepare(
-            'SELECT * FROM conversations WHERE channel = ? ORDER BY last_message_at DESC LIMIT ?'
-          ).all(channel, limit);
+            'SELECT * FROM conversations WHERE channel = ? AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT ?'
+          ).all(channel, defaultConversationWorkspace(db), limit);
         } else {
           rows = db.prepare(
-            'SELECT * FROM conversations ORDER BY last_message_at DESC LIMIT ?'
-          ).all(limit);
+            'SELECT * FROM conversations WHERE workspace_id IS NULL OR workspace_id = ? ORDER BY last_message_at DESC, id DESC LIMIT ?'
+          ).all(defaultConversationWorkspace(db), limit);
         }
         return json(rows);
       },
@@ -746,6 +749,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/vault/conversations/:id/messages': {
       GET: (req: Request & { params: { id: string } }) => {
+        const db = getDb();
+        const owned = db.query('SELECT id FROM conversations WHERE id = ? AND (workspace_id IS NULL OR workspace_id = ?)')
+          .get(req.params.id, defaultConversationWorkspace(db));
+        if (!owned) return error('Conversation not found', 404);
         const params = getSearchParams(req);
         const limit = parseInt(params.get('limit') ?? '100') || 100;
         const messages = getMessages(req.params.id, { limit });

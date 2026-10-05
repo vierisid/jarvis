@@ -1,4 +1,5 @@
 import { getDb, generateId } from './schema.ts';
+import { defaultConversationWorkspace, ensureConversationTab } from './conversation-schema.ts';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
 
@@ -65,10 +66,11 @@ export function getOrCreateConversation(channel: string): Conversation {
   // Look for a recent conversation on this channel (within last 4 hours)
   const cutoff = now - 4 * 60 * 60 * 1000;
   const existing = db.prepare(
-    'SELECT * FROM conversations WHERE channel = ? AND last_message_at > ? ORDER BY last_message_at DESC LIMIT 1'
-  ).get(channel, cutoff) as ConversationRow | null;
+    'SELECT * FROM conversations WHERE channel = ? AND last_message_at > ? AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
+  ).get(channel, cutoff, defaultConversationWorkspace(db)) as ConversationRow | null;
 
   if (existing) {
+    ensureConversationTab(db, existing.id);
     return parseConversation(existing);
   }
 
@@ -77,6 +79,7 @@ export function getOrCreateConversation(channel: string): Conversation {
   db.prepare(
     'INSERT INTO conversations (id, channel, started_at, last_message_at, message_count) VALUES (?, ?, ?, ?, 0)'
   ).run(id, channel, now, now);
+  ensureConversationTab(db, id);
 
   return {
     id,
@@ -161,8 +164,8 @@ export function getRecentConversation(channel: string): {
 } | null {
   const db = getDb();
   const row = db.prepare(
-    'SELECT * FROM conversations WHERE channel = ? ORDER BY last_message_at DESC LIMIT 1'
-  ).get(channel) as ConversationRow | null;
+    'SELECT * FROM conversations WHERE channel = ? AND (workspace_id IS NULL OR workspace_id = ?) ORDER BY last_message_at DESC, id DESC LIMIT 1'
+  ).get(channel, defaultConversationWorkspace(db)) as ConversationRow | null;
 
   if (!row) return null;
 

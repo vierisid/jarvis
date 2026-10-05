@@ -1,0 +1,45 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/daemon/api-brief-conversations.test.ts:
+(pass) older API callers without a conversation provider receive unsupported without touching a vault [1.43ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-phrPDN/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) conversation provider is discoverable but explicit lifecycle routes stay disabled by default [25.44ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-LM9lBy/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) real panel authentication protects all lifecycle writes and there is no delete action [20.21ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-HC3Mov/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) HTTP create/get/rename/tab order/active/close/reopen retain each conversation history [27.29ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-2yTRa6/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) foreign and unknown IDs are hidden through both lifecycle and legacy HTTP readers [24.88ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-Ujhf9C/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) HTTP pagination preserves equal-timestamp messages and rejects invalid inputs [22.85ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-FpVRVT/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) legacy websocket clients still restore their latest channel chat after explicit chat activity [17.76ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-Vb2gnl/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) provider errors are safe unavailable results and replacing the vault invalidates the provider [16.16ms]
+
+src/vault/conversation-schema.test.ts:
+(pass) migration preserves old histories, adopts rollback-era inserts, and keeps saved tab metadata [293.13ms]
+(pass) open-tab limit rejects extra creation atomically and reopening respects the same bound [17.22ms]
+
+src/vault/conversation-lifecycle.test.ts:
+(pass) explicit chats retain separate identities, messages and tab state across a restart [257.12ms]
+(pass) unknown and foreign IDs are rejected by every scoped operation without changing state [8.83ms]
+(pass) closing a tab preserves messages and metadata; reopening restores its place [9.55ms]
+(pass) renames persist trimmed titles and reject stale revisions without losing another edit [9.03ms]
+(pass) tab ordering keeps closed slots stable and rejects incomplete or duplicate orders atomically [9.17ms]
+(pass) message cursors traverse equal timestamps exactly once and reject cross-chat or malformed reuse [10.79ms]
+(pass) history cursors use a timestamp and ID tie-breaker and are bound to their workspace and filter [9.81ms]
+(pass) legacy channel reuse and history restoration remain separate from explicit Brief chats [10.44ms]
+
+ 18 pass
+ 0 fail
+ 150 expect() calls
+Ran 18 tests across 3 files. [1034.00ms]

@@ -1,0 +1,26 @@
+{
+  "files": {
+    "docs/brief-conversations.md": "b5600b86a30dc24ed7c3b2ffa558acd4ba4d50bcae828216c5a173df8a737093",
+    "scripts/check-migrations.ts": "8abe43ed18f01714c3c4c4eda4ba6f28115df17703e83640f48251967f68bebb",
+    "src/brief/conversation-routes.ts": "10461021b99279afc9d773d052f6e2c6a7c25f252341f4f08a45457d8fee7a10",
+    "src/brief/conversations.ts": "86ef9379c9ca746071b1468d4b9c811c8c35cad25944d08adaeebff01c0f92f5",
+    "src/brief/registrations/conversations.ts": "258d25dcd438115cc0ed1218c59e35800f96308c930b7e2adeb4dd86723de3b5",
+    "src/brief/routes.ts": "48b02e80959a5fd96638eac6a5f6f3ed7fdf0bbeedc382aa8a6a225929ca1522",
+    "src/daemon/api-brief-conversations.test.ts": "53beeef791a842c455906dbe96d99ab46b1f69d538888fb8c28d9d36f024892f",
+    "src/daemon/api-routes.ts": "773b6159cbaaa7dea9e101b440c73e193c3db0e68ffcfa64e80fc7345cd31316",
+    "src/daemon/index.ts": "99d78f24c1c9b944e2020ccbf5178f66cf5dc47872487eb4846ba9965e1b0889",
+    "src/vault/conversation-lifecycle.test.ts": "e7f29ab340c64c2b7c8535c9feb20fb07432685844e5e00238fd8a2cd29bc560",
+    "src/vault/conversation-lifecycle.ts": "bdeb740054de0a68699b05f32d25bf6a62aceb92a5d0a8311af2e112fadaf3d1",
+    "src/vault/conversation-schema.test.ts": "849e08bbb39dee5e9b3a9217e56632517352c168735ae4a388f991ceaba762e9",
+    "src/vault/conversation-schema.ts": "98096de0f60a8b096b6654908536827185e8969c64654e3daee88ede6d8e0056",
+    "src/vault/conversations.ts": "4b992755c6c863041bd75bd28d47df252e6b1dbf48691fef4f08721770877864",
+    "src/vault/schema.ts": "a3a54eeaf2bac60038fad8d32e0310b5e0b859f0823abf911a1f59dfcff6f72d",
+    "src/util/model-exec-env.ts": "e3d04b689353cc31e38bdba7ec80588db238658d07fd45873761de50a32a8f9b"
+  },
+  "source_review": "Primary implementer reviewed the lifecycle repository, migration, routes and legacy integration. Independent PR review pending.",
+  "rebase": "git range-diff reports the implementation patch unchanged from 92f1f99d to 6c749a55 after moving onto corrected shared foundations 462d955d.",
+  "mutation_checks": "Deleting history on close, reversing the message cursor comparison, and binding every repository to the default workspace each fail their targeted regression. Production source restored before final affected tests.",
+  "shared_files": "Additive schema initialization; migration guard registration; Brief route/provider registration; default-workspace filtering in legacy conversation lookups. No WS dispatcher or message writer change.",
+  "evidence_format": "Text logs normalized to LF and stripped of trailing whitespace. Original logs remain in /tmp/jarvis-f-02-*.log.",
+  "ci_followup": "The full-suite source inventory caught an unclassified opt-in flag. The flag is now a non-secret setting, preserved across CLI restarts. Existing classification, stripping and real call-site tests remain intact and pass."
+}
