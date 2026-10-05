@@ -1,0 +1,1 @@
+src/brief/chat-transport.test.ts(201,39): error TS2322: Type 'Error' is not assignable to type 'string'.

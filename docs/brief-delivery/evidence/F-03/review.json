@@ -1,0 +1,31 @@
+{
+  "implementation_commit": "ff64a7d014f9df8473aae62ea05477b3ca77c61d",
+  "base": "1a130247abe5447f23a3881d1015a5f6a377f685",
+  "main_checked": "98ad1e70884b665008e1255ee15aa79c82e23dca",
+  "source_sha256": {
+    "docs/brief-chat-transport.md": "d6e759fef8f67c6f1129520ff670dfbdfc2f343702f74dd461e53496211ce148",
+    "scripts/check-migrations.ts": "b9194a44b8e949dbdad24d922564fc273a2c3ae893b03c3e0890637d70b6c5dc",
+    "src/agents/conv/conv-orchestrator.ts": "0ecd3aa13a9a5bbb76e7fa16e64d57f4dc64ecf3c502c43e4b8607d38ccccebe",
+    "src/agents/conv/task-dispatcher.ts": "0142d88652acc27aec423fb0ee5466eccaf2e92c2ef6d0551688b7c114038a5d",
+    "src/agents/orchestrator.ts": "7af11fc530d84d3fa3f6ab260b4d2d7c454cfded7b4f2b2777023c62bea0f11a",
+    "src/brief/chat-context.ts": "b6d4abb926fef544d43ed044160a88c9282939583e7d5effbd8aebb5b7550443",
+    "src/brief/chat-transport.test.ts": "0d21f90cf12c8febf693cdadfec62fe40a6073f7139b3a8923bc0a0bfbdecc24",
+    "src/brief/chat-transport.ts": "b4215c649760d4b6c4ec98b4e842f8af992589794b73f5ca2b3244b96ea0529e",
+    "src/brief/contracts.ts": "bd7a380a31da525fac90c7cbd5b8871146d1cec6dca55593f859c5e71fa8a07c",
+    "src/brief/registrations/chat-transport.ts": "4bd72985959463f714f1438fda5774f156537b0d68b877ca03036bcfa9b69bd8",
+    "src/comms/streaming.ts": "9fc2e19e426aee88d3bead14e4899fa4fef573102f11454a743d417e374fe9ff",
+    "src/comms/websocket.ts": "c903a71828af2efa1e280068bdd90d805458d832ac5706065eb424ce2e8afa1d",
+    "src/daemon/agent-service-conversation.test.ts": "2b0eccacb35082350e3d8c4a8bfdc57a1d21f930543889aac5002e3a24e09b57",
+    "src/daemon/agent-service.ts": "5e7be169a119b2aa80b9aa42535bc17403b243d48d949a7b1af468ddf93318f4",
+    "src/daemon/index.ts": "ab6ca445efde2ee955460ae094c27de5802df39112b7ff3f251904cbf1a77c00",
+    "src/daemon/ws-service-conversation.test.ts": "07e2b95cb9c65c553f6bcb216f1b34ec7aca8fb4dc7e4775ff7effa4432b3b94",
+    "src/daemon/ws-service.ts": "8441de76be5aa279158245f337b3c88468c7ed2d8748e43ae3a306a64c31b959",
+    "src/util/model-exec-env.ts": "580a6f78d0052f12e9cc8b21b7ec8646cd6959c58b22a889686586c76cb43bf0",
+    "src/vault/chat-turn-schema.ts": "0aa24de7bf459630f57214c02642bcc03e2c943605c2d819863f8701eeb779e7",
+    "src/vault/chat-turns.test.ts": "d02b06d881aebb8aa19bb8c74d1458fb8dcfdd454428a6f908803f225e42f4b5",
+    "src/vault/chat-turns.ts": "397e1b21bfdb266df5b5579f1cdc161a4a7e40f7f416e60f1c5d2c5b513e9db1",
+    "src/vault/conversations.ts": "b3785569e21dcabb407d5e063e42f79c288fe75e632c6655c3c3e951fd0c568a",
+    "src/vault/schema.ts": "2c7f217ebbd70c72f39830fc8c6d9b71babe7285495981f04a45e095d6101d9e"
+  },
+  "review": "Scoped only to F-03. Main PR #716 label helper edits are outside these edits; the unmerged parent stack is retained."
+}

@@ -1,0 +1,54 @@
+bun test v1.3.6 (d530ed99)
+
+src/daemon/ws-service-conversation.test.ts:
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WSService] Started on port 0
+[WebSocketServer] Client connected. Total clients: 1
+[WSService] Client connected
+[WebSocketServer] Client connected. Total clients: 2
+[WSService] Client connected
+[WebSocketServer] Client connected. Total clients: 3
+[WSService] Client connected
+[WebSocketServer] Received: brief_chat_send undefined
+[WebSocketServer] Received: brief_chat_send undefined
+[WebSocketServer] Received: chat undefined
+[StreamRelay] Stream complete for request: 328c2baa-182f-44e6-b208-23ba443f17f6
+[WebSocketServer] Stopped
+[WSService] Stopped
+(pass) authenticated WebSocket routing gates the feature, scopes approvals and preserves legacy mirroring [72.27ms]
+
+src/daemon/agent-service-conversation.test.ts:
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+(pass) classic scoped AgentService streams never read or mutate the shared primary history [19.03ms]
+(pass) a cancelled classic turn cannot dispatch a late tool call [12.23ms]
+(pass) router-first AgentService uses explicit history and compaction identity instead of channel history [25.63ms]
+(pass) router task progress and cancellation stay with their conversation during concurrent delegation [17.31ms]
+(pass) task-tier cancellation reaches the in-flight model request [11.38ms]
+
+src/brief/chat-transport.test.ts:
+(pass) interleaved streams, tab switch and one cancel isolate text, progress, history and TTS [16.76ms]
+(pass) duplicates, reconnect and stale cancel reconcile the original terminal without another generation [15.39ms]
+(pass) production limiter queues another conversation and a cancelled queued turn never calls the model [11.76ms]
+(pass) disabled transport, malformed frames and unavailable cursors never create turns [21.35ms]
+(pass) cancel ends audio immediately and suppresses a delayed provider chunk and duplicate terminal [16.08ms]
+(pass) model errors persist a sanitized failed terminal and preserve partial output for replay [10.59ms]
+(pass) subscription admission cannot orphan a queued turn and queue admission cannot append messages [45.83ms]
+
+src/vault/chat-turns.test.ts:
+(pass) request identity commits one user message and rejects conflicting reuse atomically [11.42ms]
+(pass) partial text, terminal state and monotonic events are durable and terminal writes are idempotent [13.19ms]
+(pass) workspace checks protect sends, replay, history, approval association and cancel identities [11.68ms]
+(pass) restart fails interrupted work once, preserves messages and approvals, and never reruns a send [279.71ms]
+(pass) replay pages use stable sequences with transient audio gaps and reject future or malformed cursors [47.79ms]
+(pass) additive transport migration preserves legacy writers and adoption across rollback [11.51ms]
+
+ 19 pass
+ 0 fail
+ 146 expect() calls
+Ran 19 tests across 4 files. [954.00ms]

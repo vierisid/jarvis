@@ -1,0 +1,267 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2331 files).
+[pre-commit] Running 10 related test file(s) (180s timeout)...
+bun test v1.3.6 (d530ed99)
+
+scripts/check-migrations.test.ts:
+(pass) check-migrations contractKind > flags contracting DDL [0.22ms]
+(pass) check-migrations contractKind > flags a unique index (contracting) but not a plain index [0.05ms]
+(pass) check-migrations contractKind > allows additive DDL [0.03ms]
+(pass) check-migrations contractKind > comments do not waive or falsely trip detection [0.03ms]
+(pass) check-migrations contractKind > scanContent reports un-acknowledged contracts but honors the marker [0.14ms]
+
+src/comms/streaming.test.ts:
+(pass) StreamRelay cancellation > stops relaying late chunks and does not emit done after abort [1.14ms]
+[StreamRelay] Stream complete for request: req-2
+(pass) StreamRelay cancellation > keeps the normal done lifecycle when not cancelled [0.27ms]
+[StreamRelay] Stream complete for request: req-progress
+(pass) StreamRelay progress narration > starts UI/TTS immediately for a segment the producer marked complete [0.30ms]
+[StreamRelay] Stream complete for request: req
+(pass) StreamRelay progress narration > flushes a segment the model streamed in pieces [0.25ms]
+[StreamRelay] Stream complete for request: req
+(pass) StreamRelay progress narration > an empty text event is not broadcast to clients [0.26ms]
+[StreamRelay] Stream complete for request: req
+(pass) StreamRelay progress narration > onTextStart does not fire for a signal-only event [0.22ms]
+[StreamRelay] Stream complete for request: req
+(pass) StreamRelay sentence boundaries > splits on a terminator followed by whitespace [0.39ms]
+[StreamRelay] Stream complete for request: req
+(pass) StreamRelay sentence boundaries > does not split a decimal spanning chunks [0.14ms]
+[StreamRelay] Stream complete for request: req
+(pass) StreamRelay sentence boundaries > does not split a filename spanning chunks [0.63ms]
+[StreamRelay] Stream complete for request: req
+(pass) StreamRelay sentence boundaries > does not split a price spanning chunks [0.18ms]
+[StreamRelay] Stream complete for request: req
+(pass) StreamRelay sentence boundaries > flushes the trailing sentence on done [0.23ms]
+
+src/comms/websocket.test.ts:
+(pass) WebSocketServer - initialization [0.19ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - start and stop [15.24ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - health endpoint [31.58ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - health reports the JARVIS_VERSION pin [19.72ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - root endpoint returns 404 without static dir [21.52ms]
+[WebSocketServer] Started on ws://localhost:3144/ws
+[WebSocketServer] Health endpoint: http://localhost:3144/health
+[WebSocketServer] Dashboard: http://localhost:3144/
+[WebSocketServer] Stopped
+(pass) WebSocketServer - dashboard HTML is never cached by a reverse proxy [20.29ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Received: chat undefined
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Stopped
+(pass) WebSocketServer - WebSocket connection [122.96ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Client connected. Total clients: 2
+[WebSocketServer] Stopped
+(pass) WebSocketServer - broadcast [119.15ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) WebSocketServer - binary message routing [207.07ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Received: status undefined
+[WebSocketServer] Stopped
+(pass) WebSocketServer - sendBinary reaches client [416.28ms]
+[WebSocketServer] Started on ws://localhost:3150/ws
+[WebSocketServer] Health endpoint: http://localhost:3150/health
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Stopped
+(pass) WebSocketServer - JWT-only by DEFAULT: unauthenticated requests are blocked [7.16ms]
+[WebSocketServer] Started on ws://localhost:3151/ws
+[WebSocketServer] Health endpoint: http://localhost:3151/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - ?token= is exchanged for a panel session, and the session is what the cookie carries [32.96ms]
+[WebSocketServer] Started on ws://localhost:3157/ws
+[WebSocketServer] Health endpoint: http://localhost:3157/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - a panel session outlives the expiry of the bootstrap token that opened it [15.94ms]
+[WebSocketServer] Started on ws://localhost:3152/ws
+[WebSocketServer] Health endpoint: http://localhost:3152/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - there is NO shared-token backdoor without a sidecar manager [21.21ms]
+[WebSocketServer] Started on ws://localhost:3153/ws
+[WebSocketServer] Health endpoint: http://localhost:3153/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - public routes bypass auth [19.37ms]
+[WebSocketServer] Started on ws://localhost:3154/ws
+[WebSocketServer] Health endpoint: http://localhost:3154/health
+[WebSocketServer] Stopped
+(pass) WebSocketServer - auth.insecure_open_access opens the dashboard (setup escape hatch) [21.55ms]
+[WebSocketServer] Started on ws://localhost:3155/ws
+[WebSocketServer] Health endpoint: http://localhost:3155/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Stopped
+(pass) WebSocketServer - WebSocket upgrade allowed with a valid panel-session cookie [122.82ms]
+[WebSocketServer] Started on ws://localhost:3158/ws
+[WebSocketServer] Health endpoint: http://localhost:3158/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Stopped
+(pass) WebSocketServer - tearing down a session hangs up on its live socket and refuses the reconnect [17.71ms]
+[WebSocketServer] Started on ws://localhost:3143/ws
+[WebSocketServer] Health endpoint: http://localhost:3143/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Received: command undefined
+[WebSocketServer] Stopped
+(pass) WebSocketServer - sendToClient unicasts JSON [420.01ms]
+
+src/util/model-exec-env.test.ts:
+[WebSocketServer] Client disconnected. Total clients: 0
+(pass) the daemon-secret rule > every listed daemon secret is stripped, in any case [0.26ms]
+(pass) the daemon-secret rule > the sources the header cites are the names on the list [0.13ms]
+(pass) the daemon-secret rule > an unclassified JARVIS_ name is stripped: a future secret fails closed [0.09ms]
+(pass) the daemon-secret rule > settings stay, and no daemon secret is on the settings list [0.30ms]
+(pass) the daemon-secret rule > the engine wiring names are known, internal, and stripped [0.13ms]
+(pass) the daemon-secret rule > the user's shell and desktop survive whole, their own credentials included [0.16ms]
+(pass) the daemon-secret rule > stripping removes exactly the daemon secrets and nothing else [0.23ms]
+(pass) modelExecEnv() > marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off [0.43ms]
+(pass) modelExecEnv() > flags the env key only when this process holds it or inherited the flag [29.23ms]
+(pass) modelExecEnv() > an extra cannot put a daemon secret back, nor can a spread of process.env [0.18ms]
+(pass) modelExecEnv() > an undefined extra removes the key; the result is always an object [0.11ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the scan sees the names it must (not blind) [0.09ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [0.29ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the three buckets do not overlap [0.11ms]
+(pass) the model-exec markers (#514) > the key check: 16 hex chars, stable, case-insensitive, and not the key [27.06ms]
+(pass) the model-exec markers (#514) > the marker is exactly "1"; the flag is a check value or an older parent's "1" [0.31ms]
+(pass) the model-exec markers (#514) > modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged [0.08ms]
+(pass) the model-exec markers (#514) > silent for a file-key install, marked or not [0.13ms]
+(pass) the model-exec markers (#514) > warns while the parent's key is missing or a different one is set; silent once it is back [0.20ms]
+(pass) the model-exec markers (#514) > the CLI warns only for a detached start or restart [0.10ms]
+
+src/daemon/ws-service-conversation.test.ts:
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WSService] Started on port 0
+[WebSocketServer] Client connected. Total clients: 1
+[WSService] Client connected
+[WebSocketServer] Client connected. Total clients: 2
+[WSService] Client connected
+[WebSocketServer] Client connected. Total clients: 3
+[WSService] Client connected
+[WebSocketServer] Received: brief_chat_send undefined
+[WebSocketServer] Received: brief_chat_send undefined
+[WebSocketServer] Received: chat undefined
+[StreamRelay] Stream complete for request: e44402ea-40a4-424d-847c-1b4497d1dfdb
+[WebSocketServer] Stopped
+[WSService] Stopped
+(pass) authenticated WebSocket routing gates the feature, scopes approvals and preserves legacy mirroring [77.69ms]
+
+src/daemon/agent-service-conversation.test.ts:
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+(pass) classic scoped AgentService streams never read or mutate the shared primary history [23.60ms]
+(pass) a cancelled classic turn cannot dispatch a late tool call [15.36ms]
+(pass) router-first AgentService uses explicit history and compaction identity instead of channel history [28.59ms]
+(pass) router task progress and cancellation stay with their conversation during concurrent delegation [20.09ms]
+(pass) task-tier cancellation reaches the in-flight model request [14.06ms]
+
+src/brief/chat-transport.test.ts:
+(pass) interleaved streams, tab switch and one cancel isolate text, progress, history and TTS [20.71ms]
+(pass) duplicates, reconnect and stale cancel reconcile the original terminal without another generation [17.79ms]
+(pass) production limiter queues another conversation and a cancelled queued turn never calls the model [12.14ms]
+(pass) disabled transport, malformed frames and unavailable cursors never create turns [21.49ms]
+(pass) cancel ends audio immediately and suppresses a delayed provider chunk and duplicate terminal [16.73ms]
+(pass) model errors persist a sanitized failed terminal and preserve partial output for replay [13.57ms]
+(pass) subscription admission cannot orphan a queued turn and queue admission cannot append messages [44.86ms]
+
+src/brief/contracts.test.ts:
+(pass) documented JSON examples are the checked TypeScript contract examples [2.06ms]
+(pass) wire contracts have no runtime workflow repository dependency [3.69ms]
+
+src/vault/chat-turns.test.ts:
+(pass) request identity commits one user message and rejects conflicting reuse atomically [11.55ms]
+(pass) partial text, terminal state and monotonic events are durable and terminal writes are idempotent [11.00ms]
+(pass) workspace checks protect sends, replay, history, approval association and cancel identities [11.35ms]
+(pass) restart fails interrupted work once, preserves messages and approvals, and never reruns a send [311.27ms]
+(pass) replay pages use stable sequences with transient audio gaps and reject future or malformed cursors [46.17ms]
+(pass) additive transport migration preserves legacy writers and adoption across rollback [12.21ms]
+
+src/agents/conv/conv-orchestrator.test.ts:
+(pass) ConvOrchestrator > answers directly when conv LLM emits text without tool calls [1.31ms]
+[TaskDispatcher] task task_muvgo4fx_uchm8t (research, tier=medium) completed without using any tool - the model answered with text only. Result: "The capital of Italy is Rome."
+(pass) ConvOrchestrator > routes through delegate then verbalizes result [1.11ms]
+[TaskDispatcher] task task_muvgo4fz_71372e (general, tier=medium) completed without using any tool - the model answered with text only. Result: "Hi again!"
+(pass) ConvOrchestrator > hides and executes a delegate call serialized as fallback text [1.79ms]
+[TaskDispatcher] task task_muvgo4g1_gqdzuj (research, tier=medium) completed without using any tool - the model answered with text only. Result: "Your latest email is from Alice."
+(pass) ConvOrchestrator > hides and executes a parenthesized delegate call [1.24ms]
+[TaskDispatcher] task task_muvgo4g2_qeilml (research, tier=medium) completed without using any tool - the model answered with text only. Result: "Your latest email is from Alice."
+(pass) ConvOrchestrator > hides a serialized delegate call the model prints after its prose [1.04ms]
+[TaskDispatcher] task task_muvgo4g3_6cx1z5 (research, tier=medium) completed without using any tool - the model answered with text only. Result: "All done."
+(pass) ConvOrchestrator > marks the acknowledgment segment complete before delegating [0.76ms]
+[TaskDispatcher] task task_muvgo4g3_s6pz7g (research, tier=medium) completed without using any tool - the model answered with text only. Result: "partial"
+[TaskDispatcher] task task_muvgo4g4_7vh85p (research, tier=medium) completed without using any tool - the model answered with text only. Result: "partial"
+[TaskDispatcher] task task_muvgo4g4_568n9n (research, tier=medium) completed without using any tool - the model answered with text only. Result: "partial"
+[TaskDispatcher] task task_muvgo4g4_ozlzkf (research, tier=medium) completed without using any tool - the model answered with text only. Result: "partial"
+[TaskDispatcher] task task_muvgo4g4_i9ylmt (research, tier=medium) completed without using any tool - the model answered with text only. Result: "partial"
+[TaskDispatcher] task task_muvgo4g5_x57evv (research, tier=medium) completed without using any tool - the model answered with text only. Result: "partial"
+[TaskDispatcher] task task_muvgo4g5_a3w55u (research, tier=medium) completed without using any tool - the model answered with text only. Result: "partial"
+[TaskDispatcher] task task_muvgo4g5_7cpy7m (research, tier=medium) completed without using any tool - the model answered with text only. Result: "partial"
+(pass) ConvOrchestrator > separates the routing-failure message from the preceding acknowledgment [2.05ms]
+(pass) ConvOrchestrator > surfaces a fallback acknowledgment before a silent delegated task starts [0.26ms]
+(pass) ConvOrchestrator > handles check_task on an unknown task gracefully [0.51ms]
+[TaskDispatcher] task task_muvgo4g6_dgbbsa (general, tier=medium) completed without using any tool - the model answered with text only. Result: ""
+[TaskDispatcher] task task_muvgo4g7_gstb0k (general, tier=medium) completed without using any tool - the model answered with text only. Result: ""
+[TaskDispatcher] task task_muvgo4g7_u8j7z4 (general, tier=medium) completed without using any tool - the model answered with text only. Result: ""
+[TaskDispatcher] task task_muvgo4g7_l3l04r (general, tier=medium) completed without using any tool - the model answered with text only. Result: ""
+[TaskDispatcher] task task_muvgo4g7_rr0zdj (general, tier=medium) completed without using any tool - the model answered with text only. Result: ""
+[TaskDispatcher] task task_muvgo4g7_tmg4xd (general, tier=medium) completed without using any tool - the model answered with text only. Result: ""
+[TaskDispatcher] task task_muvgo4g7_bn339x (general, tier=medium) completed without using any tool - the model answered with text only. Result: ""
+[TaskDispatcher] task task_muvgo4g8_rmy6bv (general, tier=medium) completed without using any tool - the model answered with text only. Result: ""
+(pass) ConvOrchestrator > hits the iteration cap and bails gracefully [1.64ms]
+(pass) ConvOrchestrator > splits the system prompt into a cache-marked static prefix and a dynamic suffix [0.86ms]
+(pass) ConvOrchestrator > renders the user profile as a cache-marked system block between static and dynamic [0.78ms]
+(pass) ConvOrchestrator > omits the profile block when userProfile is not provided [0.50ms]
+(pass) ConvOrchestrator > omits the dynamic system message entirely when there is no dynamic context [0.35ms]
+
+ 90 pass
+ 0 fail
+ 538 expect() calls
+Ran 90 tests across 10 files. [3.60s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/f-03 ff64a7d0] [F-03] Scope durable chat turns, delivery and cancellation
+ 23 files changed, 1481 insertions(+), 40 deletions(-)
+ create mode 100644 docs/brief-chat-transport.md
+ create mode 100644 src/brief/chat-context.ts
+ create mode 100644 src/brief/chat-transport.test.ts
+ create mode 100644 src/brief/chat-transport.ts
+ create mode 100644 src/brief/registrations/chat-transport.ts
+ create mode 100644 src/daemon/agent-service-conversation.test.ts
+ create mode 100644 src/daemon/ws-service-conversation.test.ts
+ create mode 100644 src/vault/chat-turn-schema.ts
+ create mode 100644 src/vault/chat-turns.test.ts
+ create mode 100644 src/vault/chat-turns.ts
