@@ -1,0 +1,16 @@
+$ bun test --preload ./src/test-preload.ts src/workflows/evaluation/
+bun test v1.3.6 (d530ed99)
+
+src/workflows/evaluation/evaluation.test.ts:
+  attempt 1: Unauthorized...)
+[usejarvis] uj-high rejected max_tokens=100 below its thinking budget; retried with 16384. If this tier runs short structured calls, drop reasoning_effort from its model.
+  attempt 1: Unauthorized...)
+
+src/workflows/evaluation/engine.test.ts:
+
+src/workflows/evaluation/hosted-baseline.test.ts:
+
+ 39 pass
+ 0 fail
+ 234 expect() calls
+Ran 39 tests across 5 files. [45.13s]
