@@ -42,6 +42,9 @@ import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import { registerConversations } from '../brief/registrations/conversations.ts';
 import { BriefConversationProvider } from '../brief/conversations.ts';
+import { BriefChatTransport } from '../brief/chat-transport.ts';
+import { registerChatTransport } from '../brief/registrations/chat-transport.ts';
+import type { BriefCapabilityId } from '../brief/capabilities.ts';
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
@@ -4955,10 +4958,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 9b. Set up API routes + dashboard static files
     const briefConversations = new BriefConversationProvider();
+    const briefChatTransport = new BriefChatTransport({
+      db: getDb(),
+      runner: {
+        ready: () => agentService.status() === 'running' && !activeTurns.isDraining,
+        stream: input => agentService.streamMessage(input.text, 'websocket', undefined, null, input.contextKey, input),
+      },
+      send: (client, message) => wsService.getServer().sendToClient(client, message),
+      tts: () => wsService.getTTSProvider(),
+    });
+    const briefEnabled: BriefCapabilityId[] = [];
+    if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
+    if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
+    const briefCapabilities = createBriefCapabilities([
+      ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
+    ], briefEnabled);
+    wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefConversations,
-      briefCapabilities: createBriefCapabilities(registerConversations(briefConversations),
-        process.env.JARVIS_BRIEF_CONVERSATIONS === '1' ? ['conversations'] : []),
+      briefCapabilities,
       daemonStartedAt: Date.now(),
       healthMonitor,
       agentService,

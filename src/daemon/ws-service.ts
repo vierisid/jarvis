@@ -54,6 +54,9 @@ import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../
 import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
 import type { FileEntry } from '../sites/types.ts';
+import type { BriefCapabilities } from '../brief/capabilities.ts';
+import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
+import { currentBriefTurn } from '../brief/chat-context.ts';
 
 type VoiceSession = {
   requestId: string;
@@ -187,6 +190,7 @@ export class WebSocketService implements Service {
   private agentService: AgentService;
   private wsServer: WebSocketServer;
   private streamRelay: StreamRelay;
+  private briefChat: { transport: BriefChatTransport; capabilities: BriefCapabilities } | null = null;
   /** Tracks the commitment ID for the currently processing chat message */
   private activeTaskId: string | null = null;
   private commitmentExecutor: CommitmentExecutor | null = null;
@@ -271,11 +275,12 @@ export class WebSocketService implements Service {
     this.port = port;
     this.agentService = agentService;
     this.wsServer = new WebSocketServer(port, unixPath);
-    this.streamRelay = new StreamRelay(this.wsServer);
+    this.streamRelay = new StreamRelay(this.wsServer, message => this.broadcastLegacyChat(message));
 
     // Wire delegation callback: when PA delegates to a specialist,
     // update the active task's assigned_to on the task board
     this.agentService.setDelegationCallback((specialistName) => {
+      if (currentBriefTurn()) return;
       if (!this.activeTaskId) return;
       try {
         const updated = updateCommitmentAssignee(this.activeTaskId, specialistName);
@@ -351,6 +356,20 @@ export class WebSocketService implements Service {
     return this.wsServer;
   }
 
+  setBriefChatTransport(transport: BriefChatTransport, capabilities: BriefCapabilities): void {
+    this.briefChat = { transport, capabilities };
+  }
+
+  getTTSProvider(): TTSProvider | null { return this.ttsProvider; }
+
+  /** Old clients retain their mirroring protocol; opted-in sockets only get scoped chat. */
+  private broadcastLegacyChat(message: WSMessage): void {
+    if (!this.briefChat) { this.wsServer.broadcast(message); return; }
+    for (const client of this.wsServer.getClients()) {
+      if (!this.briefChat.transport.hasClient(client)) this.wsServer.sendToClient(client, message);
+    }
+  }
+
   /**
    * Register API route handlers on the underlying WebSocket server.
    * Must be called before start().
@@ -407,6 +426,7 @@ export class WebSocketService implements Service {
           console.log('[WSService] Client connected');
         },
         onDisconnect: (ws) => {
+          this.briefChat?.transport.detach(ws);
           this.cancelActiveChat(ws, 'disconnect', false);
           // Tear down any realtime voice session (closes the OpenAI WS + timer).
           this.closeRealtimeVoice(ws);
@@ -468,6 +488,7 @@ export class WebSocketService implements Service {
 
   async stop(): Promise<void> {
     this._status = 'stopping';
+    this.briefChat?.transport.stop();
     if (this.voiceConfirmationSweepTimer) {
       clearInterval(this.voiceConfirmationSweepTimer);
       this.voiceConfirmationSweepTimer = null;
@@ -562,7 +583,7 @@ export class WebSocketService implements Service {
       id: requestId,
       timestamp: Date.now(),
     };
-    this.wsServer.broadcast(message);
+    this.broadcastLegacyChat(message);
   }
 
   /**
@@ -592,6 +613,11 @@ export class WebSocketService implements Service {
     agentId: string;
     data: unknown;
   }): void {
+    const turn = currentBriefTurn();
+    if (turn) {
+      turn.progress(event.type === 'done' ? 'completed' : 'started');
+      return;
+    }
     const message: WSMessage = {
       type: 'stream',
       payload: {
@@ -600,7 +626,7 @@ export class WebSocketService implements Service {
       },
       timestamp: Date.now(),
     };
-    this.wsServer.broadcast(message);
+    this.broadcastLegacyChat(message);
 
     // Persist for the Agents Room activity timeline (Phase 6.3). Same tick
     // as the broadcast so a fresh dashboard reload + a live tab can never
@@ -625,6 +651,7 @@ export class WebSocketService implements Service {
    * are never duplicated.
    */
   broadcastApprovalRequest(request: ApprovalRequest): void {
+    if (this.briefChat?.transport.approval(request)) return;
     const shortId = request.id.slice(0, 8);
     const impact = impactFromCategory(request.action_category);
     const intent = formatApprovalIntent(request);
@@ -855,15 +882,21 @@ export class WebSocketService implements Service {
     elapsedMs: number;
     summary?: string;
   }): void {
+    const turn = currentBriefTurn();
+    if (turn) {
+      turn.progress(event.type === 'task_started' ? 'started' : event.type === 'task_completed' ? 'completed' : 'failed');
+      return;
+    }
     const message: WSMessage = {
       type: 'task_event',
       payload: event,
       timestamp: Date.now(),
     };
-    this.wsServer.broadcast(message);
+    this.broadcastLegacyChat(message);
   }
 
   broadcastApprovalUpdate(request: ApprovalRequest): void {
+    if (this.briefChat?.transport.approval(request)) return;
     const message: WSMessage = {
       type: 'notification',
       payload: {
@@ -896,7 +929,7 @@ export class WebSocketService implements Service {
       // never emits its `status: done` — so the terminal `cancelled` status
       // (and the thinking_end that mirrors the broadcast thinking_start) must
       // broadcast too, or mirroring clients keep a spinner forever.
-      this.wsServer.broadcast({
+      this.broadcastLegacyChat({
         type: 'status',
         payload: { status: 'cancelled', requestId: active.requestId, reason },
         id: active.requestId,
@@ -912,7 +945,7 @@ export class WebSocketService implements Service {
         id: active.requestId,
         timestamp: Date.now(),
       });
-      this.wsServer.broadcast({
+      this.broadcastLegacyChat({
         type: 'thinking_end',
         payload: { requestId: active.requestId, cancelled: true },
         id: active.requestId,
@@ -923,6 +956,17 @@ export class WebSocketService implements Service {
   }
 
   private async routeMessage(msg: WSMessage, ws: ServerWebSocket<unknown>): Promise<WSMessage | void> {
+    if (['brief_chat_send', 'brief_chat_cancel', 'brief_chat_subscribe', 'brief_chat_unsubscribe'].includes(msg.type)) {
+      if (!this.briefChat) return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: 'unsupported', message: 'Conversation chat is unsupported.' }, id: msg.id, timestamp: Date.now() };
+      if (this.isSetupMode() && msg.type === 'brief_chat_send') return { type: 'brief_chat_error', payload: { ...safeChatIdentity(msg.payload), code: 'setup_required', message: 'Finish first-run setup before chatting.' }, id: msg.id, timestamp: Date.now() };
+      const wasScoped = this.briefChat.transport.hasClient(ws);
+      await this.briefChat.transport.handle(msg, ws, this.briefChat.capabilities);
+      if (!wasScoped && this.briefChat.transport.hasClient(ws)) {
+        this.cancelActiveChat(ws, 'superseded');
+        this.closeRealtimeVoice(ws);
+      }
+      return;
+    }
     switch (msg.type) {
       case 'chat':
         return this.handleChat(msg, ws);
@@ -2626,7 +2670,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * a Room) and the chat agent isn't going to produce its own reply.
    */
   broadcastAssistantAck(text: string, requestId?: string): void {
-    this.wsServer.broadcast({
+    this.broadcastLegacyChat({
       type: 'notification',
       payload: { source: 'assistant_message', text },
       id: requestId,
@@ -2636,7 +2680,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
   /** Voice pipeline: STT-final received, agent now reasoning. */
   broadcastThinkingStart(requestId: string): void {
-    this.wsServer.broadcast({
+    this.broadcastLegacyChat({
       type: 'thinking_start',
       payload: { requestId },
       id: requestId,
@@ -2646,7 +2690,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
   /** Voice pipeline: agent emitted first response token (or handed back to user). */
   broadcastThinkingEnd(requestId: string): void {
-    this.wsServer.broadcast({
+    this.broadcastLegacyChat({
       type: 'thinking_end',
       payload: { requestId },
       id: requestId,

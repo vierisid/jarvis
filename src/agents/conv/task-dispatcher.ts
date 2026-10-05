@@ -56,6 +56,7 @@ export type TaskRunResult =
  * reply. The orchestrator's processTaskCall picks the loop up from there.
  */
 export type TaskRunner = (args: {
+  contextKey?: string;
   tier: TaskRequest['tier'];
   subsystem: string;
   template: TaskTemplate;
@@ -89,6 +90,7 @@ export type TaskRunner = (args: {
  * only thing that catches the next call site (#571).
  */
 export type TurnContext = {
+  signal?: AbortSignal;
   /** Tools this kind of turn does not have. `null` is the explicit "none". */
   scope: TurnToolScope | null;
   /**
@@ -120,6 +122,7 @@ export class TaskDispatcher {
    * UI events.
    */
   async dispatch(request: TaskRequest, turn: TurnContext): Promise<TaskResultEnvelope> {
+    turn.signal?.throwIfAborted();
     const subsystem = `task_${request.template}`;
     // A scoped task must run on the USER's words. The fallback below
     // (`original_message ?? intent`) would otherwise hand the task tier the
@@ -157,6 +160,7 @@ export class TaskDispatcher {
       // On a fresh dispatch the record's scope IS the turn's -- it was just
       // written from it -- so there is nothing to reconcile.
       scope: turn.scope,
+      signal: turn.signal,
       ...(turn.siteContext ? { siteContext: turn.siteContext } : {}),
     });
   }
@@ -167,6 +171,7 @@ export class TaskDispatcher {
    * so the LLM continues from where it stopped instead of starting over.
    */
   async resume(taskId: string, userInput: string, turn: TurnContext): Promise<TaskResultEnvelope> {
+    turn.signal?.throwIfAborted();
     const record = this.registry.get(taskId);
     if (!record) {
       return {
@@ -243,6 +248,7 @@ export class TaskDispatcher {
       // Identical to the record's by the check above, so either is correct;
       // the turn's is the live object.
       scope: turn.scope,
+      signal: turn.signal,
       ...(turn.siteContext ? { siteContext: turn.siteContext } : {}),
     });
   }
@@ -262,9 +268,14 @@ export class TaskDispatcher {
       history: unknown[] | undefined;
       scope: TurnToolScope | null;
       siteContext?: string;
+      signal?: AbortSignal;
     },
   ): Promise<TaskResultEnvelope> {
+    const cancel = () => abort.abort(callArgs.signal?.reason);
+    if (callArgs.signal?.aborted) cancel();
+    else callArgs.signal?.addEventListener('abort', cancel, { once: true });
     try {
+      if (abort.signal.aborted) return this.finalize(record, 'cancelled', 'Task cancelled before execution.');
       const result = await this.runner({
         tier: request.tier,
         subsystem,
@@ -272,6 +283,7 @@ export class TaskDispatcher {
         intent: request.intent,
         originalMessage: callArgs.originalMessage,
         signal: abort.signal,
+        contextKey: record.contextKey,
         history: callArgs.history,
         scope: callArgs.scope,
         ...(callArgs.siteContext ? { siteContext: callArgs.siteContext } : {}),
@@ -343,9 +355,11 @@ export class TaskDispatcher {
         );
       }
 
-      const summary = await this.summarize(record, request, result.text);
+      const summary = await this.summarize(record, request, result.text, abort.signal);
+      if (abort.signal.aborted) return this.finalize(record, 'cancelled', 'Task cancelled during execution.');
       return this.finalize(record, 'completed', summary, record.id);
     } catch (err) {
+      if (abort.signal.aborted) return this.finalize(record, 'cancelled', 'Task cancelled during execution.');
       const errorMsg = err instanceof Error ? err.message : String(err);
       const envelope: TaskResultEnvelope = {
         task_id: record.id,
@@ -355,6 +369,8 @@ export class TaskDispatcher {
       };
       this.registry.transition(record.id, 'failed', envelope);
       return envelope;
+    } finally {
+      callArgs.signal?.removeEventListener('abort', cancel);
     }
   }
 
@@ -363,7 +379,7 @@ export class TaskDispatcher {
    * passed through; long outputs are condensed via the low tier (cheap) so
    * the conv prompt doesn't carry the full transcript each verbalize call.
    */
-  private async summarize(record: TaskRecord, request: TaskRequest, rawResult: string): Promise<string> {
+  private async summarize(record: TaskRecord, request: TaskRequest, rawResult: string, signal?: AbortSignal): Promise<string> {
     const trimmed = rawResult.trim();
     if (!trimmed) return 'Task produced no output.';
     if (trimmed.length <= SUMMARY_THRESHOLD_CHARS) return trimmed;
@@ -382,7 +398,7 @@ export class TaskDispatcher {
           role: 'user',
           content: `User asked: ${request.intent}\n\nTask result:\n${trimmed}`,
         },
-      ], { temperature: 0.1, max_tokens: 600 });
+      ], { temperature: 0.1, max_tokens: 600, signal });
       return condensed.content?.trim() || trimmed.slice(0, 400);
     } catch {
       return trimmed.slice(0, 400) + (trimmed.length > 400 ? '...' : '');
