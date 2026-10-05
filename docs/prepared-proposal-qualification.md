@@ -121,8 +121,8 @@ person, and frame them before a model reads them.
 ## Quick verification
 
 ```bash
-bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts
-JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/awareness/prepared-dry-run.test.ts
+bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/awareness/prepared-dry-run.test.ts
 ```
 
-Expected: 16 pass, then 4 pass. The first engine run builds the bundle and pieces.
+Expected: 20 pass. The dry-run tests always use the real engine; the first run
+builds the bundle and pieces, and later runs reuse them.
