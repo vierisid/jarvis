@@ -1,0 +1,21 @@
+$ bun test --preload ./src/test-preload.ts   (full suite, Q-02 head 8184eb15 on brief/q-01, local WSL2)
+ 7761 pass
+ 86 skip
+ 9 fail
+ 55529 expect() calls
+Ran 7856 tests across 425 files. [598.67s]
+
+Failures (9):
+  src/sites/git-config-lint.test.ts: (fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [55.23ms]
+  src/actions/browser/page-writable-element-refs.test.ts: (fail) page-writable element refs (#592, integration) > (unnamed) [1013.18ms]
+  src/actions/browser/browser-primitives.test.ts: (fail) browser primitives (integration) > (unnamed) [212.00ms]
+  src/actions/browser/browser-local-files.test.ts: (fail) browser local-file lockdown (integration, #521) > (unnamed) [227.96ms]
+  src/actions/tools/browser-template-delivery.test.ts: (fail) webapp template delivery via browser tools (integration) > (unnamed) [236.03ms]
+  src/workflows/runner/engine-runtime/engine-reaper.test.ts: (fail) end to end, against a real process > reaps an engine whose owner really did die [58.67ms]
+  src/workflows/runner/engine-runtime/engine-reaper.test.ts: (fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [178.49ms]
+  src/actions/browser/fixtures/headless-chromium.test.ts: (fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [312.08ms]
+  src/actions/browser/fixtures/headless-chromium.test.ts: (fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [240.83ms]
+
+Seven of them (the git-config-lint legacy branches/ case and six browser/Chromium integration tests) are the same failures that occur on brief/foundations without Q-01 or Q-02.
+The two engine-reaper tests began failing on this machine during the session: they now fail identically on the unchanged Q-01 head, which passed them earlier today locally and in CI.
+The reaper finds the orphaned engine but the killed process still reports alive. Q-01 and Q-02 change no runner files. CI is the clean check.
