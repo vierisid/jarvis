@@ -560,31 +560,34 @@ const FRAMED_PAYLOAD_MAX_CHARS = 4000;
  *     Neither reads a caller-written column and neither carries a
  *     `summarizeFlow`, so a frame there would spend ~290 characters of preamble
  *     disclaiming our own ids.
- *   - the THROW paths of `run`, `enable` and `publish`, which DO carry
- *     outside-derived text and are the one thing #598 leaves open.
- *     `assertVersionReady` / `assertFlowReady` raise a `WorkflowReadinessError`
- *     whose message interpolates `i.node`, a step name
- *     (`workflows/db/repos/flow-readiness.ts`), and `assertCodeStepsAllowed`
- *     raises `refusalMessage(flowId, intent, stepNames)`
- *     (`workflows/db/repos/flow-code-steps.ts`). Step names come from the
- *     composer LLM or from an uncapped, unvalidated
- *     `POST /api/workflows/:id/versions` body -- the same writer class as
- *     `metadata`. They reach the model unframed because the orchestrator routes
- *     a throw through `markUntrustedToolFailure`, which returns the text
- *     untouched when `isUntrustedSourceTool` is false, and it is false for this
- *     tool.
  *
- *     Deferred rather than fixed, for a reason of blast radius and not of cost.
- *     Framing a throw means catching it and returning the text, which turns a
- *     failure into a success result and changes what `registry.execute`
- *     promises its callers; a dozen `rejects.toThrow` assertions across
- *     `flow-code-steps.test.ts`, `workflow-readiness.test.ts` and
- *     `version-ownership.test.ts` encode that contract deliberately. The hook
- *     designed for exactly this, `markUntrustedToolFailure`, is inert here only
- *     because the tool is not in `UNTRUSTED_TOOL_NAMES` -- and putting it there
- *     is the one change #582 argued against, because it moves `outsideReach`
- *     off `fetch` and drags in `FRAMED_ACTORS` and the tool filter's I1 union
- *     repair. So this wants its own issue, with that trade as its subject.
+ * NOT FRAMED HERE, BUT FRAMED: the THROW paths. `run`, `enable` and `publish`
+ * can fail with outside-derived text -- `assertVersionReady` /
+ * `assertFlowReady` raise a `WorkflowReadinessError` whose message interpolates
+ * `i.node`, a step name (`workflows/db/repos/flow-readiness.ts`), and
+ * `assertCodeStepsAllowed` raises `refusalMessage(flowId, intent, stepNames)`
+ * (`workflows/db/repos/flow-code-steps.ts`), and step names come from the
+ * composer LLM or a `POST /api/workflows/:id/versions` body. This function never
+ * sees those, because they throw. Since #608 (PR #628) they are framed at the
+ * model boundary instead: the tool declares `failureIsOutsideContent` (see its
+ * definition above), and every dispatch that turns a failure into prompt text
+ * -- `agents/orchestrator.ts`'s text and realtime dispatches and its inline
+ * approval gate, and `agents/sub-agent-runner.ts`'s dispatch and its
+ * `governedText` -- passes that flag to `markUntrustedToolFailure`, which then
+ * caps and frames the message.
+ *
+ * So do not catch a throw here to frame it. The tool still THROWS, and the
+ * framing never changes what it throws -- that is the point: the workflow
+ * runtime marks a step failed by the rejection, the same
+ * `WorkflowReadinessError` (422) and `CodeStepsRefusedError` (403) are what
+ * `trapErrors` serves with their raw message on the HTTP path (so the frame
+ * belongs at neither source), and the `rejects.toThrow` assertions across
+ * `manage-workflow.test.ts`, `flow-code-steps.test.ts` and
+ * `workflow-readiness.test.ts` pin that contract. Nor does this need
+ * `UNTRUSTED_TOOL_NAMES`, whose membership also moves `outsideReach`,
+ * `FRAMED_ACTORS` and the tool filter's I1 union repair; the flag moves only
+ * the failure framing. `registry.ts`'s `failureIsOutsideContent` doc lists
+ * where it is honoured and, as deliberately, where it is not.
  *
  * TAINT: NO, decided separately and against, the way #581 asks. These are reads
  * of stored data, and `isTaintSourceTool` keys on the tool NAME -- one name over

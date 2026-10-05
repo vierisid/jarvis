@@ -89,8 +89,8 @@ export class JarvisToolRegistryAdapter implements PieceToolRegistry {
     //     and on THIS path would have turned a failing step into a succeeding
     //     one. It did not: the tool declares `failureIsOutsideContent` on its
     //     definition (actions/tools/registry.ts) and each MODEL boundary frames
-    //     the message, cap first. The thrown message is byte-identical, so a
-    //     rejection is still a rejection here, `effect-boundary` still marks the
+    //     the message, cap first. The framing never alters what is thrown, so
+    //     a rejection is still a rejection here, `effect-boundary` still marks the
     //     step failed, and the ~15 `rejects.toThrow` assertions are untouched.
     //     Again NOT in `UNTRUSTED_TOOL_NAMES`, so nothing here changes.
     //

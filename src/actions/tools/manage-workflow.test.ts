@@ -278,9 +278,11 @@ describe("manage_workflow tool", () => {
 
   /**
    * #608. The tool DECLARES that its failures carry outside content, and the
-   * declaration is the whole mechanism: the thrown message stays byte-identical,
-   * which is why the ~15 `rejects.toThrow` assertions here, in
-   * `flow-code-steps.test.ts` and in `workflow-readiness.test.ts` are untouched,
+   * declaration is the whole mechanism: the framing never alters what is thrown
+   * (#633 later bounded a `WorkflowReadinessError`'s message at its source,
+   * which is a different change), which is why the ~15 `rejects.toThrow`
+   * assertions here, in `flow-code-steps.test.ts` and in
+   * `workflow-readiness.test.ts` are untouched,
    * and why `trapErrors` in `workflows/api/routes.ts` still serves the raw
    * `e.message` over HTTP. Framing happens at the model boundaries only --
    * asserted through the real dispatch in `agents/untrusted-results.test.ts`.
