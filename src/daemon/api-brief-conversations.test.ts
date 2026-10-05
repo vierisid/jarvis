@@ -2,7 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { createApiRoutes, type ApiContext } from './api-routes.ts';
+import { createApiRoutes, setCorsOrigin, type ApiContext } from './api-routes.ts';
 import { WebSocketServer } from '../comms/websocket.ts';
 import { PanelSessionStore } from '../sidecar/panel-sessions.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
@@ -46,6 +46,43 @@ test('older API callers without a conversation provider receive unsupported with
   const write = await routes['/api/brief/conversations']!.POST(new Request('http://localhost/api/brief/conversations', { method: 'POST', body: '{invalid' }));
   expect(read.status).toBe(501); expect(write.status).toBe(501);
   expect(await read.json()).toEqual({ state: 'unsupported' });
+});
+
+test('conversation success and error responses preserve configured CORS headers and no-store', async () => {
+  const fallback = createApiRoutes({} as ApiContext) as Record<string, { GET: (req: Request) => Response | Promise<Response> }>;
+  const capabilities = await fallback['/api/brief/capabilities']!.GET(new Request('http://localhost/api/brief/capabilities'));
+  const originalOrigin = capabilities.headers.get('Access-Control-Allow-Origin')!;
+  const origin = 'http://localhost:4381';
+  const check = (result: Response, status: number) => {
+    expect(result.status).toBe(status);
+    expect(result.headers.get('Access-Control-Allow-Origin')).toBe(origin);
+    expect(result.headers.get('Access-Control-Allow-Headers')).toBe('Content-Type');
+    expect(result.headers.get('Access-Control-Allow-Methods')).toContain('GET');
+    expect(result.headers.get('Cache-Control')).toBe('no-store');
+    expect(result.headers.get('Content-Type')).toContain('application/json');
+  };
+  setCorsOrigin(`${origin}/`);
+  try {
+    await withApi(true, async ({ request, provider }) => {
+      check(await request('/api/brief/conversations'), 200);
+      const created = await request('/api/brief/conversations', 'POST', { title: 'Header fixture' });
+      check(created, 201);
+      const conversation = await created.json() as BriefConversation;
+      check(await request(`/api/brief/conversations/${conversation.conversationId}`), 200);
+      check(await request('/api/brief/conversations', 'POST', '{invalid'), 400);
+      check(await request('/api/brief/conversations/missing'), 404);
+      provider.repository.list = () => { throw new Error('Internal fixture failure'); };
+      const failed = await request('/api/brief/conversations');
+      check(failed, 503);
+      expect(await failed.json()).toEqual({ state: 'unavailable', reason: 'provider_unavailable' });
+    });
+    await withApi(false, async ({ request }) => {
+      check(await request('/api/brief/conversations'), 503);
+    });
+    check(await fallback['/api/brief/conversations']!.GET(new Request('http://localhost/api/brief/conversations')), 501);
+  } finally {
+    setCorsOrigin(originalOrigin);
+  }
 });
 
 test('conversation provider is discoverable but explicit lifecycle routes stay disabled by default', async () => {
