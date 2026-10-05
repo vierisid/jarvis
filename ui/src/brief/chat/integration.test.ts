@@ -1,3 +1,6 @@
+import { BriefAttachmentProvider } from '../../../../src/brief/attachments';
+import { registerChatAttachments } from '../../../../src/brief/registrations/chat-attachments';
+import { attachmentApi } from './attachments';
 import { expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -19,15 +22,17 @@ async function until(check: () => boolean) {
   while (!check()) { if (Date.now() > deadline) throw new Error('Integration fixture timed out'); await Bun.sleep(1); }
 }
 
-test('real F-02 HTTP routes and F-03 WebSocket frames preserve histories through disconnect, close and reopen', async () => {
+for (const withFiles of [false, true]) test(`real HTTP/WebSocket chat preserves history and attachment ownership (attachments=${withFiles})`, async () => {
   const directory = mkdtempSync(join(tmpdir(), 'jarvis-f04-'));
   const database = join(directory, 'fixture.sqlite');
   initDatabase(database, { quiet: true });
   const conversations = new BriefConversationProvider();
+  const files = new BriefAttachmentProvider(getDb());
+  const inputs: import('../../../../src/brief/chat-transport').ScopedChatInput[] = [];
   let executions = 0;
   const transport = new BriefChatTransport({ db: getDb(),
     runner: { ready: () => true, stream: input => {
-      executions++;
+      executions++; inputs.push(input);
       return { onComplete: async () => {}, stream: (async function* () {
         yield { type: 'text' as const, text: `Reply to ${input.text}` };
         yield { type: 'done' as const, response: { content: `Reply to ${input.text}`, tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' as const } };
@@ -35,10 +40,10 @@ test('real F-02 HTTP routes and F-03 WebSocket frames preserve histories through
     } }, send: (socket, frame) => { socket.send(JSON.stringify(frame)); },
   });
   const capabilities = new BriefCapabilities([
-    ...registerConversations(conversations), ...registerChatTransport(transport), ...registerChatState(conversations, transport),
-  ], ['conversations', 'chatTransport', 'chatState']);
+    ...registerConversations(conversations), ...registerChatTransport(transport), ...registerChatState(conversations, transport), ...registerChatAttachments(files),
+  ], ['conversations', 'chatTransport', 'chatState', ...(withFiles ? ['chatAttachments' as const] : [])]);
   const server = Bun.serve({ hostname: '127.0.0.1', port: 0,
-    routes: createBriefRoutes(capabilities, (body, status = 200) => Response.json(body, { status }), conversations),
+    routes: createBriefRoutes(capabilities, (body, status = 200) => Response.json(body, { status }), conversations, files),
     fetch(request, server) {
       if (new URL(request.url).pathname === '/ws' && server.upgrade(request)) return;
       return new Response('Not found', { status: 404 });
@@ -52,7 +57,7 @@ test('real F-02 HTTP routes and F-03 WebSocket frames preserve histories through
   const api = conversationApi((path, init) => fetch(`${base}${path}`, init));
   const saved = new Map<string, string>();
   const storage = { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => { saved.set(key, value); } };
-  const client = new BriefConversationClient(api, storage);
+  const client = new BriefConversationClient(api, storage, attachmentApi((path, init) => fetch(`${base}${path}`, init)));
   let socket: WebSocket | undefined;
   const connect = async () => {
     socket = new WebSocket(`${base.replace('http:', 'ws:')}/ws`);
@@ -64,6 +69,7 @@ test('real F-02 HTTP routes and F-03 WebSocket frames preserve histories through
   try {
     await client.start(); const a = await client.add(), b = await client.add(); await connect();
     await until(() => client.store.getSnapshot().conversations[a]?.history.state === 'ready');
+    if (withFiles) await client.attachments.upload(a, 'document', new File(['A attachment secret'], 'a.txt', { type: 'text/plain' }));
     client.store.setDraft(a, 'A'); client.send(a, 'A');
     await until(() => Object.values(client.store.getSnapshot().conversations[a]!.turns).some(turn => turn.state === 'completed'));
     client.store.setDraft(b, 'B'); client.send(b, 'B');
@@ -80,7 +86,14 @@ test('real F-02 HTTP routes and F-03 WebSocket frames preserve histories through
     expect(client.store.getSnapshot().conversations[b]?.messages).toHaveLength(2);
     expect(client.store.getSnapshot().conversations[a]?.draft).toBe('Next A');
     expect(executions).toBe(2);
-    const reloaded = new BriefConversationClient(api, storage);
+    if (withFiles) {
+      expect(JSON.stringify(inputs[0]?.attachmentContent)).toContain('A attachment secret');
+      expect(inputs[1]?.attachmentContent).toBeUndefined();
+      expect(client.store.getSnapshot().conversations[a]?.attachments).toEqual([]);
+      expect(client.store.getSnapshot().conversations[a]?.messages[0]?.attachments?.[0]?.state).toBe('accepted');
+      expect(JSON.stringify([...saved.values()])).not.toContain('A attachment secret');
+    }
+    const reloaded = new BriefConversationClient(api, storage, attachmentApi((path, init) => fetch(`${base}${path}`, init)));
     await reloaded.start();
     expect(reloaded.store.getSnapshot().activeId).toBe(b);
     expect(reloaded.store.getSnapshot().conversations[a]?.draft).toBe('Next A');

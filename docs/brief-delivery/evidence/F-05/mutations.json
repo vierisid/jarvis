@@ -1,0 +1,20 @@
+{
+  "cases": [
+    {
+      "name": "binding",
+      "exit_code": 1,
+      "rejected": true
+    },
+    {
+      "name": "retry-identity",
+      "exit_code": 1,
+      "rejected": true
+    },
+    {
+      "name": "taint",
+      "exit_code": 1,
+      "rejected": true
+    }
+  ],
+  "sources_restored": true
+}

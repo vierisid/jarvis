@@ -1,0 +1,25 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/agent-service-attachments.test.ts:
+Unexpected parameters for tool 'run_command': command
+[Orchestrator] Tool run_command → executed...
+60 |     await send(input, new BriefCapabilities(registrations, ['conversations', 'chatTransport']));
+61 |     expect(transport.repository.pending()).toHaveLength(0); expect(seen).toHaveLength(0);
+62 |     await send({ ...input, conversationId: b }); expect(seen).toHaveLength(0);
+63 |     await send(input); await transport.idle();
+64 |     expect(transport.repository.get(input).state).toBe('completed');
+65 |     expect(executions).toBe(0);
+                            ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-05/src/daemon/agent-service-attachments.test.ts:65:24)
+(fail) attachments reach the real classic model path with isolated history and tool taint [165.26ms]
+
+ 0 pass
+ 1 filtered out
+ 1 fail
+ 5 expect() calls
+Ran 1 test across 1 file. [364.00ms]
