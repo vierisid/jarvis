@@ -1,0 +1,33 @@
+version: 2
+
+# GitHub Actions only (#646). Every workflow that holds a write scope,
+# id-token or a pull_request_target trigger pins its actions to commit SHAs,
+# with the version in a trailing comment (.github/scripts/
+# workflow-hardening.test.sh enforces it). A pin nobody bumps rots, so
+# Dependabot proposes the bumps and rewrites SHA and comment together.
+#
+# Two groups, so the routine minor/patch bumps arrive as one easy PR and the
+# majors -- which change inputs and runtimes and need reading -- arrive
+# separately rather than buried in it. The composite action under
+# .github/actions/ is scanned too.
+updates:
+  - package-ecosystem: github-actions
+    directories:
+      - /
+      - /.github/actions/*
+    schedule:
+      interval: weekly
+    groups:
+      actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - minor
+          - patch
+      actions-major:
+        patterns:
+          - "*"
+        update-types:
+          - major
+    labels:
+      - skip-changelog

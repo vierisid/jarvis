@@ -55,7 +55,7 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       should_release: ${{ steps.v.outputs.should_release }}
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
       - id: v
         run: |
           set -euo pipefail
@@ -125,9 +125,9 @@ jobs:
             runner: macos-latest
             setup: darwin
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: actions/setup-go@v6
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6.5.0
         with:
           # Track sidecar/go.mod as the single source of the Go version.
           go-version-file: sidecar/go.mod
@@ -245,7 +245,7 @@ jobs:
       - name: Authenticate to Google Cloud
         id: gcp-auth
         if: matrix.setup == 'windows-cross' && steps.winsign.outputs.ready == 'true'
-        uses: google-github-actions/auth@v2
+        uses: google-github-actions/auth@c200f3691d83b41bf9bbd8638997a462592937ed # v2.1.13
         with:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
@@ -383,14 +383,14 @@ jobs:
 
       - name: Upload bundle (darwin)
         if: matrix.setup == 'darwin'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: sidecar-${{ matrix.npm_pkg }}
           path: sidecar/jarvis-app.tar.gz
 
       - name: Upload binary
         if: matrix.setup != 'darwin'
-        uses: actions/upload-artifact@v5
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: sidecar-${{ matrix.npm_pkg }}
           path: sidecar/${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}
@@ -404,13 +404,13 @@ jobs:
       contents: read
       id-token: write
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
 
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version: ${{ env.BUN_VERSION }}
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
@@ -419,7 +419,7 @@ jobs:
         run: npm install -g npm@latest
 
       - name: Download all sidecar binaries
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0.0
         with:
           path: artifacts
           pattern: sidecar-*

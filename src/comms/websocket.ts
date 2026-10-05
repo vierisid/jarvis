@@ -482,19 +482,20 @@ export class WebSocketServer {
           return Response.json({ error: 'Not found' }, { status: 404 });
         }
 
-        // 5a. Overlay widget (served from ui/ source, not dist/)
-        if (pathname === '/overlay' && self.staticDir) {
-          // overlay.html lives in the ui/ source directory (parent of dist/)
-          const overlayPath = path.join(self.staticDir, '..', 'overlay.html');
-          const overlayFile = Bun.file(overlayPath);
-          if (await overlayFile.exists()) {
-            if (!self.insecureOpenAccess) {
-              const html = await overlayFile.text();
-              return new Response(injectTokenStrip(html), { headers: { 'Content-Type': 'text/html' } });
-            }
-            return new Response(overlayFile, { headers: { 'Content-Type': 'text/html' } });
-          }
-        }
+        // (Removed) `GET /overlay` served ui/overlay.html, the old-dashboard
+        // awareness widget. The widget itself was removed earlier, for cause:
+        // it auto-launched a Chromium window pointed here, which connected as
+        // a WebSocket client and made the daemon's proactive TTS play THROUGH
+        // it, talking over the native pebble's realtime voice (see the
+        // "(Removed)" note in daemon/index.ts). Nothing has launched or
+        // fetched this route since; the page kept two WebSocket constructions,
+        // so serving it only offered a way to re-arm that regression by hand,
+        // and under `insecure_open_access` it served with no token at all.
+        //
+        // #642 proposed shipping the file so the route would stop 404ing in
+        // the image and the npm tarball. That had the polarity backwards: a
+        // 404 was the correct answer for an orphaned route, so the route is
+        // gone instead of the gap being filled.
 
         // 5b. Static files (dashboard)
         if (self.staticDir) {
