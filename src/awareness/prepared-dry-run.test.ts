@@ -1,6 +1,4 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
 import { initDatabase } from '../vault/schema.ts';
 import { createGoal } from '../vault/goals.ts';
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from '../workflows/db/index.ts';
@@ -12,16 +10,12 @@ import { PieceCatalog, metadataToCatalogEntry } from '../workflows/runtime/piece
 import { SandboxApi } from '../workflows/sandbox-api/server.ts';
 import { EngineRuntime } from '../workflows/runner/engine-runtime/engine-runtime.ts';
 import { CredentialResolver } from '../workflows/credentials/adapter.ts';
-import { buildEngineBundle, ENGINE_BUILD_PATHS, findCachedBundle } from '../workflows/runner/engine-runtime/build.ts';
+import { buildEngineBundle } from '../workflows/runner/engine-runtime/build.ts';
 import { buildAllJarvisPieces } from '../workflows/runner/engine-runtime/build-pieces.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
 import { PreparedDryRunner, type DryFixture } from './prepared-dry-run.ts';
 import { DRY_RUNNER, JOB_CONSTRAINTS, liveQualificationServices, qualifyPreparedProposal, versionDigest, type DrySample, type QualificationRequest } from './prepared-qualification.ts';
 
-const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === '1';
-const initialCached = findCachedBundle();
-const piecesBuilt = existsSync(resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/jarvis/test/dist/src/index.js'));
-const skip = (initialCached === null && !buildOptIn) || (!piecesBuilt && !buildOptIn);
 const JARVIS = '@jarvispieces/piece-jarvis-';
 
 const step = (name: string, piece: string, actionName: string, input: Record<string, unknown>, nextAction?: FlowTriggerNode): FlowTriggerNode =>
@@ -56,15 +50,16 @@ const services = () => liveQualificationServices({ tool: () => null, targets: ()
   authority: new AuthorityEngine({ default_level: 7, governed_categories: ['send_email', 'send_message'], overrides: [],
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }) });
 
+// Always runs, like evaluation/engine.test.ts: the no-effect guarantee is only
+// worth what the real engine shows. Both builds are cached by content hash.
 describe('prepared dry runner (real engine)', () => {
   let runner: PreparedDryRunner | null = null;
 
   beforeAll(async () => {
     initDatabase(':memory:');
     initWorkflowDb(':memory:');
-    if (skip) return;
-    const bundle = initialCached ?? await buildEngineBundle();
-    if (buildOptIn) await buildAllJarvisPieces();
+    const bundle = await buildEngineBundle();
+    await buildAllJarvisPieces();
     // Readiness uses the real pieces' metadata, as the daemon does.
     const api = new SandboxApi({ services: { credentialResolver: new CredentialResolver() } });
     await api.start({ host: '127.0.0.1', port: 0 });
@@ -80,14 +75,14 @@ describe('prepared dry runner (real engine)', () => {
       } finally { await handle.release(); }
     } finally { await runtime.shutdown(); await api.stop(); }
     runner = await PreparedDryRunner.start(bundle.bundlePath);
-  }, 120_000);
+  }, 300_000);
 
   afterAll(async () => {
     await runner?.close();
     closeWorkflowDb();
   });
 
-  test.skipIf(skip)('runs the exact version with every service simulated, keeps no run, and its sample backs a Ready preview', async () => {
+  test('runs the exact version with every service simulated, keeps no run, and its sample backs a Ready preview', async () => {
     const p = prepare(reminder);
     const before = { flows: count('flow'), versions: count('flow_version') };
     const sample = await runner!.run(p.flow.id, p.version.id, fixture('Ana, invoice 1042 is two weeks overdue.'));
@@ -105,7 +100,7 @@ describe('prepared dry runner (real engine)', () => {
     expect(qualification.verdict).toBe('ready');
   }, 60_000);
 
-  test.skipIf(skip)('a step the fixture does not cover fails the run, and that sample keeps the proposal from Ready', async () => {
+  test('a step the fixture does not cover fails the run, and that sample keeps the proposal from Ready', async () => {
     const p = prepare(reminder);
     const sample = await runner!.run(p.flow.id, p.version.id, fixture());
     expect(sample.status).toBe('FAILED');
@@ -117,7 +112,7 @@ describe('prepared dry runner (real engine)', () => {
     expect(count('flow_run')).toBe(0);
   }, 60_000);
 
-  test.skipIf(skip)('concurrent requests run one at a time, each against its own fixture', async () => {
+  test('concurrent requests run one at a time, each against its own fixture', async () => {
     const p = prepare(reminder);
     const [first, second] = await Promise.all([
       runner!.run(p.flow.id, p.version.id, { ...fixture('First reply'), id: 'first' }),
@@ -128,7 +123,7 @@ describe('prepared dry runner (real engine)', () => {
     expect(first.simulated).toEqual(second.simulated);
   }, 90_000);
 
-  test.skipIf(skip)('refuses a graph it cannot simulate before anything is created', async () => {
+  test('refuses a graph it cannot simulate before anything is created', async () => {
     const flows = count('flow');
     const p = prepare({ name: 'trigger', type: 'EMPTY', nextAction: { name: 'send', type: 'PIECE',
       settings: { pieceName: '@activepieces/piece-gmail', pieceVersion: '0.0.1', actionName: 'send_email', input: {} } } });

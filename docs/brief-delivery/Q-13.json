@@ -83,8 +83,8 @@
   ],
   "quick_verify": {
     "cwd": "/home/vierisid/.cache/codex/jarvis-q-13",
-    "command": "bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts && JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/awareness/prepared-dry-run.test.ts",
-    "expected": "16 pass, then 4 pass; the first engine run builds the bundle and pieces",
+    "command": "bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/awareness/prepared-dry-run.test.ts",
+    "expected": "20 pass; the dry-run tests always use the real engine, and the first run builds the bundle and pieces",
     "screenshot": "not applicable: no visible UI changes"
   },
   "migration": "None. No schema, data, route or daemon wiring change; nothing calls the validator until F-09.",
@@ -93,7 +93,8 @@
     "Only typed constraints are checked; free-text conditions need an unverified constraint.",
     "Placeholder recipients are a fixed list; recipients computed at run time are checked at dispatch.",
     "A connection's revision excludes its updated time so token refreshes do not invalidate proposals; re-authorizing a different account under the same row is not detected.",
-    "A dry run shows the version executes on its fixture, not that a real model's draft is good; Q-01 and Q-02 measure that."
+    "A dry run shows the version executes on its fixture, not that a real model's draft is good; Q-01 and Q-02 measure that.",
+    "CI's first run on the PR skipped the four real-engine dry-run tests, because they ran before any test had built the engine bundle; they now build it themselves, as evaluation/engine.test.ts does."
   ],
   "found": [
     "Readiness treats an empty required collection as present, so a Gmail send with receiver [] passes readiness. That is deliberate for collections in general; Q-13 blocks it for deliveries and leaves readiness unchanged."
