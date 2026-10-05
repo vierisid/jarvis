@@ -1,5 +1,6 @@
 import type { Database } from 'bun:sqlite';
 import type { SidecarManager } from '../sidecar/manager';
+import { servesCapability } from '../sidecar/capability-predicate';
 import { getDb } from '../vault/schema';
 import { ChatAttachmentRepository, attachmentId } from '../vault/chat-attachments';
 import { ConversationRequestError } from '../vault/conversation-lifecycle';
@@ -69,7 +70,7 @@ export class BriefAttachmentProvider {
   }
   private async captureOnce(conversationId: string, id: string, deviceId: string) {
     const device = this.sidecar?.getSidecar(deviceId);
-    if (!device?.connected || device.status === 'revoked' || !device.capabilities?.includes('screenshot') || device.unavailable_capabilities?.some(c => c.name === 'screenshot')) {
+    if (!device || device.status === 'revoked' || !servesCapability(device, 'screenshot')) {
       throw new ConversationRequestError('Screenshot capture is unavailable on the selected device', 409);
     }
     let result: unknown;

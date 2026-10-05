@@ -63,6 +63,14 @@ bun test src/brief/attachments.test.ts src/daemon/api-brief-attachments.test.ts 
 
 The fixtures use isolated databases and synthetic text/PDF/pixel data. They upload in A, switch to B, retry, remove during decode, close during upload, reconnect and replay. Assertions prove one accepted binding, no cross-chat model content, authenticated routes, byte/format/expiry limits and model tool approval. Screenshot tests inject a fake RPC; they never capture a user's screen. Three unsafe mutations (omit binding, weaken retry identity, drop taint) must fail the targeted tests; sources are restored afterward.
 
+The review regressions also cover two subscribed windows sharing a draft: sending a file in one clears that file in both, and the second window can send a follow-up without reusing it. Canonical message events, snapshots and history consume accepted IDs while preserving newer attachments; delayed composer writes cannot restore consumed IDs. Reload recovery copies the server's screenshot name, format and size after a lost response.
+
+```bash
+bun test ui/src/brief/chat/store.test.ts ui/src/brief/chat/attachments.test.ts ui/src/brief/chat/integration.test.ts src/sidecar/capability-predicate.test.ts src/actions/tools/tool-scope.test.ts src/daemon/agent-service-attachments.test.ts
+```
+
+The capability guard requires the shared `servesCapability()` check. The model-dispatch guard and runtime fixtures retain site context, scope and conversation identity for text and attachment turns; dropping scope fails both kinds of check.
+
 For a D-line integration preview: select a small text file in A, switch to B and send a different message, then return to A and send. Only A should show the accepted reference and receive a file-based answer. An oversized/unsupported file should show an error, Retry should preserve its ID, and Remove should prevent a late upload from reappearing. Test Screenshot only with explicit user confirmation on a permitted sidecar; the automated recipe is sufficient without doing so.
 
 ## Rollback

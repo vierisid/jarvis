@@ -14,7 +14,7 @@ function fixture(api: Partial<AttachmentApi> = {}, enabled = true) {
   const files = new DraftAttachments(store, port, () => enabled, () => false);
   const file = new File(['PRIVATE FILE BYTES'], 'fixture.txt', { type: 'text/plain' });
   const items = (id = 'a') => store.getSnapshot().conversations[id]!.attachments;
-  return { store, files, file, saved, storage, items };
+  return { store, files, file, saved, storage, items, port };
 }
 
 test('failed upload retries with the same identity and switching chats cannot move its result', async () => {
@@ -74,4 +74,16 @@ test('disabled attachment capability and unconfirmed capture dispatch nothing', 
   expect(() => f.files.capture('a', 'device', false)).toThrow('Confirm');
   expect(() => f.files.capture('a', 'device', true)).toThrow('not enabled');
   expect(captures).toBe(0); expect(f.items()).toEqual([]);
+});
+
+test('reload recovers canonical screenshot metadata after the capture response is lost', async () => {
+  const canonical = { ...ref('a', 'screen'), kind: 'screenshot' as const, name: 'Screenshot.png', mediaType: 'image/png', size: 1234 };
+  const f = fixture({ get: async () => canonical });
+  f.store.setAttachments('a', [{ attachmentId: 'screen', name: 'Screenshot', mediaType: 'image/jpeg', size: 0, kind: 'screenshot', state: 'uploading' }]);
+  const reloaded = new ConversationStore(f.storage);
+  reloaded.restoreTabs({ workspaceId: 'workspace', revision: '1', activeConversationId: 'a', tabs: [f.store.getSnapshot().conversations.a!.conversation] });
+  await new DraftAttachments(reloaded, f.port, () => true, () => false).restore('a', new AbortController().signal);
+  expect(reloaded.getSnapshot().conversations.a!.attachments).toEqual([{
+    attachmentId: 'screen', name: 'Screenshot.png', mediaType: 'image/png', size: 1234, kind: 'screenshot', state: 'ready',
+  }]);
 });

@@ -59,6 +59,7 @@ for (const withFiles of [false, true]) test(`real HTTP/WebSocket chat preserves 
   const storage = { getItem: (key: string) => saved.get(key) ?? null, setItem: (key: string, value: string) => { saved.set(key, value); } };
   const client = new BriefConversationClient(api, storage, attachmentApi((path, init) => fetch(`${base}${path}`, init)));
   let socket: WebSocket | undefined;
+  let peer: BriefConversationClient | undefined, peerSocket: WebSocket | undefined;
   const connect = async () => {
     socket = new WebSocket(`${base.replace('http:', 'ws:')}/ws`);
     socket.onopen = () => client.adapter.onOpen(socket!);
@@ -69,7 +70,17 @@ for (const withFiles of [false, true]) test(`real HTTP/WebSocket chat preserves 
   try {
     await client.start(); const a = await client.add(), b = await client.add(); await connect();
     await until(() => client.store.getSnapshot().conversations[a]?.history.state === 'ready');
-    if (withFiles) await client.attachments.upload(a, 'document', new File(['A attachment secret'], 'a.txt', { type: 'text/plain' }));
+    if (withFiles) {
+      await client.attachments.upload(a, 'document', new File(['A attachment secret'], 'a.txt', { type: 'text/plain' }));
+      peer = new BriefConversationClient(api, storage, attachmentApi((path, init) => fetch(`${base}${path}`, init)));
+      await peer.start();
+      peerSocket = new WebSocket(`${base.replace('http:', 'ws:')}/ws`);
+      peerSocket.onopen = () => peer!.adapter.onOpen(peerSocket!);
+      peerSocket.onmessage = event => { peer!.adapter.onMessage(JSON.parse(String(event.data))); };
+      peerSocket.onclose = () => peer!.adapter.onClose();
+      await until(() => peer!.store.getSnapshot().conversations[a]?.history.state === 'ready');
+      expect(peer.store.getSnapshot().conversations[a]?.attachments).toHaveLength(1);
+    }
     client.store.setDraft(a, 'A'); client.send(a, 'A');
     await until(() => Object.values(client.store.getSnapshot().conversations[a]!.turns).some(turn => turn.state === 'completed'));
     client.store.setDraft(b, 'B'); client.send(b, 'B');
@@ -99,8 +110,17 @@ for (const withFiles of [false, true]) test(`real HTTP/WebSocket chat preserves 
     expect(reloaded.store.getSnapshot().conversations[a]?.draft).toBe('Next A');
     expect(reloaded.store.getSnapshot().conversations[a]?.scroll.top).toBe(120);
     reloaded.stop();
+    if (peer) {
+      await until(() => Object.values(peer!.store.getSnapshot().conversations[a]!.turns).some(turn => turn.state === 'completed'));
+      expect(peer.store.getSnapshot().conversations[a]?.attachments).toEqual([]);
+      const next = peer.send(a, 'Follow-up from the other window');
+      await until(() => peer!.store.getSnapshot().conversations[a]?.turns[next.turnId]?.state === 'completed');
+      expect(executions).toBe(3); expect(inputs[2]?.attachmentContent).toBeUndefined();
+    }
   } finally {
     client.stop();
+    peer?.stop();
+    if (peerSocket) { peerSocket.onclose = peerSocket.onmessage = peerSocket.onopen = null; peerSocket.close(); }
     if (socket) { socket.onclose = socket.onmessage = socket.onopen = null; socket.close(); }
     transport.stop(); await transport.idle(); await server.stop(true); closeDb();
     rmSync(directory, { recursive: true, force: true });
