@@ -123,5 +123,32 @@
     ],
     "exit": 0,
     "expected": 0
+  },
+  {
+    "name": "affected-final",
+    "command": [
+      "bun",
+      "test",
+      "src/vault",
+      "src/brief",
+      "src/agents/conv",
+      "src/agents/orchestrator-progress.test.ts",
+      "src/agents/orchestrator-task-call.test.ts",
+      "src/agents/orchestrator-tier-fallback.test.ts",
+      "src/agents/orchestrator-realtime.test.ts",
+      "src/daemon/agent-service-conversation.test.ts",
+      "src/daemon/ws-service-conversation.test.ts",
+      "src/daemon/ws-service-cleanup.test.ts",
+      "src/daemon/ws-service-voice-start.test.ts",
+      "src/comms/streaming.test.ts",
+      "src/comms/websocket.test.ts",
+      "src/daemon/api-brief.test.ts",
+      "src/daemon/api-brief-conversations.test.ts",
+      "src/util/model-exec-env.test.ts",
+      "scripts/check-migrations.test.ts",
+      "src/actions/tools/tool-scope.test.ts"
+    ],
+    "exit": 0,
+    "expected": 0
   }
 ]

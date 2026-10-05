@@ -1,0 +1,47 @@
+bun test v1.3.6 (d530ed99)
+
+src/actions/tools/tool-scope.test.ts:
+(pass) the scope itself > the production registry built completely [0.06ms]
+(pass) the scope itself > every withheld name is a tool that really exists [0.19ms]
+(pass) the scope itself > it withholds the generic file and shell tools and nothing else [0.15ms]
+(pass) the scope itself > the site tools survive, and so does the rest of the assistant [0.15ms]
+(pass) the scope itself > the pinned category is the site tools [0.16ms]
+(pass) the scope itself > no scope means no change at all [0.06ms]
+(pass) the scope itself > a malformed scope withholds what it can and pins nothing [0.12ms]
+(pass) the substitution #561 measured > "install react-router in the project" no longer gets the generic shell [6.12ms]
+(pass) the substitution #561 measured > no ordinary site ask is offered a generic file or shell tool [5.32ms]
+(pass) the substitution #561 measured > every ordinary site ask can at least see the project [4.87ms]
+(pass) the substitution #561 measured > an ask that reaches for a withheld tool gets the whole site surface [2.97ms]
+(pass) the substitution #561 measured > an unrelated ask is not handed the site actors, the shell or the loud tools [0.80ms]
+(pass) the substitution #561 measured > a scoped turn never offers more than the same unscoped turn plus the site surface [70.70ms]
+(pass) the substitution #561 measured > pinning does not break the framing invariant [3.86ms]
+(pass) the substitution #561 measured > a non-site ask in a site chat still gets its own tool [0.36ms]
+(pass) what a future change could silently undo > no turn points the process-wide default cwd at a site project [10.49ms]
+(pass) what a future change could silently undo > both branches of streamMessageInner carry the scope and the site block [1.33ms]
+(pass) what a future change could silently undo > every entry that takes a scope also takes a site context [1.44ms]
+(pass) what a future change could silently undo > the voice fall-through is still an unscoped main-chat turn, on purpose [1.79ms]
+(pass) what a future change could silently undo > the conv task runner hands the scope to processTaskCall [0.78ms]
+(pass) what a future change could silently undo > every path that appends a site block also appends the scope notice [0.82ms]
+(pass) what a future change could silently undo > every tool loop in the orchestrator decides about the scope explicitly [2.13ms]
+(pass) what a future change could silently undo > no scope withholds request_approval [0.08ms]
+Database initialized at: :memory:
+(pass) enforcement at dispatch, not just selection > a withheld tool called anyway is not run [26.06ms]
+Database initialized at: :memory:
+(pass) enforcement at dispatch, not just selection > the refusal names the replacement and is not an authority denial [18.74ms]
+Database initialized at: :memory:
+(pass) enforcement at dispatch, not just selection > the site tools still run in the same turn [19.00ms]
+Database initialized at: :memory:
+(pass) enforcement at dispatch, not just selection > without a scope the same calls run as before [15.65ms]
+Database initialized at: :memory:
+(pass) enforcement at dispatch, not just selection > the attempt leaves an audit row [15.56ms]
+Database initialized at: :memory:
+(pass) enforcement at dispatch, not just selection > the refusal tells the model not to come back, and marks the call not run [15.14ms]
+Database initialized at: :memory:
+(pass) enforcement at dispatch, not just selection > a name nothing registers still reads as unknown, not out of scope [13.63ms]
+Database initialized at: :memory:
+(pass) enforcement at dispatch, not just selection > discover_tools cannot reveal a withheld tool [14.67ms]
+
+ 31 pass
+ 0 fail
+ 242 expect() calls
+Ran 31 tests across 1 file. [522.00ms]

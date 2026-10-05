@@ -158,7 +158,8 @@ delayed audio, duplicate sends, stale cancellation, disk restart, reconnect,
 ownership, queue limits, approval identity, both model paths and legacy mirroring.
 No visible UI changed, so no screenshot is applicable.
 
-The broader affected run passed 483 tests with one platform skip. TypeScript and
+The final affected run passed 514 tests with one platform skip, including the
+existing site-scope guard updated for the added conversation argument. TypeScript and
 normal commit checks are recorded in `brief-delivery/evidence/F-03/`. Three unsafe
 mutations failed the routing, history-isolation and terminal-idempotency tests;
 the restored implementation passes. These results do not certify real hosted

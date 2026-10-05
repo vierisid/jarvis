@@ -15,7 +15,7 @@
   "status": {
     "merge": "not_merged",
     "release_enabled": false,
-    "publication": "PR against brief/f-02-1; remote checks are recorded in its description",
+    "publication": "PR #727 open against brief/f-02-1: https://github.com/vierisid/jarvis/pull/727",
     "implementation": "verified locally"
   },
   "dependencies": {
@@ -97,8 +97,8 @@
     },
     {
       "command": "Affected selection in evidence/F-03/verification.json",
-      "result": "483 passed, 1 platform skip, 0 failed, 2444 assertions across 47 files",
-      "log": "evidence/F-03/affected.log"
+      "result": "514 passed, 1 platform skip, 0 failed, 2686 assertions across 48 files",
+      "log": "evidence/F-03/affected-final.log"
     },
     {
       "command": "bun x --no-install tsc --noEmit",
@@ -133,5 +133,18 @@
   "implementation_commit": "ff64a7d014f9df8473aae62ea05477b3ca77c61d",
   "verification_notes": [
     "Early fixture type and socket delivery-order issues were corrected. Final quick, TypeScript and commit-hook logs apply to the committed source."
-  ]
+  ],
+  "ci_correction": {
+    "failed_head": "a8ad992f9daacab66c774e41edfd665916843bbc",
+    "failed_run": "https://github.com/vierisid/jarvis/actions/runs/37341091831",
+    "result": "7877 passed, 31 skipped, one failure: source guard expected the pre-F03 argument list",
+    "cause": "Existing tool-scope.test.ts checked exact arguments on both model paths; the appended conversation parameter was missing from the expected strings. Runtime scope arguments were retained.",
+    "fix": "Extend both exact assertions to include conversation. Removing scope on either path still fails the guard.",
+    "verification": [
+      "31 scope tests / 242 assertions pass",
+      "conv-scope-mutation.log and classic-scope-mutation.log both exit 1",
+      "affected-final.log contains the expanded final selection"
+    ],
+    "remote": "Corrected-head CI recorded in the PR description."
+  }
 }
