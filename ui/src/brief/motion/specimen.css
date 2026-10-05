@@ -1,0 +1,73 @@
+.brief-motion { min-height: 100vh; padding: 28px 48px 56px; background: var(--brief-canvas); color: var(--brief-ink); font: 400 1rem/1.5 var(--brief-sans); }
+.brief-motion * { box-sizing: border-box; }
+.brief-motion__header { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding-bottom: 26px; border-bottom: 1px solid var(--brief-card-edge); }
+.brief-motion__header .brief-brand { width: 142px; }
+.brief-motion__header > span:last-child, .brief-motion__eyebrow { font: 400 .75rem/1.6 var(--brief-mono); color: var(--brief-secondary); }
+.brief-motion__intro { display: flex; gap: 24px; justify-content: space-between; align-items: center; padding: 38px 0 26px; }
+.brief-motion h1 { font-size: 2.5rem; line-height: 1.15; letter-spacing: -.04em; font-weight: 600; margin: 8px 0 12px; }
+.brief-motion p { margin: 0; color: var(--brief-secondary); }
+.brief-motion__tools { display: grid; gap: 10px; min-width: 260px; margin: 0; padding: 0; border: 0; }
+.brief-motion .brief-button__label { display: inline-flex; align-items: center; gap: 8px; }
+.brief-motion__test { display: flex; align-items: center; flex-wrap: wrap; gap: 16px 24px; padding: 20px 0 24px; margin-bottom: 18px; border-bottom: 1px solid var(--brief-card-edge); }
+.brief-motion__test p, .brief-motion__test [role="status"] { font-size: .8125rem; }
+.brief-motion__test > div { margin-right: auto; }
+.brief-motion__test [role="status"] { color: var(--brief-secondary); flex-basis: 100%; }
+.brief-motion__examples { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 18px; max-width: 1300px; margin-inline: auto; }
+.brief-motion__example { min-width: 0; padding: 20px; background: var(--brief-card); border: 1px solid var(--brief-card-edge); border-radius: 16px 0 16px 16px; }
+.brief-motion__caption { display: flex; align-items: baseline; gap: 10px; }
+.brief-motion__caption h2 { font-size: 1rem; font-weight: 600; margin: 0; }
+.brief-motion__caption > span, .brief-motion__caption small { font: 400 .75rem/1.5 var(--brief-mono); color: var(--brief-secondary); }
+.brief-motion__caption small { margin-left: auto; }
+.brief-motion__small-stage { height: 156px; display: flex; align-items: center; justify-content: center; position: relative; }
+.brief-motion__note { border-top: 1px solid var(--brief-card-edge); padding-top: 12px; display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.brief-motion__note p { font-size: .8125rem; min-height: 40px; }
+.brief-motion__contact { position: relative; display: flex; align-items: center; gap: 16px; height: 44px; padding: 0 18px; border: 0; border-radius: 12px 0 12px 12px; background: var(--brief-ink); color: var(--brief-card); font: 600 .875rem var(--brief-sans); cursor: pointer; overflow: hidden; }
+.brief-motion__contact > span:first-child { position: absolute; inset: 0; background: var(--brief-card); pointer-events: none; }
+.brief-motion__reveal { align-items: flex-end; padding-bottom: 10px; }
+.brief-motion__menu { position: absolute; left: 50%; top: 28px; margin-left: -110px; width: 220px; height: 48px; padding: 0 14px; display: flex; align-items: center; gap: 10px; background: var(--brief-menu); border: 1px solid var(--brief-menu-edge); border-radius: 12px 0 12px 12px; box-shadow: 0 6px 16px var(--brief-menu-shadow); font-size: .875rem; }
+.brief-motion__menu span { flex: 1; }
+.brief-motion__selection { width: 280px; }
+.brief-motion__choices { display: flex; position: relative; border-bottom: 1px solid var(--brief-card-edge); }
+.brief-motion__choices button { width: 140px; height: 44px; padding: 0; background: none; color: var(--brief-secondary); border: 0; font: 500 .875rem var(--brief-sans); cursor: pointer; }
+.brief-motion__choices button[aria-pressed="true"] { color: var(--brief-ink); font-weight: 600; }
+.brief-motion__choices > span { position: absolute; bottom: -1px; left: 0; width: 140px; height: 2px; background: var(--brief-ink); pointer-events: none; }
+.brief-motion__selection p { font-size: .8125rem; padding-top: 18px; }
+.brief-motion__example--reflow { grid-column: 1 / -1; }
+.brief-motion__example--reflow .brief-motion__note { flex-direction: row; align-items: center; justify-content: space-between; }
+.brief-motion__example--reflow .brief-motion__note p { min-height: 0; }
+.brief-motion__reflow { position: relative; height: 254px; margin: 20px 0; }
+.brief-motion__work { position: absolute; left: 0; top: 0; height: 254px; background: var(--brief-soft); border: 1px solid var(--brief-card-edge); border-radius: 14px 0 14px 14px; }
+.brief-motion__reading { position: absolute; top: 24px; left: 24px; width: 228px; }
+.brief-motion__status { font-size: .75rem; color: var(--brief-attention-text); background: var(--brief-attention-surface); padding: 5px 10px; border-radius: 20px; }
+.brief-motion__reading h3 { font-size: 1.375rem; line-height: 1.25; letter-spacing: -.02em; margin: 20px 0 8px; }
+.brief-motion__reading p { font-size: .875rem; margin-bottom: 22px; }
+.brief-motion__panel { position: absolute; top: 0; right: 0; height: 254px; background: var(--brief-card); border: 1px solid var(--brief-card-edge); border-radius: 14px 0 14px 14px; padding: 12px 16px; }
+.brief-motion__panel-head { display: flex; align-items: center; justify-content: space-between; gap: 4px; font-size: .875rem; }
+.brief-motion__panel p { margin-top: 16px; font-size: .875rem; }
+.brief-motion__composer { position: absolute; bottom: 16px; left: 16px; right: 16px; }
+.brief-motion__composer input { width: 100%; height: 44px; padding: 0 12px; border: 1px solid var(--brief-field-edge); border-radius: 12px 0 12px 12px; background: var(--brief-card); color: var(--brief-ink); font: 400 .875rem var(--brief-sans); }
+.brief-motion__reflow[data-narrow="true"] { height: 492px; }
+.brief-motion__reflow[data-narrow="true"] .brief-motion__panel { top: 270px; height: 222px; }
+.brief-motion__transfer { justify-content: flex-start; }
+.brief-motion__slots { position: absolute; inset: 20px 0; display: grid; grid-template-columns: 1fr 1fr; font-size: .75rem; color: var(--brief-secondary); }
+.brief-motion__slots span { border: 1px dashed var(--brief-field-edge); border-radius: 10px 0 10px 10px; padding: 10px; }
+.brief-motion__job { display: flex; align-items: center; gap: 8px; position: absolute; left: 5px; top: 63px; width: calc(50% - 10px); min-height: 56px; padding: 10px; background: var(--brief-paper); border: 1px solid var(--brief-paper-edge); border-radius: 10px 0 10px 10px; color: var(--brief-ink); font: 500 .8125rem/1.3 var(--brief-sans); text-align: left; cursor: pointer; box-shadow: 0 3px 8px var(--brief-paper-shadow); }
+.brief-motion__job svg { flex: none; }
+.brief-motion__tray { width: 250px; border-radius: 12px 0 12px 12px; background: var(--brief-recessed); padding: 8px; }
+.brief-motion__settle { display: flex; align-items: center; gap: 10px; width: 100%; height: 56px; padding: 0 12px; font: 500 .875rem var(--brief-sans); color: var(--brief-ink); background: var(--brief-paper); border: 1px solid var(--brief-paper-edge); border-radius: 10px 0 10px 10px; box-shadow: 0 3px 8px var(--brief-paper-shadow); cursor: pointer; }
+.brief-motion__settle span { flex: 1; text-align: left; }
+.brief-motion__example--transfer, .brief-motion__example--settle { grid-column: span 1; }
+.brief-motion :is(button,input):focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 3px; }
+.brief-motion__evidence { margin-top: 28px; max-width: 80ch; font-size: .875rem; }
+.brief-motion__evidence summary { cursor: pointer; padding-block: 12px; }
+.brief-motion__evidence pre { max-height: 350px; overflow: auto; font: 400 .75rem/1.6 var(--brief-mono); }
+.brief-motion__examples[data-width="compact"] { grid-template-columns: minmax(0,1fr); max-width: 400px; }
+@media (max-width: 1050px) { .brief-motion__examples { grid-template-columns: repeat(2,minmax(0,1fr)); } .brief-motion__example--selection { grid-column: 1 / -1; } }
+@media (max-width: 680px) {
+  .brief-motion { padding: 20px 16px 40px; }
+  .brief-motion__header { align-items: flex-start; } .brief-motion__header > span:last-child { max-width: 130px; text-align: right; }
+  .brief-motion__intro { flex-direction: column; align-items: stretch; } .brief-motion h1 { font-size: 2rem; }
+  .brief-motion__examples { grid-template-columns: minmax(0,1fr); } .brief-motion__example { padding: 16px; }
+  .brief-motion__reading { left: 16px; }
+  .brief-motion__example--reflow .brief-motion__note { flex-direction: column; align-items: flex-start; }
+}

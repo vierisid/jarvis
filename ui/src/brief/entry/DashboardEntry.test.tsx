@@ -106,6 +106,16 @@ test("shared-control specimen is isolated from live account and connection effec
   expect(connections).toBe(1); expect(document.querySelector('[role="menu"]')).toBeNull();
 });
 
+test("motion specimen stays isolated and unmounts without live side effects", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=motion#/_brief_preview");
+  expect(host.textContent).toContain("Motion with a purpose.");
+  await click("Toggle make room");
+  expect(host.querySelector('input[placeholder="Ask Jarvis…"]')?.closest('[aria-hidden]')?.getAttribute('aria-hidden')).toBe("false");
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(connections).toBe(1);
+});
+
 test("missing modules give a truthful fallback instead of fabricated empty business data", async () => {
   await mount("http://localhost:4381/?brief=1#/brief/today", {});
   expect(host.textContent).toContain("not available in Brief yet");
