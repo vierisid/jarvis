@@ -201,6 +201,19 @@ export const WAITPOINT_RESUME_UNKNOWN_ID_PER_MINUTE = 30;
  */
 export const WAITPOINT_RESUME_MAX_BODY_BYTES = 1_000_000;
 
+/**
+ * Ceiling on `POST /:id/run`'s `triggeredBy` label (#649). Every writer in the
+ * codebase sets a short tag (`dashboard`, `editor:run`, `trigger:<kind>`); the
+ * longest, `work_item:<id>:decision:<id>`, is well under 100. The column has no
+ * limit of its own and the value is read back to the model, so the API is
+ * where it gets one.
+ */
+export const RUN_TRIGGERED_BY_MAX_CHARS = 200;
+
+function isRunEnvironment(value: unknown): value is RunEnvironment {
+  return value === "PRODUCTION" || value === "TESTING";
+}
+
 const ok = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
     status,
@@ -240,9 +253,11 @@ const FLOW_METADATA_MAX_CHARS = 16_384;
  * Ceiling on a FLOW-LEVEL write request body, checked BEFORE it is parsed.
  *
  * Scope, stated because the name does not carry it: this fronts
- * `POST /api/workflows` and `PATCH /api/workflows/:id` only. The two version
- * routes carry the bigger body -- the whole step graph plus `uiMeta` -- and have
- * their own, larger ceiling (`VERSION_WRITE_MAX_BODY_BYTES`), rather than being
+ * `POST /api/workflows`, `PATCH /api/workflows/:id`, and the two flow-level
+ * switches whose bodies are a single field, `/publish` (`{ versionId }`) and
+ * `/code-steps` (`{ enabled }`) (#649). The connections routes borrow it too;
+ * see there. The two version routes carry the bigger body -- the whole step
+ * graph plus `uiMeta` -- and have their own, larger ceiling (`VERSION_WRITE_MAX_BODY_BYTES`), rather than being
  * squeezed through a limit sized for `{ displayName, metadata }`: a cap that is
  * generous for a flow row is a guess for a step graph, and breaking a large
  * flow's save in the visual editor would be a worse outcome than the exposure
@@ -430,8 +445,21 @@ const SAMPLE_DATA_MAX_BODY_BYTES = 2_000_000;
  * readers a route happened to call. The refusal NAMES the limit, because the
  * likeliest legitimate way to hit it is a large CODE step and a bare "too large"
  * gives the author nothing to act on.
+ *
+ * `allowEmpty` is for the routes where an absent body IS the contract:
+ * `/publish` with no body locks the latest draft, and `/run` with none is a
+ * plain production run (#649). An empty or whitespace-only body then reads as
+ * `{}` instead of "body must be valid JSON". It is decided on the TEXT, after
+ * both size checks, not on `req.body === null` or `content-length`: an empty
+ * chunked body has a non-null stream and no length, and the routes this
+ * replaced already accepted whitespace. Off by default, so the routes that
+ * require a body keep refusing an empty one.
  */
-async function readWriteBody(req: Request, maxBytes: number): Promise<{ body: Record<string, unknown> } | { error: Response }> {
+async function readWriteBody(
+  req: Request,
+  maxBytes: number,
+  opts: { allowEmpty?: boolean } = {},
+): Promise<{ body: Record<string, unknown> } | { error: Response }> {
   const tooLarge = () => err(`request body too large; the limit is ${maxBytes} bytes`, 413);
   const declared = Number(req.headers.get("content-length") ?? "0");
   if (Number.isFinite(declared) && declared > maxBytes) {
@@ -445,6 +473,9 @@ async function readWriteBody(req: Request, maxBytes: number): Promise<{ body: Re
   }
   if (text.length > maxBytes) {
     return { error: tooLarge() };
+  }
+  if (opts.allowEmpty && !text.trim()) {
+    return { body: {} };
   }
   let parsed: unknown;
   try {
@@ -1722,15 +1753,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           if (!getFlow(id)) return err("flow not found", 404);
-          const raw = await req.text();
-          let body: { enabled?: unknown } = {};
-          if (raw.trim()) {
-            try { body = JSON.parse(raw); }
-            catch { return err("code-steps body must be valid JSON", 400); }
-            if (!body || typeof body !== "object" || Array.isArray(body)) {
-              return err("code-steps body must be a JSON object", 400);
-            }
-          }
+          // An empty body is let through so it gets the `enabled` message
+          // below, which says what to send, rather than a bare JSON error.
+          const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES, { allowEmpty: true });
+          if ("error" in read) return read.error;
+          const body = read.body as { enabled?: unknown };
           if (typeof body.enabled !== "boolean") {
             return err('enabled must be a boolean ({"enabled": true} permits CODE steps for this flow)', 400);
           }
@@ -1748,15 +1775,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           // Default semantic: lock the latest draft and set it as published.
           // Body can override with `{ versionId }` for explicit selection.
-          const raw = await req.text();
-          let body: { versionId?: unknown } = {};
-          if (raw.trim()) {
-            try { body = JSON.parse(raw); }
-            catch { return err("publish body must be valid JSON", 400); }
-            if (!body || typeof body !== "object" || Array.isArray(body)) {
-              return err("publish body must be a JSON object", 400);
-            }
-          }
+          const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES, { allowEmpty: true });
+          if ("error" in read) return read.error;
+          const body = read.body as { versionId?: unknown };
           if (body.versionId !== undefined && (typeof body.versionId !== "string" || !body.versionId.trim())) {
             return err("versionId must be a non-empty string", 400);
           }
@@ -1773,11 +1794,20 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const flow = getFlow(id);
           if (!flow) return err("flow not found", 404);
-          const body = (await req
-            .json()
-            .catch(() => ({}))) as {
-            environment?: RunEnvironment;
-            triggeredBy?: string;
+          // `payload` is one run's trigger input, JSON.stringify'd into
+          // `workflow_job.payload`, so this body was unbounded STORAGE, not
+          // just parse cost (#649). It is the same kind of thing a resume
+          // payload is, so it gets the same cap rather than the flow-write one
+          // sized for `{ displayName, metadata }`.
+          //
+          // A body that is not JSON used to fall back to `{}` and start a
+          // production run with an empty payload. It is now a 400: running
+          // with input the caller did not send is worse than saying so.
+          const read = await readWriteBody(req, WAITPOINT_RESUME_MAX_BODY_BYTES, { allowEmpty: true });
+          if ("error" in read) return read.error;
+          const body = read.body as {
+            environment?: unknown;
+            triggeredBy?: unknown;
             stepNameToTest?: string;
             payload?: Record<string, unknown>;
             workItemId?: string;
@@ -1791,6 +1821,19 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             }
             try { return ok(startWorkItemRun(body.workItemId, id), 202); }
             catch (e) { if (e instanceof WorkItemError) return err(e.message, e.status); throw e; }
+          }
+          // Both were cast and written straight to `flow_run`. A bad
+          // `environment` then failed the column's CHECK as a 500, and
+          // `triggeredBy` of any size went on to `workflow_effect.provenance`
+          // and back to the model through `manage_workflow`'s run summaries.
+          if (body.environment !== undefined && !isRunEnvironment(body.environment)) {
+            return err("environment must be PRODUCTION or TESTING", 400);
+          }
+          if (
+            body.triggeredBy !== undefined
+            && (typeof body.triggeredBy !== "string" || body.triggeredBy.length > RUN_TRIGGERED_BY_MAX_CHARS)
+          ) {
+            return err(`triggeredBy must be a string of at most ${RUN_TRIGGERED_BY_MAX_CHARS} characters`, 400);
           }
           // Version selection:
           //   - Test-from-here (stepNameToTest set): prefer DRAFT. The user
