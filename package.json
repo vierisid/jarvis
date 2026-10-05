@@ -28,6 +28,7 @@
     "roles/",
     "ui/dist/",
     "ui/public/",
+    "ui/overlay.html",
     "scripts/ensure-bun.cjs",
     "scripts/build-shared-runtime.ts",
     "README.md"

@@ -86,6 +86,14 @@ describe("check-package-files REQUIRED", () => {
     expect(REQUIRED.map((r) => r.path)).toContain("scripts/build-shared-runtime.ts");
   });
 
+  test("ui/overlay.html is required -- the daemon serves /overlay from it by path (#642)", () => {
+    // websocket.ts resolves it as staticDir/../overlay.html, i.e. NEXT TO
+    // ui/dist rather than inside it, so neither `ui/dist/` nor `ui/public/` in
+    // `files` covers it. It shipped in no artifact, and /overlay fell through
+    // to a 404 everywhere except a source checkout.
+    expect(REQUIRED.map((r) => r.path)).toContain("ui/overlay.html");
+  });
+
   test("every requirement explains who breaks without it", () => {
     for (const r of REQUIRED) {
       expect(r.path.length).toBeGreaterThan(0);
