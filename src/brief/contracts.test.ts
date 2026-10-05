@@ -8,6 +8,25 @@ test('documented JSON examples are the checked TypeScript contract examples', as
   expect(json.reads.map((read: { state: string }) => read.state)).toEqual(['loading', 'ready', 'empty', 'stale', 'unavailable', 'unsupported']);
 });
 
+test('wire contracts have no runtime workflow repository dependency', async () => {
+  const runtimeRepos: string[] = [];
+  const bundle = await Bun.build({
+    entrypoints: [`${import.meta.dir}/contracts.ts`], target: 'browser',
+    plugins: [{
+      name: 'reject-workflow-repository-runtime-imports',
+      setup(build) {
+        build.onResolve({ filter: /workflows\/db\/repos\// }, args => {
+          runtimeRepos.push(args.path);
+          throw new Error(`Wire contracts must not import a workflow repository at runtime: ${args.path}`);
+        });
+      },
+    }],
+  });
+  expect(runtimeRepos).toEqual([]);
+  expect(bundle.success).toBe(true);
+  expect(bundle.outputs).toHaveLength(1);
+});
+
 // Checked by tsc, never invoked. A contract change must not quietly weaken these distinctions.
 function rejectedShapes() {
   // @ts-expect-error Cancel is turn-scoped, not just conversation-scoped.
