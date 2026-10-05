@@ -1,0 +1,23 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+scripts/version-stamp-cache.test.ts:
+(pass) release cache check > warms a fresh manifest as well as VERSION before the version-only comparison [136.99ms]
+(pass) release cache check > accepts platform-prefixed BuildKit output [143.39ms]
+(pass) release cache check > rejects an uncached deps step [133.22ms]
+(pass) release cache check > rejects an uncached build step [142.67ms]
+(pass) release cache check > rejects an uncached workflows step [146.70ms]
+(pass) release cache check > rejects an uncached production step [146.43ms]
+(pass) release cache check > rejects an unknown step outcome [150.60ms]
+(pass) release cache check > requires the version stamp to execute [134.18ms]
+(pass) release cache check > fails closed when required vertex 2 is missing [136.18ms]
+(pass) release cache check > fails closed when required vertex 3 is missing [135.47ms]
+(pass) release cache check > fails closed when required vertex 4 is missing [133.75ms]
+(pass) release cache check > fails closed when required vertex 5 is missing [133.01ms]
+(pass) release cache check > fails closed when required vertex 7 is missing [137.66ms]
+(pass) release cache check > surfaces a build failure and stops before comparison [72.71ms]
+
+ 14 pass
+ 0 fail
+ 86 expect() calls
+Ran 14 tests across 1 file. [1.98s]

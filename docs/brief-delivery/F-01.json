@@ -109,6 +109,34 @@
       "evidence/F-01/ci-projection-mutation.log",
       "evidence/F-01/ci-contracts-mutation.log"
     ],
-    "remote_ci": "Awaiting the corrected commit. Separate Docker release-cache failure also present on D-01; not fixed by this boundary-review correction."
+    "remote_ci": "Passed at 49b59ed3: 7,846 tests, 31 skipped, zero failures, plus TypeScript. https://github.com/vierisid/jarvis/actions/runs/37319239538"
+  },
+  "ci_cache_repair": {
+    "source_commit": "2e9d829e415df803703cdd0ff39c46a40c7847c1",
+    "change": "Reuse the exact script and regression tests from the D-01 repair so independent F-01 CI also warms both package.json and VERSION before comparing the version-only rebuild. Required cache-hit assertions remain intact.",
+    "verification": "Old script: 13 pass, 1 fail. Repaired script: 14 pass, zero failures, 86 assertions. The original D-01 Docker run passed at https://github.com/vierisid/jarvis/actions/runs/37321875199; F-01 exact-head CI will rerun after push.",
+    "evidence": [
+      "evidence/F-01/cache-red.log",
+      "evidence/F-01/cache-green.log"
+    ],
+    "limit": "Checks reuse on a warmed builder, not remote cache export/import fidelity. Local Docker daemon unavailable; real BuildKit proof comes from CI."
+  },
+  "rebase_2026_10_14": {
+    "baseline": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "original_head": "b1401bcdf8feb5fce39f3e93c8a9f094d7cdc250",
+    "owner_decision": "Keep both API import sets and reuse the D01 combined cache fix.",
+    "resolution": [
+      "Retain main approvalIntentFields and its existing use; add Brief capability imports alongside it.",
+      "Keep main dedicated builder and explanatory comments; retain manifest warm-up with identical script and test files to rebased D01."
+    ],
+    "validation": {
+      "focused_tests": "161 passed, 0 failed, 769 assertions across 8 files: Brief, capability API, approval delivery, trust boundaries and cache guard.",
+      "upstream_shell_guard": "14 checks passed.",
+      "normal_pre_commit": "Passed: TypeScript, cache tests, EE import guard, migrations, 100 templates and package content."
+    },
+    "limitations": [
+      "Real Docker builds and full suite await current-head GitHub CI.",
+      "Capabilities remain unsupported and disabled; no merge, activation or deployment."
+    ]
   }
 }
