@@ -1,0 +1,1315 @@
+{
+  "date": "2026-10-05",
+  "browser": "Codex in-app Chromium",
+  "scope": "Isolated D-03 control specimen; no live domain data",
+  "samples": [
+    {
+      "label": "light-390-compact-invalid",
+      "field": {
+        "h": 40,
+        "w": 350,
+        "x": 20,
+        "y": 714.53125
+      },
+      "form": {
+        "h": 627.3333740234375,
+        "w": 350,
+        "x": 20,
+        "y": 688.53125
+      },
+      "horizontalOverflow": false,
+      "icons": [
+        {
+          "label": "Close panel",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 20,
+            "y": 1963.197998046875
+          }
+        },
+        {
+          "label": "Delete example",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 68,
+            "y": 1963.197998046875
+          }
+        },
+        {
+          "label": "Unavailable action",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 116,
+            "y": 1963.197998046875
+          }
+        }
+      ],
+      "samples": [
+        {
+          "bg": "rgb(19, 22, 26)",
+          "color": "rgb(255, 255, 255)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Review follow-upReview follow-up",
+          "outline": "2.66667px none rgb(255, 255, 255)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgb(255, 255, 255)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Keep draftKeep draft",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(83, 91, 99)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Full name",
+          "outline": "2.66667px none rgb(83, 91, 99)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(179, 50, 56)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Shown in your workspace.Enter a name before saving.Enter a name before saving.Enter a name before saving.",
+          "outline": "2.66667px none rgb(179, 50, 56)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Active",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        }
+      ],
+      "save": {
+        "h": 32,
+        "w": 137.30209350585938,
+        "x": 20,
+        "y": 1255.8645935058594
+      },
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 274.29168701171875,
+            "y": 1684.1979370117188
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(19, 22, 26)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "true",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 301.09375,
+            "y": 1744.1979370117188
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "false",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 301.09375,
+            "y": 1804.1979370117188
+          },
+          "thumb": "none",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        }
+      ],
+      "theme": "light",
+      "tooltip": null,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    {
+      "label": "light-390-compact-filled",
+      "field": {
+        "h": 40,
+        "w": 350,
+        "x": 20,
+        "y": 714.53125
+      },
+      "form": {
+        "h": 627.3333740234375,
+        "w": 350,
+        "x": 20,
+        "y": 688.53125
+      },
+      "horizontalOverflow": false,
+      "icons": [
+        {
+          "label": "Close panel",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 20,
+            "y": 1963.1979064941409
+          }
+        },
+        {
+          "label": "Delete example",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 68,
+            "y": 1963.1979064941409
+          }
+        },
+        {
+          "label": "Unavailable action",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 116,
+            "y": 1963.1979064941409
+          }
+        }
+      ],
+      "samples": [
+        {
+          "bg": "rgb(19, 22, 26)",
+          "color": "rgb(255, 255, 255)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Review follow-upReview follow-up",
+          "outline": "2.66667px none rgb(255, 255, 255)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgb(255, 255, 255)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Keep draftKeep draft",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(83, 91, 99)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Full name",
+          "outline": "2.66667px none rgb(83, 91, 99)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(83, 91, 99)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Shown in your workspace.Enter a name before saving.Shown in your workspace.",
+          "outline": "2.66667px none rgb(83, 91, 99)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Active",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        }
+      ],
+      "save": {
+        "h": 32,
+        "w": 137.30209350585938,
+        "x": 20,
+        "y": 1255.8645935058594
+      },
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 274.29168701171875,
+            "y": 1684.1979064941406
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(19, 22, 26)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "true",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 301.09375,
+            "y": 1744.1979064941406
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "false",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 301.09375,
+            "y": 1804.1979064941409
+          },
+          "thumb": "none",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        }
+      ],
+      "theme": "light",
+      "tooltip": null,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    {
+      "label": "light-390-compact-saved",
+      "field": {
+        "h": 40,
+        "w": 350,
+        "x": 20,
+        "y": 714.53125
+      },
+      "form": {
+        "h": 627.3333740234375,
+        "w": 350,
+        "x": 20,
+        "y": 688.53125
+      },
+      "horizontalOverflow": false,
+      "icons": [
+        {
+          "label": "Close panel",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 20,
+            "y": 1963.197998046875
+          }
+        },
+        {
+          "label": "Delete example",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 68,
+            "y": 1963.197998046875
+          }
+        },
+        {
+          "label": "Unavailable action",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 116,
+            "y": 1963.197998046875
+          }
+        }
+      ],
+      "samples": [
+        {
+          "bg": "rgb(19, 22, 26)",
+          "color": "rgb(255, 255, 255)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Review follow-upReview follow-up",
+          "outline": "2.66667px none rgb(255, 255, 255)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgb(255, 255, 255)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Keep draftKeep draft",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(83, 91, 99)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Full name",
+          "outline": "2.66667px none rgb(83, 91, 99)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(31, 122, 67)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Shown in your workspace.Name saved in this example.Enter a name before saving.Name saved in this example.",
+          "outline": "2.66667px none rgb(31, 122, 67)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Active",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        }
+      ],
+      "save": {
+        "h": 32,
+        "w": 137.30209350585938,
+        "x": 20,
+        "y": 1255.8645935058594
+      },
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 274.29168701171875,
+            "y": 1684.1979370117188
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(19, 22, 26)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "true",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 301.09375,
+            "y": 1744.1979370117188
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "false",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 301.09375,
+            "y": 1804.1979370117188
+          },
+          "thumb": "none",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        }
+      ],
+      "theme": "light",
+      "tooltip": null,
+      "viewport": [
+        390,
+        844
+      ]
+    },
+    {
+      "label": "light-1280-standard",
+      "field": {
+        "h": 44,
+        "w": 544,
+        "x": 80,
+        "y": 527.3333740234375
+      },
+      "form": {
+        "h": 419.3333435058594,
+        "w": 1120,
+        "x": 80,
+        "y": 501.3333435058594
+      },
+      "horizontalOverflow": false,
+      "icons": [
+        {
+          "label": "Close panel",
+          "target": {
+            "h": 44,
+            "w": 44,
+            "x": 80,
+            "y": 1568
+          }
+        },
+        {
+          "label": "Delete example",
+          "target": {
+            "h": 44,
+            "w": 44,
+            "x": 136,
+            "y": 1568
+          }
+        },
+        {
+          "label": "Unavailable action",
+          "target": {
+            "h": 44,
+            "w": 44,
+            "x": 192,
+            "y": 1568
+          }
+        }
+      ],
+      "samples": [
+        {
+          "bg": "rgb(19, 22, 26)",
+          "color": "rgb(255, 255, 255)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Review follow-upReview follow-up",
+          "outline": "2.66667px none rgb(255, 255, 255)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        },
+        {
+          "bg": "rgb(255, 255, 255)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Keep draftKeep draft",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(83, 91, 99)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Full name",
+          "outline": "2.66667px none rgb(83, 91, 99)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(31, 122, 67)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Shown in your workspace.Name saved in this example.Enter a name before saving.Name saved in this example.",
+          "outline": "2.66667px none rgb(31, 122, 67)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Active",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        }
+      ],
+      "save": {
+        "h": 40,
+        "w": 152.0729217529297,
+        "x": 80,
+        "y": 852.6666870117188
+      },
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 1104.291748046875,
+            "y": 1289
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(19, 22, 26)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "true",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 1131.09375,
+            "y": 1349
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "false",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 1131.09375,
+            "y": 1409
+          },
+          "thumb": "none",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        }
+      ],
+      "theme": "light",
+      "tooltip": null,
+      "viewport": [
+        1280,
+        720
+      ]
+    },
+    {
+      "label": "dark-1280-standard",
+      "field": {
+        "h": 44,
+        "w": 544,
+        "x": 80,
+        "y": 527.3333740234375
+      },
+      "form": {
+        "h": 419.3333435058594,
+        "w": 1120,
+        "x": 80,
+        "y": 501.3333435058594
+      },
+      "horizontalOverflow": false,
+      "icons": [
+        {
+          "label": "Close panel",
+          "target": {
+            "h": 44,
+            "w": 44,
+            "x": 80,
+            "y": 1568
+          }
+        },
+        {
+          "label": "Delete example",
+          "target": {
+            "h": 44,
+            "w": 44,
+            "x": 136,
+            "y": 1568
+          }
+        },
+        {
+          "label": "Unavailable action",
+          "target": {
+            "h": 44,
+            "w": 44,
+            "x": 192,
+            "y": 1568
+          }
+        }
+      ],
+      "samples": [
+        {
+          "bg": "rgb(238, 241, 244)",
+          "color": "rgb(26, 29, 34)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Review follow-upReview follow-up",
+          "outline": "2.66667px none rgb(26, 29, 34)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        },
+        {
+          "bg": "rgb(26, 29, 34)",
+          "color": "rgb(238, 241, 244)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Keep draftKeep draft",
+          "outline": "2.66667px none rgb(238, 241, 244)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(164, 171, 179)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Full name",
+          "outline": "2.66667px none rgb(164, 171, 179)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(82, 201, 127)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Shown in your workspace.Name saved in this example.Enter a name before saving.Name saved in this example.",
+          "outline": "2.66667px none rgb(82, 201, 127)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(238, 241, 244)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Active",
+          "outline": "2.66667px none rgb(238, 241, 244)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        }
+      ],
+      "save": {
+        "h": 40,
+        "w": 152.0729217529297,
+        "x": 80,
+        "y": 852.6666870117188
+      },
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 1104.291748046875,
+            "y": 1289
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(238, 241, 244)",
+            "color": "rgb(238, 241, 244)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(238, 241, 244)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "true",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 1131.09375,
+            "y": 1349
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(32, 37, 44)",
+            "color": "rgb(238, 241, 244)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(238, 241, 244)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "false",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 1131.09375,
+            "y": 1409
+          },
+          "thumb": "none",
+          "track": {
+            "bg": "rgb(32, 37, 44)",
+            "color": "rgb(238, 241, 244)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(238, 241, 244)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        }
+      ],
+      "theme": "dark",
+      "tooltip": null,
+      "viewport": [
+        1280,
+        720
+      ]
+    },
+    {
+      "label": "dark-1280-narrow-compact",
+      "field": {
+        "h": 40,
+        "w": 420,
+        "x": 430,
+        "y": 571.3333740234375
+      },
+      "form": {
+        "h": 627.3333740234375,
+        "w": 420,
+        "x": 430,
+        "y": 545.3333740234375
+      },
+      "horizontalOverflow": false,
+      "icons": [
+        {
+          "label": "Close panel",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 430,
+            "y": 1820
+          }
+        },
+        {
+          "label": "Delete example",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 478,
+            "y": 1820
+          }
+        },
+        {
+          "label": "Unavailable action",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 526,
+            "y": 1820
+          }
+        }
+      ],
+      "samples": [
+        {
+          "bg": "rgb(238, 241, 244)",
+          "color": "rgb(26, 29, 34)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Review follow-upReview follow-up",
+          "outline": "2.66667px none rgb(26, 29, 34)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgb(26, 29, 34)",
+          "color": "rgb(238, 241, 244)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Keep draftKeep draft",
+          "outline": "2.66667px none rgb(238, 241, 244)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(164, 171, 179)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Full name",
+          "outline": "2.66667px none rgb(164, 171, 179)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(82, 201, 127)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Shown in your workspace.Name saved in this example.Enter a name before saving.Name saved in this example.",
+          "outline": "2.66667px none rgb(82, 201, 127)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(238, 241, 244)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Active",
+          "outline": "2.66667px none rgb(238, 241, 244)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        }
+      ],
+      "save": {
+        "h": 32,
+        "w": 137.30209350585938,
+        "x": 430,
+        "y": 1112.666748046875
+      },
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 754.2916870117188,
+            "y": 1541
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(238, 241, 244)",
+            "color": "rgb(238, 241, 244)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(238, 241, 244)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "true",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 781.09375,
+            "y": 1601
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(32, 37, 44)",
+            "color": "rgb(238, 241, 244)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(238, 241, 244)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "false",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 781.09375,
+            "y": 1661
+          },
+          "thumb": "none",
+          "track": {
+            "bg": "rgb(32, 37, 44)",
+            "color": "rgb(238, 241, 244)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(238, 241, 244)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        }
+      ],
+      "theme": "dark",
+      "tooltip": null,
+      "viewport": [
+        1280,
+        720
+      ]
+    },
+    {
+      "label": "light-1280-narrow-compact",
+      "field": {
+        "h": 40,
+        "w": 420,
+        "x": 430,
+        "y": 571.3333740234375
+      },
+      "form": {
+        "h": 627.3333740234375,
+        "w": 420,
+        "x": 430,
+        "y": 545.3333740234375
+      },
+      "horizontalOverflow": false,
+      "icons": [
+        {
+          "label": "Close panel",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 430,
+            "y": 1820
+          }
+        },
+        {
+          "label": "Delete example",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 478,
+            "y": 1820
+          }
+        },
+        {
+          "label": "Unavailable action",
+          "target": {
+            "h": 36,
+            "w": 36,
+            "x": 526,
+            "y": 1820
+          }
+        }
+      ],
+      "samples": [
+        {
+          "bg": "rgb(19, 22, 26)",
+          "color": "rgb(255, 255, 255)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Review follow-upReview follow-up",
+          "outline": "2.66667px none rgb(255, 255, 255)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgb(255, 255, 255)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Keep draftKeep draft",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "13px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(83, 91, 99)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Full name",
+          "outline": "2.66667px none rgb(83, 91, 99)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(31, 122, 67)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Shown in your workspace.Name saved in this example.Enter a name before saving.Name saved in this example.",
+          "outline": "2.66667px none rgb(31, 122, 67)",
+          "radius": "0px",
+          "size": "12px"
+        },
+        {
+          "bg": "rgba(0, 0, 0, 0)",
+          "color": "rgb(19, 22, 26)",
+          "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+          "label": "Active",
+          "outline": "2.66667px none rgb(19, 22, 26)",
+          "radius": "8px 0px 8px 8px",
+          "size": "14px"
+        }
+      ],
+      "save": {
+        "h": 32,
+        "w": 137.30209350585938,
+        "x": 430,
+        "y": 1112.666748046875
+      },
+      "switches": [
+        {
+          "checked": "true",
+          "disabled": false,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 754.2916870117188,
+            "y": 1541
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(19, 22, 26)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "true",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 781.09375,
+            "y": 1601
+          },
+          "thumb": "matrix(1, 0, 0, 1, 20, 0)",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        },
+        {
+          "checked": "false",
+          "disabled": true,
+          "target": {
+            "h": 40,
+            "w": 44,
+            "x": 781.09375,
+            "y": 1661
+          },
+          "thumb": "none",
+          "track": {
+            "bg": "rgb(240, 243, 246)",
+            "color": "rgb(19, 22, 26)",
+            "font": "\"Familjen Grotesk\", system-ui, -apple-system, BlinkMacSystemFont, sans-serif",
+            "outline": "2.66667px none rgb(19, 22, 26)",
+            "radius": "12px 0px 12px 12px",
+            "size": "14px"
+          }
+        }
+      ],
+      "theme": "light",
+      "tooltip": null,
+      "viewport": [
+        1280,
+        720
+      ]
+    }
+  ],
+  "contrast": {
+    "light": [
+      {
+        "label": "Review follow-upReview follow-up",
+        "ratio": 18.14
+      },
+      {
+        "label": "Keep draftKeep draft",
+        "ratio": 18.14
+      },
+      {
+        "label": "Full name",
+        "ratio": 6.66
+      },
+      {
+        "label": "Shown in your workspace.Enter a name before saving.Show",
+        "ratio": 6.66
+      },
+      {
+        "label": "Email address",
+        "ratio": 6.66
+      },
+      {
+        "label": "A long value stays inside its field.A long value stays ",
+        "ratio": 6.66
+      },
+      {
+        "label": "Summary frequency",
+        "ratio": 6.66
+      },
+      {
+        "label": "Native selection, shared geometry.Native selection, sha",
+        "ratio": 6.66
+      },
+      {
+        "label": "Notes",
+        "ratio": 6.66
+      },
+      {
+        "label": "Multiline content keeps its own space.Multiline content",
+        "ratio": 6.66
+      },
+      {
+        "label": "Save changesSaving…Changes savedTry againSave changes",
+        "ratio": 18.14
+      },
+      {
+        "label": "Active",
+        "ratio": 17.51
+      },
+      {
+        "label": "Completed",
+        "ratio": 6.66
+      },
+      {
+        "label": "A retained draft",
+        "ratio": 6.66
+      },
+      {
+        "label": "Edit this, then visit Completed and return.Edit this, t",
+        "ratio": 6.66
+      },
+      {
+        "label": "EnabledPausedEnabled",
+        "ratio": 6.66
+      },
+      {
+        "label": "Account exampleAccount example",
+        "ratio": 18.14
+      }
+    ],
+    "dark": [
+      {
+        "label": "Review follow-upReview follow-up",
+        "ratio": 14.91
+      },
+      {
+        "label": "Keep draftKeep draft",
+        "ratio": 14.91
+      },
+      {
+        "label": "Full name",
+        "ratio": 7.96
+      },
+      {
+        "label": "Shown in your workspace.Enter a name before saving.Show",
+        "ratio": 7.96
+      },
+      {
+        "label": "Email address",
+        "ratio": 7.96
+      },
+      {
+        "label": "A long value stays inside its field.A long value stays ",
+        "ratio": 7.96
+      },
+      {
+        "label": "Summary frequency",
+        "ratio": 7.96
+      },
+      {
+        "label": "Native selection, shared geometry.Native selection, sha",
+        "ratio": 7.96
+      },
+      {
+        "label": "Notes",
+        "ratio": 7.96
+      },
+      {
+        "label": "Multiline content keeps its own space.Multiline content",
+        "ratio": 7.96
+      },
+      {
+        "label": "Save changesSaving…Changes savedTry againSave changes",
+        "ratio": 14.91
+      },
+      {
+        "label": "Active",
+        "ratio": 16.28
+      },
+      {
+        "label": "Completed",
+        "ratio": 7.96
+      },
+      {
+        "label": "A retained draft",
+        "ratio": 7.96
+      },
+      {
+        "label": "Edit this, then visit Completed and return.Edit this, t",
+        "ratio": 7.96
+      },
+      {
+        "label": "EnabledPausedEnabled",
+        "ratio": 7.96
+      },
+      {
+        "label": "Account exampleAccount example",
+        "ratio": 14.91
+      }
+    ],
+    "disabledExcluded": true,
+    "scope": "Sampled meaningful text, not non-text boundary certification"
+  },
+  "interactionChecks": {
+    "saveFormStable": true,
+    "saveButtonStable": true,
+    "invalidFormStable": true,
+    "tabKeyboardManualActivation": true,
+    "tabDraftPreserved": true,
+    "switchSpaceActivation": true,
+    "tooltipFocusEscapeAndPointerBridge": true,
+    "menuTopLayerEscapesClipping": true,
+    "menuTabReturnsToNextControl": true,
+    "menuEscapeCycles": 10,
+    "deleteCancelConfirmUndoLocal": true
+  },
+  "fixes": [
+    "Expanded radio input hit surface from 1px to its full label target.",
+    "Preserved tooltip while keyboard focus remains.",
+    "Removed color interpolation that briefly lowered theme-switch text contrast."
+  ],
+  "limitations": [
+    "Native select popup belongs to OS/browser.",
+    "No screen-reader session, older-host rendering, OS zoom or reduced-motion runtime trace.",
+    "Full-page screenshot unavailable; viewport captures used."
+  ]
+}

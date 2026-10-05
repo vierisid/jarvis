@@ -1,0 +1,42 @@
+{
+  "source": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "specimens": { "controls": "486:73123", "fields": "513:84134", "light_lab": "513:86582", "dark_lab": "513:86641" },
+  "extraction": ["UI-04 build-controls.js, refine-shared-controls.js and native-control-specimens.png", "UI-05 build-fields.js, refine-and-lab.js and specimen-contact.png", "UI-09 tokens-and-routes-before.json (resolved Light/Dark values)"],
+  "geometry": {
+    "corner_order": "top-left, top-right, bottom-right, bottom-left",
+    "controls": [8, 0, 8, 8],
+    "button": {"standard_height": 40, "compact_height": 32, "padding_x": [16, 12], "font_size": [14, 13], "line_height": 20},
+    "icon": {"standard_target": 44, "compact_target": 36, "glyph": 16, "stroke": 1.5},
+    "focus": {"width": 2, "offset": 3},
+    "field": {"standard_height": 44, "compact_height": 40, "padding_x": 14, "font_size": 14, "line_height": 20, "feedback_minimum": 32, "textarea_minimum": 84},
+    "switch": {"target": [44, 40], "track": [44, 24], "track_corners": [12, 0, 12, 12], "thumb": [18, 18], "thumb_corners": [9, 0, 9, 9], "inset": 3, "travel": 20},
+    "tooltip": {"gap": 8, "padding_x": 10, "minimum_height": 32, "font_size": 12, "hover_delay_ms": 500, "focus_delay_ms": 0},
+    "tab": {"target_height": 44, "underline": 2},
+    "link_arrow_travel": 3
+  },
+  "control_colors": {
+    "order": ["Light", "Dark"],
+    "primary_hover": ["#2B3036", "#D9E0E7"],
+    "primary_pressed": ["#080A0C", "#C3CCD6"],
+    "quiet_hover": ["#EDF1F5", "#272D35"],
+    "quiet_pressed": ["#E2E7EC", "#333B46"],
+    "disabled_surface": ["#F0F3F6", "#20252C"],
+    "disabled_ink": ["#747C84", "#7D8792"],
+    "switch_off": ["#BEC7D1", "#45505D"],
+    "switch_off_source": "VariableID:404:3856",
+    "danger_tint": ["#FCEBEB", "#392426"],
+    "danger_ink": ["#B33238", "#FF999E"],
+    "danger_strong": ["#B33238", "#B33238"],
+    "danger_pressed": ["#8D252A", "#8D252A"],
+    "tooltip_surface": ["#13161A", "#13161A"],
+    "tooltip_ink": ["#FFFFFF", "#FFFFFF"]
+  },
+  "runtime_adaptations": [
+    "Native semantic buttons, fields, radios and select; manual-activation ARIA tabs.",
+    "Width-reserving labels and feedback slots grow for authored long content instead of clipping.",
+    "Surface/ink changes are immediate together. Color interpolation caused a transient theme-switch contrast failure in browser QA and was removed.",
+    "Only the 20px switch translation and 3px link arrow use the local 160ms ease; both obey reduced-motion CSS. D-04 owns the later shared motion system.",
+    "Portaled menus and tooltips inherit the invoking theme, use the native top layer where supported, and retain a body-portal fallback."
+  ]
+}
