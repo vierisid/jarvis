@@ -1,0 +1,187 @@
+{
+  "cases": [
+    {
+      "label": "light-wide-standard",
+      "viewport": {
+        "height": 1600,
+        "width": 1440
+      },
+      "reduced": false,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 273,
+      "longestFrameIntervalMs": 33.29999999999927,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 16.800000000000182,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0.009999999999990905
+    },
+    {
+      "label": "light-wide-reduced",
+      "viewport": {
+        "height": 1600,
+        "width": 1440
+      },
+      "reduced": true,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 0,
+      "longestFrameIntervalMs": 17.399999999997817,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 16.899999999997817,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0
+    },
+    {
+      "label": "dark-wide-standard",
+      "viewport": {
+        "height": 1600,
+        "width": 1440
+      },
+      "reduced": false,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 273,
+      "longestFrameIntervalMs": 33.19999999999709,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 16.80000000000291,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0.009999999999990905
+    },
+    {
+      "label": "dark-wide-reduced",
+      "viewport": {
+        "height": 1600,
+        "width": 1440
+      },
+      "reduced": true,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 0,
+      "longestFrameIntervalMs": 33.40000000000873,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 16.89999999999418,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0
+    },
+    {
+      "label": "dark-compact-standard",
+      "viewport": {
+        "height": 1600,
+        "width": 1440
+      },
+      "reduced": false,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 234,
+      "longestFrameIntervalMs": 16.89999999999418,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 16.80000000000291,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0
+    },
+    {
+      "label": "dark-compact-reduced",
+      "viewport": {
+        "height": 1600,
+        "width": 1440
+      },
+      "reduced": true,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 0,
+      "longestFrameIntervalMs": 17.5,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 16.800000000017462,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0
+    },
+    {
+      "label": "light-compact-standard",
+      "viewport": {
+        "height": 1600,
+        "width": 1440
+      },
+      "reduced": false,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 234,
+      "longestFrameIntervalMs": 20.9320000000007,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 17.10000000000582,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0
+    },
+    {
+      "label": "light-compact-reduced",
+      "viewport": {
+        "height": 1600,
+        "width": 1440
+      },
+      "reduced": true,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 0,
+      "longestFrameIntervalMs": 17.20000000001164,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 16.800000000046566,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0
+    },
+    {
+      "label": "light-390-standard",
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "reduced": false,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 234,
+      "longestFrameIntervalMs": 21.23200000001816,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 17.099999999976717,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0
+    },
+    {
+      "label": "dark-390-reduced",
+      "viewport": {
+        "height": 844,
+        "width": 390
+      },
+      "reduced": true,
+      "osReduced": false,
+      "activeAnimations": 0,
+      "cycles": 20,
+      "interruptions": 0,
+      "longestFrameIntervalMs": 17.400000000023283,
+      "maxAnchorDrift": 0,
+      "p95FrameIntervalMs": 16.899999999965075,
+      "passed": true,
+      "transitions": 280,
+      "maxSynchronousRetargetDifference": 0
+    }
+  ],
+  "retainedDraft": "Draft retained through repeated reflow.",
+  "native390NoHorizontalOverflow": true,
+  "limitations": "Reduce-only preview setting exercised in browser. OS media-query changes unit-tested. rAF/WAAPI samples are not GPU traces or a frame-rate guarantee."
+}
