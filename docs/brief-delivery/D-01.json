@@ -6,6 +6,14 @@
   "status": "implemented",
   "merged": false,
   "release_enabled": false,
+  "pull_request": "https://github.com/vierisid/jarvis/pull/701",
+  "ci_followup": {
+    "reason": "User-requested repair of the failed release-version cache assertion",
+    "change": "Warm a unique source manifest version before comparing the release rebuild; cache assertions unchanged",
+    "local_tests": "14 cache-check tests / 86 assertions; 49 combined cache, Brief and onboarding tests / 409 assertions; 25 workflow-hardening checks",
+    "evidence": "evidence/D-01/cache-check.md",
+    "remote_verdict": "Read the latest check on the current PR head; this receipt does not claim a future CI result."
+  },
   "repository": "https://github.com/vierisid/jarvis",
   "branch": "brief/d-01",
   "baseline": "05039c3e90d8670f90527f6c58f0a0ab684024b7",
@@ -119,9 +127,9 @@
     "Connection-owner preservation is tested with an instrumented legacy root; no live hosted WebSocket, voice, sidecar or OAuth session was exercised.",
     "Onboarding regression tests and gate ownership are checked; a full real onboarding-to-workflow handoff within future Brief rooms is not implemented or certified.",
     "Preview toggles demonstrate shell state, not the later sidebar/Pebble layouts or Figma animations.",
-    "The full repository suite and remote CI were not run.",
-    "No deployment, push, PR, real workflow execution or account mutation."
+    "Remote tests passed on the original D-01 head; Docker cache failure prompted the documented follow-up. Current-head CI is recorded on PR #701.",
+    "No deployment, PR merge, real workflow execution or account mutation."
   ],
   "rollback": "Remove the brief query parameter to return to the existing dashboard. Revert the D-01 commit for code rollback; no data migration or cleanup is required.",
-  "next": "D-02 in a separate worktree based on D-01; stacked PRs can be developed and reviewed before the foundation merges."
+  "next": "D-02 is draft PR #703 against brief/foundations (D-01 plus F-01). Keep all PRs unmerged; D-03 is not started."
 }
