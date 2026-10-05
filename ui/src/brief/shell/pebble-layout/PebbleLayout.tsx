@@ -84,6 +84,15 @@ export function PebbleLayout({ shell, enabled, conversation, children, reducedMo
     return () => main.removeEventListener("scroll", followScroll);
   }, []);
   useLayoutEffect(() => {
+    const main = work.current?.querySelector("main");
+    if (!companion || !companionPresent || open || !main) return;
+    // The stable portal is outside main's native scroll chain. Only the closed
+    // room companion forwards wheel input; the open goal keeps its own scroll.
+    const wheel = (event: WheelEvent) => forwardCompanionWheel(event, companion, main);
+    companion.addEventListener("wheel", wheel, { passive: false });
+    return () => companion.removeEventListener("wheel", wheel);
+  }, [companion, companionPresent, open]);
+  useLayoutEffect(() => {
     if (open && !wasOpen.current) {
       returnFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
       // The composer is at the origin and can be focused without scrolling the
@@ -144,4 +153,27 @@ export function PebbleLayout({ shell, enabled, conversation, children, reducedMo
       </div>
     </div>
   </CompanionContext.Provider></WorkspaceContext.Provider>;
+}
+
+function forwardCompanionWheel(event: WheelEvent, companion: HTMLElement, main: HTMLElement) {
+  if (event.defaultPrevented || !event.cancelable || event.ctrlKey || event.metaKey) return;
+  const target = event.target instanceof Element ? event.target : null;
+  // Leave native value-changing controls and scrollable goal content in charge.
+  if (target?.closest('select, input[type="number"], input[type="range"]')) return;
+  for (let node = target; node && companion.contains(node); node = node.parentElement) {
+    const style = getComputedStyle(node);
+    const ownsAxis = (delta: number, overflow: string, containment: string, offset: number, extent: number, viewport: number) =>
+      delta !== 0 && /^(auto|scroll)$/.test(overflow) && (containment === "contain" || containment === "none"
+        || (delta < 0 ? offset > 0 : offset + viewport < extent));
+    if (ownsAxis(event.deltaY, style.overflowY, style.overscrollBehaviorY, node.scrollTop, node.scrollHeight, node.clientHeight)
+      || ownsAxis(event.deltaX, style.overflowX, style.overscrollBehaviorX, node.scrollLeft, node.scrollWidth, node.clientWidth)) return;
+  }
+  const line = parseFloat(getComputedStyle(main).lineHeight) || 16;
+  const scaleX = event.deltaMode === 1 ? line : event.deltaMode === 2 ? main.clientWidth : 1;
+  const scaleY = event.deltaMode === 1 ? line : event.deltaMode === 2 ? main.clientHeight : 1;
+  const top = Math.max(0, Math.min(main.scrollHeight - main.clientHeight, main.scrollTop + event.deltaY * scaleY));
+  const left = Math.max(0, Math.min(main.scrollWidth - main.clientWidth, main.scrollLeft + event.deltaX * scaleX));
+  if (top === main.scrollTop && left === main.scrollLeft) return;
+  event.preventDefault();
+  main.scrollTop = top; main.scrollLeft = left;
 }

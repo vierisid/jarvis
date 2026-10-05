@@ -111,6 +111,72 @@ test("Review is a visible keyboard/touch path; close restores focus and permits 
   await React.act(async () => host.querySelector(".brief-today-document-review")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
   expect(host.querySelector(".brief-today-document-review")).toBeNull(); expect(document.activeElement).toBe(button("Review follow-up"));
 });
+
+test("Escape from a first-use paper action returns focus without opening Review first", async () => {
+  await render(); await hover(true);
+  const approve = button("Approve & send");
+  await React.act(async () => approve.focus());
+  expect(document.activeElement === approve).toBe(true);
+  await React.act(async () => approve.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true })));
+  expect(document.activeElement === button("Review follow-up")).toBe(true);
+  expect(stage().dataset.raised).toBe("false");
+  expect(host.querySelector(".brief-today-paper-actions")!.hasAttribute("inert")).toBe(true);
+  expect(host.querySelector(".brief-today-document-review")).toBeNull();
+  expect(actions).toEqual([]);
+  await hover(true); expect(stage().dataset.raised).toBe("true");
+});
+
+test("wheel over the closed companion scrolls Today, but not while chat is open", async () => {
+  await render();
+  const main = host.querySelector("main")!;
+  Object.defineProperties(main, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 } });
+  const goal = host.querySelector<HTMLInputElement>('[aria-label="Retained goal view"]')!;
+  const wheel = () => new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true });
+  const event = wheel(); goal.dispatchEvent(event);
+  expect(main.scrollTop).toBe(120); expect(event.defaultPrevented).toBe(true);
+  shell = { ...shell, chatOpen: true }; await render();
+  const openEvent = wheel(); goal.dispatchEvent(openEvent);
+  expect(main.scrollTop).toBe(120); expect(openEvent.defaultPrevented).toBe(false);
+  shell = { ...shell, chatOpen: false }; await render();
+  goal.dispatchEvent(wheel()); expect(main.scrollTop).toBe(240);
+  expect(host.querySelector('[aria-label="Retained goal view"]')).toBe(goal);
+});
+
+test("companion wheel preserves zoom, nested scrolling and boundary behavior", async () => {
+  await render();
+  const main = host.querySelector("main")!;
+  main.style.lineHeight = "20px";
+  Object.defineProperties(main, { clientHeight: { value: 600 }, scrollHeight: { value: 2000 },
+    clientWidth: { value: 800 }, scrollWidth: { value: 1000 } });
+  const companion = host.querySelector<HTMLElement>(".brief-pebble-companion")!;
+  const wheel = (target: Element, init: WheelEventInit = {}) => {
+    const event = new WheelEvent("wheel", { deltaY: 120, bubbles: true, cancelable: true, ...init });
+    // Happy DOM's WheelEvent extends UIEvent and omits the browser's modifiers.
+    Object.defineProperties(event, { ctrlKey: { value: init.ctrlKey ?? false }, metaKey: { value: init.metaKey ?? false } });
+    target.dispatchEvent(event); return event;
+  };
+  expect(wheel(companion, { ctrlKey: true }).defaultPrevented).toBe(false);
+  expect(wheel(companion, { metaKey: true }).defaultPrevented).toBe(false);
+  expect(wheel(companion, { cancelable: false }).defaultPrevented).toBe(false);
+  expect(main.scrollTop).toBe(0);
+  wheel(companion, { deltaY: 3, deltaMode: 1 }); expect(main.scrollTop).toBe(60);
+  wheel(companion, { deltaY: 1, deltaMode: 2 }); expect(main.scrollTop).toBe(660);
+  wheel(companion, { deltaY: 0, deltaX: 40 }); expect(main.scrollLeft).toBe(40); expect(main.scrollTop).toBe(660);
+  const inner = document.createElement("div"); inner.style.overflowY = "auto";
+  Object.defineProperties(inner, { clientHeight: { value: 100 }, scrollHeight: { value: 300 } });
+  companion.append(inner);
+  expect(wheel(inner).defaultPrevented).toBe(false); expect(main.scrollTop).toBe(660);
+  inner.scrollTop = 200;
+  expect(wheel(inner).defaultPrevented).toBe(true); expect(main.scrollTop).toBe(780);
+  inner.style.overscrollBehaviorY = "contain";
+  expect(wheel(inner).defaultPrevented).toBe(false); expect(main.scrollTop).toBe(780);
+  const select = document.createElement("select"); companion.append(select);
+  expect(wheel(select).defaultPrevented).toBe(false); expect(main.scrollTop).toBe(780);
+  wheel(companion, { deltaY: 3000 }); expect(main.scrollTop).toBe(1400);
+  expect(wheel(companion).defaultPrevented).toBe(false);
+  wheel(companion, { deltaY: -3000 }); expect(main.scrollTop).toBe(0);
+  expect(wheel(companion, { deltaY: -120 }).defaultPrevented).toBe(false);
+});
 test("queue insertion retains the front paper; a new identity starts at rest with its own document", async () => {
   await render(); await hover(true); const face = host.querySelector(".brief-today-paper-face");
   binding = { ...binding, state: { status: "ready", data: samplePaper("queued", false) } }; await render();

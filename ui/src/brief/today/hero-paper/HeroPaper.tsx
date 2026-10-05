@@ -77,8 +77,8 @@ function Decision({ item, binding, reducedMotion }: { item: DecisionPaper; bindi
       <p className="brief-type-body brief-secondary">{item.description}</p>
       {binding.state.status === "stale" && <p className="brief-today-decision-notice" role="status">{binding.state.reason}</p>}
       {unresolved && <p className="brief-today-decision-notice">Approval is not confirmation that this action completed. Check the outcome before trying again.</p>}
-      <BriefButton className="brief-today-review-trigger" variant="primary" aria-controls={review ? `${id}-review` : undefined} aria-expanded={review}
-        onClick={event => { reviewButton.current = event.currentTarget; if (review) closeReview(event); else { setReview(true); setSuppressed(false); } }}>{item.reviewLabel}</BriefButton>
+      <BriefButton ref={reviewButton} className="brief-today-review-trigger" variant="primary" aria-controls={review ? `${id}-review` : undefined} aria-expanded={review}
+        onClick={event => { if (review) closeReview(event); else { setReview(true); setSuppressed(false); } }}>{item.reviewLabel}</BriefButton>
       <span className="brief-today-action-feedback brief-type-utility" role="status">{operation?.state === "pending" ? "Waiting for confirmation…" : operation?.message ?? ""}</span>
     </div>
     <div className="brief-today-paper-stage" ref={region} data-raised={raised}
@@ -92,7 +92,7 @@ function Decision({ item, binding, reducedMotion }: { item: DecisionPaper; bindi
       onPointerLeave={() => setHover(false)}
       onFocus={event => { if (event.target.matches(":focus-visible")) { setFocus(true); setSuppressed(false); } }}
       onBlur={event => { if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setFocus(false); }}
-      onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeReview(); reviewButton.current?.focus({ preventScroll: true }); } }}>
+      onKeyDown={event => { if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closeReview(); reviewButton.current?.focus(); } }}>
       <div className="brief-today-paper-recess" aria-hidden="true" />
       <div className="brief-today-paper-clip" data-raised={raised}>
         <div className="brief-today-paper-backing-mask" aria-hidden="true"><div className="brief-today-paper-backs">

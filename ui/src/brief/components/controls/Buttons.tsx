@@ -6,6 +6,7 @@ import { BriefTooltip } from "./Floating";
 export type ControlSize = "sm" | "md";
 export type ActionState = "idle" | "pending" | "success" | "error";
 export interface BriefButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
+  ref?: React.Ref<HTMLButtonElement>;
   variant?: "primary" | "secondary" | "ghost" | "text" | "danger";
   size?: ControlSize;
   state?: ActionState;
