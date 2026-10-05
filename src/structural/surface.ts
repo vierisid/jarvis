@@ -132,9 +132,14 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
     const raw = (await manager.dispatchRPC(sidecarId, 'browser_ax_snapshot', {}, CAPTURE_RPC_TIMEOUT)) as {
       url?: string;
       title?: string;
+      // Deliberately `unknown`: `surfaceFromCdp` is what constrains it, and a
+      // `string | undefined` annotation here would only make the check below
+      // look redundant to a reader while erasing at runtime all the same.
+      loader_id?: unknown;
       elements?: CdpAxElement[];
     };
-    surface = surfaceFromCdp({ url: raw.url, title: raw.title, elements: raw.elements ?? [] });
+    surface = surfaceFromCdp({ url: raw.url, title: raw.title, loader_id: raw.loader_id,
+      elements: raw.elements ?? [] });
   } else {
     const raw = (await manager.dispatchRPC(
       sidecarId,

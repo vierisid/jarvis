@@ -103,12 +103,54 @@ type AddressedElement = {
   pid?: number;
   title: string;
   url?: string;
+  /** The document, for a browser surface; absent on desktop and pre-#640 sidecars. */
+  loaderId?: string;
 };
 
 const addressed = new Map<number, AddressedElement>();
 /** Ids per snapshot, oldest first - the eviction queue for `addressed`. */
 const snapshotIds: number[][] = [];
 let nextId = 1;
+
+/**
+ * Has the surface this element was reviewed on been replaced since?
+ *
+ * #640, and the shape of the answer is the whole point: the identity to compare
+ * depends on whether the surface HAS a document.
+ *
+ * A BROWSER surface does, and `history.pushState` is the reason the URL cannot
+ * be it. An SPA rewrites `location.href` and `document.title` on every in-app
+ * navigation without ever committing a document, so comparing those two refused
+ * a perfectly valid click on Gmail, Linear or a sheet the model was told to
+ * reuse an id across -- the pre-existing false refusal #603 named and left. #603
+ * settled the rule everywhere else in one sentence: compare the loaderId, never
+ * the URL (`confirmSameDocument`, `refuseStaleAXElement`, `assertSamePage`).
+ * With `loader_id` now on the AX snapshot reply this path can follow it, so for
+ * a browser surface the loaderId is the ONLY term -- adding url or title back as
+ * an extra condition would reinstate exactly the refusal being removed.
+ *
+ * A DESKTOP surface has no document, so url+title stays its identity, unchanged.
+ *
+ * ABSENT ON EITHER SIDE MEANS FALL BACK, never "equal". A sidecar older than
+ * #640 sends no `loader_id`, and an empty or over-long one is dropped by
+ * `surfaceFromCdp`; two absent identities compared with `===` would both be
+ * `undefined` and pass, which is a check that reads as one and is not. So the
+ * loaderId term is used only when BOTH sides have one, and otherwise the
+ * previous, stricter comparison runs. The degradation is towards the
+ * false-refusal, which costs a retry; the other direction would cost a click on
+ * the wrong document.
+ *
+ * NOT the only guard, and not load-bearing alone. The sidecar's own
+ * `refuseStaleAXElement` re-reads the frame tree and refuses an id whose
+ * document moved or whose snapshot was superseded, the caller still requires
+ * `resolveRef` to find the node in the fresh capture above its confidence floor,
+ * and the acted node's role and name must still match the reviewed ones. This is
+ * the daemon-side term of four.
+ */
+function surfaceMoved(entry: AddressedElement, now: SemanticSurface): boolean {
+  if (entry.loaderId && now.root.loaderId) return now.root.loaderId !== entry.loaderId;
+  return now.root.url !== entry.url || (now.root.title ?? '') !== entry.title;
+}
 
 /** Sidecars are addressable by id or name; remember snapshots by id only. */
 function canonicalTarget(target: string): string {
@@ -123,7 +165,8 @@ function addressSurface(surface: SemanticSurface, kind: CaptureKind, target: str
   const canonical = canonicalTarget(target);
   const ids = surface.nodes.map((node) => {
     const id = nextId++;
-    addressed.set(id, { node, kind, target: canonical, pid, title: surface.root.title ?? '', url: surface.root.url });
+    addressed.set(id, { node, kind, target: canonical, pid, title: surface.root.title ?? '',
+      url: surface.root.url, ...(surface.root.loaderId ? { loaderId: surface.root.loaderId } : {}) });
     return id;
   });
   snapshotIds.push(ids);
@@ -367,7 +410,7 @@ export const uiActTool: ToolDefinition = {
       const pre = await captureSurface({ kind, target, pid, full: false });
       before = pre.surface.nodes;
       beforeTitle = pre.surface.root.title;
-      if (!READ_ONLY_ACTIONS.has(action) && (pre.surface.root.url !== entry.url || (pre.surface.root.title ?? '') !== entry.title)) {
+      if (!READ_ONLY_ACTIONS.has(action) && surfaceMoved(entry, pre.surface)) {
         return 'Error: the UI surface changed since review - nothing was done; take a fresh ui_snapshot and review the action again';
       }
     } catch (err) {

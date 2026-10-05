@@ -145,6 +145,39 @@ func TestBrowserAXActionGuardsIntegration(t *testing.T) {
 	honest := axFindBackendID(t, snap.Result, "honest field")
 	reviewed := axFindBackendID(t, snap.Result, "reviewed field")
 
+	// ── the reply names the DOCUMENT, not just the page's own url/title (#640) ──
+	//
+	// `ui_act` compared `url` and `title` -- `location.href` and
+	// `document.title`, which `history.pushState` moves on every SPA navigation
+	// without committing a document -- because the reply carried nothing else to
+	// compare. `loader_id` is what lets it follow #603's rule instead. Asserted
+	// here, against a real browser, because the value has to be the one
+	// `refuseStaleAXElement` compares: a loader id that is merely present and
+	// not the checked document's would read as a guard and bind nothing.
+	axLoader := func(result any) string {
+		t.Helper()
+		m, ok := result.(map[string]any)
+		if !ok {
+			t.Fatalf("ax snapshot reply is %T, not an object", result)
+		}
+		got, _ := m["loader_id"].(string)
+		if got == "" {
+			t.Fatal("ax snapshot reply carries no loader_id, so ui_act has only the page's own url and title")
+		}
+		return got
+	}
+	firstLoader := axLoader(snap.Result)
+
+	// Stable across a re-read of the SAME document: the term `ui_act` compares
+	// has to hold still, or it would refuse every call the way the url did.
+	again, err := axSnapshot(withHeadless(nil))
+	if err != nil {
+		t.Fatalf("second ax snapshot: %v", err)
+	}
+	if got := axLoader(again.Result); got != firstLoader {
+		t.Fatalf("loader_id moved on a re-read of the same document: %q then %q", firstLoader, got)
+	}
+
 	// ── the honest path still works, against a page that has redefined
 	// isConnected and activeElement in its own world ──
 	res, err := axSetValue(withHeadless(map[string]any{
@@ -255,6 +288,22 @@ func TestBrowserAXActionGuardsIntegration(t *testing.T) {
 		if !strings.Contains(err.Error(), "navigated to a new document") {
 			t.Fatalf("ax %s gave an unhelpful refusal: %v", name, err)
 		}
+	}
+
+	// ── and the loader id MOVED with that document (#640) ──
+	//
+	// The half a constant loader id would silently switch off. LAST in this
+	// test on purpose: a fresh snapshot re-registers `axIDs` for the new
+	// document, which would turn the two refusals above from "navigated to a
+	// new document" into "not one the last snapshot returned" -- the same
+	// outcome reached for a weaker reason, which is exactly what those
+	// assertions exist to tell apart.
+	afterNav, err := axSnapshot(withHeadless(nil))
+	if err != nil {
+		t.Fatalf("ax snapshot after navigation: %v", err)
+	}
+	if got := axLoader(afterNav.Result); got == firstLoader {
+		t.Fatalf("loader_id %q survived a real navigation, so it identifies no document", got)
 	}
 }
 

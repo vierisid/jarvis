@@ -437,3 +437,122 @@ describe('advertised actions exist', () => {
     }
   });
 });
+
+/**
+ * #640, the second half: `ui_act` compared the page's own url+title where every
+ * other path compares the loaderId.
+ *
+ * `history.pushState` rewrites `location.href` and `document.title` while the
+ * document holds, which is how every SPA navigates, so an ordinary click on
+ * Gmail or Linear -- or the cell-to-cell id reuse `webapp-templates/gsheets.yaml`
+ * tells the model to do -- was refused for a surface that had not changed. #603
+ * named this and deliberately left it, because `browser_ax_snapshot`'s reply
+ * carried no document identity to compare instead. It carries `loader_id` now.
+ *
+ * The four tests below are the four cases that have to stay apart: a moved URL
+ * on a held document (act), a moved document (refuse), a sidecar too old to say
+ * (refuse, as before), and a desktop surface, which has no document at all and
+ * keeps url+title as its only identity (refuse).
+ */
+describe('ui_act compares the document, not the page\'s own url and title (#640)', () => {
+  beforeEach(() => resetUiSnapshots());
+
+  /** A browser sidecar whose AX snapshot replies come from a queue. */
+  function browserManager(replies: Array<Record<string, unknown>>, calls: Call[]): SidecarManager {
+    const queue = [...replies];
+    return {
+      listSidecars: () => [{ id: 'sc1', name: 'chrome-box', connected: true,
+        capabilities: ['browser'], unavailable_capabilities: [] }],
+      dispatchRPC: async (_i: string, method: string, params: Record<string, unknown>) => {
+        calls.push({ method, params });
+        if (method === 'browser_ax_snapshot') return queue.length > 1 ? queue.shift()! : queue[0]!;
+        return { success: true };
+      },
+    } as unknown as SidecarManager;
+  }
+
+  const send = [{ ax_id: 'a', backend_node_id: 7, role: 'button', name: 'Send', interactive: true, sig: 's7' }];
+  const clicks = (calls: Call[]) => calls.filter((c) => c.method === 'browser_ax_click');
+
+  it('acts after a pushState moved the url AND the title, because the document held', async () => {
+    const calls: Call[] = [];
+    setSidecarManagerRef(browserManager([
+      { url: 'https://mail.test/u/0/#inbox', title: 'Inbox (3)', loader_id: 'LOADER-1', elements: send },
+      // Same document (loader_id unchanged), both page-authored fields moved.
+      { url: 'https://mail.test/u/0/#inbox/thread-9', title: 'Re: invoice', loader_id: 'LOADER-1', elements: send },
+    ], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'browser' }) as string;
+    const out = await uiActTool.execute({ element_id: idOf(snap, 'Send'), action: 'click' }) as string;
+    expect(out).not.toContain('the UI surface changed since review');
+    expect(clicks(calls)).toHaveLength(1);
+    expect(clicks(calls)[0]!.params.backend_node_id).toBe(7);
+  });
+
+  it('still refuses when the document itself was replaced, even with the url and title unchanged', async () => {
+    // The direction that must not be lost, and the one url+title could not
+    // see on its own: a same-url re-navigation commits a new document, every
+    // id from the old one is meaningless, and the two page-authored fields
+    // both compare equal.
+    const calls: Call[] = [];
+    setSidecarManagerRef(browserManager([
+      { url: 'https://mail.test/u/0/#inbox', title: 'Inbox (3)', loader_id: 'LOADER-1', elements: send },
+      { url: 'https://mail.test/u/0/#inbox', title: 'Inbox (3)', loader_id: 'LOADER-2', elements: send },
+    ], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'browser' }) as string;
+    const out = await uiActTool.execute({ element_id: idOf(snap, 'Send'), action: 'click' }) as string;
+    expect(out).toContain('the UI surface changed since review');
+    expect(out).toContain('nothing was done');
+    expect(clicks(calls)).toHaveLength(0);
+  });
+
+  for (const [label, absent] of [
+    ['an older sidecar that sends none', {}],
+    ['an empty one, which must not compare equal to another empty one', { loader_id: '' }],
+    ['a non-string one', { loader_id: 42 }],
+    ['an over-long one', { loader_id: 'x'.repeat(129) }],
+  ] as const) {
+    it(`falls back to url+title for ${label}`, async () => {
+      // Degrading to the STRICTER comparison, so a missing or unusable identity
+      // costs a retry and never a click on a document nothing vouched for.
+      const calls: Call[] = [];
+      setSidecarManagerRef(browserManager([
+        { url: 'https://mail.test/a', title: 'A', ...absent, elements: send },
+        { url: 'https://mail.test/b', title: 'B', ...absent, elements: send },
+      ], calls));
+      const snap = await uiSnapshotTool.execute({ kind: 'browser' }) as string;
+      const out = await uiActTool.execute({ element_id: idOf(snap, 'Send'), action: 'click' }) as string;
+      expect(out).toContain('the UI surface changed since review');
+      expect(clicks(calls)).toHaveLength(0);
+    });
+  }
+
+  it('a desktop surface keeps url+title as its identity, having no document', async () => {
+    // Not a regression to tolerate -- it is the right check for a window. The
+    // loaderId term must not reach this path, and `surfaceFromUia` sets none.
+    const calls: Call[] = [];
+    setSidecarManagerRef(fakeManager(
+      [[el(1, 'File'), el(2, 'Send')], [el(1, 'File'), el(2, 'Send')]],
+      calls,
+      ['Untitled - Notepad', 'draft.txt - Notepad'],
+    ));
+    const snap = await uiSnapshotTool.execute({ kind: 'desktop' }) as string;
+    const out = await uiActTool.execute({ element_id: idOf(snap, 'Send'), action: 'click' }) as string;
+    expect(out).toContain('the UI surface changed since review');
+    expect(acts(calls)).toHaveLength(0);
+  });
+
+  it('a read still works while the surface is moving, since it dispatches nothing', async () => {
+    // `get_value` is in READ_ONLY_ACTIONS, so the surface check is skipped by
+    // design. Pinned so the predicate change cannot have started refusing reads.
+    const calls: Call[] = [];
+    setSidecarManagerRef(browserManager([
+      { url: 'https://mail.test/a', title: 'A', loader_id: 'LOADER-1',
+        elements: [{ ax_id: 'a', backend_node_id: 7, role: 'textbox', name: 'Subject', interactive: true, sig: 's7' }] },
+      { url: 'https://mail.test/b', title: 'B', loader_id: 'LOADER-2',
+        elements: [{ ax_id: 'a', backend_node_id: 7, role: 'textbox', name: 'Subject', interactive: true, sig: 's7' }] },
+    ], calls));
+    const snap = await uiSnapshotTool.execute({ kind: 'browser' }) as string;
+    const out = await uiActTool.execute({ element_id: idOf(snap, 'Subject'), action: 'get_value' }) as string;
+    expect(out).not.toContain('the UI surface changed since review');
+  });
+});

@@ -325,6 +325,31 @@ format is deliberately provider-independent and the helpers in
 `sidecar/semantic.go` are shared, so the work is in the walk, not in the
 addressing.
 
+### `browser_ax_snapshot`: `loader_id` is the surface's identity, `url` and `title` are not
+
+The reply carries three identity-ish fields and they are not interchangeable:
+
+| Field | Who chooses it | What it is for |
+|---|---|---|
+| `url` | the PAGE (`location.href`) | display; never eligible to select a site playbook (#572, #583) |
+| `title` | the PAGE (`document.title`) | display |
+| `loader_id` | the BROWSER (frame tree, via `assertSamePage`) | deciding whether this is the same surface as before (#640) |
+
+A consumer asking "is this still the surface I read a moment ago" compares
+`loader_id` and nothing else. `history.pushState` rewrites the URL and the title
+while the document holds, which is how every single-page app navigates, so a URL
+term in that comparison refuses ordinary clicks on Gmail or Linear -- the rule
+#603 settled for `confirmSameDocument` and `refuseStaleAXElement`, and the reason
+`loader_id` was added here. Both page-authored fields are still bounded by
+`axIdentityField` rather than plainly truncated, because a daemon may compare
+them where no `loader_id` is available and two cut values compare equal as soon
+as their prefixes agree.
+
+A sidecar older than #640 sends no `loader_id`. The daemon's rule for that is to
+fall back to the url+title comparison, never to treat two absent identities as
+equal -- so the field widens the wire with no version gate, and its absence
+degrades to the previous, stricter, SPA-refusing behaviour.
+
 ### `browser_ax_snapshot`: no traversal into out-of-process iframes
 
 The sidecar attaches one flat-mode CDP session to a single page target
