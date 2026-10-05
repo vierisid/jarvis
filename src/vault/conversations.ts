@@ -1,4 +1,5 @@
 import { getDb, generateId } from './schema.ts';
+import type { Database } from 'bun:sqlite';
 import { defaultConversationWorkspace, ensureConversationTab } from './conversation-schema.ts';
 
 export type MessageRole = 'user' | 'assistant' | 'system';
@@ -100,9 +101,17 @@ export function addMessage(
   conversationId: string,
   msg: { role: MessageRole; content: string; tool_calls?: unknown[] }
 ): ConversationMessage {
-  const db = getDb();
-  const id = generateId();
-  const now = Date.now();
+  return insertConversationMessage(getDb(), conversationId, msg);
+}
+
+/** Shared canonical writer; durable turn transactions supply their own IDs and ordering. */
+export function insertConversationMessage(
+  db: Database,
+  conversationId: string,
+  msg: { role: MessageRole; content: string; tool_calls?: unknown[] },
+  id = generateId(),
+  now = Date.now(),
+): ConversationMessage {
 
   db.prepare(
     'INSERT INTO conversation_messages (id, conversation_id, role, content, tool_calls, created_at) VALUES (?, ?, ?, ?, ?, ?)'

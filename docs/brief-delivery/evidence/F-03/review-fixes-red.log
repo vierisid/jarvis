@@ -1,0 +1,89 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/daemon/agent-service-conversation.test.ts:
+(pass) classic scoped AgentService streams never read or mutate the shared primary history [36.16ms]
+(pass) a cancelled classic turn cannot dispatch a late tool call [20.06ms]
+(pass) router-first AgentService uses explicit history and compaction identity instead of channel history [54.58ms]
+(pass) router task progress and cancellation stay with their conversation during concurrent delegation [23.00ms]
+(pass) task-tier cancellation reaches the in-flight model request [14.74ms]
+[Orchestrator] Executing "delegate_task" with NO authority engine wired: tool calls are ungated and unaudited
+[DelegateTool] Delegating to Fixture: Read A...
+[DelegateTool] Spawned Fixture (544a1113-3022-4cd5-aa71-b4a1de2aac93) with 0 tools
+[SubAgent:Fixture] Error: Turn cancelled
+210 |     await until(() => specialistSignal !== undefined);
+211 |     await transport.handle({ type: 'brief_chat_send', payload: b, timestamp: Date.now() }, socket, capabilities);
+212 |     expect(startedB).toBe(false);
+213 |     const { text: _text, ...identity } = a;
+214 |     await transport.handle({ type: 'brief_chat_cancel', payload: identity, timestamp: Date.now() }, socket, capabilities);
+215 |     expect(specialistSignal!.aborted).toBe(true);
+                                            ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-03/src/daemon/agent-service-conversation.test.ts:215:39)
+(fail) cancelling real specialist delegation aborts its model and frees the next conversation [59.52ms]
+
+src/brief/chat-transport.test.ts:
+(pass) interleaved streams, tab switch and one cancel isolate text, progress, history and TTS [21.01ms]
+(pass) duplicates, reconnect and stale cancel reconcile the original terminal without another generation [18.78ms]
+(pass) production limiter queues another conversation and a cancelled queued turn never calls the model [15.18ms]
+(pass) disabled transport, malformed frames and unavailable cursors never create turns [44.15ms]
+(pass) cancel ends audio immediately and suppresses a delayed provider chunk and duplicate terminal [42.23ms]
+(pass) model errors persist a sanitized failed terminal and preserve partial output for replay [14.92ms]
+(pass) subscription admission cannot orphan a queued turn and queue admission cannot append messages [68.36ms]
+244 |     await f.send(owner, 'brief_chat_send', a);
+245 |     f.push(a.turnId, { type: 'text', text: 'Spoken answer' }); f.push(a.turnId, done());
+246 |     await until(() => f.frames.get(owner)!.some(frame => frame.type === 'brief_chat_audio' && (frame.payload as any).phase === 'chunk'));
+247 |     await f.send(owner, 'brief_chat_unsubscribe', { conversationId: a.conversationId });
+248 |     const audio = f.frames.get(owner)!.filter(frame => frame.type === 'brief_chat_audio');
+249 |     expect(audio.map(frame => (frame.payload as any).phase)).toEqual(['start', 'chunk', 'end']);
+                                                                   ^
+error: expect(received).toEqual(expected)
+
+  [
+    "start",
+    "chunk",
+-   "end",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-03/src/brief/chat-transport.test.ts:249:62)
+(fail) resubscribing during speech never resumes a truncated audio stream [22.55ms]
+265 |     await f.send(owner, 'brief_chat_send', a);
+266 |     await f.send(owner, 'brief_chat_unsubscribe', { conversationId: a.conversationId });
+267 |     await f.send(owner, 'brief_chat_subscribe', { conversationId: a.conversationId });
+268 |     f.push(a.turnId, { type: 'text', text: 'Answer' }); f.push(a.turnId, done());
+269 |     await f.transport.idle();
+270 |     expect(syntheses).toBe(0);
+                            ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-03/src/brief/chat-transport.test.ts:270:23)
+(fail) leaving before speech starts prevents audio after returning to the conversation [13.17ms]
+284 |     }
+285 |     // Inspect retained work, not just DB state: terminal rows no longer count
+286 |     // toward admission, but must not leave closures and input in the limiter.
+287 |     await Bun.sleep(0);
+288 |     const retained = f.transport as unknown as { jobs: Set<unknown>; controllers: Map<string, unknown> };
+289 |     expect(retained.jobs.size).toBe(1);
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: 65
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-03/src/brief/chat-transport.test.ts:289:32)
+(fail) repeated queued cancellation releases retained jobs before the active turn ends [139.14ms]
+
+ 12 pass
+ 4 fail
+ 88 expect() calls
+Ran 16 tests across 2 files. [1076.00ms]

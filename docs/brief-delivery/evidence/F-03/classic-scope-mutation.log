@@ -1,0 +1,23 @@
+bun test v1.3.6 (d530ed99)
+
+src/actions/tools/tool-scope.test.ts:
+297 |     const conv = /return this\.streamMessageConv\(([^)]*)\);/.exec(src);
+298 |     expect(conv).not.toBeNull();
+299 |     expect(conv![1]).toBe('text, channel, siteContext, scope, contextKey, conversation');
+300 |     // F-03 adds explicit conversation history to both branches; it must not
+301 |     // replace or drop the existing site scope on either path.
+302 |     expect(src).toContain('this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope, conversation)');
+                      ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope, conversation)"
+Received: [full AgentService source omitted; it lacks the expected scope argument]
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-03/src/actions/tools/tool-scope.test.ts:302:17)
+(fail) what a future change could silently undo > both branches of streamMessageInner carry the scope and the site block [2.15ms]
+
+ 0 pass
+ 30 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [191.00ms]

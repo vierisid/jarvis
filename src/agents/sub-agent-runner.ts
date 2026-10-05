@@ -185,6 +185,8 @@ export type RunSubAgentOptions = {
   context: string;
   llmManager: LLMManager;
   toolRegistry: ToolRegistry;
+  /** Cancels in-flight model work as well as fencing later dispatch. */
+  signal?: AbortSignal;
   /**
    * Provider entries from the post-DB-merge `llm` config, for the tool
    * filter's model-class gate. Absent means the classifier reads a
@@ -652,7 +654,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
 
   // A cancellation is not an agent error: the caller stopped the run and
   // must not record anything for it.
-  const fence = () => { try { checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); } };
+  const fence = () => { try { opts.signal?.throwIfAborted(); checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); } };
 
   const noteToolCall = (tc: LLMToolCall) => {
     toolsUsed.push(tc.name);
@@ -824,7 +826,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     // Tool execution loop
     for (let iteration = startIteration; iteration < maxIterations; iteration++) {
       fence();
-      const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
+      const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools, ...(opts.signal ? { signal: opts.signal } : {}) });
       fence();
 
       totalUsage.input += llmResponse.usage.input_tokens;
@@ -873,7 +875,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     console.error(`[SubAgent:${agentName}] Error:`, errorMsg);
 
     return finish({ success: false, response: `Sub-agent error: ${errorMsg}`, terminationReason: 'error',
-      ...(err instanceof GovernedDispatchError ? { dispatchError: true } : err instanceof SubAgentCanceled ? { canceled: true } : {}) });
+      ...(err instanceof GovernedDispatchError ? { dispatchError: true } : err instanceof SubAgentCanceled || opts.signal?.aborted ? { canceled: true } : {}) });
   } finally {
     agent.idle();
   }

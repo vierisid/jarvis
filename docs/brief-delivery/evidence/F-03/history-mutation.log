@@ -1,0 +1,23 @@
+bun test v1.3.6 (d530ed99)
+
+src/daemon/agent-service-conversation.test.ts:
+55 |   expect(await first).toBeInstanceOf(Error); await second;
+56 |   expect(captured.get('Question A')!.signal.aborted).toBe(true);
+57 |   expect(captured.get('Question B')!.signal.aborted).toBe(false);
+58 |   for (const name of ['A', 'B']) {
+59 |     const text = JSON.stringify(captured.get(`Question ${name}`)!.messages);
+60 |     expect(text).toContain(`Private history ${name}`);
+                      ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "Private history A"
+Received: "[{\"role\":\"system\",\"content\":\"\",\"cache\":true},{\"role\":\"user\",\"content\":\"LEGACY PRIVATE HISTORY\"},{\"role\":\"user\",\"content\":\"Question A\"}]"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-03/src/daemon/agent-service-conversation.test.ts:60:18)
+(fail) classic scoped AgentService streams never read or mutate the shared primary history [23.42ms]
+
+ 0 pass
+ 4 filtered out
+ 1 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [206.00ms]

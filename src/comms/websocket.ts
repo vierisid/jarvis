@@ -11,6 +11,8 @@ import { rejectsCrossSiteWrite } from './cross-site-guard.ts';
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
   type: 'chat' | 'cancel' | 'command' | 'status' | 'stream' | 'error' | 'notification'
+      | 'brief_chat_send' | 'brief_chat_cancel' | 'brief_chat_subscribe' | 'brief_chat_unsubscribe'
+      | 'brief_chat_event' | 'brief_chat_audio' | 'brief_chat_ack' | 'brief_chat_sync' | 'brief_chat_error'
       | 'tts_start' | 'tts_text' | 'tts_end' | 'voice_start' | 'voice_end' | 'voice_text'
       | 'interview_start' | 'interview_user_message' | 'interview_assistant' | 'interview_done' | 'interview_error'
       // A dashboard loaded before the interview became text-only can still

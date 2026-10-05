@@ -1,0 +1,154 @@
+[
+  {
+    "name": "quick",
+    "command": [
+      "bun",
+      "test",
+      "src/vault/chat-turns.test.ts",
+      "src/brief/chat-transport.test.ts",
+      "src/daemon/agent-service-conversation.test.ts",
+      "src/daemon/ws-service-conversation.test.ts"
+    ],
+    "exit": 0,
+    "expected": 0
+  },
+  {
+    "name": "routing-mutation",
+    "command": [
+      "bun",
+      "test",
+      "src/brief/chat-transport.test.ts",
+      "--test-name-pattern",
+      "interleaved streams"
+    ],
+    "exit": 1,
+    "expected": 1
+  },
+  {
+    "name": "terminal-mutation",
+    "command": [
+      "bun",
+      "test",
+      "src/vault/chat-turns.test.ts",
+      "--test-name-pattern",
+      "partial text"
+    ],
+    "exit": 1,
+    "expected": 1
+  },
+  {
+    "name": "history-mutation",
+    "command": [
+      "bun",
+      "test",
+      "src/daemon/agent-service-conversation.test.ts",
+      "--test-name-pattern",
+      "classic scoped"
+    ],
+    "exit": 1,
+    "expected": 1
+  },
+  {
+    "name": "quick-restored",
+    "command": [
+      "bun",
+      "test",
+      "src/vault/chat-turns.test.ts",
+      "src/brief/chat-transport.test.ts",
+      "src/daemon/agent-service-conversation.test.ts",
+      "src/daemon/ws-service-conversation.test.ts"
+    ],
+    "exit": 0,
+    "expected": 0
+  },
+  {
+    "name": "affected",
+    "command": [
+      "bun",
+      "test",
+      "src/vault",
+      "src/brief",
+      "src/agents/conv",
+      "src/agents/orchestrator-progress.test.ts",
+      "src/agents/orchestrator-task-call.test.ts",
+      "src/agents/orchestrator-tier-fallback.test.ts",
+      "src/agents/orchestrator-realtime.test.ts",
+      "src/daemon/agent-service-conversation.test.ts",
+      "src/daemon/ws-service-conversation.test.ts",
+      "src/daemon/ws-service-cleanup.test.ts",
+      "src/daemon/ws-service-voice-start.test.ts",
+      "src/comms/streaming.test.ts",
+      "src/comms/websocket.test.ts",
+      "src/daemon/api-brief.test.ts",
+      "src/daemon/api-brief-conversations.test.ts",
+      "src/util/model-exec-env.test.ts",
+      "scripts/check-migrations.test.ts"
+    ],
+    "exit": 0,
+    "expected": 0
+  },
+  {
+    "name": "types",
+    "command": [
+      "bun",
+      "x",
+      "--no-install",
+      "tsc",
+      "--noEmit"
+    ],
+    "exit": 2,
+    "expected": 0
+  },
+  {
+    "name": "quick-final",
+    "command": [
+      "bun",
+      "test",
+      "src/vault/chat-turns.test.ts",
+      "src/brief/chat-transport.test.ts",
+      "src/daemon/agent-service-conversation.test.ts",
+      "src/daemon/ws-service-conversation.test.ts"
+    ],
+    "exit": 0,
+    "expected": 0
+  },
+  {
+    "name": "types-final",
+    "command": [
+      "bun",
+      "x",
+      "--no-install",
+      "tsc",
+      "--noEmit"
+    ],
+    "exit": 0,
+    "expected": 0
+  },
+  {
+    "name": "affected-final",
+    "command": [
+      "bun",
+      "test",
+      "src/vault",
+      "src/brief",
+      "src/agents/conv",
+      "src/agents/orchestrator-progress.test.ts",
+      "src/agents/orchestrator-task-call.test.ts",
+      "src/agents/orchestrator-tier-fallback.test.ts",
+      "src/agents/orchestrator-realtime.test.ts",
+      "src/daemon/agent-service-conversation.test.ts",
+      "src/daemon/ws-service-conversation.test.ts",
+      "src/daemon/ws-service-cleanup.test.ts",
+      "src/daemon/ws-service-voice-start.test.ts",
+      "src/comms/streaming.test.ts",
+      "src/comms/websocket.test.ts",
+      "src/daemon/api-brief.test.ts",
+      "src/daemon/api-brief-conversations.test.ts",
+      "src/util/model-exec-env.test.ts",
+      "scripts/check-migrations.test.ts",
+      "src/actions/tools/tool-scope.test.ts"
+    ],
+    "exit": 0,
+    "expected": 0
+  }
+]
