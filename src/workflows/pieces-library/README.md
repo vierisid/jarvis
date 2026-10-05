@@ -273,6 +273,10 @@ at the verification path.
      endpoint. They are what the approval card shows.
    - A deny case and an approve case in
      `src/workflows/runtime/governed-pieces.test.ts`.
+   - Record the installed version's manifest:
+     `bun run scripts/sync-pieces-catalog.ts --manifests-only` (this downloads
+     and runs the verified pieces' code locally). `governed-pieces.test.ts`
+     fails until every action in it is mapped.
 
    A piece WITHOUT an adapter is still installable and runnable; it just is
    not governed. Verified means vetted AND governed.
@@ -286,19 +290,34 @@ at the verification path.
 
 ## Updating versions
 
-**When the range stays the same** (bun re-resolves within the existing
-caret/tilde to a newer version):
+**Verified pieces move with the weekly sync, when their adapter still covers
+them.** The sync's `inspect` job reads the new version's actions inside a
+container (see `.github/workflows/sync-pieces-catalog.yml`), and the bump is
+taken when every action is mapped in the governed adapter, no existing
+action's upstream `classification` got more severe, and no existing action
+lost props (`scripts/lib/verified-upgrade.ts`). Anything else stays at the
+installed version and is listed in the open `verified-piece-review` issue,
+which says why and what clears it:
 
-- Re-run steps 2 + 5 from "Adding a new piece" against the new version.
-- Bump `vettedVersion` and `vettedAt`. `versionRange` stays.
-- This is the common case -- activepieces patches a bug, we re-vet.
+- Unmapped actions: map them in `GOVERNED_PIECE_ADAPTERS`.
+- A raised classification or removed props: check the adapter still fits,
+  then add `"<id>": "<version>"` to `VERIFIED_UPGRADE_REVIEWED` in
+  `catalog-overrides.ts`. Later releases are then compared from that version.
+
+Land either in its own PR to main; the next sync run takes the bump. Do not
+commit to the bot's `chore/sync-pieces-catalog` branch, which every run
+rebuilds. `vettedAt` records the promotion checklist, not each bump.
+
+**Community pieces** (bun re-resolves within the existing caret/tilde to a
+newer version) move with the sync too, with no check of their actions.
 
 **When the range needs to widen** (upstream went `0.12.x` -> `0.13.x` and
 we want to allow that):
 
 - Treat this like adding a new piece. Pre-1.0 minor bumps may include
   breaking changes.
-- Bump `versionRange`, `vettedVersion`, `vettedAt`.
+- Bump `versionRange`, `vettedVersion`, `vettedAt` (a verified piece: also
+  re-run `--manifests-only` and map anything new).
 - If schema changes affect existing user flows, document migration in the
   changelog. The reconciler reports a warning when a user's resolved
   version differs from `vettedVersion`.

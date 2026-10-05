@@ -326,8 +326,29 @@ describe('governed piece adapter table', () => {
       const entry = CATALOG.find(piece => piece.id === adapter.catalogId)!;
       expect(entry).toBeDefined();
       expect(entry.npmPackage).toBe(adapter.pieceName);
-      // The table was read from the version the catalogue actually installs.
-      expect(adapter.vettedVersion).toBe(entry.vettedVersion);
+    }
+  });
+
+  /**
+   * What the table has to cover is the version the catalogue installs, read
+   * from the published package by the catalog sync. The sync only moves a
+   * verified piece to a version this still holds for, so a failure here means
+   * a hand edit moved a version or dropped a mapping.
+   */
+  test('every action of the installed version is mapped', async () => {
+    const { CATALOG } = await import('../pieces-library/catalog');
+    const { VERIFIED_MANIFESTS } = await import('../pieces-library/verified-manifests-generated');
+    for (const adapter of GOVERNED_PIECE_ADAPTERS) {
+      const piece = adapter.catalogId;
+      const manifest = VERIFIED_MANIFESTS[piece];
+      expect({ piece, manifest: manifest !== undefined }).toEqual({ piece, manifest: true });
+      const installed = CATALOG.find(entry => entry.id === piece)!.vettedVersion;
+      expect({ piece, version: manifest!.version }).toEqual({ piece, version: installed });
+      expect(manifest!.actions.length).toBeGreaterThan(0);
+      const unmapped = manifest!.actions
+        .map(action => action.name)
+        .filter(name => !resolveGovernedPieceAction(adapter.pieceName, name)!.known);
+      expect({ piece, unmapped }).toEqual({ piece, unmapped: [] });
     }
   });
 

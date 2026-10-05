@@ -105,7 +105,9 @@ function mergeEntry(g: GeneratedCatalogEntry): CatalogEntry {
   // A verified piece installs the exact version that was reviewed. The
   // review is of a specific release, so an open range would let a later
   // minor land on the user's machine without anyone having looked at it;
-  // a catalog re-sync (a reviewable repo change) is how the pin moves.
+  // a catalog re-sync (a reviewable repo change) is how the pin moves, and
+  // the sync only moves it to a version the piece's governed adapter covers
+  // (scripts/lib/verified-upgrade.ts).
   // Community pieces keep the generated range: nobody vouched for any
   // particular version of those.
   const vettedVersion = pin?.vettedVersion ?? g.latestVersion;

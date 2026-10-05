@@ -17,6 +17,8 @@
  *                        broken. Overrides the generated versionRange +
  *                        vettedVersion. Drop the entry once the next upstream
  *                        release fixes the issue.
+ *   - `VERIFIED_UPGRADE_REVIEWED` Sign-offs for verified bumps the sync held
+ *                        for a raised classification or removed props.
  *   - `SIZE_OVERRIDE`    Hand-measured `estimatedSizeMb`. The sync script
  *                        can't probe sizes without doing a real bun install
  *                        per piece (slow + flaky in CI), so verified pieces
@@ -88,6 +90,23 @@ export const VERIFIED_METADATA: Record<string, { vettedAt: string }> = {
 export const EXCLUDED: ReadonlySet<string> = new Set<string>([
   // (empty -- add ids with a comment explaining why)
 ]);
+
+/**
+ * Verified upgrades a person has read and signed off, as id -> version.
+ *
+ * The catalog sync bumps a verified piece by itself when its governed adapter
+ * still covers the new version (see `scripts/lib/verified-upgrade.ts`). Two
+ * findings hold a bump for a person instead: an existing action whose upstream
+ * classification got more severe, and an existing action that lost props. Once
+ * you have checked the adapter still fits, add the version here and the next
+ * sync run takes it. Unmapped actions are NOT cleared by this: map them.
+ *
+ * Example:
+ *   gmail: "0.18.0",
+ */
+export const VERIFIED_UPGRADE_REVIEWED: Record<string, string> = {
+  // (empty -- add entries when the review issue asks for one)
+};
 
 /**
  * Hold-back pins. Each entry forces a specific versionRange + vettedVersion

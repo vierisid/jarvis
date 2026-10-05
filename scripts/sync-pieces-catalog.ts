@@ -27,10 +27,25 @@
  *      catalog. Retry / cooldown / classification logic lives in
  *      scripts/lib/npm-latest.ts (unit-tested).
  *   5. Build a sorted entry list and write catalog-generated.ts.
- *   6. With --report <path> (or env CATALOG_REPORT_PATH): diff against the
+ *   6. Verified pieces move only to a version their governed adapter still
+ *      covers, decided against what is installed (the committed manifests);
+ *      a bump that fails is held at the installed version. The manifests come
+ *      from `--inspection <path>`, written by scripts/inspect-verified-pieces.ts
+ *      in CI's read-only job, so THIS process never runs piece code there.
+ *      Without the flag (a local run, `--check` included) they are read
+ *      in-process, which downloads and runs the verified pieces' code. See
+ *      scripts/lib/verified-sync.ts. The installed manifests are written to
+ *      verified-manifests-generated.ts, which governed-pieces.test.ts checks.
+ *   7. With --report <path> (or env CATALOG_REPORT_PATH): diff against the
  *      previously-committed catalog and write a markdown PR body that calls out
  *      "safe to merge" (version bumps only) vs "manual review required" (pieces
- *      added/removed, license or SHA changes). See scripts/lib/catalog-diff.ts.
+ *      added/removed, license or SHA changes, a verified bump that skipped the
+ *      check). See scripts/lib/catalog-diff.ts.
+ *   8. With --held <path>: write the held verified bumps as JSON, which
+ *      scripts/render-review-issue.ts turns into the review issue.
+ *
+ *   --manifests-only skips 1-8 and just rewrites the verified manifests for
+ *   the versions the committed catalog installs (runs piece code).
  *
  * What the script does NOT do:
  *   - Probe install size (slow, flaky in CI). Sizes come from the
@@ -65,6 +80,17 @@ import {
   type GeneratedEntryLike,
 } from "./lib/catalog-diff";
 import { createNpmClient, resolveVersion } from "./lib/npm-latest";
+import { fetchPieceManifest, type PieceManifest } from "./lib/piece-manifest";
+import type { UpgradeAssessment } from "./lib/verified-upgrade";
+import { committable, renderManifestsFile } from "./lib/verified-manifests";
+import { decideVerified, lookupIn, parseInspection } from "./lib/verified-sync";
+import { inspectVerified } from "./lib/verified-inspect";
+import {
+  VERIFIED,
+  VERIFIED_UPGRADE_REVIEWED,
+  VERSION_PIN,
+} from "../src/workflows/pieces-library/catalog-overrides";
+import { resolveGovernedPieceAction } from "../src/workflows/runtime/piece-effects";
 
 /**
  * Activepieces commit walked when generating the list. Keep this in sync
@@ -79,6 +105,7 @@ const PINNED_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
 const REPO_URL = "https://github.com/activepieces/activepieces.git";
 const WORK_DIR = join(tmpdir(), `jarvis-pieces-sync-${PINNED_SHA.slice(0, 12)}`);
 const OUT_FILE = resolve(import.meta.dir, "../src/workflows/pieces-library/catalog-generated.ts");
+const MANIFEST_FILE = resolve(import.meta.dir, "../src/workflows/pieces-library/verified-manifests-generated.ts");
 
 interface PieceMetadata {
   id: string;
@@ -104,6 +131,12 @@ async function main(): Promise<void> {
   // --report) to diff for the PR body.
   const previous = await readPreviousGeneration();
   const previousById = new Map((previous?.entries ?? []).map((e) => [e.id, e]));
+  const previousManifests = await readPreviousManifests();
+
+  if (process.argv.includes("--manifests-only")) {
+    await refreshManifestsOnly(previous, previousManifests);
+    return;
+  }
 
   // 1. Sparse-clone packages/pieces/community.
   ensureWorkdir();
@@ -168,25 +201,41 @@ async function main(): Promise<void> {
     for (const s of skipped) console.log(`  - ${s.id}: ${s.reason}`);
   }
 
-  // 5. Render + (optionally) analyse the diff for the auto-PR body.
+  // 6. Verified pieces move only to versions their governed adapter covers.
+  const verified = await decideVerifiedPieces(
+    found,
+    previousById,
+    previousManifests,
+    new Set(carriedForward.map((c) => c.id)),
+  );
+  const heldPath = resolveFlagPath("--held");
+  if (heldPath) {
+    mkdirSync(dirname(heldPath), { recursive: true });
+    writeFileSync(heldPath, JSON.stringify(verified.assessments.filter((a) => !a.ok), null, 2));
+  }
+
+  // 7. Render + (optionally) analyse the diff for the auto-PR body.
   const rendered = renderCatalogFile(found);
+  const renderedManifests = renderManifestsFile(verified.manifests);
   if (reportPath) {
-    await writePrReport(reportPath, previous, found, rendered, carriedForward);
+    await writePrReport(reportPath, previous, found, rendered, carriedForward, verified);
   }
 
   if (checkOnly) {
     const current = existsSync(OUT_FILE) ? readFileSync(OUT_FILE, "utf8") : "";
-    if (current === rendered) {
-      info("catalog-generated.ts is up to date.");
+    const currentManifests = existsSync(MANIFEST_FILE) ? readFileSync(MANIFEST_FILE, "utf8") : "";
+    if (current === rendered && currentManifests === renderedManifests) {
+      info("catalog-generated.ts and verified-manifests-generated.ts are up to date.");
       process.exit(0);
     }
-    console.error("catalog-generated.ts is out of date.");
+    console.error("catalog-generated.ts or verified-manifests-generated.ts is out of date.");
     console.error("Run `bun run scripts/sync-pieces-catalog.ts` and commit.");
     process.exit(1);
   }
 
   writeFileSync(OUT_FILE, rendered);
-  info(`Wrote ${OUT_FILE} (${found.length} entries)`);
+  writeFileSync(MANIFEST_FILE, renderedManifests);
+  info(`Wrote ${OUT_FILE} (${found.length} entries) and ${Object.keys(verified.manifests).length} verified manifests`);
 
   // Don't auto-clean WORK_DIR so subsequent local runs reuse the clone.
   // CI containers are ephemeral; nothing to leak.
@@ -383,12 +432,16 @@ function sourceUrlFor(id: string): string {
 // up-front "safe to merge" vs "manual review required" verdict instead of a
 // raw diff. See scripts/lib/catalog-diff.ts for the analysis itself.
 
+/** The path after `flag`, ignoring a missing value or a following flag (`--report --verbose`). */
+function resolveFlagPath(flag: string): string | null {
+  const idx = process.argv.indexOf(flag);
+  const next = idx !== -1 ? process.argv[idx + 1] : undefined;
+  return next && !next.startsWith("--") ? resolve(next) : null;
+}
+
 /** Where to write the PR-body markdown, or null when reporting is off. */
 function resolveReportPath(): string | null {
-  const idx = process.argv.indexOf("--report");
-  const next = idx !== -1 ? process.argv[idx + 1] : undefined;
-  // Ignore a missing value or an accidental following flag (`--report --verbose`).
-  const fromFlag = next && !next.startsWith("--") ? next : undefined;
+  const fromFlag = resolveFlagPath("--report");
   const raw = fromFlag ?? process.env.CATALOG_REPORT_PATH;
   return raw ? resolve(raw) : null;
 }
@@ -416,6 +469,105 @@ async function readPreviousGeneration(): Promise<PreviousGeneration | null> {
     console.warn(`[warn] could not read previous catalog for diff: ${(e as Error).message}`);
     return null;
   }
+}
+
+/** The committed verified manifests, read before anything overwrites them. */
+async function readPreviousManifests(): Promise<Record<string, PieceManifest>> {
+  if (!existsSync(MANIFEST_FILE)) return {};
+  try {
+    const mod = (await import(pathToFileURL(MANIFEST_FILE).href)) as {
+      VERIFIED_MANIFESTS?: Record<string, PieceManifest>;
+    };
+    return mod.VERIFIED_MANIFESTS ?? {};
+  } catch (e) {
+    console.warn(`[warn] could not read previous verified manifests: ${(e as Error).message}`);
+    return {};
+  }
+}
+
+/** The version the catalog installs for a verified id, as `catalog.ts` derives it. */
+function installedVersion(id: string, generatedVersion: string): string {
+  return Object.hasOwn(VERSION_PIN, id) ? VERSION_PIN[id]!.vettedVersion : generatedVersion;
+}
+
+/** The committed manifest when it is for `version`, otherwise read from npm. */
+async function manifestFor(
+  pkg: string,
+  version: string,
+  committed: PieceManifest | null,
+): Promise<PieceManifest | null> {
+  if (committed?.version === version) return committed;
+  const r = await fetchPieceManifest(pkg, version);
+  if (r.kind === "ok") return r.manifest;
+  console.warn(`[warn] could not read the actions of ${pkg}@${version}: ${r.error}`);
+  return null;
+}
+
+type VerifiedRun = ReturnType<typeof decideVerified>;
+
+/**
+ * Step 6: decide every verified piece's version (see scripts/lib/verified-sync.ts).
+ * Rewrites a held entry's `latestVersion` back to the installed version.
+ */
+async function decideVerifiedPieces(
+  found: PieceMetadata[],
+  previousById: Map<string, GeneratedEntryLike>,
+  previousManifests: Record<string, PieceManifest>,
+  carriedForward: ReadonlySet<string>,
+): Promise<VerifiedRun> {
+  const policy = { committed: previousManifests, pins: VERSION_PIN, reviewed: VERIFIED_UPGRADE_REVIEWED };
+  const entries = found.filter((e) => VERIFIED.has(e.id));
+  const inspectionPath = resolveFlagPath("--inspection");
+  let raw: unknown;
+  if (inspectionPath) {
+    raw = JSON.parse(readFileSync(inspectionPath, "utf8"));
+  } else {
+    info("no --inspection file: reading verified manifests in-process, which runs the pieces' code");
+    raw = await inspectVerified({
+      pieces: entries.map((e) => ({
+        id: e.id,
+        npmPackage: e.npmPackage,
+        installed: previousManifests[e.id]?.version ?? previousById.get(e.id)?.latestVersion ?? e.latestVersion,
+      })),
+      policy,
+      npm,
+      log: (msg) => info(`inspect ${msg}`),
+    });
+  }
+  const run = decideVerified({
+    entries,
+    previousVersion: (id) => previousById.get(id)?.latestVersion,
+    carriedForward,
+    policy,
+    lookup: lookupIn(parseInspection(raw)),
+    isMapped: (pkg, action) => resolveGovernedPieceAction(pkg, action)?.known === true,
+  });
+  for (const a of run.assessments) {
+    info(a.ok
+      ? `verified ${a.id}: ${a.from} -> ${a.to} (adapter covers it)`
+      : `verified ${a.id}: holding at ${a.from}, ${a.to} needs review (${a.reasons.map((r) => r.kind).join(", ")})`);
+  }
+  for (const note of run.notes) info(`verified ${note}`);
+  return run;
+}
+
+/** `--manifests-only`: rewrite the manifests for what the committed catalog installs. */
+async function refreshManifestsOnly(
+  previous: PreviousGeneration | null,
+  previousManifests: Record<string, PieceManifest>,
+): Promise<void> {
+  const manifests: Record<string, PieceManifest> = {};
+  for (const id of VERIFIED) {
+    const entry = previous?.entries.find((e) => e.id === id);
+    if (!entry) fatal(`verified piece ${id} is not in the committed catalog`);
+    const version = installedVersion(id, entry.latestVersion);
+    const m = await manifestFor(entry.npmPackage, version, previousManifests[id] ?? null);
+    if (!m) fatal(`could not read the actions of ${entry.npmPackage}@${version}`);
+    manifests[id] = committable(m);
+    info(`manifest ${id}@${version}: ${m.actions.length} actions`);
+  }
+  writeFileSync(MANIFEST_FILE, renderManifestsFile(manifests));
+  info(`Wrote ${MANIFEST_FILE}`);
 }
 
 /** Map each id to its 1-based line in the rendered file (for `path:Lnn` refs). */
@@ -450,11 +602,19 @@ async function writePrReport(
   found: PieceMetadata[],
   rendered: string,
   carriedForward: Array<{ id: string; version: string }>,
+  verified: VerifiedRun,
 ): Promise<void> {
+  const assessments: UpgradeAssessment[] = verified.assessments;
   const diff = diffCatalogs(previous?.entries ?? [], toGeneratedEntries(found), {
     oldSha: previous?.sha ?? "",
     newSha: PINNED_SHA,
+    // A pinned verified piece installs its pin, so a generated bump moves
+    // nothing it runs.
+    verified: new Set([...VERIFIED].filter((id) => !Object.hasOwn(VERSION_PIN, id))),
+    checked: new Set(assessments.filter((a) => a.ok).map((a) => a.id)),
   });
+  const server = process.env.GITHUB_SERVER_URL;
+  const repo = process.env.GITHUB_REPOSITORY;
   const lineIndex = buildLineIndex(rendered);
   const { verdict, markdown } = renderReport(diff, {
     shortSha: PINNED_SHA.slice(0, 7),
@@ -462,6 +622,10 @@ async function writePrReport(
     fileLabel: "src/workflows/pieces-library/catalog-generated.ts",
     lineOf: (id) => lineIndex.get(id) ?? null,
     carriedForward,
+    verifiedUpgrades: assessments,
+    ...(server && repo
+      ? { testsUrl: `${server}/${repo}/actions/workflows/test.yml?query=branch%3Achore%2Fsync-pieces-catalog` }
+      : {}),
   });
 
   mkdirSync(dirname(reportPath), { recursive: true });
@@ -478,7 +642,13 @@ async function writePrReport(
   const githubOutput = process.env.GITHUB_OUTPUT;
   if (githubOutput) {
     try {
-      appendFileSync(githubOutput, `verdict=${verdict}\nhas_changes=${changed}\n`);
+      // held_count drives the review issue; inconclusive_count keeps the
+      // workflow from closing it on a run that could not decide everything.
+      const held = assessments.filter((a) => !a.ok).length;
+      appendFileSync(
+        githubOutput,
+        `verdict=${verdict}\nhas_changes=${changed}\nheld_count=${held}\ninconclusive_count=${verified.inconclusive.length}\n`,
+      );
     } catch (e) {
       console.warn(`[warn] could not write GITHUB_OUTPUT: ${(e as Error).message}`);
     }
