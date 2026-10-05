@@ -1,0 +1,44 @@
+{
+  "task": "D-02",
+  "title": "Apply the approved type, surfaces and logo",
+  "date": "2026-10-05",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-02",
+  "baseline": "044bbf7927595cb9e56e3801b477e9631a7f8101",
+  "original_base": "160ed8e5705689e05ecb7e2cb46af9cc9a272b38",
+  "upstream_main": "05039c3e90d8670f90527f6c58f0a0ab684024b7",
+  "stack_base": "brief/foundations",
+  "dependency_prs": ["https://github.com/vierisid/jarvis/pull/701", "https://github.com/vierisid/jarvis/pull/702"],
+  "head": {"ref": "brief/d-02", "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-02.json"},
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-02",
+  "figma": {
+    "file": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+    "sources": ["UI-01 appearance", "UI-02 native type styles", "UI-03 materials and corners", "UI-06 progress", "UI-09 resolved variable snapshot"],
+    "extraction": "ui/src/brief/styles/figma-reference.json"
+  },
+  "owns": ["ui/src/brief/styles/**", "ui/src/brief/entry/DashboardEntry.tsx (style mount)", "ui/src/brief/preview/FoundationPreview.tsx (specimen link)", "docs/brief-delivery/D-02.*", "docs/brief-delivery/evidence/D-02/**"],
+  "excludes": ["Global v2 tokens", "Live room redesign", "F/Q contracts and behavior", "D-03 controls and D-04 motion", "Production cutover", "Hosting"],
+  "tests": [
+    {"command": "bun test ui/src/brief", "result": "pass", "tests": 15, "assertions": 179},
+    {"command": "bun test scripts/version-stamp-cache.test.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts src/brief src/daemon/api-brief.test.ts src/daemon/api-billing.test.ts src/daemon/api-approval-resolution.test.ts src/daemon/api-goal-validation.test.ts src/daemon/api-goal-review.test.ts src/daemon/api-onboarding-hosted.test.ts src/daemon/api-tasks-paused.test.ts", "result": "pass", "tests": 130, "files": 16, "assertions": 886, "note": "On refreshed foundations including F-01 review tests and D-01 cache-check repair."},
+    {"command": "bun test src/workflows/adapters/untrusted-reach.test.ts", "result": "pass", "tests": 11, "assertions": 22},
+    {"command": "bunx tsc --noEmit", "result": "pass"},
+    {"command": "bun run build:ui", "result": "pass", "note": "Existing @theme/@tailwind warnings remain."}
+  ],
+  "manual_checks": [
+    {"case": "Ten sampled theme/width/text-size/paper states", "result": "pass", "evidence": "evidence/D-02/browser-checks.json"},
+    {"case": "Important text contrast and horizontal overflow", "result": "pass", "note": "Two Dark tertiary labels failed initially at 4.41:1 and were changed to the existing secondary role. All recorded final samples pass."},
+    {"case": "200% text-only scaling", "result": "pass", "note": "Local specimen control doubles computed text sizes; not a claim of browser or OS zoom certification."},
+    {"case": "Official mark, Dark separation and matched lower shadow corners", "result": "pass"},
+    {"case": "Both 6/10 representations and native font loading", "result": "pass"}
+  ],
+  "evidence": ["D-02.md", "evidence/D-02/browser-checks.json", "evidence/D-02/light-wide.png", "evidence/D-02/dark-wide.png", "evidence/D-02/light-paper-and-progress.png", "evidence/D-02/dark-390-200-text.png"],
+  "limitations": ["Style-level Figma comparison only; later rooms are not implemented.", "No live hosted/sidecar, backend or financial data checks.", "Current-head remote CI is recorded on PR #703; no runtime motion certification.", "The preview reuses D-01 buttons; D-03 owns their final interaction states."],
+  "rollback": "Revert D-02; D-01 remains available. No migration. Remove the brief query parameter to use the default dashboard.",
+  "next": "D-03 in a separate worktree; stacked development does not wait for merge."
+}
