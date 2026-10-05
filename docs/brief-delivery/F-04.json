@@ -1,0 +1,100 @@
+{
+  "task": "F-04",
+  "title": "Persist client chat selection, drafts and unread state",
+  "date": "2026-10-05",
+  "branch": "brief/f-04",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-04",
+  "baseline": "6b37f2ff0137deebeb2ef33a9886d38b9c496030",
+  "baseline_ref": "origin/brief/f-03",
+  "main_checked": "2c70cf0fe436834bbd96cb06a7df615ff136f6e5",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-04.json"
+  },
+  "status": {
+    "merge": "not_merged",
+    "release_enabled": false,
+    "capability": "implemented, supported and default off; provider requires explicit host mounting",
+    "publication": "Open as PR #738 against brief/f-03; review corrections target the existing branch. Exact head and CI are recorded in the PR description."
+  },
+  "dependencies": {
+    "merge_after": ["F-01", "F-02", "F-02.1", "F-03"],
+    "enable_after": ["F-02", "F-03"],
+    "reason": "Owner-approved staged unmerged dependency stack. The concrete client consumes F-02/F-03 lifecycle and wire types. D-12 through D-15 own host composition and presentation."
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-212",
+    "scope": "State and adapters only; no tab styling or visual affordance change"
+  },
+  "activation": {
+    "capability": "chatState",
+    "flags": ["JARVIS_BRIEF_CONVERSATIONS=1", "JARVIS_BRIEF_CHAT_TRANSPORT=1", "JARVIS_BRIEF_CHAT_STATE=1"],
+    "client": "BriefConversationProvider enabled prop defaults to false; no production entry mounts it in F-04",
+    "readiness": "Actual initialized conversation and transport services; all dependencies must also be enabled"
+  },
+  "acceptance": [
+    {
+      "check": "Ten add/close cycles preserve every surviving draft and history",
+      "status": "passed",
+      "evidence": "ui/src/brief/chat/client.test.ts: 30 conversations across ten cycles; right/left adjacency, inactive close, reopen and final blank state; all history retained"
+    },
+    {
+      "check": "Out-of-order events and delayed history never overwrite the selected conversation",
+      "status": "passed",
+      "evidence": "ui/src/brief/chat/store.test.ts and client.test.ts: sequence projection, snapshot watermark, ID-based history merge, stale async fences, serialized reconnect/selection and conversation-scoped errors"
+    },
+    {
+      "check": "Unsupported backend falls back to single chat",
+      "status": "passed",
+      "evidence": "ui/src/brief/chat/provider.test.tsx: actual existing history load and chat sender, no scoped frames; capability loss replaces the permanently opted-in socket"
+    },
+    {
+      "check": "One socket through room/theme changes and lifecycle cleanup",
+      "status": "passed",
+      "evidence": "ui/src/brief/chat/provider.test.tsx: StrictMode, ten room/theme remounts, manual retry, disconnect, capability loss, disabled mount, unmount and browser visibility"
+    },
+    {
+      "check": "Canonical server and local device state survive reconnect and reload",
+      "status": "passed",
+      "evidence": "ui/src/brief/chat/integration.test.ts: actual HTTP routes/WebSocket transport, isolated SQLite, separate histories and exactly two fake-model executions; store.test.ts covers local storage and workspace isolation"
+    }
+  ],
+  "verification": {
+    "focused": { "command": "bun test ui/src/brief/chat src/brief/registrations/chat-state.test.ts", "passed": 35, "failed": 0 },
+    "affected": {
+      "command": "bun test ui/src/brief ui/src/hooks/useWebSocket.test.ts ui/src/hooks/useWebSocket.realtime-status.test.ts src/brief src/vault/conversation-lifecycle.test.ts src/vault/conversation-schema.test.ts src/vault/chat-turns.test.ts src/daemon/api-brief-conversations.test.ts src/daemon/api-brief.test.ts src/daemon/ws-service-conversation.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts src/workflows/adapters/untrusted-reach.test.ts",
+      "passed": 209, "failed": 0, "assertions": 1571, "files": 22,
+      "log": "docs/brief-delivery/evidence/F-04/review-affected.log"
+    },
+    "mutations": { "rejected": 4, "total": 4, "evidence": "docs/brief-delivery/evidence/F-04/mutations.json", "sources_restored": true, "verified_on": "Original F-04 head fdf9efb2; review fixes have separate red/green evidence below." },
+    "review_regressions": {"cases": 7, "original_head_failures": 7, "fixed_head_passed": 7, "evidence": "docs/brief-delivery/evidence/F-04/review-fixes.json", "red_log": "docs/brief-delivery/evidence/F-04/review-red.log", "green_log": "docs/brief-delivery/evidence/F-04/review-green.log"},
+    "ui_build": "passed: bun run build:ui; existing @theme/@tailwind warnings remain",
+    "browser_bundle": "passed: bun build ui/src/brief/chat/provider.tsx --target=browser; 14 modules, no server runtime dependencies",
+    "typescript": "passed: bun x tsc --noEmit",
+    "guards": "Normal commit hook result recorded in the PR description",
+    "full_suite": "Not run locally; exact-head remote CI is reported separately"
+  },
+  "review_fixes": [
+    "Replay compacts only the delivered event prefix; per-message snapshot watermarks retain missed history without repeated text, and old terminal events unblock cached running turns.",
+    "Atomic field writes preserve drafts, attachment references and scroll across windows; original v1 records remain readable. Acceptance checks for a newer draft saved by another window.",
+    "Turn error codes and messages survive live delivery, replay and daemon restart; latest failure is exposed per conversation, and partial output keeps a failed/cancelled item status."
+],
+  "manual_checks": {
+    "main_and_open_prs": "Fetched and checked before editing; D/Q feature work is on separate branches. F-03's corrected Tests/Docker checks pass.",
+    "visual": "not_applicable: no visible UI change",
+    "browser_automation": "not_run: React lifecycle uses happy-dom and counted WebSocket fakes; protocol integration uses real local HTTP/WebSocket",
+    "external_effects": "none: deterministic model fixtures only, no user database or running daemon"
+  },
+  "limitations": [
+    "Production host mounting and tab presentation remain D-12 through D-15 work.",
+    "Composer state is device-local, not cross-device; canonical messages and selection stay on the server.",
+    "Windows do not collaboratively edit draft text; the last actual write to the same field wins. New field keys take precedence over retained legacy aggregate records.",
+    "Attachment references are retained, but file upload/validation/turn binding remains F-05; sending with refs rejects explicitly.",
+    "Scoped text sends use speak=false; scoped voice playback is not activated.",
+    "A failed two-step close can leave the neighbor selected while the original tab remains open; state is reconciled and the error is visible.",
+    "No live browser design review or hosted provider quality claim is made."
+  ],
+  "rollback": "Disable chatState activation and keep the existing dashboard entry. Retain local draft keys and server conversations. Do not delete messages, drop tables or replay work.",
+  "quick_verification": "docs/brief-chat-state.md",
+  "next_task": "F-05 not started"
+}

@@ -30,7 +30,7 @@ export type ObjectType =
   | "usage"
   | "settings";
 
-export type JarvisSpeechStatus = "speaking" | "done";
+export type JarvisSpeechStatus = "speaking" | "done" | "failed" | "cancelled";
 
 export type ThreadItem =
   | {
@@ -51,6 +51,7 @@ export type ThreadItem =
       text: string;
       t: string;
       status: JarvisSpeechStatus;
+      error?: string;
     }
   | {
       kind: "jarvis-thought";

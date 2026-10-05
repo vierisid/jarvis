@@ -44,6 +44,7 @@ import { registerConversations } from '../brief/registrations/conversations.ts';
 import { BriefConversationProvider } from '../brief/conversations.ts';
 import { BriefChatTransport } from '../brief/chat-transport.ts';
 import { registerChatTransport } from '../brief/registrations/chat-transport.ts';
+import { registerChatState } from '../brief/registrations/chat-state.ts';
 import type { BriefCapabilityId } from '../brief/capabilities.ts';
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
@@ -4970,8 +4971,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
+    if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
+      ...registerChatState(briefConversations, briefChatTransport),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
