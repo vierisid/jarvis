@@ -39,6 +39,7 @@ import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
+import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
@@ -4952,6 +4953,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 9b. Set up API routes + dashboard static files
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
+      briefCapabilities: createBriefCapabilities(),
       daemonStartedAt: Date.now(),
       healthMonitor,
       agentService,

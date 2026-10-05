@@ -1,0 +1,235 @@
+{
+  "contractVersion": 1,
+  "conversation": {
+    "conversationId": "conversation-1",
+    "workspaceId": "workspace-1",
+    "title": "Weekly report",
+    "revision": "r2",
+    "tab": {
+      "open": false,
+      "order": 0
+    },
+    "lastMessageAt": 1791194400000
+  },
+  "reads": [
+    {
+      "state": "loading"
+    },
+    {
+      "state": "ready",
+      "data": {
+        "items": [
+          {
+            "conversationId": "conversation-1",
+            "workspaceId": "workspace-1",
+            "title": "Weekly report",
+            "revision": "r2",
+            "tab": {
+              "open": false,
+              "order": 0
+            },
+            "lastMessageAt": 1791194400000
+          }
+        ],
+        "nextCursor": null
+      },
+      "asOf": 1791194400000
+    },
+    {
+      "state": "empty",
+      "asOf": 1791194400000
+    },
+    {
+      "state": "stale",
+      "data": {
+        "items": [
+          {
+            "conversationId": "conversation-1",
+            "workspaceId": "workspace-1",
+            "title": "Weekly report",
+            "revision": "r2",
+            "tab": {
+              "open": false,
+              "order": 0
+            },
+            "lastMessageAt": 1791194400000
+          }
+        ],
+        "nextCursor": "opaque-next-page"
+      },
+      "asOf": 1791194400000
+    },
+    {
+      "state": "unavailable",
+      "reason": "provider_unavailable"
+    },
+    {
+      "state": "unsupported"
+    }
+  ],
+  "cancel": {
+    "conversationId": "conversation-1",
+    "turnId": "turn-2",
+    "requestId": "request-3"
+  },
+  "event": {
+    "conversationId": "conversation-1",
+    "turnId": "turn-2",
+    "requestId": "request-3",
+    "eventId": "event-4",
+    "sequence": 4,
+    "payload": {
+      "kind": "terminal",
+      "state": "cancelled"
+    }
+  },
+  "decision": {
+    "decisionId": "decision-1",
+    "revision": "r1",
+    "approval": {
+      "approvalId": "approval-1",
+      "status": "approved",
+      "executionMode": "workflow",
+      "executionOutcome": null
+    },
+    "workItemId": "commitment-1",
+    "workStatus": "ready",
+    "workflow": {
+      "flowId": "flow-1",
+      "versionId": "version-3",
+      "activation": "DISABLED",
+      "versionState": "LOCKED"
+    },
+    "run": {
+      "flowId": "flow-1",
+      "versionId": "version-3",
+      "activation": "DISABLED",
+      "versionState": "LOCKED",
+      "runId": "run-1",
+      "status": "QUEUED"
+    },
+    "actions": [
+      "inspect"
+    ]
+  },
+  "preparedOpportunity": {
+    "proposalId": "proposal-1",
+    "revision": "r3",
+    "evidence": [
+      {
+        "kind": "observation",
+        "id": "observation-1",
+        "revision": "r1"
+      }
+    ],
+    "goal": {
+      "goalId": "goal-1",
+      "revision": "r2",
+      "rationale": "Prepare the recurring report"
+    },
+    "compositionId": "composition-1",
+    "workflow": {
+      "flowId": "flow-1",
+      "versionId": "version-3",
+      "activation": "DISABLED",
+      "versionState": "LOCKED"
+    },
+    "bindings": [
+      {
+        "kind": "connection",
+        "id": "connection-1",
+        "revision": "r1",
+        "availability": "ready"
+      }
+    ],
+    "previewBasis": "sandbox_sample",
+    "state": "ready",
+    "readiness": {
+      "state": "ready",
+      "checkedAt": 1791194400000
+    }
+  },
+  "goal": {
+    "goalId": "goal-1",
+    "revision": "r2",
+    "status": "active",
+    "health": "on_track",
+    "score": 0.6,
+    "measurement": null
+  },
+  "outcome": {
+    "outcomeId": "outcome-1",
+    "workItemId": "commitment-1",
+    "runId": "run-1",
+    "goalIds": [
+      "goal-1"
+    ],
+    "window": {
+      "start": 1791108000000,
+      "end": 1791194400000,
+      "timezone": "Europe/Berlin"
+    },
+    "result": {
+      "value": 1,
+      "unit": "reviewed report",
+      "baseline": 0,
+      "target": 1,
+      "asOf": 1791194400000,
+      "provenance": [
+        {
+          "kind": "receipt",
+          "id": "receipt-1",
+          "revision": "r1"
+        }
+      ],
+      "qualification": "user_reported"
+    },
+    "timeBack": null
+  },
+  "memory": {
+    "factId": "fact-1",
+    "sourceId": "source-1",
+    "sentence": "Reports are reviewed on Monday.",
+    "basis": "reported",
+    "status": "active",
+    "provenance": [
+      {
+        "kind": "source",
+        "id": "source-1",
+        "revision": "r1"
+      }
+    ],
+    "uses": [
+      {
+        "useId": "use-1",
+        "factId": "fact-1",
+        "sourceRevision": "r1",
+        "stage": "supplied",
+        "turn": {
+          "conversationId": "conversation-1",
+          "turnId": "turn-2",
+          "requestId": "request-3"
+        },
+        "runId": null,
+        "at": 1791194400000
+      }
+    ],
+    "permissions": {
+      "canRead": true,
+      "canCorrect": true,
+      "canForget": false
+    }
+  },
+  "connection": {
+    "sourceId": "library-piece-1",
+    "kind": "library_piece",
+    "accountId": null,
+    "availability": "ready",
+    "permissions": {
+      "canInspect": true,
+      "canConnect": false,
+      "canRevoke": false
+    },
+    "authenticated": null
+  }
+}
