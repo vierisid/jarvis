@@ -39,8 +39,15 @@ import { resolveSkillEffect } from '../../skills/effects.ts';
 import { getRecorder, type RecordingEndReason } from '../../skills/recorder.ts';
 import { compileSkill } from '../../skills/compiler.ts';
 import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
+import { forCard } from '../../util/card-text.ts';
 
 const RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
+/**
+ * Cap for a stored value in the MIDDLE of a card sentence: the sibling
+ * convention (src/sites/builder-tools.ts, ui.ts's UI_CARD_VALUE), short
+ * because text follows it and a long value could forge the sentence's ending.
+ */
+const CARD_NAME_MAX = 80;
 /** Hard cap on a recording session; the sidecar enforces the same cap on its hooks. */
 export const RECORDING_MAX_MS = 10 * 60_000;
 /** Actions the browser provider can carry out; anything else must fail loudly. */
@@ -243,17 +250,56 @@ export const manageSkillsTool: ToolDefinition = {
     action: { type: 'string', description: '"list" (default) or "delete".', required: false, enum: ['list', 'delete'] },
     name: { type: 'string', description: 'delete: the skill name to remove.', required: false },
   },
+  /**
+   * Pins the delete to ONE skill before the gate runs (#659 review). The gate
+   * and execute used to look the name up separately -- the gate as typed,
+   * execute trimmed -- so ' b' got a card saying nothing would be deleted and
+   * then deleted "b"; and a skill re-recorded while the card waited was
+   * deleted under a card that described its predecessor. Now the name is
+   * trimmed once and the skill it names (or the absence of one) is pinned, so
+   * the card, the approval and the run all describe the same row.
+   *
+   * `pinned_skill` is always overwritten here, so a model cannot pre-pin a
+   * different skill; on a path that does not freeze, a pin only adds a check
+   * execute must pass, so it can narrow a delete and never widen one.
+   */
+  freezeArguments: (params) => {
+    if (params.action !== 'delete') return params;
+    const name = typeof params.name === 'string' ? params.name.trim() : params.name;
+    const skill = typeof name === 'string' && name ? getSkillByName(name) : null;
+    return { ...params, name, pinned_skill: skill ? { id: skill.id, version: skill.version } : null };
+  },
   authorityGate: (params): ToolGate | null => {
     if (params.action !== 'delete') return null;
-    const skill = typeof params.name === 'string' ? getSkillByName(params.name) : null;
-    const what = skill ? `"${skill.name}" (v${skill.version}, ${skill.provenance}, ${skill.steps.length} steps)` : `"${String(params.name ?? '')}"`;
-    return { actionCategory: 'delete_data', intent: `Delete skill ${what}` };
+    // The name is text nobody vetted (#659, the defect #631 closed for ui_act):
+    // the model's argument when no skill matches, and the stored name -- which
+    // the model chose at record_skill stop -- when one does. So it goes LAST,
+    // reduced, at the trailing budget: with nothing after it there is nothing
+    // to impersonate, which quoting mid-sentence could not promise (a
+    // look-alike quote is not escaped). Everything before it is a number or
+    // the card's own words.
+    const shown = (value: unknown) => forCard(value) || '(a name made only of invisible characters)';
+    const name = typeof params.name === 'string' ? params.name.trim() : '';
+    const skill = name ? getSkillByName(name) : null;
+    const intent = skill
+      ? `Delete stored skill (v${skill.version}, ${forCard(skill.provenance, CARD_NAME_MAX)}, ${skill.steps.length} steps) named: ${shown(skill.name)}`
+      : `Delete nothing: no stored skill is named ${shown(params.name)}`;
+    return { actionCategory: 'delete_data', intent };
   },
   execute: async (params) => {
     if (params.action === 'delete') {
       const name = typeof params.name === 'string' ? params.name.trim() : '';
       if (!name) return 'Error: delete needs the skill name.';
       const skill = getSkillByName(name);
+      if (Object.prototype.hasOwnProperty.call(params, 'pinned_skill')) {
+        const pin = params.pinned_skill as { id?: unknown; version?: unknown } | null;
+        const same = pin === null
+          ? skill === null
+          : skill !== null && skill.id === pin?.id && skill.version === pin?.version;
+        if (!same) {
+          return 'Error: the skill with this name changed after the deletion was reviewed, so nothing was deleted. List the skills and ask again if it should still go.';
+        }
+      }
       if (!skill) return `Error: no skill named "${name}".`;
       deleteSkill(skill.id);
       return `Deleted skill "${skill.name}" (v${skill.version}, ${skill.provenance}).`;

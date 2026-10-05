@@ -39,6 +39,30 @@ describe('forCard', () => {
     }
   });
 
+  test('it strips C0, DEL and C1 controls, which render as nothing or as junk', () => {
+    // A name of only controls used to survive non-empty and show as a blank on
+    // the card; an escape sequence rendered as terminal junk. #656 stripped
+    // these locally in ui.ts; every other caller had the same hole (#659).
+    expect(forCard('\u0001\u0002')).toBe('');
+    expect(forCard('Save\u001b[2J\u007f')).toBe('Save[2J');
+    expect(forCard('a\u0085b\u009fc')).toBe('abc');
+    // Vertical tab and form feed are dropped like the others rather than
+    // turned into a space, matching what ui.ts did.
+    expect(forCard('a\u000bb\u000cc')).toBe('abc');
+    // The whitespace controls are still whitespace.
+    expect(forCard('a\tb\nc\rd')).toBe('a b c d');
+  });
+
+  test('it strips every default-ignorable code point, not just the bidi and zero-width ones', () => {
+    // Combining grapheme joiner, variation selector 16, tag characters (ASCII
+    // smuggling), the Hangul fillers: each made two different strings read the
+    // same, or a non-empty name render blank (#659 review).
+    expect(forCard('no\u034ftes')).toBe('notes');
+    expect(forCard('a\ufe0fb')).toBe('ab');
+    expect(forCard('a\u{e0041}\u{e0042}b')).toBe('ab');
+    expect(forCard('\u3164\u115f')).toBe('');
+  });
+
   test('it leaves ordinary text, including non-ASCII, alone', () => {
     expect(forCard('/home/me/Documentos/currículum.pdf')).toBe('/home/me/Documentos/currículum.pdf');
     expect(forCard('~/Downloads/レポート.xlsx')).toBe('~/Downloads/レポート.xlsx');

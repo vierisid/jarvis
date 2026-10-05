@@ -16,10 +16,28 @@
  * a filename it wrote, say -- could make the card say something other than what
  * is being approved. Removed, not escaped: a card is prose for a person, and
  * there is no legitimate path or label that needs a bidi control in it.
+ *
+ * The set is every Default_Ignorable_Code_Point (#659 review), not the short
+ * list it used to be: that list missed the combining grapheme joiner, the
+ * variation selectors, the tag characters and the Hangul fillers, so `no\u034Ftes`
+ * read as `notes` and a name of fillers rendered blank. It is the same property
+ * `roles/untrusted.ts`'s IGNORABLE strips; the cost is cosmetic (a ZWJ emoji
+ * sequence shows as its separate glyphs).
  */
-const INVISIBLE = /[­؜᠎​-‏‪-‮⁠-⁤⁦-⁯﻿]/g;
+const INVISIBLE = /\p{Default_Ignorable_Code_Point}/gu;
+
+/**
+ * Control characters, dropped for the same reason (#659): raw C0 (other than
+ * tab, newline and carriage return, which the whitespace collapse turns into a
+ * space), DEL and C1. A name of `\u0001\u0001` survived the collapse non-empty
+ * and rendered as nothing, and a `\u001b` sequence rendered as terminal junk.
+ * With INVISIBLE above, this is exactly the set `roles/untrusted.ts`'s
+ * IGNORABLE strips. #656 added it to `ui_act`'s gate alone; every other caller
+ * here had the same hole.
+ */
+const CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g;
 
 export function forCard(value: unknown, max = 600): string {
-  const s = String(value ?? '').replace(INVISIBLE, '').replace(/\s+/g, ' ').trim();
+  const s = String(value ?? '').replace(INVISIBLE, '').replace(CONTROLS, '').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 3)}...` : s;
 }

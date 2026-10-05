@@ -342,7 +342,7 @@ describe('ui_act\'s gate intent reduces the page text it quotes (#631)', () => {
     expect(gate.intent!.endsWith(CLOSES)).toBe(true);
   });
 
-  it('drops the control characters forCard leaves behind', async () => {
+  it('drops control characters, which forCard once left behind', async () => {
     // `forCard` strips the bidi and zero-width class and collapses `\s`, which
     // leaves raw C0 and DEL. Escaped rather than dropped they would also expand
     // six-fold (`\u001b` is six characters for one), so the 80-char cap would
@@ -402,8 +402,8 @@ describe('ui_act\'s gate intent reduces the page text it quotes (#631)', () => {
     expect(gate.intent!.endsWith(CLOSES)).toBe(true);
   });
 
-  // Both classes have to reach the fallback: `forCard` removes the first, and
-  // this module's own CARD_CONTROLS the second. Before that strip an all-C0
+  // Both classes have to reach the fallback: `forCard` removes both (the
+  // controls since #659; ui.ts stripped them locally before). Before that an all-C0
   // target was still non-empty, no fallback fired, and the card read "on .".
   for (const [label, target] of [
     ['zero-width', '​​'],

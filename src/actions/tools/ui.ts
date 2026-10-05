@@ -37,26 +37,12 @@ import { forCard } from '../../util/card-text.ts';
 const UI_CARD_VALUE = 80;
 
 /**
- * Control characters `forCard` does not remove, dropped here.
- *
- * `forCard` strips the `Cf`/bidi/zero-width class and collapses `\s`, which
- * leaves raw C0 (minus the whitespace ones) and DEL untouched -- so a name of
- * `\u0001\u0001` survives it non-empty and renders as nothing on the card, and a
- * `\u001b` sequence renders as terminal junk or disappears. Removed rather than
- * escaped, for the reason `card-text.ts` gives for the invisibles it drops: a
- * card is prose for a person, and no legitimate element name or machine name
- * needs a control character in it. `roles/untrusted.ts`'s `IGNORABLE` makes the
- * same call for the same characters.
- *
- * Local to this module on purpose. It belongs in `forCard` -- every sibling gate
- * that puts a reduced value into card prose UNQUOTED has the same hole -- but
- * that is 17 other call sites and a separate change.
+ * One value for the gate sentence: reduced, de-controlled, capped. The control
+ * characters (raw C0, DEL) used to be stripped here, locally, because `forCard`
+ * left them; #659 moved that strip into `forCard` for every caller.
  */
-const CARD_CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/g;
-
-/** One value for the gate sentence: reduced, de-controlled, capped. */
 function cardPlain(value: unknown): string {
-  return forCard(String(value ?? '').replace(CARD_CONTROLS, ''), UI_CARD_VALUE);
+  return forCard(value, UI_CARD_VALUE);
 }
 
 /**
