@@ -3,9 +3,9 @@ import type { BriefConversationProvider } from './conversations.ts';
 import { createConversationRoutes } from './conversation-routes.ts';
 
 /** Mounted only inside the daemon's existing authenticated API route table. */
-export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown) => Response, conversations?: BriefConversationProvider) {
+export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider) {
   return {
-    ...createConversationRoutes(capabilities, conversations),
+    ...createConversationRoutes(capabilities, json, conversations),
     '/api/brief/capabilities': {
       GET: () => {
         const response = json(capabilities.snapshot());
