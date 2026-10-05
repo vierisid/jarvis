@@ -1,0 +1,112 @@
+{
+  "task": "Q-01",
+  "title": "Establish the current hosted-model baseline",
+  "date": "2026-10-05",
+  "branch": "brief/q-01",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-q-01",
+  "initial_baseline": "cd59a0e072ca739420c89a6fd9cd21bbbb793160",
+  "baseline": "462d955d54014e15ea003b5908860917642e5b34",
+  "baseline_ref": "brief/foundations (D-01 #701 and F-01 #702 on main 05039c3e)",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-01.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "evaluation tooling only; no product capability or flag",
+    "release_enabled": false,
+    "baseline_measurement": "not_run: rubric workflow-release-v1 is proposed; no admin profile export, evaluation key or spend authorization yet",
+    "publication": "PR #725 open against brief/foundations; https://github.com/vierisid/jarvis/pull/725"
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "page": "81:2",
+    "checkpoint": "UI-35; no visual changes in Q-01"
+  },
+  "ownership": {
+    "implementer": "Core-quality-line Claude session",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [],
+  "enable_after": [],
+  "behavior": [
+    "Every hosted run needs a dated spend authorization for its profile and split; requests and reported tokens are checked before each POST, and a successful response without usage stops the run.",
+    "A held-out run also needs the plan's unmodified admin export (GET /api/llm/profiles, GET /api/llm/models) and a frozen release rubric; otherwise not_run with every reason, exit 2, no provider request.",
+    "The admin export resolves plan, profile, high slot and upstream model; a mismatched intendedModel is refused; the profile revision is a fingerprint of the resolved profile and declared proxy fallbacks.",
+    "Hosted requests are pinned to uj-high; any other alias is refused before sending and recorded on the row.",
+    "Report groups keep every scheduled task in the denominator, with one disposition per row from structured fields and Wilson 95% intervals for every rate.",
+    "--mode baseline writes a sanitized report judged against the frozen rubric and refuses smoke, plan, development, unpinned or mismatched runs."
+  ],
+  "acceptance": [
+    {
+      "check": "Another engineer can reproduce the exact fixture/profile/policy comparison",
+      "status": "passed for the tooling; no hosted comparison has run",
+      "evidence": "Manifests pin head, source fingerprint, task set, rubric hash, profile revision, authorization, arguments and Bun version; src/workflows/evaluation/hosted-baseline.test.ts"
+    },
+    {
+      "check": "Failures, timeouts and unrun tasks remain in the denominator; no synthetic test is called a hosted baseline",
+      "status": "passed",
+      "evidence": "hosted-baseline.test.ts denominator, disposition and baseline-refusal tests; evidence/Q-01/smoke-baseline-refused.json"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "7,750 pass, 86 skip, 8 fail of 7,844 tests across 424 files (local WSL2). All 8 failures occur on brief/foundations without Q-01 or pass when rerun alone; Q-01 touches none of those areas.",
+      "log": "evidence/Q-01/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/workflows/evaluation/",
+      "result": "39 pass, 0 fail across 5 files",
+      "log": "evidence/Q-01/evaluation-tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-01/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "passed, exit 0; 100 templates, no errors or warnings",
+      "log": "evidence/Q-01/guards.log"
+    },
+    {
+      "command": "revert each of 15 guards in turn and run its test",
+      "result": "15 of 15 fail when their guard is removed; sources restored",
+      "log": "evidence/Q-01/revert-checks.log"
+    },
+    {
+      "command": "bun run eval:workflows --mode smoke --split development --out /tmp/q01-smoke",
+      "result": "18 of 18 passed through the real engine and outer worker; every group carries measures",
+      "log": "evidence/Q-01/smoke-report.json"
+    },
+    {
+      "command": "bun run eval:workflows --mode baseline --runs /tmp/q01-smoke --out /tmp/q01-smoke-baseline",
+      "result": "exit 1, refused: a smoke run is not a hosted measurement",
+      "log": "evidence/Q-01/smoke-baseline-refused.json"
+    }
+  ],
+  "quick_verify": {
+    "cwd": "/home/vierisid/.cache/codex/jarvis-q-01",
+    "command": "bun run eval:workflows --mode hosted --split heldout --out /tmp/q01-gate",
+    "expected": "exit 2; /tmp/q01-gate/report.json is not_run with three reasons (profile missing, spend authorization missing, rubric proposed); no provider request",
+    "evidence": "evidence/Q-01/hosted-gate-not-run.json, evidence/Q-01/baseline-not-run.json",
+    "screenshot": "not applicable: no visible UI changes"
+  },
+  "migration": "None. No schema, data or production behavior change; new evaluation row fields are optional.",
+  "rollback": "Revert the Q-01 commit. Older run directories remain readable.",
+  "limitations": [
+    "No paid hosted evaluation was run; the baseline is not_run.",
+    "Per-request upstream routing is not verifiable from the brain; the proxy spend log is the authority.",
+    "The existing held-out set (10 supported, 2 negative tasks) is below the proposed 40 and 20 minimum; verdicts read insufficient_sample until Q-02 adds tasks.",
+    "The hosted provider's error rewrite already prevents a fallback to uj-medium; the alias pin makes that a guarantee rather than fixing a live defect."
+  ],
+  "decisions_needed": [
+    "Vieri and Lapo freeze workflow-release-v1: decision rule, human-reviewed or automatic intent, per-plan budgets.",
+    "An admin with llm.view exports /api/llm/profiles and /api/llm/models and names each plan's profile key.",
+    "One evaluation account and key per plan.",
+    "A spend authorization per plan."
+  ],
+  "next": "Q-02 stacked on brief/q-01 in its own worktree; keep all PRs unmerged."
+}

@@ -1,0 +1,22 @@
+$ bun test --preload ./src/test-preload.ts   (full suite, Q-01 head on brief/foundations 462d955d, local WSL2)
+ 7750 pass
+ 86 skip
+ 8 fail
+ 55416 expect() calls
+Ran 7844 tests across 424 files. [932.52s]
+
+Failures (8):
+  src/sites/git-config-lint.test.ts: (fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [128.65ms]
+  src/actions/browser/page-writable-element-refs.test.ts: (fail) page-writable element refs (#592, integration) > (unnamed) [5004.61ms]
+  src/actions/browser/browser-primitives.test.ts: (fail) browser primitives (integration) > (unnamed) [6226.99ms]
+  src/actions/browser/browser-local-files.test.ts: (fail) browser local-file lockdown (integration, #521) > (unnamed) [554.40ms]
+  src/actions/tools/browser-template-delivery.test.ts: (fail) webapp template delivery via browser tools (integration) > (unnamed) [570.02ms]
+  src/workflows/runner/engine-runtime/engine-lifecycle.test.ts: (fail) engine lifecycle shim: SIGTERM > with the shim, SIGTERM exits within the grace window [356.84ms]
+  src/actions/browser/fixtures/headless-chromium.test.ts: (fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [631.80ms]
+  src/actions/browser/fixtures/headless-chromium.test.ts: (fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [609.38ms]
+
+Same 7 files on brief/foundations 462d955d without Q-01 (separate worktree):
+  343 pass, 1 skip, 7 fail: git-config-lint legacy branches/ case and six browser/Chromium integration tests fail identically.
+  engine-lifecycle SIGTERM passed there; on the Q-01 head it passed 3 of 3 when rerun alone (11 pass each). Q-01 changes no runner files.
+
+Conclusion: all 8 failures occur on brief/foundations without Q-01 or pass when rerun alone; Q-01 touches none of these areas. Causes were not diagnosed further.
