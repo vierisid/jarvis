@@ -140,12 +140,13 @@ jobs:
   #     tag=v9.9.9 would publish that branch as 9.9.9 and have
   #     action-gh-release create the tag on the default branch. A dry run may
   #     rehearse any ref, since it publishes nothing.
-  #   - Sizes npm accepts: each of major.minor.patch at most 16 digits
-  #     (node-semver's MAX_SAFE_COMPONENT_LENGTH) and the version at most 256
-  #     characters (its MAX_LENGTH), so an oversized tag fails here and not at
-  #     `npm version`, after the sidecar has published. (node-semver also
-  #     refuses a 16-digit component above 2^53-1; that sliver still fails
-  #     late.)
+  #   - Sizes every publisher accepts: each of major.minor.patch at most 16
+  #     digits (node-semver's MAX_SAFE_COMPONENT_LENGTH) and the version at
+  #     most 128 characters -- Docker's tag limit, which publish-docker hits
+  #     with the bare `{{version}}` tag AFTER npm has published, and the
+  #     tighter of it and npm's 256. An oversized tag fails here instead of
+  #     half-publishing. (node-semver also refuses a 16-digit component above
+  #     2^53-1; that sliver still fails late.)
   #
   # What this gate is and is not. It stops malformed and hostile tag TEXT, and
   # a release of one ref under another ref's version. It is not a control
@@ -175,7 +176,7 @@ jobs:
           id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
           num='(0|[1-9][0-9]{0,15})'
           re="^v(${num}[.]${num}[.]${num}(-${id}([.]${id})*)?)\$"
-          if [ "${#RAW_TAG}" -gt 257 ] || ! [[ "$RAW_TAG" =~ $re ]]; then
+          if [ "${#RAW_TAG}" -gt 129 ] || ! [[ "$RAW_TAG" =~ $re ]]; then
             # %q, so a newline in the value cannot start a workflow command of
             # its own in the log.
             printf '::error::Release tag is not v<semver> without build metadata (e.g. v1.2.3, v1.2.3-rc.1): %q\n' "$RAW_TAG"

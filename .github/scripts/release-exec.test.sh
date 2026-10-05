@@ -252,11 +252,12 @@ accept 'v1.2.4-0' '1.2.4-0' true
 accept 'v1.2.3-alpha-1.beta.11' '1.2.3-alpha-1.beta.11' true
 accept 'v1.2.3-0a.x-y' '1.2.3-0a.x-y' true
 
-# Sizes npm accepts: 16-digit components, a 256-character version.
+# Sizes every publisher accepts: 16-digit components, a 128-character version
+# (Docker's tag limit; npm's is 256).
 accept 'v1234567890123456.0.0' '1234567890123456.0.0' false
 reject 'v12345678901234567.0.0'
 reject 'v1.12345678901234567.0'
-LONG_OK="1.2.3-$(printf 'a%.0s' $(seq 1 250))"
+LONG_OK="1.2.3-$(printf 'a%.0s' $(seq 1 122))"
 accept "v${LONG_OK}" "$LONG_OK" true
 reject "v${LONG_OK}a"
 
