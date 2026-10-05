@@ -6,8 +6,9 @@ import { BriefButton } from "./Buttons";
 
 /** Portals escape clipping; native popovers also escape other stacking contexts.
  * The portal explicitly follows the invoking Brief root's chosen appearance. */
-function FloatingSurface({ anchor, kind, children, onReady, ...props }:
+export function FloatingSurface({ anchor, kind, children, onReady, placement, className = "", ...props }:
   HTMLAttributes<HTMLDivElement> & { anchor: RefObject<HTMLElement | null>; kind: "menu" | "tooltip";
+    placement?: "top-start" | "right-end" | "right";
     children: ReactNode; onReady?: (element: HTMLDivElement) => void }) {
   const surface = useRef<HTMLDivElement>(null);
   const [theme, setTheme] = useState("light");
@@ -33,9 +34,14 @@ function FloatingSurface({ anchor, kind, children, onReady, ...props }:
       const preferAbove = kind === "tooltip";
       const top = preferAbove && above >= padding ? above
         : below + box.height <= window.innerHeight - padding ? below : Math.max(padding, above);
+      const desiredLeft = placement === "top-start" ? rect.left
+        : placement === "right" ? rect.right : placement === "right-end" ? rect.right + 24 : rect.right - box.width;
+      const desiredTop = placement === "top-start" ? above
+        : placement === "right-end" ? rect.bottom - box.height
+        : placement === "right" ? rect.top + (rect.height - box.height) / 2 : top;
       setPosition({
-        left: Math.max(padding, Math.min(rect.right - box.width, window.innerWidth - box.width - padding)),
-        top,
+        left: Math.max(padding, Math.min(desiredLeft, window.innerWidth - box.width - padding)),
+        top: Math.max(padding, Math.min(desiredTop, window.innerHeight - box.height - padding)),
       });
     };
     place();
@@ -49,14 +55,14 @@ function FloatingSurface({ anchor, kind, children, onReady, ...props }:
       window.removeEventListener("resize", place);
       window.removeEventListener("scroll", place, true);
     };
-  }, [anchor, kind]);
+  }, [anchor, kind, placement]);
   return createPortal(<div className="brief-root brief-control-layer" data-brief-theme={theme}>
-    <div {...props} ref={surface} popover="manual" className={`brief-floating brief-floating--${kind}`}
+    <div {...props} data-placement={placement} ref={surface} popover="manual" className={`brief-floating brief-floating--${kind} ${className}`}
       style={{ left: position.left, top: position.top }}>{children}</div>
   </div>, document.body);
 }
 
-export function BriefTooltip({ label, children }: { label: string; children: ReactElement<HTMLAttributes<HTMLElement>> }) {
+export function BriefTooltip({ label, children, placement, disabled = false }: { label: string; children: ReactElement<HTMLAttributes<HTMLElement>>; placement?: "right"; disabled?: boolean }) {
   const id = useId();
   const anchor = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -73,6 +79,7 @@ export function BriefTooltip({ label, children }: { label: string; children: Rea
     timer.current = setTimeout(() => setOpen(false), 80);
   };
   useEffect(() => () => clear(), []);
+  useEffect(() => { if (disabled) close(); }, [disabled]);
   useEffect(() => {
     if (!open) return;
     const escape = (event: KeyboardEvent) => {
@@ -84,14 +91,14 @@ export function BriefTooltip({ label, children }: { label: string; children: Rea
   return <span ref={anchor} className="brief-tooltip-anchor"
     onPointerEnter={event => {
       hovering.current = true;
-      if (event.pointerType === "touch" || suppressed.current) return;
+      if (disabled || event.pointerType === "touch" || suppressed.current) return;
       clear(); timer.current = setTimeout(() => setOpen(true), 500);
     }} onPointerLeave={leave}
-    onFocus={() => { clear(); focused.current = true; suppressed.current = false; setOpen(true); }}
+    onFocus={() => { clear(); focused.current = true; suppressed.current = false; if (!disabled) setOpen(true); }}
     onBlur={() => { focused.current = false; if (!hovering.current) { suppressed.current = false; close(); } }}
     onClickCapture={() => { suppressed.current = true; close(); }}>
-    {cloneElement(children, { "aria-describedby": [children.props["aria-describedby"], open ? id : null].filter(Boolean).join(" ") || undefined })}
-    {open && <FloatingSurface anchor={anchor} kind="tooltip" onPointerEnter={() => { clear(); hovering.current = true; }} onPointerLeave={leave}>
+    {cloneElement(children, { "aria-describedby": [children.props["aria-describedby"], open && !disabled ? id : null].filter(Boolean).join(" ") || undefined })}
+    {open && !disabled && <FloatingSurface anchor={anchor} kind="tooltip" placement={placement} onPointerEnter={() => { clear(); hovering.current = true; }} onPointerLeave={leave}>
       <span role="tooltip" id={id} className="brief-tooltip__body">{label}</span>
     </FloatingSurface>}
   </span>;
