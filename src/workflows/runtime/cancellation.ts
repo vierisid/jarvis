@@ -2,11 +2,12 @@ import { withExecutionScope } from "../../actions/execution-scope";
 import { getWorkflowDb } from "../db";
 import { getRunCancellation } from "../db/repos/run-cancellation";
 import { onRunCanceled } from "./cancellation-signals";
+import { WorkflowCancellationError } from "./cancellation-error";
 
-export class WorkflowCancellationError extends Error {
-  override readonly name = "WorkflowCancellationError";
-  constructor(runId: string) { super(`Workflow ${runId} was canceled or deleted; no new actions may start. Previously dispatched effects may have completed.`); }
-}
+// Defined in a leaf module and re-exported here, so `ToolRegistry.execute` can
+// recognise it without importing the workflow database (see
+// cancellation-error.ts). This file stays the name every existing caller uses.
+export { WorkflowCancellationError } from "./cancellation-error";
 
 export function assertRunNotCanceled(runId: string): void {
   // Deleting a workflow cascades to its run and cancellation record. Pending
