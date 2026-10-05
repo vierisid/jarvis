@@ -100,6 +100,14 @@ implementation or is activated by daemon startup.
 | Shell/router/layout and view adapters | D implementer; import the contract/optional interfaces without hard imports of future providers. |
 | Runtime/composer/goal quality | Q implementer; coordinate overlapping canonical services. |
 
+The workflow trust-boundary inventory in
+`src/workflows/adapters/untrusted-reach.test.ts` includes both Brief consumers.
+Contracts import workflow status types only; their browser bundle has no runtime
+workflow-repository dependency. `projectWorkflowRef` copies only identity and
+status fields, verifies version ownership, and never reads or forwards captured
+step payloads. Regression tests enforce both properties. A later provider that
+returns workflow payloads must review and protect its model boundary separately.
+
 Merge prerequisites: none. Activation prerequisites for F-01: none, because no
 feature is activated. Later activation dependencies are the fixed table in
 `capabilities.ts`. F-09 must also satisfy Q-13; F-13 must also satisfy Q-18. Those
@@ -113,7 +121,7 @@ From this worktree in WSL:
 
 ```bash
 cd /home/vierisid/.cache/codex/jarvis-f-01
-/home/vierisid/.bun/bin/bun test src/brief src/daemon/api-brief.test.ts
+/home/vierisid/.bun/bin/bun test src/brief src/daemon/api-brief.test.ts src/workflows/adapters/untrusted-reach.test.ts src/roles/untrusted-import-guard.test.ts
 ```
 
 This exercises a real HTTP server on a unique temporary Unix socket, bootstrap and

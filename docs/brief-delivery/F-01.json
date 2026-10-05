@@ -16,7 +16,7 @@
     "merge": "not_merged",
     "capability_ready": "foundation only; all feature providers absent",
     "release_enabled": false,
-    "publication": "not_pushed; no PR created"
+    "publication": "PR #702 open against main; https://github.com/vierisid/jarvis/pull/702"
   },
   "design": {
     "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
@@ -79,8 +79,8 @@
   ],
   "quick_verify": {
     "cwd": "/home/vierisid/.cache/codex/jarvis-f-01",
-    "command": "/home/vierisid/.bun/bin/bun test src/brief src/daemon/api-brief.test.ts",
-    "expected": "33 tests pass; real isolated Unix-socket HTTP auth; 26 default-off capabilities; fixture enable/disable and compatibility checks",
+    "command": "/home/vierisid/.bun/bin/bun test src/brief src/daemon/api-brief.test.ts src/workflows/adapters/untrusted-reach.test.ts src/roles/untrusted-import-guard.test.ts",
+    "expected": "51 tests pass, including the workflow trust-boundary inventory, runtime-import guard and payload-exclusion regression",
     "dashboard_console": "fetch('/api/brief/capabilities', { credentials: 'same-origin' }).then(async r => console.log(r.status, await r.json()))",
     "dashboard_expected": "On this branch: 200, contractVersion 1; each capability has supported/ready/enabled false. Without a valid session: 401 under the default policy.",
     "screenshot": "not applicable: no visible UI changes"
@@ -94,5 +94,21 @@
     "Q-13 and Q-18 readiness requirements remain with the relevant future providers.",
     "No dashboard integration or F-02 implementation in this task."
   ],
-  "next": "F-02 after F-01 merges. Do not activate dependent features merely because this seam exists."
+  "next": "F-02 from the corrected origin/brief/foundations in its own worktree, per Vieri's approved stacked-PR plan. Keep all PRs unmerged.",
+  "ci_correction": {
+    "previous_head": "b1eaac677b72a05298e2d9597fbba414b57d7eb8",
+    "failed_run": "https://github.com/vierisid/jarvis/actions/runs/37316759787",
+    "cause": "The #573 source-derived workflow reader inventory detected brief/contracts.ts and brief/adapters.ts without a recorded boundary review.",
+    "review": "Contracts use status-only type imports. projectWorkflowRef extracts four identity/status fields and checks flow ownership; it does not read or forward captured payloads. No model-facing provider is registered. The source-derived guard remains intact.",
+    "regressions": "Both new safety tests reject intentional unsafe mutations: spreading the version payload and adding a runtime workflow-repository import. Original production source restored byte-for-byte.",
+    "verification": "97 affected tests across 12 files, 507 assertions; TypeScript passes.",
+    "evidence": [
+      "evidence/F-01/ci-review-red.log",
+      "evidence/F-01/ci-review-tests.log",
+      "evidence/F-01/ci-review-types.log",
+      "evidence/F-01/ci-projection-mutation.log",
+      "evidence/F-01/ci-contracts-mutation.log"
+    ],
+    "remote_ci": "Awaiting the corrected commit. Separate Docker release-cache failure also present on D-01; not fixed by this boundary-review correction."
+  }
 }
