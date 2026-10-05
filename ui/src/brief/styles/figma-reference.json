@@ -1,0 +1,292 @@
+{
+  "source": "Figma Brief v6.1 / UI-35 final checkpoint; native UI-01/02/03/06 exports",
+  "nodes": [
+    "81:3",
+    "479:72559",
+    "524:87099"
+  ],
+  "colors": {
+    "light": {
+      "canvas": "#FAFBFC",
+      "card": "#FFFFFF",
+      "card-edge": "#E2E7EC",
+      "recessed": "#EFF2F5",
+      "soft": "#F6F8FA",
+      "ink": "#13161A",
+      "secondary": "#535B63",
+      "tertiary": "#677077",
+      "selected": "#EDF1F5",
+      "field-edge": "#CBD3DB",
+      "focus": "#1E5FD8",
+      "progress-near": "#B84A48",
+      "progress-early": "#EAA40E",
+      "progress-middle": "#2D78FF",
+      "progress-complete": "#2FA45E",
+      "progress-remaining": "#DEE5EB",
+      "positive": "#1F7A43",
+      "attention-text": "#8A6206",
+      "attention-surface": "#FFF8E7",
+      "success-text": "#1F7A43",
+      "success-surface": "#EDF8F0",
+      "running-text": "#1E5FD8",
+      "running-surface": "#EFF5FF",
+      "error-text": "#B84A48",
+      "error-surface": "#FFF5F3",
+      "paper": "#FFFFFF",
+      "paper-edge": "#C4CDD6",
+      "paper-backing": "#EDF1F5",
+      "paper-shadow": "#2635451A",
+      "menu": "#FFFFFF",
+      "menu-edge": "#D7DEE5",
+      "menu-shadow": "#2635451F",
+      "stack-near": "#F6F8FA",
+      "stack-far": "#EDF1F5"
+    },
+    "dark": {
+      "canvas": "#121417",
+      "card": "#1A1D22",
+      "card-edge": "#272C33",
+      "recessed": "#16191E",
+      "soft": "#1E2128",
+      "ink": "#EEF1F4",
+      "secondary": "#A4ABB3",
+      "tertiary": "#8A919A",
+      "selected": "#222831",
+      "field-edge": "#3A424D",
+      "focus": "#6FA4FF",
+      "progress-near": "#FF6A5C",
+      "progress-early": "#EAA40E",
+      "progress-middle": "#6FA4FF",
+      "progress-complete": "#52C97F",
+      "progress-remaining": "#2A3038",
+      "positive": "#52C97F",
+      "attention-text": "#F0B53C",
+      "attention-surface": "#2B2418",
+      "success-text": "#52C97F",
+      "success-surface": "#182B22",
+      "running-text": "#6FA4FF",
+      "running-surface": "#1A263B",
+      "error-text": "#FF6A5C",
+      "error-surface": "#321F20",
+      "paper": "#272C34",
+      "paper-edge": "#424B58",
+      "paper-backing": "#20252C",
+      "paper-shadow": "#080B1047",
+      "menu": "#272C34",
+      "menu-edge": "#424B58",
+      "menu-shadow": "#080B1052",
+      "stack-near": "#171B21",
+      "stack-far": "#14181E"
+    }
+  },
+  "typeStyles": [
+    {
+      "Style": "Brief / Room title",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "32",
+      "Line height": "40"
+    },
+    {
+      "Style": "Brief / Today greeting",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "34",
+      "Line height": "43"
+    },
+    {
+      "Style": "Brief / Display statement",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "36",
+      "Line height": "45"
+    },
+    {
+      "Style": "Brief / Hero heading",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "24",
+      "Line height": "30"
+    },
+    {
+      "Style": "Brief / Section heading",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "20",
+      "Line height": "26"
+    },
+    {
+      "Style": "Brief / Card heading",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "18",
+      "Line height": "24"
+    },
+    {
+      "Style": "Brief / Compact heading",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "16",
+      "Line height": "22"
+    },
+    {
+      "Style": "Brief / Body",
+      "Font": "Familjen Grotesk",
+      "Weight": "Regular",
+      "Size": "14",
+      "Line height": "20"
+    },
+    {
+      "Style": "Brief / Body emphasis",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "14",
+      "Line height": "20"
+    },
+    {
+      "Style": "Brief / Conversation body",
+      "Font": "Familjen Grotesk",
+      "Weight": "Regular",
+      "Size": "16",
+      "Line height": "24"
+    },
+    {
+      "Style": "Brief / Control",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "14",
+      "Line height": "20"
+    },
+    {
+      "Style": "Brief / Quiet control",
+      "Font": "Familjen Grotesk",
+      "Weight": "Regular",
+      "Size": "14",
+      "Line height": "20"
+    },
+    {
+      "Style": "Brief / Utility",
+      "Font": "Familjen Grotesk",
+      "Weight": "Regular",
+      "Size": "12",
+      "Line height": "16"
+    },
+    {
+      "Style": "Brief / Utility emphasis",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "12",
+      "Line height": "16"
+    },
+    {
+      "Style": "Brief / Data",
+      "Font": "Spline Sans Mono",
+      "Weight": "Regular",
+      "Size": "12",
+      "Line height": "16"
+    },
+    {
+      "Style": "Brief / Outcome 96 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "96",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 43 regular",
+      "Font": "Familjen Grotesk",
+      "Weight": "Regular",
+      "Size": "43",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 66 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "66",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 55 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "55",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 34 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "34",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 22 regular",
+      "Font": "Familjen Grotesk",
+      "Weight": "Regular",
+      "Size": "22",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 94 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "94",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 50 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "50",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 43 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "43",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 59 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "59",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 23 regular",
+      "Font": "Familjen Grotesk",
+      "Weight": "Regular",
+      "Size": "23",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 76 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "76",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 27 regular",
+      "Font": "Familjen Grotesk",
+      "Weight": "Regular",
+      "Size": "27",
+      "Line height": "AUTO"
+    },
+    {
+      "Style": "Brief / Outcome 44 bold",
+      "Font": "Familjen Grotesk",
+      "Weight": "Bold",
+      "Size": "44",
+      "Line height": "AUTO"
+    }
+  ],
+  "logo": {
+    "source": "dashboard-brief-figma-2026-09-14-v7/assets/logo.svg",
+    "sha256": "cc632dda375c344edc52959219edb17c88614259e9529a1f08766bfa3cc898f8",
+    "dark": "Only existing ink fills recolored to approved Dark roles; geometry and embedded font unchanged."
+  }
+}

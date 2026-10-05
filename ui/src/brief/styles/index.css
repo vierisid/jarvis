@@ -1,0 +1,265 @@
+/* Approved native Figma UI-01/02/03/06. Scoped to Brief; v2 tokens stay intact. */
+.brief-root {
+  --brief-canvas: #FAFBFC;
+  --brief-card: #FFFFFF;
+  --brief-card-edge: #E2E7EC;
+  --brief-recessed: #EFF2F5;
+  --brief-soft: #F6F8FA;
+  --brief-ink: #13161A;
+  --brief-secondary: #535B63;
+  --brief-tertiary: #677077;
+  --brief-selected: #EDF1F5;
+  --brief-field-edge: #CBD3DB;
+  --brief-focus: #1E5FD8;
+  --brief-progress-near: #B84A48;
+  --brief-progress-early: #EAA40E;
+  --brief-progress-middle: #2D78FF;
+  --brief-progress-complete: #2FA45E;
+  --brief-progress-remaining: #DEE5EB;
+  --brief-positive: #1F7A43;
+  --brief-attention-text: #8A6206;
+  --brief-attention-surface: #FFF8E7;
+  --brief-success-text: #1F7A43;
+  --brief-success-surface: #EDF8F0;
+  --brief-running-text: #1E5FD8;
+  --brief-running-surface: #EFF5FF;
+  --brief-error-text: #B84A48;
+  --brief-error-surface: #FFF5F3;
+  --brief-paper: #FFFFFF;
+  --brief-paper-edge: #C4CDD6;
+  --brief-paper-backing: #EDF1F5;
+  --brief-paper-shadow: #2635451A;
+  --brief-menu: #FFFFFF;
+  --brief-menu-edge: #D7DEE5;
+  --brief-menu-shadow: #2635451F;
+  --brief-stack-near: #F6F8FA;
+  --brief-stack-far: #EDF1F5;
+}
+
+:root[data-theme="dark"] .brief-root {
+  --brief-canvas: #121417;
+  --brief-card: #1A1D22;
+  --brief-card-edge: #272C33;
+  --brief-recessed: #16191E;
+  --brief-soft: #1E2128;
+  --brief-ink: #EEF1F4;
+  --brief-secondary: #A4ABB3;
+  --brief-tertiary: #8A919A;
+  --brief-selected: #222831;
+  --brief-field-edge: #3A424D;
+  --brief-focus: #6FA4FF;
+  --brief-progress-near: #FF6A5C;
+  --brief-progress-early: #EAA40E;
+  --brief-progress-middle: #6FA4FF;
+  --brief-progress-complete: #52C97F;
+  --brief-progress-remaining: #2A3038;
+  --brief-positive: #52C97F;
+  --brief-attention-text: #F0B53C;
+  --brief-attention-surface: #2B2418;
+  --brief-success-text: #52C97F;
+  --brief-success-surface: #182B22;
+  --brief-running-text: #6FA4FF;
+  --brief-running-surface: #1A263B;
+  --brief-error-text: #FF6A5C;
+  --brief-error-surface: #321F20;
+  --brief-paper: #272C34;
+  --brief-paper-edge: #424B58;
+  --brief-paper-backing: #20252C;
+  --brief-paper-shadow: #080B1047;
+  --brief-menu: #272C34;
+  --brief-menu-edge: #424B58;
+  --brief-menu-shadow: #080B1052;
+  --brief-stack-near: #171B21;
+  --brief-stack-far: #14181E;
+}
+
+:root .brief-root[data-brief-theme="light"] {
+  --brief-canvas: #FAFBFC;
+  --brief-card: #FFFFFF;
+  --brief-card-edge: #E2E7EC;
+  --brief-recessed: #EFF2F5;
+  --brief-soft: #F6F8FA;
+  --brief-ink: #13161A;
+  --brief-secondary: #535B63;
+  --brief-tertiary: #677077;
+  --brief-selected: #EDF1F5;
+  --brief-field-edge: #CBD3DB;
+  --brief-focus: #1E5FD8;
+  --brief-progress-near: #B84A48;
+  --brief-progress-early: #EAA40E;
+  --brief-progress-middle: #2D78FF;
+  --brief-progress-complete: #2FA45E;
+  --brief-progress-remaining: #DEE5EB;
+  --brief-positive: #1F7A43;
+  --brief-attention-text: #8A6206;
+  --brief-attention-surface: #FFF8E7;
+  --brief-success-text: #1F7A43;
+  --brief-success-surface: #EDF8F0;
+  --brief-running-text: #1E5FD8;
+  --brief-running-surface: #EFF5FF;
+  --brief-error-text: #B84A48;
+  --brief-error-surface: #FFF5F3;
+  --brief-paper: #FFFFFF;
+  --brief-paper-edge: #C4CDD6;
+  --brief-paper-backing: #EDF1F5;
+  --brief-paper-shadow: #2635451A;
+  --brief-menu: #FFFFFF;
+  --brief-menu-edge: #D7DEE5;
+  --brief-menu-shadow: #2635451F;
+  --brief-stack-near: #F6F8FA;
+  --brief-stack-far: #EDF1F5;
+}
+
+:root .brief-root[data-brief-theme="dark"] {
+  --brief-canvas: #121417;
+  --brief-card: #1A1D22;
+  --brief-card-edge: #272C33;
+  --brief-recessed: #16191E;
+  --brief-soft: #1E2128;
+  --brief-ink: #EEF1F4;
+  --brief-secondary: #A4ABB3;
+  --brief-tertiary: #8A919A;
+  --brief-selected: #222831;
+  --brief-field-edge: #3A424D;
+  --brief-focus: #6FA4FF;
+  --brief-progress-near: #FF6A5C;
+  --brief-progress-early: #EAA40E;
+  --brief-progress-middle: #6FA4FF;
+  --brief-progress-complete: #52C97F;
+  --brief-progress-remaining: #2A3038;
+  --brief-positive: #52C97F;
+  --brief-attention-text: #F0B53C;
+  --brief-attention-surface: #2B2418;
+  --brief-success-text: #52C97F;
+  --brief-success-surface: #182B22;
+  --brief-running-text: #6FA4FF;
+  --brief-running-surface: #1A263B;
+  --brief-error-text: #FF6A5C;
+  --brief-error-surface: #321F20;
+  --brief-paper: #272C34;
+  --brief-paper-edge: #424B58;
+  --brief-paper-backing: #20252C;
+  --brief-paper-shadow: #080B1047;
+  --brief-menu: #272C34;
+  --brief-menu-edge: #424B58;
+  --brief-menu-shadow: #080B1052;
+  --brief-stack-near: #171B21;
+  --brief-stack-far: #14181E;
+}
+
+.brief-root {
+  --brief-sans: var(--sans);
+  --brief-mono: var(--mono);
+  --brief-corner-card: 14px 0 14px 14px;
+  --brief-corner-outcome: 16px 0 16px 16px;
+  --brief-corner-paper: 12px 0 12px 12px;
+  --brief-corner-menu: 10px 0 10px 10px;
+  --brief-corner-control: 9px 0 9px 9px;
+  --brief-corner-segment: 2px 0 2px 2px;
+  /* Compatibility for D-01's wrappers only, inherited inside this root. */
+  --bg: var(--brief-canvas); --raise: var(--brief-card);
+  --panel: var(--brief-recessed); --panel2: var(--brief-soft);
+  --ink: var(--brief-ink); --ink2: var(--brief-secondary); --ink3: var(--brief-tertiary);
+  --rule: var(--brief-card-edge); --corner: var(--brief-corner-card);
+  --corner-sm: var(--brief-corner-control);
+  color: var(--brief-ink); background: var(--brief-canvas);
+  font-family: var(--brief-sans); -webkit-font-smoothing: antialiased;
+  color-scheme: light;
+}
+:root[data-theme="dark"] .brief-root { color-scheme: dark; }
+:root .brief-root[data-brief-theme="light"] { color-scheme: light; }
+:root .brief-root[data-brief-theme="dark"] { color-scheme: dark; }
+
+.brief-root .brief-type-room-title { font: 700 calc(2rem * var(--brief-text-scale, 1))/1.25 var(--brief-sans); }
+.brief-root .brief-type-today-greeting { font: 700 calc(2.125rem * var(--brief-text-scale, 1))/1.2647059 var(--brief-sans); }
+.brief-root .brief-type-display-statement { font: 700 calc(2.25rem * var(--brief-text-scale, 1))/1.25 var(--brief-sans); }
+.brief-root .brief-type-hero-heading { font: 700 calc(1.5rem * var(--brief-text-scale, 1))/1.25 var(--brief-sans); }
+.brief-root .brief-type-section-heading { font: 700 calc(1.25rem * var(--brief-text-scale, 1))/1.3 var(--brief-sans); }
+.brief-root .brief-type-card-heading { font: 700 calc(1.125rem * var(--brief-text-scale, 1))/1.3333333 var(--brief-sans); }
+.brief-root .brief-type-compact-heading { font: 700 calc(1rem * var(--brief-text-scale, 1))/1.375 var(--brief-sans); }
+.brief-root .brief-type-body { font: 400 calc(0.875rem * var(--brief-text-scale, 1))/1.4285714 var(--brief-sans); }
+.brief-root .brief-type-body-emphasis { font: 700 calc(0.875rem * var(--brief-text-scale, 1))/1.4285714 var(--brief-sans); }
+.brief-root .brief-type-conversation-body { font: 400 calc(1rem * var(--brief-text-scale, 1))/1.5 var(--brief-sans); }
+.brief-root .brief-type-control { font: 700 calc(0.875rem * var(--brief-text-scale, 1))/1.4285714 var(--brief-sans); }
+.brief-root .brief-type-quiet-control { font: 400 calc(0.875rem * var(--brief-text-scale, 1))/1.4285714 var(--brief-sans); }
+.brief-root .brief-type-utility { font: 400 calc(0.75rem * var(--brief-text-scale, 1))/1.3333333 var(--brief-sans); }
+.brief-root .brief-type-utility-emphasis { font: 700 calc(0.75rem * var(--brief-text-scale, 1))/1.3333333 var(--brief-sans); }
+.brief-root .brief-type-data { font: 400 calc(0.75rem * var(--brief-text-scale, 1))/1.3333333 var(--brief-mono); }
+.brief-root .brief-type-outcome-96-bold { font: 700 calc(6rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-43-regular { font: 400 calc(2.6875rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-66-bold { font: 700 calc(4.125rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-55-bold { font: 700 calc(3.4375rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-34-bold { font: 700 calc(2.125rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-22-regular { font: 400 calc(1.375rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-94-bold { font: 700 calc(5.875rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-50-bold { font: 700 calc(3.125rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-43-bold { font: 700 calc(2.6875rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-59-bold { font: 700 calc(3.6875rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-23-regular { font: 400 calc(1.4375rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-76-bold { font: 700 calc(4.75rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-27-regular { font: 400 calc(1.6875rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+.brief-root .brief-type-outcome-44-bold { font: 700 calc(2.75rem * var(--brief-text-scale, 1))/normal var(--brief-sans); }
+
+.brief-root :is(.brief-type-room-title,.brief-type-today-greeting,.brief-type-display-statement,.brief-type-hero-heading,.brief-type-section-heading) { text-wrap: balance; }
+.brief-root :is(.brief-type-body,.brief-type-conversation-body) { max-inline-size: 70ch; overflow-wrap: anywhere; }
+.brief-root .brief-type-data, .brief-root [class*="brief-type-outcome-"] { font-variant-numeric: tabular-nums lining-nums; }
+.brief-root .brief-secondary { color: var(--brief-secondary); }
+.brief-root .brief-tertiary { color: var(--brief-tertiary); }
+.brief-root .brief-positive { color: var(--brief-positive); }
+
+/* Fill, border, clipping and shadow belong to the same rounded box. */
+.brief-root .brief-surface {
+  --brief-radius: var(--brief-corner-card);
+  border-radius: var(--brief-radius); border: 1px solid var(--brief-card-edge);
+  background: var(--brief-card); color: var(--brief-ink); position: relative;
+}
+.brief-root .brief-surface--outcome { --brief-radius: var(--brief-corner-outcome); }
+.brief-root .brief-surface--paper {
+  --brief-radius: var(--brief-corner-paper);
+  background: var(--brief-paper); border-color: var(--brief-paper-edge);
+  box-shadow: 8px 12px 0 var(--brief-paper-shadow);
+}
+.brief-root .brief-surface--paper::before {
+  content: ""; position: absolute; inset: -1px; transform: translate(4px, 6px);
+  border-radius: inherit; border: 1px solid var(--brief-card-edge);
+  background: var(--brief-paper-backing); z-index: -1; pointer-events: none;
+}
+.brief-root .brief-paper-object { position: relative; isolation: isolate; }
+.brief-root .brief-surface--menu {
+  --brief-radius: var(--brief-corner-menu);
+  background: var(--brief-menu); border-color: var(--brief-menu-edge);
+  box-shadow: 3px 5px 0 var(--brief-menu-shadow);
+}
+.brief-root .brief-surface--control { --brief-radius: var(--brief-corner-control); }
+.brief-root .brief-surface__clip { border-radius: inherit; overflow: clip; }
+.brief-root .brief-paper-highlight { background: var(--brief-attention-surface); color: var(--brief-attention-text); }
+
+.brief-root .brief-progress { display: flex; gap: 4px; height: 6px; }
+.brief-root .brief-progress > span { flex: 1; min-width: 0; border-radius: var(--brief-corner-segment); background: var(--brief-progress-remaining); }
+.brief-root .brief-progress > [data-complete="true"] { background: var(--brief-progress-color); }
+.brief-root .brief-progress--near { --brief-progress-color: var(--brief-progress-near); }
+.brief-root .brief-progress--early { --brief-progress-color: var(--brief-progress-early); }
+.brief-root .brief-progress--middle { --brief-progress-color: var(--brief-progress-middle); }
+.brief-root .brief-progress--complete { --brief-progress-color: var(--brief-progress-complete); }
+.brief-root .brief-status {
+  display: inline-flex; align-items: center; gap: 8px;
+  min-height: 24px; padding: 4px 10px; border-radius: var(--brief-corner-paper);
+  font: 400 calc(.75rem * var(--brief-text-scale, 1))/1.3333333 var(--brief-sans);
+  background: var(--brief-soft); color: var(--brief-secondary);
+}
+.brief-root .brief-status::before { content:""; width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
+.brief-root .brief-status--attention { background:var(--brief-attention-surface); color:var(--brief-attention-text); }
+.brief-root .brief-status--success { background:var(--brief-success-surface); color:var(--brief-success-text); }
+.brief-root .brief-status--running { background:var(--brief-running-surface); color:var(--brief-running-text); }
+.brief-root .brief-status--error { background:var(--brief-error-surface); color:var(--brief-error-text); }
+
+.brief-root .brief-brand { display:inline-grid; width:144px; max-width:100%; vertical-align:middle; }
+.brief-root .brief-brand img { grid-area:1/1; display:block; width:100%; height:auto; }
+.brief-root .brief-brand__dark { visibility:hidden; }
+:root[data-theme="dark"] .brief-root .brief-brand__light { visibility:hidden; }
+:root[data-theme="dark"] .brief-root .brief-brand__dark { visibility:visible; }
+:root .brief-root[data-brief-theme="light"] .brief-brand__light { visibility:visible; }
+:root .brief-root[data-brief-theme="light"] .brief-brand__dark { visibility:hidden; }
+:root .brief-root[data-brief-theme="dark"] .brief-brand__light { visibility:hidden; }
+:root .brief-root[data-brief-theme="dark"] .brief-brand__dark { visibility:visible; }
+
