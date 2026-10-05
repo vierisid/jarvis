@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-10-04";
+export const GENERATED_AT = "2026-10-05";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -462,8 +462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "attio",
     npmPackage: "@activepieces/piece-attio",
-    versionRange: "^0.2.0",
-    latestVersion: "0.2.0",
+    versionRange: "^0.3.0",
+    latestVersion: "0.3.0",
     displayName: "Attio",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/attio",
@@ -1242,8 +1242,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "cloudinary",
     npmPackage: "@activepieces/piece-cloudinary",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Cloudinary",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/cloudinary",
@@ -1692,8 +1692,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "docusign",
     npmPackage: "@activepieces/piece-docusign",
-    versionRange: "^0.3.1",
-    latestVersion: "0.3.1",
+    versionRange: "^0.3.2",
+    latestVersion: "0.3.2",
     displayName: "Docusign",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/docusign",
@@ -2372,8 +2372,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "gmail",
     npmPackage: "@activepieces/piece-gmail",
-    versionRange: "^0.17.0",
-    latestVersion: "0.17.0",
+    versionRange: "^0.17.1",
+    latestVersion: "0.17.1",
     displayName: "Gmail",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/gmail",
@@ -2622,8 +2622,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "grist",
     npmPackage: "@activepieces/piece-grist",
-    versionRange: "^0.2.0",
-    latestVersion: "0.2.0",
+    versionRange: "^0.3.0",
+    latestVersion: "0.3.0",
     displayName: "Grist",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/grist",
@@ -2762,8 +2762,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "http-oauth2",
     npmPackage: "@activepieces/piece-http-oauth2",
-    versionRange: "^0.3.0",
-    latestVersion: "0.3.0",
+    versionRange: "^0.3.1",
+    latestVersion: "0.3.1",
     displayName: "Http Oauth2",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/http-oauth2",
@@ -2842,8 +2842,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "imap",
     npmPackage: "@activepieces/piece-imap",
-    versionRange: "^0.6.0",
-    latestVersion: "0.6.0",
+    versionRange: "^0.6.1",
+    latestVersion: "0.6.1",
     displayName: "Imap",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/imap",
@@ -3812,8 +3812,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-todo",
     npmPackage: "@activepieces/piece-microsoft-todo",
-    versionRange: "^0.4.0",
-    latestVersion: "0.4.0",
+    versionRange: "^0.5.0",
+    latestVersion: "0.5.0",
     displayName: "Microsoft Todo",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-todo",
@@ -4122,8 +4122,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "odoo",
     npmPackage: "@activepieces/piece-odoo",
-    versionRange: "^0.2.0",
-    latestVersion: "0.2.0",
+    versionRange: "^0.2.1",
+    latestVersion: "0.2.1",
     displayName: "Odoo",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/odoo",
@@ -4622,8 +4622,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "presentation",
     npmPackage: "@activepieces/piece-presentation",
-    versionRange: "^0.2.0",
-    latestVersion: "0.2.0",
+    versionRange: "^0.3.0",
+    latestVersion: "0.3.0",
     displayName: "Presentation",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/presentation",
@@ -4842,8 +4842,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "reddit",
     npmPackage: "@activepieces/piece-reddit",
-    versionRange: "^0.3.0",
-    latestVersion: "0.3.0",
+    versionRange: "^0.4.0",
+    latestVersion: "0.4.0",
     displayName: "Reddit",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/reddit",
@@ -5142,8 +5142,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "sendgrid",
     npmPackage: "@activepieces/piece-sendgrid",
-    versionRange: "^0.6.1",
-    latestVersion: "0.6.1",
+    versionRange: "^0.6.2",
+    latestVersion: "0.6.2",
     displayName: "Sendgrid",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/sendgrid",
@@ -5572,8 +5572,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "supadata",
     npmPackage: "@activepieces/piece-supadata",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Supadata",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/supadata",
@@ -5792,8 +5792,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "ticktick",
     npmPackage: "@activepieces/piece-ticktick",
-    versionRange: "^0.2.1",
-    latestVersion: "0.2.1",
+    versionRange: "^0.3.0",
+    latestVersion: "0.3.0",
     displayName: "Ticktick",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/ticktick",
@@ -6462,8 +6462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "zendesk",
     npmPackage: "@activepieces/piece-zendesk",
-    versionRange: "^0.4.0",
-    latestVersion: "0.4.0",
+    versionRange: "^0.5.0",
+    latestVersion: "0.5.0",
     displayName: "Zendesk",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/zendesk",
@@ -6562,8 +6562,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "zoho-mail",
     npmPackage: "@activepieces/piece-zoho-mail",
-    versionRange: "^0.2.0",
-    latestVersion: "0.2.0",
+    versionRange: "^0.2.1",
+    latestVersion: "0.2.1",
     displayName: "Zoho Mail",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/zoho-mail",

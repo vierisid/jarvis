@@ -123,7 +123,7 @@ export const VERIFIED_MANIFESTS: Record<string, VerifiedManifest> = {
     ],
   },
   "gmail": {
-    version: "0.17.0",
+    version: "0.17.1",
     actions: [
       {"name":"create_draft_reply","classification":"WRITE","props":["attachment","attachment_name","body","body_type","include_original_message","message_id","reply_type","sender_name"]},
       {"name":"custom_api_call","classification":"WRITE","props":["body","body_type","failsafe","followRedirects","headers","method","queryParams","response_is_binary","timeout","url"]},
