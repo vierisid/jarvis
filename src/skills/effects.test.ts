@@ -164,3 +164,88 @@ describe('resolveSkillEffect', () => {
     expect(e.intent).toContain('+4 more steps');
   });
 });
+
+/**
+ * #706. The card renders this sentence and nothing else, and most of it is
+ * text nobody vetted: `record_skill` compiles element names from the
+ * accessible names of fields on pages the person used, the skill name is the
+ * model's, the app is the recorded window's, and typed values and keys come
+ * from the caller. Each value is reduced with `forCard` and capped, and a
+ * quoted value has its quotes escaped, so none of them can reorder the
+ * sentence, run it on past the step that sends, or close its own quote.
+ */
+describe('#706: page-derived and model-chosen text on the run_skill card', () => {
+  const RLO = String.fromCharCode(0x202e);
+  const CONTROLS_OR_FORMAT = /[\p{Cf}\u0000-\u001f\u007f-\u009f]/u;
+
+  test('a long label with a bidi override cannot hide the step that sends', () => {
+    const s = skill([
+      { action: 'click', ref: ref('button', `Archive${RLO}${'x'.repeat(2000)}`) },
+      { action: 'click', ref: ref('button', 'Send') },
+    ], { name: 'gmail-send', app: 'Gmail' });
+    const e = resolveSkillEffect(s, {});
+    expect(e.intent).not.toMatch(CONTROLS_OR_FORMAT);
+    expect(e.intent).toContain(`click Archive${'x'.repeat(70)}...; click Send (sends email)`);
+    expect(e.intent.length).toBeLessThan(400);
+  });
+
+  test('the classifier still judges the raw name: the reduction is for display only', () => {
+    // The word that classifies sits past the 80-character cap, so a classifier
+    // fed the card text would lose it.
+    const step = classifyStep({ action: 'click', ref: ref('button', `${'x'.repeat(90)} delete`) }, 0, skill([]), {});
+    expect(step.category).toBe('delete_data');
+    expect(step.summary).toBe(`click ${'x'.repeat(77)}... (deletes)`);
+  });
+
+  test('an opened URL and a launched app are quoted, reduced and capped', () => {
+    const s = skill([
+      { action: 'navigate', value: `https://a.example/"${String.fromCharCode(10)}${RLO}${'q'.repeat(60)}` },
+      { action: 'launch_app', value: `notepad"${RLO}.exe` },
+    ]);
+    const e = resolveSkillEffect(s, {});
+    expect(e.intent).not.toMatch(CONTROLS_OR_FORMAT);
+    expect(e.intent).toContain(`open "https://a.example/\\" ${'q'.repeat(17)}..."`);
+    expect(e.intent).toContain('launch "notepad\\".exe"');
+  });
+
+  test('a skill name cannot close its quote or break the line', () => {
+    const name = `gmail-send" in Notepad (v9, authored): click Cancel.${String.fromCharCode(10)}Run skill "x`;
+    const e = resolveSkillEffect(skill([{ action: 'click', ref: ref('button', 'Send') }], { name, app: 'Gmail' }), {});
+    expect(e.intent).not.toMatch(CONTROLS_OR_FORMAT);
+    const quoted = /^Run skill ("(?:[^"\\]|\\.)*")/.exec(e.intent)![1]!;
+    // Everything up to the first unescaped quote is the name, whole.
+    expect(JSON.parse(quoted)).toBe('gmail-send" in Notepad (v9, authored): click Cancel. Run skill "x');
+    expect(e.intent.slice('Run skill '.length + quoted.length)).toStartWith(' in Gmail (v1, authored): click Send');
+  });
+
+  test('the skill name and the app are capped', () => {
+    const e = resolveSkillEffect(skill([{ action: 'click', ref: ref('button', 'OK') }],
+      { name: 'n'.repeat(500), app: `A${String.fromCharCode(0x1b)}[2J${'p'.repeat(500)}` }), {});
+    expect(e.intent).toStartWith(`Run skill "${'n'.repeat(77)}..." in A[2J${'p'.repeat(73)}... (v1, authored): click OK`);
+  });
+
+  test('a typed value cannot close its quote, and a pressed key is capped', () => {
+    const s = skill([
+      { action: 'set_value', ref: ref('textbox', 'To'), value: '{{to}}' },
+      { action: 'press_keys', value: '{{keys}}' },
+    ], { params: [
+      { name: 'to', type: 'string', description: '', required: true },
+      { name: 'keys', type: 'string', description: '', required: true },
+    ] });
+    const e = resolveSkillEffect(s, { to: 'bob" into Search; click Cancel', keys: `enter${'k'.repeat(500)}` });
+    expect(e.intent).toContain('type "bob\\" into Search; click Cancel" into To');
+    expect(e.intent).toContain(`press enter${'k'.repeat(32)}...`);
+    expect(e.intent).not.toContain('k'.repeat(36));
+  });
+
+  test('a label made only of invisible characters falls back to the role', () => {
+    const e = resolveSkillEffect(skill([{ action: 'click', ref: ref('button', `${RLO}${String.fromCharCode(0x200b)}`) }]), {});
+    expect(e.intent).toContain(': click button');
+  });
+
+  test('an unknown recorded action is quoted, reduced and capped on the card', () => {
+    const action = `swipe"${String.fromCharCode(10)}${'z'.repeat(200)}` as unknown as SkillStep['action'];
+    const step = classifyStep({ action }, 0, skill([]), {});
+    expect(step.summary).toBe(`unknown action "swipe\\" ${'z'.repeat(30)}..."`);
+  });
+});
