@@ -91,29 +91,87 @@
   ],
   "verification": [
     {
-      "command": "bun test src/vault/chat-turns.test.ts src/brief/chat-transport.test.ts src/daemon/agent-service-conversation.test.ts src/daemon/ws-service-conversation.test.ts",
-      "result": "19 passed, 0 failed, 146 assertions",
-      "log": "evidence/F-03/quick-final.log"
+      "phase": "red",
+      "command": [
+        "bun",
+        "test",
+        "src/brief/chat-transport.test.ts",
+        "src/daemon/agent-service-conversation.test.ts"
+      ],
+      "exit": 1,
+      "pass": 12,
+      "fail": 4,
+      "log": "evidence/F-03/review-fixes-red.log",
+      "note": "New regressions on the reviewed implementation. All four failed at the relevant behavior assertion."
     },
     {
-      "command": "Affected selection in evidence/F-03/verification.json",
-      "result": "514 passed, 1 platform skip, 0 failed, 2686 assertions across 48 files",
-      "log": "evidence/F-03/affected-final.log"
+      "phase": "green",
+      "command": [
+        "bun",
+        "test",
+        "src/vault/chat-turns.test.ts",
+        "src/brief/chat-transport.test.ts",
+        "src/daemon/agent-service-conversation.test.ts",
+        "src/daemon/ws-service-conversation.test.ts",
+        "src/actions/execution-scope.test.ts",
+        "src/util/concurrency.test.ts"
+      ],
+      "exit": 0,
+      "pass": 30,
+      "fail": 0,
+      "assertions": 199,
+      "files": 6,
+      "log": "evidence/F-03/review-fixes-green.log"
     },
     {
-      "command": "bun x --no-install tsc --noEmit",
-      "log": "evidence/F-03/types-final.log",
-      "result": "passed, exit 0"
+      "phase": "affected",
+      "command": [
+        "bun",
+        "test",
+        "src/vault",
+        "src/brief",
+        "src/agents",
+        "src/actions/execution-scope.test.ts",
+        "src/actions/tools/tool-scope.test.ts",
+        "src/util/concurrency.test.ts",
+        "src/daemon/agent-service-conversation.test.ts",
+        "src/daemon/ws-service-conversation.test.ts",
+        "src/daemon/ws-service-cleanup.test.ts",
+        "src/daemon/ws-service-voice-start.test.ts",
+        "src/comms/streaming.test.ts",
+        "src/comms/websocket.test.ts",
+        "src/daemon/api-brief.test.ts",
+        "src/daemon/api-brief-conversations.test.ts",
+        "src/util/model-exec-env.test.ts",
+        "scripts/check-migrations.test.ts",
+        "src/workflows/runtime/cancellation.test.ts",
+        "src/workflows/runtime/workflow-authority.test.ts",
+        "src/workflows/runtime/delegated-approval.test.ts",
+        "src/workflows/adapters/m7-agent-delegator.test.ts"
+      ],
+      "exit": 0,
+      "pass": 843,
+      "skip": 1,
+      "fail": 0,
+      "assertions": 4132,
+      "files": 66,
+      "note": "Includes existing workflow cancellation/authority, delegated approvals, sub-agent, browser-intent, taint and tool-filter tests. One existing platform-specific keychain skip."
     },
     {
-      "command": "Normal pre-commit: four guards, related tests and TypeScript",
-      "log": "evidence/F-03/commit-hook.log",
-      "result": "four guards, 90 related tests / 538 assertions and TypeScript passed"
+      "phase": "types",
+      "command": [
+        "bun",
+        "x",
+        "--no-install",
+        "tsc",
+        "--noEmit"
+      ],
+      "exit": 0
     }
   ],
   "quick_verify": {
     "guide": "docs/brief-chat-transport.md",
-    "expected": "19 tests pass against isolated databases, authenticated fixture sockets and fake model/TTS providers",
+    "expected": "30 tests pass across six files using isolated databases, authenticated fixture sockets, fake providers and shared cancellation primitives",
     "screenshot": "not applicable; backend only",
     "real_model_or_hosted_evaluation": "not_run"
   },
@@ -146,5 +204,28 @@
       "affected-final.log contains the expanded final selection"
     ],
     "remote": "Corrected-head CI recorded in the PR description."
-  }
+  },
+  "verification_before_review_fixes": [
+    {
+      "command": "bun test src/vault/chat-turns.test.ts src/brief/chat-transport.test.ts src/daemon/agent-service-conversation.test.ts src/daemon/ws-service-conversation.test.ts",
+      "result": "19 passed, 0 failed, 146 assertions",
+      "log": "evidence/F-03/quick-final.log"
+    },
+    {
+      "command": "Affected selection in evidence/F-03/verification.json",
+      "result": "514 passed, 1 platform skip, 0 failed, 2686 assertions across 48 files",
+      "log": "evidence/F-03/affected-final.log"
+    },
+    {
+      "command": "bun x --no-install tsc --noEmit",
+      "log": "evidence/F-03/types-final.log",
+      "result": "passed, exit 0"
+    },
+    {
+      "command": "Normal pre-commit: four guards, related tests and TypeScript",
+      "log": "evidence/F-03/commit-hook.log",
+      "result": "four guards, 90 related tests / 538 assertions and TypeScript passed"
+    }
+  ],
+  "review_fixes": "All three findings at dc3e9bb6 are fixed; see evidence/F-03/review-fixes.json for the red/green tests, commands and results."
 }

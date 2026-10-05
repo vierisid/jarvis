@@ -13,6 +13,7 @@ import type { LLMManager } from '../../llm/manager.ts';
 import type { RoleDefinition } from '../../roles/types.ts';
 import type { ToolDefinition } from './registry.ts';
 import { runSubAgent, createScopedToolRegistry, type ProgressCallback } from '../../agents/sub-agent-runner.ts';
+import { executionSignal } from '../execution-scope.ts';
 
 export type DelegateToolDeps = {
   orchestrator: AgentOrchestrator;
@@ -107,6 +108,7 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
           context,
           llmManager: deps.llmManager,
           toolRegistry: scopedRegistry,
+          signal: executionSignal(),
           // Provider kinds for the relevance filter's eligibility gate, so a
           // sub-agent classifies its model the way the parent loop does.
           toolFilterProviders: deps.orchestrator.getToolFilterProviders?.(),
