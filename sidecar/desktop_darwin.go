@@ -11,19 +11,23 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
 // ── Element Cache ──────────────────────────────────────────────────────
 
-// elementCache stores the last tree snapshot so click_element / type_text
-// can reference elements by their [id] without re-walking the tree.
-var elementCache struct {
-	mu        sync.Mutex
-	elements  []map[string]any
-	pid       int
-	timestamp time.Time
+// walkDesktopElements is the walk that mints element ids, and the one
+// resolveDesktopElement repeats to confirm one (desktop_element_cache.go).
+var walkDesktopElements = func(pid, depth int, budget time.Duration) ([]any, error) {
+	tree, err := walkDarwinTree(pid, depth, budget)
+	if err != nil {
+		return nil, err
+	}
+	if msg, ok := tree["error"].(string); ok && msg != "" {
+		return nil, errors.New(msg)
+	}
+	elems, _ := tree["elements"].([]any)
+	return elems, nil
 }
 
 // ── list_windows ──────────────────────────────────────────────────────
@@ -73,13 +77,13 @@ end tell`
 		isFG := strings.TrimSpace(parts[7]) == "true"
 
 		windows = append(windows, map[string]any{
-			"title":        title,
-			"pid":          pid,
-			"process_name": procName,
-			"left":         left,
-			"top":          top,
-			"right":        left + width,
-			"bottom":       top + height,
+			"title":         title,
+			"pid":           pid,
+			"process_name":  procName,
+			"left":          left,
+			"top":           top,
+			"right":         left + width,
+			"bottom":        top + height,
 			"is_foreground": isFG,
 		})
 	}
@@ -96,6 +100,16 @@ end tell`
 // docs/sidecar/SIDECAR_PROTOCOL.md, "Surface Limits"; the shared sig helpers in
 // semantic.go are provider-independent if this walk ever grows them.
 func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
+	// Every path that does not fill the cache retires it instead, so a failed
+	// or empty snapshot leaves no earlier ids live (desktop_element_cache.go,
+	// forget). Deferred so a return added later cannot skip it.
+	filled := false
+	defer func() {
+		if !filled {
+			elementCache.forget()
+		}
+	}()
+
 	pid := 0
 	if v, ok := params["pid"].(float64); ok {
 		pid = int(v)
@@ -119,6 +133,40 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 		depth = int(v)
 	}
 
+	tree, err := walkDarwinTree(pid, depth, jxaWalkTimeout)
+	if err != nil {
+		return nil, err
+	}
+
+	// Cache elements for click/type reference, with the depth that produced
+	// them: a read-back at a different depth walks a different tree and its
+	// indices do not line up (#661).
+	if elems, ok := tree["elements"].([]any); ok {
+		elementCache.fill(elems, pid, depth)
+		filled = true
+	}
+
+	return &RPCResult{Result: tree}, nil
+}
+
+// jxaWalkTimeout bounds a snapshot's JXA walk and the read-back ahead of a
+// click (20s + 5s click = 25s). jxaTypeReadBackTimeout is the read-back ahead
+// of a keystroke, where 20s would put the call at 35s, past the daemon's 30s;
+// 10s brings it to Linux's 25s. See the budget note in desktop_element_cache.go.
+const (
+	jxaWalkTimeout         = 20 * time.Second
+	jxaTypeReadBackTimeout = 10 * time.Second
+)
+
+// jxaTypeSlowHint is what a type read-back that ran out of its shorter budget
+// tells the model: the click path has the full 20s, and typing without an
+// element_id types wherever the focus is, which is where that click put it.
+const jxaTypeSlowHint = ". If this window is slow to read, desktop_click the element first and then call desktop_type without element_id"
+
+// walkDarwinTree runs the JXA accessibility walk for one process. Ids are
+// indices in this walk's depth-first order, so the snapshot and the read-back
+// in resolveDesktopElement must both come through here with the same depth.
+func walkDarwinTree(pid, depth int, timeout time.Duration) (map[string]any, error) {
 	// Use JXA (JavaScript for Automation) to walk the accessibility tree
 	jsScript := fmt.Sprintf(`
 ObjC.import('stdlib')
@@ -162,7 +210,7 @@ try { winTitle = proc.frontWindow ? proc.frontWindow.name() : (wins.length > 0 ?
 JSON.stringify({window_title: winTitle, pid: %d, element_count: elements.length, elements: elements})
 }`, depth, pid, pid, pid)
 
-	out, err := runOsascriptJS(jsScript, 20*time.Second)
+	out, err := runOsascriptJS(jsScript, timeout)
 	if err != nil {
 		return nil, fmt.Errorf("get_window_tree failed: %w", err)
 	}
@@ -171,22 +219,7 @@ JSON.stringify({window_title: winTitle, pid: %d, element_count: elements.length,
 	if err := json.Unmarshal([]byte(out), &tree); err != nil {
 		return nil, fmt.Errorf("parse tree: %w (%s)", err, truncate(out, 200))
 	}
-
-	// Cache elements for click/type reference
-	if elems, ok := tree["elements"].([]any); ok {
-		elementCache.mu.Lock()
-		elementCache.elements = make([]map[string]any, 0, len(elems))
-		for _, e := range elems {
-			if m, ok := e.(map[string]any); ok {
-				elementCache.elements = append(elementCache.elements, m)
-			}
-		}
-		elementCache.pid = pid
-		elementCache.timestamp = time.Now()
-		elementCache.mu.Unlock()
-	}
-
-	return &RPCResult{Result: tree}, nil
+	return tree, nil
 }
 
 // ── click_element ────────────────────────────────────────────────────
@@ -196,25 +229,23 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 	if !ok {
 		return nil, fmt.Errorf("missing required parameter: element_id")
 	}
-	id := int(elemID)
 
 	action, _ := params["action"].(string)
 	if action == "" {
 		action = "click"
 	}
+	return clickElement(int(elemID), action, jxaWalkTimeout, "")
+}
 
-	// Look up cached element for its bounding rect
-	elementCache.mu.Lock()
-	var rect map[string]any
-	if id >= 0 && id < len(elementCache.elements) {
-		if r, ok := elementCache.elements[id]["rect"].(map[string]any); ok {
-			rect = r
-		}
-	}
-	elementCache.mu.Unlock()
-
-	if rect == nil {
-		return nil, fmt.Errorf("element [%d] not found in cache — run desktop_snapshot first", id)
+// clickElement acts on a cached element id. walkBudget bounds the read-back
+// that confirms it, so a caller with more to do after the click can keep the
+// whole RPC inside the daemon's timeout.
+func clickElement(id int, action string, walkBudget time.Duration, slowHint string) (*RPCResult, error) {
+	// The rect the element has NOW, confirmed to be the element the snapshot
+	// listed, or a refusal before anything is clicked (#661).
+	rect, err := resolveDesktopElement(id, walkBudget, slowHint)
+	if err != nil {
+		return nil, err
 	}
 
 	x := toInt(rect["x"]) + toInt(rect["w"])/2
@@ -281,7 +312,7 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 
 	// If element_id is given, click it first to focus it
 	if elemID, ok := params["element_id"].(float64); ok {
-		if _, err := handleClickElement(map[string]any{"element_id": elemID}); err != nil {
+		if _, err := clickElement(int(elemID), "click", jxaTypeReadBackTimeout, jxaTypeSlowHint); err != nil {
 			return nil, fmt.Errorf("failed to click element before typing: %w", err)
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -590,8 +621,9 @@ CGEventPost(kCGHIDEventTap, ev)
 // ── find_element ─────────────────────────────────────────────────────
 
 func handleFindElement(params map[string]any) (*RPCResult, error) {
-	// Snapshot the tree to populate the cache, then filter in Go
-	_, err := handleGetWindowTree(params)
+	// Walk (which fills the cache and mints this walk's ids), then filter THAT
+	// walk's reply -- see findInWalk.
+	res, err := handleGetWindowTree(params)
 	if err != nil {
 		return nil, fmt.Errorf("find_element failed: %w", err)
 	}
@@ -601,32 +633,7 @@ func handleFindElement(params map[string]any) (*RPCResult, error) {
 	className, _ := params["class_name"].(string)
 	// automation_id is ignored on macOS (not an accessibility concept)
 
-	elementCache.mu.Lock()
-	defer elementCache.mu.Unlock()
-
-	var matches []map[string]any
-	for _, el := range elementCache.elements {
-		if name != "" {
-			elName, _ := el["name"].(string)
-			if elName != name {
-				continue
-			}
-		}
-		if controlType != "" {
-			elType, _ := el["control_type"].(string)
-			if elType != controlType {
-				continue
-			}
-		}
-		if className != "" {
-			elClass, _ := el["class_name"].(string)
-			if elClass != className {
-				continue
-			}
-		}
-		matches = append(matches, el)
-	}
-
+	matches := findInWalk(res.Result, name, controlType, className)
 	return &RPCResult{Result: map[string]any{
 		"match_count": len(matches),
 		"elements":    matches,
@@ -731,36 +738,36 @@ func convertKeysToOsascript(keys string) string {
 // Returns (keyCode, true) for known special keys, (0, false) otherwise.
 func osascriptKeyCode(key string) (int, bool) {
 	keyCodes := map[string]int{
-		"enter":    36,
-		"return":   36,
-		"tab":      48,
-		"escape":   53,
-		"esc":      53,
-		"delete":   51,
+		"enter":     36,
+		"return":    36,
+		"tab":       48,
+		"escape":    53,
+		"esc":       53,
+		"delete":    51,
 		"backspace": 51,
-		"space":    49,
-		"up":       126,
-		"down":     125,
-		"left":     123,
-		"right":    124,
-		"home":     115,
-		"end":      119,
-		"pageup":   116,
-		"pgup":     116,
-		"pagedown": 121,
-		"pgdn":     121,
-		"f1":       122,
-		"f2":       120,
-		"f3":       99,
-		"f4":       118,
-		"f5":       96,
-		"f6":       97,
-		"f7":       98,
-		"f8":       100,
-		"f9":       101,
-		"f10":      109,
-		"f11":      103,
-		"f12":      111,
+		"space":     49,
+		"up":        126,
+		"down":      125,
+		"left":      123,
+		"right":     124,
+		"home":      115,
+		"end":       119,
+		"pageup":    116,
+		"pgup":      116,
+		"pagedown":  121,
+		"pgdn":      121,
+		"f1":        122,
+		"f2":        120,
+		"f3":        99,
+		"f4":        118,
+		"f5":        96,
+		"f6":        97,
+		"f7":        98,
+		"f8":        100,
+		"f9":        101,
+		"f10":       109,
+		"f11":       103,
+		"f12":       111,
 	}
 	if code, ok := keyCodes[strings.ToLower(key)]; ok {
 		return code, true
@@ -781,5 +788,3 @@ func toInt(v any) int {
 	}
 	return 0
 }
-
-

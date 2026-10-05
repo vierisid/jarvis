@@ -1129,7 +1129,7 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 		ordCount[k.ctrl+"|"+k.name]++
 
 		if k.visible || includeInvisible {
-			id := state.cache.add(k.elem)
+			id := state.cache.add(k.elem, desktopElementPrint{name: k.name, role: k.ctrl, autoID: k.autoID, x: k.x, y: k.y, w: k.w, h: k.h})
 			info := buildElementInfoPrefetched(k.elem, id, depth, k.name, k.ctrl, k.autoID, k.x, k.y, k.w, k.h)
 			if semantic {
 				info["path"] = path
@@ -1291,7 +1291,7 @@ func uiaFindElements(state *uiaState, pid int, automationId, name, className, co
 		for i := 0; i < length; i++ {
 			elem := uiaArrayGetElement(arr, i)
 			if elem != nil {
-				id := state.cache.add(elem)
+				id := state.cache.add(elem, uiaElementPrint(elem))
 				results = append(results, buildElementInfo(elem, id, 0))
 			}
 		}

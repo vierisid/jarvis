@@ -44,8 +44,15 @@ let sidecarManager: SidecarManager | null = null;
  * fails if it becomes listed; `rpc_handler_panic_test.go` pins the other half,
  * that the sidecar's own message carries the uncertainty rather than claiming a
  * refusal, but it knows nothing about this set.
+ *
+ * `DESKTOP_STALE_ELEMENT` (#661) is every refusal of a desktop element id the
+ * sidecar could not confirm is still the element its snapshot listed -- never
+ * minted, gone, moved, re-pointed, superseded by a newer snapshot, or a window
+ * it could not re-read. Each is returned before the first click, keystroke or
+ * pattern call, which `desktop_element_stale_linux_test.go` pins by checking
+ * that no pointer or keyboard command ran.
  */
-const NOT_STARTED_RPC_CODES = new Set(['DESKTOP_INVALID_KEYS']);
+const NOT_STARTED_RPC_CODES = new Set(['DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT']);
 
 /**
  * Inject the sidecar manager at startup. Called once from the daemon.

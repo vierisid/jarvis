@@ -13,20 +13,21 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
 
 // ── Element Cache ──────────────────────────────────────────────────────
 
-// elementCache stores the last tree snapshot so click_element / type_text
-// can reference elements by their [id] without re-walking the tree.
-var elementCache struct {
-	mu        sync.Mutex
-	elements  []map[string]any
-	pid       int
-	timestamp time.Time
+// walkDesktopElements is the walk that mints element ids, and the one
+// resolveDesktopElement repeats to confirm one (desktop_element_cache.go).
+var walkDesktopElements = func(pid, depth int, budget time.Duration) ([]any, error) {
+	tree, err := tryATSPI(pid, depth, budget)
+	if err != nil {
+		return nil, err
+	}
+	elems, _ := tree["elements"].([]any)
+	return elems, nil
 }
 
 // ── list_windows ──────────────────────────────────────────────────────
@@ -111,14 +112,14 @@ func parseWmctrlOutput(output, activeWID string) ([]map[string]any, error) {
 		}
 
 		windows = append(windows, map[string]any{
-			"hwnd":         widInt,
-			"title":        title,
-			"pid":          pid,
-			"process_name": procName,
-			"left":         x,
-			"top":          y,
-			"right":        x + w,
-			"bottom":       y + h,
+			"hwnd":          widInt,
+			"title":         title,
+			"pid":           pid,
+			"process_name":  procName,
+			"left":          x,
+			"top":           y,
+			"right":         x + w,
+			"bottom":        y + h,
 			"is_foreground": wid == activeWID || fmt.Sprintf("%d", widInt) == activeWID,
 		})
 	}
@@ -237,6 +238,16 @@ print(json.dumps({'elements': elements, 'element_count': len(elements)}))
 // docs/sidecar/SIDECAR_PROTOCOL.md, "Surface Limits"; the shared sig helpers in
 // semantic.go are provider-independent if this walk ever grows them.
 func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
+	// Every path that does not fill the cache retires it instead, so a failed
+	// or empty snapshot leaves no earlier ids live (desktop_element_cache.go,
+	// forget). Deferred so a return added later cannot skip it.
+	filled := false
+	defer func() {
+		if !filled {
+			elementCache.forget()
+		}
+	}()
+
 	pid := 0
 	if v, ok := params["pid"].(float64); ok {
 		pid = int(v)
@@ -269,15 +280,17 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 	}
 
 	// Try AT-SPI2 via python3
-	tree, atSPIErr := tryATSPI(pid, depth)
+	tree, atSPIErr := tryATSPI(pid, depth, atSPIWalkTimeout)
 	if atSPIErr == nil {
 		// Merge in window title and pid
 		tree["window_title"] = windowTitle
 		tree["pid"] = pid
 
-		// Cache elements
+		// Cache elements, with the depth that produced them: a read-back at a
+		// different depth walks a different tree and its indices do not line up.
 		if elems, ok := tree["elements"].([]any); ok {
-			cacheElements(elems, pid)
+			elementCache.fill(elems, pid, depth)
+			filled = true
 		}
 
 		return &RPCResult{Result: tree}, nil
@@ -293,8 +306,13 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 	}}, nil
 }
 
+// atSPIWalkTimeout bounds one AT-SPI walk, for a snapshot and for the
+// read-back ahead of an element action alike (see the budget note in
+// desktop_element_cache.go: 10s + 5s click + 10s keystroke = 25s).
+const atSPIWalkTimeout = 10 * time.Second
+
 // tryATSPI runs the embedded Python3 AT-SPI2 script and parses its output.
-func tryATSPI(pid, depth int) (map[string]any, error) {
+func tryATSPI(pid, depth int, timeout time.Duration) (map[string]any, error) {
 	// Write script to a temp file to avoid shell escaping issues
 	tmpFile, err := os.CreateTemp("", "jarvis-atspi-*.py")
 	if err != nil {
@@ -308,7 +326,7 @@ func tryATSPI(pid, depth int) (map[string]any, error) {
 	}
 	tmpFile.Close()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
 	cmd := exec.CommandContext(ctx, "python3", tmpFile.Name(), strconv.Itoa(pid), strconv.Itoa(depth))
@@ -324,20 +342,6 @@ func tryATSPI(pid, depth int) (map[string]any, error) {
 	return result, nil
 }
 
-// cacheElements stores the AT-SPI element list for subsequent click/type calls.
-func cacheElements(elems []any, pid int) {
-	elementCache.mu.Lock()
-	defer elementCache.mu.Unlock()
-	elementCache.elements = make([]map[string]any, 0, len(elems))
-	for _, e := range elems {
-		if m, ok := e.(map[string]any); ok {
-			elementCache.elements = append(elementCache.elements, m)
-		}
-	}
-	elementCache.pid = pid
-	elementCache.timestamp = time.Now()
-}
-
 // ── click_element ────────────────────────────────────────────────────
 
 func handleClickElement(params map[string]any) (*RPCResult, error) {
@@ -345,25 +349,23 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 	if !ok {
 		return nil, fmt.Errorf("missing required parameter: element_id")
 	}
-	id := int(elemID)
 
 	action, _ := params["action"].(string)
 	if action == "" {
 		action = "click"
 	}
+	return clickElement(int(elemID), action, atSPIWalkTimeout, "")
+}
 
-	// Look up cached element for its bounding rect
-	elementCache.mu.Lock()
-	var rect map[string]any
-	if id >= 0 && id < len(elementCache.elements) {
-		if r, ok := elementCache.elements[id]["rect"].(map[string]any); ok {
-			rect = r
-		}
-	}
-	elementCache.mu.Unlock()
-
-	if rect == nil {
-		return nil, fmt.Errorf("element [%d] not found in cache — run desktop_snapshot first", id)
+// clickElement acts on a cached element id. walkBudget bounds the read-back
+// that confirms it, so a caller with more to do after the click can keep the
+// whole RPC inside the daemon's timeout.
+func clickElement(id int, action string, walkBudget time.Duration, slowHint string) (*RPCResult, error) {
+	// The rect the element has NOW, confirmed to be the element the snapshot
+	// listed, or a refusal before anything is clicked (#661).
+	rect, err := resolveDesktopElement(id, walkBudget, slowHint)
+	if err != nil {
+		return nil, err
 	}
 
 	x := toInt(rect["x"]) + toInt(rect["w"])/2
@@ -407,7 +409,7 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 
 	// If element_id is given, click it first
 	if elemID, ok := params["element_id"].(float64); ok {
-		if _, err := handleClickElement(map[string]any{"element_id": elemID}); err != nil {
+		if _, err := clickElement(int(elemID), "click", atSPIWalkTimeout, ""); err != nil {
 			return nil, fmt.Errorf("failed to click element before typing: %w", err)
 		}
 		time.Sleep(100 * time.Millisecond)
@@ -654,8 +656,9 @@ func handleFocusWindow(params map[string]any) (*RPCResult, error) {
 // ── find_element ─────────────────────────────────────────────────────
 
 func handleFindElement(params map[string]any) (*RPCResult, error) {
-	// Snapshot the tree to populate the cache, then filter in Go
-	_, err := handleGetWindowTree(params)
+	// Walk (which fills the cache and mints this walk's ids), then filter THAT
+	// walk's reply -- see findInWalk.
+	res, err := handleGetWindowTree(params)
 	if err != nil {
 		return nil, fmt.Errorf("find_element failed: %w", err)
 	}
@@ -665,32 +668,7 @@ func handleFindElement(params map[string]any) (*RPCResult, error) {
 	className, _ := params["class_name"].(string)
 	// automation_id is ignored on Linux (not an AT-SPI concept)
 
-	elementCache.mu.Lock()
-	defer elementCache.mu.Unlock()
-
-	var matches []map[string]any
-	for _, el := range elementCache.elements {
-		if name != "" {
-			elName, _ := el["name"].(string)
-			if elName != name {
-				continue
-			}
-		}
-		if controlType != "" {
-			elType, _ := el["control_type"].(string)
-			if elType != controlType {
-				continue
-			}
-		}
-		if className != "" {
-			elClass, _ := el["class_name"].(string)
-			if elClass != className {
-				continue
-			}
-		}
-		matches = append(matches, el)
-	}
-
+	matches := findInWalk(res.Result, name, controlType, className)
 	return &RPCResult{Result: map[string]any{
 		"match_count": len(matches),
 		"elements":    matches,
@@ -936,5 +914,3 @@ func mapKeyToXdotool(key string) string {
 		return key
 	}
 }
-
-

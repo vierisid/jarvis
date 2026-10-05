@@ -242,6 +242,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('Rules:');
   lines.push('- Always `desktop_list_windows` first to get the PID, then `desktop_snapshot` with that PID.');
   lines.push('- After clicking or typing, snapshot again to verify the updated state.');
+  lines.push('- An element [id] is valid only until the next `desktop_snapshot` or `desktop_find_element`, and only while the element is unchanged. A click refused because the element changed or the id is stale did nothing: snapshot again and use an id from the new result.');
   lines.push('- Use `desktop_find_element` when you know the element name/type — faster than scanning the full tree.');
   lines.push('- The `action` param on `desktop_click` supports richer interactions on Windows (invoke, toggle, set_value, expand, collapse). On macOS/Linux, only click, double_click, right_click, and focus are supported.');
   lines.push('- `automation_id` in `desktop_find_element` is Windows-only; it is ignored on other platforms.');

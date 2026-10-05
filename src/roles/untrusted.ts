@@ -353,9 +353,17 @@ const UNTRUSTED_TOOL_NAMES: ReadonlySet<string> = new Set([
   //     desktop_list_windows. So on the common path they add no gate that the
   //     turn did not already have.
   //   - That is NOT a recency guarantee. The sidecar's element cache has no
-  //     TTL (it stamps a timestamp nothing reads) and its ids are small
-  //     integers, so a cold `desktop_click` in a fresh turn can resolve
-  //     against a cache filled in an earlier one -- and taint is per turn.
+  //     TTL and its ids are small integers, so a cold `desktop_click` in a
+  //     fresh turn can resolve against a cache filled in an earlier one -- and
+  //     taint is per turn. #661 bound each id to the walk that minted it (any
+  //     later snapshot or find_element makes it unknown) and made every
+  //     resolve re-read the element and refuse unless it still matches what
+  //     that walk reported -- role, name and rect on Linux and macOS; name,
+  //     role and AutomationId on Windows, which acts on the live element.
+  //     That closes the STALE target and deliberately leaves this alone: with
+  //     no walk in between, an id from an earlier turn still resolves, its
+  //     meaning still came from a read in that earlier turn, and a confirmed
+  //     element's `get_value` is still the remote machine's text.
   //     `run_command` is likewise an untainted source of a pid. Those are
   //     exactly the turns where the read is the first outside content to
   //     arrive, so they are the reason to taint rather than an argument

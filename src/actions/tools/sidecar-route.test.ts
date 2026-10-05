@@ -85,6 +85,19 @@ describe('typed desktop outcomes', () => {
     });
   });
 
+  test('a desktop element the sidecar could not confirm is refused as not started (#661)', async () => {
+    // sidecar/desktop_element_cache.go and uia_actions_windows.go send
+    // DESKTOP_STALE_ELEMENT before the first click, so the model should take a
+    // fresh snapshot rather than go and check whether something was clicked.
+    setSidecarManagerRef(stubManager([mac], async () => {
+      throw new SidecarRPCError('DESKTOP_STALE_ELEMENT',
+        'element [3] has moved since the snapshot that listed it, so nothing was done. Run desktop_snapshot again and use an id from that result');
+    }));
+    await expect(routeToSidecarAction(mac.id, 'click_element', { element_id: 3 }, 'desktop')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'DESKTOP_STALE_ELEMENT', effect: 'not_started' },
+    });
+  });
+
   /**
    * #623, the brain half. The sidecar now answers a panicking handler with
    * `HANDLER_PANIC` instead of dropping the socket, and the question this pins

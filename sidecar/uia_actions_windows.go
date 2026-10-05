@@ -15,9 +15,18 @@ import (
 
 // uiaPerformAction executes an action on a cached element.
 func uiaPerformAction(state *uiaState, elementID int, action, value string) (map[string]any, error) {
-	elem := state.cache.get(elementID)
+	elem, snap := state.cache.get(elementID)
 	if elem == nil {
-		return nil, fmt.Errorf("element %d is not in the current element cache — every desktop_snapshot invalidates all previous ids, so only ids from the MOST RECENT snapshot/find_element are valid; take a fresh desktop_snapshot and use an id from that result", elementID)
+		return nil, desktopElementNotCached(elementID)
+	}
+	// Before ANY action, read-only ones included: get_value would otherwise
+	// hand back the text of whatever the pointer names now (#661). Not
+	// positional, because every action below goes through the live element
+	// and actionClick's fallback reads its bounds at click time. No generation
+	// check either: every call runs on the one COM thread, so a snapshot
+	// cannot refill the cache between this check and the action.
+	if why := desktopElementChange(snap, uiaElementPrint(elem), false); why != "" {
+		return nil, desktopElementStale(elementID, why)
 	}
 
 	result := map[string]any{
@@ -75,6 +84,20 @@ func uiaPerformAction(state *uiaState, elementID int, action, value string) (map
 
 	result["success"] = true
 	return result, nil
+}
+
+// uiaElementPrint reads an element's print the way the snapshot walk reports
+// it: the name truncated to the same length, so an over-long name compares
+// equal to itself. A dead element reads back empty and so never matches the
+// print of one that had a name or a role.
+func uiaElementPrint(elem *ole.IDispatch) desktopElementPrint {
+	x, y, w, h := uiaElementGetBoundingRect(elem)
+	return desktopElementPrint{
+		name:   truncateRunes(uiaElementGetPropertyStr(elem, UIA_NamePropertyId), elementNameRunes),
+		role:   controlTypeName(uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId)),
+		autoID: uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId),
+		x:      x, y: y, w: w, h: h,
+	}
 }
 
 // actionClick activates an element, preferring the UIA Invoke pattern
