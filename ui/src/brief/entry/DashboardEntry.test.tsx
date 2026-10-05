@@ -141,6 +141,18 @@ test("missing modules give a truthful fallback instead of fabricated empty busin
   expect(connections).toBe(1);
 });
 
+test("Pebble review mounts one isolated conversation without live reads or writers", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=pebble#/_brief_preview");
+  const composer = host.querySelector<HTMLTextAreaElement>('[aria-label="Conversation draft"]')!;
+  expect(composer).not.toBeNull();
+  await React.act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Open conversation"]')!.click());
+  expect(host.querySelector("[data-pebble-open]")?.getAttribute("data-pebble-open")).toBe("true");
+  await React.act(async () => host.querySelector<HTMLButtonElement>('[aria-label="Close conversation"]')!.click());
+  expect(host.querySelector('[aria-label="Conversation draft"]')).toBe(composer);
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/"); expect(connections).toBe(1);
+});
+
 test("room modules preserve shell state and selected source IDs through navigation", async () => {
   let observed: BriefShellPort | undefined;
   function Body({ shell }: { shell: BriefShellPort }) {

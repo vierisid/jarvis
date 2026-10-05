@@ -9,6 +9,7 @@ import { badgeLabel, breadcrumbs, canMountNavigation, connectionLabel, DIRECTION
   navigationRoute, NAV_LABELS, parentRoom, PRIMARY_NAV, UNKNOWN_NAVIGATION, UTILITY_NAV,
   type BriefNavigationBinding, type BriefNavigationData, type NavRoom } from "./model";
 import "./navigation.css";
+import { PebbleLayout, type BriefConversationBinding } from "../pebble-layout/PebbleLayout";
 
 const ICONS = { today: House, workflows: GitBranch, opportunities: Eye, "needs-you": ShieldCheck,
   goals: Target, memory: FileText, "connected-workspace": Laptop, authority: ShieldCheck };
@@ -23,12 +24,14 @@ export interface NavigationShellProps {
   shell: BriefShellPort;
   rooms: BriefRoomRegistry;
   binding?: BriefNavigationBinding;
+  conversation?: BriefConversationBinding;
+  reducedMotion?: boolean;
   children: React.ReactNode;
 }
 
 /** D-01 owns routing and state; this shell only lays out those persistent children.
  * F-25 activation and a live view are required before replacing released navigation. */
-export function NavigationShell({ shell, rooms, binding, children }: NavigationShellProps) {
+export function NavigationShell({ shell, rooms, binding, conversation, reducedMotion, children }: NavigationShellProps) {
   const id = useId();
   const content = useRef<HTMLElement>(null);
   const active = canMountNavigation(shell.mode, binding);
@@ -65,9 +68,11 @@ export function NavigationShell({ shell, rooms, binding, children }: NavigationS
           </button>
         </BriefTooltip>
       </header>}
+      <PebbleLayout shell={shell} enabled={active} conversation={conversation} reducedMotion={reducedMotion}>
       <main ref={content} className="brief-workspace-content" id={`${id}-content`} tabIndex={-1} data-brief-room={shell.route.room}>
         {children}
       </main>
+      </PebbleLayout>
     </div>
   </div>;
 }
