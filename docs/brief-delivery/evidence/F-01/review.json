@@ -17,7 +17,9 @@
     "src/daemon/api-brief.test.ts": "4a3d057d42b965e08819bb1505370588999e821710fd354984f597a209391145",
     "src/daemon/api-routes.ts": "2f843e9a2224c4a213d070f566e82b20c75c6c982563b68272d76fd94f48a0bd",
     "src/daemon/index.ts": "2eef3ed8a03e849359cb54c40cd67c1eaa66f575699762eeb2075f3d043ae16c",
-    "src/workflows/adapters/untrusted-reach.test.ts": "842ceecccb1183707af02deef20d609d9bb1185abdb1a09677bd8d0f02398986"
+    "src/workflows/adapters/untrusted-reach.test.ts": "842ceecccb1183707af02deef20d609d9bb1185abdb1a09677bd8d0f02398986",
+    ".github/scripts/version-stamp-cache.sh": "73466d30ad6931b6b1c7c0f7e8fc081bd3d07756d0c656d3402ad00d3c0b5c34",
+    "scripts/version-stamp-cache.test.ts": "5881db6cf1ac02e14369ad0a8dbdbcdc8df89b96d085477f1ee53179422d0193"
   },
   "source_review": "Primary implementer reviewed the complete F-01 source and integration diff. Independent PR review pending.",
   "shared_file_diff": "src/daemon/api-routes.ts: 6 added lines; src/daemon/index.ts: 2 added lines. No changes to schema, WS dispatch, domain writers or UI.",
@@ -28,5 +30,6 @@
   ],
   "overlap": "No direct changed-file overlap with F-01; #691 is relevant to later workflow/approval tasks.",
   "evidence_copy_format": "Log copies normalize line endings and trailing whitespace for Git. Raw logs remain at /tmp/jarvis-f-01-{red,tests,types,guards}.log.",
-  "ci_boundary_review": "Reviewed the two new consumers for #573 and added behavioral payload exclusion plus runtime-import regressions. Mutation checks fail for unsafe alternatives. Production F-01 code is unchanged."
+  "ci_boundary_review": "Reviewed the two new consumers for #573 and added behavioral payload exclusion plus runtime-import regressions. Mutation checks fail for unsafe alternatives. Production F-01 code is unchanged.",
+  "shared_ci_repair": "Two CI files copied byte-for-byte from D-01 commit 2e9d829e; no D-01 product code or receipt was copied. Separate red/green verification completed."
 }
