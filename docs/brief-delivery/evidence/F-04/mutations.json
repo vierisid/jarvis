@@ -1,0 +1,33 @@
+{
+  "cases": [
+    {
+      "mutation": "arrival_order",
+      "source": "ui/src/brief/chat/store.ts",
+      "test": "out-of-order and duplicate",
+      "exitCode": 1,
+      "rejected": true
+    },
+    {
+      "mutation": "duplicate_snapshot_deltas",
+      "source": "ui/src/brief/chat/store.ts",
+      "test": "canonical snapshots",
+      "exitCode": 1,
+      "rejected": true
+    },
+    {
+      "mutation": "late_history_replaces_stream",
+      "source": "ui/src/brief/chat/store.ts",
+      "test": "late history fills",
+      "exitCode": 1,
+      "rejected": true
+    },
+    {
+      "mutation": "first_tab_instead_of_neighbor",
+      "source": "ui/src/brief/chat/store.ts",
+      "test": "ten add/close cycles",
+      "exitCode": 1,
+      "rejected": true
+    }
+  ],
+  "restored": true
+}

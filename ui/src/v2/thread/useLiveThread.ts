@@ -334,7 +334,7 @@ function tsFromInjectedId(id: string): number {
   return Number.isFinite(num) ? num : Date.now();
 }
 
-function messageToThreadItem(msg: ChatMessage): (ThreadItem & { __ts: number }) | null {
+export function messageToThreadItem(msg: ChatMessage): (ThreadItem & { __ts: number }) | null {
   const t = formatTime(msg.timestamp);
 
   if (msg.role === "user") {
