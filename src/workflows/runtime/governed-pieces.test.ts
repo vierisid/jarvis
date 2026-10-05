@@ -312,6 +312,47 @@ describe('the approval card describes the piece action', () => {
     const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
     expect(ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!)).toContain('Openai - list models');
   });
+
+  /**
+   * #697. The target values are the step's real input -- a subject or a
+   * recipient a flow wired from an email it read -- and the dashboard sentence
+   * cut them at 80 characters but kept line breaks, controls and bidi
+   * overrides, the same hole #651 closed on the Telegram card.
+   */
+  test('a target value cannot reorder or break the dashboard sentence', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const rlo = String.fromCharCode(0x202e);
+    const pending = await f.authorize({ ...SEND_INPUT,
+      subject: `Q3 invoice${rlo}gpj.exe\r\nNEL${String.fromCharCode(0x85)}LS${String.fromCharCode(0x2028)}VT${String.fromCharCode(0x0b)}end`,
+      receiver: [`finance@example.test\n(approved by finance)`] });
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    const intent = ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!);
+    expect(intent).not.toMatch(/[\p{Cf}\u0000-\u001f\u007f-\u009f\u2028\u2029]/u);
+    expect(intent).toContain('receiver: finance@example.test (approved by finance)');
+    expect(intent).toContain('subject: Q3 invoicegpj.exe NEL LS VT end');
+  });
+
+  test('a target value made only of invisible characters is named as such, not shown blank', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const pending = await f.authorize({ ...SEND_INPUT, subject: `${String.fromCharCode(0x202e)}${String.fromCharCode(0x200b)}` });
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    expect(ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!)).toContain('subject: (invisible characters only)');
+  });
+
+  test('a long target value is still cut at 80 and marked', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const pending = await f.authorize({ ...SEND_INPUT, subject: 's'.repeat(300) });
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    const intent = ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!);
+    expect(intent).toContain(`subject: ${'s'.repeat(80)}...`);
+    expect(intent).not.toContain('s'.repeat(81));
+  });
 });
 
 describe('governed piece adapter table', () => {
