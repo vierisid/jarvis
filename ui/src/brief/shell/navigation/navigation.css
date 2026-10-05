@@ -1,0 +1,83 @@
+/* UI-08 / UI-09, approved native shell. Room internals belong to later D tasks. */
+.brief-root .brief-navigation { display: flex; height: 100dvh; min-height: 320px; overflow: hidden; }
+.brief-root .brief-navigation :is(button,a) { -webkit-tap-highlight-color: transparent; }
+.brief-root .brief-navigation button { cursor: pointer; font-family: var(--brief-sans); }
+.brief-root .brief-navigation button:disabled { cursor: default; }
+.brief-root .brief-navigation :is(button,a):focus-visible,
+.brief-root .brief-account-menu button:focus-visible { outline: 2px solid var(--brief-focus); outline-offset: 3px; }
+.brief-root .brief-sidebar { position: relative; flex: none; display: flex; flex-direction: column; width: 232px; min-height: 0; padding-top: 102px; border-right: 1px solid var(--brief-card-edge); background: var(--brief-soft); }
+.brief-root .brief-sidebar-brand { position: absolute; top: 24px; left: 17.58px; width: 170px; height: 37px; pointer-events: none; }
+.brief-root .brief-sidebar-brand .brief-brand { display: grid; width: 132.02px; height: 36.84px; max-width: none; }
+.brief-root .brief-sidebar-brand .brief-brand img { width: 132.02px; height: 36.84px; max-width: none; }
+.brief-root .brief-sidebar-brand__mark { position: absolute; inset: 0; width: 38px; overflow: hidden; }
+.brief-root .brief-sidebar-brand__word { position: absolute; inset: 0; clip-path: inset(0 0 0 38px); }
+.brief-root .brief-collapse-anchor { position: absolute; left: 16px; top: 60px; }
+.brief-root .brief-collapse { width: 40px; height: 36px; display: grid; place-items: center; border: 1px solid transparent; border-radius: var(--brief-corner-control); color: var(--brief-secondary); background: transparent; padding: 0; }
+.brief-root .brief-collapse:disabled { color: var(--brief-tertiary); }
+.brief-root .brief-navigation-rows { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; scrollbar-width: thin; padding: 6px 20px 10px; border-top: 1px solid var(--brief-card-edge); }
+.brief-root .brief-navigation-rows > div { flex-shrink: 0; }
+.brief-root .brief-nav-primary, .brief-root .brief-nav-direction, .brief-root .brief-nav-utilities { display: flex; flex-direction: column; gap: 8px; }
+.brief-root .brief-navigation-rows .brief-tooltip-anchor { width: 100%; }
+.brief-root .brief-nav-row { position: relative; display: flex; align-items: center; flex: 1; height: 42px; min-width: 0; padding: 0 8px 0 13px; gap: 14px; text-align: left; border: 1px solid transparent; border-radius: var(--brief-corner-control); color: var(--brief-secondary); background: transparent; font-size: 14px; font-weight: 400; line-height: 20px; }
+.brief-root .brief-nav-icon { flex: none; }
+.brief-root .brief-nav-label { white-space: nowrap; overflow: hidden; flex: 1; min-width: 0; }
+.brief-root .brief-nav-count { width: 24px; flex: none; text-align: right; font: 400 12px/16px var(--brief-mono); font-variant-numeric: tabular-nums; }
+.brief-root .brief-nav-count[data-attention="true"] { color: var(--brief-attention-text); }
+.brief-root .brief-nav-row[aria-current="page"] { color: var(--brief-ink); background: var(--brief-card); border-color: var(--brief-card-edge); }
+.brief-root .brief-nav-direction { margin-top: 26px; }
+.brief-root .brief-nav-group { height: 20px; margin: 0 8px 0; color: var(--brief-tertiary); white-space: nowrap; overflow: hidden; font: 400 12px/20px var(--brief-mono); }
+.brief-root .brief-nav-utilities { margin-top: auto; padding-top: 30px; }
+.brief-root .brief-nav-utilities .brief-nav-row { gap: 12px; font-size: 12px; }
+.brief-root .brief-nav-utilities .brief-nav-count { display: none; }
+.brief-root .brief-account-block { flex: none; margin: 0 16px; padding: 12px 0 16px; border-top: 1px solid var(--brief-card-edge); }
+.brief-root .brief-account-origin { display: flex; align-items: center; gap: 12px; width: 100%; height: 60px; border: 1px solid transparent; border-radius: var(--brief-corner-control); background: transparent; color: var(--brief-ink); text-align: left; padding: 0 8px; }
+.brief-root .brief-account-avatar { display: grid; place-items: center; width: 32px; height: 32px; flex: none; border-radius: 50%; background: var(--brief-recessed); font: 400 11px/16px var(--brief-sans); }
+.brief-root .brief-account-copy { display: grid; gap: 3px; white-space: nowrap; min-width: 0; }
+.brief-root .brief-account-copy > * { overflow: hidden; text-overflow: ellipsis; }
+.brief-root .brief-account-copy strong { font: 700 13px/18px var(--brief-sans); }
+.brief-root .brief-account-copy > span { font: 400 12px/16px var(--brief-sans); color: var(--brief-secondary); }
+.brief-root .brief-account-origin[aria-expanded="true"] { background: var(--brief-selected); border-color: var(--brief-card-edge); }
+.brief-root .brief-account-menu { width: 200px; min-width: 200px; padding: 8px 0; }
+.brief-root .brief-account-menu__body { padding: 8px; }
+.brief-root .brief-account-menu__body button { min-height: 44px; }
+.brief-root .brief-account-menu__body button svg { flex: none; }
+.brief-root .brief-account-menu__body button[aria-current="page"] { background: var(--brief-selected); }
+.brief-root .brief-workspace { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.brief-root .brief-workspace-header { display: flex; justify-content: space-between; align-items: center; gap: 16px; height: 76px; flex: none; padding: 0 20px 0 38px; border-bottom: 1px solid var(--brief-card-edge); background: var(--brief-card); }
+.brief-root .brief-breadcrumb { display: flex; align-items: center; min-width: 0; gap: 20px; font: 400 12px/18px var(--brief-sans); color: var(--brief-secondary); }
+.brief-root .brief-breadcrumb > :is(strong,.brief-workspace-name) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.brief-root .brief-workspace-name { max-width: 28ch; }
+.brief-root .brief-breadcrumb strong { font-weight: 700; color: var(--brief-ink); }
+.brief-root .brief-breadcrumb button { border: none; color: var(--brief-secondary); background: transparent; padding: 8px 0; font-size: inherit; border-radius: 3px; }
+.brief-root .brief-connection { width: 40px; height: 40px; flex: none; border: 0; padding: 0; display: grid; place-items: center; background: transparent; border-radius: var(--brief-corner-control); }
+.brief-root .brief-connection-dot { height: 8px; width: 8px; border-radius: 50%; background: var(--brief-tertiary); }
+.brief-root .brief-connection-dot[data-state="connected"] { background: var(--brief-success-text); }
+.brief-root .brief-connection-dot[data-state="reconnecting"] { background: var(--brief-attention-text); }
+.brief-root .brief-connection-dot[data-state="offline"] { background: var(--brief-error-text); }
+.brief-root .brief-workspace-content { flex: 1; min-height: 0; min-width: 0; padding: 38px; overflow: auto; outline: none; scrollbar-gutter: stable; }
+.brief-root .brief-workspace-content > .brief-foundation__notice { margin: 0; }
+.brief-root .brief-shell-reading { max-width: 1132px; }
+.brief-root .brief-skip { position: absolute; left: 84px; top: 8px; padding: 12px; background: var(--brief-card); color: var(--brief-ink); border-radius: var(--brief-corner-control); transform: translateY(-160%); z-index: 10; }
+.brief-root .brief-skip:focus { transform: none; }
+.brief-root [data-rail="true"] .brief-navigation-rows { padding-inline: 16px; }
+.brief-root [data-rail="true"] .brief-nav-row { justify-content: center; flex: none; width: 40px; padding: 0; gap: 0; }
+.brief-root [data-rail="true"] :is(.brief-nav-label,.brief-account-copy) { display: none; }
+.brief-root [data-rail="true"] .brief-nav-count { position: absolute; right: -8px; top: -5px; width: 24px; background: var(--brief-soft); border-radius: 6px 0 6px 6px; text-align: center; }
+.brief-root [data-rail="true"] .brief-nav-count:empty { display: none; }
+.brief-root [data-rail="true"] .brief-nav-group { font-size: 0; width: 24px; margin-inline: auto; position: relative; }
+.brief-root [data-rail="true"] .brief-nav-group::after { content: ""; position: absolute; top: 10px; left: 0; right: 0; height: 1px; background: var(--brief-card-edge); }
+.brief-root [data-rail="true"] .brief-account-origin { width: 40px; padding: 0 3px; gap: 0; }
+@media (hover: hover) {
+  .brief-root .brief-nav-row:not([aria-current]):hover,
+  .brief-root .brief-account-origin:not([aria-expanded="true"]):hover,
+  .brief-root .brief-collapse:not(:disabled):hover,
+  .brief-root .brief-connection:hover { background: var(--brief-recessed); }
+  .brief-root .brief-breadcrumb button:hover { color: var(--brief-ink); text-decoration: underline; text-underline-offset: 3px; }
+}
+.brief-root .brief-navigation button:active:not(:disabled) { background: var(--brief-selected); }
+@media (max-width: 699px) {
+  .brief-root .brief-workspace-header { padding-inline: 18px 8px; gap: 8px; }
+  .brief-root .brief-workspace-content { padding: 24px 18px; }
+  .brief-root .brief-breadcrumb { gap: 10px; }
+  .brief-root .brief-workspace-name, .brief-root .brief-workspace-name + span { display: none; }
+}
