@@ -1,0 +1,15 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/vault/conversation-lifecycle.test.ts:
+
+# Unhandled error between tests
+-------------------------------
+error: Cannot find module './conversation-lifecycle.ts' from '/home/vierisid/.cache/codex/jarvis-f-02/src/vault/conversation-lifecycle.test.ts'
+-------------------------------
+
+
+ 0 pass
+ 1 fail
+ 1 error
+Ran 1 test across 1 file. [233.00ms]

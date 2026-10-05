@@ -1,0 +1,30 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/vault/conversation-lifecycle.test.ts:
+108 |     getDb().run('INSERT INTO conversation_messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)', [id, a.conversationId, 'user', id, 100]);
+109 |   }
+110 |   const page1 = repo.messages(a.conversationId, { limit: 2 });
+111 |   expect(page1.items.map(m => m.id)).toEqual(['m4', 'm5']);
+112 |   const page2 = repo.messages(a.conversationId, { limit: 2, cursor: page1.nextCursor! });
+113 |   expect(page2.items.map(m => m.id)).toEqual(['m2', 'm3']);
+                                           ^
+error: expect(received).toEqual(expected)
+
+  [
+-   "m2",
+-   "m3",
++   "m5",
+  ]
+
+- Expected  - 2
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/conversation-lifecycle.test.ts:113:38)
+(fail) message cursors traverse equal timestamps exactly once and reject cross-chat or malformed reuse [13.74ms]
+
+ 0 pass
+ 7 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [135.00ms]

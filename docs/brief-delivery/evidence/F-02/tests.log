@@ -1,0 +1,774 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+scripts/check-migrations.test.ts:
+(pass) check-migrations contractKind > flags contracting DDL [0.28ms]
+(pass) check-migrations contractKind > flags a unique index (contracting) but not a plain index [0.06ms]
+(pass) check-migrations contractKind > allows additive DDL [0.05ms]
+(pass) check-migrations contractKind > comments do not waive or falsely trip detection [0.02ms]
+(pass) check-migrations contractKind > scanContent reports un-acknowledged contracts but honors the marker [0.21ms]
+
+scripts/version-stamp-cache.test.ts:
+(pass) release cache check > warms a fresh manifest as well as VERSION before the version-only comparison [137.40ms]
+(pass) release cache check > accepts platform-prefixed BuildKit output [134.21ms]
+(pass) release cache check > rejects an uncached deps step [137.30ms]
+(pass) release cache check > rejects an uncached build step [140.02ms]
+(pass) release cache check > rejects an uncached workflows step [135.60ms]
+(pass) release cache check > rejects an uncached production step [138.15ms]
+(pass) release cache check > rejects an unknown step outcome [137.99ms]
+(pass) release cache check > requires the version stamp to execute [135.35ms]
+(pass) release cache check > fails closed when required vertex 2 is missing [134.41ms]
+(pass) release cache check > fails closed when required vertex 3 is missing [140.47ms]
+(pass) release cache check > fails closed when required vertex 4 is missing [135.85ms]
+(pass) release cache check > fails closed when required vertex 5 is missing [139.93ms]
+(pass) release cache check > fails closed when required vertex 7 is missing [134.46ms]
+(pass) release cache check > surfaces a build failure and stops before comparison [69.33ms]
+
+src/roles/untrusted-import-guard.test.ts:
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > no production file locates a delimiter tag [21.10ms]
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > only the webapp template delivery mints a trusted trailer [21.90ms]
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > only one framing caller is a tool return; the rest frame a prompt [23.24ms]
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > nothing searches tool results for a site-instructions separator [40.44ms]
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > every tool that attaches template instructions is framed, derived from the source [17.22ms]
+
+src/cli/backup.test.ts:
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis export > default export curates user data and EXCLUDES secrets + config + logs [64.28ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis export > --full additionally includes the OS-level secrets and the keychain pair [47.71ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+[Keychain] Moved the keychain from /tmp/jarvis-backup-test-aJ9xYJ/data to /tmp/jarvis-backup-test-aJ9xYJ/read-at; backups of the data dir now include it
+[WorkflowEncryption] Moved the workflow encryption key from /tmp/jarvis-backup-test-aJ9xYJ/data/workflow-encryption.key to /tmp/jarvis-backup-test-aJ9xYJ/read-at/workflow-encryption.key; backups of the data dir now include it
+(pass) jarvis export > --full picks the keychain up from where it actually lives, not from data_dir [102.13ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+[WorkflowEncryption] Moved the workflow encryption key from /tmp/jarvis-backup-test-kZCFZ7/data/workflow-encryption.key to /tmp/jarvis-backup-test-kZCFZ7/occupied/workflow-encryption.key; backups of the data dir now include it
+(pass) jarvis export > restore leaves an existing keychain alone and says so [89.17ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis export > a symlinked entry is dereferenced: the archive holds real data [59.17ms]
+(pass) jarvis export > --out immediately followed by another flag is a usage error [19.72ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis export > missing entries are skipped, not fatal [45.35ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis export > snapshot is consistent: uncommitted writes are not captured [53.28ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis export > fails with exit 1 when there is no database [19.10ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis export > the manifest records format, variant, and file list [55.24ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > round-trip: export --full, wipe, restore recovers db + files + modes [78.40ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > round-trip: the workflow encryption key comes back and its credential decrypts [80.59ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > --full picks the workflow key up from cache/ on an install that has not been relocated yet [77.91ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > refuses while the daemon holds its lock [44.01ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > rejects a garbage archive and leaves existing data untouched [23.19ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > rejects an archive with a corrupt database [42.16ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > rejects an unsupported manifest format [27.57ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > an archive whose entry is a SYMLINK is refused, data untouched [49.03ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > a failed swap rolls back: no half-restored data dir, WAL preserved [78.84ms]
+Config file not found at /home/vierisid/.jarvis/config.yaml, using defaults
+(pass) jarvis restore > warns when the archive comes from a newer brain [47.45ms]
+(pass) jarvis restore > usage error without an archive argument [21.03ms]
+(pass) bin dispatch (subprocess) > jarvis export --out - streams a valid tar to stdout [124.80ms]
+
+src/daemon/api-billing.test.ts:
+(pass) GET /api/billing > is 503 on a self-hosted install [7.60ms]
+(pass) GET /api/billing > is ok:false (not 503) on a hosted install whose control plane rendered no billing block [0.32ms]
+(pass) GET /api/billing > serves the parsed summary and the account links [1.59ms]
+[billing] could not reach the control plane; billing unavailable: connect ECONNREFUSED https://control-plane.internal
+[billing] control plane answered 401; billing unavailable
+(pass) GET /api/billing > never echoes the endpoint, instance id or secret — on success or failure [1.19ms]
+(pass) GET /api/billing > reads are cached, and ?fresh=1 still shares a reading younger than the floor [0.42ms]
+[billing] control plane answered 502; billing unavailable
+(pass) GET /api/billing > still offers the account links when the read fails, so the user has a way forward [0.28ms]
+
+src/daemon/api-tasks-paused.test.ts:
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > returns an empty list when the task registry is null (classic mode) [12.60ms]
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > returns an empty list when no tasks are paused [11.10ms]
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > returns paused tasks with the UI contract shape [11.46ms]
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > excludes running/queued tasks (only needs_input surfaces) [10.82ms]
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > returns empty question string rather than null when a paused task has no question text [11.48ms]
+
+src/daemon/api-approval-resolution.test.ts:
+(pass) status and listings surface an approval that never started, with its state [11.84ms]
+(pass) execute runs a not-started approval exactly once, then it is no longer a decision [12.12ms]
+(pass) an interrupted approval refuses execute and accepts close with a note [9.62ms]
+(pass) close tolerates a missing or non-object body and refuses a non-string note [9.27ms]
+(pass) approve and deny have nothing to flip on an unresolved row [9.45ms]
+
+src/daemon/api-brief.test.ts:
+(pass) Brief capabilities are registered with every feature disabled by default [0.58ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f-01-http-vHyL9X/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) capability endpoint is protected by the real session gate, including after session expiry [8.51ms]
+(pass) API exposes live sanitized readiness using the injected provider registry [0.52ms]
+(pass) old conversation client sees unchanged payloads and stored history after a capability read [11.48ms]
+
+src/daemon/api-brief-conversations.test.ts:
+(pass) older API callers without a conversation provider receive unsupported without touching a vault [0.39ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-y37K3w/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) conversation provider is discoverable but explicit lifecycle routes stay disabled by default [16.92ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-1M2sXm/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) real panel authentication protects all lifecycle writes and there is no delete action [17.85ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-A6NBdv/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) HTTP create/get/rename/tab order/active/close/reopen retain each conversation history [26.34ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-NN8YAA/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) foreign and unknown IDs are hidden through both lifecycle and legacy HTTP readers [21.75ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-DchLkV/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) HTTP pagination preserves equal-timestamp messages and rejects invalid inputs [22.38ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-8r6OrN/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) legacy websocket clients still restore their latest channel chat after explicit chat activity [19.56ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-tNqdhx/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) provider errors are safe unavailable results and replacing the vault invalidates the provider [18.91ms]
+
+src/daemon/api-onboarding-hosted.test.ts:
+Database initialized at: :memory:
+(pass) POST /api/onboarding/setup on a hosted install > drops provider config a bypassing client sends, and keeps the plan defaults live [13.25ms]
+Database initialized at: :memory:
+[LLM] Built provider 'usejarvis_ai' (kind=usejarvis_ai)
+[LLM] Tier 'conversation' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'high' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'medium' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'low' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Providers active after hot-reload: usejarvis_ai
+(pass) POST /api/onboarding/setup on a hosted install > a clean hosted payload (mode + enabled only) reports nothing dropped [20.46ms]
+Database initialized at: :memory:
+[LLM] Built provider 'usejarvis_ai' (kind=usejarvis_ai)
+[LLM] Tier 'conversation' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'high' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'medium' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'low' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Providers active after hot-reload: usejarvis_ai
+(pass) POST /api/onboarding/setup on a hosted install > still completes setup, so onboarding does not replay next launch [10.35ms]
+Database initialized at: :memory:
+(pass) POST /api/onboarding/setup on a hosted install > the tts whitelist admits enabled ONLY — a smuggled provider is still dropped [11.58ms]
+Database initialized at: :memory:
+[LLM] llm.default ('anthropic:claude-x') references unregistered provider 'anthropic' - skipping.
+[LLM] Built provider 'anthropic' (kind=anthropic)
+[LLM] Providers active after hot-reload: anthropic
+(pass) POST /api/onboarding/setup on a hosted install > a self-hosted install is untouched by the guard [17.03ms]
+
+src/daemon/api-goal-validation.test.ts:
+(pass) dashboard quick-create payload persists with deadline null [11.39ms]
+(pass) dashboard quick-create payload persists with deadline 1790856000000 [9.27ms]
+(pass) quick mode still validates goal fields before writing [9.33ms]
+(pass) invalid direct API write is 4xx and writes nothing: null [9.14ms]
+(pass) invalid direct API write is 4xx and writes nothing: %j [9.01ms]
+(pass) invalid direct API write is 4xx and writes nothing: 4 [8.97ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"mode":"typo","title":"Goal"} [9.17ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":[]} [9.88ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"  "} [11.36ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","level":"invalid"} [10.88ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","deadline":"2026-10-01"} [12.18ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","estimated_hours":-2} [10.80ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","authority_level":11} [8.68ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","parent_id":"missing"} [8.73ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","tags":[3]} [10.20ms]
+(pass) quick-create and patch enforce the same shape and hierarchy as proposal writes [13.87ms]
+(pass) API proposal validation and an insert failure leave no partial tree [33.87ms]
+(pass) the API returns an anchored validated proposal and confirms the same deadlines [13.11ms]
+(pass) the API rejects malformed model output without offering a confirmable proposal [11.32ms]
+(pass) decomposition through the real chat tool creates next-level children [14.99ms]
+(pass) chat quick-create under a parent defaults to the next level [11.53ms]
+(pass) parent identity and level are rechecked at confirmation [15.37ms]
+
+src/daemon/api-goal-review.test.ts:
+(pass) the public score API reports missing review evidence without claiming the goal is missing [10.26ms]
+(pass) manual scores still work and unknown IDs are rejected [9.63ms]
+(pass) check-in API exposes the stored evidence snapshot and rejected decisions [13.21ms]
+
+src/sidecar/panel-sessions.test.ts:
+(pass) PanelSessionStore > ids are opaque and unique [2.08ms]
+(pass) PanelSessionStore > survives well past the old 10-minute TTL [0.16ms]
+(pass) PanelSessionStore > use does not extend it: the cap is absolute [0.08ms]
+(pass) PanelSessionStore > an aged-out session is refused on the request that notices, not at the next sweep [0.06ms]
+(pass) PanelSessionStore > lastSeenAt tracks use, createdAt does not move [0.05ms]
+(pass) PanelSessionStore > an unknown id resolves to nothing [0.03ms]
+(pass) PanelSessionStore > deleteBySid closes every panel of one device and leaves the others [0.12ms]
+(pass) PanelSessionStore > deleteBySid on a device with no panels is a no-op [0.04ms]
+(pass) PanelSessionStore > delete closes exactly one session [0.06ms]
+(pass) PanelSessionStore > sweep drops only what is past the cap [0.12ms]
+(pass) PanelSessionStore > the default cap is the documented 12 hours [0.05ms]
+(pass) PanelSessionStore persistence > a session opened before a restart still authorizes after one [0.16ms]
+(pass) PanelSessionStore persistence > hydrate drops what aged out while the brain was down, and forgets it [0.13ms]
+(pass) PanelSessionStore persistence > every close is written through, so nothing resurrects on the next start [0.12ms]
+(pass) PanelSessionStore persistence > an aged-out session is forgotten by the sweep and by the request that finds it [0.11ms]
+[PanelSessions] Could not restore sessions: 234 |       },
+235 |       remove: () => {
+236 |         throw new Error('disk full');
+237 |       },
+238 |       load: () => {
+239 |         throw new Error('disk gone');
+                        ^
+error: disk gone
+      at load (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.test.ts:239:19)
+      at hydrate (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.ts:276:39)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.test.ts:245:18)
+
+[PanelSessions] Persistence failed (session still live): 228 |   });
+229 |
+230 |   test('a failing disk never takes out a live session', () => {
+231 |     const angry: PanelSessionSink = {
+232 |       insert: () => {
+233 |         throw new Error('disk full');
+                        ^
+error: disk full
+      at insert (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.test.ts:233:19)
+      at persist (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.ts:299:7)
+      at create (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.ts:312:10)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.test.ts:249:27)
+
+[PanelSessions] Persistence failed (session still live): 231 |     const angry: PanelSessionSink = {
+232 |       insert: () => {
+233 |         throw new Error('disk full');
+234 |       },
+235 |       remove: () => {
+236 |         throw new Error('disk full');
+                        ^
+error: disk full
+      at remove (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.test.ts:236:19)
+      at persist (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.ts:299:7)
+      at delete (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.ts:376:23)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/sidecar/panel-sessions.test.ts:251:18)
+
+(pass) PanelSessionStore persistence > a failing disk never takes out a live session [0.42ms]
+(pass) PanelSessionStore persistence > with no sink at all it is a plain in-memory store [0.04ms]
+(pass) PanelSessionStore liveness > an open socket keeps an otherwise silent panel alive [0.17ms]
+(pass) PanelSessionStore liveness > the session goes once the window closes and stays shut [0.10ms]
+(pass) PanelSessionStore liveness > sibling panels sharing one session: collected only when the last closes [0.09ms]
+(pass) PanelSessionStore liveness > a reconnecting panel is not collected [0.05ms]
+(pass) PanelSessionStore liveness > socket bookkeeping ignores ids it does not know [0.11ms]
+(pass) PanelSessionStore liveness > a session restored from disk gets a full window to reconnect in [0.13ms]
+(pass) PanelSessionStore liveness > the cap still wins over an open socket [0.07ms]
+(pass) PanelSessionStore liveness > teardown hangs up on the open sockets, it does not just forget them [0.07ms]
+(pass) PanelSessionStore liveness > revoking a device hangs up on every one of its panels [0.11ms]
+(pass) PanelSessionStore liveness > the cap and the sweep hang up too [0.07ms]
+(pass) PanelSessionStore liveness > a socket that throws on close does not block the others [0.12ms]
+(pass) PanelSessionStore liveness > a sleeping machine accrues no idle time: its windows are still on screen [0.22ms]
+(pass) PanelSessionStore liveness > a connected sidecar with no window really does get collected [0.06ms]
+(pass) PanelSessionStore liveness > touchBySid refreshes only the named device [0.14ms]
+(pass) PanelSessionStore liveness > a socket that arrives after its session was collected is hung up on [0.03ms]
+(pass) PanelSessionStore liveness > the cap ignores the gate: it is a bound, not hygiene [0.09ms]
+(pass) PanelSessionStore liveness > the gate is asked about the right device [0.06ms]
+(pass) PanelSessionStore liveness > stopping is not revocation: clear() does not hang up [0.08ms]
+
+src/brief/contracts.test.ts:
+(pass) documented JSON examples are the checked TypeScript contract examples [0.81ms]
+(pass) wire contracts have no runtime workflow repository dependency [3.07ms]
+
+src/brief/capabilities.test.ts:
+(pass) production registration enables nothing, even when activation is requested without providers [0.31ms]
+(pass) installed and ready does not activate a feature without an explicit selection [0.08ms]
+(pass) readiness changes are reflected without restarting or retaining a stale true flag [0.16ms]
+(pass) transitive activation dependencies must themselves be enabled [0.14ms]
+(pass) dependency failure disables consumers on the next snapshot [0.09ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.10ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.03ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.03ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.02ms]
+(pass) duplicate and unknown registrations fail early, and registries do not share state [0.29ms]
+(pass) old or unsupported server response cannot enable new controls: null [0.04ms]
+(pass) old or unsupported server response cannot enable new controls: {}
+(pass) old or unsupported server response cannot enable new controls: {"error":"Not found"}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":2,"capabilities":{}}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":1,"capabilities":null}
+(pass) v1 clients accept additive fields but reject inconsistent booleans or unknown capability IDs [0.09ms]
+(pass) the fixed activation graph has only known dependencies and no cycles [0.13ms]
+(pass) contracts and capability consumer bundle for a browser without importing backend implementations [1.76ms]
+
+src/brief/adapters.test.ts:
+(pass) an independent optional reader fails closed without another feature module [0.30ms]
+(pass) typed feature registrations compile and read independently of an absent collaborator [0.23ms]
+(pass) disabled and dependency-blocked readers never invoke their data handler [0.29ms]
+(pass) only the registered provider can be used, and ready reads preserve the supplied query [0.17ms]
+(pass) provider loading is not an empty collection [0.11ms]
+(pass) provider unavailable is not an empty collection [0.02ms]
+(pass) stale and empty results remain distinct and preserve their as-of times [0.21ms]
+(pass) failed reads redact internal error details [0.18ms]
+(pass) legacy goal projections preserve source identity and never infer measured counts [0.06ms]
+(pass) workflow projection keeps activation and version lifecycle distinct and rejects foreign versions [0.11ms]
+(pass) workflow references never read or forward captured payloads from a full version [0.04ms]
+
+src/vault/conversation-schema.test.ts:
+(pass) migration preserves old histories, adopts rollback-era inserts, and keeps saved tab metadata [265.85ms]
+(pass) open-tab limit rejects extra creation atomically and reopening respects the same bound [16.44ms]
+
+src/vault/commitment-scope.test.ts:
+Database initialized at: :memory:
+(pass) commitment scope provenance > an explicit scope_id is stored and read back [10.00ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > the ambient turn scope is picked up with no explicit argument [9.50ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > an explicit argument wins over the ambient scope [10.49ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > outside any scoped turn the column stays null [9.65ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > a NULL in the column reads as unscoped [8.96ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > a table that never got the column still accepts writes [10.25ms]
+
+src/vault/webapp-templates.test.ts:
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > resolves path-qualified domains to the right app [13.11ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > plain hostname domains still work, including subdomains [8.43ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > most specific domain entry wins when both match [8.65ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > unmatched host returns null [9.02ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > a path entry matches on a segment boundary, not a prefix [9.04ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > a URL that does not parse resolves to nothing, not to a hostname [8.64ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > disabled templates never resolve [9.74ms]
+Database initialized at: :memory:
+(pass) getWebappInstructionsForUrl > resolves a browsed URL to formatted instructions [8.39ms]
+Database initialized at: :memory:
+(pass) getWebappInstructionsForUrl > returns null for URLs no template claims [8.66ms]
+Database initialized at: :memory:
+(pass) getWebappInstructionsForUrl > never throws on garbage input [9.24ms]
+(pass) formatWebappInstructions > formats a single template into a prompt-ready block [0.06ms]
+
+src/vault/recall-heldout.test.ts:
+(pass) frozen recall heldout preserves useful qualified context and abstention [242.21ms]
+(pass) frozen recall heldout-v2 preserves useful qualified context and abstention [266.06ms]
+
+src/vault/observations-prompt.test.ts:
+(pass) describeObservationForPrompt > screen captures carry app and window, never OCR text [0.35ms]
+(pass) describeObservationForPrompt > clipboard carries only a length [0.04ms]
+(pass) describeObservationForPrompt > email carries sender and subject, not the snippet [0.04ms]
+(pass) describeObservationForPrompt > notifications carry app and title, not the body [0.04ms]
+(pass) describeObservationForPrompt > long fields are clipped [0.06ms]
+(pass) describeObservationForPrompt > unknown data shapes never throw [0.09ms]
+
+src/vault/agent-activity.test.ts:
+Database initialized at: :memory:
+(pass) agent-activity > records and lists events for one agent [8.69ms]
+Database initialized at: :memory:
+(pass) agent-activity > isolates events by agent_id [8.77ms]
+Database initialized at: :memory:
+(pass) agent-activity > respects limit and offset [9.02ms]
+Database initialized at: :memory:
+(pass) agent-activity > clamps limit between 1 and 200 [9.44ms]
+Database initialized at: :memory:
+(pass) agent-activity > round-trips JSON data and handles missing data [8.51ms]
+Database initialized at: :memory:
+(pass) agent-activity > returns empty for unknown agent [8.54ms]
+
+src/vault/facts.test.ts:
+Database initialized at: /tmp/jarvis-facts-2eesqK/vault.db
+Database initialized at: /tmp/jarvis-facts-2eesqK/vault.db
+(pass) confirmed correction is used on the next recall and after restart; late inference stays qualified [246.10ms]
+Database initialized at: /tmp/jarvis-facts-et4P6x/vault.db
+(pass) repeated inferences preserve sources without duplication or promotion [231.67ms]
+Database initialized at: /tmp/jarvis-facts-3reHEd/vault.db
+(pass) known single-value contradictions are contested until explicit confirmation [235.07ms]
+Database initialized at: /tmp/jarvis-facts-dqrVV4/vault.db
+(pass) locations, aliases, jobs and unknown predicates preserve multiple valid values [292.28ms]
+Database initialized at: /tmp/jarvis-facts-0EAOYz/vault.db
+(pass) targeted location correction replaces only that location and retry retains one record [232.22ms]
+Database initialized at: /tmp/jarvis-facts-FD4yCc/vault.db
+(pass) scope and disjoint validity periods remain separate; expired values cannot bind [233.83ms]
+Database initialized at: /tmp/jarvis-facts-bauYwz/vault.db
+(pass) an out of period value is still marked as outside its validity when shown [229.97ms]
+Database initialized at: /tmp/jarvis-facts-jXCpXu/vault.db
+(pass) overlapping but different confirmed periods are contested, not silently superseded [235.44ms]
+Database initialized at: /tmp/jarvis-facts-SMb0oD/vault.db
+(pass) paths, URLs and email local parts retain case during deduplication [241.85ms]
+Database initialized at: /tmp/jarvis-facts-s84hIc/vault.db
+(pass) confirmation cannot be inferred from a source label or confidence [240.24ms]
+Database initialized at: /tmp/jarvis-facts-oFcba2/vault.db
+(pass) atomic correction rolls back replacement, supersession and evidence on failure [233.78ms]
+Database initialized at: /tmp/jarvis-facts-6ImvkA/vault.db
+Database initialized at: /tmp/jarvis-facts-6ImvkA/legacy.db
+Database initialized at: /tmp/jarvis-facts-6ImvkA/legacy.db
+(pass) upgrade preserves legacy IDs/sources, consolidates duplicates and qualifies old contradictions [473.07ms]
+Database initialized at: /tmp/jarvis-facts-9WOKVi/vault.db
+Database initialized at: /tmp/jarvis-facts-9WOKVi/vault.db
+(pass) inherited property predicate constructor supports creation, lookup and restart [239.20ms]
+Database initialized at: /tmp/jarvis-facts-rlMOJU/vault.db
+Database initialized at: /tmp/jarvis-facts-rlMOJU/vault.db
+(pass) inherited property predicate __proto__ supports creation, lookup and restart [355.22ms]
+Database initialized at: /tmp/jarvis-facts-QUXXcK/vault.db
+Database initialized at: /tmp/jarvis-facts-QUXXcK/legacy-property.db
+Database initialized at: /tmp/jarvis-facts-QUXXcK/legacy-property.db
+(pass) inherited property predicate constructor migrates legacy facts without blocking startup [648.00ms]
+Database initialized at: /tmp/jarvis-facts-NAopVP/vault.db
+Database initialized at: /tmp/jarvis-facts-NAopVP/legacy-property.db
+Database initialized at: /tmp/jarvis-facts-NAopVP/legacy-property.db
+(pass) inherited property predicate __proto__ migrates legacy facts without blocking startup [504.33ms]
+Database initialized at: /tmp/jarvis-facts-s3WDyv/vault.db
+(pass) profile changes retain superseded history and confirmed current answers [245.01ms]
+Database initialized at: /tmp/jarvis-facts-0kt21h/vault.db
+Database initialized at: /tmp/jarvis-facts-0kt21h/vault.db
+(pass) profile corrections update prompt settings and derived name across restart and later saves [267.85ms]
+Database initialized at: /tmp/jarvis-facts-VwPiaK/vault.db
+Database initialized at: /tmp/jarvis-facts-VwPiaK/vault.db
+(pass) capitalization correction updates API, profile and recall without duplicate facts or inference overwrite [267.45ms]
+Database initialized at: /tmp/jarvis-facts-NGdVkB/vault.db
+(pass) a changed capitalization on a superseded correction requires reviewing the current fact [243.17ms]
+Database initialized at: /tmp/jarvis-facts-KE3CKQ/vault.db
+(pass) profile correction rolls back settings, entity, projections and evidence together [239.13ms]
+Database initialized at: /tmp/jarvis-facts-uC0n0O/vault.db
+Database initialized at: /tmp/jarvis-facts-uC0n0O/vault.db
+(pass) profile heuristics remain inferred and cannot turn a product name into a confirmed user alias [255.82ms]
+Database initialized at: /tmp/jarvis-facts-CxIn6I/vault.db
+(pass) confirming a competing profile answer updates the profile without affecting scoped or other-person facts [253.73ms]
+Database initialized at: /tmp/jarvis-facts-GgXWPa/vault.db
+(pass) later profile edits retain explicitly confirmed aliases but retire removed direct answers [252.48ms]
+Database initialized at: /tmp/jarvis-facts-EpWSYS/vault.db
+Database initialized at: /tmp/jarvis-facts-EpWSYS/legacy-profile.db
+Database initialized at: /tmp/jarvis-facts-EpWSYS/legacy-profile.db
+(pass) legacy migration confirms only profile answers supported by the canonical record [513.52ms]
+Database initialized at: /tmp/jarvis-facts-9g7l9N/vault.db
+(pass) deleting a conflicting inference clears contested state without confirming anything [246.24ms]
+Database initialized at: /tmp/jarvis-facts-nZzT6J/vault.db
+(pass) recall caps the evidence ledger so a repeated assertion cannot grow the prompt without bound [883.91ms]
+Database initialized at: /tmp/jarvis-facts-bgyh0F/vault.db
+(pass) recall shows the strongest evidence first and clips an overlong quote [242.07ms]
+Database initialized at: /tmp/jarvis-facts-eECpWH/vault.db
+(pass) a person-facing fact summary stays readable and still carries the qualification [243.78ms]
+Database initialized at: /tmp/jarvis-facts-q7iXGf/vault.db
+(pass) decision routes answer through the caller's response helper so they keep the API CORS scope [246.84ms]
+Database initialized at: /tmp/jarvis-facts-nhsafA/vault.db
+(pass) decision routes require explicit confirmation, validate input and expose history [266.35ms]
+Database initialized at: /tmp/jarvis-facts-8y0NyN/vault.db
+(pass) extraction cannot forge confirmation, assistant quotes or overwrite a confirmed correction [265.84ms]
+
+src/vault/user-profile.test.ts:
+Database initialized at: :memory:
+(pass) Vault — User Profile > save + load persists normalized answers [12.72ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > clear removes saved profile [13.38ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > save syncs profile answers into the vault knowledge base [16.11ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > save derives alias facts from free-form profile answers [11.02ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > prompt formatter includes answered fields only [11.15ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > prompt formatter indents multiline answers to keep them contained [11.13ms]
+
+src/vault/keychain.test.ts:
+(skip) keychain > JARVIS_HOME is where a fresh install stores its keychain
+(pass) keychain > a fresh install writes and reads its keychain under the configured dir [6.87ms]
+(pass) keychain > an un-migrated install keeps using the legacy pair, both halves together [10.18ms]
+(pass) keychain > a fresh install with neither pair resolves to the configured dir [0.70ms]
+(pass) keychain > JARVIS_SECRETS_DIR overrides JARVIS_HOME and skips the fallback [5.10ms]
+[Keychain] Moved the keychain from /tmp/jarvis-keychain-WhdWGk/legacy to /tmp/jarvis-keychain-WhdWGk/data; backups of the data dir now include it
+(pass) keychain > migrate moves the pair and the secrets survive [9.91ms]
+(pass) keychain > migrate is a no-op when the destination already has a keychain [9.45ms]
+(pass) keychain > migrate is a no-op when there is nothing to move [0.70ms]
+(pass) keychain > a broken source pair aborts the move instead of destroying it [5.74ms]
+(pass) keychain > a save leaves no temp file behind [7.58ms]
+[Keychain] Keychain at /tmp/jarvis-keychain-jAlBm1/data/.secrets.enc could not be read (Unsupported state or unable to authenticate data). Restore the matching .secrets.key, or move both files aside to start a new store.
+DeprecationWarning: Using AES-GCM authentication tags of less than 128 bits without specifying the authTagLength option when initializing decryption is deprecated.
+ code: "DEP0182"
+
+      at setAuthTag (node:crypto:265:36)
+      at decrypt (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:159:12)
+      at readSecretsAt (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:168:21)
+      at readSecrets (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:181:12)
+      at loadSecrets (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:195:12)
+      at getSecret (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:258:19)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.test.ts:191:12)
+
+DeprecationWarning: Using AES-GCM authentication tags of less than 128 bits without specifying the authTagLength option when initializing decryption is deprecated.
+ code: "DEP0182"
+
+      at setAuthTag (node:crypto:265:36)
+      at decrypt (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:159:12)
+      at readSecretsAt (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:168:21)
+      at readSecrets (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:181:12)
+      at setSecret (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:263:19)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.test.ts:195:57)
+
+DeprecationWarning: Using AES-GCM authentication tags of less than 128 bits without specifying the authTagLength option when initializing decryption is deprecated.
+ code: "DEP0182"
+
+      at setAuthTag (node:crypto:265:36)
+      at decrypt (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:159:12)
+      at readSecretsAt (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:168:21)
+      at readSecrets (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:181:12)
+      at setSecrets (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.ts:279:19)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-02/src/vault/keychain.test.ts:196:68)
+
+(pass) keychain > an unreadable store is never overwritten: reads degrade, writes refuse [6.81ms]
+
+src/vault/memory-regression.test.ts:
+Database initialized at: :memory:
+(pass) recall preserves the source and confidence of an extracted assertion [12.85ms]
+Database initialized at: :memory:
+(pass) repeated extraction does not add duplicate facts [11.67ms]
+Database initialized at: :memory:
+(pass) confirming the corrected current preference removes the old value from next recall [14.10ms]
+Database initialized at: :memory:
+(pass) single-fact lookup cannot silently promote a high-confidence inference [11.09ms]
+
+src/vault/recall-ranking.test.ts:
+(pass) development benchmark meets recall, qualification, precision and order gates [271.72ms]
+(pass) partial names match whole Unicode tokens without matching substrings [10.03ms]
+(pass) unrelated self requests abstain but explicit self overview still works [10.11ms]
+(pass) an embedded "me" inside an ordinary word is not a self overview request [10.44ms]
+(pass) a remembered value cannot forge the qualification separator or a new record [12.70ms]
+(pass) aliases shared by different subjects preserve ambiguity and evidence qualification [10.18ms]
+(pass) crowded alias recall keeps selection evidence (reverse=%s) [13.37ms]
+(pass) crowded alias recall keeps selection evidence (reverse=%s) [13.67ms]
+(pass) a subject cannot appear when its required alias qualification does not fit [15.02ms]
+(pass) all matched aliases count toward the fact limits [11.23ms]
+(pass) unavailable alias dependencies omit the subject (missing) [10.04ms]
+(pass) unavailable alias dependencies omit the subject (expired) [10.12ms]
+(pass) alias dependencies remain whole at the shared fact limit [14.45ms]
+(pass) empty and stopword-only messages avoid database reads while self overview still reads [15.61ms]
+(pass) large evidence quotes cannot evict a short qualified fact or be silently truncated [10.35ms]
+(pass) many evidence records keep explicit omission counts and a stable ledger reference [10.23ms]
+(pass) whole qualified facts fit the exact budget; oversize facts cannot hide small siblings [9.89ms]
+(pass) entity and fact budgets distribute useful context across subjects [31.57ms]
+(pass) a subject whose records are all out of period reads as having none [9.74ms]
+(pass) a long message cannot make scoring quadratic on the recall path [634.46ms]
+(pass) a subject whose facts all miss the budget contributes no heading or relationship [11.21ms]
+(pass) a value stored on another subject survives a name-only top match [11.92ms]
+(pass) a subject named with a common word recovers no cross-references [14.18ms]
+(pass) a possessive name still anchors on its subject [11.99ms]
+(pass) facts dropped by ranking are reported as an incomplete record [12.25ms]
+(pass) the self overview and the profile boost agree on the same request [14.17ms]
+(pass) relationship context is bounded, stable and unverified [11.07ms]
+(pass) ranking respects C8 states and periods while retaining contested facts [10.40ms]
+(pass) value query retains the current confirmed counterpart: Does Alex still use Vim? [10.26ms]
+(pass) value query retains the current confirmed counterpart: Vim [11.81ms]
+(pass) active multi-valued facts do not acquire correction dependencies [9.83ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: missing [9.78ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: expired [9.58ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: oversize [9.68ms]
+(pass) mutually contested confirmations preserve their dependency group at context limits [11.81ms]
+(pass) packing keeps C8 source references, scope, validity and contested status intact [10.20ms]
+(pass) default recall recovers qualified facts after a database restart [344.58ms]
+(pass) value queries retain the correction through aliases, crowding and restart [303.44ms]
+(pass) repeated evidence preserves corrected recall and the full ledger after restart [287.96ms]
+(pass) corrections, periods and source ledger survive default recall [10.76ms]
+
+src/vault/extractor.test.ts:
+Database initialized at: :memory:
+(pass) Vault Extractor > buildExtractionPrompt > should build prompt with user and assistant messages [10.09ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > parseExtractionResponse > should parse valid JSON response [9.98ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > parseExtractionResponse > should handle markdown code blocks [9.84ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > parseExtractionResponse > should return empty result on invalid JSON [11.57ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > parseExtractionResponse > should handle missing fields [12.22ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should return empty result when no provider given [11.37ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should extract and store entities [13.36ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should extract and store facts [10.82ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should extract and store relationships [11.40ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should extract and store commitments [9.86ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should reuse existing entities [10.55ms]
+Database initialized at: :memory:
+Invalid entity type: invalid_type, skipping entity Invalid
+(pass) Vault Extractor > extractAndStore > should handle invalid entity types [9.94ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > maps extracted entity sharing the profile name to the profile entity [13.39ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > maps entities flagged is_current_user/is_user (boolean or string) to the profile entity [10.68ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > prefers the profile entity even when a newer same-name duplicate exists [10.55ms]
+Database initialized at: :memory:
+Skipping user-representing entity "User": no user profile exists
+Subject entity not found: User, skipping fact
+(pass) Vault Extractor > extractAndStore user profile dedup > drops user-representing entities when no profile exists instead of creating ghosts [9.43ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > still creates unrelated entities normally alongside a profile [12.58ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > never resolves a conversation entity to a goal completion record [11.41ms]
+
+src/vault/vectors.test.ts:
+Database initialized at: :memory:
+(pass) vectors > storeVector > stores and returns the record [10.99ms]
+Database initialized at: :memory:
+(pass) vectors > storeVector > roundtrips embedding values through the BLOB column [10.00ms]
+Database initialized at: :memory:
+(pass) vectors > storeVector > roundtrips an embedding stored as an offset subarray view [9.68ms]
+Database initialized at: :memory:
+(pass) vectors > storeVector > replaces an existing (ref_type, ref_id, model) embedding [10.70ms]
+Database initialized at: :memory:
+(pass) vectors > storeVector > keeps embeddings from different models for the same ref [9.70ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > returns empty array when store is empty [10.16ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > ranks results by cosine similarity descending [9.99ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > respects the limit [10.97ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > filters by minScore [9.70ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > handles a zero-norm query without NaN [9.46ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > skips candidates whose dimensionality differs from the query [9.67ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > filters candidates by model when asked [9.67ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > labels each match with its model when scanning across models [10.57ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > excludes a given ref when asked [9.35ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > returns empty array when the source ref has no embedding [12.41ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > finds related refs without returning the source itself [10.71ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > filters the source lookup by model [10.49ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > only scores candidates from the same model as the source embedding [11.34ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > applies minScore to results [11.32ms]
+Database initialized at: :memory:
+(pass) vectors > deleteVectors > removes all embeddings for a ref [10.97ms]
+
+src/vault/approval-migration.test.ts:
+[Vault] Closed 2 approval(s) that were approved before execution receipts existed. Whether they ran is unknown, so none were run again; they read as closed in Authority.
+(pass) the upgrade closes approved rows written before receipts existed, once, and leaves everything else alone [316.43ms]
+[Vault] Closed 2 approval(s) that were approved before execution receipts existed. Whether they ran is unknown, so none were run again; they read as closed in Authority.
+(pass) the columns and the closure land together: a failed closure rolls the columns back [290.03ms]
+
+src/vault/conversation-lifecycle.test.ts:
+(pass) explicit chats retain separate identities, messages and tab state across a restart [284.87ms]
+(pass) unknown and foreign IDs are rejected by every scoped operation without changing state [13.74ms]
+(pass) closing a tab preserves messages and metadata; reopening restores its place [11.34ms]
+(pass) renames persist trimmed titles and reject stale revisions without losing another edit [12.10ms]
+(pass) tab ordering keeps closed slots stable and rejects incomplete or duplicate orders atomically [11.72ms]
+(pass) message cursors traverse equal timestamps exactly once and reject cross-chat or malformed reuse [11.61ms]
+(pass) history cursors use a timestamp and ID tie-breaker and are bound to their workspace and filter [12.86ms]
+(pass) legacy channel reuse and history restoration remain separate from explicit Brief chats [12.06ms]
+
+src/vault/memory-room.test.ts:
+Database initialized at: :memory:
+(pass) memory room — create chain > creates an entity, attaches a fact, and links a relationship [12.47ms]
+Database initialized at: :memory:
+(pass) memory room — create chain > findEntities filters by type and name substring [11.32ms]
+Database initialized at: :memory:
+(pass) memory room — create chain > voice "remember that" path: lookup-or-create entity then attach fact [11.76ms]
+Database initialized at: :memory:
+(pass) memory room — create chain > createFact rejects an unknown subject_id via FK constraint [9.35ms]
+
+src/vault/retrieval.test.ts:
+Database initialized at: :memory:
+(pass) extractSearchTerms filters stopwords [10.48ms]
+Database initialized at: :memory:
+(pass) extractSearchTerms deduplicates [9.58ms]
+Database initialized at: :memory:
+(pass) extractSearchTerms handles empty input [9.65ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage finds entities by name [10.05ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage finds entities via fact objects [10.11ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage includes facts for matched entities [9.72ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage includes relationships [10.95ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage returns empty for irrelevant query [9.42ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage includes current user profile for self queries [10.24ms]
+Database initialized at: :memory:
+(pass) formatKnowledgeContext formats entity with facts [11.99ms]
+Database initialized at: :memory:
+(pass) formatKnowledgeContext returns empty for no profiles [11.03ms]
+Database initialized at: :memory:
+(pass) getKnowledgeForMessage end-to-end [11.50ms]
+Database initialized at: :memory:
+(pass) getKnowledgeForMessage handles no matches gracefully [10.87ms]
+
+src/vault/skills.test.ts:
+Database initialized at: :memory:
+(pass) Vault - Skills > upsert inserts then updates by name, bumping version, and signs the row [10.97ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > getByName is case-insensitive; list respects enabled [9.97ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > recordSkillRun accumulates the successRate signal without breaking the MAC [10.31ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > a row whose steps were rewritten without the key reads as tampered and is not runnable [10.00ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > provenance and description are covered: relabelling a row invalidates it [10.06ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > one row's signed content cannot be moved into another row [11.15ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > a row with no MAC is unsigned, listed, never runnable [10.26ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > a different signing key rejects every row [9.98ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > matchSkills is URL/process-aware, not just message text, and skips tampered rows [11.46ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > delete removes the skill [10.21ms]
+
+src/workflows/adapters/untrusted-reach.test.ts:
+(pass) #573 premise 1: the reachable tool set is closed and known > the reachable set is exactly the reviewed table [0.09ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing is both reachable and refused as opaque [0.06ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the opaque refusals still include the navigate and shell family [0.08ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > each reachable tool is the untrusted source the table says, by real category [23.19ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the untrusted-source subset is the eight tools the decision is about [0.08ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > no source file outside the workflow runtime spells a workflowEffect declaration [2.53ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > a bounded tool name cannot be re-registered with different semantics [0.40ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing removes a tool from a registry in production [12.81ms]
+(pass) #573 premise 2: the routes out of the workflow data plane are enumerated > only the reviewed files outside src/workflows hold a run or a version object [14.19ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > an untrusted-source tool's result reaches the step unframed and byte-exact [1.08ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > a browser result reaches the step unframed too, matched by category [0.24ms]
+
+ui/src/brief/entry/route.test.ts:
+(pass) the default and non-exact flag values keep the released dashboard [0.23ms]
+(pass) all existing sidecar and dashboard destinations retain their route owner [0.17ms]
+(pass) onboarding reset owns the page even when a Brief URL was bookmarked [0.04ms]
+(pass) fixture mode requires both its explicit flag and isolated destination [0.10ms]
+(pass) every registered destination resolves without requiring another room's module [0.24ms]
+(pass) unknown or malformed Brief destinations use the existing safe fallback [0.08ms]
+(pass) source identities roundtrip without inventing a record or retaining unknown query keys [0.13ms]
+(pass) rollback removes only the Brief opt-in and preserves connection parameters [0.10ms]
+
+ui/src/brief/entry/DashboardEntry.test.tsx:
+(pass) flag off and legacy hash navigation retain one legacy mount and its connection owner [24.37ms]
+(pass) every current room and sidecar panel still resolves through the released router [27.77ms]
+(pass) isolated preview owns no live connection, fetch or onboarding side effects [31.35ms]
+(pass) real Brief entry remains behind the existing onboarding gate [2.47ms]
+(pass) missing modules give a truthful fallback instead of fabricated empty business data [10.88ms]
+(pass) room modules preserve shell state and selected source IDs through navigation [4.86ms]
+(pass) a fixture view cannot accidentally supply live room business data [2.05ms]
+
+1 tests skipped:
+(skip) keychain > JARVIS_HOME is where a fresh install stores its keychain
+
+ 396 pass
+ 1 skip
+ 0 fail
+ 1919 expect() calls
+Ran 397 tests across 37 files. [19.96s]
