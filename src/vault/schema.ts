@@ -2,6 +2,7 @@ import { Database } from "bun:sqlite";
 import { ensureSuggestionSchema } from './suggestion-schema.ts';
 import { ensureGoalEventSchema } from './goal-event-schema.ts';
 import { ensureFactSchema } from './fact-schema.ts';
+import { ensureConversationSchema } from './conversation-schema.ts';
 
 let dbInstance: Database | null = null;
 
@@ -330,6 +331,8 @@ function createTables(db: Database): void {
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_conv_msg_time ON conversation_messages(created_at)
   `);
+
+  ensureConversationSchema(db);
 
   // Content pipeline: items moving through creation stages
   db.run(`
