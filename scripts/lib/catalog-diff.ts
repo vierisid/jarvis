@@ -232,9 +232,10 @@ export function renderReport(
         : `the only entry changes are ${n} version bump${n === 1 ? "" : "s"} from npm`;
     p("> [!NOTE]");
     p(
-      `> **Safe to merge.** No pieces were added, removed, or relicensed and the ` +
-        `pinned SHA is unchanged -- ${bumps}. CI (catalog invariants + typecheck) ` +
-        `still gates this PR.`,
+      `> **Safe to merge.** No pieces were added, removed, or relicensed, no ` +
+        `verified piece moved, and the pinned SHA is unchanged -- ${bumps}. ` +
+        `Merge on a green Tests run only: the bumps still run the full suite, and ` +
+        `nothing blocks merging a red one (#664 was merged red).`,
     );
   } else {
     p("> [!WARNING]");

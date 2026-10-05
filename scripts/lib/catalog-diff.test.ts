@@ -144,6 +144,9 @@ describe("renderReport", () => {
     expect(verdict).toBe("safe");
     expect(markdown).toContain("> [!NOTE]");
     expect(markdown).toContain("Safe to merge");
+    // It used to say CI "still gates this PR", which nothing enforced.
+    expect(markdown).toContain("Merge on a green Tests run only");
+    expect(markdown).not.toContain("gates this PR");
     expect(markdown).toContain("`0.4.7` -> `0.4.8`");
     expect(markdown).not.toContain("[!WARNING]");
   });
