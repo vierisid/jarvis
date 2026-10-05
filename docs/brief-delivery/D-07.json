@@ -20,7 +20,7 @@
   "owns": ["ui/src/brief/today/**", "Optional room-local Today registration factory", "Stable goal companion extension to D-06", "Isolated review entry and its network guard", "docs/brief-delivery/D-07.*", "docs/brief-delivery/evidence/D-07/**"],
   "excludes": ["D-08 queue advancement and decision operation controller", "D-09 to D-11 production supporting cards", "Live decision adapters/writers or queue policy", "Conversation internals", "F/Q worktrees and persistence", "Live rollout"],
   "tests": [
-    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 103, "assertions": 2712, "files": 10},
+    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 106, "assertions": 2745, "files": 10},
     {"command": "bunx tsc --noEmit", "result": "pass"},
     {"command": "bun run build:ui", "result": "pass", "note": "Existing @theme/@tailwind warnings."},
     {"command": "git diff --check", "result": "pass"}
@@ -34,6 +34,14 @@
     {"case": "390px greeting/goal/hero separation, narrow chat return and reduced motion", "result": "pass"}
   ],
   "evidence": "evidence/D-07/browser-checks.json",
+  "review_corrections": {
+    "R1": "Closed companion wheel input reaches the main scroll owner; open-chat/nested scrolling, zoom and native value controls remain independent.",
+    "R2": "Review ref exists from mount; first-use Escape from a paper action restores visible Review focus.",
+    "red": {"tests": 11, "passed": 9, "failed": 2},
+    "green": {"tests": 106, "assertions": 2745, "failed": 0},
+    "browser": "Both-theme wheel checks, open-chat isolation, 20 Escape/re-hover cycles and 390px visible focus return. See reviewCorrections in the raw evidence.",
+    "screenshot": "evidence/D-07/review-fixes-narrow-focus.png"
+  },
   "limitations": [
     "Supporting cards and conversation bodies are isolated fixtures, not completed live feature implementations.",
     "Live decisions remain gated and default registration remains unchanged.",

@@ -328,5 +328,61 @@
     "Illustrative supporting cards/conversation only. No live approvals or workflows.",
     "Chromium, desktop and narrow container layouts. No touch, screen-reader or frame-rate certification.",
     "Browser focus adjusted the viewport scroll slightly during one click; size/identity remained stable."
-  ]
+  ],
+  "reviewCorrections": {
+    "build": "index-mw6nr0kc.js",
+    "red": {
+      "wheel": {
+        "before": 0,
+        "after": 0
+      },
+      "tests": {
+        "pass": 9,
+        "fail": 2
+      }
+    },
+    "checks": [
+      {
+        "case": "Desktop closed goal wheel",
+        "goalTop": 2.6666667461395264,
+        "scroll": 180
+      },
+      {
+        "case": "Open chat goal does not scroll Today",
+        "scroll": 180
+      },
+      {
+        "case": "light Escape and fresh-pointer rehover",
+        "passed": 10
+      },
+      {
+        "case": "dark Escape and fresh-pointer rehover",
+        "passed": 10
+      },
+      {
+        "case": "Dark desktop closed goal wheel",
+        "scroll": 150
+      },
+      {
+        "case": "390px first-use Escape returns visible Review",
+        "focused": true,
+        "raised": "false",
+        "reviewBottom": 270.6354217529297,
+        "reviewOpen": false,
+        "reviewTop": 230.6354217529297,
+        "viewportTop": 230.6666717529297,
+        "visibleWithinPixel": true,
+        "note": "Native scroll alignment differs by 0.032 CSS pixels; visibility tolerance is 0.5px."
+      }
+    ],
+    "tests": {
+      "pass": 106,
+      "fail": 0,
+      "assertions": 2745
+    },
+    "limitations": [
+      "Native wheel and keyboard checks in Chromium; no new touch or cross-browser claim.",
+      "Re-hover cycles include fresh pointer movement, as required by the existing stationary-pointer suppression."
+    ]
+  }
 }
