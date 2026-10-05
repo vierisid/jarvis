@@ -1,0 +1,22 @@
+bun test v1.3.6 (d530ed99)
+
+src/daemon/api-brief.test.ts:
+2 | import { createApiRoutes, type ApiContext } from './api-routes.ts';
+3 |
+4 | test('Brief capabilities are registered with every feature disabled by default', async () => {
+5 |   const routes = createApiRoutes({} as ApiContext);
+6 |   const route = routes['/api/brief/capabilities'] as { GET: () => Response } | undefined;
+7 |   expect(route).toBeDefined();
+                    ^
+error: expect(received).toBeDefined()
+
+Received: undefined
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-01/src/daemon/api-brief.test.ts:7:17)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-01/src/daemon/api-brief.test.ts:4:82)
+(fail) Brief capabilities are registered with every feature disabled by default [18.18ms]
+
+ 0 pass
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [491.00ms]
