@@ -1,0 +1,231 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/provider.test.tsx:
+[WS] Connected
+141 |   const ref = { conversationId: 'chat-a', turnId: 'failed-turn', requestId: 'failed-request' };
+142 |   await React.act(async () => {
+143 |     socket.receive('brief_chat_event', { ...ref, eventId: 'partial', sequence: 1, payload: { kind: 'delta', messageId: 'answer', text: 'Partial response' } });
+144 |     socket.receive('brief_chat_event', { ...ref, eventId: 'failure', sequence: 2, payload: { kind: 'terminal', state: 'failed', error: { code: 'generation_failed', message: 'Please try again.' } } });
+145 |   });
+146 |   expect(observed.current?.error).toBe('Please try again.');
+                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "Please try again."
+Received: null
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-04/ui/src/brief/chat/provider.test.tsx:146:35)
+(fail) an accepted failed response exposes its explanation and never projects partial output as done [73.85ms]
+
+ui/src/brief/chat/client.test.ts:
+232 |   while (page.hasMore) page = f.sync(a);
+233 |   const expected = f.repository.messages(a, { limit: 100 }).items;
+234 |   // Older delta events do not carry timestamps, so compare canonical identities,
+235 |   // order, roles and complete text. Snapshot/history rows keep their exact dates.
+236 |   const transcript = (rows: typeof expected) => rows.map(({ id, role, content }) => ({ id, role, content }));
+237 |   expect(transcript(f.client.store.getSnapshot().conversations[a]!.messages)).toEqual(transcript(expected));
+                                                                                    ^
+error: expect(received).toEqual(expected)
+
+  [
+    {
+      "content": "Question before",
+      "id": "188f9576-f669-481c-879b-c3e96dd282ee",
+      "role": "user",
+    },
+    {
+      "content": "Answer before",
+      "id": "30673efc-d6eb-4636-bc53-8ae04ab3eae0",
+      "role": "assistant",
+    },
+    {
+-     "content": "Offline 0",
+-     "id": "bc70920a-5e4c-43ca-a835-c41799e7ea3f",
+-     "role": "user",
+-   },
+-   {
+-     "content": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+-     "id": "01dcd593-e28c-45e8-b626-2a5851d4b416",
+-     "role": "assistant",
+-   },
+-   {
+      "content": "Offline 1",
+      "id": "189a732a-49a0-4404-8f0a-27282d4f1088",
+      "role": "user",
+    },
+    {
+      "content": "x",
+      "id": "2bab1dbc-fbda-4bf4-bed5-a4c12c5be030",
+      "role": "assistant",
+    },
+    {
+      "content": "Offline 2",
+      "id": "d81ef336-7bf3-48fd-bcb2-80ab2fb5614e",
+      "role": "user",
+    },
+    {
+      "content": "x",
+      "id": "364c5046-85d1-41f7-914c-85ef53d71ff4",
+      "role": "assistant",
+    },
+    {
+      "content": "Offline 3",
+      "id": "9d2e1d80-0c7e-4a15-ade3-c5e60d95fa8c",
+      "role": "user",
+    },
+    {
+      "content": "x",
+      "id": "9c58e040-c997-4028-9ae5-fb5554daf87d",
+      "role": "assistant",
+    },
+    {
+      "content": "Offline 4",
+      "id": "b989326e-f2b6-4b6b-8c5d-399bcde0c73f",
+      "role": "user",
+    },
+    {
+      "content": "x",
+      "id": "bb85ea2b-d7bf-4582-bf02-0adbf50b0611",
+      "role": "assistant",
+    },
+    {
+      "content": "Offline 5",
+      "id": "bbd5237d-a23f-49b3-bc42-1b97c49e4d76",
+      "role": "user",
+    },
+    {
+      "content": "x",
+      "id": "1a335974-48a2-4b61-8990-c292dcbb5875",
+      "role": "assistant",
+    },
+  ]
+
+- Expected  - 10
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-04/ui/src/brief/chat/client.test.ts:237:79)
+(fail) reconnect fills missed history beyond the snapshot tail across replay pages [148.94ms]
+250 |   for (let i = 0; i < 51; i++) {
+251 |     const input = { conversationId: a, turnId: `later-${i}`, requestId: `later-request-${i}`, text: 'Later' };
+252 |     f.turns.accept(input); f.turns.start(input); f.turns.text(input, 'Done'); f.turns.finish(input, 'completed');
+253 |   }
+254 |   await f.open();
+255 |   expect(f.client.store.getSnapshot().conversations[a]?.turns[first.turnId]?.state).toBe('completed');
+                                                                                          ^
+error: expect(received).toBe(expected)
+
+Expected: "completed"
+Received: "running"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-04/ui/src/brief/chat/client.test.ts:255:85)
+(fail) replay completes an old cached running turn outside the latest fifty turns [101.33ms]
+261 |   const ref = f.client.send(a, 'Fail after partial output');
+262 |   f.turns.accept({ ...ref, text: 'Fail after partial output' }).events.forEach(f.emit);
+263 |   f.emit(f.turns.start(ref)); f.emit(f.turns.text(ref, 'Partial'));
+264 |   const failure = { code: 'generation_failed', message: 'This response could not finish.' };
+265 |   f.emit(f.turns.finish(ref, 'failed', failure));
+266 |   expect(f.client.store.getSnapshot().conversations[a]?.turns[ref.turnId]).toMatchObject({ state: 'failed', error: failure });
+                                                                                 ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "error": {
+-     "code": "generation_failed",
+-     "message": "This response could not finish.",
+-   },
++   "assistantMessageId": "b54877a1-f87c-4f32-b0fe-7549c4ae4b72",
++   "conversationId": "474a683a-8d01-4592-8ffb-ef4e37190224",
++   "createdAt": 1791233489935,
++   "requestId": "4d7744fc-2502-4c60-b20d-25cc47cf162a",
+    "state": "failed",
++   "turnId": "f9aef3f4-d6cb-40c1-9cf3-27f85d30aea2",
+  }
+
+- Expected  - 4
++ Received  + 5
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-04/ui/src/brief/chat/client.test.ts:266:76)
+(fail) failed turn details survive live delivery, reconnect and a daemon restart [39.70ms]
+303 |   f.client.store.setDraft(a, 'Send this');
+304 |   const second = new BriefConversationClient(f.api, storage); cleanups.push(() => second.stop()); await second.start();
+305 |   const input = f.client.send(a, 'Send this');
+306 |   second.store.setDraft(a, 'New question in the other window');
+307 |   f.turns.accept({ ...input, text: 'Send this' }).events.forEach(f.emit);
+308 |   expect(f.client.store.getSnapshot().conversations[a]?.draft).toBe('New question in the other window');
+                                                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "New question in the other window"
+Received: ""
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-04/ui/src/brief/chat/client.test.ts:308:64)
+(fail) acceptance in a stale window preserves a newer draft saved by another window [37.99ms]
+
+ui/src/brief/chat/store.test.ts:
+118 |   first.setDraft('a', 'New draft in first window');
+119 |   first.setAttachments('a', [{ attachmentId: 'file-a', name: 'A', size: 1, mediaType: 'text/plain' }]);
+120 |   second.setScroll('a', { top: 200, atBottom: false });
+121 |   second.applyEvent(event(1, { kind: 'delta', messageId: 'background', text: 'B update' }, 'b'), 10);
+122 |   second.setDraft('b', 'Independent B draft');
+123 |   expect(fixture(storage).getSnapshot().conversations.a?.draft).toBe('New draft in first window');
+                                                                      ^
+error: expect(received).toBe(expected)
+
+Expected: "New draft in first window"
+Received: ""
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-04/ui/src/brief/chat/store.test.ts:123:65)
+(fail) other windows cannot overwrite a saved draft or attachment by scrolling or receiving events [1.12ms]
+139 |   const records = new Map([[key, legacy]]);
+140 |   const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); } };
+141 |   const first = fixture(storage), second = fixture(storage);
+142 |   expect(first.getSnapshot().conversations.a?.draft).toBe('Legacy draft');
+143 |   first.setDraft('a', 'Updated'); second.setScroll('a', { top: 10, atBottom: false });
+144 |   expect(fixture(storage).getSnapshot().conversations.a).toMatchObject({ draft: 'Updated', scroll: { top: 10 } });
+                                                               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "draft": "Updated",
++   "activity": {},
++   "approvals": {},
++   "attachments": [],
++   "conversation": {
++     "conversationId": "a",
++     "lastMessageAt": null,
++     "revision": "1",
++     "tab": {
++       "open": true,
++       "order": 0,
++     },
++     "title": "a",
++     "workspaceId": "workspace",
++   },
++   "draft": "Legacy draft",
++   "error": null,
++   "history": {
++     "cursor": null,
++     "state": "idle",
++   },
++   "messages": [],
++   "readSequence": 0,
+    "scroll": {
++     "atBottom": false,
+      "top": 10,
+    },
++   "sequence": 0,
++   "turns": {},
++   "unread": [],
+  }
+
+- Expected  - 1
++ Received  + 26
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-04/ui/src/brief/chat/store.test.ts:144:58)
+(fail) legacy drafts remain readable while new field writes preserve concurrent edits [0.71ms]
+
+ 0 pass
+ 26 filtered out
+ 7 fail
+ 10 expect() calls
+Ran 7 tests across 3 files. [-0.55s]

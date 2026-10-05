@@ -4,7 +4,7 @@ import type { ConversationTabs } from '../../../../src/vault/conversation-lifecy
 import type { ChatTurnRepository } from '../../../../src/vault/chat-turns';
 
 export type ChatSnapshot = ReturnType<ChatTurnRepository['snapshot']> & { subscribed: boolean };
-export type ChatTurn = BriefTurnRef & { state: BriefTurnState; createdAt: number; assistantMessageId?: string };
+export type ChatTurn = BriefTurnRef & { state: BriefTurnState; createdAt: number; assistantMessageId?: string; error?: { code: string; message: string } };
 /** References only. F-05 owns file bytes, upload validation and submission binding. */
 export interface ChatAttachment { attachmentId: string; name: string; size: number; mediaType: string }
 export interface ChatScroll { top: number; atBottom: boolean }
@@ -33,8 +33,9 @@ export interface ChatStoreState {
 }
 type StoragePort = Pick<Storage, 'getItem' | 'setItem'>;
 type LocalState = Pick<ConversationState, 'draft' | 'attachments' | 'scroll' | 'unread' | 'readSequence'>;
-type Projection = { messages: ConversationMessage[]; turns: Record<string, ChatTurn> };
+type Projection = { messages: ConversationMessage[]; turns: Record<string, ChatTurn>; messageSequences: Map<string, number>; historyIds: Set<string> };
 type Replay = { sequence: number; base: Projection; events: Map<string, BriefChatEvent> };
+const localFields = ['draft', 'attachments', 'scroll', 'unread', 'readSequence'] as const;
 const terminal = (state: BriefTurnState) => ['completed', 'failed', 'cancelled'].includes(state);
 const compareMessages = (a: ConversationMessage, b: ConversationMessage) => a.created_at - b.created_at || a.id.localeCompare(b.id);
 const emptyLocal = (): LocalState => ({ draft: '', attachments: [], scroll: { top: 0, atBottom: true }, unread: [], readSequence: 0 });
@@ -47,27 +48,53 @@ export class ConversationStore {
   private replay = new Map<string, Replay>();
   private saved: Record<string, LocalState> = dictionary();
   private storageKey = '';
+  private requestErrors = new Map<string, string>();
+  private dismissedFailures = new Map<string, string>();
   constructor(private readonly storage?: StoragePort) {}
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
 
   private publish(persist = false) {
     if (persist && this.storage && this.storageKey) {
-      for (const [id, chat] of Object.entries(this.state.conversations)) {
-        const { draft, attachments, scroll, unread, readSequence } = chat;
-        this.saved[id] = { draft, attachments, scroll, unread, readSequence };
-      }
       try {
-        this.storage.setItem(this.storageKey, JSON.stringify({ version: 1, conversations: this.saved }));
+        for (const [id, chat] of Object.entries(this.state.conversations)) {
+          const saved = this.saved[id] ?? emptyLocal();
+          for (const field of localFields) {
+            // Each actual field edit is one atomic storage write. Another window's
+            // draft cannot be replaced by this window's stream/scroll/read updates.
+            const value = JSON.stringify(chat[field]);
+            if (value !== JSON.stringify(saved[field])) {
+              this.storage.setItem(this.fieldKey(id, field), value);
+              this.saved[id] = { ...(this.saved[id] ?? saved), [field]: chat[field] };
+            }
+          }
+        }
         this.state = { ...this.state, persistenceError: null };
       } catch { this.state = { ...this.state, persistenceError: 'Chat changes are kept in this window but could not be saved on this device.' }; }
     }
     for (const listener of this.listeners) listener();
   }
 
+  private fieldKey(id: string, field: keyof LocalState) {
+    return `${this.storageKey}.field.${encodeURIComponent(id)}.${field}`;
+  }
+
+  private localState(id: string): LocalState {
+    let local = this.saved[id] ?? emptyLocal();
+    for (const field of localFields) {
+      try {
+        const raw = this.storage?.getItem(this.fieldKey(id, field));
+        if (raw != null) local = readLocal({ ...local, [field]: JSON.parse(raw) }) ?? local;
+      } catch { /* Preserve other fields and the legacy fallback if one key is corrupt. */ }
+    }
+    this.saved[id] = local;
+    return local;
+  }
+
   restoreTabs(tabs: ConversationTabs) {
     if (this.state.workspaceId !== tabs.workspaceId) {
       this.replay.clear(); this.saved = dictionary();
+      this.requestErrors.clear(); this.dismissedFailures.clear();
       this.state = { ...this.state, workspaceId: tabs.workspaceId, conversations: dictionary(), persistenceError: null };
       this.storageKey = `jarvis.brief.chat.v1.${encodeURIComponent(tabs.workspaceId)}`;
       try {
@@ -95,9 +122,9 @@ export class ConversationStore {
 
   private entry(conversation: BriefConversation, existing?: ConversationState): ConversationState {
     if (existing) return { ...existing, conversation };
-    this.replay.set(conversation.conversationId, { sequence: 0, base: { messages: [], turns: dictionary() }, events: new Map() });
+    this.replay.set(conversation.conversationId, { sequence: 0, base: { messages: [], turns: dictionary(), messageSequences: new Map(), historyIds: new Set() }, events: new Map() });
     return { conversation, messages: [], turns: dictionary(), activity: dictionary(), approvals: dictionary(),
-      ...(this.saved[conversation.conversationId] ?? emptyLocal()), sequence: 0, error: null, history: { state: 'idle', cursor: null } };
+      ...this.localState(conversation.conversationId), sequence: 0, error: null, history: { state: 'idle', cursor: null } };
   }
   putConversation(conversation: BriefConversation, select = false) {
     if (conversation.workspaceId !== this.state.workspaceId) throw new Error('Conversation workspace mismatch');
@@ -120,14 +147,39 @@ export class ConversationStore {
   }
   setVisible(visible: boolean) { this.state = { ...this.state, visible }; this.markViewed(); this.publish(true); }
   setDraft(id: string, draft: string) { this.update(id, { draft }); }
-  setError(id: string, error: string | null) { this.update(id, { error }, false); }
+  acceptDraft(id: string, text: string) {
+    if (this.state.conversations[id]?.draft !== text) return;
+    try {
+      const raw = this.storage?.getItem(this.fieldKey(id, 'draft'));
+      const saved = raw == null ? text : JSON.parse(raw);
+      if (typeof saved === 'string' && saved !== text) {
+        // Acceptance in this window must not erase a newer edit saved elsewhere.
+        this.saved[id] = { ...(this.saved[id] ?? emptyLocal()), draft: saved };
+        this.update(id, { draft: saved }, false);
+        return;
+      }
+    } catch { return; /* Keep the draft if its latest saved value cannot be checked. */ }
+    this.setDraft(id, '');
+  }
+  setError(id: string, error: string | null) {
+    if (error === null) this.requestErrors.delete(id); else this.requestErrors.set(id, error);
+    this.update(id, {}, false);
+  }
+  dismissError(id: string) {
+    const turn = latestTurn(this.state.conversations[id]?.turns ?? {});
+    if (turn) this.dismissedFailures.set(id, turn.turnId);
+    this.setError(id, null);
+  }
   setAttachments(id: string, attachments: ChatAttachment[]) {
     this.update(id, { attachments: attachments.map(({ attachmentId, name, size, mediaType }) => ({ attachmentId, name, size, mediaType })) });
   }
   setScroll(id: string, scroll: ChatScroll) { this.update(id, { scroll: { top: Math.max(0, Number.isFinite(scroll.top) ? scroll.top : 0), atBottom: scroll.atBottom } }); }
   private update(id: string, patch: Partial<ConversationState>, persist = true) {
     const chat = this.state.conversations[id]; if (!chat) return;
-    this.state = { ...this.state, conversations: { ...this.state.conversations, [id]: { ...chat, ...patch } } };
+    const updated = { ...chat, ...patch }, turn = latestTurn(updated.turns);
+    updated.error = this.requestErrors.get(id) ?? (turn?.state === 'failed' && this.dismissedFailures.get(id) !== turn.turnId
+      ? turn.error?.message ?? 'This response could not finish. You can send a new message to try again.' : null);
+    this.state = { ...this.state, conversations: { ...this.state.conversations, [id]: updated } };
     this.markViewed(); this.publish(persist);
   }
   private markViewed() {
@@ -144,26 +196,32 @@ export class ConversationStore {
     if (replay.events.has(event.eventId)) return false;
     if (event.sequence > replay.sequence) replay.events.set(event.eventId, event);
     const metadata = this.metadata(chat, [event]);
-    const projected = project(replay, timestamp);
+    const { messageSequences: _watermarks, historyIds: _history, ...projected } = project(replay, timestamp);
     this.update(id, { ...metadata, ...projected, sequence: Math.max(chat.sequence, event.sequence) });
     return replay.events.size >= 500;
   }
   applySnapshot(snapshot: ChatSnapshot) {
     const id = snapshot.conversationId, chat = this.state.conversations[id], replay = this.replay.get(id);
     if (!chat || !replay) return;
-    if (snapshot.sequence >= replay.sequence) {
-      // Fold the known prefix before trimming it, including rows older than the latest ten.
-      const prefix = project({ ...replay, events: new Map([...replay.events].filter(([, event]) => event.sequence <= snapshot.sequence)) }, Date.now());
+    if (snapshot.nextSequence >= replay.sequence) {
+      for (const event of snapshot.events) if (event.sequence > replay.sequence) replay.events.set(event.eventId, event);
+      // Only compact the replay prefix actually delivered, not the snapshot's
+      // later watermark. Subsequent pages may contain messages outside its tail.
+      const prefix = project({ ...replay, events: new Map([...replay.events].filter(([, event]) => event.sequence <= snapshot.nextSequence)) }, Date.now());
       const messages = new Map(prefix.messages.map(row => [row.id, row]));
-      for (const row of snapshot.messages.items) messages.set(row.id, row);
+      for (const row of snapshot.messages.items) if (snapshot.sequence >= (prefix.messageSequences.get(row.id) ?? 0)) {
+        messages.set(row.id, row); prefix.messageSequences.set(row.id, snapshot.sequence);
+        prefix.historyIds.delete(row.id);
+      }
       const turns = { ...prefix.turns };
-      for (const turn of snapshot.turns) turns[turn.turnId] = turn;
-      replay.base = { messages: [...messages.values()].sort(compareMessages), turns };
-      replay.sequence = snapshot.sequence;
-      for (const [key, event] of replay.events) if (event.sequence <= snapshot.sequence) replay.events.delete(key);
+      for (const turn of snapshot.turns) turns[turn.turnId] = { ...turns[turn.turnId], ...turn };
+      replay.base = { messages: [...messages.values()].sort(compareMessages), turns, messageSequences: prefix.messageSequences, historyIds: prefix.historyIds };
+      replay.sequence = snapshot.nextSequence;
+      for (const [key, event] of replay.events) if (event.sequence <= snapshot.nextSequence) replay.events.delete(key);
     }
     const metadata = this.metadata(chat, snapshot.events);
-    this.update(id, { ...metadata, ...project(replay, Date.now()), sequence: Math.max(chat.sequence, snapshot.sequence),
+    const { messageSequences: _watermarks, historyIds: _history, ...projected } = project(replay, Date.now());
+    this.update(id, { ...metadata, ...projected, sequence: Math.max(chat.sequence, snapshot.sequence),
       // A reconnect must not rewind the older-history cursor already consumed by the reader.
       history: chat.history.state === 'idle' ? { state: 'ready', cursor: snapshot.messages.nextCursor } : chat.history });
   }
@@ -186,30 +244,52 @@ export class ConversationStore {
     // History has no event watermark. It can fill gaps, never replace a row updated by a stream/snapshot.
     const liveIds = new Set(this.state.conversations[id]?.messages.map(row => row.id));
     const messages = new Map(page.items.filter(row => !liveIds.has(row.id)).map(row => [row.id, row]));
+    for (const messageId of messages.keys()) replay.base.historyIds.add(messageId);
     for (const row of replay.base.messages) messages.set(row.id, row);
     replay.base = { ...replay.base, messages: [...messages.values()].sort(compareMessages) };
-    this.update(id, { ...project(replay, Date.now()), history: { state: 'ready', cursor: page.nextCursor } }, false);
+    const { messageSequences: _watermarks, historyIds: _history, ...projected } = project(replay, Date.now());
+    this.update(id, { ...projected, history: { state: 'ready', cursor: page.nextCursor } }, false);
   }
 }
 
 function project(replay: Replay, timestamp: number): Projection {
   const messages = new Map(replay.base.messages.map(row => [row.id, row]));
+  const messageSequences = new Map(replay.base.messageSequences);
+  const historyIds = new Set(replay.base.historyIds);
   const turns = { ...replay.base.turns };
   for (const event of [...replay.events.values()].sort((a, b) => a.sequence - b.sequence)) {
     const { conversationId, turnId, requestId, payload } = event;
     const turn: ChatTurn = turns[turnId] ?? { conversationId, turnId, requestId, state: 'queued', createdAt: timestamp };
     if (payload.kind === 'message') {
       const row = payload.message;
-      messages.set(row.messageId, { id: row.messageId, conversation_id: conversationId, role: row.role, content: row.content, created_at: row.createdAt, tool_calls: null });
+      if (event.sequence > (messageSequences.get(row.messageId) ?? 0)) {
+        messages.set(row.messageId, { id: row.messageId, conversation_id: conversationId, role: row.role, content: row.content, created_at: row.createdAt, tool_calls: null });
+        messageSequences.set(row.messageId, event.sequence);
+        historyIds.delete(row.messageId);
+      }
       turns[turnId] = { ...turn, createdAt: row.createdAt };
     } else if (payload.kind === 'delta') {
+      // REST rows have no sequence. If replay reaches a history-only answer,
+      // reconstruct it from its events rather than appending to its full text.
+      if (historyIds.delete(payload.messageId)) {
+        const historical = messages.get(payload.messageId);
+        if (historical) messages.set(payload.messageId, { ...historical, content: '' });
+      }
       const row = messages.get(payload.messageId) ?? { id: payload.messageId, conversation_id: conversationId, role: 'assistant' as const, content: '', created_at: turn.createdAt + 1, tool_calls: null };
-      messages.set(row.id, { ...row, content: row.content + payload.text });
+      if (event.sequence > (messageSequences.get(row.id) ?? 0)) {
+        messages.set(row.id, { ...row, content: row.content + payload.text });
+        messageSequences.set(row.id, event.sequence);
+      }
       turns[turnId] = { ...turn, assistantMessageId: row.id };
     } else if (payload.kind === 'status' && !terminal(turn.state)) turns[turnId] = { ...turn, state: payload.state };
-    else if (payload.kind === 'terminal') turns[turnId] = { ...turn, state: payload.state };
+    else if (payload.kind === 'terminal') turns[turnId] = { ...turn, state: payload.state, error: payload.error };
   }
-  return { messages: [...messages.values()].sort(compareMessages), turns };
+  return { messages: [...messages.values()].sort(compareMessages), turns, messageSequences, historyIds };
+}
+
+function latestTurn(turns: Record<string, ChatTurn>) {
+  return Object.values(turns).reduce<ChatTurn | undefined>((latest, turn) => !latest || turn.createdAt > latest.createdAt
+    || (turn.createdAt === latest.createdAt && turn.turnId > latest.turnId) ? turn : latest, undefined);
 }
 
 function readLocal(value: unknown): LocalState | null {

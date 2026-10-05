@@ -135,3 +135,15 @@ test('browser visibility and panel visibility jointly determine whether the acti
     expect(sockets).toHaveLength(1);
   } finally { Reflect.deleteProperty(document, 'visibilityState'); }
 });
+
+test('an accepted failed response exposes its explanation and never projects partial output as done', async () => {
+  const { client } = clientFixture(); await render(client); const socket = sockets[0]!; await open(socket);
+  const ref = { conversationId: 'chat-a', turnId: 'failed-turn', requestId: 'failed-request' };
+  await React.act(async () => {
+    socket.receive('brief_chat_event', { ...ref, eventId: 'partial', sequence: 1, payload: { kind: 'delta', messageId: 'answer', text: 'Partial response' } });
+    socket.receive('brief_chat_event', { ...ref, eventId: 'failure', sequence: 2, payload: { kind: 'terminal', state: 'failed', error: { code: 'generation_failed', message: 'Please try again.' } } });
+  });
+  expect(observed.current?.error).toBe('Please try again.');
+  expect(observed.items.find(item => item.id === 'answer')).toMatchObject({ text: 'Partial response', status: 'failed' });
+  expect(observed.isResponding).toBe(false);
+});

@@ -24,6 +24,13 @@ temporary SQLite, an OS-assigned local port and a deterministic fake model. It
 checks two separate histories, reconnect, reopen, reload and exactly two executions.
 No live daemon, account, model, paid service or user database is used.
 
+Expected: **35 focused tests pass**. Review regressions cover a missed answer split
+across replay pages outside the latest-ten snapshot, a cached running turn outside
+the latest fifty turns, history loaded before subscription, two windows sharing
+storage, legacy draft recovery, and generation/restart errors. Seven cases fail
+on the original F-04 commit and pass with the review fixes. See the retained
+`docs/brief-delivery/evidence/F-04/review-{red,green,affected}.log` files.
+
 ## Integration contract
 
 Mount `BriefConversationProvider` exactly once under the existing authenticated,
@@ -64,6 +71,11 @@ Operations:
   state belongs to that same chat. Late REST pages cannot overwrite streamed rows
   or change selection. Failed history stays retryable. Scoped send/sync errors
   live in that conversation's `error`, so a late failure in A cannot become B's error.
+- Terminal failures retain their safe `{ code, message }` on the affected turn.
+  `current.error` exposes the latest failed turn, including after replay/restart;
+  starting another send dismisses that banner without deleting the turn's error.
+  Failed/cancelled partial answers carry `failed`/`cancelled` in `items`, rather
+  than `done`. Presentation owners can render `item.error` or `current.error`.
 - `send(text)` captures the active ID at invocation. An uncertain send retains its
   exact conversation/turn/request IDs and text for reconnect; accepted sends are
   reconciled without another execution. An unchanged matching draft clears only
@@ -83,6 +95,12 @@ use `speak: false`; voice presentation and scoped audio playback are not activat
 Selection, tab visibility/order and messages remain authoritative in F-02/F-03.
 Drafts, attachment references, scroll, unread IDs and read watermarks use
 origin-local browser storage under `jarvis.brief.chat.v1.<server workspace ID>`.
+Each changed field uses its own `.field.<conversation ID>.<field>` key, so an
+unrelated scroll, read update or incoming event in another window cannot rewrite
+a draft. The last actual write to the same field wins; windows do not provide
+collaborative text editing. Send acceptance checks the latest saved draft before
+clearing its matching local copy. Existing aggregate v1 records remain readable
+as a fallback and are never rewritten or deleted by the new writer.
 There is no copied transcript, file body, audio or tool output in that storage.
 This is device-local composer state, not cross-device draft synchronization.
 Closed conversations keep their draft and cached history; the server retains the
@@ -97,11 +115,14 @@ pages continue from `nextSequence` until `subscribed: true`. Each request is
 correlated to its own sync ID; stale pages cannot reopen a closed tab. Checkpoints
 advance only after a completed sync, and are kept in memory with their projection.
 
-Snapshot messages are canonical as of `sequence`. The store folds known earlier
-events into its base, replaces snapshot rows by ID, and reapplies only newer
-events. Reordered live events are projected in sequence order; gaps are valid.
-Replay at or below the snapshot watermark updates metadata without adding text a
-second time. History reads can fill missing rows but cannot replace newer content.
+Snapshot messages are canonical as of `sequence`. Replay compaction advances only
+to the delivered page's `nextSequence`, preserving later pages even when their
+events precede the snapshot watermark. Each canonical message has its own sequence
+watermark, so covered text is not appended twice while older missed messages and
+terminal events still replay. Reordered live events are projected in sequence
+order; gaps are valid. History-only rows are reconstructed when replay reaches
+them, preserving their canonical timestamps without duplicating their full text.
+History reads can fill missing rows but cannot replace newer streamed content.
 Old socket handlers and asynchronous results are fenced after disconnect/unmount.
 
 ## Activation and rollback

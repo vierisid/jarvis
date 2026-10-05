@@ -110,3 +110,52 @@ test('compacting a stream retains older locally received messages outside the sn
   store.applySnapshot(snapshot(5, 'Latest answer'));
   expect(store.getSnapshot().conversations.a?.messages.map(m => m.content)).toEqual(['Keep this history', 'Latest answer']);
 });
+
+test('other windows cannot overwrite a saved draft or attachment by scrolling or receiving events', () => {
+  const records = new Map<string, string>();
+  const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); } };
+  const first = fixture(storage), second = fixture(storage);
+  first.setDraft('a', 'New draft in first window');
+  first.setAttachments('a', [{ attachmentId: 'file-a', name: 'A', size: 1, mediaType: 'text/plain' }]);
+  second.setScroll('a', { top: 200, atBottom: false });
+  second.applyEvent(event(1, { kind: 'delta', messageId: 'background', text: 'B update' }, 'b'), 10);
+  second.setDraft('b', 'Independent B draft');
+  expect(fixture(storage).getSnapshot().conversations.a?.draft).toBe('New draft in first window');
+  first.setVisible(true);
+  let restored = fixture(storage);
+  expect(restored.getSnapshot().conversations.a?.draft).toBe('New draft in first window');
+  expect(restored.getSnapshot().conversations.a?.attachments[0]?.attachmentId).toBe('file-a');
+  expect(restored.getSnapshot().conversations.a?.scroll.top).toBe(200);
+  expect(restored.getSnapshot().conversations.b?.draft).toBe('Independent B draft');
+  // An explicit edit to the same field wins, but unrelated later writes cannot undo it.
+  second.setDraft('a', 'Latest explicit edit'); first.setScroll('b', { top: 5, atBottom: false });
+  restored = fixture(storage);
+  expect(restored.getSnapshot().conversations.a?.draft).toBe('Latest explicit edit');
+});
+
+test('legacy drafts remain readable while new field writes preserve concurrent edits', () => {
+  const key = 'jarvis.brief.chat.v1.workspace';
+  const legacy = JSON.stringify({ version: 1, conversations: { a: { draft: 'Legacy draft', attachments: [], scroll: { top: 3, atBottom: false }, unread: [], readSequence: 0 } } });
+  const records = new Map([[key, legacy]]);
+  const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); } };
+  const first = fixture(storage), second = fixture(storage);
+  expect(first.getSnapshot().conversations.a?.draft).toBe('Legacy draft');
+  first.setDraft('a', 'Updated'); second.setScroll('a', { top: 10, atBottom: false });
+  expect(fixture(storage).getSnapshot().conversations.a).toMatchObject({ draft: 'Updated', scroll: { top: 10 } });
+  expect(records.get(key)).toBe(legacy);
+});
+
+test('replayed failure stays scoped and does not replace a later successful turn', () => {
+  const store = fixture();
+  const failure = event(2, { kind: 'terminal', state: 'failed', error: { code: 'failed', message: 'Old failure' } });
+  store.applyEvent(event(1, { kind: 'message', message: { conversationId: 'a', turnId: 'turn-a', requestId: 'request-a', messageId: 'user', role: 'user', content: 'First', createdAt: 1 } }), 1);
+  store.applyEvent(failure, 1);
+  store.select('b');
+  expect(store.getSnapshot().conversations.b?.error).toBeNull();
+  const next = { conversationId: 'a', turnId: 'next', requestId: 'next-request' };
+  store.applyEvent({ ...next, eventId: 'next-user', sequence: 3, payload: { kind: 'message', message: { ...next, messageId: 'next-user', role: 'user', content: 'Again', createdAt: 3 } } }, 3);
+  store.applyEvent({ ...next, eventId: 'next-done', sequence: 4, payload: { kind: 'terminal', state: 'completed' } }, 3);
+  store.applyEvent(failure, 1);
+  expect(store.getSnapshot().conversations.a?.error).toBeNull();
+  expect(store.getSnapshot().conversations.a?.turns['turn-a']?.error?.message).toBe('Old failure');
+});

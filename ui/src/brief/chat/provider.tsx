@@ -25,7 +25,13 @@ function useBriefLiveThread(client: BriefConversationClient, enabled: boolean, c
     id: row.id, role: row.role, content: row.content, timestamp: row.created_at,
     isStreaming: Object.values(current?.turns ?? {}).some(turn => turn.assistantMessageId === row.id && (turn.state === 'queued' || turn.state === 'running')),
   }));
-  const items = messages.map(messageToThreadItem).filter(item => item !== null).map(({ __ts: _time, ...item }) => item);
+  const items = messages.map(messageToThreadItem).filter(item => item !== null).map(({ __ts: _time, ...item }) => {
+    const turn = status.mode === 'scoped' && Object.values(current?.turns ?? {}).find(turn => turn.assistantMessageId === item.id);
+    if (item.kind === 'jarvis-speech' && turn && (turn.state === 'failed' || turn.state === 'cancelled')) {
+      return { ...item, status: turn.state, error: turn.error?.message };
+    }
+    return item;
+  });
   return {
     status, state, current: status.mode === 'scoped' ? current : null, messages, items,
     isConnected: status.mode === 'scoped' ? status.connected : ws.isConnected,

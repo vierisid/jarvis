@@ -1,0 +1,21 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/provider.test.tsx:
+[WS] Connected
+(pass) an accepted failed response exposes its explanation and never projects partial output as done [65.08ms]
+
+ui/src/brief/chat/client.test.ts:
+(pass) reconnect fills missed history beyond the snapshot tail across replay pages [166.22ms]
+(pass) replay completes an old cached running turn outside the latest fifty turns [96.24ms]
+(pass) failed turn details survive live delivery, reconnect and a daemon restart [45.05ms]
+(pass) acceptance in a stale window preserves a newer draft saved by another window [30.66ms]
+
+ui/src/brief/chat/store.test.ts:
+(pass) other windows cannot overwrite a saved draft or attachment by scrolling or receiving events [1.92ms]
+(pass) legacy drafts remain readable while new field writes preserve concurrent edits [0.84ms]
+
+ 7 pass
+ 26 filtered out
+ 0 fail
+ 30 expect() calls
+Ran 7 tests across 3 files. [771.00ms]
