@@ -68,7 +68,11 @@ export interface GovernedPieceAdapter {
    * this table was written is over-gated rather than under-gated.
    */
   unknownActionCategory: ActionCategory;
-  /** Action names per category. Complete for the vetted version below. */
+  /**
+   * Action names per category. Complete for the version the catalog installs:
+   * `governed-pieces.test.ts` checks every action in that version's manifest
+   * (`pieces-library/verified-manifests-generated.ts`) is named here.
+   */
   categories: Partial<Record<ActionCategory, readonly string[]>>;
   /**
    * Input props that identify what the action will act on, in the order they
@@ -76,20 +80,17 @@ export interface GovernedPieceAdapter {
    * input; absent props are omitted.
    */
   targetProps: readonly string[];
-  /** Piece version the action table was read from. */
-  vettedVersion: string;
 }
 
 /**
- * The verified ten. Action tables were read from the exact versions named in
- * `vettedVersion`, which are the versions `pieces-library/catalog.ts` installs
- * for a verified piece.
+ * The verified ten. Each table covers every action of the version
+ * `pieces-library/catalog.ts` installs; the catalog sync only moves a verified
+ * piece to a version this table still covers (`scripts/lib/verified-upgrade.ts`).
  */
 export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'gmail',
     pieceName: '@activepieces/piece-gmail',
-    vettedVersion: '0.17.0',
     // Gmail spans read through send to permanent deletion, so no single
     // category describes it. `gmail_delete_draft` deletes permanently and
     // `gmail_stop_watch` changes a mailbox setting; both sit at level 9, so an
@@ -130,7 +131,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'slack',
     pieceName: '@activepieces/piece-slack',
-    vettedVersion: '0.21.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['channel', 'user', 'userId', 'recipients', 'username', 'email', 'handle', 'ts', 'threadTs',
       'text', 'file', 'reaction', 'name', 'query', 'url', 'method'],
@@ -172,7 +172,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'notion',
     pieceName: '@activepieces/piece-notion',
-    vettedVersion: '0.7.3',
     unknownActionCategory: 'delete_data',
     targetProps: ['database_id', 'page_id', 'pageId', 'block_id', 'item_id', 'database_item_id',
       'archived_item_id', 'parent_page_id', 'new_parent_page_id', 'title', 'comment_text', 'url', 'method'],
@@ -195,7 +194,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'openai',
     pieceName: '@activepieces/piece-openai',
-    vettedVersion: '0.12.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['model', 'prompt', 'text', 'input', 'query', 'fileName', 'purpose', 'url', 'method'],
     categories: {
@@ -211,7 +209,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'claude',
     pieceName: '@activepieces/piece-claude',
-    vettedVersion: '0.7.0',
     // Only `custom_api_call` reaches this today, and through it the API key
     // reaches every Anthropic endpoint, files and batches included.
     unknownActionCategory: 'delete_data',
@@ -232,7 +229,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'github',
     pieceName: '@activepieces/piece-github',
-    vettedVersion: '0.7.3',
     unknownActionCategory: 'delete_data',
     targetProps: ['repository', 'issue_number', 'pull_number', 'discussion_number', 'commit_id',
       'branch', 'source_branch', 'new_branch_name', 'title', 'filename', 'public', 'path', 'username',
@@ -256,7 +252,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'google-calendar',
     pieceName: '@activepieces/piece-google-calendar',
-    vettedVersion: '0.12.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['calendar_id', 'calendar_ids', 'event_id', 'eventId', 'title', 'attendees',
       'start_date_time', 'end_date_time', 'start_date', 'end_date', 'location', 'send_updates',
@@ -280,7 +275,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'google-drive',
     pieceName: '@activepieces/piece-google-drive',
-    vettedVersion: '0.11.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['file_id', 'fileId', 'fileName', 'file_name', 'name', 'folderId', 'folder_id',
       'parent_folder_id', 'parentFolder', 'drive_id', 'user_email', 'role', 'type', 'permission_name',
@@ -308,7 +302,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'discord',
     pieceName: '@activepieces/piece-discord',
-    vettedVersion: '0.7.0',
     unknownActionCategory: 'delete_data',
     targetProps: ['guild_id', 'channel_id', 'user_id', 'role_id', 'message_id', 'name', 'content',
       'message', 'reason', 'emoji', 'webhook_url', 'url', 'method'],
@@ -341,7 +334,6 @@ export const GOVERNED_PIECE_ADAPTERS: readonly GovernedPieceAdapter[] = [
   {
     catalogId: 'telegram-bot',
     pieceName: '@activepieces/piece-telegram-bot',
-    vettedVersion: '0.5.7',
     // The piece exposes seven actions, but the bot token reaches the whole Bot
     // API, which deletes messages and bans members. An action this table does
     // not name is gated accordingly.

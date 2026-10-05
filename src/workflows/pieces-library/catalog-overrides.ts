@@ -90,6 +90,23 @@ export const EXCLUDED: ReadonlySet<string> = new Set<string>([
 ]);
 
 /**
+ * Verified upgrades a person has read and signed off, as id -> version.
+ *
+ * The catalog sync bumps a verified piece by itself when its governed adapter
+ * still covers the new version (see `scripts/lib/verified-upgrade.ts`). Two
+ * findings hold a bump for a person instead: an existing action whose upstream
+ * classification got more severe, and an existing action that lost props. Once
+ * you have checked the adapter still fits, add the version here and the next
+ * sync run takes it. Unmapped actions are NOT cleared by this: map them.
+ *
+ * Example:
+ *   gmail: "0.18.0",
+ */
+export const VERIFIED_UPGRADE_REVIEWED: Record<string, string> = {
+  // (empty -- add entries when the review issue asks for one)
+};
+
+/**
  * Hold-back pins. Each entry forces a specific versionRange + vettedVersion
  * regardless of what the sync script discovered on npm. Use sparingly --
  * pinning means you're now responsible for unpinning when the upstream fix

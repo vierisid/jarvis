@@ -15,6 +15,12 @@
  *   merge without a human reading it. Anything else -- a piece entering or
  *   leaving the catalog, a license change, a pinned-SHA bump -- puts
  *   third-party code or a trust assertion in motion and asks for human eyes.
+ *
+ *   Verified pieces are the exception to "a bump is mechanical": each has a
+ *   governed adapter that must cover the version installed. The sync script
+ *   checks that per bump (`verified-upgrade.ts`) and holds back the ones that
+ *   fail, so a verified bump reaching this diff has passed it. One that did
+ *   not -- `checked` does not list it -- forces review, as #664 should have.
  */
 
 /**
@@ -41,12 +47,11 @@ export interface CatalogDiff {
   /** Same id, different npm version. The mechanical, expected change. */
   versionChanged: Array<{ id: string; from: string; to: string }>;
   /**
-   * The subset of `versionChanged` that moves a verified piece's installed
-   * version. Not mechanical: each verified piece has a governed adapter
-   * (`GOVERNED_PIECE_ADAPTERS` in `src/workflows/runtime/piece-effects.ts`)
-   * whose action table was read at the old version, and an action added
-   * upstream is unmapped until someone reads the new one. #664 merged eight of
-   * these as "safe" and turned `main` red.
+   * Bumps that move a verified piece's installed version WITHOUT having passed
+   * the sync script's adapter check. Empty on every run the script makes; it
+   * exists so a code path that skips the check fails loudly instead of
+   * shipping the bump as "safe" (#664 merged eight unchecked ones and turned
+   * `main` red).
    */
   verifiedVersionChanged: Array<{ id: string; from: string; to: string }>;
   /** Same id, different SPDX license. A trust/legal signal -- always flagged. */
@@ -76,9 +81,12 @@ export function diffCatalogs(
     newSha: string;
     /**
      * Verified ids whose installed version follows the generated one, i.e.
-     * VERIFIED minus VERSION_PIN. Omitted, no bump is treated as governed.
+     * VERIFIED minus VERSION_PIN. Required, so a caller cannot forget it and
+     * get the old every-bump-is-safe behaviour.
      */
-    verified?: ReadonlySet<string>;
+    verified: ReadonlySet<string>;
+    /** Verified ids whose bump passed the adapter check this run. */
+    checked: ReadonlySet<string>;
   },
 ): CatalogDiff {
   const oldById = new Map(oldEntries.map((e) => [e.id, e]));
@@ -116,8 +124,9 @@ export function diffCatalogs(
       ? { from: meta.oldSha, to: meta.newSha }
       : null;
 
-  const verified = meta.verified ?? new Set<string>();
-  const verifiedVersionChanged = versionChanged.filter((c) => verified.has(c.id));
+  const verifiedVersionChanged = versionChanged.filter(
+    (c) => meta.verified.has(c.id) && !meta.checked.has(c.id),
+  );
 
   return {
     added,
@@ -187,6 +196,18 @@ export interface ReportOptions {
    * until the next successful run.
    */
   carriedForward?: Array<{ id: string; version: string }>;
+  /** The sync script's verified-bump decisions, taken and held. */
+  verifiedUpgrades?: ReadonlyArray<{
+    id: string;
+    from: string;
+    to: string;
+    ok: boolean;
+    added: string[];
+    removed: string[];
+    reasons: ReadonlyArray<{ kind: string }>;
+  }>;
+  /** Where the Tests runs for this PR's branch are listed. */
+  testsUrl?: string;
 }
 
 /** Collapse a list into a `<details>` block once it gets long. */
@@ -232,10 +253,11 @@ export function renderReport(
         : `the only entry changes are ${n} version bump${n === 1 ? "" : "s"} from npm`;
     p("> [!NOTE]");
     p(
-      `> **Safe to merge.** No pieces were added, removed, or relicensed, no ` +
-        `verified piece moved, and the pinned SHA is unchanged -- ${bumps}. ` +
-        `Merge on a green Tests run only: the bumps still run the full suite, and ` +
-        `nothing blocks merging a red one (#664 was merged red).`,
+      `> **Safe to merge.** No pieces were added, removed, or relicensed, every ` +
+        `verified bump passed the adapter check, and the pinned SHA is unchanged -- ` +
+        `${bumps}. Merge on a green Tests run only: nothing blocks merging a red one, ` +
+        `and a bot PR does not show its checks.` +
+        (opts.testsUrl ? ` [Tests runs for this branch](${opts.testsUrl}).` : ""),
     );
   } else {
     p("> [!WARNING]");
@@ -258,6 +280,11 @@ export function renderReport(
   p(`| Version bumps | ${diff.versionChanged.length} |`);
   p(`| License changes | ${diff.licenseChanged.length} |`);
   p(`| Other metadata | ${diff.otherChanged.length} |`);
+  const upgrades = opts.verifiedUpgrades ?? [];
+  if (upgrades.length > 0) {
+    const taken = upgrades.filter((u) => u.ok).length;
+    p(`| Verified upgrades | ${taken} taken, ${upgrades.length - taken} held |`);
+  }
   const carried = opts.carriedForward ?? [];
   if (carried.length > 0) {
     p(`| Carried forward (stale) | ${carried.length} |`);
@@ -276,17 +303,53 @@ export function renderReport(
   }
 
   if (diff.verifiedVersionChanged.length > 0) {
-    p("### Verified pieces bumped -- re-read their governed adapters");
+    p("### Verified pieces bumped without the adapter check -- review required");
     p();
     p(
-      "Each of these has an action table in `GOVERNED_PIECE_ADAPTERS` " +
-        "(`src/workflows/runtime/piece-effects.ts`) that was read at the old version. " +
-        "Diff the action set at the new version, give every added action a category, " +
-        "and bump the adapter's `vettedVersion`. `governed-pieces.test.ts` fails until you do:",
+      "The sync script checks every verified bump against its governed adapter and " +
+        "holds back the ones the adapter no longer covers. These moved without that " +
+        "check, which is a bug in the sync: do not merge until each is checked against " +
+        "`GOVERNED_PIECE_ADAPTERS` (`src/workflows/runtime/piece-effects.ts`):",
     );
     p();
     for (const c of diff.verifiedVersionChanged) {
-      p(`- \`${c.id}\` -- \`${c.from}\` -> \`${c.to}\``);
+      p(`- \`${c.id}\` -- \`${codeSafe(c.from)}\` -> \`${codeSafe(c.to)}\``);
+    }
+    p();
+  }
+
+  const taken = upgrades.filter((u) => u.ok);
+  if (taken.length > 0) {
+    p("### Verified pieces upgraded");
+    p();
+    p(
+      "Each new version passed the adapter check: every action it offers is mapped, " +
+        "no existing action got a more severe upstream classification, and none lost props.",
+    );
+    p();
+    for (const u of taken) {
+      const moved: string[] = [];
+      if (u.added.length > 0) moved.push(`+${u.added.length} (${u.added.map((a) => `\`${codeSafe(a)}\``).join(", ")}, already mapped)`);
+      if (u.removed.length > 0) moved.push(`-${u.removed.length} (${u.removed.map((a) => `\`${codeSafe(a)}\``).join(", ")})`);
+      const actions = moved.length > 0 ? `actions ${moved.join(", ")}` : "same action set";
+      p(`- \`${u.id}\` -- \`${codeSafe(u.from)}\` -> \`${codeSafe(u.to)}\` -- ${actions}`);
+    }
+    p();
+  }
+
+  const held = upgrades.filter((u) => !u.ok);
+  if (held.length > 0) {
+    p("### Verified pieces held back");
+    p();
+    p(
+      "These stay at the installed version because the adapter does not cover the new " +
+        "one yet. They do not affect this PR; the review issue the sync opened says why " +
+        "and how to clear each, and the next run takes the bump once it is cleared.",
+    );
+    p();
+    for (const u of held) {
+      const why = [...new Set(u.reasons.map((r) => r.kind))].join(", ");
+      p(`- \`${u.id}\` -- stays at \`${codeSafe(u.from)}\`, \`${codeSafe(u.to)}\` available -- ${why}`);
     }
     p();
   }
@@ -391,8 +454,9 @@ export function renderReport(
   p(
     "Hand-tuning (verified status, exclusions, version pins, sizes, descriptions) " +
       "lives in `catalog-overrides.ts`, which this refresh does not touch. If a " +
-      "newly added piece needs an exclusion, pin, or description override, follow " +
-      "up with a commit on this branch.",
+      "newly added piece needs an exclusion, pin, or description override, land it " +
+      "in its own PR to main: the next sync run rebuilds this branch from main and " +
+      "force-pushes it, so a commit made here is lost.",
   );
 
   return { verdict, markdown: out.join("\n") + "\n" };
@@ -420,7 +484,7 @@ function reviewReasons(diff: CatalogDiff): string {
   }
   if (diff.verifiedVersionChanged.length > 0) {
     const n = diff.verifiedVersionChanged.length;
-    parts.push(`${n} verified piece${n === 1 ? "" : "s"} bumped`);
+    parts.push(`${n} verified piece${n === 1 ? "" : "s"} bumped without the adapter check`);
   }
   return parts.join(", ");
 }

@@ -9,12 +9,20 @@
 #      script exits non-zero and this job fails without opening a PR.
 #      It also diffs against the committed catalog and emits two step outputs:
 #      `verdict` (safe | review) and `has_changes` (whether any entry moved).
+#      Verified pieces only move to a version their governed adapter still
+#      covers; the rest are held at the installed version and written to
+#      `held.json` (see scripts/lib/verified-upgrade.ts).
 #   2. `bun test` and `tsc --noEmit` -- the catalog tests in
 #      `pieces-library/catalog.test.ts` guard against malformed entries
-#      (bad semver, missing displayName, ids that collide, etc.).
+#      (bad semver, missing displayName, ids that collide, etc.), and
+#      `governed-pieces.test.ts` that every verified piece's installed actions
+#      are mapped, which the hold in step 1 should always leave true.
 #   3. Open a PR ONLY when an entry actually changed (`has_changes == true`).
 #      A run that bumped nothing but the generation timestamp opens no PR. The
 #      PR title reflects the verdict and the body is the script's diff analysis.
+#   4. Track held verified bumps in one issue (label `verified-piece-review`):
+#      opened when something is held, rewritten every run, closed once nothing
+#      is. It links the PR and says why each piece was held and how to clear it.
 #
 # Why a PR (not a direct commit):
 #   - Every catalog change is reviewable. Pieces can be renamed or removed
@@ -46,6 +54,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
+      # The held-verified-bumps tracking issue (last step).
+      issues: write
       # Needed by the "Trigger tests" step to dispatch test.yml on the PR branch.
       actions: write
     steps:
@@ -63,7 +73,10 @@ jobs:
       # `verdict` output (safe | review) used to title the PR below.
       - name: Regenerate pieces catalog
         id: sync
-        run: bun run scripts/sync-pieces-catalog.ts --report "${{ runner.temp }}/catalog-pr-body.md"
+        run: >-
+          bun run scripts/sync-pieces-catalog.ts
+          --report "${{ runner.temp }}/catalog-pr-body.md"
+          --held "${{ runner.temp }}/held.json"
         env:
           # Lift the GitHub API rate limit when the script needs it
           # (mostly for the sparse clone, which is unauthenticated by
@@ -76,7 +89,7 @@ jobs:
       - name: Validate
         run: |
           bun run scripts/check-no-ee-imports.ts
-          bun test src/workflows/pieces-library/catalog.test.ts
+          bun test src/workflows/pieces-library/catalog.test.ts src/workflows/runtime/governed-pieces.test.ts
           bunx tsc --noEmit
 
       # Open (or update) a PR with the catalog diff. peter-evans's
@@ -86,6 +99,7 @@ jobs:
       # body is the markdown the sync script wrote (body-path), so reviewers
       # see "safe to merge" vs "manual review required" at a glance.
       - name: Open PR with catalog changes
+        id: cpr
         if: steps.sync.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@v7
         with:
@@ -102,12 +116,54 @@ jobs:
       # `pull_request` CI started automatically -- the runs sit "awaiting
       # approval" until a maintainer clicks through. GitHub's suppression rule
       # explicitly exempts workflow_dispatch, so kick the test workflow at the
-      # PR branch ourselves; its check runs attach to the same head commit and
-      # show up on the PR. (Alternative if this ever breaks: create the PR with
-      # a fine-grained PAT via the `token:` input above, which makes CI trigger
-      # natively.)
+      # PR branch ourselves. Its check runs attach to the same head commit, but
+      # GitHub does not list them on the PR (its check rollup stays empty), so
+      # the PR body links the runs instead. (Alternative if this ever breaks:
+      # create the PR with a fine-grained PAT via the `token:` input above,
+      # which makes CI trigger natively and show on the PR.)
       - name: Trigger tests on the PR branch
         if: steps.sync.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run test.yml --ref chore/sync-pieces-catalog -R "$GITHUB_REPOSITORY"
+
+      # One issue for every verified bump the sync held back, so a contributor
+      # sees what needs mapping or a sign-off without reading the catalog PR.
+      # Rewritten in full each run (it always describes the newest npm
+      # release), and closed once a run holds nothing. A held piece does not
+      # affect the PR: it stays at the installed version until cleared, and the
+      # next run takes the bump by itself.
+      - name: Track held verified pieces in an issue
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HELD_COUNT: ${{ steps.sync.outputs.held_count }}
+          PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
+          PR_OPERATION: ${{ steps.cpr.outputs.pull-request-operation }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          HELD_JSON: ${{ runner.temp }}/held.json
+          ISSUE_BODY: ${{ runner.temp }}/review-issue.md
+        run: |
+          set -euo pipefail
+          label=verified-piece-review
+          gh label create "$label" --color D93F0B \
+            --description "A verified piece bump the catalog sync held for a person" 2>/dev/null || true
+          existing=$(gh issue list --label "$label" --state open --json number --jq '.[0].number // empty')
+          if [ "${HELD_COUNT:-0}" -gt 0 ]; then
+            args=("$HELD_JSON" --run-url "$RUN_URL")
+            if [ -n "$PR_URL" ]; then args+=(--pr-url "$PR_URL"); fi
+            bun run scripts/render-review-issue.ts "${args[@]}" > "$ISSUE_BODY"
+            if [ -n "$existing" ]; then
+              gh issue edit "$existing" --body-file "$ISSUE_BODY"
+              number=$existing
+            else
+              url=$(gh issue create --title "Verified pieces held back from the catalog refresh" \
+                --label "$label" --body-file "$ISSUE_BODY")
+              number=${url##*/}
+            fi
+            # Once per PR, not once per weekly update of it.
+            if [ "$PR_OPERATION" = "created" ]; then
+              gh pr comment "$PR_URL" --body "Verified pieces held back from this refresh, and how to clear them: #${number}"
+            fi
+          elif [ -n "$existing" ]; then
+            gh issue close "$existing" --comment "Nothing is held as of ${RUN_URL}: every verified piece is at its newest version or its bump was taken."
+          fi
