@@ -1,6 +1,7 @@
 import type { ContentBlock } from '../../llm/provider.ts';
 import { checkpointExecution } from '../execution-scope.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
+import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 
 export type ToolParameter = {
   type: string;
@@ -152,7 +153,11 @@ export type ToolDefinition = {
    * ONE ACCEPTED COST. `execute` below rewraps a plain Error as
    * `Tool '<name>' execution failed: ...` before any dispatch sees it, so that
    * repo-authored prefix ends up INSIDE the block, disclaimed along with the text
-   * it precedes. That is the same trade `manage-workflow.ts` takes for its `note`
+   * it precedes. ("A plain Error" is now two carve-outs, not one: an
+   * `ActionOutcomeError` and a `WorkflowCancellationError` are both typed
+   * verdicts a caller translates, and both pass through untouched -- see
+   * `execute`. Neither is the tool's own diagnosis, so neither is the text this
+   * paragraph is about.) That is the same trade `manage-workflow.ts` takes for its `note`
    * field, and the alternative -- framing only part of a message -- is the
    * branch-dependent framing #559 warns against. The direction that must never
    * happen is the opposite one, and it cannot: the only text outside the block is
@@ -214,6 +219,31 @@ export class ToolRegistry {
       return await tool.execute(params);
     } catch (error) {
       if (error instanceof ActionOutcomeError) throw error;
+      // #630. The fence above is NOT the only place cancellation is raised, and
+      // that was the whole defect: `withExecutionScope` publishes the run's
+      // fence into an AsyncLocalStorage scope, and the deep dispatch points a
+      // tool reaches through -- `SidecarManager.dispatchRPC`, the channel
+      // adapters, the TTS chunk loop, the ws service -- each call
+      // `checkpointExecution()` of their own, INSIDE `tool.execute`. So a
+      // cancellation acknowledged while a tool was awaiting a remote reply
+      // landed in this catch and left as a plain `Error`, and
+      // `sandbox-api/server.ts`'s `instanceof WorkflowCancellationError` ->
+      // 409 could never fire for it: a deliberate cancel was reported to the
+      // engine as a 500 and to the run as a generic tool failure.
+      //
+      // Carved out for the same reason as `ActionOutcomeError` and not a new
+      // one: both are TYPED verdicts about the call that callers above
+      // translate, rather than diagnoses from inside the tool that only a
+      // human reads. Rewrapping either does not add information -- it removes
+      // the only thing a caller can branch on. Nothing else is carved out: a
+      // tool's own failure stays wrapped, named and attributed.
+      //
+      // The message is left alone too. `WorkflowCancellationError`'s text
+      // already names the run and says that previously dispatched effects may
+      // have completed, which is exactly what a 409 body should say; prefixing
+      // it with "Tool 'x' execution failed" would assert a failure where what
+      // happened is a stop.
+      if (error instanceof WorkflowCancellationError) throw error;
       throw new Error(
         `Tool '${name}' execution failed: ${error instanceof Error ? error.message : String(error)}`
       );

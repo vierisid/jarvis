@@ -47,9 +47,14 @@ func axNodesWith(count int, name, value string) []axNode {
 func axReplyBytes(t *testing.T, elements []map[string]any) int {
 	t.Helper()
 	raw, err := json.Marshal(map[string]any{
-		"provider":      "cdp",
-		"url":           "https://mail.example.com/u/0/#inbox",
-		"title":         "Inbox",
+		"provider": "cdp",
+		"url":      "https://mail.example.com/u/0/#inbox",
+		"title":    "Inbox",
+		// Mirrors the handler's reply, `loader_id` included (#640). Fixed-width
+		// and ~50 bytes against a 2 MB cap, so it moves no verdict here -- but a
+		// mirror that drops a field measures a reply the sidecar does not send,
+		// and this helper's own docblock is about measuring the real thing.
+		"loader_id":     "8F2C1A9B4D7E0356A1B2C3D4E5F60718",
 		"element_count": len(elements),
 		"elements":      elements,
 		"captured_at":   int64(1764000000000),

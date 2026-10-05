@@ -156,19 +156,54 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 		// NOT a plain truncation, because these two are COMPARED and not only
 		// displayed: `ui_act` refuses to act when the surface it re-reads has a
 		// different url or title than the one that was reviewed
-		// (src/actions/tools/ui.ts), and on this path that comparison is the
-		// only document check there is -- `browser_ax_click` and
-		// `browser_ax_set_value` have no frame-tree check of their own. Two cut
-		// values compare EQUAL as soon as their first 4096 characters agree, so
-		// a plain cut would have switched that guard off for any page willing to
-		// pad its URL. That is #594's mistake inverted: truncate what is
-		// RENDERED, never what is BRANCHED ON. See axIdentityField.
+		// (src/actions/tools/ui.ts). Two cut values compare EQUAL as soon as
+		// their first 4096 characters agree, so a plain cut would have switched
+		// that guard off for any page willing to pad its URL. That is #594's
+		// mistake inverted: truncate what is RENDERED, never what is BRANCHED
+		// ON. See axIdentityField.
+		//
+		// CORRECTION, #640: this comment used to add "and on this path that
+		// comparison is the only document check there is -- browser_ax_click
+		// and browser_ax_set_value have no frame-tree check of their own". That
+		// was never true of the tree it shipped in: #637 added
+		// `refuseStaleAXElement`, which both AX actions run, in the SAME commit
+		// as this sentence. The bound still stands on its own -- `ui_act` does
+		// compare these two, so they are branched on -- but it is one layer, not
+		// the only one.
 		axURL, _ := pageInfo["url"].(string)
 		axTitle, _ := pageInfo["title"].(string)
 		return &RPCResult{Result: map[string]any{
-			"provider":      "cdp",
-			"url":           axIdentityField(axURL, maxRenderedURL),
-			"title":         axIdentityField(axTitle, maxRenderedTitle),
+			"provider": "cdp",
+			"url":      axIdentityField(axURL, maxRenderedURL),
+			"title":    axIdentityField(axTitle, maxRenderedTitle),
+			// THE DOCUMENT, so the daemon can compare the one thing that
+			// actually identifies it (#640).
+			//
+			// `ui_act`'s surface check compared `url` and `title` -- the two
+			// fields above, which are `location.href` and `document.title`, i.e.
+			// the page's own claims -- because they were the only identity on
+			// this reply. `history.pushState` moves both while the document
+			// holds, and that is how every SPA navigates, so a Gmail or Linear
+			// click reviewed one moment was refused the next for a surface that
+			// had not changed. #603 settled the rule for every other path:
+			// compare the loaderId, never the URL (`confirmSameDocument`,
+			// `refuseStaleAXElement` above). This field is what lets this path
+			// follow it.
+			//
+			// The BROWSER's answer, not the page's: `checked` comes from
+			// `assertNotLocalContent`/`assertSamePage`, which read the frame
+			// tree, so a page cannot choose it -- unlike `url` and `title`.
+			// Unbounded here for the same reason it needs no `axIdentityField`:
+			// Chrome's loaderId is a short hex string from the protocol and not
+			// page-authored. The daemon bounds it anyway on arrival
+			// (`MAX_LOADER_ID_LENGTH`, sidecar-route.ts), which is the standing
+			// rule for a field off the wire.
+			//
+			// An older sidecar sends no `loader_id` and the daemon keeps the
+			// url+title comparison for it, so this widens the wire without a
+			// version gate: a missing field degrades to the previous, stricter,
+			// SPA-refusing behaviour rather than to no check.
+			"loader_id":     checked.loaderID,
 			"element_count": len(elements),
 			"elements":      elements,
 			"captured_at":   time.Now().UnixMilli(),

@@ -433,10 +433,8 @@ export async function buildEngineBundle(opts?: {
   // A shared prebuilt bundle short-circuits the whole build — including the
   // staging install, which would otherwise cost every tenant a ~47 MB
   // node_modules just to discover the bundle already exists.
-  if (!opts?.force) {
-    const shared = findSharedBundle(opts?.sharedRoot);
-    if (shared) return shared;
-  }
+  const shared = opts?.force ? { kind: "miss" as const } : findSharedBundle(opts?.sharedRoot);
+  if (shared.kind === "hit") return shared.bundle;
 
   await ensureStagingInstalled();
 
@@ -444,7 +442,19 @@ export async function buildEngineBundle(opts?: {
   const bundleDir = resolve(BUNDLE_ROOT, hash);
   const bundlePath = resolve(bundleDir, "main.js");
 
-  if (!opts?.force && existsSync(bundlePath)) {
+  // A REFUSED shared bundle must not be answered by ADOPTING whatever sits in
+  // the per-user cache (#624). The line below accepts a pre-existing main.js on
+  // `existsSync` alone -- which is correct for its own case (same uid, this
+  // daemon built it) and wrong as the answer to a failed verification: the
+  // shared root is host-owned and read-only to the tenant, BUNDLE_ROOT is
+  // tenant-writable, and `bundleHash()` is computable by anyone who can read
+  // the install, so the target path is predictable. Degrading from an
+  // unverified host-owned bundle to an unverified tenant-writable one is the
+  // wrong direction in exactly the hosting shape this root exists for.
+  //
+  // So a refusal degrades to a BUILD, not to an adoption. That costs the
+  // staging install, which is the cost the warning already announces.
+  if (!opts?.force && shared.kind !== "refused" && existsSync(bundlePath)) {
     return { bundlePath, hash, bundleDir };
   }
 
@@ -493,31 +503,202 @@ export const ENGINE_BUILD_PATHS = {
   BUNDLE_ROOT,
 } as const;
 
-/** The shared-root bundle for the current source hash, if present.
+/**
+ * A shared-root lookup. `miss` and `refused` are kept apart because they call
+ * for different fallbacks: a miss is answered by the per-user cache, a refusal
+ * must not be (see `buildEngineBundle`).
+ */
+type SharedBundleLookup =
+  | { kind: "hit"; bundle: EngineBundle }
+  | { kind: "miss" }
+  | { kind: "refused" };
+
+/**
+ * One line of CONFIG text, safe to put in a log a person and a model both read.
  *
- * When the builder shipped a content manifest (main.js.sha256), the bytes we
- * are about to execute are verified against it — the directory NAME hashes
- * build inputs, not output, so without this check the store would be
- * content-addressed in name only. Mismatch/missing-manifest handling: a bad
- * manifest is a MISS (fall back to the local build), never a crash. */
-function findSharedBundle(sharedRoot?: string | null): EngineBundle | null {
+ * The path is operator-supplied by design and naming it is the whole point of
+ * the warning, so this is not about secrecy. It is about forgery: a path
+ * component may contain a newline, and `JARVIS_ENGINE_CACHE_ROOT` is in
+ * `JARVIS_SETTINGS_ENV_NAMES`, i.e. deliberately forwarded to model-directed
+ * children -- so a model that can start a daemon can choose this string. A
+ * newline would let it write its own log lines; the `<<<` tokens would let it
+ * disclaim whatever follows. Same reasoning as `boundedReceiptText` (#634),
+ * done locally because this module is the engine BUILDER and must not grow an
+ * import into the daemon's role machinery.
+ */
+function logSafePath(value: string): string {
+  // `Zl`/`Zp` as well as `Cc`/`Cf`: U+2028 LINE SEPARATOR and U+2029 PARAGRAPH
+  // SEPARATOR are line terminators to a JavaScript parser and to several log
+  // shippers, and neither is a control or format character, so the first two
+  // classes miss exactly the two code points a forger would reach for next.
+  const flat = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "?").replaceAll("<<<", "(((").replaceAll(">>>", ")))");
+  // `.toWellFormed()` AFTER the cut, for the reason `defangDelimiters` repairs
+  // ill-formed UTF-16 at all: a fixed-length slice can land between the halves
+  // of a surrogate pair, and a lone surrogate is rejected outright by some
+  // providers and silently dropped by some serialisers -- the second of which
+  // can bring two halves of a marker back together.
+  return (flat.length > 400 ? flat.slice(0, 400) + "...(truncated)" : flat).toWellFormed();
+}
+
+/**
+ * The digest a `.sha256` manifest names, out of the two shapes a publisher
+ * actually produces.
+ *
+ * NEITHER NORMALISATION IS A WEAKENING, which is the only thing that matters
+ * here, and both are stated because "be lenient about the input to a security
+ * check" is normally the wrong instinct.
+ *
+ *   - The FIRST whitespace-delimited token. `sha256sum FILE > FILE.sha256` --
+ *     the obvious command, and what anyone publishing a shared root by rsync or
+ *     a tarball will reach for -- writes `<hash>  <filename>`. Only the
+ *     Dockerfile's `| cut -d' ' -f1` avoided it in this tree. The second field
+ *     is a filename, carries no integrity information, and dropping it leaves
+ *     the comparison on exactly the same 64 characters.
+ *   - LOWERCASED. Hex is case-insensitive by definition, so `AB` and `ab` are
+ *     the same number; comparing them case-sensitively rejects a correct digest
+ *     rather than accepting a wrong one. The value space is unchanged.
+ *
+ * What is NOT relaxed: the comparison itself stays full-string equality against
+ * the real hash, so a truncated, padded, multi-digest or empty manifest still
+ * refuses. Before this, all four of those and both shapes above landed in
+ * `digest_mismatch` and logged `manifest says <not a sha256 digest>` -- which an
+ * operator reads as corruption, not as a format mistake, and #624 turned that
+ * from a silent fallback into every tenant on the host losing its shared
+ * bundle. Getting the format wrong must not look like getting the bytes wrong.
+ */
+function manifestDigest(contents: string): string {
+  return (contents.trim().split(/\s+/u)[0] ?? "").toLowerCase();
+}
+
+/**
+ * Say why a shared root was not used, and refuse it.
+ *
+ * Warned EVERY time rather than once per path+reason. It is a refusal on a cold
+ * path -- `findCachedBundle` is called per engine resolution, not per request --
+ * and a memo keyed on the reason silently swallows the two cases an operator
+ * most needs: the same failure recurring after a repair, and a tree that is
+ * swapped under a long-lived daemon. `reason=` is a stable token so a fleet can
+ * alert on it instead of reading prose.
+ */
+function refuseSharedBundle(bundlePath: string, reason: string, detail: string): { kind: "refused" } {
+  console.warn(`[engine] shared bundle REFUSED reason=${reason} path=${logSafePath(bundlePath)}: ${detail}`);
+  return { kind: "refused" };
+}
+
+/** The shared-root bundle for the current source hash, if it verifies.
+ *
+ * `main.js` out of this tree is spawned as the workflow engine with the
+ * daemon's authority, and the directory NAME hashes build INPUTS, not output --
+ * so without a content check the store would be content-addressed in name only.
+ * The builder's `main.js.sha256` is that check.
+ *
+ * THE MANIFEST IS REQUIRED, not optional (#624). It used to be consulted only
+ * `if (existsSync(manifestPath))`, so a verification was enabled by the
+ * presence of the very thing it verified against -- which is not a
+ * verification. Making absence behave exactly like a mismatch leaves one
+ * contract instead of two, and turns "this tree was not produced by a known
+ * good producer, or was produced partially" into a refusal instead of a pass.
+ *
+ * WHAT THIS IS NOT, stated because it is easy to claim more. It is NOT an
+ * anti-tamper control, and requiring the manifest does not make it one: in both
+ * producers the digest sits beside the bundle with the same ownership, written
+ * by the same step, so anything that can replace `main.js` can replace the
+ * digest beside it. `Dockerfile`'s own comment on the engine-cache COPY says
+ * this already. Nor does it detect corruption introduced BY the producer --
+ * `scripts/build-shared-runtime.ts` digests the bytes it just copied, read back
+ * from the destination, so a truncated copy yields a self-consistent manifest.
+ * And the trust root itself is chosen by configuration: `workflows.engine_dir`
+ * or `JARVIS_ENGINE_CACHE_ROOT`, the latter forwarded into model-directed
+ * children. Whoever sets that sets what is trusted. A real anti-tamper control
+ * is a detached signature over the bundle, verified against a key the tenant
+ * tree cannot write, plus a read-only mount -- a different change.
+ *
+ * What it DOES buy: an unconditional delivery-integrity and operator-error
+ * check (a truncated copy, a bad layer pull, a tree published without its
+ * digest) where it used to be opt-in, and the removal of a fail-open.
+ *
+ * ALSO NOT execution-time integrity. Verification happens once, HERE, at
+ * resolution; the path is then carried on the `EngineRuntime` and spawned many
+ * times over the daemon's whole life, re-read from disk each time, with no
+ * re-verification. `piece-catalog`'s cache key re-hashes the same file with no
+ * manifest check at all. So the window between check and use is the daemon's
+ * lifetime, not microseconds, and requiring the manifest does not narrow it.
+ * Closing that is re-hashing in `spawnEngine`, or an immutable mount, and is
+ * its own issue.
+ *
+ * COST, scoped honestly: zero for in-tree producers. Both write the manifest
+ * unconditionally in the same step as the bundle --
+ * `scripts/build-shared-runtime.ts` and the Dockerfile's engine staging RUN --
+ * and the Dockerfile's post-`USER jarvis` assertion, which already requires
+ * `findCachedBundle()` to resolve from under `/app/engine-cache`, turns a
+ * forgotten manifest into a failed image build rather than a silent runtime
+ * regression. But a shared root can also be published out of tree, by an rsync
+ * with an `--exclude`, a tarball or a fleet builder, and such a host now loses
+ * its shared bundle on every tenant at once. That degradation is safe and
+ * expensive -- and in a container with no egress or a read-only FS the staging
+ * install fails outright and the daemon starts with workflow features
+ * disabled. Which is why every refusal here is LOUD and carries a stable
+ * `reason=` token: a fleet operator has to be able to alert on this rather than
+ * discover it as an outage.
+ *
+ * HOW expensive, measured rather than implied, because "expensive" above
+ * understated it. A refusal also switches off the per-user fast path -- that is
+ * `buildEngineBundle`'s point, and the reason is stated there -- so it is a
+ * REBUILD per resolution and not a one-time cost. `ensureStagingInstalled` is
+ * memoized, so the ~47 MB install is paid at most once per process; the esbuild
+ * (~700 ms, the figure `engine-bootstrap` logs) is paid on every
+ * `buildEngineBundle`. In practice that is once per boot, plus once per
+ * `createEvaluationEngine`. And `engine-bootstrap` calls `findCachedBundle` and
+ * then `buildEngineBundle`, each of which runs this function, so one boot on a
+ * broken host reads and hashes the shared `main.js` twice and logs two REFUSED
+ * lines. Two attempts, two honest answers -- not a double-warning bug.
+ *
+ * SCOPE: the shared root only. The per-user BUNDLE_ROOT has no manifest by
+ * design -- same uid, built locally -- and nothing here touches it. That it has
+ * no verification AT ALL is a separate, larger matter; what this change does
+ * owe it is not to make it the answer to a failed verification, which
+ * `buildEngineBundle` handles. */
+function findSharedBundle(sharedRoot?: string | null): SharedBundleLookup {
   const root = sharedBundleRoot(sharedRoot);
-  if (!root) return null;
+  if (!root) return { kind: "miss" };
   const hash = bundleHash();
   const bundleDir = resolve(root, hash);
   const bundlePath = resolve(bundleDir, "main.js");
-  if (!existsSync(bundlePath)) return null;
+  // Not a refusal: a shared root with no bundle for THIS source hash is the
+  // ordinary miss the per-user build exists for, and on a developer machine it
+  // is every single call.
+  if (!existsSync(bundlePath)) return { kind: "miss" };
   const manifestPath = bundlePath + ".sha256";
-  if (existsSync(manifestPath)) {
-    try {
-      const want = readFileSync(manifestPath, "utf8").trim();
-      const got = createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
-      if (want !== got) return null;
-    } catch {
-      return null;
-    }
+  if (!existsSync(manifestPath)) {
+    return refuseSharedBundle(bundlePath, "manifest_absent",
+      "no main.js.sha256 beside it, so its bytes cannot be verified; publish the manifest with the bundle");
   }
-  return { bundlePath, hash, bundleDir };
+  let want: string;
+  let got: string;
+  try {
+    want = manifestDigest(readFileSync(manifestPath, "utf8"));
+    got = createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
+  } catch (err) {
+    // `err instanceof Error ? err.message : String(err)`, the shape used
+    // everywhere else, and not `String((err as Error).message)`: that cast
+    // renders a non-Error throw as the literal "undefined", which is the one
+    // outcome a line whose whole job is to be diagnosable cannot afford.
+    return refuseSharedBundle(bundlePath, "manifest_unreadable",
+      `manifest or bundle could not be read (${logSafePath(err instanceof Error ? err.message : String(err))})`);
+  }
+  if (want !== got) {
+    // The manifest's contents reach the log line, so they are shown only in the
+    // one shape that cannot forge a line: the premise of this check is that
+    // something may have written into this tree. `manifestDigest` already makes
+    // a newline structurally impossible -- it splits on whitespace and keeps one
+    // token -- and this keeps the shape check anyway, because a single token can
+    // still be `<<<UNTRUSTED_CONTENT` or a megabyte of text, and the two
+    // defences answer different questions.
+    const shown = /^[0-9a-f]{64}$/u.test(want) ? want : "<not a sha256 digest>";
+    return refuseSharedBundle(bundlePath, "digest_mismatch",
+      `manifest says ${shown}, bytes hash to ${got}`);
+  }
+  return { kind: "hit", bundle: { bundlePath, hash, bundleDir } };
 }
 
 /**
@@ -535,7 +716,12 @@ export function findCachedBundle(opts?: {
   sharedRoot?: string | null;
 }): { bundlePath: string; hash: string } | null {
   const shared = findSharedBundle(opts?.sharedRoot);
-  if (shared) return { bundlePath: shared.bundlePath, hash: shared.hash };
+  if (shared.kind === "hit") return { bundlePath: shared.bundle.bundlePath, hash: shared.bundle.hash };
+  // A REFUSED shared bundle is answered by "nothing is cached", never by the
+  // per-user copy (#624): that tree is tenant-writable and unverified, so
+  // adopting it would answer a failed integrity check by lowering the trust
+  // level. The caller's `buildEngineBundle` then BUILDS rather than adopts.
+  if (shared.kind === "refused") return null;
   const hash = bundleHash();
   const bundleDir = resolve(BUNDLE_ROOT, hash);
   const bundlePath = resolve(bundleDir, "main.js");

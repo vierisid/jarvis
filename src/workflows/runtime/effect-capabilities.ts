@@ -8,6 +8,7 @@ import type { SidecarCapability } from '../../sidecar/types';
 import { resolve } from 'node:path';
 import { policyHome } from '../../actions/tools/file-path-policy';
 import { getMachineScope } from '../../actions/machine-scope';
+import { rawUiGate, REVIEWED_UI_TOOLS } from '../../authority/ui-intent';
 
 /**
  * Tools whose effect is bounded enough to describe a review target (a sidecar
@@ -53,6 +54,122 @@ const RESERVED_TARGET_KEYS = new Set(['tool', 'capability', 'sidecarId', 'select
 export const BOUNDED_TOOL_NAMES: ReadonlySet<string> = BOUNDED_TOOLS;
 export const OPAQUE_TOOL_NAMES: ReadonlySet<string> = OPAQUE_TOOLS;
 export const GATED_TOOL_NAMES: ReadonlySet<string> = GATED_TOOLS;
+
+/**
+ * Why this call cannot be approved through the boundary at all, or null.
+ *
+ * #638, and DEFENCE IN DEPTH rather than a plugged hole -- stated plainly
+ * because the issue reads as the latter and the distinction is the whole value
+ * of this function.
+ *
+ * WHAT IS REAL. An approval that acts on a live SURFACE is bound, on the
+ * interactive path, by `captureApprovalGuard`: a closure holding the CDP
+ * connection, the approval epoch and -- for an element-addressed tool -- the
+ * document and the generation of the id map (#602). The boundary cannot hold
+ * one. It is durable by design: a record parks on a MANUAL waitpoint for hours
+ * and is rechecked on resume through `validateTarget`, which gets the frozen
+ * arguments and the recorded target and nothing else. A closure does not cross
+ * that gap, and what it closes over does not survive a restart --
+ * `ApprovalManager.reconcileAfterRestart` clears `uiExecutions` outright, which
+ * is why the chat path refuses a UI card whose binding is gone. So the boundary
+ * must never be the thing that approves a surface-bound call.
+ *
+ * AND THE BINDING CANNOT BE MADE DURABLE, which is why this refuses instead of
+ * persisting one. #638 reads as "price the guard against what `requestDigest`
+ * already persists", so here is the price. That digest and `record.target`
+ * persist NAMES -- a canonical sidecar id, an absolute path, a skill name and
+ * version -- and a name still denotes the same thing after a restart, which is
+ * what makes `validateTarget` able to recheck it hours later. A surface binding
+ * has no name to persist. Measured on `ui_act`, the one tool at issue:
+ * `actions/tools/ui.ts` addresses elements out of a process-local `Map` keyed by
+ * a `nextId` that starts at 1, and it remembers `MAX_REMEMBERED_SNAPSHOTS = 4`
+ * captures -- shared with chat, so four snapshots anywhere in the daemon evict
+ * the entry. Over a waitpoint measured in hours the recorded id is simply gone,
+ * and `uiActTool.authorityGate` then returns null, so the recomputed category
+ * is LOWER; `validateTarget` on the delegated route compares
+ * `severityRank(now) > severityRank(reviewed)` and is therefore blind in
+ * exactly that direction. Persisting a generation counter that restarts at 1
+ * would make the comparison PASS on a different surface -- a check that is
+ * worse than no check, because it reads as one.
+ *
+ * So the durable answer is not a persisted binding; it is a typed adapter whose
+ * target carries the reviewed SUBJECT and re-resolves it at dispatch, which is
+ * what `run_skill` does (`skills/runtime.ts` re-captures the surface and
+ * resolves each step's durable ref against the fresh capture). That is a
+ * feature, not a fix, and nothing in a flow needs it today.
+ *
+ * WHAT WAS NOT REACHABLE, and why this is not a vulnerability fix. The two
+ * routes into the boundary refuse these calls already, by different means, and
+ * neither means is stated anywhere near the other:
+ *
+ *   - `toolsInvoke` calls `toolEffectCapability`, which throws for every
+ *     browser/desktop action name (OPAQUE) and for `ui_act` (no declared
+ *     Authority action).
+ *   - the delegated sub-agent route gates on set membership and calls
+ *     `toolEffectCapability` not at all -- so `ui_act`, which sits in
+ *     `REVIEWED_UI_TOOLS` and in NONE of bounded/opaque/gated, passes both of
+ *     its checks. It is nonetheless refused, three files away, by
+ *     `sub-agent-runner.ts`: "a call the person must confirm cannot be made by
+ *     a sub-agent at all" fires for `gate.confirm === 'always'`, and
+ *     `rawUiGate` returns exactly that for every member of
+ *     `REVIEWED_UI_TOOLS` (measured, all 14).
+ *
+ * So the delegate route's protection against the one name the sets disagree on
+ * is incidental -- it depends on a gate in another subsystem, keyed on a
+ * different property, for a reason that has nothing to do with binding. That is
+ * the fragility worth closing: this makes the refusal local, explicit, and
+ * independent of all three.
+ *
+ * TWO SIGNALS, covering the two drift directions:
+ *
+ *   - `rawUiGate(toolName, params)` -- the authoritative judgement of "this is
+ *     a raw UI action requiring mandatory review". Used rather than
+ *     `REVIEWED_UI_TOOLS.has(name)` so its carve-out comes along for free:
+ *     `ui_act` with `action: 'get_value'` is a READ, is not reviewed, and must
+ *     not be refused here either.
+ *   - a declared `captureApprovalGuard` on a tool that is in NEITHER
+ *     `REVIEWED_UI_TOOLS` nor `BOUNDED_TOOLS` -- a tool saying for itself that
+ *     reviewing it is not enough, which nobody registered and whose effect the
+ *     boundary cannot describe either. The only signal that would survive
+ *     someone adding a guarded tool and forgetting `ui-intent.ts`.
+ *
+ *     BOTH exclusions carry their weight, and the second was found missing by
+ *     review. `REVIEWED_UI_TOOLS` is what keeps the `get_value` read above from
+ *     being re-refused. `BOUNDED_TOOLS` is what keeps a guarded READ from being
+ *     refused at all: `createBrowserTools` (builtin.ts) ends with an
+ *     unconditional loop that assigns `captureApprovalGuard` to EVERY tool it
+ *     builds, `browser_snapshot` and `browser_screenshot` included, and neither
+ *     is in `REVIEWED_UI_TOOLS`. Measured on that factory: all 9 tools carry a
+ *     guard and those 2 were refused. It is latent -- the delegated route is
+ *     handed `createScopedToolRegistry(BUILTIN_TOOLS)` and only a test supplies
+ *     `agentScopedRegistry` -- but "empty today, measured", which this docblock
+ *     used to assert, was simply false for that registry.
+ *
+ *     And excluding bounded names is right on the merits, not just convenient.
+ *     A guard on a BOUNDED tool is about the connection and the epoch, not about
+ *     actuating a reviewed surface: a bounded tool's review target is SERIALISED
+ *     into the effect record and rechecked at dispatch by `validateTarget`, so it
+ *     is bound by the durable mechanism rather than by a closure, which is the
+ *     whole thing this function refuses the absence of.
+ *
+ * NOT the same refusal as `OPAQUE_TOOLS`. Opaque means "a category cannot
+ * describe what this will do"; this means "what this acts on cannot be bound
+ * across a waitpoint". `ui_act` is only ever the second.
+ */
+export function surfaceBoundRefusal(
+  tool: ToolDefinition | undefined,
+  toolName: string,
+  params: Record<string, unknown>,
+): string | null {
+  const reviewedRawUi = rawUiGate(toolName, params) !== null;
+  const declaresUnregisteredGuard = typeof tool?.captureApprovalGuard === 'function'
+    && !REVIEWED_UI_TOOLS.has(toolName) && !BOUNDED_TOOLS.has(toolName);
+  if (!reviewedRawUi && !declaresUnregisteredGuard) return null;
+  return `Unsupported workflow capability: ${toolName} acts on a live UI surface, and an approval that waits on a `
+    + `workflow waitpoint cannot stay bound to the screen it was reviewed against -- the browser can reconnect, `
+    + `navigate or be a different machine by the time it resumes. Use a typed governed adapter whose target carries `
+    + `the reviewed subject, or run it from chat where the approval is answered against the screen it names.`;
+}
 
 function pinnedSidecar(capability: SidecarCapability, requested: unknown): { sidecarId: string | null; selection: string; machineBinding?: unknown } {
   const scope = getMachineScope();

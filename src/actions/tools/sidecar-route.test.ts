@@ -85,6 +85,44 @@ describe('typed desktop outcomes', () => {
     });
   });
 
+  /**
+   * #623, the brain half. The sidecar now answers a panicking handler with
+   * `HANDLER_PANIC` instead of dropping the socket, and the question this pins
+   * is what the brain is allowed to conclude from that.
+   *
+   * `may_have_occurred`, and the reasoning is not "we do not know the code".
+   * `runRPCHandler` wraps the handler WHOLE, so the panic is as likely to be
+   * the line after `robotgo.Click` as the type assertion on the first line, and
+   * `recover()` cannot tell those apart -- there is no prefix of the handler
+   * that is known not to have run. So the only sound report is the one that
+   * sends the model to look at the machine. Note this is strictly WEAKER than
+   * `DESKTOP_INVALID_KEYS` above, which earns `not_started` by being emitted at
+   * a point the handler can prove it had not acted.
+   *
+   * The assertion is not about an unknown code falling through. It is that
+   * HANDLER_PANIC must never be ADDED to `NOT_STARTED_RPC_CODES` -- the one
+   * edit that would silently convert "the remote machine crashed mid-action"
+   * into "nothing happened, retry freely", which no test caught before this
+   * one. Proven non-vacuous by adding it to that set and watching this fail.
+   */
+  test('a handler that crashed cannot be reported as not started (#623)', async () => {
+    setSidecarManagerRef(stubManager([mac], async () => {
+      throw new SidecarRPCError('HANDLER_PANIC',
+        'the press_keys handler crashed on this machine; the action may or may not have taken effect'
+        + " - verify the current state before retrying, and report this: the stack is in the sidecar's log");
+    }));
+    const err = await rejection(() => routeToSidecarAction(mac.id, 'press_keys', { keys: 'cmd+v' }, 'desktop'));
+    expect(err.outcome).toMatchObject({ status: 'error', code: 'HANDLER_PANIC', effect: 'may_have_occurred' });
+    // The sidecar's own words survive to the model: a brain-side rewrite would
+    // be a second place to keep this reasoning correct, and the message is
+    // where the instruction to verify lives.
+    expect(err.outcome.message).toContain('may or may not have taken effect');
+    // And the code is carried verbatim, not folded into SIDECAR_OUTCOME_UNKNOWN
+    // -- a sidecar BUG has to stay distinguishable in an outcome from a
+    // disconnect and from an error a handler chose to return.
+    expect(err.outcome.code).not.toBe('SIDECAR_OUTCOME_UNKNOWN');
+  });
+
   test('an unverified launch window stays an unverified success, note and pid intact', async () => {
     // launchResultLinux/launchResultDarwin report this as success on purpose:
     // calling it a failure makes the model launch an app that is already open.
