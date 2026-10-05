@@ -1,0 +1,299 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.4.2 (744846f84)
+
+src/model-exec-env-sites.test.ts:
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > CONTROL: a spawn that inherits sees every canary, through both spawn APIs [102.50ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > run_command: TerminalExecutor.execute, $SHELL -c [263.29ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > run_command, streaming: TerminalExecutor.stream [167.25ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > desktop_launch_app on Linux: LinuxAppController.launchApp [215.02ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > launch_app on Windows/macOS: the native-exec seam [160.32ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > the browser the model drives: launchChrome [3422.68ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > desktop-bridge, which launches apps for the model: launchSidecar [626.92ms]
+(pass) model-directed spawns strip the daemon secrets and keep the user env (#514) > the PowerShell toast, an interpreter run for model text: sendViaPowerShell [227.32ms]
+
+src/util/model-exec-env.test.ts:
+(pass) the daemon-secret rule > every listed daemon secret is stripped, in any case [0.35ms]
+(pass) the daemon-secret rule > the sources the header cites are the names on the list [0.20ms]
+(pass) the daemon-secret rule > an unclassified JARVIS_ name is stripped: a future secret fails closed [0.14ms]
+(pass) the daemon-secret rule > settings stay, and no daemon secret is on the settings list [0.45ms]
+(pass) the daemon-secret rule > the engine wiring names are known, internal, and stripped [0.24ms]
+(pass) the daemon-secret rule > the user's shell and desktop survive whole, their own credentials included [0.18ms]
+(pass) the daemon-secret rule > stripping removes exactly the daemon secrets and nothing else [0.28ms]
+(pass) modelExecEnv() > marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off [0.48ms]
+(pass) modelExecEnv() > flags the env key only when this process holds it or inherited the flag [0.44ms]
+(pass) modelExecEnv() > an extra cannot put a daemon secret back, nor can a spread of process.env [0.20ms]
+(pass) modelExecEnv() > an undefined extra removes the key; the result is always an object [0.09ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the scan sees the names it must (not blind) [0.12ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [0.40ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the three buckets do not overlap [0.08ms]
+(pass) the model-exec markers (#514) > the key check: 16 hex chars, stable, case-insensitive, and not the key [60.14ms]
+(pass) the model-exec markers (#514) > the marker is exactly "1"; the flag is a check value or an older parent's "1" [0.44ms]
+(pass) the model-exec markers (#514) > modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged [0.16ms]
+(pass) the model-exec markers (#514) > silent for a file-key install, marked or not [0.29ms]
+(pass) the model-exec markers (#514) > warns while the parent's key is missing or a different one is set; silent once it is back [0.32ms]
+(pass) the model-exec markers (#514) > the CLI warns only for a detached start or restart [0.14ms]
+
+src/daemon/ws-service-conversation.test.ts:
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WSService] Started on port 0
+[WebSocketServer] Client connected. Total clients: 1
+[WSService] Client connected
+[WebSocketServer] Client connected. Total clients: 2
+[WSService] Client connected
+[WebSocketServer] Client connected. Total clients: 3
+[WSService] Client connected
+[WebSocketServer] Received: brief_chat_send undefined
+[WebSocketServer] Received: brief_chat_send undefined
+[WebSocketServer] Received: chat undefined
+[StreamRelay] Stream complete for request: 61566a2f-f7a3-40ec-bae5-6308f21a950a
+[WebSocketServer] Stopped
+[WSService] Stopped
+(pass) authenticated WebSocket routing gates the feature, scopes approvals and preserves legacy mirroring [100.01ms]
+
+src/daemon/api-brief.test.ts:
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+[WebSocketServer] Client disconnected. Total clients: 0
+[WSService] Client disconnected
+(pass) Brief capabilities are registered with every feature disabled by default [2.31ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f-01-http-SndGK7/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) capability endpoint is protected by the real session gate, including after session expiry [17.47ms]
+(pass) API exposes live sanitized readiness using the injected provider registry [0.79ms]
+(pass) old conversation client sees unchanged payloads and stored history after a capability read [30.21ms]
+
+src/daemon/api-brief-conversations.test.ts:
+(pass) older API callers without a conversation provider receive unsupported without touching a vault [0.72ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-bo5U5n/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-CRCXvF/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) conversation success and error responses preserve configured CORS headers and no-store [81.63ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-QjCo4B/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) conversation provider is discoverable but explicit lifecycle routes stay disabled by default [37.52ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-F4OaWS/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) real panel authentication protects all lifecycle writes and there is no delete action [37.40ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-6mcbDk/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) HTTP create/get/rename/tab order/active/close/reopen retain each conversation history [48.25ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-yNcNuW/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) foreign and unknown IDs are hidden through both lifecycle and legacy HTTP readers [54.89ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-MRoo1u/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) HTTP pagination preserves equal-timestamp messages and rejects invalid inputs [47.20ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-YFQ4xC/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) legacy websocket clients still restore their latest channel chat after explicit chat activity [34.90ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f02-api-qtTZg8/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) provider errors are safe unavailable results and replacing the vault invalidates the provider [36.99ms]
+
+src/brief/chat-transport.test.ts:
+(pass) interleaved streams, tab switch and one cancel isolate text, progress, history and TTS [35.04ms]
+(pass) duplicates, reconnect and stale cancel reconcile the original terminal without another generation [30.59ms]
+(pass) production limiter queues another conversation and a cancelled queued turn never calls the model [29.81ms]
+(pass) disabled transport, malformed frames and unavailable cursors never create turns [53.07ms]
+(pass) cancel ends audio immediately and suppresses a delayed provider chunk and duplicate terminal [31.61ms]
+(pass) model errors persist a sanitized failed terminal and preserve partial output for replay [28.20ms]
+(pass) subscription admission cannot orphan a queued turn and queue admission cannot append messages [98.89ms]
+(pass) resubscribing during speech never resumes a truncated audio stream [45.41ms]
+(pass) leaving before speech starts prevents audio after returning to the conversation [32.73ms]
+(pass) repeated queued cancellation releases retained jobs before the active turn ends [217.11ms]
+
+src/brief/contracts.test.ts:
+(pass) documented JSON examples are the checked TypeScript contract examples [0.87ms]
+(pass) wire contracts have no runtime workflow repository dependency [9.34ms]
+
+src/brief/capabilities.test.ts:
+(pass) production registration enables nothing, even when activation is requested without providers [0.82ms]
+(pass) installed and ready does not activate a feature without an explicit selection [0.22ms]
+(pass) readiness changes are reflected without restarting or retaining a stale true flag [0.24ms]
+(pass) transitive activation dependencies must themselves be enabled [0.31ms]
+(pass) dependency failure disables consumers on the next snapshot [0.21ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.40ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.16ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.07ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.07ms]
+(pass) duplicate and unknown registrations fail early, and registries do not share state [0.38ms]
+(pass) old or unsupported server response cannot enable new controls: null [0.04ms]
+(pass) old or unsupported server response cannot enable new controls: {}
+(pass) old or unsupported server response cannot enable new controls: {"error":"Not found"}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":2,"capabilities":{}}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":1,"capabilities":null}
+(pass) v1 clients accept additive fields but reject inconsistent booleans or unknown capability IDs [0.20ms]
+(pass) the fixed activation graph has only known dependencies and no cycles [0.33ms]
+(pass) contracts and capability consumer bundle for a browser without importing backend implementations [5.79ms]
+
+src/brief/adapters.test.ts:
+(pass) an independent optional reader fails closed without another feature module [0.67ms]
+(pass) typed feature registrations compile and read independently of an absent collaborator [0.66ms]
+(pass) disabled and dependency-blocked readers never invoke their data handler [0.79ms]
+(pass) only the registered provider can be used, and ready reads preserve the supplied query [0.52ms]
+(pass) provider loading is not an empty collection [0.29ms]
+(pass) provider unavailable is not an empty collection [0.04ms]
+(pass) stale and empty results remain distinct and preserve their as-of times [0.51ms]
+(pass) failed reads redact internal error details [0.40ms]
+(pass) legacy goal projections preserve source identity and never infer measured counts [0.13ms]
+(pass) workflow projection keeps activation and version lifecycle distinct and rejects foreign versions [0.34ms]
+(pass) workflow references never read or forward captured payloads from a full version [0.16ms]
+
+src/vault/conversation-schema.test.ts:
+(pass) migration preserves old histories, adopts rollback-era inserts, and keeps saved tab metadata [866.82ms]
+(pass) open-tab limit rejects extra creation atomically and reopening respects the same bound [57.28ms]
+
+src/vault/chat-turns.test.ts:
+(pass) request identity commits one user message and rejects conflicting reuse atomically [30.31ms]
+(pass) partial text, terminal state and monotonic events are durable and terminal writes are idempotent [30.40ms]
+(pass) workspace checks protect sends, replay, history, approval association and cancel identities [30.28ms]
+(pass) restart fails interrupted work once, preserves messages and approvals, and never reruns a send [791.98ms]
+(pass) replay pages use stable sequences with transient audio gaps and reject future or malformed cursors [99.59ms]
+(pass) additive transport migration preserves legacy writers and adoption across rollback [31.87ms]
+
+src/vault/conversation-lifecycle.test.ts:
+(pass) explicit chats retain separate identities, messages and tab state across a restart [801.71ms]
+(pass) unknown and foreign IDs are rejected by every scoped operation without changing state [27.81ms]
+(pass) closing a tab preserves messages and metadata; reopening restores its place [27.55ms]
+(pass) renames persist trimmed titles and reject stale revisions without losing another edit [30.85ms]
+(pass) tab ordering keeps closed slots stable and rejects incomplete or duplicate orders atomically [32.97ms]
+(pass) message cursors traverse equal timestamps exactly once and reject cross-chat or malformed reuse [26.22ms]
+(pass) history cursors use a timestamp and ID tie-breaker and are bound to their workspace and filter [29.99ms]
+(pass) legacy channel reuse and history restoration remain separate from explicit Brief chats [26.33ms]
+
+src/workflows/adapters/untrusted-reach.test.ts:
+(pass) #573 premise 1: the reachable tool set is closed and known > the reachable set is exactly the reviewed table [0.11ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing is both reachable and refused as opaque [0.09ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the opaque refusals still include the navigate and shell family [0.26ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > each reachable tool is the untrusted source the table says, by real category [20.76ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the untrusted-source subset is the eight tools the decision is about [0.15ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > no source file outside the workflow runtime spells a workflowEffect declaration [2.64ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > a bounded tool name cannot be re-registered with different semantics [0.71ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing removes a tool from a registry in production [22.58ms]
+(pass) #573 premise 2: the routes out of the workflow data plane are enumerated > only the reviewed files outside src/workflows hold a run or a version object [15.93ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > an untrusted-source tool's result reaches the step unframed and byte-exact [2.28ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > a browser result reaches the step unframed too, matched by category [0.32ms]
+
+src/brief/registrations/chat-state.test.ts:
+(pass) chat state remains default off and requires both live dependencies plus explicit activation [0.44ms]
+
+ui/src/hooks/useWebSocket.realtime-status.test.ts:
+(pass) dispatchRealtimeStatus > a realtime error goes to the realtime handler, not the generic one [0.19ms]
+(pass) dispatchRealtimeStatus > without a realtime handler the error still reaches onError [0.08ms]
+(pass) dispatchRealtimeStatus > closed passes the reason through [0.25ms]
+(pass) dispatchRealtimeStatus > live and unknown states, or no hook attached, do nothing [0.10ms]
+
+ui/src/hooks/useWebSocket.test.ts:
+(pass) finalizeStreamMessage > recovers text from the done frame when every stream chunk was missed [0.25ms]
+(pass) finalizeStreamMessage > repairs partial streamed text with authoritative completed text [0.13ms]
+(pass) finalizeStreamMessage > does not duplicate a response when completion is handled twice [0.09ms]
+(pass) mergeRestoredHistory > returns history untouched when nothing raced in [0.29ms]
+(pass) mergeRestoredHistory > keeps a message that landed while the history fetch was in flight [0.21ms]
+(pass) mergeRestoredHistory > drops the live copy of a message the vault already has [0.06ms]
+(pass) mergeRestoredHistory > does not collapse a genuinely repeated answer [0.07ms]
+(pass) mergeRestoredHistory > does not match across roles [0.11ms]
+(pass) nextStreamBuffer > adopts the relay's running total so a late client is not left truncated [0.27ms]
+(pass) nextStreamBuffer > stays in step with local accumulation on a healthy stream [0.05ms]
+(pass) nextStreamBuffer > falls back to appending when the chunk carries no accumulated total [0.04ms]
+(pass) nextStreamBuffer > ignores a non-string accumulated value [0.03ms]
+(pass) nextStreamBuffer > keeps the buffer intact when a chunk has no text at all [0.06ms]
+(pass) extractNestedMessage > returns null for non-objects and empty values [0.10ms]
+(pass) extractNestedMessage > pulls .message from a flat object [0.07ms]
+(pass) extractNestedMessage > pulls string .error [0.07ms]
+(pass) extractNestedMessage > recurses into nested .error.message (Anthropic shape) [0.03ms]
+(pass) extractNestedMessage > trims whitespace [0.07ms]
+(pass) formatProviderErrorMessage — buckets > auth: 401 status code [0.55ms]
+(pass) formatProviderErrorMessage — buckets > forbidden: 403 gets model-access copy, not the API-key copy [0.07ms]
+(pass) formatProviderErrorMessage — buckets > auth wins when a 401 body also carries permission wording [0.04ms]
+(pass) formatProviderErrorMessage — buckets > forbidden: model-access wording with no status code [0.11ms]
+(pass) formatProviderErrorMessage — buckets > auth: invalid x-api-key [0.08ms]
+(pass) formatProviderErrorMessage — buckets > rate limit: 429 status code — split from network bucket [0.13ms]
+(pass) formatProviderErrorMessage — buckets > rate limit: insufficient_quota [0.10ms]
+(pass) formatProviderErrorMessage — buckets > network: 503 [0.11ms]
+(pass) formatProviderErrorMessage — buckets > network: econnrefused [0.10ms]
+(pass) formatProviderErrorMessage — buckets > fallback: unknown errors still preserve detail [0.18ms]
+(pass) formatProviderErrorMessage — detail extraction > parses full-JSON payload and extracts nested message as detail [0.10ms]
+(pass) formatProviderErrorMessage — detail extraction > parses embedded-JSON payload [0.08ms]
+(pass) formatProviderErrorMessage — detail extraction > returns empty detail when raw is missing [0.05ms]
+(pass) formatProviderErrorMessage — detail extraction > gracefully handles malformed embedded JSON [0.08ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > auth code routes to auth summary regardless of raw text [0.10ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > rate_limit code overrides keyword heuristic (e.g. raw mentions 'timeout') [0.11ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > forbidden code has its own copy, distinct from auth [0.13ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > structured code still outranks digits in the raw message [0.12ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > not_found has its own copy [0.10ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > bad_request has its own copy [0.10ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > server has its own copy [0.07ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > unknown code falls back to keyword heuristic [0.11ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > code present but no raw still returns a summary [0.07ms]
+(pass) formatProviderErrorMessage — status-code brittleness fix > does NOT match '401' embedded in unrelated digits [0.11ms]
+(pass) formatProviderErrorMessage — status-code brittleness fix > does NOT match '403' embedded in unrelated digits [0.08ms]
+(pass) formatProviderErrorMessage — status-code brittleness fix > does NOT match '429' embedded in unrelated digits [0.10ms]
+(pass) formatProviderErrorMessage — status-code brittleness fix > DOES match '\b401\b' when it is a real status code [0.10ms]
+
+ui/src/brief/chat/integration.test.ts:
+(pass) real F-02 HTTP routes and F-03 WebSocket frames preserve histories through disconnect, close and reopen [808.96ms]
+
+ui/src/brief/chat/provider.test.tsx:
+[WS] Connected
+(pass) one connection survives ten room/theme remounts and retains the provider-owned draft [71.74ms]
+[WS] Connected
+(pass) old backend uses the existing single-chat history and writer without a scoped frame [23.58ms]
+[WS] Connected
+[WS] Disconnected, reconnecting in 2s...
+[WS] Connected
+[WS] Connected
+(pass) disconnect/retry and capability loss close scoped ownership before opening a fresh legacy socket [15.41ms]
+[WS] Connected
+(pass) disabled provider opens no connection, and unmount cannot schedule a reconnect [10.63ms]
+(pass) browser visibility and panel visibility jointly determine whether the active chat is read [10.25ms]
+
+ui/src/brief/chat/client.test.ts:
+(pass) ten add/close cycles preserve all surviving drafts/history, select neighbors, and reopen closed history [126.65ms]
+(pass) rapid mutations are serialized, active-last close selects left, and inactive close retains selection [28.23ms]
+(pass) delayed history and old lifecycle responses cannot overwrite a selected chat or a restarted workspace [28.52ms]
+(pass) reconnect pages all replay events without duplicating snapshot output, preserving drafts and unread [112.92ms]
+(pass) uncertain sends retry the same identity, accepted sends clear only their unchanged draft, and cancel is scoped [36.87ms]
+(pass) rejected sends retain draft and attachments never silently become a text-only submission [33.10ms]
+(pass) old/malformed/disabled capabilities fall back to single chat, while authentication/network failures stay unavailable [29.18ms]
+(pass) a failed close reconciles metadata and preserves the draft and history with a visible error [30.92ms]
+(pass) a stale tab fetch on reconnect completes before a newer selection is applied [30.32ms]
+(pass) tab reconciliation subscribes newly discovered chats and unsubscribes remotely closed ones [31.86ms]
+(pass) malformed and delayed sync pages cannot overwrite state or continue an invalid cursor [31.73ms]
+
+ui/src/brief/chat/store.test.ts:
+(pass) out-of-order and duplicate events reconstruct ordered text and never regress a terminal turn [0.74ms]
+(pass) canonical snapshots do not double replay text, regress newer text or reset consumed history [0.85ms]
+(pass) late history fills missing IDs without overwriting live output or selected conversation [0.29ms]
+(pass) activity and approval transitions are scoped, deduplicated and monotonic [0.38ms]
+(pass) draft, attachment references, scroll and unread survive reload, with workspace isolation [0.98ms]
+(pass) unread is per answer, remains while the panel is hidden, and clears only for the viewed chat [0.56ms]
+(pass) corrupt or quota-limited storage leaves chat usable and reports failed persistence [1.21ms]
+(pass) compacting a stream retains older locally received messages outside the snapshot tail [0.47ms]
+
+ui/src/brief/entry/route.test.ts:
+(pass) the default and non-exact flag values keep the released dashboard [0.33ms]
+(pass) all existing sidecar and dashboard destinations retain their route owner [0.41ms]
+(pass) onboarding reset owns the page even when a Brief URL was bookmarked [0.06ms]
+(pass) fixture mode requires both its explicit flag and isolated destination [0.22ms]
+(pass) every registered destination resolves without requiring another room's module [0.47ms]
+(pass) unknown or malformed Brief destinations use the existing safe fallback [0.14ms]
+(pass) source identities roundtrip without inventing a record or retaining unknown query keys [0.42ms]
+(pass) rollback removes only the Brief opt-in and preserves connection parameters [0.13ms]
+
+ui/src/brief/entry/DashboardEntry.test.tsx:
+(pass) flag off and legacy hash navigation retain one legacy mount and its connection owner [11.67ms]
+(pass) every current room and sidecar panel still resolves through the released router [37.85ms]
+(pass) isolated preview owns no live connection, fetch or onboarding side effects [37.29ms]
+(pass) real Brief entry remains behind the existing onboarding gate [2.95ms]
+(pass) missing modules give a truthful fallback instead of fabricated empty business data [6.31ms]
+(pass) room modules preserve shell state and selected source IDs through navigation [7.44ms]
+(pass) a fixture view cannot accidentally supply live room business data [2.58ms]
+
+ 200 pass
+ 0 fail
+ 1537 expect() calls
+Ran 200 tests across 22 files. [11.93s]
