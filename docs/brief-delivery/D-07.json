@@ -1,0 +1,48 @@
+{
+  "task": "D-07",
+  "title": "Build Today composition and review paper",
+  "date": "2026-10-05",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-07",
+  "baseline": "f77b6e712f2e223ac2d781dbcf38f606c324ba03",
+  "inspected_main": "2c70cf0fe436834bbd96cb06a7df615ff136f6e5",
+  "stack_base": "brief/d-06",
+  "dependency_prs": ["https://github.com/vierisid/jarvis/pull/736"],
+  "activation_dependencies": ["F-12 decision view and operation owner", "F-14 decision policy", "F-25/navigationCompatibility", "D-08 operation/queue presentation", "D-33 activation"],
+  "head": {"ref": "brief/d-07", "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-07.json"},
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-07",
+  "preview": "http://localhost:4387/?brief=preview&specimen=today#/_brief_preview",
+  "figma": {"file": "eNfKeirIKLZLlZEasrurZa", "nodes": ["81:3", "81:212"], "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded", "extraction": "ui/src/brief/today/figma-reference.json"},
+  "owns": ["ui/src/brief/today/**", "Optional room-local Today registration factory", "Stable goal companion extension to D-06", "Isolated review entry and its network guard", "docs/brief-delivery/D-07.*", "docs/brief-delivery/evidence/D-07/**"],
+  "excludes": ["D-08 queue advancement and decision operation controller", "D-09 to D-11 production supporting cards", "Live decision adapters/writers or queue policy", "Conversation internals", "F/Q worktrees and persistence", "Live rollout"],
+  "tests": [
+    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 103, "assertions": 2712, "files": 10},
+    {"command": "bunx tsc --noEmit", "result": "pass"},
+    {"command": "bun run build:ui", "result": "pass", "note": "Existing @theme/@tailwind warnings."},
+    {"command": "git diff --check", "result": "pass"}
+  ],
+  "browser_checks": [
+    {"case": "Ten re-hover cycles in each Light/Dark × expanded/rail × closed/open combination", "result": "pass", "cycles": 80},
+    {"case": "Stationary summary and retained conversation draft throughout the matrix", "result": "pass"},
+    {"case": "Direct approval and Keep draft without a pin click, page change or premature queue advancement", "result": "pass"},
+    {"case": "Review close/re-hover after queue insertion and new identity; long document and keyboard path", "result": "pass"},
+    {"case": "Loading/empty/stale/unavailable/unknown effect states", "result": "pass"},
+    {"case": "390px greeting/goal/hero separation, narrow chat return and reduced motion", "result": "pass"}
+  ],
+  "evidence": "evidence/D-07/browser-checks.json",
+  "limitations": [
+    "Supporting cards and conversation bodies are isolated fixtures, not completed live feature implementations.",
+    "Live decisions remain gated and default registration remains unchanged.",
+    "A browser focus action adjusted main scroll by about 8.67px in one direct-action check; hero size and identity remained unchanged. Stored review scroll restoration occurs after the initiating control receives focus.",
+    "Chromium only; narrow container testing is not touch-device or virtual-keyboard emulation.",
+    "No screen-reader certification, cross-browser certification or frame-rate guarantee.",
+    "No email, workflow, account mutation or live provider call was made.",
+    "Read current-head GitHub checks for remote CI status."
+  ],
+  "rollback": "Keep default Today registration or omit the factory/binding. No migration. Revert removes the optional layout/paper/companion and fixture route.",
+  "next": "D-08, separate worktree and PR; not started."
+}

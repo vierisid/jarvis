@@ -89,6 +89,21 @@ test("isolated preview owns no live connection, fetch or onboarding side effects
   expect(connections).toBe(1); expect(starts).toBe(1);
 });
 
+test("Today review and illustrative decision actions never call live providers", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=today#/_brief_preview");
+  expect(host.querySelector(".brief-today-decision")).not.toBeNull();
+  await click("Review follow-up");
+  const approve = host.querySelector<HTMLButtonElement>(".brief-today-review-actions button")!;
+  await React.act(async () => approve.click());
+  expect(host.textContent).toContain("Waiting for confirmation");
+  expect(host.querySelector(".brief-today-decision")?.getAttribute("data-decision-id")).toBe("fixture-decision-follow-up");
+  await click("Reset sample request");
+  expect(host.textContent).toContain("Nothing was sent or executed");
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(connections).toBe(1); expect(host.querySelector(".brief-pebble-companion")).toBeNull();
+});
+
 test("real Brief entry remains behind the existing onboarding gate", async () => {
   function SetupGate() { return <div>Complete existing onboarding</div>; }
   await mount("http://localhost:4381/?brief=1#/brief/today", {}, SetupGate);
