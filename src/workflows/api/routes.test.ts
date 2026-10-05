@@ -12,6 +12,7 @@ import { queueStats } from "../db/repos/job-queue";
 import { updateFlowMetadata } from "../db/repos/flow";
 import {
   createWorkflowRoutes,
+  RUN_TRIGGERED_BY_MAX_CHARS,
   WAITPOINT_RESUME_MAX_BODY_BYTES,
   WAITPOINT_RESUME_PER_ID_PER_MINUTE,
   WAITPOINT_RESUME_UNKNOWN_ID_PER_MINUTE,
@@ -2530,5 +2531,131 @@ describe("#636: run ordering is defined, so a page means something", () => {
     // The composed WHERE concatenates only literal fragments, so a filter value
     // that looks like SQL stays a bound parameter and matches nothing.
     expect(listRuns({ flowId: `' OR 1=1 --` }).length).toBe(0);
+  });
+});
+
+/**
+ * #649. `/run`, `/publish` and `/code-steps` were left out of #635 because an
+ * absent body is part of their contract, so the shared reader was not a drop-in.
+ * It now has an `allowEmpty` mode, decided on the text after both size checks.
+ */
+describe("#649: /run, /publish and /code-steps bound their bodies and keep the empty-body contract", () => {
+  type Route = "run" | "publish" | "code-steps";
+
+  async function newFlow(): Promise<string> {
+    const created = await callJson(routes["/api/workflows"]?.POST, plainReq("POST", "http://x", { displayName: "x" }));
+    return created.body.flow.id;
+  }
+
+  async function hit(route: Route, id: string, body?: BodyInit, headers: Record<string, string> = {}) {
+    const req = new Request(`http://x/api/workflows/${id}/${route}`, { method: "POST", body, headers }) as
+      Request & { params: { id: string } };
+    req.params = { id };
+    return callJson(routes[`/api/workflows/:id/${route}`]?.POST, req);
+  }
+
+  const emptyStream = () => new ReadableStream({ start(c) { c.close(); } });
+
+  /**
+   * `req.body === null` is not the test for "absent": a chunked body with no
+   * bytes has a stream and no content-length, and whitespace was accepted by
+   * the readers this replaced. All four mean the default.
+   */
+  test("an absent body still means the default on /publish and /run, however it arrives", async () => {
+    const absent: [string, () => BodyInit | undefined][] = [
+      ["no body", () => undefined],
+      ["empty string", () => ""],
+      ["whitespace", () => " \n"],
+      ["empty chunked stream", emptyStream],
+    ];
+    for (const [label, body] of absent) {
+      const published = await hit("publish", await newFlow(), body());
+      expect({ label, status: published.status }).toEqual({ label, status: 200 });
+      expect(published.body.version.state).toBe("LOCKED");
+
+      const ran = await hit("run", await newFlow(), body());
+      expect({ label, status: ran.status }).toEqual({ label, status: 202 });
+      expect(ran.body.environment).toBe("PRODUCTION");
+    }
+  });
+
+  test("/code-steps with no body is told what to send, not that it sent bad JSON", async () => {
+    const id = await newFlow();
+    const empty = await hit("code-steps", id);
+    expect(empty.status).toBe(400);
+    expect(empty.body.error).toMatch(/enabled must be a boolean/);
+    expect((await hit("code-steps", id, JSON.stringify({ enabled: true }))).status).toBe(200);
+  });
+
+  test("a body that is not a JSON object is refused on all three, and /run starts nothing", async () => {
+    for (const route of ["run", "publish", "code-steps"] as const) {
+      const malformed = await hit(route, await newFlow(), "{not json");
+      expect({ route, status: malformed.status }).toEqual({ route, status: 400 });
+      expect(malformed.body.error).toMatch(/body must be valid JSON/);
+      const array = await hit(route, await newFlow(), "[]");
+      expect({ route, status: array.status }).toEqual({ route, status: 400 });
+      expect(array.body.error).toMatch(/body must be a JSON object/);
+    }
+    // It used to fall back to {} and start a production run with no payload.
+    expect(queueStats().queued).toBe(0);
+  });
+
+  test("/publish and /code-steps refuse an oversized body, declared or not", async () => {
+    for (const route of ["publish", "code-steps"] as const) {
+      const declared = await hit(route, await newFlow(), "{}", { "Content-Length": String(262_144 + 1) });
+      expect({ route, status: declared.status }).toEqual({ route, status: 413 });
+      const actual = await hit(route, await newFlow(), JSON.stringify({ pad: "a".repeat(262_144) }));
+      expect({ route, status: actual.status }).toEqual({ route, status: 413 });
+      expect(actual.body.error).toMatch(/the limit is 262144 bytes/);
+    }
+  });
+
+  /**
+   * `payload` is one run's trigger input, so `/run` shares the resume cap
+   * rather than the flow-write one: a payload between the two is legitimate.
+   */
+  test("/run takes a payload over the flow-write cap and refuses one over the resume cap", async () => {
+    const big = await hit("run", await newFlow(), JSON.stringify({ payload: { s: "a".repeat(300_000) } }));
+    expect(big.status).toBe(202);
+
+    const declared = await hit("run", await newFlow(), "{}", {
+      "Content-Length": String(WAITPOINT_RESUME_MAX_BODY_BYTES + 1),
+    });
+    expect(declared.status).toBe(413);
+    const actual = await hit("run", await newFlow(), JSON.stringify({ payload: { s: "a".repeat(WAITPOINT_RESUME_MAX_BODY_BYTES) } }));
+    expect(actual.status).toBe(413);
+    expect(actual.body.error).toMatch(new RegExp(`the limit is ${WAITPOINT_RESUME_MAX_BODY_BYTES} bytes`));
+    expect(queueStats().queued).toBe(1);
+  });
+
+  test("/run refuses an environment outside the union instead of a 500 from the column CHECK", async () => {
+    const bogus = await hit("run", await newFlow(), JSON.stringify({ environment: "BOGUS" }));
+    expect(bogus.status).toBe(400);
+    expect(bogus.body.error).toMatch(/environment must be PRODUCTION or TESTING/);
+    expect(queueStats().queued).toBe(0);
+
+    const testing = await hit("run", await newFlow(), JSON.stringify({ environment: "TESTING" }));
+    expect(testing.status).toBe(202);
+    expect(testing.body.environment).toBe("TESTING");
+  });
+
+  test("/run's triggeredBy is a short string, because it is stored and read back to the model", async () => {
+    for (const triggeredBy of [{ a: 1 }, 7, "t".repeat(RUN_TRIGGERED_BY_MAX_CHARS + 1)]) {
+      const refused = await hit("run", await newFlow(), JSON.stringify({ triggeredBy }));
+      expect(refused.status).toBe(400);
+      expect(refused.body.error).toMatch(/triggeredBy must be a string of at most/);
+    }
+    expect(queueStats().queued).toBe(0);
+
+    const atCap = "t".repeat(RUN_TRIGGERED_BY_MAX_CHARS);
+    const accepted = await hit("run", await newFlow(), JSON.stringify({ triggeredBy: atCap }));
+    expect(accepted.status).toBe(202);
+    expect(accepted.body.triggeredBy).toBe(atCap);
+  });
+
+  test("a route that requires a body still refuses an empty one", async () => {
+    const empty = await callJson(routes["/api/workflows"]?.POST, new Request("http://x", { method: "POST", body: "" }));
+    expect(empty.status).toBe(400);
+    expect(empty.body.error).toMatch(/body must be valid JSON/);
   });
 });

@@ -49,15 +49,17 @@ jobs:
               # a change to how they invoke it must re-run its tests.
               - '.github/workflows/sidecar-release.yml'
               - '.github/workflows/installer-release.yml'
-              # These two gate this job's retried step, so an edit to either
+              # The first two gate this job's retried step, so an edit to either
               # must re-run the job it guards -- otherwise a PR that touched
-              # only the guard would ship it unexecuted. Named individually
+              # only the guard would ship it unexecuted. The third is the
+              # guard's own test, which runs in the same job. Named individually
               # rather than '.github/scripts/**': the directory also holds
               # docker-smoke.sh, which has nothing to do with the sidecar, and
               # this filter also gates sidecar-build-darwin on a macos runner
               # that bills at 10x.
               - '.github/scripts/chromium-test-partition.sh'
               - '.github/scripts/chromium-tests.go'
+              - '.github/scripts/chromium-test-partition.test.sh'
             # The daemon lifecycle (lock acquire/release, autostart service
             # definitions) is the one TypeScript area with behaviour that only
             # exists on macOS: the launchd agent is installed with KeepAlive, so
@@ -228,6 +230,15 @@ jobs:
       - name: Test the Windows signing script
         working-directory: sidecar
         run: scripts/sign-windows.test.sh
+
+      # The guard that keeps a Chromium test out of the un-retried step agrees
+      # with the real sidecar whether or not it works, so it gets fixtures of
+      # its own (#648): most break the partition in a way the guard has to
+      # name, and two are controls it has to pass. Runs before the partition
+      # itself so a neutered guard is caught before anything trusts it.
+      # CHROMIUM_TESTS comes from the job env.
+      - name: Test the Chromium partition guard
+        run: .github/scripts/chromium-test-partition.test.sh
 
       - name: Build + vet + test (linux/amd64, cgo)
         working-directory: sidecar
