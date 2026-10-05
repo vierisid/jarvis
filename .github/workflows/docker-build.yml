@@ -30,6 +30,7 @@ on:
       - "package.json"
       - ".github/workflows/docker-build.yml"
       - ".github/scripts/docker-smoke.sh"
+      - ".github/scripts/version-stamp-cache.sh"
       # The image prebuilds the workflow runtime (#613), so a source change can
       # fail the image build without touching the Dockerfile -- and the build's
       # own assertion that every piece is on the content-hash fast path is
@@ -127,6 +128,18 @@ jobs:
           # leftover from the attempt before it.
           SMOKE_PREFIX: jarvis-smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: ./.github/scripts/docker-smoke.sh "$IMAGE_TAG"
+
+      # #647: a release must reuse this workflow's cache. A release commit
+      # changes only package.json's version (and passes a new VERSION), and
+      # the Dockerfile keeps both away from the expensive steps: deps and the
+      # workflow prebuild read a version-neutral package.json from the
+      # `manifest` stage, and the stamp is the build stage's last instruction.
+      # This checks the behaviour rather than the layout: it builds a copy of
+      # the tracked tree, bumps the copy's version as a release commit does,
+      # rebuilds, and fails naming any deps/build/workflows step that re-ran.
+      # Two full builds on this job's builder, no output (~17s warm locally).
+      - name: Check a release re-runs only its version-dependent steps
+        run: ./.github/scripts/version-stamp-cache.sh .
 
       # The script removes the containers and volumes it created, by name, in
       # its own EXIT trap. It deliberately does not touch the image, since a
