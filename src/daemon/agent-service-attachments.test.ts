@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from 'bun:test';
+import { afterEach, expect, spyOn, test } from 'bun:test';
 import { PNG } from 'pngjs';
 import type { ServerWebSocket } from 'bun';
 import { AgentService } from './agent-service';
@@ -17,8 +17,32 @@ import { initDatabase, getDb, closeDb } from '../vault/schema';
 import type { LLMMessage, LLMProvider, LLMResponse } from '../llm/provider';
 import type { JarvisConfig } from '../config/types';
 import type { RoleDefinition } from '../roles/types';
+import { PROJECT_SITE_CHAT_SCOPE, scopeSystemNote } from '../actions/tools/tool-scope';
+import type { ScopedChatInput } from '../brief/chat-transport';
 
 afterEach(() => closeDb());
+for (const withAttachments of [false, true]) test(`scoped model dispatch preserves site context and conversation (attachments=${withAttachments})`, async () => {
+  initDatabase(':memory:', { quiet: true });
+  const service = new AgentService({} as JarvisConfig);
+  const conversation: ScopedChatInput = { conversationId: 'a', turnId: 'turn', requestId: 'request', text: 'Inspect', history: [],
+    contextKey: 'brief:workspace:a', signal: new AbortController().signal,
+    ...(withAttachments ? { attachmentContent: [{ type: 'text' as const, text: 'Untrusted attachment fixture' }] } : {}) };
+  // Configured router-first attachment turns must preserve scope on their classic fallback.
+  if (withAttachments) Object.assign(service, { convOrchestrator: { streamTurn() { throw Error('Wrong path'); } } });
+  const dispatch = spyOn(service.getOrchestrator(), 'streamMessage').mockImplementation(async function* () {});
+  try {
+    const result = service.streamMessage(conversation.text, 'websocket', 'SITE CONTEXT FIXTURE', PROJECT_SITE_CHAT_SCOPE, conversation.contextKey, conversation);
+    for await (const _event of result.stream) { /* Release the tracked turn. */ }
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    const args = dispatch.mock.calls[0]!;
+    expect(args[5]).toBe(PROJECT_SITE_CHAT_SCOPE); expect(args[6]).toBe(conversation);
+    expect(JSON.stringify(args[0])).toContain('SITE CONTEXT FIXTURE');
+    expect(JSON.stringify(args[0])).toContain(JSON.stringify(scopeSystemNote(PROJECT_SITE_CHAT_SCOPE)).slice(1, -1));
+    if (withAttachments) expect(args[1]).toEqual([...conversation.attachmentContent!, { type: 'text', text: conversation.text }]);
+    else expect(args[1]).toBe(conversation.text);
+  } finally { dispatch.mockRestore(); }
+});
+
 for (const routerFirst of [false, true]) test(`attachments reach the real ${routerFirst ? 'router-first' : 'classic'} model path with isolated history and tool taint`, async () => {
   initDatabase(':memory:', { quiet: true });
   const seen: LLMMessage[][] = []; let executions = 0;

@@ -121,7 +121,8 @@ export class DraftAttachments {
         if (epoch !== this.epoch || signal.aborted) return;
         if (JSON.stringify(this.items(conversationId).find(a => a.attachmentId === item.attachmentId)) !== JSON.stringify(item) || this.jobs.has(item.attachmentId)) continue;
         if (ref.state === 'accepted') this.store.acceptAttachments(conversationId, [item.attachmentId]);
-        else if (ref.state === 'ready' && ref.expiresAt > Date.now()) this.update(conversationId, item.attachmentId, { state: 'ready', error: undefined });
+        else if (ref.state === 'ready' && ref.expiresAt > Date.now()) this.update(conversationId, item.attachmentId,
+          { state: 'ready', error: undefined, name: ref.name, mediaType: ref.mediaType, size: ref.size, kind: ref.kind });
         else this.update(conversationId, item.attachmentId, { state: 'failed', error: 'Attachment expired or was removed. Choose the file again.' });
       } catch {
         if (epoch !== this.epoch || signal.aborted) return;

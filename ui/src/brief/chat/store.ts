@@ -50,6 +50,7 @@ export class ConversationStore {
   private storageKey = '';
   private requestErrors = new Map<string, string>();
   private dismissedFailures = new Map<string, string>();
+  private consumedAttachments = new Map<string, Set<string>>();
   constructor(private readonly storage?: StoragePort) {}
   getSnapshot = () => this.state;
   subscribe = (listener: () => void) => { this.listeners.add(listener); return () => { this.listeners.delete(listener); }; };
@@ -95,6 +96,7 @@ export class ConversationStore {
     if (this.state.workspaceId !== tabs.workspaceId) {
       this.replay.clear(); this.saved = dictionary();
       this.requestErrors.clear(); this.dismissedFailures.clear();
+      this.consumedAttachments.clear();
       this.state = { ...this.state, workspaceId: tabs.workspaceId, conversations: dictionary(), persistenceError: null };
       this.storageKey = `jarvis.brief.chat.v1.${encodeURIComponent(tabs.workspaceId)}`;
       try {
@@ -171,21 +173,24 @@ export class ConversationStore {
     this.setError(id, null);
   }
   acceptAttachments(id: string, ids: string[]) {
-    const chat = this.state.conversations[id]; if (!chat) return;
+    const chat = this.state.conversations[id]; if (!chat || !ids.length) return;
+    const consumed = this.consumedAttachments.get(id) ?? new Set<string>();
+    for (const attachmentId of ids) consumed.add(attachmentId);
+    this.consumedAttachments.set(id, consumed);
     let items = chat.attachments;
     try {
       const raw = this.storage?.getItem(this.fieldKey(id, 'attachments'));
       if (raw != null) {
         const latest = readLocal({ ...emptyLocal(), attachments: JSON.parse(raw) });
-        if (!latest) return;
         // Merge the latest saved references before clearing accepted identities.
-        items = latest.attachments;
+        if (latest) items = latest.attachments;
       }
-    } catch { return; }
-    this.setAttachments(id, items.filter(item => !ids.includes(item.attachmentId)));
+    } catch { /* Canonical acceptance still clears this window when storage is unavailable. */ }
+    this.setAttachments(id, items);
   }
   setAttachments(id: string, attachments: ChatAttachment[]) {
-    this.update(id, { attachments: attachments.map(({ attachmentId, name, size, mediaType, kind, state, error }) => ({ attachmentId, name, size, mediaType, ...(kind ? { kind } : {}), ...(state ? { state } : {}), ...(error ? { error } : {}) })) });
+    // Canonical consumption is permanent, including across delayed composer writes.
+    this.update(id, { attachments: attachments.filter(item => !this.consumedAttachments.get(id)?.has(item.attachmentId)).map(({ attachmentId, name, size, mediaType, kind, state, error }) => ({ attachmentId, name, size, mediaType, ...(kind ? { kind } : {}), ...(state ? { state } : {}), ...(error ? { error } : {}) })) });
   }
   setScroll(id: string, scroll: ChatScroll) { this.update(id, { scroll: { top: Math.max(0, Number.isFinite(scroll.top) ? scroll.top : 0), atBottom: scroll.atBottom } }); }
   private update(id: string, patch: Partial<ConversationState>, persist = true) {
@@ -212,6 +217,7 @@ export class ConversationStore {
     const metadata = this.metadata(chat, [event]);
     const { messageSequences: _watermarks, historyIds: _history, ...projected } = project(replay, timestamp);
     this.update(id, { ...metadata, ...projected, sequence: Math.max(chat.sequence, event.sequence) });
+    if (event.payload.kind === 'message') this.acceptAttachments(id, event.payload.message.attachments?.map(ref => ref.attachmentId) ?? []);
     return replay.events.size >= 500;
   }
   applySnapshot(snapshot: ChatSnapshot) {
@@ -238,6 +244,11 @@ export class ConversationStore {
     this.update(id, { ...metadata, ...projected, sequence: Math.max(chat.sequence, snapshot.sequence),
       // A reconnect must not rewind the older-history cursor already consumed by the reader.
       history: chat.history.state === 'idle' ? { state: 'ready', cursor: snapshot.messages.nextCursor } : chat.history });
+    this.acceptAttachments(id, [
+      ...snapshot.messages.items.flatMap(message => message.attachments ?? []),
+      ...snapshot.turns.flatMap(turn => turn.attachments ?? []),
+      ...snapshot.events.flatMap(event => event.payload.kind === 'message' ? event.payload.message.attachments ?? [] : []),
+    ].map(ref => ref.attachmentId));
   }
   private metadata(chat: ConversationState, events: BriefChatEvent[]) {
     const activity = { ...chat.activity }, approvals = { ...chat.approvals }, unread = new Set(chat.unread);
@@ -263,6 +274,7 @@ export class ConversationStore {
     replay.base = { ...replay.base, messages: [...messages.values()].sort(compareMessages) };
     const { messageSequences: _watermarks, historyIds: _history, ...projected } = project(replay, Date.now());
     this.update(id, { ...projected, history: { state: 'ready', cursor: page.nextCursor } }, false);
+    this.acceptAttachments(id, page.items.flatMap(message => message.attachments ?? []).map(ref => ref.attachmentId));
   }
 }
 

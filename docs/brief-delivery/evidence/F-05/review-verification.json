@@ -1,0 +1,38 @@
+{
+  "reviewed_head": "c1ad45f2e617c45621774964075d5643920823c8",
+  "red": {
+    "passed": 66,
+    "failed": 8,
+    "failing_checks": [
+      "(fail) #611 no seventh copy appears elsewhere in the tree > every file touching unavailable_capabilities is one we know about",
+      "(fail) what a future change could silently undo > both branches of streamMessageInner carry the scope and the site block",
+      "(fail) real HTTP/WebSocket chat preserves history and attachment ownership (attachments=true)",
+      "(fail) reload recovers canonical screenshot metadata after the capture response is lost",
+      "(fail) canonical event consumes attachments in a stale window and prevents resurrection",
+      "(fail) canonical snapshot-message consumes attachments in a stale window and prevents resurrection",
+      "(fail) canonical snapshot-turn consumes attachments in a stale window and prevents resurrection",
+      "(fail) canonical history consumes attachments in a stale window and prevents resurrection"
+    ]
+  },
+  "scope_mutation": {
+    "change": "Replace the classic model dispatch scope argument with null",
+    "exit_code": 1,
+    "failing_checks": [
+      "(fail) scoped model dispatch preserves site context and conversation (attachments=false)",
+      "(fail) scoped model dispatch preserves site context and conversation (attachments=true)",
+      "(fail) what a future change could silently undo > both branches of streamMessageInner carry the scope and the site block"
+    ],
+    "source_restored": true
+  },
+  "green": {
+    "passed": 363,
+    "failed": 0,
+    "assertions": 3097,
+    "files": 34,
+    "command": "bun test src/brief ui/src/brief src/vault/chat-turns.test.ts src/vault/conversation-lifecycle.test.ts src/vault/conversation-schema.test.ts src/agents/taint-gating.test.ts src/agents/path-parity-scope.test.ts src/agents/tool-filter-wiring.test.ts src/agents/orchestrator-tier-fallback.test.ts src/roles/untrusted-import-guard.test.ts src/workflows/adapters/untrusted-reach.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts ui/src/hooks/useWebSocket.test.ts ui/src/hooks/useWebSocket.realtime-status.test.ts src/daemon/ws-service-conversation.test.ts src/daemon/api-brief-attachments.test.ts src/daemon/api-brief.test.ts src/daemon/api-brief-conversations.test.ts src/daemon/agent-service-conversation.test.ts src/daemon/agent-service-attachments.test.ts src/sidecar/capability-predicate.test.ts src/actions/tools/tool-scope.test.ts",
+    "log": "review-affected.log"
+  },
+  "typescript": "passed",
+  "ui_build": "passed; existing CSS at-rule warnings",
+  "browser_bundle": "passed; 16 modules"
+}

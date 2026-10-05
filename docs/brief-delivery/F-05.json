@@ -120,5 +120,22 @@
   ],
   "rollback": "Disable chatAttachments and its future UI affordance, preserve additive tables/history, do not replay turns or delete user content.",
   "quick_verification": "docs/brief-chat-attachments.md",
-  "next_task": "F-06 not started"
+  "next_task": "F-06 not started",
+  "review_fixes": {
+    "findings": [
+      "Canonical events, snapshots and history clear consumed references in every window and prevent stale composer writes from resurrecting them. Newer draft files remain.",
+      "Screenshot restore refreshes canonical name, MIME type, size and kind.",
+      "Screenshot capability checks use servesCapability while preserving revoked-device refusal.",
+      "Scope guard accepts multimodal dispatch; runtime fixtures verify site context, scope and conversation for both text and attachment turns."
+    ],
+    "verification": "docs/brief-delivery/evidence/F-05/review-verification.json",
+    "affected": {
+      "passed": 363,
+      "failed": 0,
+      "assertions": 3097,
+      "files": 34
+    },
+    "red_green": "All six new failing cases and the two existing CI guard failures pass after correction. Dropping scope fails both runtime fixtures and the source guard.",
+    "remote_ci": "Exact pushed head and current CI result are recorded in the PR description."
+  }
 }
