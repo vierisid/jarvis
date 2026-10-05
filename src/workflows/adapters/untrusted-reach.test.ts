@@ -190,18 +190,22 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     DrySample's `outputs` (8,000 characters
  *                                     each) and `error` (500). Every service in
  *                                     that run is simulated from the caller's
- *                                     fixture, so the text is as trusted as the
- *                                     fixture. The sample backs a preview a
- *                                     person reads; a consumer that hands it to
- *                                     a model frames it there, as goals/rhythm.ts
+ *                                     fixture and no connection resolves, so the
+ *                                     text is as trusted as the fixture; the
+ *                                     run's log file is deleted with the run.
+ *                                     The sample backs a preview a person
+ *                                     reads; a consumer that hands it to a
+ *                                     model frames it there, as goals/rhythm.ts
  *                                     does.
  *   awareness/prepared-qualification.ts BENIGN. Holds a whole `FlowVersion` and
  *                                     `FlowRun` but reads the graph, ids, state
- *                                     and status, and effect records' step
- *                                     names, digests and status. Its reasons are
- *                                     fixed sentences with step names, readiness
- *                                     messages and a dry sample's bounded error,
- *                                     for a person through the Brief provider.
+ *                                     and status, effect records' step names,
+ *                                     digests and status, and each step's
+ *                                     status from `run.steps`, never a payload.
+ *                                     Its reasons are fixed sentences with step
+ *                                     names, readiness messages and a dry
+ *                                     sample's bounded error, for a person
+ *                                     through the Brief provider.
  *   brief/contracts.ts                BENIGN. Imports only workflow status
  *                                     TYPES for wire references. It fetches no
  *                                     run/version and exports no captured step

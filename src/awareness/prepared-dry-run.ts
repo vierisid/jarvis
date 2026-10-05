@@ -7,14 +7,18 @@
  * fixture, notifications and tools are recorded and never delivered, context
  * reads return fixture data. Agent delegation, nested runs and governed piece
  * dispatch are not configured, so the sandbox API refuses them and the step
- * fails closed. `drySupport` refuses community pieces and CODE before the
+ * fails closed. No connection resolves, so no step can read a stored
+ * credential. `drySupport` refuses community pieces and CODE before the
  * engine starts, because those reach the network without the sandbox API.
  *
- * The run executes a scratch copy of the version, deleted afterwards, so the
- * proposal's own workflow gets no run history. It never enqueues a job: the
- * daemon's worker drains that queue with real services.
+ * The run executes a scratch copy of the version, deleted afterwards with the
+ * run's log file, so the proposal's own workflow gets no run history. It never
+ * enqueues a job: the daemon's worker drains that queue with real services.
  */
+import { rmSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { SandboxApi, type SandboxApiServices } from '../workflows/sandbox-api/server.ts';
+import { workflowLogsBase } from '../workflows/sandbox-api/config.ts';
 import { EngineRuntime } from '../workflows/runner/engine-runtime/engine-runtime.ts';
 import { CredentialResolver } from '../workflows/credentials/adapter.ts';
 import { createFlow, deleteFlow, getFlow } from '../workflows/db/repos/flow.ts';
@@ -44,6 +48,11 @@ const RUN_TIMEOUT_SECONDS = 60;
 
 type Active = { fixture: DryFixture; simulated: DrySample['simulated'] };
 
+/** No supported step needs a credential, so none is ever resolved: a connection reference fails its step. */
+class NoCredentials extends CredentialResolver {
+  override async resolve(): Promise<null> { return null; }
+}
+
 function dryServices(active: () => Active | null): SandboxApiServices {
   const record = (service: DrySample['simulated'][number]['service'], ctx: WorkflowEffectContext) => {
     const run = active();
@@ -60,7 +69,7 @@ function dryServices(active: () => Active | null): SandboxApiServices {
     return { result: fixture(run.fixture.context, step, 'context result') as never };
   };
   return {
-    credentialResolver: new CredentialResolver(),
+    credentialResolver: new NoCredentials(),
     llmChat: async (req, ctx) => {
       const { run, step } = record('llm', ctx);
       const text = fixture(run.fixture.replies, step, 'model reply');
@@ -70,10 +79,11 @@ function dryServices(active: () => Active | null): SandboxApiServices {
         ...(req.outputSchema ? { outputSchema: req.outputSchema } : {}) });
       return 'parsed' in evaluated ? { text, parsed: evaluated.parsed, outcome: evaluated.outcome } : { text, outcome: evaluated.outcome };
     },
-    // Nothing is delivered, and the step's output says so.
-    notify: async (_req, ctx) => {
+    // Answered as a delivery succeeds, so later steps take the path they
+    // take in production; the sample lists the step as simulated.
+    notify: async (req, ctx) => {
       record('notify', ctx);
-      return { delivered: [], failed: [] };
+      return { delivered: [...req.channels], failed: [] };
     },
     toolsInvoke: async (req, ctx) => {
       const { run, step } = record('tool', ctx);
@@ -151,7 +161,9 @@ export class PreparedDryRunner {
         error = thrown instanceof Error ? thrown.message : String(thrown);
       } finally {
         this.active = null;
+        // Released first, so the engine cannot upload another backup after the file is gone.
         await handle.release();
+        removeRunLog(run.id);
       }
       const settled = getFlowRun(run.id);
       // Each streamed step is stored as { output: <engine step record> }, whose own `output` is the result.
@@ -168,4 +180,9 @@ export class PreparedDryRunner {
       deleteFlow(scratch.id);
     }
   }
+}
+
+/** The engine's execution-state backup outlives the run row; remove it with the scratch copy. */
+function removeRunLog(runId: string): void {
+  rmSync(resolve(workflowLogsBase(), `${runId}.bin`), { force: true });
 }

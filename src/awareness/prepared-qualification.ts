@@ -28,7 +28,7 @@ import { getWorkflowComposition } from '../workflows/db/repos/workflow-compositi
 import { listWorkflowEffects } from '../workflows/db/repos/workflow-effect.ts';
 import type { CredentialResolver } from '../workflows/credentials/adapter.ts';
 import { digest } from '../workflows/runtime/effect-context.ts';
-import { GATED_TOOL_NAMES, toolEffectCapability } from '../workflows/runtime/effect-capabilities.ts';
+import { BOUNDED_TOOL_NAMES, GATED_TOOL_NAMES, boundedToolCapability, toolEffectCapability } from '../workflows/runtime/effect-capabilities.ts';
 import { governedPieceToolDefinition, PIECE_TOOL_CATEGORY, resolveGovernedPieceAction } from '../workflows/runtime/piece-effects.ts';
 import type { WorkflowReadiness } from '../workflows/runtime/workflow-readiness.ts';
 import type { JobKind } from './opportunity-types.ts';
@@ -39,7 +39,7 @@ export const DRY_RUNNER = 'prepared-dry-run-v1';
 
 /** Constraints a job states that can be checked against the graph. */
 export type JobConstraint =
-  /** Anything that reaches another person or cannot be undone asks the user first. */
+  /** Sends, deletions and other external or irreversible effects ask the user first; shared writes get a person's review. */
   | { kind: 'review_before_effects' }
   /** No step may reach these Authority categories (for example a draft-only job forbids send_email). */
   | { kind: 'forbid'; categories: ActionCategory[] }
@@ -81,7 +81,7 @@ export interface DrySample {
   error: string | null;
   /** Steps whose daemon service was called and simulated, in call order. Nothing else is reachable. */
   simulated: Array<{ step: string; service: 'llm' | 'notify' | 'tool' | 'context' }>;
-  /** Step outputs, each cut to a bounded size. */
+  /** Step outputs, each cut to a bounded size. A loop step keeps its last iteration. */
   outputs: Record<string, unknown>;
 }
 
@@ -106,7 +106,7 @@ export type QualificationCode =
   | 'incomplete' | 'goal_changed' | 'goal_inactive' | 'composition_unlinked'
   | 'version_missing' | 'version_changed' | 'version_not_ready'
   | 'binding_unavailable' | 'binding_undeclared' | 'binding_changed'
-  | 'recipient_missing' | 'authority_denied' | 'effect_ungoverned' | 'effect_unreviewable'
+  | 'recipient_missing' | 'authority_denied' | 'effect_unavailable' | 'effect_ungoverned' | 'effect_unreviewable'
   | 'constraint_violated' | 'constraint_unverified'
   | 'sample_missing' | 'sample_failed' | 'sample_mismatch' | 'sample_unsafe'
   | 'preview_missing' | 'preview_unsupported' | 'preview_misstated';
@@ -143,20 +143,30 @@ export interface BindingFact {
   steps: string[];
 }
 
+/** A machine a tool step can name, as the sidecar inventory reports it. */
+export type QualificationTarget = ExecutionTarget & { unavailableCapabilities?: string[] };
+
 export interface StepFact {
   step: string;
   piece: string | null;
   action: string | null;
-  /** read_data steps read sources; every other category is an effect. */
+  /** Steps that only read are sources; anything else is an effect. */
   role: 'source' | 'effect';
+  /** The most severe category, and every category the step reaches, most severe first. */
   category: ActionCategory | null;
-  /** The decision the effect boundary would make for the workflow principal. */
-  decision: 'auto' | 'approval' | 'denied' | 'ungoverned';
+  categories: ActionCategory[];
+  /**
+   * What the effect boundary would do for the workflow principal. `unknown`:
+   * decided at run time. `unavailable`: refused before Authority is asked.
+   */
+  decision: 'auto' | 'approval' | 'denied' | 'ungoverned' | 'unknown' | 'unavailable';
   reason: string;
-  /** Set when part of what this step does is decided only at run time. */
-  unreviewable: string | null;
+  /** What this step decides only at run time, so no one can confirm it now. */
+  unreviewable: string[];
   /** Deliveries to people other than the owner. */
   recipients: { state: 'ok' | 'missing' | 'placeholder' | 'runtime'; literals: string[] } | null;
+  /** The service of a write that may reach whoever shares that space. */
+  shared: string | null;
 }
 
 export interface QualificationFacts {
@@ -166,7 +176,7 @@ export interface QualificationFacts {
   bindings: BindingFact[];
   steps: StepFact[];
   /** The preview's real run, when it claims verified output. */
-  run: { flowId: string; versionId: string; status: string; proven: boolean; succeeded: string[] } | null;
+  run: { flowId: string; versionId: string; status: string; partial: boolean; proven: boolean; completed: string[] } | null;
 }
 
 export interface QualificationServices {
@@ -175,22 +185,30 @@ export interface QualificationServices {
   composition(id: string): { state: 'COMPOSING' | 'VALIDATED' | 'FAILED' } | null;
   flowMetadata(flowId: string): Record<string, unknown> | null;
   /** The version's graph and live readiness, or null when it is missing or belongs to another flow. */
-  version(flowId: string, versionId: string): { projectId: string; trigger: FlowTriggerNode; state: 'DRAFT' | 'LOCKED'; readiness: WorkflowReadiness } | null;
+  version(flowId: string, versionId: string): {
+    projectId: string; trigger: FlowTriggerNode; state: 'DRAFT' | 'LOCKED'; updated: number; readiness: WorkflowReadiness;
+  } | null;
   /** Project-scoped and metadata only; never decrypts or refreshes a credential. */
   connection(projectId: string, externalId: string, pieceName: string): { revision: BriefRevision | null; reason: string | null };
-  targets(): ExecutionTarget[];
+  targets(): QualificationTarget[];
   tool(name: string): ToolDefinition | null;
   authority: AuthorityEngine | null;
-  run(runId: string): { flowId: string; versionId: string; status: string;
-    effects: Array<{ stepName: string; versionDigest: string; status: string }> } | null;
+  /** A run's identity and outcome: effect records and each step's status, never step payloads. */
+  run(runId: string): {
+    flowId: string; versionId: string; status: string; created: number; partial: boolean;
+    effects: Array<{ stepName: string; versionDigest: string; status: string }>;
+    steps: Record<string, string | null>;
+  } | null;
 }
 
 /** The identity the effect boundary pins an execution to (`effect-context.ts`). */
 export const versionDigest = (trigger: unknown) => digest(trigger);
 
 const JARVIS = '@jarvispieces/piece-jarvis-';
-/** Pieces that compute locally and call no daemon service. */
-const PURE_PIECES = new Set(['regex', 'validate']);
+/** Jarvis pieces that compute locally: no daemon service, connection or store. */
+const PURE_PIECES = new Set(['regex']);
+/** Jarvis pieces whose every daemon call the dry runner simulates. */
+const DRY_PIECES = new Set([...PURE_PIECES, 'ask', 'notify', 'context', 'tool']);
 const EXPRESSION = /\{\{[\s\S]*?\}\}/;
 /** The binding grammar readiness parses inside each `{{...}}` (`workflow-readiness.ts`). */
 const CONNECTION_SOURCE = /^connections(?:\.([\w:-]+)|\['([^']+)'\])$/;
@@ -198,14 +216,51 @@ const DELIVERY: ReadonlySet<ActionCategory> = new Set(['send_email', 'send_messa
 /** Effects a "for approval" job must not run unasked: deliveries, and anything external or irreversible. */
 const REVIEWED: ReadonlySet<ActionCategory> = new Set(['send_email', 'send_message', 'access_browser',
   'delete_data', 'modify_settings', 'make_payment', 'install_software', 'execute_command', 'terminate_agent']);
-/** Input names that address a person or a conversation, across the governed adapters' target props. */
-const RECIPIENT_PROPS = ['receiver', 'to', 'cc', 'bcc', 'recipients', 'email', 'channel', 'channel_id',
-  'user', 'userId', 'user_id', 'chat_id', 'username', 'handle', 'attendees'];
-/** A reply, forward or saved draft is addressed by the message it continues. */
-const THREAD_PROPS = ['message_id', 'message_ids', 'thread_id', 'draft_id', 'ts', 'threadTs'];
+
+/**
+ * Who each verified delivery action reaches, from its manifest props
+ * (`pieces-library/verified-manifests-generated.ts`); a test keeps it in step
+ * with the adapters. `to`: at least one must name a recipient. `cc`: more
+ * recipients, checked but not enough alone. `continues`: the action continues
+ * a message, thread or draft that already has recipients. `none`: published,
+ * not addressed.
+ */
+type Delivery = { to?: string[]; cc?: string[]; continues?: string[]; none?: true };
+const MAIL: Delivery = { to: ['receiver'], cc: ['cc', 'bcc'] };
+export const DELIVERIES: Readonly<Record<string, Delivery>> = {
+  'gmail:send_email': MAIL, 'gmail:gmail_send_email': MAIL, 'gmail:request_approval_in_mail': MAIL,
+  // A forward carries an existing message to new people: the message is content, not an address.
+  'gmail:gmail_forward_message': MAIL,
+  'gmail:reply_to_email': { continues: ['message_id'] }, 'gmail:gmail_reply_to_thread': { continues: ['message_id'] },
+  'gmail:gmail_send_draft': { continues: ['draft_id'] },
+  'slack:send_direct_message': { to: ['userId'] }, 'slack:request_approval_direct_message': { to: ['userId'] },
+  'slack:request_action_direct_message': { to: ['userId'] }, 'slack:slack_send_direct_message': { to: ['userId'] },
+  'slack:send_channel_message': { to: ['channel'] }, 'slack:request_approval_message': { to: ['channel'] },
+  'slack:request_action_message': { to: ['channel'] }, 'slack:slack_post_message': { to: ['channel'] },
+  'slack:slack_schedule_message': { to: ['channel'] }, 'slack:slack_send_ephemeral_message': { to: ['user'], cc: ['channel'] },
+  'slack:send_message_to_multiple_users': { to: ['recipients'] },
+  'slack:updateMessage': { continues: ['ts'] }, 'slack:slack_update_message': { continues: ['ts'] },
+  'discord:sendMessageWithBot': { to: ['channel_id'] }, 'discord:discord_send_message': { to: ['channel_id'] },
+  'discord:send_message_webhook': { to: ['webhook_url'] }, 'discord:request_approval_message': { to: ['channel'] },
+  'discord:discord_edit_message': { continues: ['message_id'] },
+  'telegram-bot:send_text_message': { to: ['chat_id'] }, 'telegram-bot:send_media': { to: ['chat_id'] },
+  'telegram-bot:request_approval_message': { to: ['chat_id'] },
+  'github:github_create_gist': { none: true },
+  'google-calendar:google-calendar-add-attendees': { to: ['attendees'] },
+  'google-calendar:google_calendar_remove_attendee': { to: ['attendee_email'] },
+};
+/** Third-party writes that stay with the user: mailbox drafts, labels and archive. */
+const PRIVATE_WRITES = new Set(['create_draft_reply', 'gmail_create_draft', 'gmail_update_draft', 'gmail_create_label',
+  'gmail_add_label_to_email', 'gmail_remove_label_from_email', 'gmail_archive_email', 'gmail_archive_message',
+  'gmail_get_or_create_label', 'gmail_update_label', 'gmail_untrash_message'].map(action => `gmail:${action}`));
+/** Model providers: what a step writes goes to the provider, not to people. */
+const PRIVATE_SERVICES = new Set(['openai', 'claude']);
+/** The inputs a tool's own Authority gate reads, where it reads fewer than all (`builtin.ts` write_file). */
+const GATE_INPUTS: Readonly<Record<string, readonly string[]>> = { write_file: ['path'] };
+/** Whole values that stand in for a recipient. */
 const PLACEHOLDERS = [
-  /^<[^<>]*>$/, /^\[[^[\]]*\]$/,
-  /\b(?:tbd|todo|fixme|placeholder|changeme|change[ _-]me|x{3,})\b/i,
+  /^<[^<>]*>$/, /^\[[^[\]]*\]$/, /^\{[^{}]*\}$/,
+  /^(?:tbd|todo|fixme|placeholder|changeme|change[ _-]me|x{3,})$/i,
   // RFC 2606 reserves these names; nothing real is delivered to them.
   /@(?:[\w-]+\.)*example(?:\.(?:com|org|net))?$/i, /@(?:[\w-]+\.)*invalid$/i,
 ];
@@ -217,6 +272,19 @@ const hasExpression = (value: unknown): boolean => typeof value === 'string' ? E
   : Array.isArray(value) ? value.some(hasExpression) : object(value) ? Object.values(value).some(hasExpression) : false;
 const present = (value: unknown) => value !== undefined && value !== null
   && !(typeof value === 'string' && !value.trim()) && !(Array.isArray(value) && value.length === 0);
+
+/** A tool step's params as readiness and the engine read them: an object, or the JSON text of one. */
+function toolParams(raw: unknown): { params: Record<string, unknown>; known: boolean } {
+  if (raw === undefined || raw === null) return { params: {}, known: true };
+  if (object(raw)) return { params: raw, known: true };
+  if (typeof raw === 'string' && !hasExpression(raw)) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (object(parsed)) return { params: parsed, known: true };
+    } catch { /* not JSON; readiness reports it */ }
+  }
+  return { params: {}, known: false };
+}
 
 /**
  * Why the dry runner cannot execute this graph without reaching a real
@@ -231,22 +299,37 @@ export function drySupport(trigger: unknown): string | null {
     if (node.type !== 'PIECE') return `${node.name} is a ${node.type} step`;
     const piece = String(node.settings?.pieceName ?? '');
     const name = piece.startsWith(JARVIS) ? piece.slice(JARVIS.length) : null;
-    if (!name || !(PURE_PIECES.has(name) || ['ask', 'notify', 'context', 'tool'].includes(name))) {
-      return `${node.name} uses ${piece || 'an unknown piece'}, which the dry runner cannot simulate`;
-    }
+    if (!name || !DRY_PIECES.has(name)) return `${node.name} uses ${piece || 'an unknown piece'}, which the dry runner cannot simulate`;
   }
   return null;
 }
 
-/** Connections and targets the graph binds, with live availability. F-09 shows these as its `BriefBinding`s. */
-export function requiredBindings(trigger: FlowTriggerNode, projectId: string, targets: ExecutionTarget[],
+/** The runtime's lookup (`machine-binding.ts` identify): sidecars only, by id, then name, then a unique partial name, ignoring case. */
+function identifyTarget(selector: string, targets: QualificationTarget[]): QualificationTarget | 'ambiguous' | null {
+  const sidecars = targets.filter(t => !t.isHost);
+  const exact = sidecars.find(t => t.id === selector);
+  if (exact) return exact;
+  const wanted = selector.toLowerCase();
+  const named = sidecars.filter(t => t.name.toLowerCase() === wanted);
+  const matches = named.length ? named : sidecars.filter(t => t.name.toLowerCase().includes(wanted));
+  return matches.length === 1 ? matches[0]! : matches.length ? 'ambiguous' : null;
+}
+
+const AVAILABILITY_RANK = { ready: 0, unknown: 1, unavailable: 2 } as const;
+
+/** Connections and machines the graph binds, with live availability. F-09 shows these as its `BriefBinding`s. */
+export function requiredBindings(trigger: FlowTriggerNode, projectId: string, targets: QualificationTarget[],
   connection: QualificationServices['connection']): BindingFact[] {
   const found = new Map<string, BindingFact>();
   const add = (fact: Omit<BindingFact, 'steps'>, step: string) => {
-    const key = `${fact.kind}:${fact.id}`;
-    const existing = found.get(key);
-    if (existing) { if (!existing.steps.includes(step)) existing.steps.push(step); return; }
-    found.set(key, { ...fact, steps: [step] });
+    const existing = found.get(bindingKey(fact));
+    if (!existing) { found.set(bindingKey(fact), { ...fact, steps: [step] }); return; }
+    if (!existing.steps.includes(step)) existing.steps.push(step);
+    // One machine can serve one step and not another (a missing capability): keep the worst.
+    if (AVAILABILITY_RANK[fact.availability] > AVAILABILITY_RANK[existing.availability]) {
+      existing.availability = fact.availability;
+      existing.reason = fact.reason;
+    }
   };
   for (const node of walkFlowNodes(trigger)) {
     const pieceName = String(node.settings?.pieceName ?? '');
@@ -263,121 +346,147 @@ export function requiredBindings(trigger: FlowTriggerNode, projectId: string, ta
       else if (object(value)) Object.values(value).forEach(visit);
     };
     visit(node.settings?.input);
-    const params = node.settings?.input?.params;
-    if (pieceName === JARVIS + 'tool' && object(params) && present(params.target) && !hasExpression(params.target)) {
-      const name = String(params.target);
-      const target = targets.find(t => t.name === name || (t.id && t.id === name));
-      if (!target) add({ kind: 'target', id: name, revision: null, availability: 'unavailable', reason: `No machine named ${name} is enrolled` }, node.name);
-      else {
-        const id = target.isHost ? 'host' : target.id;
-        const availability = target.isHost || target.connected === true ? 'ready' : target.connected === false ? 'unavailable' : 'unknown';
-        add({ kind: 'target', id, revision: digest({ id, name: target.name, os: target.os, capabilities: [...(target.capabilities ?? [])].sort() }),
-          availability, reason: availability === 'ready' ? null : `${target.name} is ${availability === 'unavailable' ? 'offline' : 'not reporting its state'}` }, node.name);
-      }
+    if (pieceName !== JARVIS + 'tool') continue;
+    const { params, known } = toolParams(node.settings?.input?.params);
+    const selector = known && typeof params.target === 'string' && !hasExpression(params.target) ? params.target.trim() : '';
+    if (!selector) continue;
+    const toolName = node.settings?.input?.toolName;
+    const capability = typeof toolName === 'string' && BOUNDED_TOOL_NAMES.has(toolName) ? boundedToolCapability(toolName) : null;
+    const target = identifyTarget(selector, targets);
+    if (!target || target === 'ambiguous') {
+      add({ kind: 'target', id: selector, revision: null, availability: 'unavailable',
+        reason: target ? `several machines match "${selector}"` : `no enrolled machine matches "${selector}"` }, node.name);
+      continue;
     }
+    // Dispatch refuses a machine that does not offer the capability (`machine-binding.ts` assertDispatch).
+    const lacks = capability !== null && (!target.capabilities?.includes(capability) || !!target.unavailableCapabilities?.includes(capability));
+    const availability = lacks || target.connected === false ? 'unavailable' : target.connected === true ? 'ready' : 'unknown';
+    add({ kind: 'target', id: target.id, availability,
+      revision: digest({ id: target.id, name: target.name, os: target.os, capabilities: [...(target.capabilities ?? [])].sort(),
+        unavailable: [...(target.unavailableCapabilities ?? [])].sort() }),
+      reason: lacks ? `${target.name} cannot run ${capability} tools`
+        : availability === 'ready' ? null : `${target.name} is ${availability === 'unavailable' ? 'offline' : 'not reporting its state'}` }, node.name);
   }
   // Code-point order, so the fingerprint never depends on the host's locale.
   return [...found.values()].sort((a, b) => bindingKey(a) < bindingKey(b) ? -1 : bindingKey(a) > bindingKey(b) ? 1 : 0);
 }
 
-/** Who a delivery reaches. Null when the step is not a delivery. */
-function recipientsOf(input: Record<string, unknown>, props: readonly string[]): NonNullable<StepFact['recipients']> {
-  const supplied = props.filter(p => present(input[p]));
-  if (!supplied.length) {
-    return { state: THREAD_PROPS.some(p => present(input[p])) ? 'ok' : 'missing', literals: [] };
-  }
+/** Who a delivery reaches. */
+function recipientsFor(delivery: Delivery, input: Record<string, unknown>): NonNullable<StepFact['recipients']> {
+  if (delivery.none) return { state: 'ok', literals: [] };
+  const to = (delivery.to ?? []).filter(prop => present(input[prop]));
+  if (!to.length) return { state: (delivery.continues ?? []).some(prop => present(input[prop])) ? 'ok' : 'missing', literals: [] };
   const literals: string[] = [];
-  let runtime = false, placeholder = false;
-  for (const prop of supplied) {
-    for (const value of (Array.isArray(input[prop]) ? input[prop] as unknown[] : [input[prop]])) {
-      if (hasExpression(value)) { runtime = true; continue; }
+  let reached = false, runtime = false, placeholder = false;
+  const read = (prop: string, addressing: boolean) => {
+    for (const value of Array.isArray(input[prop]) ? input[prop] as unknown[] : [input[prop]]) {
+      if (hasExpression(value)) { runtime = true; reached ||= addressing; continue; }
       for (const part of String(value).split(/[,;]/).map(s => s.trim()).filter(Boolean)) {
         if (PLACEHOLDERS.some(p => p.test(part))) placeholder = true;
-        else literals.push(part);
+        else { literals.push(part); reached ||= addressing; }
       }
     }
-  }
-  return { state: placeholder ? 'placeholder' : literals.length ? 'ok' : runtime ? 'runtime' : 'missing', literals: literals.sort() };
+  };
+  to.forEach(prop => read(prop, true));
+  (delivery.cc ?? []).filter(prop => present(input[prop])).forEach(prop => read(prop, false));
+  return { state: placeholder ? 'placeholder' : !reached ? 'missing' : runtime ? 'runtime' : 'ok', literals: literals.sort() };
 }
 
-type Judged = Pick<StepFact, 'decision' | 'reason'>;
+type Judged = { decision: 'auto' | 'approval' | 'denied'; reason: string; timed: boolean };
 /** The effect boundary's own fold (`effect-boundary.ts` policy()), without its run, emergency or cancellation fences. */
 function decide(authority: AuthorityEngine | null, effect: {
   toolName: string; toolCategory: string; category: ActionCategory; categories?: ActionCategory[];
   aboveLevelFloor?: ActionCategory; confirmation?: boolean;
 }): Judged {
-  if (!authority) return { decision: 'denied', reason: 'Workflow Authority is unavailable; execution denied' };
+  if (!authority) return { decision: 'denied', reason: 'Workflow Authority is unavailable; execution denied', timed: false };
+  const categories = effect.categories?.length ? effect.categories : [effect.category];
   const check = (actionCategory: ActionCategory) => authority.checkAuthority({ agentId: 'workflow:qualification',
     agentRoleId: 'workflow-default', agentAuthorityLevel: 0, toolName: effect.toolName, toolCategory: effect.toolCategory,
     actionCategory, temporaryGrants: new Map(), profile: null });
-  const folded = combineDecisions((effect.categories?.length ? effect.categories : [effect.category]).map(check));
+  const folded = combineDecisions(categories.map(check));
   const decision = effect.aboveLevelFloor
     ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: effect.aboveLevelFloor }, check) : folded;
-  if (!decision.allowed) return { decision: 'denied', reason: decision.reason };
-  if (effect.confirmation || decision.requiresApproval) return { decision: 'approval', reason: decision.reason };
-  return { decision: 'auto', reason: decision.reason };
+  // A time-window rule decides by the hour of dispatch, not the hour of qualification.
+  const judged = [...categories, ...(effect.aboveLevelFloor ? [effect.aboveLevelFloor] : [])];
+  const timed = authority.getConfig().context_rules.some(rule => rule.condition === 'time_range' && judged.includes(rule.action));
+  if (!decision.allowed) return { decision: 'denied', reason: decision.reason, timed };
+  if (effect.confirmation || decision.requiresApproval) return { decision: 'approval', reason: decision.reason, timed };
+  return { decision: 'auto', reason: decision.reason, timed };
 }
 
 function judgeStep(node: FlowTriggerNode, services: Pick<QualificationServices, 'tool' | 'authority'>): StepFact | null {
   const step = node.name;
-  if (node.type === 'CODE') return { step, piece: null, action: null, role: 'effect', category: null, decision: 'ungoverned',
-    reason: 'Code steps run without Authority', unreviewable: null, recipients: null };
+  if (node.type === 'CODE') return { step, piece: null, action: null, role: 'effect', category: null, categories: [],
+    decision: 'ungoverned', reason: 'Code steps run without Authority', unreviewable: [], recipients: null, shared: null };
   if (node.type !== 'PIECE') return null;
   const piece = String(node.settings?.pieceName ?? ''), action = String(node.settings?.actionName ?? '');
   const input = object(node.settings?.input) ? node.settings!.input! : {};
-  const fact = (category: ActionCategory, judged: Judged, extra: Partial<StepFact> = {}): StepFact => ({
-    step, piece, action, role: category === 'read_data' ? 'source' : 'effect', category, ...judged,
-    unreviewable: null, recipients: null, ...extra });
+  const unjudged = (decision: 'ungoverned' | 'unknown' | 'unavailable', reason: string, unreviewable: string[] = []): StepFact => ({
+    step, piece, action, role: 'effect', category: null, categories: [], decision, reason, unreviewable, recipients: null, shared: null });
+  const fact = (categories: ActionCategory[], judged: Judged): StepFact => ({
+    step, piece, action, role: categories.every(c => c === 'read_data') ? 'source' : 'effect',
+    category: categories[0] ?? null, categories, decision: judged.decision, reason: judged.reason,
+    unreviewable: judged.timed ? [`Authority decides ${categories.join(' and ')} by the time of day`] : [], recipients: null, shared: null });
   if (piece.startsWith(JARVIS)) {
     const name = piece.slice(JARVIS.length);
     if (PURE_PIECES.has(name)) return null;
     // The routes below mirror `service-backends.ts`; the parity test runs both.
-    if (name === 'notify') return fact('send_message', decide(services.authority,
+    if (name === 'notify') return fact(['send_message'], decide(services.authority,
       { toolName: 'workflow_notify', toolCategory: 'notification', category: 'send_message' }));
-    if (name === 'ask') return fact('read_data', decide(services.authority,
+    if (name === 'ask') return fact(['read_data'], decide(services.authority,
       { toolName: 'workflow_ask', toolCategory: 'llm', category: 'read_data' }));
-    if (name === 'context') return fact('read_data', decide(services.authority,
+    if (name === 'context') return fact(['read_data'], decide(services.authority,
       { toolName: `workflow_${action}`, toolCategory: 'context', category: 'read_data' }));
-    if (name === 'agent') return fact('spawn_agent', decide(services.authority,
-      { toolName: 'workflow_delegate', toolCategory: 'delegation', category: 'spawn_agent' }),
-      { unreviewable: 'The delegated agent chooses its actions at run time' });
-    if (name === 'trigger') return fact('spawn_agent', decide(services.authority,
-      { toolName: 'workflow_start', toolCategory: 'delegation', category: 'spawn_agent' }),
-      { unreviewable: 'The workflow it starts is not part of this proposal' });
-    if (name === 'tool') {
-      const toolName = input.toolName, params = object(input.params) ? input.params : {};
-      if (typeof toolName !== 'string' || hasExpression(toolName)) return fact('execute_command',
-        { decision: 'denied', reason: 'the tool is chosen at run time, so it cannot be qualified' });
-      const tool = services.tool(toolName);
-      if (!tool) return fact('execute_command', { decision: 'denied', reason: `tool ${toolName} is not installed` });
-      let capability: ReturnType<typeof toolEffectCapability>;
-      try { capability = toolEffectCapability(tool, params); }
-      catch (error) { return fact('execute_command', { decision: 'denied', reason: (error as Error).message }); }
-      const gate = resolveToolGate(tool, toolName, params);
-      const judged = fact(capability.category, decide(services.authority, { toolName: tool.name, toolCategory: tool.category,
-        category: capability.category, categories: capability.categories,
-        ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}), confirmation: gate.confirm === 'always' }));
-      // A per-call gate judges the resolved arguments; with runtime values the
-      // decision here could be stricter than the one made at dispatch.
-      if ((tool.authorityGate || GATED_TOOL_NAMES.has(tool.name)) && hasExpression(params)) {
-        judged.unreviewable = `${toolName}'s Authority decision depends on values known only at run time`;
-      }
-      if (present(params.target) && hasExpression(params.target)) judged.unreviewable = 'The machine is chosen at run time';
-      if (DELIVERY.has(capability.category)) judged.recipients = recipientsOf(params, RECIPIENT_PROPS);
+    if (name === 'agent' || name === 'trigger') {
+      const judged = fact(['spawn_agent'], decide(services.authority, name === 'agent'
+        ? { toolName: 'workflow_delegate', toolCategory: 'delegation', category: 'spawn_agent' }
+        : { toolName: 'workflow_start', toolCategory: 'delegation', category: 'spawn_agent' }));
+      judged.unreviewable.push(name === 'agent' ? 'The delegated agent chooses its actions at run time'
+        : 'The workflow it starts is not part of this proposal');
       return judged;
     }
-    return { step, piece, action, role: 'effect', category: null, decision: 'ungoverned',
-      reason: `${piece} has no workflow Authority route`, unreviewable: null, recipients: null };
+    if (name !== 'tool') return unjudged('ungoverned', `${piece} has no workflow Authority route`);
+    const toolName = input.toolName;
+    if (typeof toolName !== 'string' || hasExpression(toolName)) {
+      return unjudged('unknown', 'the tool is chosen at run time', ['The tool is chosen at run time']);
+    }
+    const tool = services.tool(toolName);
+    if (!tool) return unjudged('unavailable', `tool ${toolName} is not installed`);
+    const { params, known } = toolParams(input.params);
+    let capability: ReturnType<typeof toolEffectCapability>;
+    try { capability = toolEffectCapability(tool, params); }
+    catch (error) { return unjudged('unavailable', (error as Error).message); }
+    const gate = resolveToolGate(tool, toolName, params);
+    const judged = fact(capability.categories, decide(services.authority, { toolName: tool.name, toolCategory: tool.category,
+      category: capability.category, categories: capability.categories,
+      ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}), confirmation: gate.confirm === 'always' }));
+    // A per-call gate judges the resolved arguments, so a value it reads that
+    // is only known at run time can change the decision either way.
+    const gateInputs = GATE_INPUTS[tool.name];
+    if (!known) judged.unreviewable.push('Its parameters are computed at run time, and with them its Authority decision and machine');
+    else {
+      if ((tool.authorityGate || GATED_TOOL_NAMES.has(tool.name))
+        && (gateInputs ? gateInputs.some(key => hasExpression(params[key])) : hasExpression(params))) {
+        judged.unreviewable.push(`${toolName}'s Authority decision depends on values known only at run time`);
+      }
+      if (present(params.target) && hasExpression(params.target)) judged.unreviewable.push('The machine is chosen at run time');
+    }
+    if (capability.categories.some(c => DELIVERY.has(c))) judged.unreviewable.push(`Who ${toolName} reaches is not modeled`);
+    return judged;
   }
   const resolved = resolveGovernedPieceAction(piece, action);
-  if (!resolved) return { step, piece, action, role: 'effect', category: null, decision: 'ungoverned',
-    reason: `${piece} is not a governed piece; its actions run without Authority`, unreviewable: null, recipients: null };
+  if (!resolved) return unjudged('ungoverned', `${piece} is not a governed piece; its actions run without Authority`);
   const tool = governedPieceToolDefinition(resolved);
   let category: ActionCategory;
   try { category = toolEffectCapability(tool).category; }
-  catch (error) { return fact('execute_command', { decision: 'denied', reason: (error as Error).message }); }
-  const judged = fact(category, decide(services.authority, { toolName: tool.name, toolCategory: PIECE_TOOL_CATEGORY, category }));
-  if (DELIVERY.has(category)) judged.recipients = recipientsOf(input, resolved.adapter.targetProps.filter(p => RECIPIENT_PROPS.includes(p)));
+  catch (error) { return unjudged('unavailable', (error as Error).message); }
+  const judged = fact([category], decide(services.authority, { toolName: tool.name, toolCategory: PIECE_TOOL_CATEGORY, category }));
+  const service = resolved.adapter.catalogId, key = `${service}:${action}`;
+  if (DELIVERY.has(category)) {
+    const delivery = DELIVERIES[key];
+    if (delivery) judged.recipients = recipientsFor(delivery, input);
+    else judged.unreviewable.push(`Who ${action} reaches is not modeled`);
+  } else if (category === 'write_data' && !PRIVATE_WRITES.has(key) && !PRIVATE_SERVICES.has(service)) judged.shared = service;
   return judged;
 }
 
@@ -392,20 +501,27 @@ export function observePreparedProposal(request: QualificationRequest, services:
   const nodes = walkFlowNodes(live.trigger);
   const steps = nodes.map(node => judgeStep(node, services)).filter((s): s is StepFact => s !== null);
   const bindings = requiredBindings(live.trigger, live.projectId, services.targets(), services.connection);
+  const current = versionDigest(live.trigger);
   let run: QualificationFacts['run'] = null;
   if (request.preview?.basis === 'verified_output' && request.preview.runId) {
     const found = services.run(request.preview.runId);
     if (found) {
-      const current = versionDigest(live.trigger);
-      // A LOCKED version cannot change. A draft is edited in place, so only
-      // effect records, which carry the digest they ran under, prove the run.
-      const proven = live.state === 'LOCKED' || (found.effects.length > 0 && found.effects.every(e => e.versionDigest === current));
-      run = { flowId: found.flowId, versionId: found.versionId, status: found.status, proven,
-        succeeded: [...new Set(found.effects.filter(e => e.status === 'succeeded').map(e => e.stepName))].sort() };
+      // Effect records carry the digest they ran under, and one that differs
+      // disproves the run even on a LOCKED version: publishing locks the draft
+      // in place. With no records, only a LOCKED version unchanged since the
+      // run started proves it.
+      const proven = found.effects.length
+        ? found.effects.every(e => e.versionDigest === current)
+        : live.state === 'LOCKED' && found.created >= live.updated;
+      // A governed piece's effect record means dispatch was authorized; the
+      // step's own status says whether the call then completed.
+      const completed = found.effects.filter(e => e.status === 'succeeded' && found.steps[e.stepName] === 'SUCCEEDED');
+      run = { flowId: found.flowId, versionId: found.versionId, status: found.status, partial: found.partial, proven,
+        completed: [...new Set(completed.map(e => e.stepName))].sort() };
     }
   }
   return { goal, composition, bindings, steps, run,
-    version: { digest: versionDigest(live.trigger), state: live.state, readiness: live.readiness, dry: drySupport(live.trigger) } };
+    version: { digest: current, state: live.state, readiness: live.readiness, dry: drySupport(live.trigger) } };
 }
 
 /** The bindings a proposal shows, exactly as qualification compares them. */
@@ -462,9 +578,10 @@ export function judgePreparedProposal(request: QualificationRequest, facts: Qual
 
   const effects = facts.steps.filter(s => s.role === 'effect');
   for (const step of facts.steps) {
-    if (step.decision === 'denied') block('authority_denied', `${step.step} would be refused: ${step.reason}`, step.step);
+    if (step.decision === 'denied') block('authority_denied', `Authority would refuse ${step.step}: ${step.reason}`, step.step);
+    if (step.decision === 'unavailable') block('effect_unavailable', `${step.step} cannot run: ${step.reason}`, step.step);
     if (step.decision === 'ungoverned') review('effect_ungoverned', `${step.step} runs without Authority: ${step.reason}`, step.step);
-    if (step.unreviewable) review('effect_unreviewable', `${step.step}: ${step.unreviewable}`, step.step);
+    for (const why of step.unreviewable) review('effect_unreviewable', `${step.step}: ${why}`, step.step);
     if (step.recipients?.state === 'missing') block('recipient_missing', `${step.step} has no recipient`, step.step);
     if (step.recipients?.state === 'placeholder') block('recipient_missing', `${step.step} is addressed to a placeholder, not a real recipient`, step.step);
   }
@@ -473,16 +590,24 @@ export function judgePreparedProposal(request: QualificationRequest, facts: Qual
     if (constraint.kind === 'unverified') review('constraint_unverified', `Check by hand: ${constraint.text}`);
     if (constraint.kind === 'review_before_effects') {
       for (const step of effects) {
-        if (step.decision === 'ungoverned') block('constraint_violated', `${step.step} cannot ask first: it runs without Authority`, step.step);
-        else if (step.decision === 'auto' && step.category && REVIEWED.has(step.category) && step.piece !== JARVIS + 'notify') {
-          block('constraint_violated', `${step.step} would ${step.category.replace('_', ' ')} without asking first`, step.step);
+        if (step.decision === 'ungoverned') {
+          block('constraint_violated', `${step.step} cannot ask first: it runs without Authority`, step.step);
+          continue;
         }
+        // The owner's own notification is how a prepared draft reaches the person who approves it.
+        if (step.decision !== 'auto' || step.piece === JARVIS + 'notify') continue;
+        const reviewed = step.categories.find(c => REVIEWED.has(c));
+        if (reviewed) block('constraint_violated', `${step.step} would ${reviewed.replace('_', ' ')} without asking first`, step.step);
+        else if (step.shared) review('constraint_unverified', `${step.step} writes to ${step.shared} without asking; check that it reaches no one else`, step.step);
       }
     }
     if (constraint.kind === 'forbid') {
       for (const step of facts.steps) {
-        if (step.category && constraint.categories.includes(step.category)) block('constraint_violated', `${step.step} reaches ${step.category}, which this job rules out`, step.step);
-        else if (step.decision === 'ungoverned') review('constraint_unverified', `${step.step} may reach ${constraint.categories.join(' or ')}; its effect is not classified`, step.step);
+        const hit = step.categories.find(c => constraint.categories.includes(c));
+        if (hit) block('constraint_violated', `${step.step} reaches ${hit}, which this job rules out`, step.step);
+        else if (step.decision === 'ungoverned' || step.decision === 'unknown') {
+          review('constraint_unverified', `${step.step} may reach ${constraint.categories.join(' or ')}; what it does is not known`, step.step);
+        }
       }
     }
     if (constraint.kind === 'recipients') {
@@ -513,7 +638,8 @@ export function judgePreparedProposal(request: QualificationRequest, facts: Qual
       const run = facts.run;
       if (!run || run.flowId !== workflow.flowId || run.versionId !== workflow.versionId || run.status !== 'SUCCEEDED') {
         block('preview_unsupported', 'The preview claims verified output without a successful run of this version');
-      } else if (!run.proven) block('preview_unsupported', 'No record proves the run used this exact version');
+      } else if (run.partial) block('preview_unsupported', 'The preview shows a single-step test run, not a run of the workflow');
+      else if (!run.proven) block('preview_unsupported', 'No record proves the run used this exact version');
     }
     const shown = new Map<string, PreparedPreview['effects'][number]>();
     for (const entry of preview.effects) {
@@ -530,7 +656,7 @@ export function judgePreparedProposal(request: QualificationRequest, facts: Qual
       if (entry.approval === 'runs_automatically' && step.decision === 'approval') {
         block('preview_misstated', `The preview says ${step.step} runs automatically, but it asks first`, step.step);
       }
-      if (entry.sample === 'completed' && !(preview.basis === 'verified_output' && facts.run?.succeeded.includes(step.step))) {
+      if (entry.sample === 'completed' && !(preview.basis === 'verified_output' && facts.run?.completed.includes(step.step))) {
         block('preview_misstated', `The preview says ${step.step} already happened, and no record shows it did`, step.step);
       }
       if (entry.sample === 'simulated' && !(preview.basis === 'sandbox_sample' && sample?.simulated.some(s => s.step === step.step))) {
@@ -587,7 +713,8 @@ export function briefReadiness(qualification: Qualification, stale = false):
 export function liveQualificationServices(options: {
   authority: AuthorityEngine | null;
   tool: (name: string) => ToolDefinition | null;
-  targets: () => ExecutionTarget[];
+  /** The sidecar inventory, with each machine's unavailable capabilities. */
+  targets: () => QualificationTarget[];
   credentials?: CredentialResolver;
   now?: () => number;
 }): QualificationServices {
@@ -611,7 +738,8 @@ export function liveQualificationServices(options: {
     version(flowId, versionId) {
       const flow = getFlow(flowId), version = getFlowVersion(versionId);
       if (!flow || !version || version.flowId !== flowId) return null;
-      return { projectId: flow.project_id, trigger: version.trigger, state: version.state, readiness: versionReadiness(flowId, versionId) };
+      return { projectId: flow.project_id, trigger: version.trigger, state: version.state, updated: version.updated,
+        readiness: versionReadiness(flowId, versionId) };
     },
     connection(projectId, externalId, pieceName) {
       // The rules readiness applies (`flow-readiness.ts` contextFor), plus the
@@ -632,8 +760,13 @@ export function liveQualificationServices(options: {
     run(runId) {
       const run = getFlowRun(runId);
       if (!run) return null;
-      return { flowId: run.flowId, versionId: run.flowVersionId, status: run.status,
-        effects: listWorkflowEffects(runId).map(e => ({ stepName: e.stepName, versionDigest: e.versionDigest, status: e.status })) };
+      // Each streamed step is { output: <engine step record> }; only its status is read.
+      const steps = (run.steps ?? {}) as Record<string, { output?: { status?: unknown } } | undefined>;
+      return { flowId: run.flowId, versionId: run.flowVersionId, status: run.status, created: run.created,
+        partial: run.stepNameToTest !== null,
+        effects: listWorkflowEffects(runId).map(e => ({ stepName: e.stepName, versionDigest: e.versionDigest, status: e.status })),
+        steps: Object.fromEntries(Object.entries(steps).map(([name, record]) =>
+          [name, typeof record?.output?.status === 'string' ? record.output.status : null])) };
     },
   };
 }
