@@ -1,0 +1,137 @@
+{
+  "task": "F-03",
+  "title": "Scope chat transport and cancellation to a conversation",
+  "date": "2026-10-05",
+  "branch": "brief/f-03",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-03",
+  "baseline": "1a130247abe5447f23a3881d1015a5f6a377f685",
+  "baseline_ref": "origin/brief/f-02-1",
+  "main_initial": "2d2d6f34831897ae14a77f84022e4c7938fec6f3",
+  "main_checked": "98ad1e70884b665008e1255ee15aa79c82e23dca",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-03.json"
+  },
+  "status": {
+    "merge": "not_merged",
+    "release_enabled": false,
+    "publication": "PR against brief/f-02-1; remote checks are recorded in its description",
+    "implementation": "verified locally"
+  },
+  "dependencies": {
+    "merge_after": [
+      "F-01",
+      "F-02",
+      "F-02.1"
+    ],
+    "enable_after": [
+      "F-02"
+    ],
+    "reason": "Implementation uses F-02 canonical lifecycle and workspace ownership. Owner authorized staged unmerged dependencies; this PR targets F-02.1 instead of main."
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-212",
+    "scope": "Backend protocol only; no visible UI change"
+  },
+  "activation": {
+    "flags": [
+      "JARVIS_BRIEF_CONVERSATIONS=1",
+      "JARVIS_BRIEF_CHAT_TRANSPORT=1"
+    ],
+    "default": "disabled",
+    "capability": "chatTransport",
+    "readiness": "initialized vault and running, non-draining agent; conversations capability must be enabled",
+    "production_concurrency": 1
+  },
+  "behavior": [
+    "Explicit conversation, turn and request IDs; durable monotonic conversation event sequences.",
+    "Canonical user/partial assistant persistence, transactional acceptance and exactly one terminal transition.",
+    "Conversation history, compaction and tool-exposure context; no scoped writes to shared primary history.",
+    "Only subscribed sockets receive scoped messages/progress; origin-only transient audio.",
+    "Cancellation reaches model and delegated-task signals, discards late chunks and cannot cancel newer turns.",
+    "Exact duplicate sends reconcile without generation; reconnect replays events and canonical messages.",
+    "Interrupted work becomes failed once on restart; no automatic execution replay.",
+    "Approval IDs retain a persisted originating turn across tab changes and restart.",
+    "Legacy stream/status mirroring remains behind a delivery adapter; opted-in sockets are excluded."
+  ],
+  "acceptance": [
+    {
+      "check": "Two interleaved fake model streams, tab switch and one cancel isolate text, progress, context and TTS",
+      "status": "passed",
+      "evidence": [
+        "src/brief/chat-transport.test.ts",
+        "src/daemon/agent-service-conversation.test.ts",
+        "evidence/F-03/quick-final.log"
+      ]
+    },
+    {
+      "check": "Duplicate sends, reconnect, restart and stale cancellation retain one terminal for the intended turn",
+      "status": "passed",
+      "evidence": [
+        "src/vault/chat-turns.test.ts",
+        "src/brief/chat-transport.test.ts"
+      ]
+    },
+    {
+      "check": "Authenticated real WebSocket routing, disabled gate, legacy mirroring and stable approval identity",
+      "status": "passed",
+      "evidence": [
+        "src/daemon/ws-service-conversation.test.ts"
+      ]
+    },
+    {
+      "check": "Unsafe subscriber broadcast, shared history and duplicate terminal mutations are detected",
+      "status": "passed",
+      "evidence": [
+        "evidence/F-03/routing-mutation.log",
+        "evidence/F-03/history-mutation.log",
+        "evidence/F-03/terminal-mutation.log"
+      ]
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test src/vault/chat-turns.test.ts src/brief/chat-transport.test.ts src/daemon/agent-service-conversation.test.ts src/daemon/ws-service-conversation.test.ts",
+      "result": "19 passed, 0 failed, 146 assertions",
+      "log": "evidence/F-03/quick-final.log"
+    },
+    {
+      "command": "Affected selection in evidence/F-03/verification.json",
+      "result": "483 passed, 1 platform skip, 0 failed, 2444 assertions across 47 files",
+      "log": "evidence/F-03/affected.log"
+    },
+    {
+      "command": "bun x --no-install tsc --noEmit",
+      "log": "evidence/F-03/types-final.log",
+      "result": "passed, exit 0"
+    },
+    {
+      "command": "Normal pre-commit: four guards, related tests and TypeScript",
+      "log": "evidence/F-03/commit-hook.log",
+      "result": "four guards, 90 related tests / 538 assertions and TypeScript passed"
+    }
+  ],
+  "quick_verify": {
+    "guide": "docs/brief-chat-transport.md",
+    "expected": "19 tests pass against isolated databases, authenticated fixture sockets and fake model/TTS providers",
+    "screenshot": "not applicable; backend only",
+    "real_model_or_hosted_evaluation": "not_run"
+  },
+  "migration": "Four additive metadata tables and two indexes. Canonical conversation_messages remains the source of truth. Existing writers and history survive rollback; no table drops or destructive migration.",
+  "rollback": "Unset JARVIS_BRIEF_CHAT_TRANSPORT and restart. Keep additive metadata, IDs and history; reconnect clients to the legacy protocol. Do not replay accepted effects.",
+  "limitations": [
+    "No frontend cutover, draft/unread state, attachments, speech input migration or proactive speech changes.",
+    "Model and TTS are fixtures; no live credentials, paid evaluation, external effects or production data used.",
+    "Production scoped generation concurrency is one; fake tests alone use concurrency two.",
+    "Speech synthesis starts after full text and is not replayed on reconnect; providers may take time to release an aborted iterator.",
+    "Cancellation does not undo completed effects or revoke canonical approval requests.",
+    "Replay pages have count/byte bounds; current snapshot messages must not receive old replay deltas twice. Older messages use the F-02 history endpoint.",
+    "The daemon remains a single authenticated owner; workspace guards do not create a multi-tenant auth system.",
+    "The main update from PR #716 changes approval label helpers separately from this routing patch; preserve it when rebasing the stack."
+  ],
+  "next": "Review and CI for F-03, keep unmerged and disabled. F-04 is not started.",
+  "implementation_commit": "ff64a7d014f9df8473aae62ea05477b3ca77c61d",
+  "verification_notes": [
+    "Early fixture type and socket delivery-order issues were corrected. Final quick, TypeScript and commit-hook logs apply to the committed source."
+  ]
+}

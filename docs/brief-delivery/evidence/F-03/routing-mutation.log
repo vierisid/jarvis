@@ -1,0 +1,23 @@
+bun test v1.3.6 (d530ed99)
+
+src/brief/chat-transport.test.ts:
+78 |     await f.send(ownerA, 'brief_chat_cancel', identity(a));
+79 |     expect(f.inputs.get(a.turnId)!.signal.aborted).toBe(true);
+80 |     expect(f.inputs.get(b.turnId)!.signal.aborted).toBe(false);
+81 |     f.push(b.turnId, { type: 'text', text: ' finishes.' }); f.push(b.turnId, done());
+82 |     await f.transport.idle();
+83 |     expect(f.events(ownerB).every(event => event.conversationId === b.conversationId)).toBe(true);
+                                                                                            ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-03/src/brief/chat-transport.test.ts:83:88)
+(fail) interleaved streams, tab switch and one cancel isolate text, progress, history and TTS [25.42ms]
+
+ 0 pass
+ 6 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [134.00ms]

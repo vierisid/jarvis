@@ -1,0 +1,32 @@
+bun test v1.3.6 (d530ed99)
+
+src/vault/chat-turns.test.ts:
+35 |   const turn = repo.accept(input).turn;
+36 |   repo.start(turn);
+37 |   repo.text(turn, 'Partial ');
+38 |   repo.text(turn, 'reply');
+39 |   expect(repo.finish(turn, 'cancelled')?.payload).toEqual({ kind: 'terminal', state: 'cancelled' });
+40 |   expect(repo.finish(turn, 'completed')).toBeNull();
+                                              ^
+error: expect(received).toBeNull()
+
+Received: {
+  conversationId: "c7788770-8453-4e53-b156-2a7130302b0c",
+  turnId: "turn-1",
+  requestId: "request-1",
+  eventId: "3eddc6af-8092-41ce-b21c-437ccdb5afb1",
+  sequence: 7,
+  payload: {
+    kind: "terminal",
+    state: "completed",
+  },
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-03/src/vault/chat-turns.test.ts:40:42)
+(fail) partial text, terminal state and monotonic events are durable and terminal writes are idempotent [19.86ms]
+
+ 0 pass
+ 5 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [138.00ms]
