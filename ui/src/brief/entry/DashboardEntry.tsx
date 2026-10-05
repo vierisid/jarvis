@@ -57,9 +57,8 @@ function BriefHost({ route, rooms, navigation }: { route: BriefRoute; rooms: Bri
   const room = rooms[route.room];
   const Body = room?.Body;
   const activated = canMountNavigation(shell.mode, navigation);
-  const Root = activated ? "div" : "main";
   return (
-    <Root className={`brief-root${activated ? "" : " brief-foundation"}`} data-brief-room={route.room} data-brief-theme={theme}>
+    <div className={`brief-root${activated ? "" : " brief-foundation"}`} data-brief-room={route.room} data-brief-theme={theme}>
       <NavigationShell shell={shell} rooms={rooms} binding={navigation}>
       {Body ? <Body key={route.room} shell={shell} /> : (
         <section className="brief-foundation__notice" aria-labelledby="brief-unavailable-title">
@@ -72,6 +71,6 @@ function BriefHost({ route, rooms, navigation }: { route: BriefRoute; rooms: Bri
         </section>
       )}
       </NavigationShell>
-    </Root>
+    </div>
   );
 }

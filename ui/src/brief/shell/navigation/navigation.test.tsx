@@ -111,6 +111,28 @@ test("ten collapse/expand cycles retain the actual body DOM, draft, room, select
   expect(host.querySelector('[aria-current="page"].brief-nav-row')?.getAttribute("aria-label")).toBe("Workflows");
 });
 
+test("new destinations start at the top but shell changes and same-room selection retain scroll", async () => {
+  await render();
+  const content = host.querySelector<HTMLElement>("main")!;
+  content.scrollTop = 320; content.scrollLeft = 48;
+  shell = { ...shell, sidebar: "rail", chatOpen: false, theme: "dark" };
+  await render();
+  expect(host.querySelector("main")).toBe(content);
+  expect(content.scrollTop).toBe(320); expect(content.scrollLeft).toBe(48);
+  shell = { ...shell, route: { ...shell.route, selection: { flowId: "flow-1", runId: "run-11" } } };
+  await render(); expect(content.scrollTop).toBe(320);
+  await click(host.querySelector<HTMLButtonElement>('[aria-label="Memory"]')!); await render();
+  expect(content.scrollTop).toBe(0); expect(content.scrollLeft).toBe(0);
+  content.scrollTop = 150;
+  await click(trigger());
+  await click([...menu()!.querySelectorAll("button")].find(b => b.textContent === "Billing")!); await render();
+  expect(content.scrollTop).toBe(0);
+  content.scrollTop = 90;
+  // Covers external/Back navigation as well as sidebar and account origins.
+  shell = { ...shell, route: { room: "memory", selection: {} } }; await render();
+  expect(content.scrollTop).toBe(0);
+});
+
 test("account menu opens by keyboard, wraps focus, supports typeahead and Escape return", async () => {
   await render(); trigger().focus(); await key(trigger(), "ArrowUp");
   expect(document.activeElement?.textContent).toBe("Billing");

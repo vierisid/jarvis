@@ -21,7 +21,7 @@
   "excludes": ["D-06 Pebble layout", "Real room bodies", "F/Q providers and semantics", "Legacy navigation replacement before F-25", "Live data mutations"],
   "activation": "Default off. D-01 accepts an optional live navigation binding; F-01 navigationCompatibility must be enabled. Fixtures render only in the explicit preview. F-25 supplies the real reader and compatibility mapping.",
   "tests": [
-    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 78, "assertions": 703, "files": 8},
+    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 80, "assertions": 763, "files": 8},
     {"command": "bunx tsc --noEmit", "result": "pass"},
     {"command": "bun run build:ui", "result": "pass", "note": "Existing @theme/@tailwind warnings."},
     {"command": "git diff --check", "result": "pass"}
@@ -35,6 +35,11 @@
     {"case": "Dark logo, menu x80, keyboard rail tooltip and theme continuity", "result": "pass"}
   ],
   "evidence": "evidence/D-05/browser-checks.json",
+  "review_fixes": {
+    "R1": "Stable room ancestry preserves local draft, focus and mount identity through capability loss/recovery; navigation chrome remains gated.",
+    "R2": "Destination changes reset workspace scroll to the top; same-room selection, sidebar, chat and theme retain the offset.",
+    "regression": "Both tests failed before the fixes and pass afterward; 26 entry/navigation tests, 384 assertions."
+  },
   "limitations": ["Preview account data is illustrative; actual reader wiring belongs to F-25.", "Account destinations tested; account form implementations are later tasks.", "Conversation state retained; D-06 panel layout not implemented here.", "Chromium only; no screen-reader certification or frame-rate guarantee.", "OS reduced motion uses D-04; OS settings were not changed.", "Read current-head GitHub checks for remote CI verdict."],
   "rollback": "Revert D-05 or omit the navigation binding. Remove Brief opt-in to use unchanged v2. No data migration.",
   "next": "D-06, separate worktree and PR; not started."

@@ -1,6 +1,8 @@
 import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
 import type { BriefRoomRegistry, BriefRoomProps, BriefShellPort } from "../contracts";
+import type { BriefNavigationBinding } from "../shell/navigation/model";
+import { UNKNOWN_NAVIGATION } from "../shell/navigation/model";
 import { getV2Route, ROOM_KEYS } from "../../v2/router";
 
 GlobalRegistrator.register({ url: "http://localhost:4381/" });
@@ -151,6 +153,45 @@ test("room modules preserve shell state and selected source IDs through navigati
   await route("http://localhost:4381/?brief=1#/brief/memory?factId=known-fact");
   expect(observed?.sidebar).toBe("rail"); expect(observed?.chatOpen).toBe(true);
   expect(observed?.route.selection).toEqual({ factId: "known-fact" });
+  expect(network).toEqual([]);
+});
+
+test("navigation readiness loss and recovery preserve the mounted room and edited draft", async () => {
+  let mounts = 0;
+  let observed: BriefShellPort | undefined;
+  function Body({ shell }: { shell: BriefShellPort }) {
+    observed = shell;
+    React.useEffect(() => { mounts++; }, []);
+    return <><input aria-label="Unsaved draft" defaultValue="Original" />
+      <button onClick={() => { shell.setSidebar("rail"); shell.setChatOpen(true); shell.setTheme("dark"); }}>Set shell</button></>;
+  }
+  const rooms: BriefRoomRegistry = { workflows: { id: "workflows", title: "Workflows", Body } };
+  const ready: BriefNavigationBinding = { capabilities: { contractVersion: 1, asOf: 1, capabilities: {
+    navigationCompatibility: { supported: true, ready: true, enabled: true, state: "ready", reason: null },
+  } }, view: { source: "live", state: { status: "ready", data: UNKNOWN_NAVIGATION } } };
+  const loading: BriefNavigationBinding = { ...ready, capabilities: { contractVersion: 1, asOf: 2, capabilities: {
+    navigationCompatibility: { supported: true, ready: false, enabled: false, state: "loading", reason: "provider_loading" },
+  } } };
+  history.replaceState(null, "", "http://localhost:4381/?brief=1#/brief/workflows?flowId=existing");
+  const render = async (navigation?: BriefNavigationBinding) => {
+    await React.act(async () => root!.render(<Entry legacy={<Legacy />} rooms={rooms} Gate={Gate} navigation={navigation} />));
+  };
+  await render(loading);
+  const input = host.querySelector("input")!;
+  input.value = "My unsaved workflow";
+  await click("Set shell");
+  await React.act(async () => input.focus());
+  for (const navigation of [ready, loading, ready, undefined, ready]) {
+    await render(navigation);
+    expect(host.querySelector("input") === input).toBe(true);
+    expect(input.value).toBe("My unsaved workflow");
+    expect(document.activeElement === input).toBe(true);
+    expect(mounts).toBe(1);
+    expect(observed?.sidebar).toBe("rail"); expect(observed?.chatOpen).toBe(true);
+    expect(observed?.theme).toBe("dark"); expect(observed?.route.selection.flowId).toBe("existing");
+    expect(host.querySelectorAll("main")).toHaveLength(1);
+    expect(host.querySelector("aside") !== null).toBe(navigation === ready);
+  }
   expect(network).toEqual([]);
 });
 
