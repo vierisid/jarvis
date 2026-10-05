@@ -184,6 +184,24 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     whose `sampleData` is empty by
  *                                     construction. It writes a draft; it reads
  *                                     no run.
+ *   awareness/prepared-dry-run.ts      OPEN-ish, one hop like goals/work-items.ts.
+ *                                     It reads `run.steps` and `failedStep` off
+ *                                     its own scratch run and returns them as a
+ *                                     DrySample's `outputs` (8,000 characters
+ *                                     each) and `error` (500). Every service in
+ *                                     that run is simulated from the caller's
+ *                                     fixture, so the text is as trusted as the
+ *                                     fixture. The sample backs a preview a
+ *                                     person reads; a consumer that hands it to
+ *                                     a model frames it there, as goals/rhythm.ts
+ *                                     does.
+ *   awareness/prepared-qualification.ts BENIGN. Holds a whole `FlowVersion` and
+ *                                     `FlowRun` but reads the graph, ids, state
+ *                                     and status, and effect records' step
+ *                                     names, digests and status. Its reasons are
+ *                                     fixed sentences with step names, readiness
+ *                                     messages and a dry sample's bounded error,
+ *                                     for a person through the Brief provider.
  *   brief/contracts.ts                BENIGN. Imports only workflow status
  *                                     TYPES for wire references. It fetches no
  *                                     run/version and exports no captured step
@@ -216,6 +234,8 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
 const REVIEWED_STEP_OUTPUT_READERS = [
   'actions/tools/manage-workflow.ts',
   'actions/tools/workflow-composer.ts',
+  'awareness/prepared-dry-run.ts',
+  'awareness/prepared-qualification.ts',
   'awareness/suggestion-composer.ts',
   'brief/adapters.ts',
   'brief/contracts.ts',
