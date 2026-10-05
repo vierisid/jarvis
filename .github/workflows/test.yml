@@ -93,6 +93,12 @@ jobs:
       # script's header). Re-run just before `npm publish` too, in
       # release-exec.yml, where the real artifact is built.
       - run: bun run scripts/check-package-files.ts
+      # The release tag gate (#644) is a `run:` block inside release-exec.yml,
+      # which executes only on a release -- so without this a PR that weakened
+      # it would merge green and the first test would be a real tag. Runs the
+      # block verbatim against hostile tags and checks the workflow structure
+      # that keeps the raw tag out of every other job's shell.
+      - run: .github/scripts/release-exec.test.sh
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xdotool && echo JARVIS_REQUIRE_XDOTOOL_SHIM=1 >> "$GITHUB_ENV" # linux.test.ts runs the real xdotool's argument parsing (#518)
       # --retry=2 (3 attempts per test), NOT a retry around the whole step.
       # Every flake this suite has produced in CI is a per-test hook timing out
