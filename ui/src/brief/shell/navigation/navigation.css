@@ -55,6 +55,7 @@
 .brief-root .brief-connection-dot[data-state="reconnecting"] { background: var(--brief-attention-text); }
 .brief-root .brief-connection-dot[data-state="offline"] { background: var(--brief-error-text); }
 .brief-root .brief-workspace-content { flex: 1; min-height: 0; min-width: 0; padding: 38px; overflow: auto; outline: none; scrollbar-gutter: stable; }
+.brief-root .brief-navigation[data-navigation-active="false"] .brief-workspace-content { padding: 0; }
 .brief-root .brief-workspace-content > .brief-foundation__notice { margin: 0; }
 .brief-root .brief-shell-reading { max-width: 1132px; }
 .brief-root .brief-skip { position: absolute; left: 84px; top: 8px; padding: 12px; background: var(--brief-card); color: var(--brief-ink); border-radius: var(--brief-corner-control); transform: translateY(-160%); z-index: 10; }

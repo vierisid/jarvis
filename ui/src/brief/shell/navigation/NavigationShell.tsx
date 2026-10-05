@@ -1,4 +1,4 @@
-import React, { useId, useSyncExternalStore } from "react";
+import React, { useId, useLayoutEffect, useRef, useSyncExternalStore } from "react";
 import { Eye, FileText, GitBranch, House, Laptop, PanelLeftClose, PanelLeftOpen, ShieldCheck, Target } from "lucide-react";
 import { BriefTooltip } from "../../components/controls";
 import { BriefBrand } from "../../styles/BriefBrand";
@@ -6,7 +6,8 @@ import { useBriefMotion } from "../../motion";
 import type { BriefRoomRegistry, BriefShellPort } from "../../contracts";
 import { AccountMenu } from "../account-menu/AccountMenu";
 import { badgeLabel, breadcrumbs, canMountNavigation, connectionLabel, DIRECTION_NAV, navigationData,
-  navigationRoute, NAV_LABELS, parentRoom, PRIMARY_NAV, UTILITY_NAV, type BriefNavigationBinding, type NavRoom } from "./model";
+  navigationRoute, NAV_LABELS, parentRoom, PRIMARY_NAV, UNKNOWN_NAVIGATION, UTILITY_NAV,
+  type BriefNavigationBinding, type BriefNavigationData, type NavRoom } from "./model";
 import "./navigation.css";
 
 const ICONS = { today: House, workflows: GitBranch, opportunities: Eye, "needs-you": ShieldCheck,
@@ -27,22 +28,56 @@ export interface NavigationShellProps {
 
 /** D-01 owns routing and state; this shell only lays out those persistent children.
  * F-25 activation and a live view are required before replacing released navigation. */
-export function NavigationShell(props: NavigationShellProps) {
-  if (!canMountNavigation(props.shell.mode, props.binding)) return <>{props.children}</>;
-  return <NavigationFrame {...props} binding={props.binding!} />;
-}
-
-function NavigationFrame({ shell, rooms, binding, children }: NavigationShellProps & { binding: BriefNavigationBinding }) {
+export function NavigationShell({ shell, rooms, binding, children }: NavigationShellProps) {
   const id = useId();
+  const content = useRef<HTMLElement>(null);
+  const active = canMountNavigation(shell.mode, binding);
   const narrow = useSyncExternalStore(subscribeWidth, narrowSnapshot, () => false);
   // A dense viewport uses the existing rail; the user's wider-layout preference survives.
   const rail = narrow || shell.sidebar === "rail";
-  const data = navigationData(binding.view);
-  const selected = parentRoom(shell.route.room);
+  const data = active && binding ? navigationData(binding.view) : UNKNOWN_NAVIGATION;
   const crumbs = breadcrumbs(shell.route, rooms[shell.route.room]?.title ?? "Today", data.objectTitle);
+  const statusLabel = connectionLabel(data);
+  // A new destination starts at its heading. Local selection, theme, chat and
+  // sidebar changes keep their current offset; they are not room navigation.
+  useLayoutEffect(() => {
+    if (content.current) { content.current.scrollTop = 0; content.current.scrollLeft = 0; }
+  }, [shell.route.room]);
+  // Keep the content's entire ancestor chain mounted as readiness changes.
+  // Only navigation chrome is gated, so an outage cannot discard local edits.
+  return <div className="brief-navigation" data-navigation-active={active} data-rail={rail} data-requested-sidebar={shell.sidebar} data-chat-open={shell.chatOpen}>
+    {active && <a className="brief-skip" href={`#${id}-content`} onClick={event => {
+      event.preventDefault(); content.current?.focus();
+    }}>Skip to content</a>}
+    {active && <Sidebar shell={shell} data={data} rail={rail} narrow={narrow} id={id} />}
+    <div className="brief-workspace">
+      {active && <header className="brief-workspace-header">
+        <nav className="brief-breadcrumb" aria-label="Breadcrumb">
+          <span className="brief-workspace-name" title={data.workspaceName || "Your workspace"}>{data.workspaceName || "Your workspace"}</span>
+          <span aria-hidden="true">/</span>
+          {crumbs.parent && <><button type="button" onClick={() => shell.navigate(crumbs.parent!.route)}>{crumbs.parent.label}</button><span aria-hidden="true">/</span></>}
+          <strong aria-current="page" title={crumbs.current}>{crumbs.current}</strong>
+        </nav>
+        <BriefTooltip label={statusLabel}>
+          <button type="button" className="brief-connection" aria-label={`${statusLabel}. Open connected workspace`}
+            onClick={() => { if (shell.route.room !== "connected-workspace") shell.navigate({ room: "connected-workspace", selection: {} }); }}>
+            <span className="brief-connection-dot" data-state={data.connection} aria-hidden="true" />
+          </button>
+        </BriefTooltip>
+      </header>}
+      <main ref={content} className="brief-workspace-content" id={`${id}-content`} tabIndex={-1} data-brief-room={shell.route.room}>
+        {children}
+      </main>
+    </div>
+  </div>;
+}
+
+function Sidebar({ shell, data, rail, narrow, id }: {
+  shell: BriefShellPort; data: BriefNavigationData; rail: boolean; narrow: boolean; id: string;
+}) {
+  const selected = parentRoom(shell.route.room);
   const sidebarRef = useBriefMotion<HTMLElement>({ width: rail ? 72 : 232 }, { kind: "reflow", active: rail });
   const wordRef = useBriefMotion<HTMLSpanElement>({ opacity: rail ? 0 : 1 }, { kind: "reveal", active: !rail });
-  const statusLabel = connectionLabel(data);
   const row = (room: NavRoom) => {
     const Icon = ICONS[room];
     const label = NAV_LABELS[room];
@@ -60,11 +95,7 @@ function NavigationFrame({ shell, rooms, binding, children }: NavigationShellPro
       </button>
     </BriefTooltip>;
   };
-  return <div className="brief-navigation" data-rail={rail} data-requested-sidebar={shell.sidebar} data-chat-open={shell.chatOpen}>
-    <a className="brief-skip" href={`#${id}-content`} onClick={event => {
-      event.preventDefault(); document.getElementById(`${id}-content`)?.focus();
-    }}>Skip to content</a>
-    <aside className="brief-sidebar" ref={sidebarRef} aria-label="Workspace navigation">
+  return <aside className="brief-sidebar" ref={sidebarRef} aria-label="Workspace navigation">
       <div className="brief-sidebar-brand" role="img" aria-label="usejarvis">
         <span className="brief-sidebar-brand__mark" aria-hidden="true"><BriefBrand /></span>
         <span className="brief-sidebar-brand__word" ref={wordRef} aria-hidden="true"><BriefBrand /></span>
@@ -87,25 +118,5 @@ function NavigationFrame({ shell, rooms, binding, children }: NavigationShellPro
         <div className="brief-nav-utilities">{UTILITY_NAV.map(row)}</div>
       </nav>
       <div className="brief-account-block"><AccountMenu shell={shell} account={data.account} rail={rail} /></div>
-    </aside>
-    <div className="brief-workspace">
-      <header className="brief-workspace-header">
-        <nav className="brief-breadcrumb" aria-label="Breadcrumb">
-          <span className="brief-workspace-name" title={data.workspaceName || "Your workspace"}>{data.workspaceName || "Your workspace"}</span>
-          <span aria-hidden="true">/</span>
-          {crumbs.parent && <><button type="button" onClick={() => shell.navigate(crumbs.parent!.route)}>{crumbs.parent.label}</button><span aria-hidden="true">/</span></>}
-          <strong aria-current="page" title={crumbs.current}>{crumbs.current}</strong>
-        </nav>
-        <BriefTooltip label={statusLabel}>
-          <button type="button" className="brief-connection" aria-label={`${statusLabel}. Open connected workspace`}
-            onClick={() => { if (shell.route.room !== "connected-workspace") shell.navigate({ room: "connected-workspace", selection: {} }); }}>
-            <span className="brief-connection-dot" data-state={data.connection} aria-hidden="true" />
-          </button>
-        </BriefTooltip>
-      </header>
-      <main className="brief-workspace-content" id={`${id}-content`} tabIndex={-1} data-brief-room={shell.route.room}>
-        {children}
-      </main>
-    </div>
-  </div>;
+  </aside>;
 }

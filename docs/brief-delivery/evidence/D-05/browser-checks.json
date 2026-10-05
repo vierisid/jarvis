@@ -325,6 +325,18 @@
       }
     }
   ],
+  "review_fix_checks": {
+    "build": "index-vse69853.js",
+    "url": "http://localhost:4385/?brief=preview&specimen=navigation&review=d05-fixes#/_brief_preview",
+    "R1": "Verified by DashboardEntry regression: stable input node, unsaved value, focus, single mount, selection, theme and shell state through readiness changes. No live provider was enabled.",
+    "R2": [
+      {"case": "Light expanded Today to Memory", "before_scroll_top": 332, "after_scroll_top": 0, "draft": "Keep this edited workflow"},
+      {"case": "Light collapse sidebar", "before_scroll_top": 332, "after_scroll_top": 332, "draft": "Keep this edited workflow"},
+      {"case": "Light rail account menu to Billing", "before_scroll_top": 332, "after_scroll_top": 0},
+      {"case": "Dark rail Billing to Today", "before_scroll_top": 332, "after_scroll_top": 0, "draft": "Keep this edited workflow in dark"}
+    ],
+    "scope": "Actual Chromium interactions with the rebuilt fixture preview. Readiness changes are integration-tested, not a live backend outage reproduction."
+  },
   "limitations": [
     "Viewport resize automatically uses rail below 700px; wider preference is retained.",
     "No screen-reader certification or real account mutation.",
