@@ -1,0 +1,136 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.3.6 (d530ed99)
+
+src/daemon/api-billing.test.ts:
+(pass) GET /api/billing > is 503 on a self-hosted install [16.41ms]
+(pass) GET /api/billing > is ok:false (not 503) on a hosted install whose control plane rendered no billing block [0.69ms]
+(pass) GET /api/billing > serves the parsed summary and the account links [3.64ms]
+[billing] could not reach the control plane; billing unavailable: connect ECONNREFUSED https://control-plane.internal
+[billing] control plane answered 401; billing unavailable
+(pass) GET /api/billing > never echoes the endpoint, instance id or secret — on success or failure [3.37ms]
+(pass) GET /api/billing > reads are cached, and ?fresh=1 still shares a reading younger than the floor [1.06ms]
+[billing] control plane answered 502; billing unavailable
+(pass) GET /api/billing > still offers the account links when the read fails, so the user has a way forward [0.87ms]
+
+src/daemon/api-tasks-paused.test.ts:
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > returns an empty list when the task registry is null (classic mode) [30.25ms]
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > returns an empty list when no tasks are paused [27.08ms]
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > returns paused tasks with the UI contract shape [29.87ms]
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > excludes running/queued tasks (only needs_input surfaces) [21.53ms]
+Database initialized at: :memory:
+(pass) GET /api/tasks/paused > returns empty question string rather than null when a paused task has no question text [26.12ms]
+
+src/daemon/api-approval-resolution.test.ts:
+(pass) status and listings surface an approval that never started, with its state [32.52ms]
+(pass) execute runs a not-started approval exactly once, then it is no longer a decision [28.71ms]
+(pass) an interrupted approval refuses execute and accepts close with a note [34.33ms]
+(pass) close tolerates a missing or non-object body and refuses a non-string note [30.83ms]
+(pass) approve and deny have nothing to flip on an unresolved row [33.63ms]
+
+src/daemon/api-brief.test.ts:
+(pass) Brief capabilities are registered with every feature disabled by default [1.43ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f-01-http-p7bgcX/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) capability endpoint is protected by the real session gate, including after session expiry [29.21ms]
+(pass) API exposes live sanitized readiness using the injected provider registry [1.76ms]
+(pass) old conversation client sees unchanged payloads and stored history after a capability read [29.17ms]
+
+src/daemon/api-onboarding-hosted.test.ts:
+Database initialized at: :memory:
+(pass) POST /api/onboarding/setup on a hosted install > drops provider config a bypassing client sends, and keeps the plan defaults live [27.05ms]
+Database initialized at: :memory:
+[LLM] Built provider 'usejarvis_ai' (kind=usejarvis_ai)
+[LLM] Tier 'conversation' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'high' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'medium' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'low' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Providers active after hot-reload: usejarvis_ai
+(pass) POST /api/onboarding/setup on a hosted install > a clean hosted payload (mode + enabled only) reports nothing dropped [60.86ms]
+Database initialized at: :memory:
+[LLM] Built provider 'usejarvis_ai' (kind=usejarvis_ai)
+[LLM] Providers active after hot-reload: usejarvis_ai
+[LLM] Tier 'conversation' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'high' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'medium' references unregistered provider 'usejarvis_ai' - skipping.
+[LLM] Tier 'low' references unregistered provider 'usejarvis_ai' - skipping.
+(pass) POST /api/onboarding/setup on a hosted install > still completes setup, so onboarding does not replay next launch [25.60ms]
+Database initialized at: :memory:
+(pass) POST /api/onboarding/setup on a hosted install > the tts whitelist admits enabled ONLY — a smuggled provider is still dropped [30.68ms]
+Database initialized at: :memory:
+[LLM] llm.default ('anthropic:claude-x') references unregistered provider 'anthropic' - skipping.
+[LLM] Built provider 'anthropic' (kind=anthropic)
+[LLM] Providers active after hot-reload: anthropic
+(pass) POST /api/onboarding/setup on a hosted install > a self-hosted install is untouched by the guard [85.95ms]
+
+src/daemon/api-goal-validation.test.ts:
+(pass) dashboard quick-create payload persists with deadline null [24.39ms]
+(pass) dashboard quick-create payload persists with deadline 1790856000000 [31.18ms]
+(pass) quick mode still validates goal fields before writing [30.98ms]
+(pass) invalid direct API write is 4xx and writes nothing: null [31.56ms]
+(pass) invalid direct API write is 4xx and writes nothing: %j [35.81ms]
+(pass) invalid direct API write is 4xx and writes nothing: 4 [33.69ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"mode":"typo","title":"Goal"} [27.31ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":[]} [24.64ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"  "} [31.37ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","level":"invalid"} [23.74ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","deadline":"2026-10-01"} [32.98ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","estimated_hours":-2} [33.08ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","authority_level":11} [22.40ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","parent_id":"missing"} [25.13ms]
+(pass) invalid direct API write is 4xx and writes nothing: {"title":"Goal","tags":[3]} [27.03ms]
+(pass) quick-create and patch enforce the same shape and hierarchy as proposal writes [32.74ms]
+(pass) API proposal validation and an insert failure leave no partial tree [67.88ms]
+(pass) the API returns an anchored validated proposal and confirms the same deadlines [43.02ms]
+(pass) the API rejects malformed model output without offering a confirmable proposal [39.81ms]
+(pass) decomposition through the real chat tool creates next-level children [48.48ms]
+(pass) chat quick-create under a parent defaults to the next level [34.27ms]
+(pass) parent identity and level are rechecked at confirmation [45.74ms]
+
+src/daemon/api-goal-review.test.ts:
+(pass) the public score API reports missing review evidence without claiming the goal is missing [30.77ms]
+(pass) manual scores still work and unknown IDs are rejected [30.99ms]
+(pass) check-in API exposes the stored evidence snapshot and rejected decisions [29.61ms]
+
+src/brief/contracts.test.ts:
+(pass) documented JSON examples are the checked TypeScript contract examples [1.00ms]
+
+src/brief/capabilities.test.ts:
+(pass) production registration enables nothing, even when activation is requested without providers [0.79ms]
+(pass) installed and ready does not activate a feature without an explicit selection [0.36ms]
+(pass) readiness changes are reflected without restarting or retaining a stale true flag [0.40ms]
+(pass) transitive activation dependencies must themselves be enabled [0.54ms]
+(pass) dependency failure disables consumers on the next snapshot [0.54ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.53ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.11ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.29ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.36ms]
+(pass) duplicate and unknown registrations fail early, and registries do not share state [1.03ms]
+(pass) old or unsupported server response cannot enable new controls: null [0.06ms]
+(pass) old or unsupported server response cannot enable new controls: {} [0.02ms]
+(pass) old or unsupported server response cannot enable new controls: {"error":"Not found"} [0.02ms]
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":2,"capabilities":{}} [0.02ms]
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":1,"capabilities":null}
+(pass) v1 clients accept additive fields but reject inconsistent booleans or unknown capability IDs [0.30ms]
+(pass) the fixed activation graph has only known dependencies and no cycles [0.50ms]
+(pass) contracts and capability consumer bundle for a browser without importing backend implementations [7.62ms]
+
+src/brief/adapters.test.ts:
+(pass) an independent optional reader fails closed without another feature module [0.88ms]
+(pass) typed feature registrations compile and read independently of an absent collaborator [1.01ms]
+(pass) disabled and dependency-blocked readers never invoke their data handler [0.69ms]
+(pass) only the registered provider can be used, and ready reads preserve the supplied query [0.85ms]
+(pass) provider loading is not an empty collection [0.57ms]
+(pass) provider unavailable is not an empty collection [0.09ms]
+(pass) stale and empty results remain distinct and preserve their as-of times [0.76ms]
+(pass) failed reads redact internal error details [0.70ms]
+(pass) legacy goal projections preserve source identity and never infer measured counts [0.24ms]
+(pass) workflow projection keeps activation and version lifecycle distinct and rejects foreign versions [1.08ms]
+
+ 79 pass
+ 0 fail
+ 472 expect() calls
+Ran 79 tests across 10 files. [2.03s]

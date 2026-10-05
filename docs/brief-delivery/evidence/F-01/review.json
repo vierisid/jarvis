@@ -1,0 +1,30 @@
+{
+  "files": {
+    "docs/brief-contract-v1.examples.json": "60e8e55f58b52b4e1bce74f6a61c9c6b8e0a8b34d873be8a1b7407a0c4f2945f",
+    "docs/brief-contract-v1.examples.ts": "ac0dfb7ee2278e2c6492a055483ec246eff3540639b135e4581b8509e5e3180e",
+    "docs/brief-contract-v1.md": "49fa3be34909e83a80a2dc1cc63ce7b08259a77f592d2234dcdf7a81be6fb19e",
+    "src/brief/adapters.test.ts": "d17694bb18fdea2d9c61ed9bd2ae757327f8f7a50985480ba65049211578e582",
+    "src/brief/adapters.ts": "2342b9a1f002438e09468b9e190601d36d29861a57326851738a20206f8a890b",
+    "src/brief/capabilities.test.ts": "6fa191f7d97cbd3dbea4281b6a5ac827e9b5990fcad7d18561284794e69d61cb",
+    "src/brief/capabilities.ts": "40e2b20ed13c004194162e2f2ec87591463ce75799957489651a929537c34926",
+    "src/brief/contracts.test.ts": "9e430760dc54b8dd5259dbce05300f891ef1c3fa7a8e46c4af358ddd17c4ca95",
+    "src/brief/contracts.ts": "5e8eccae048b3cf55c04dcdfd016aaa46b2f7bf14d18bace5817d7f434915391",
+    "src/brief/providers.ts": "0054410ef9528c0811ee00cd9294dc53db6c68f2a7702f46a8211530cc89a1b7",
+    "src/brief/registrations/conversations.ts": "63037e7600b2949bce9b5ca5485aeb31861df438f0a46a398ba637611af6356b",
+    "src/brief/registrations/decisions.ts": "4445e00d50a29b0d60333f9f3638034a72d004a458499417556edace6bd1f520",
+    "src/brief/registrations/index.ts": "a5a4efaa4c67ee067d061ec0d096e8bcabeadc9d020efad1d83d711c6839ea21",
+    "src/brief/routes.ts": "f497ec6cd8c4a1901c14fee8615c908257c238e323253fa30300282934a66980",
+    "src/daemon/api-brief.test.ts": "4a3d057d42b965e08819bb1505370588999e821710fd354984f597a209391145",
+    "src/daemon/api-routes.ts": "2f843e9a2224c4a213d070f566e82b20c75c6c982563b68272d76fd94f48a0bd",
+    "src/daemon/index.ts": "2eef3ed8a03e849359cb54c40cd67c1eaa66f575699762eeb2075f3d043ae16c"
+  },
+  "source_review": "Primary implementer reviewed the complete F-01 source and integration diff. Independent PR review pending.",
+  "shared_file_diff": "src/daemon/api-routes.ts: 6 added lines; src/daemon/index.ts: 2 added lines. No changes to schema, WS dispatch, domain writers or UI.",
+  "open_prs_at_final_fetch": [
+    699,
+    691,
+    690
+  ],
+  "overlap": "No direct changed-file overlap with F-01; #691 is relevant to later workflow/approval tasks.",
+  "evidence_copy_format": "Log copies normalize line endings and trailing whitespace for Git. Raw logs remain at /tmp/jarvis-f-01-{red,tests,types,guards}.log."
+}
