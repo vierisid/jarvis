@@ -1,0 +1,53 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/composition.test.ts:
+Database initialized at: /tmp/jarvis-f07-9DqlDW/test.db
+ 97 | });
+ 98 |
+ 99 | test('a trigger-only result is a useful blocker and cannot create an empty success', async () => {
+100 |   const p = provider({ async chat() { return { text: JSON.stringify({ displayName: 'Empty', trigger: { name: 'trigger', type: 'EMPTY' } }) }; } });
+101 |   const { job } = p.submit(input); await p.idle();
+102 |   expect(p.get(job.jobId)).toMatchObject({ state: 'blocked', workflow: null, blocker: { code: 'insufficient_information', message: expect.stringContaining('destination') } });
+                                 ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "blocker": {
+-     "code": "insufficient_information",
+-     "message": StringContaining "destination",
++   "blocker": null,
++   "compositionId": "jzLxV7zyp0iT42qJDX1SM",
++   "createdAt": 1791290541991,
++   "jobId": "PeniRNF14KG4d1WA46EZh",
++   "progress": {
++     "checkedCandidates": 1,
+    },
+-   "state": "blocked",
+-   "workflow": null,
++   "requestId": "stable-request",
++   "specification": {
++     "name": "Private report",
++     "prompt":
++ "  On manual trigger, draft a report in the dashboard. Never send email or delete files.
++ "
++ ,
++   },
++   "state": "draft_ready",
++   "updatedAt": 1791290542015,
++   "workflow": {
++     "flowId": "wDJSBydUYUUtLscQoLx24",
++     "versionId": "64z8oQubTQX55wnqEhysH",
++   },
+  }
+
+- Expected  - 5
++ Received  + 20
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:102:28)
+(fail) a trigger-only result is a useful blocker and cannot create an empty success [869.12ms]
+
+ 0 pass
+ 18 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [967.00ms]

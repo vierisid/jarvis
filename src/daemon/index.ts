@@ -1,6 +1,8 @@
 import { registerChatAttachments } from '../brief/registrations/chat-attachments';
 import { registerChatProgress } from '../brief/registrations/chat-progress';
 import { BriefAttachmentProvider } from '../brief/attachments';
+import { BriefCompositionProvider } from '../brief/composition';
+import { registerWorkflowComposition } from '../brief/registrations/workflow-composition';
 /**
  * J.A.R.V.I.S. Daemon
  *
@@ -153,6 +155,7 @@ export interface DaemonConfig {
 
 let shutdownInProgress = false;
 let suggestionComposer: SuggestionComposer | null = null;
+let briefWorkflowComposition: BriefCompositionProvider | null = null;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
@@ -336,6 +339,8 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
   }
   suggestionComposer?.stop();
   suggestionComposer = null;
+  briefWorkflowComposition?.stop();
+  briefWorkflowComposition = null;
   console.log(`\n[Daemon] Received ${signal}, draining gracefully (deadline ${budgetMs}ms)...`);
 
   try {
@@ -4972,22 +4977,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       tts: () => wsService.getTTSProvider(),
     });
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
+    briefWorkflowComposition = new BriefCompositionProvider(getDb());
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
     if (process.env.JARVIS_BRIEF_CHAT_ATTACHMENTS === '1') briefEnabled.push('chatAttachments');
     if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     if (process.env.JARVIS_BRIEF_CHAT_PROGRESS === '1') briefEnabled.push('chatProgress');
+    if (process.env.JARVIS_BRIEF_WORKFLOW_COMPOSITION === '1') briefEnabled.push('workflowComposition');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
       ...registerChatState(briefConversations, briefChatTransport),
       ...registerChatAttachments(briefAttachments),
       ...registerChatProgress(briefChatTransport),
+      ...registerWorkflowComposition(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefConversations,
       briefAttachments,
+      briefWorkflowComposition,
       briefCapabilities,
       daemonStartedAt: Date.now(),
       healthMonitor,
@@ -5497,14 +5506,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
       if (workflowPieceCatalog) {
         const pieceRegistry = workflowPieceCatalog;
-        suggestionComposer = new SuggestionComposer(request => composePersistedFlow({
+        const compositionDependencies = () => ({
           llm: composeLlm, pieceRegistry,
           tools: composerToolRegistry?.listDetailed(),
           specialistRoles: Array.from(agentService.getSpecialists().values()).map(r => ({
             id: r.id, name: r.name, description: r.description,
           })),
           library: composerLibrary, executionTargets: collectExecutionTargets(),
-        }, request));
+        });
+        briefWorkflowComposition?.configure(compositionDependencies);
+        suggestionComposer = new SuggestionComposer(request => composePersistedFlow(compositionDependencies(), request));
         apiContext.suggestionComposer = suggestionComposer;
         suggestionComposer.start();
       }
