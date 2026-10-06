@@ -3,7 +3,7 @@
   "title": "Qualify a prepared proposal before it says Ready",
   "date": "2026-10-05",
   "branch": "brief/q-13",
-  "worktree": "/home/vierisid/.cache/codex/jarvis-q-13",
+  "worktree": "a checkout of brief/q-13",
   "baseline": "462d955d54014e15ea003b5908860917642e5b34",
   "baseline_ref": "brief/foundations (D-01 and F-01); Q-13 merges after F-01",
   "head": {
@@ -82,7 +82,7 @@
     }
   ],
   "quick_verify": {
-    "cwd": "/home/vierisid/.cache/codex/jarvis-q-13",
+    "cwd": "repository root, on brief/q-13",
     "command": "bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/awareness/prepared-dry-run.test.ts",
     "expected": "30 pass; the dry-run tests always use the real engine, and the first run builds the bundle and pieces",
     "screenshot": "not applicable: no visible UI changes"
