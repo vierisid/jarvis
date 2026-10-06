@@ -1,0 +1,154 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:
+(pass) preview/live sources and preparation/activation gates remain separate [8.27ms]
+(pass) acceptance requires the exact receipt, action and immutable workflow version [0.84ms]
+(pass) preparation, stale reads, missing binding credentials and absent writers never enable [80.43ms]
+(pass) malformed ready snapshots cannot enable [0.72ms]
+(pass) ten local next cycles retain the list; light/dark and compact changes retain selection [479.36ms]
+(pass) double approval confirms locally, then removes exactly one and leaves the next actionable [1213.19ms]
+(pass) dismiss has a neutral acknowledgement and final empty state restores local focus [1806.87ms]
+(pass) missing reads do not reset a pending operation or permit a duplicate submission [616.61ms]
+(pass) lost, mismatched, unknown, failed and conflicting results keep the proposal and block retries [3247.71ms]
+(pass) a lost response can recover only from a receipt matching the outstanding request [610.95ms]
+(pass) a changed revision fences the old callback and permits reviewing the new prepared version [9.75ms]
+(pass) a changed account cannot display or settle another account's request [600.27ms]
+(pass) owner removing the accepted item before its response does not skip another proposal [605.62ms]
+(pass) background changes leave external composer focus and content intact [7.37ms]
+(pass) terminal snapshots stay absent, duplicate identities fail closed, unknown count is not zero [3.46ms]
+128 | });
+129 | 
+130 | test("freshness loss during a navigation exit still settles the next cached proposal",async()=>{
+131 |   await render();await next();expect(phase()).toBe("exit");const ready=binding;
+132 |   binding={...binding,state:{status:"stale",data:data(),reason:"Offline"}};await render();expect(feedback()).toContain("Refresh");
+133 |   await tick();await tick();expect(front()).toBe("fixture-opportunity-1");expect(phase()).toBe("rest");
+                                                  ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-opportunity-1"
+Received: "fixture-opportunity-0"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:133:45)
+(fail) freshness loss during a navigation exit still settles the next cached proposal [47.84ms]
+139 |   binding={...opportunityFixture("stale"),onAction:async req=>{calls++;return opportunityReceipt(req);}};
+140 |   const cached="data" in binding.state?binding.state.data:[];
+141 |   await render();
+142 |   for(let i=0;i<10;i++){
+143 |     await next();await tick();await tick();
+144 |     expect(front()).toBe(`fixture-opportunity-${(i+1)%3}`);expect(phase()).toBe("rest");
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-opportunity-1"
+Received: "fixture-opportunity-0"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:144:21)
+(fail) stale proposals allow repeated local navigation without allowing writes [47.03ms]
+(pass) stale data still holds an action receipt until fresh confirmation can be presented [1203.40ms]
+174 |     await render();await next();await tick();await tick();expect(front()).toBe("fixture-opportunity-1");
+175 |     if(action==="approve_enable")await accept();else await dismiss();
+176 |     const refreshed=change==="earlier-removed"?[b!,c!,d]:change==="owner-removed-current"?[c!,d]:change==="reordered"?[d,b!,a!,c!]:change==="successor-removed"?[b!,d]:[e];
+177 |     binding={...binding,state:{status:"ready",data:refreshed}};await render();expect(front()).toBe("fixture-opportunity-1");
+178 |     await React.act(async()=>resolve(opportunityReceipt(request)));await settle();
+179 |     expect(front()).toBe(change==="all-replaced"?"fixture-opportunity-4":change==="successor-removed"?"fixture-opportunity-3":"fixture-opportunity-2");
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-opportunity-2"
+Received: "fixture-opportunity-3"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:179:21)
+(fail) approve_enable retains the next proposal identity when the refreshed list is earlier-removed [657.87ms]
+174 |     await render();await next();await tick();await tick();expect(front()).toBe("fixture-opportunity-1");
+175 |     if(action==="approve_enable")await accept();else await dismiss();
+176 |     const refreshed=change==="earlier-removed"?[b!,c!,d]:change==="owner-removed-current"?[c!,d]:change==="reordered"?[d,b!,a!,c!]:change==="successor-removed"?[b!,d]:[e];
+177 |     binding={...binding,state:{status:"ready",data:refreshed}};await render();expect(front()).toBe("fixture-opportunity-1");
+178 |     await React.act(async()=>resolve(opportunityReceipt(request)));await settle();
+179 |     expect(front()).toBe(change==="all-replaced"?"fixture-opportunity-4":change==="successor-removed"?"fixture-opportunity-3":"fixture-opportunity-2");
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-opportunity-2"
+Received: "fixture-opportunity-3"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:179:21)
+(fail) approve_enable retains the next proposal identity when the refreshed list is owner-removed-current [653.23ms]
+174 |     await render();await next();await tick();await tick();expect(front()).toBe("fixture-opportunity-1");
+175 |     if(action==="approve_enable")await accept();else await dismiss();
+176 |     const refreshed=change==="earlier-removed"?[b!,c!,d]:change==="owner-removed-current"?[c!,d]:change==="reordered"?[d,b!,a!,c!]:change==="successor-removed"?[b!,d]:[e];
+177 |     binding={...binding,state:{status:"ready",data:refreshed}};await render();expect(front()).toBe("fixture-opportunity-1");
+178 |     await React.act(async()=>resolve(opportunityReceipt(request)));await settle();
+179 |     expect(front()).toBe(change==="all-replaced"?"fixture-opportunity-4":change==="successor-removed"?"fixture-opportunity-3":"fixture-opportunity-2");
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-opportunity-2"
+Received: "fixture-opportunity-0"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:179:21)
+(fail) approve_enable retains the next proposal identity when the refreshed list is reordered [647.06ms]
+(pass) approve_enable retains the next proposal identity when the refreshed list is successor-removed [650.84ms]
+(pass) approve_enable retains the next proposal identity when the refreshed list is all-replaced [651.60ms]
+174 |     await render();await next();await tick();await tick();expect(front()).toBe("fixture-opportunity-1");
+175 |     if(action==="approve_enable")await accept();else await dismiss();
+176 |     const refreshed=change==="earlier-removed"?[b!,c!,d]:change==="owner-removed-current"?[c!,d]:change==="reordered"?[d,b!,a!,c!]:change==="successor-removed"?[b!,d]:[e];
+177 |     binding={...binding,state:{status:"ready",data:refreshed}};await render();expect(front()).toBe("fixture-opportunity-1");
+178 |     await React.act(async()=>resolve(opportunityReceipt(request)));await settle();
+179 |     expect(front()).toBe(change==="all-replaced"?"fixture-opportunity-4":change==="successor-removed"?"fixture-opportunity-3":"fixture-opportunity-2");
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-opportunity-2"
+Received: "fixture-opportunity-3"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:179:21)
+(fail) dismiss retains the next proposal identity when the refreshed list is earlier-removed [650.69ms]
+174 |     await render();await next();await tick();await tick();expect(front()).toBe("fixture-opportunity-1");
+175 |     if(action==="approve_enable")await accept();else await dismiss();
+176 |     const refreshed=change==="earlier-removed"?[b!,c!,d]:change==="owner-removed-current"?[c!,d]:change==="reordered"?[d,b!,a!,c!]:change==="successor-removed"?[b!,d]:[e];
+177 |     binding={...binding,state:{status:"ready",data:refreshed}};await render();expect(front()).toBe("fixture-opportunity-1");
+178 |     await React.act(async()=>resolve(opportunityReceipt(request)));await settle();
+179 |     expect(front()).toBe(change==="all-replaced"?"fixture-opportunity-4":change==="successor-removed"?"fixture-opportunity-3":"fixture-opportunity-2");
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-opportunity-2"
+Received: "fixture-opportunity-3"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:179:21)
+(fail) dismiss retains the next proposal identity when the refreshed list is owner-removed-current [648.70ms]
+174 |     await render();await next();await tick();await tick();expect(front()).toBe("fixture-opportunity-1");
+175 |     if(action==="approve_enable")await accept();else await dismiss();
+176 |     const refreshed=change==="earlier-removed"?[b!,c!,d]:change==="owner-removed-current"?[c!,d]:change==="reordered"?[d,b!,a!,c!]:change==="successor-removed"?[b!,d]:[e];
+177 |     binding={...binding,state:{status:"ready",data:refreshed}};await render();expect(front()).toBe("fixture-opportunity-1");
+178 |     await React.act(async()=>resolve(opportunityReceipt(request)));await settle();
+179 |     expect(front()).toBe(change==="all-replaced"?"fixture-opportunity-4":change==="successor-removed"?"fixture-opportunity-3":"fixture-opportunity-2");
+                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-opportunity-2"
+Received: "fixture-opportunity-0"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:179:21)
+(fail) dismiss retains the next proposal identity when the refreshed list is reordered [651.92ms]
+(pass) dismiss retains the next proposal identity when the refreshed list is successor-removed [649.82ms]
+(pass) dismiss retains the next proposal identity when the refreshed list is all-replaced [650.98ms]
+(pass) refresh order does not replace the initially selected identity [5.78ms]
+(pass) a response after remount cannot alter the new stack [602.03ms]
+(pass) an in-flight identity can be left and restored without losing its request or receipt [608.25ms]
+(pass) an authoritative recovery cannot be overwritten by a late transport failure [610.00ms]
+
+8 tests failed:
+(fail) freshness loss during a navigation exit still settles the next cached proposal [47.84ms]
+(fail) stale proposals allow repeated local navigation without allowing writes [47.03ms]
+(fail) approve_enable retains the next proposal identity when the refreshed list is earlier-removed [657.87ms]
+(fail) approve_enable retains the next proposal identity when the refreshed list is owner-removed-current [653.23ms]
+(fail) approve_enable retains the next proposal identity when the refreshed list is reordered [647.06ms]
+(fail) dismiss retains the next proposal identity when the refreshed list is earlier-removed [650.69ms]
+(fail) dismiss retains the next proposal identity when the refreshed list is owner-removed-current [648.70ms]
+(fail) dismiss retains the next proposal identity when the refreshed list is reordered [651.92ms]
+
+ 24 pass
+ 8 fail
+ 193 expect() calls
+Ran 32 tests across 1 file. [18.66s]

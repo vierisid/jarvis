@@ -40,7 +40,9 @@ export function TodaySpecimen() {
   const [opportunityResult, setOpportunityResult] = useState("confirmed");
   const [opportunityCalls, setOpportunityCalls] = useState(0);
   const [opportunityReset, setOpportunityReset] = useState(0);
+  const [opportunityReversed, setOpportunityReversed] = useState(false);
   const opportunities = opportunityFixture(opportunityScenario);
+  if (opportunityReversed && "data" in opportunities.state) opportunities.state = { ...opportunities.state, data: [...opportunities.state.data].reverse() };
   opportunities.refresh = () => setRefreshCount(n => n + 1);
   if (opportunityScenario !== "no-owner") opportunities.onAction = async request => {
     setOpportunityCalls(n => n + 1);
@@ -97,7 +99,8 @@ export function TodaySpecimen() {
       <span aria-label="Acceptance calls">{acceptCalls}</span>
       <label>Opportunities <select aria-label="Opportunity scenario" value={opportunityScenario} onChange={e => setOpportunityScenario(e.target.value)}>{["ready","preparing","blocked","missing-connection","no-owner","loading","empty","stale","unavailable","unsupported","long"].map(v => <option key={v}>{v}</option>)}</select></label>
       <label>Opportunity result <select aria-label="Opportunity result" value={opportunityResult} onChange={e => setOpportunityResult(e.target.value)}>{["confirmed","conflict","failed","unknown","lost-response"].map(v => <option key={v}>{v}</option>)}</select></label>
-      <button onClick={() => { setOpportunityReset(n => n + 1); setOpportunityCalls(0); }}>Reset opportunities</button><span aria-label="Opportunity action calls">{opportunityCalls}</span>
+      <button onClick={() => setOpportunityReversed(value => !value)}>Reverse opportunity list</button>
+      <button onClick={() => { setOpportunityReset(n => n + 1); setOpportunityCalls(0); setOpportunityReversed(false); }}>Reset opportunities</button><span aria-label="Opportunity action calls">{opportunityCalls}</span>
       <small>Simulated receipts only. No email or workflow executes.</small>
       <small>Illustrative outcome evidence only. Recommendations and opportunities use simulated owners. Conversation remains a layout fixture.</small>
     </div>
