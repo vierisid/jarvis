@@ -1,0 +1,40 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:
+(pass) preview/live sources and preparation/activation gates remain separate [8.22ms]
+(pass) acceptance requires the exact receipt, action and immutable workflow version [1.12ms]
+(pass) preparation, stale reads, missing binding credentials and absent writers never enable [68.39ms]
+(pass) malformed ready snapshots cannot enable [0.68ms]
+(pass) ten local next cycles retain the list; light/dark and compact changes retain selection [475.89ms]
+(pass) double approval confirms locally, then removes exactly one and leaves the next actionable [1211.32ms]
+(pass) dismiss has a neutral acknowledgement and final empty state restores local focus [1811.11ms]
+(pass) missing reads do not reset a pending operation or permit a duplicate submission [615.48ms]
+(pass) lost, mismatched, unknown, failed and conflicting results keep the proposal and block retries [3240.42ms]
+(pass) a lost response can recover only from a receipt matching the outstanding request [609.74ms]
+(pass) a changed revision fences the old callback and permits reviewing the new prepared version [8.93ms]
+(pass) a changed account cannot display or settle another account's request [602.52ms]
+(pass) owner removing the accepted item before its response does not skip another proposal [604.23ms]
+(pass) background changes leave external composer focus and content intact [9.07ms]
+(pass) terminal snapshots stay absent, duplicate identities fail closed, unknown count is not zero [4.30ms]
+(pass) freshness loss during a navigation exit still settles the next cached proposal [50.44ms]
+(pass) stale proposals allow repeated local navigation without allowing writes [1060.67ms]
+(pass) stale data still holds an action receipt until fresh confirmation can be presented [1198.92ms]
+(pass) approve_enable retains the next proposal identity when the refreshed list is earlier-removed [652.94ms]
+(pass) approve_enable retains the next proposal identity when the refreshed list is owner-removed-current [653.08ms]
+(pass) approve_enable retains the next proposal identity when the refreshed list is reordered [648.58ms]
+(pass) approve_enable retains the next proposal identity when the refreshed list is successor-removed [649.65ms]
+(pass) approve_enable retains the next proposal identity when the refreshed list is all-replaced [646.60ms]
+(pass) dismiss retains the next proposal identity when the refreshed list is earlier-removed [650.93ms]
+(pass) dismiss retains the next proposal identity when the refreshed list is owner-removed-current [648.08ms]
+(pass) dismiss retains the next proposal identity when the refreshed list is reordered [645.96ms]
+(pass) dismiss retains the next proposal identity when the refreshed list is successor-removed [646.30ms]
+(pass) dismiss retains the next proposal identity when the refreshed list is all-replaced [650.34ms]
+(pass) refresh order does not replace the initially selected identity [6.46ms]
+(pass) a response after remount cannot alter the new stack [599.08ms]
+(pass) an in-flight identity can be left and restored without losing its request or receipt [608.87ms]
+(pass) an authoritative recovery cannot be overwritten by a late transport failure [616.03ms]
+
+ 32 pass
+ 0 fail
+ 261 expect() calls
+Ran 32 tests across 1 file. [19.52s]

@@ -127,11 +127,60 @@ test("terminal snapshots stay absent, duplicate identities fail closed, unknown 
   binding=opportunityFixture();binding={...binding,state:{status:"ready",data:data().map(card=>({...card,proposal:{...card.proposal,state:"accepted" as const}}))}};await render();expect(count()).toBe("0");expect(host.querySelector(".brief-opportunity-approve")).toBeNull();
 });
 
-test("freshness loss during an exit keeps the stale card readable and resumes safely",async()=>{
+test("freshness loss during a navigation exit still settles the next cached proposal",async()=>{
   await render();await next();expect(phase()).toBe("exit");const ready=binding;
-  binding={...binding,state:{status:"stale",data:data(),reason:"Offline"}};await render();expect(phase()).toBe("rest");expect(feedback()).toContain("Refresh");
-  await tick();expect(front()).toBe("fixture-opportunity-0");binding=ready;await render();await tick();await tick();expect(front()).toBe("fixture-opportunity-1");expect(phase()).toBe("rest");
+  binding={...binding,state:{status:"stale",data:data(),reason:"Offline"}};await render();expect(feedback()).toContain("Refresh");
+  await tick();await tick();expect(front()).toBe("fixture-opportunity-1");expect(phase()).toBe("rest");
+  binding=ready;await render();expect(front()).toBe("fixture-opportunity-1");expect(phase()).toBe("rest");
 });
+
+test("stale proposals allow repeated local navigation without allowing writes",async()=>{
+  let calls=0;
+  binding={...opportunityFixture("stale"),onAction:async req=>{calls++;return opportunityReceipt(req);}};
+  const cached="data" in binding.state?binding.state.data:[];
+  await render();
+  for(let i=0;i<10;i++){
+    await next();await tick();await tick();
+    expect(front()).toBe(`fixture-opportunity-${(i+1)%3}`);expect(phase()).toBe("rest");
+    expect(host.querySelector('[aria-label="Next opportunity"]')!.getAttribute("aria-disabled")).toBe("false");
+    expect(host.querySelector(".brief-opportunity-approve")!.getAttribute("aria-disabled")).toBe("true");
+    expect(host.querySelector(".brief-opportunity-dismiss")!.getAttribute("aria-disabled")).toBe("true");
+    await accept();await dismiss();await render("preview",i%2===0,i%2===0);
+  }
+  expect(calls).toBe(0);
+  binding={...binding,state:{status:"ready",data:cached}};
+  await render();expect(front()).toBe("fixture-opportunity-1");
+  await accept();await settle();expect(calls).toBe(1);expect(front()).toBe("fixture-opportunity-2");
+});
+
+test("stale data still holds an action receipt until fresh confirmation can be presented",async()=>{
+  let resolve!:(r:OpportunityResult)=>void,request!:OpportunityRequest;
+  binding.onAction=req=>{request=req;return new Promise(r=>resolve=r);};const ready=binding;
+  await render();await accept();binding={...binding,state:{status:"stale",data:data(),reason:"Offline"}};await render();
+  await React.act(async()=>resolve(opportunityReceipt(request)));await settle();
+  expect(front()).toBe("fixture-opportunity-0");expect(feedback()).not.toBe("Workflow enabled");expect(count()).toBe("1 / 3");
+  await next();expect(front()).toBe("fixture-opportunity-0");
+  binding=ready;await render();expect(feedback()).toBe("Workflow enabled");await settle();expect(front()).toBe("fixture-opportunity-1");
+});
+
+for(const action of ["approve_enable","dismiss"] as const) for(const change of ["earlier-removed","owner-removed-current","reordered","successor-removed","all-replaced"] as const){
+  test(`${action} retains the next proposal identity when the refreshed list is ${change}`,async()=>{
+    let resolve!:(r:OpportunityResult)=>void,request!:OpportunityRequest;
+    binding.onAction=req=>{request=req;return new Promise(r=>resolve=r);};
+    const [a,b,c]=data();
+    const d={...c!,proposal:{...c!.proposal,proposalId:"fixture-opportunity-3"}};
+    const e={...d,proposal:{...d.proposal,proposalId:"fixture-opportunity-4"}};
+    binding={...binding,state:{status:"ready",data:[a!,b!,c!,d]}};
+    await render();await next();await tick();await tick();expect(front()).toBe("fixture-opportunity-1");
+    if(action==="approve_enable")await accept();else await dismiss();
+    const refreshed=change==="earlier-removed"?[b!,c!,d]:change==="owner-removed-current"?[c!,d]:change==="reordered"?[d,b!,a!,c!]:change==="successor-removed"?[b!,d]:[e];
+    binding={...binding,state:{status:"ready",data:refreshed}};await render();expect(front()).toBe("fixture-opportunity-1");
+    await React.act(async()=>resolve(opportunityReceipt(request)));await settle();
+    expect(front()).toBe(change==="all-replaced"?"fixture-opportunity-4":change==="successor-removed"?"fixture-opportunity-3":"fixture-opportunity-2");
+    expect(phase()).toBe("rest");
+    expect(host.querySelector(".brief-opportunity-approve")!.getAttribute("aria-disabled")).toBe("false");
+  });
+}
 test("refresh order does not replace the initially selected identity",async()=>{
   await render();binding={...binding,state:{status:"ready",data:[...data()].reverse()}};await render();expect(front()).toBe("fixture-opportunity-0");expect(count()).toBe("3 / 3");
 });

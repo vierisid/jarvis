@@ -1,0 +1,94 @@
+{
+  "browser": "154.0.8037.93",
+  "base": "http://127.0.0.1:4391/?brief=preview&specimen=today#/_brief_preview",
+  "build": [
+    "./index-9mh0vv42.js"
+  ],
+  "results": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "staleNextCycles": 10,
+      "staleWrites": 0,
+      "reorderedApproval": "fixture-opportunity-2",
+      "reorderedDismissal": "fixture-opportunity-2",
+      "reducedMotion": true
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "staleNextCycles": 10,
+      "staleWrites": 0,
+      "reorderedApproval": "fixture-opportunity-2",
+      "reorderedDismissal": "fixture-opportunity-2",
+      "reducedMotion": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "staleNextCycles": 10,
+      "staleWrites": 0,
+      "reorderedApproval": "fixture-opportunity-2",
+      "reorderedDismissal": "fixture-opportunity-2",
+      "reducedMotion": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "staleNextCycles": 10,
+      "staleWrites": 0,
+      "reorderedApproval": "fixture-opportunity-2",
+      "reorderedDismissal": "fixture-opportunity-2",
+      "reducedMotion": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "staleNextCycles": 10,
+      "staleWrites": 0,
+      "reorderedApproval": "fixture-opportunity-2",
+      "reorderedDismissal": "fixture-opportunity-2",
+      "reducedMotion": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "staleNextCycles": 10,
+      "staleWrites": 0,
+      "reorderedApproval": "fixture-opportunity-2",
+      "reorderedDismissal": "fixture-opportunity-2",
+      "reducedMotion": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "staleNextCycles": 10,
+      "staleWrites": 0,
+      "reorderedApproval": "fixture-opportunity-2",
+      "reorderedDismissal": "fixture-opportunity-2",
+      "reducedMotion": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "staleNextCycles": 10,
+      "staleWrites": 0,
+      "reorderedApproval": "fixture-opportunity-2",
+      "reorderedDismissal": "fixture-opportunity-2",
+      "reducedMotion": true
+    }
+  ],
+  "errors": [],
+  "limits": [
+    "Illustrative providers only; no workflow enabled or dismissed in a live account.",
+    "No real network outage or cross-window backend synchronization exercised."
+  ]
+}

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useBriefReducedMotion } from "../../motion";
 import { activationBlock, canDismiss, confirmedResult, matchesRequest, opportunityKey, opportunityView, OPPORTUNITY_TIMING, resultMessage, type OpportunityAction, type OpportunityBinding, type OpportunityCard, type OpportunityRequest, type OpportunityResult } from "./model";
 
-interface Attempt { request: OpportunityRequest; result?: OpportunityResult }
+interface Attempt { request: OpportunityRequest; successors: readonly string[]; result?: OpportunityResult }
 interface Transition {
   key: string; card: OpportunityCard; phase: "pending" | "acknowledged" | "exit" | "enter";
   action?: OpportunityAction; count: number; index: number;
@@ -28,6 +28,8 @@ export function useOpportunityStack(mode: "live" | "preview", supplied?: Opportu
   // Do not retain a removed account's content or a superseded revision during a local transition.
   const replaced = transition && raw.some(c => c.proposal.proposalId === transition.card.proposal.proposalId && scope(c) !== transition.key);
   const showing = transitionInScope && !replaced && ["ready", "stale"].includes(binding.state.status) && !duplicate ? transition : null;
+  // Browsing cached proposals is local. Action acknowledgements still require fresh data.
+  const canTransition = binding.state.status === "ready" || (binding.state.status === "stale" && !transition?.action);
   const card = showing?.card ?? stored;
   const key = card ? scope(card) : null;
   const attempt = key ? attempts.current.get(key) : undefined;
@@ -65,7 +67,7 @@ export function useOpportunityStack(mode: "live" | "preview", supplied?: Opportu
   }, [transition, key, card, count, index, binding.state.status, binding.onAction, binding.receipts]);
 
   useEffect(() => {
-    if (!transition || !showing || binding.state.status !== "ready" || transition.phase === "pending") return;
+    if (!transition || !showing || !canTransition || transition.phase === "pending") return;
     const phase = transition.phase;
     const duration = phase === "acknowledged" ? transition.action === "dismiss" ? OPPORTUNITY_TIMING.dismiss : OPPORTUNITY_TIMING.acknowledge
       : reduced ? 0 : phase === "exit" ? OPPORTUNITY_TIMING.exit : OPPORTUNITY_TIMING.enter;
@@ -75,15 +77,18 @@ export function useOpportunityStack(mode: "live" | "preview", supplied?: Opportu
       const { binding: latest, items: available } = current.current;
       if (transition.action) settled.current.add(transition.key);
       const remaining = available.filter(c => !settled.current.has(opportunityKey(latest, c)));
-      const oldIndex = remaining.findIndex(c => opportunityKey(latest, c) === transition.key);
-      const nextIndex = transition.action ? Math.min(transition.index, remaining.length - 1) : (oldIndex + 1) % remaining.length;
+      const positions = new Map(remaining.map((c, i) => [opportunityKey(latest, c), i]));
+      // Keep the reviewed neighbours even if a refresh removes or reorders earlier cards.
+      const successor = attempts.current.get(transition.key)?.successors.find(key => positions.has(key));
+      const nextIndex = transition.action ? successor ? positions.get(successor)! : 0
+        : ((positions.get(transition.key) ?? -1) + 1) % remaining.length;
       const next = remaining[nextIndex];
       setSelected(next ? opportunityKey(latest, next) : null);
       if (!next) { lock.current = false; setTransition(null); repaint(n => n + 1); return; }
       setTransition({ key: opportunityKey(latest, next), card: next, count: remaining.length, index: nextIndex, phase: "enter" });
     }, duration);
     return () => clearTimeout(timer);
-  }, [transition, showing, binding.state.status, reduced]);
+  }, [transition, showing, canTransition, reduced]);
 
   const next = () => {
     const s = current.current;
@@ -97,7 +102,10 @@ export function useOpportunityStack(mode: "live" | "preview", supplied?: Opportu
     if (lock.current || !s.card || !s.key || attempts.current.has(s.key) || !s.binding.onAction || (action === "approve_enable" ? activationBlock(s.binding, s.card) !== null : !canDismiss(s.binding, s.card))) return;
     const p = s.card.proposal;
     const request: OpportunityRequest = { requestId: Array.from(crypto.getRandomValues(new Uint8Array(16)), b => b.toString(16).padStart(2, "0")).join(""), proposalId: p.proposalId, revision: p.revision, action, flowId: p.workflow?.flowId ?? null, versionId: p.workflow?.versionId ?? null };
-    const a: Attempt = { request }; attempts.current.set(s.key, a);
+    // Prefer following cards, then the nearest preceding card when resolving the last one.
+    // Store identities on the attempt so read/scope recovery retains the same destination.
+    const successors = [...s.items.slice(s.index + 1), ...s.items.slice(0, s.index).reverse()].map(c => opportunityKey(s.binding, c));
+    const a: Attempt = { request, successors }; attempts.current.set(s.key, a);
     lock.current = true; setSelected(s.key);
     setTransition({ key: s.key, card: s.card, count: s.count, index: s.index, action, phase: "pending" });
     const generation = epoch.current;
@@ -108,8 +116,7 @@ export function useOpportunityStack(mode: "live" | "preview", supplied?: Opportu
     };
     try { void Promise.resolve(s.binding.onAction(request)).then(finish, () => finish()); } catch { finish(); }
   };
-  // A stale snapshot must stay readable even if freshness was lost halfway through exit.
-  const phase = binding.state.status === "ready" ? showing?.phase ?? "rest" : "rest";
+  const phase = canTransition ? showing?.phase ?? "rest" : "rest";
   const confirming = !!showing?.action && (phase === "acknowledged" || phase === "exit");
   const message = binding.state.status === "stale" ? "Refresh this proposal before enabling it."
     : confirming ? showing.action === "approve_enable" ? "Workflow enabled" : "Dismissed"
