@@ -240,6 +240,8 @@ describe('#611 no seventh copy appears elsewhere in the tree', () => {
     'src/sidecar/types.ts',
     // Displays the reasons to an operator; asks which, not whether.
     'src/actions/tools/sidecar-list.ts',
+    // F09 carries unavailable names into Q13's live qualification facts; no routing predicate.
+    'src/daemon/index.ts',
     // Carries the field across the wire.
     'src/sidecar/manager.ts',
     // The shared predicate and its own test.

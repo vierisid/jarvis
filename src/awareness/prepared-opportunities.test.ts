@@ -6,16 +6,18 @@ import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../workflows/db'
 import { getDb } from '../vault/schema';
 import { createSuggestion } from '../vault/awareness';
 import { createGoal } from '../vault/goals';
-import { getFlow } from '../workflows/db/repos/flow';
+import { deleteFlow, getFlow } from '../workflows/db/repos/flow';
 import { getFlowVersion, updateDraftVersion } from '../workflows/db/repos/flow-version';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { getWorkflowComposition } from '../workflows/db/repos/workflow-composition';
 import { sampleCatalog } from '../workflows/runtime/test-fixtures';
 import { digest } from '../workflows/runtime/effect-context';
+import { acceptSuggestion, getCompositionRow, retrySuggestionComposition } from './suggestion-feedback';
+import { SuggestionComposer } from './suggestion-composer';
 import { PreparedOpportunities } from './prepared-opportunities';
 import { recoverCompositionLeases } from './composition-leases';
 import type { PreparedAssessment, PreparedIdentity, PreparedQualificationGate } from './prepared-contracts';
-import type { ComposerLlmClient } from '../actions/tools/workflow-composer';
+import type { ComposerLlmClient, ComposedFlow } from '../actions/tools/workflow-composer';
 import { BriefCapabilities } from '../brief/capabilities';
 import { registerPreparedOpportunities } from '../brief/registrations/prepared-opportunities';
 import { createPreparedOpportunityRoutes } from '../brief/prepared-opportunity-routes';
@@ -194,6 +196,7 @@ test('attachment transaction failure leaves no orphan flow, and explicit retry s
   const s = source(), p = provider();
   getDb().exec("CREATE TRIGGER reject_prepared_version BEFORE INSERT ON flow_version BEGIN SELECT RAISE(ABORT, 'private failure'); END");
   const view = await prepared(p, s.id); expect(view.state).toBe('blocked');
+  expect(view.compositionId).not.toBeNull(); expect(getWorkflowComposition(view.compositionId!)!.state).toBe('VALIDATED');
   expect(JSON.stringify(view)).not.toContain('private failure'); expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(0);
   getDb().exec('DROP TRIGGER reject_prepared_version');
   p.retry(view.proposalId, view.revision); await p.idle(); expect(p.get(view.proposalId).state).toBe('ready');
@@ -263,4 +266,133 @@ test('publishing through another surface cannot leave an approval-eligible propo
   const p = provider(), view = await prepared(p, source().id);
   getDb().run('UPDATE flow SET published_version_id = ? WHERE id = ?', [view.workflow!.versionId, view.workflow!.flowId]);
   expect(p.get(view.proposalId)).toMatchObject({ state: 'blocked', canApprove: false, blockers: [{ code: 'already_published', message: expect.any(String) }] });
+});
+
+const acceptance = { requestId: 'accept', reason: 'Prepare the invoice review', name: 'Invoice review',
+  description: 'Review unpaid invoices', expectedOutcome: 'A list for review' };
+
+for (const stage of ['queued', 'running', 'ready'] as const) test(`shared ownership rejects legacy acceptance when F09 is ${stage}`, async () => {
+  const s = source(), entered = deferred<void>(), finish = deferred<void>(); let calls = 0;
+  const p = provider({ async chat() { calls++; entered.resolve(); await finish.promise; return { text: JSON.stringify(graph()) }; } });
+  const view = p.ensure(s.id);
+  try {
+    if (stage !== 'queued') await entered.promise;
+    if (stage === 'ready') { finish.resolve(); await p.idle(); }
+    expect(() => acceptSuggestion(s.id, acceptance)).toThrow('prepared proposal');
+    expect(getCompositionRow(s.id)).toBeNull();
+    expect(getDb().query('SELECT id FROM suggestion_feedback').all()).toHaveLength(0);
+  } finally { finish.resolve(); await p.idle(); }
+  expect(p.get(view.proposalId).state).toBe('ready'); expect(calls).toBe(1);
+  expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1);
+});
+
+test('legacy ownership survives a blocked F09 row and permits legacy retry', async () => {
+  const s = source(); acceptSuggestion(s.id, acceptance);
+  let calls = 0; const p = provider({ async chat() { calls++; return { text: '{}' }; } });
+  const view = await prepared(p, s.id); expect(view.state).toBe('blocked'); expect(calls).toBe(0);
+  const legacy = new SuggestionComposer(async () => ({ ok: true, flow: graph() as ComposedFlow, rawResponse: '{}' }));
+  getDb().run("UPDATE suggestion_composition_jobs SET state = 'failed' WHERE suggestion_id = ?", [s.id]);
+  retrySuggestionComposition(s.id, { requestId: 'retry', reason: 'Try again' });
+  legacy.start(); try { await legacy.idle(); } finally { legacy.stop(); }
+  expect(getCompositionRow(s.id)?.state).toBe('draft_ready');
+  p.retry(view.proposalId, view.revision); await p.idle(); expect(calls).toBe(0);
+  expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1);
+});
+
+for (const winner of ['prepared', 'legacy'] as const) test(`old mixed queues reserve the ${winner} owner before either inference`, async () => {
+  const s = source(); acceptSuggestion(s.id, acceptance);
+  let preparedCalls = 0, legacyCalls = 0;
+  const p = provider({ async chat() { preparedCalls++; return { text: JSON.stringify(graph()) }; } });
+  const view = await prepared(p, s.id);
+  // Simulate records created by the previous version, which had no shared reservation.
+  getDb().run("UPDATE prepared_opportunities SET state = 'queued', error = NULL, created_at = ? WHERE id = ?", [winner === 'prepared' ? 1 : 3, view.proposalId]);
+  getDb().run('UPDATE suggestion_composition_jobs SET created_at = 2 WHERE suggestion_id = ?', [s.id]);
+  if (getDb().query("SELECT 1 FROM sqlite_master WHERE name = 'opportunity_composition_owners'").get()) getDb().run('DELETE FROM opportunity_composition_owners');
+  const legacy = new SuggestionComposer(async () => { legacyCalls++; return { ok: true, flow: graph() as ComposedFlow, rawResponse: '{}' }; });
+  legacy.start(); p.kick();
+  try { await Promise.all([legacy.idle(), p.idle()]); } finally { legacy.stop(); }
+  expect(preparedCalls).toBe(winner === 'prepared' ? 1 : 0); expect(legacyCalls).toBe(winner === 'legacy' ? 1 : 0);
+  expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1);
+});
+
+for (const failure of ['provider', 'model'] as const) test(`private ${failure} diagnostics stay in the linked journal`, async () => {
+  const p = provider({ async chat() { if (failure === 'provider') throw Error('PRIVATE PROVIDER DIAGNOSTIC'); return { text: '{PRIVATE MODEL RESPONSE' }; } });
+  const view = await prepared(p, source().id);
+  expect(JSON.stringify(view)).not.toContain('PRIVATE'); expect(view.state).toBe('blocked');
+  expect(view.compositionId).not.toBeNull();
+  expect(JSON.stringify(getWorkflowComposition(view.compositionId!))).toContain('PRIVATE');
+  const retry = p.retry(view.proposalId, view.revision); await p.idle();
+  const old = getDb().query<{ snapshot: string }, [string]>('SELECT snapshot FROM prepared_opportunity_history WHERE revision = ?').get(view.revision)!;
+  expect(JSON.parse(old.snapshot).composition_id).toBe(view.compositionId);
+  expect(p.get(retry.proposalId).compositionId).not.toBe(view.compositionId);
+});
+
+test('pre-upgrade diagnostic text is sanitized when reading blocked proposals', async () => {
+  const p = provider(), view = await prepared(p, source().id);
+  getDb().run("UPDATE prepared_opportunities SET state = 'failed', assessment = NULL, error = 'PRIVATE OLD DIAGNOSTIC' WHERE id = ?", [view.proposalId]);
+  expect(JSON.stringify(p.get(view.proposalId))).not.toContain('PRIVATE');
+});
+
+for (const ending of ['dismiss', 'timeout', 'shutdown'] as const) test(`journal is linked before inference and retained after ${ending}`, async () => {
+  const entered = deferred<void>(), finish = deferred<{ text: string }>();
+  const p = provider({ async chat() { entered.resolve(); return finish.promise; } }, gate(), ending === 'timeout' ? 50 : 120000);
+  const view = p.ensure(source().id); await entered.promise;
+  try {
+    const journalId = p.get(view.proposalId).compositionId;
+    expect(journalId).not.toBeNull(); expect(getWorkflowComposition(journalId!)).not.toBeNull();
+    if (ending === 'dismiss') p.dismiss(view.proposalId, view.revision);
+    if (ending === 'shutdown') p.stop();
+    await p.idle(); expect(p.get(view.proposalId).compositionId).toBe(journalId);
+  } finally { finish.resolve({ text: JSON.stringify(graph()) }); p.stop(); await p.idle(); }
+  expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(0);
+});
+
+test('failure to bind the journal rolls back before inference', async () => {
+  let calls = 0; const p = provider({ async chat() { calls++; return { text: JSON.stringify(graph()) }; } });
+  getDb().exec("CREATE TRIGGER reject_journal_link BEFORE UPDATE OF composition_id ON prepared_opportunities WHEN NEW.composition_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'private link failure'); END");
+  const view = await prepared(p, source().id);
+  expect(view.state).toBe('blocked'); expect(calls).toBe(0);
+  expect(getDb().query('SELECT id FROM workflow_composition').all()).toHaveLength(0);
+});
+
+for (const missing of ['workflow', 'version'] as const) test(`deleted ${missing} has a distinct recovery blocker`, async () => {
+  const p = provider(), view = await prepared(p, source().id);
+  if (missing === 'workflow') deleteFlow(view.workflow!.flowId);
+  else getDb().run('DELETE FROM flow_version WHERE id = ?', [view.workflow!.versionId]);
+  const current = p.get(view.proposalId);
+  expect(current).toMatchObject({ state: 'blocked', canApprove: false, workflow: null });
+  expect(current.blockers[0]?.code).toBe(missing === 'workflow' ? 'workflow_missing' : 'workflow_version_missing');
+  expect(current.compositionId).toBe(view.compositionId);
+});
+
+
+test('legacy inference cannot attach after old mixed records resolve to prepared ownership', async () => {
+  const s = source(); acceptSuggestion(s.id, acceptance);
+  const entered = deferred<void>(), finish = deferred<void>();
+  const legacy = new SuggestionComposer(async () => { entered.resolve(); await finish.promise; return { ok: true, flow: graph() as ComposedFlow, rawResponse: '{}' }; });
+  legacy.start(); await entered.promise;
+  const p = provider(), view = await prepared(p, s.id);
+  getDb().run("UPDATE prepared_opportunities SET state = 'queued', created_at = 1 WHERE id = ?", [view.proposalId]);
+  getDb().run('DELETE FROM opportunity_composition_owners');
+  try { finish.resolve(); await legacy.idle(); p.kick(); await p.idle(); } finally { finish.resolve(); legacy.stop(); }
+  expect(getCompositionRow(s.id)?.state).toBe('failed'); expect(p.get(view.proposalId).state).toBe('ready');
+  expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1);
+});
+
+test('prepared inference cannot attach after old mixed records resolve to legacy ownership', async () => {
+  const s = source(), entered = deferred<void>(), finish = deferred<void>();
+  const p = provider({ async chat() { entered.resolve(); await finish.promise; return { text: JSON.stringify(graph()) }; } });
+  const view = p.ensure(s.id); await entered.promise;
+  // An older writer could persist a legacy request without consulting the new reservation.
+  getDb().run("INSERT INTO suggestion_feedback VALUES ('old-feedback', ?, 'old-accept', 'accept', 'Review', '{}', 1)", [s.id]);
+  getDb().run(`INSERT INTO suggestion_composition_jobs (id, suggestion_id, feedback_id, request, state, created_at, updated_at)
+    VALUES ('old-job', ?, 'old-feedback', ?, 'queued', 1, 1)`, [s.id, JSON.stringify({ ...acceptance, goalLink: null, observations: [] })]);
+  getDb().run('DELETE FROM opportunity_composition_owners');
+  finish.resolve(); await p.idle();
+  expect(p.get(view.proposalId)).toMatchObject({ state: 'blocked', canApprove: false });
+  expect(p.get(view.proposalId).compositionId).not.toBeNull();
+  expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(0);
+  const legacy = new SuggestionComposer(async () => ({ ok: true, flow: graph() as ComposedFlow, rawResponse: '{}' }));
+  legacy.start(); try { await legacy.idle(); } finally { legacy.stop(); }
+  expect(getCompositionRow(s.id)?.state).toBe('draft_ready'); expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1);
 });

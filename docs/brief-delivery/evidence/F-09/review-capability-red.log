@@ -1,0 +1,45 @@
+bun test v1.4.2 (744846f84)
+
+src/sidecar/capability-predicate.test.ts:
+(pass) #611 servesCapability answers all three terms > yes when connected, advertised and not unavailable [0.17ms]
+(pass) #611 servesCapability answers all three terms > no when disconnected, whatever it advertises [0.15ms]
+(pass) #611 servesCapability answers all three terms > no for a capability it does not advertise [0.11ms]
+(pass) #611 servesCapability answers all three terms > no when advertised but reported unavailable [0.54ms]
+(pass) #611 servesCapability answers all three terms > FAIL-CLOSED on an absent capabilities array [0.09ms]
+(pass) #611 servesCapability answers all three terms > a missing connected flag is not a connected sidecar [0.05ms]
+(pass) #611 servesCapability answers all three terms > it answers exactly what the copies it replaced answered, and what the router answers [6.21ms]
+(pass) #611 the leaf stays a leaf, and its caller stays assertable alone > capability-predicate.ts imports nothing at all [1.67ms]
+(pass) #611 the leaf stays a leaf, and its caller stays assertable alone > capability-predicate.ts has no runtime requires or dynamic imports either [0.75ms]
+(pass) #611 the leaf stays a leaf, and its caller stays assertable alone > pebble-narration.ts imports only this leaf [0.68ms]
+(pass) #611 the leaf stays a leaf, and its caller stays assertable alone > pebble-narration.ts has no dynamic imports [0.34ms]
+(pass) #611 no copy of the predicate is left in the files that moved > ../daemon/pebble-narration.ts has no hand-rolled capability test of any shape [0.83ms]
+(pass) #611 no copy of the predicate is left in the files that moved > ../daemon/pebble-narration.ts routes the question through the shared predicate exactly once [0.56ms]
+(pass) #611 no copy of the predicate is left in the files that moved > ../actions/browser/remote-element-point.ts has no hand-rolled capability test of any shape [0.19ms]
+(pass) #611 no copy of the predicate is left in the files that moved > ../actions/browser/remote-element-point.ts routes the question through the shared predicate exactly once [0.15ms]
+(pass) #611 the record of the remaining copies is complete and enforced > it names every site that still holds its own version [0.23ms]
+(pass) #611 the record of the remaining copies is complete and enforced > it keeps flagging the one copy whose semantics differ [0.21ms]
+(pass) #611 the record of the remaining copies is complete and enforced > it states the drift rule in the non-inverted direction [0.26ms]
+270 |     expect(
+271 |       unknown,
+272 |       `new file(s) read unavailable_capabilities: either call servesCapability() `
+273 |       + `or add them to the allowlist AND to the header's record in `
+274 |       + `src/sidecar/capability-predicate.ts`,
+275 |     ).toEqual([]);
+            ^
+error: new file(s) read unavailable_capabilities: either call servesCapability() or add them to the allowlist AND to the header's record in src/sidecar/capability-predicate.ts
+
+- []
++ [
++   "src/daemon/index.ts",
++ ]
+
+- Expected  - 1
++ Received  + 3
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/sidecar/capability-predicate.test.ts:275:7)
+(fail) #611 no seventh copy appears elsewhere in the tree > every file touching unavailable_capabilities is one we know about [88.97ms]
+
+ 18 pass
+ 1 fail
+ 637 expect() calls
+Ran 19 tests across 1 file. [205.00ms]
