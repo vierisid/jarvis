@@ -34,11 +34,13 @@
 # correct branch and passes on a re-run trains everyone to re-run it, which is
 # the same as not having it (#688).
 #
-# The cost, stated plainly: the warm build is now genuinely cold, so this job
-# pays one full image build it used to get from the remote cache for free. That
-# is the price of the check meaning what it says. If it proves too slow, the
-# honest alternatives are to run it only on push to main, or to judge fewer
-# stages -- not to put it back on the shared builder.
+# The cost, measured rather than guessed: 1m36s for the whole step on a GitHub
+# ubuntu runner, against 1m49s-2m26s for the four runs this replaced -- so no
+# slower, despite the warm build no longer being served from the remote cache.
+# A dedicated docker-container builder still pulls base layers from the
+# registry at runner speed, which is most of what the old cache was saving.
+# If that ever changes, the honest alternatives are to run this only on push to
+# main, or to judge fewer stages -- not to put it back on the shared builder.
 #
 # Allowed to re-run in the second build: the `manifest` stage (it reads the
 # bumped package.json), the version stamp, and the production steps from the
