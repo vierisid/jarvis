@@ -9,18 +9,22 @@ export function useGoalHandoff(mode: "live" | "preview", input?: GoalCardBinding
   const goal = "data" in binding.state ? binding.state.data : null;
   const rec = "data" in binding.recommendation ? binding.recommendation.data : null;
   const key = JSON.stringify([mode, binding.source, goal?.goalId, goal?.revision, rec?.recommendationId, rec?.revision]);
-  const live = useRef({ key, active: false });
-  const lock = useRef<string | null>(null);
-  const [attempt, setAttempt] = useState<Attempt | null>(null);
-  const [settledReceipt, setSettledReceipt] = useState<string | null>(null);
+  const lifecycle = useRef(0);
+  // A missing read is not a new recommendation. Retain each attempted identity until
+  // this owner scope unmounts, so reconnecting cannot unlock an unresolved request.
+  const requests = useRef(new Map<string, Attempt>());
+  const [attempts, setAttempts] = useState<ReadonlyMap<string, Attempt>>(new Map());
+  const [settledReceipts, setSettledReceipts] = useState<ReadonlySet<string>>(new Set());
   const [cue, setCue] = useState<{ key: string; title: string; workItemId: string } | null>(null);
-  const shown = useRef<string | null>(null);
+  const shown = useRef(new Set<string>());
   const [expiryTick, tick] = useState(0);
   const reduced = useBriefReducedMotion(reducedMotion);
   useLayoutEffect(() => {
-    live.current = { key, active: true }; lock.current = null; setAttempt(null); setCue(null); setSettledReceipt(null); shown.current = null;
-    return () => { live.current.active = false; };
-  }, [key]);
+    lifecycle.current++;
+    requests.current.clear(); setAttempts(new Map()); setCue(null); setSettledReceipts(new Set()); shown.current.clear();
+    return () => { lifecycle.current++; requests.current.clear(); };
+  }, [mode, binding.source]);
+  useEffect(() => { setCue(null); }, [key]);
   useEffect(() => {
     if (!rec || rec.state !== "available" || !Number.isFinite(rec.expiresAt)) return;
     const remaining = rec.expiresAt - Date.now();
@@ -28,16 +32,18 @@ export function useGoalHandoff(mode: "live" | "preview", input?: GoalCardBinding
     const timer = setTimeout(() => tick(n => n + 1), Math.min(remaining + 1, 2147483647));
     return () => clearTimeout(timer);
   }, [rec?.expiresAt, rec?.state, expiryTick]);
-  const current = attempt?.key === key ? attempt : null;
+  const current = attempts.get(key);
   const destination = current?.result ? queuedDestination(current.result, current.title, binding.queue) : null;
   const receiptId = current?.result?.state === "confirmed" ? current.result.receiptId : null;
   const related = rec?.goalId === goal?.goalId && rec?.goalRevision === goal?.revision;
-  const accepted = (!!destination || (!!receiptId && settledReceipt === receiptId)) && binding.state.status === "ready" && binding.recommendation.status === "ready" && related;
-  useEffect(() => { if (accepted && receiptId) setSettledReceipt(receiptId); }, [accepted, receiptId]);
+  const accepted = (!!destination || (!!receiptId && settledReceipts.has(receiptId))) && binding.state.status === "ready" && binding.recommendation.status === "ready" && related;
   useEffect(() => {
-    if (!accepted || !destination || !receiptId || shown.current === receiptId) return;
+    if (accepted && receiptId) setSettledReceipts(previous => previous.has(receiptId) ? previous : new Set(previous).add(receiptId));
+  }, [accepted, receiptId]);
+  useEffect(() => {
+    if (!accepted || !destination || !receiptId || shown.current.has(receiptId)) return;
     // Local acknowledgement first, followed by the coordinated destination cue.
-    const timer = setTimeout(() => { shown.current = receiptId; setCue({ key, title: destination!.title, workItemId: destination!.workItemId }); }, reduced ? 0 : 160);
+    const timer = setTimeout(() => { shown.current.add(receiptId); setCue({ key, title: destination!.title, workItemId: destination!.workItemId }); }, reduced ? 0 : 160);
     return () => clearTimeout(timer);
   }, [accepted, receiptId, key, reduced]);
   useEffect(() => {
@@ -47,18 +53,20 @@ export function useGoalHandoff(mode: "live" | "preview", input?: GoalCardBinding
   }, [cue, reduced]);
   const blocked = recommendationBlock(binding, Date.now());
   const accept = () => {
-    if (lock.current === key || current || recommendationBlock(binding, Date.now()) || !rec || !goal || !binding.onAccept) return;
-    lock.current = key;
+    if (requests.current.has(key) || recommendationBlock(binding, Date.now()) || !rec || !goal || !binding.onAccept) return;
     const request = { requestId: crypto.randomUUID(), recommendationId: rec.recommendationId, revision: rec.revision, goalId: goal.goalId, goalRevision: goal.revision };
     const started: Attempt = { key, request, title: rec.title };
-    setAttempt(started);
+    const epoch = lifecycle.current;
+    const record = (value: Attempt) => { requests.current.set(key, value); setAttempts(new Map(requests.current)); };
+    const isCurrentRequest = () => lifecycle.current === epoch && requests.current.get(key)?.request.requestId === request.requestId;
+    record(started);
     // Promise resolution alone is never a receipt, and no optimistic queue/progress write occurs.
     Promise.resolve().then(() => binding.onAccept!(request)).then(result => {
-      if (!live.current.active || live.current.key !== key) return;
+      if (!isCurrentRequest()) return;
       const valid = matchingReceipt(request, result) && (result.state !== "confirmed" || !!result.receiptId && !!result.destination?.decisionId && !!result.destination.workItemId && result.destination.title === started.title);
-      setAttempt(valid ? { ...started, result } : { ...started, unknown: true });
+      record(valid ? { ...started, result } : { ...started, unknown: true });
     }).catch(() => {
-      if (live.current.active && live.current.key === key) setAttempt({ ...started, unknown: true });
+      if (isCurrentRequest()) record({ ...started, unknown: true });
     });
   };
   const pending = !!current && !current.result && !current.unknown;

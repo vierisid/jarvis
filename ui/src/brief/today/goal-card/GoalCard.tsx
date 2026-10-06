@@ -13,12 +13,19 @@ export function GoalCard({ handoff }: { handoff: GoalHandoff }) {
   const [openedKey, setOpenedKey] = useState<string | null>(null);
   const open = openedKey === handoff.key;
   const next = useRef<HTMLButtonElement>(null), back = useRef<HTMLButtonElement>(null), body = useRef<HTMLDivElement>(null);
+  const focusRequested = useRef(false);
+  const lastBodyFocus = useRef<HTMLElement | null>(null);
+  const changeView = (key: string | null) => { focusRequested.current = true; setOpenedKey(key); };
   const previous = useRef(open);
   const id = useId();
   useLayoutEffect(() => {
     if (previous.current === open) return;
     previous.current = open;
-    (open ? back : next).current?.focus({ preventScroll: true });
+    // Background revisions can close/reopen this body while the user is typing in
+    // Pebble. Restore focus only for local intent or a focused control we removed.
+    const removedFocus = lastBodyFocus.current && !lastBodyFocus.current.isConnected && document.activeElement === document.body;
+    if (focusRequested.current || removedFocus) (open ? back : next).current?.focus({ preventScroll: true });
+    focusRequested.current = false;
     if (reduced) return;
     const animation = body.current?.animate?.([{ opacity: .55 }, { opacity: 1 }], { duration: 180, easing: BRIEF_EASE_OUT });
     void animation?.finished?.catch(() => {});
@@ -38,12 +45,12 @@ export function GoalCard({ handoff }: { handoff: GoalHandoff }) {
       <GoalSegments value={progress.value} target={progress.target} label={`${formatNumber(progress.value)} of ${formatNumber(progress.target)} ${goal.progressLabel}`} reducedMotion={reduced} />
     </> : <p className="brief-goal-missing brief-type-body brief-secondary">Progress not measured yet</p>}
     {binding.state.status === "stale" && <p className="brief-type-utility brief-secondary">{binding.state.reason}</p>}
-    <div ref={body} className="brief-goal-body" onKeyDown={e => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); setOpenedKey(null); } }}>
+    <div ref={body} className="brief-goal-body" onFocusCapture={e => { lastBodyFocus.current = e.target as HTMLElement; }} onKeyDown={e => { if (e.key === "Escape" && open) { e.preventDefault(); e.stopPropagation(); changeView(null); } }}>
       {open ? <>
         {rec ? <><h3 className="brief-type-body-emphasis">{rec.title}</h3><p className="brief-type-body brief-secondary">{rec.rationale}</p></> : <p className="brief-type-body brief-secondary">{binding.recommendation.status === "loading" ? "Finding the next useful step…" : binding.recommendation.status === "empty" ? "No new step to add right now." : "reason" in binding.recommendation ? binding.recommendation.reason : "Recommendation unavailable."}</p>}
         <div className="brief-goal-actions">
           {rec && <BriefButton size="sm" variant="primary" className="brief-goal-accept" state={handoff.pending ? "pending" : handoff.accepted ? "success" : "idle"} stateLabels={{ pending: "Adding…", success: "Added to Today" }} aria-disabled={handoff.locked || undefined} onClick={handoff.accept}>Add to Today</BriefButton>}
-          <BriefButton ref={back} size="sm" variant="text" onClick={() => setOpenedKey(null)}>Back to goal</BriefButton>
+          <BriefButton ref={back} size="sm" variant="text" onClick={() => changeView(null)}>Back to goal</BriefButton>
         </div>
         <div className={`brief-goal-feedback brief-type-utility${handoff.accepted || handoff.pending ? " brief-sr-only" : ""}`} role="status" aria-live="polite">{handoff.message}</div>
         {handoff.locked && !handoff.accepted && !handoff.pending && binding.refresh && <BriefButton size="sm" variant="text" onClick={binding.refresh}>Refresh recommendation</BriefButton>}
@@ -51,7 +58,7 @@ export function GoalCard({ handoff }: { handoff: GoalHandoff }) {
         <div className="brief-goal-drivers">{goal.drivers.map(driver => <div className="brief-goal-driver" key={driver.goalId}>
           <span>{driver.title}</span>{qualifiedProgress(driver.progress) ? <><GoalSegments value={driver.progress.value} target={driver.progress.target} label={`${driver.title}: ${formatNumber(driver.progress.value)} of ${formatNumber(driver.progress.target)}`} reducedMotion={reduced} /><span className="brief-secondary">{formatNumber(driver.progress.value)} / {formatNumber(driver.progress.target)}</span></> : <span className="brief-secondary">Not measured</span>}
         </div>)}</div>
-        <BriefButton ref={next} variant="text" className="brief-goal-next" onClick={() => setOpenedKey(handoff.key)} aria-expanded={false}>What’s next?<ArrowRight size={16} /></BriefButton>
+        <BriefButton ref={next} variant="text" className="brief-goal-next" onClick={() => changeView(handoff.key)} aria-expanded={false}>What’s next?<ArrowRight size={16} /></BriefButton>
       </>}
     </div>
   </section>;

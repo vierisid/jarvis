@@ -52,7 +52,7 @@ export function TodaySpecimen() {
     const paper = goalPaper();
     if ("data" in goalBinding.recommendation) paper.title = goalBinding.recommendation.data.title;
     sample.enqueue(paper);
-    const result: GoalAcceptResult = {...request,state:"confirmed",receiptId:"fixture-receipt-maya",destination:{decisionId:paper.decision.decisionId,workItemId:paper.decision.workItemId!,title:paper.title}};
+    const result: GoalAcceptResult = {...request,state:"confirmed",receiptId:`fixture-receipt-maya-${sample.generation}`,destination:{decisionId:paper.decision.decisionId,workItemId:paper.decision.workItemId!,title:paper.title}};
     receipts.current.set(receiptKey,result); return result;
   } }, reduced);
   const shell = useMemo<BriefShellPort>(() => ({ mode: "preview", route, sidebar, setSidebar, chatOpen, setChatOpen, theme, setTheme, navigate: setRoute }), [route, sidebar, chatOpen, theme, setTheme]);
