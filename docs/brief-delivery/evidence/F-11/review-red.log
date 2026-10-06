@@ -1,0 +1,74 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/awareness-delivery-policy.test.ts:
+Database initialized at: :memory:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+197 |         app_name: 'Terminal', window_title: 'Build', ocr_text: 'Error: connection failed while compiling synthetic project' } });
+198 |     expect(getWorkflowDb().query('SELECT id FROM screen_captures').all()).toHaveLength(1);
+199 |     expect(errors).toHaveLength(1); expect(f.messages.some(m => m.type === 'notification')).toBe(true);
+200 |     const saved = getRecentSuggestions()[0]!;
+201 |     expect(saved.type).toBe('error');
+202 |     expect(saved.body).toBe('I spotted "Error".');
+                             ^
+error: expect(received).toBe(expected)
+
+Expected: "I spotted "Error"."
+Received: "I spotted "Error". Researching a fix now..."
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:202:24)
+(fail) F11 review R1: quiet error suggestions preserve evidence without promising research [50.24ms]
+243 |   `;
+244 |   const child = Bun.spawn([process.execPath, '--eval', script], { stdout: 'pipe', stderr: 'pipe' });
+245 |   const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+246 |   expect({ exit, errors }).toEqual({ exit: 0, errors: '' });
+247 |   const result = JSON.parse(output.trim().split('RESULT:')[1]!);
+248 |   expect(result.calls).toEqual({ native: 0, desktop: 0, receipt: 1, channels: 1, voice: 0 });
+                             ^
+error: expect(received).toEqual(expected)
+
+  {
+    "channels": 1,
+    "desktop": 0,
+-   "native": 0,
+-   "receipt": 1,
++   "native": 2,
++   "receipt": 0,
+    "voice": 0,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:248:24)
+(fail) F11 review R2: injected desktop receipt true controls offline legacy delivery [42.51ms]
+243 |   `;
+244 |   const child = Bun.spawn([process.execPath, '--eval', script], { stdout: 'pipe', stderr: 'pipe' });
+245 |   const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+246 |   expect({ exit, errors }).toEqual({ exit: 0, errors: '' });
+247 |   const result = JSON.parse(output.trim().split('RESULT:')[1]!);
+248 |   expect(result.calls).toEqual({ native: 0, desktop: 0, receipt: 1, channels: 1, voice: 0 });
+                             ^
+error: expect(received).toEqual(expected)
+
+  {
+    "channels": 1,
+    "desktop": 0,
+-   "native": 0,
+-   "receipt": 1,
++   "native": 2,
++   "receipt": 0,
+    "voice": 0,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:248:24)
+(fail) F11 review R2: injected desktop receipt false controls offline legacy delivery [39.85ms]
+
+ 0 pass
+ 20 filtered out
+ 3 fail
+ 9 expect() calls
+Ran 3 tests across 1 file. [404.00ms]

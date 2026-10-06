@@ -9,7 +9,7 @@ import type { WorkflowEventBus } from '../workflows/runtime/event-bus.ts';
 import { AWARENESS_EVENT_TYPE_MAP } from '../workflows/runtime/event-types.ts';
 import { classifyEvent } from './event-classifier.ts';
 import { wrapUntrusted, inlineUntrusted } from '../roles/untrusted.ts';
-import { sendDesktopNotification as defaultDesktop } from '../comms/desktop-notify.ts';
+import { sendDesktopNotification as defaultDesktop, type sendDesktopNotificationWithReceipt } from '../comms/desktop-notify.ts';
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
 
 type DeliverySockets = Pick<WebSocketService, 'broadcastAwarenessEvent' | 'broadcastNotification' | 'broadcastProactiveVoice'> & {
@@ -23,6 +23,8 @@ export interface AwarenessDeliveryDependencies {
   eventBus: Pick<WorkflowEventBus, 'publish'>;
   agent(): Pick<BackgroundAgentService, 'handleMessage' | 'lastTurnRequestedApproval'> | null;
   desktop?: typeof defaultDesktop;
+  // A launched sender is not a delivery receipt; keep the two contracts distinct.
+  desktopWithReceipt?: typeof sendDesktopNotificationWithReceipt;
 }
 
 /** Only the AwarenessService callback and opportunity outbox use this policy.
@@ -204,7 +206,10 @@ export class AwarenessDeliveryPolicy {
   }
 
   async deliverOpportunity(suggestion: Suggestion): Promise<string | null> {
-    const channel = await deliverOpportunityNotification(suggestion, this.deps.sockets.getServer(), this.deps.channels, undefined, { quiet: this.quiet });
+    const channel = await deliverOpportunityNotification(
+      suggestion, this.deps.sockets.getServer(), this.deps.channels,
+      this.deps.desktopWithReceipt, { quiet: this.quiet },
+    );
     if (channel === 'websocket' && !this.quiet) {
       (this.deps.desktop ?? defaultDesktop)(`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'normal' });
       this.deps.sockets.broadcastProactiveVoice(suggestion.body).catch(err => console.error('[Daemon] Awareness TTS error:', err));

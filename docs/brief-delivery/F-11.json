@@ -127,5 +127,54 @@
   ],
   "rollback": "Unset JARVIS_BRIEF_QUIET_AWARENESS and restart. Keep captures, suggestions, outbox receipts, prepared opportunities and decisions. Legacy interruption/auto-research behavior returns.",
   "guide": "docs/brief-quiet-awareness.md",
-  "next_task": "F-12 not started"
+  "next_task": "F-12 not started",
+  "review_corrections": {
+    "reviewed_head": "2f782d136f0d0c145baa63e2ff1f3f0092f84c7d",
+    "same_pr": "https://github.com/vierisid/jarvis/pull/772",
+    "findings": [
+      {
+        "id": "R1",
+        "severity": "minor",
+        "fix": "New error suggestions record only the observation before persistence. Both delivery modes share truthful wording; historical records and automatic-help policy remain unchanged.",
+        "coverage": "Actual AwarenessService capture ingestion, persisted suggestion, emitted event and suggestions API agree, with no quiet-mode research."
+      },
+      {
+        "id": "R2",
+        "severity": "minor",
+        "fix": "Pass a separate injectable desktopWithReceipt sender through the opportunity helper. The launch-only desktop hook remains separate from confirmed delivery acceptance.",
+        "coverage": "Isolated subprocess cases block native calls, wait for deferred receipt acceptance, and check accepted/refused offline fallback without chat voice or duplicate desktop delivery."
+      }
+    ],
+    "verification": {
+      "red": {
+        "log": "docs/brief-delivery/evidence/F-11/review-red.log",
+        "failed": 3,
+        "passed": 0,
+        "result": "R1 wording and both R2 receipt outcomes fail before repair. A subprocess guard prevents real OS calls even on the broken code."
+      },
+      "focused": {
+        "log": "docs/brief-delivery/evidence/F-11/review-green.log",
+        "passed": 3,
+        "failed": 0,
+        "assertions": 20
+      },
+      "affected": {
+        "status": "passed",
+        "command_file": "docs/brief-delivery/evidence/F-11/review-affected-command.txt",
+        "log": "docs/brief-delivery/evidence/F-11/review-affected.log",
+        "passed": 513,
+        "skipped": 2,
+        "failed": 0,
+        "assertions": 2928,
+        "files": 28,
+        "skip": "Unchanged optional-Q13 dependency-overlay checks. No F-11 dependency/provider changes."
+      },
+      "guards": "Normal required commit checks; final outcome and published SHA recorded in the PR description.",
+      "typescript": {
+        "command": "bun node_modules/typescript/bin/tsc --noEmit",
+        "exit_code": 0,
+        "log": "docs/brief-delivery/evidence/F-11/review-typescript.log"
+      }
+    }
+  }
 }

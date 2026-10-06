@@ -40,6 +40,7 @@ function fixture(flag: string | undefined = '1', accepted = 1) {
       broadcastToAll: async () => { calls.channels++; },
       tryBroadcastToChannels: async () => { calls.channels++; return { delivered: ['telegram'], failed: [] }; } },
     desktop: () => { calls.desktop++; return true; },
+    desktopWithReceipt: async () => { calls.desktop++; return true; },
     reactor: { react: async () => { calls.reactor++; return true; } },
     coalescer: { addEvent: () => { calls.coalescer++; } }, eventBus,
     agent: () => ({ handleMessage: async () => { calls.research++; return 'A synthetic solution long enough to announce.'; }, lastTurnRequestedApproval: () => false }),
@@ -178,7 +179,7 @@ test.each([undefined, '0', 'true', '1'])('quiet capability accurately reports fl
 });
 
 
-test('real screen capture still stores awareness evidence and emits a quiet error event', async () => {
+test('F11 review R1: quiet error suggestions preserve evidence without promising research', async () => {
   initWorkflowDb(':memory:');
   const f = fixture(), errors: unknown[] = [];
   f.eventBus.subscribe('awareness.error_detected', value => { errors.push(value); });
@@ -196,7 +197,56 @@ test('real screen capture still stores awareness evidence and emits a quiet erro
         app_name: 'Terminal', window_title: 'Build', ocr_text: 'Error: connection failed while compiling synthetic project' } });
     expect(getWorkflowDb().query('SELECT id FROM screen_captures').all()).toHaveLength(1);
     expect(errors).toHaveLength(1); expect(f.messages.some(m => m.type === 'notification')).toBe(true);
+    const saved = getRecentSuggestions()[0]!;
+    expect(saved.type).toBe('error');
+    expect(saved.body).toBe('I spotted "Error".');
+    expect(f.messages.map(m => m.payload)).toContainEqual({ source: 'awareness_event', event: {
+      type: 'suggestion_ready', data: { id: saved.id, type: saved.type, title: saved.title, body: saved.body }, timestamp: expect.any(Number),
+    } });
+    const routes = createApiRoutes({ awarenessService: service } as ApiContext);
+    const route = routes['/api/awareness/suggestions'] as { GET: (request: Request) => Response };
+    const response = route.GET(new Request('http://fixture/api/awareness/suggestions'));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toContainEqual(expect.objectContaining({ id: saved.id, body: saved.body }));
     expect(f.messages.some(m => m.type === 'chat')).toBe(false);
     expect(f.calls).toEqual({ research: 0, reactor: 0, coalescer: 0, voice: 0, desktop: 0, channels: 0 });
   } finally { await service.stop(); closeWorkflowDb(); }
+});
+
+
+for (const accepted of [true, false]) test(`F11 review R2: injected desktop receipt ${accepted} controls offline legacy delivery`, async () => {
+  // A child isolates the OS-call guard from every other suite. Even the broken
+  // policy cannot launch a real notification while this regression runs.
+  const script = `
+    import { AwarenessDeliveryPolicy } from ${JSON.stringify(new URL('./awareness-delivery-policy.ts', import.meta.url).href)};
+    const calls = { native: 0, desktop: 0, receipt: 0, channels: 0, voice: 0 };
+    Bun.spawnSync = Bun.spawn = () => { calls.native++; throw new Error('Native notification forbidden in fixture'); };
+    let release;
+    const acceptedReceipt = new Promise(resolve => { release = resolve; });
+    let receiptArgs;
+    const policy = new AwarenessDeliveryPolicy({
+      sockets: { getServer: () => ({ getClientCount: () => 0, broadcastWithReceipt: () => 0 }),
+        broadcastAwarenessEvent() {}, broadcastNotification() {}, broadcastProactiveVoice: async () => { calls.voice++; } },
+      channels: { getManager: () => ({ listChannels: () => ['telegram'] }), broadcastToAll: async () => {},
+        tryBroadcastToChannels: async () => { calls.channels++; return { delivered: [], failed: [{ channel: 'telegram', error: 'offline' }] }; } },
+      desktop: () => { calls.desktop++; return true; },
+      desktopWithReceipt: async (...args) => { calls.receipt++; receiptArgs = args; return await acceptedReceipt; },
+      reactor: { react: async () => false }, coalescer: { addEvent() {} }, eventBus: { publish() {} }, agent: () => null,
+    }, '0');
+    let settled = false;
+    const delivery = policy.deliverOpportunity(${JSON.stringify(suggestion)}).then(result => { settled = true; return result; });
+    await Bun.sleep(0);
+    const pendingBeforeReceipt = !settled;
+    release(${JSON.stringify(accepted)});
+    const result = await delivery;
+    console.log('RESULT:' + JSON.stringify({ result, calls, pendingBeforeReceipt, receiptArgs }));
+  `;
+  const child = Bun.spawn([process.execPath, '--eval', script], { stdout: 'pipe', stderr: 'pipe' });
+  const [output, errors, exit] = await Promise.all([new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited]);
+  expect({ exit, errors }).toEqual({ exit: 0, errors: '' });
+  const result = JSON.parse(output.trim().split('RESULT:')[1]!);
+  expect(result.calls).toEqual({ native: 0, desktop: 0, receipt: 1, channels: 1, voice: 0 });
+  expect(result.pendingBeforeReceipt).toBe(true);
+  expect(result.receiptArgs).toEqual([`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'critical', expireMs: 30000 }]);
+  expect(result.result).toBe(accepted ? 'desktop' : null);
 });
