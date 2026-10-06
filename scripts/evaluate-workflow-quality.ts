@@ -12,11 +12,11 @@ const { values } = parseArgs({ options: {
   split: { type: 'string', default: 'heldout' }, policy: { type: 'string', default: 'both' },
   condition: { type: 'string', default: 'natural' }, repeats: { type: 'string', default: '1' },
   profile: { type: 'string' }, authorization: { type: 'string' }, rubric: { type: 'string' }, 'max-requests': { type: 'string' },
-  results: { type: 'string' }, reviews: { type: 'string' }, key: { type: 'string' }, runs: { type: 'string' },
+  results: { type: 'string' }, reviews: { type: 'string' }, key: { type: 'string' }, runs: { type: 'string' }, rule: { type: 'string' },
   taskset: { type: 'string', default: 'w8' }, reserve: { type: 'string' }, references: { type: 'string' }, help: { type: 'boolean' },
 } });
 if (values.help) {
-  console.log('Workflow quality: --mode plan|smoke|hosted|review-packet|review|baseline --out NEW_DIRECTORY\n'
+  console.log('Workflow quality: --mode plan|smoke|hosted|review-packet|review|baseline|compare --out NEW_DIRECTORY\n'
     + '--taskset w8|founder|founder-reserve (the reserve also needs --reserve FILE)\n'
     + '--split development|heldout --policy both|baseline-v1|deterministic-first-v1\n'
     + '--condition natural|malformed-first --repeats 1..20 [--rubric RUBRIC.json]\n'
@@ -24,6 +24,7 @@ if (values.help) {
     + 'Review packet: --results RUN/rows.jsonl (writes a blinded packet, its key and a template)\n'
     + 'Review: --results RUN/rows.jsonl --reviews REVIEWS.json [--key KEY.json for blinded reviews]\n'
     + 'Baseline: --runs RUN_OR_REVIEWED_DIRECTORY[,...]\n'
+    + 'Compare: --runs RUN_OR_REVIEWED_DIRECTORY[,...] [--rule PROMOTION_RULE.json] (deterministic-first against baseline-v1)\n'
     + 'Plan is the default and makes no provider requests. Smoke requires development, unless --references FILE\n'
     + 'supplies answers kept outside the repository: that proves a held-out set is satisfiable and measures nothing.');
   process.exit(0);
@@ -33,7 +34,7 @@ function integer(value: string, max: number, name: string) {
   if (!Number.isSafeInteger(n) || n < 1 || n > max) throw new Error(name + ' must be 1..' + max);
   return n;
 }
-if (!['plan', 'smoke', 'hosted', 'review-packet', 'review', 'baseline'].includes(values.mode!)) throw new Error('Invalid mode');
+if (!['plan', 'smoke', 'hosted', 'review-packet', 'review', 'baseline', 'compare'].includes(values.mode!)) throw new Error('Invalid mode');
 if (values.taskset === 'founder-reserve' && (values.split !== 'heldout' || !values.reserve)) throw new Error('The reserve is a held-out set and needs --reserve FILE');
 if (!['development', 'heldout'].includes(values.split!)) throw new Error('Invalid split');
 if (!['natural', 'malformed-first'].includes(values.condition!)) throw new Error('Invalid condition');
@@ -60,6 +61,7 @@ const { validateProfile, resolveAdminEvidence, MeasuredHostedProvider, COMPOSITI
 const { validateAuthorization, authorizationProblems } = await import('../src/workflows/evaluation/authorization');
 const { loadRubric, rubricProblems } = await import('../src/workflows/evaluation/rubric');
 const { baselineReport } = await import('../src/workflows/evaluation/baseline');
+const { loadPromotionRule, promotionReport } = await import('../src/workflows/evaluation/promotion');
 const startedAt = new Date();
 const profile = values.profile ? validateProfile(JSON.parse(readFileSync(values.profile, 'utf8'))) : undefined;
 const evidence = profile?.admin ? resolveAdminEvidence(profile) : null;
@@ -106,16 +108,23 @@ if (values.mode === 'review') {
   console.log('Review report: ' + out);
   process.exit(0);
 }
+const loadRuns = (list: string) => list.split(',').filter(Boolean).map(directory => {
+  const at = resolve(directory);
+  return { source: directory, manifest: readJson(join(at, 'manifest.json')), report: readJson(join(at, 'report.json')),
+    taskset: readJson(join(at, 'taskset.json')),
+    rows: existsSync(join(at, 'reviewed-rows.json')) ? readJson(join(at, 'reviewed-rows.json'))
+      : existsSync(join(at, 'rows.jsonl')) ? readRows(join(at, 'rows.jsonl')) : [] };
+});
+if (values.mode === 'compare') {
+  if (!values.runs) throw new Error('Compare needs --runs');
+  const promotion = promotionReport(loadRuns(values.runs), loadPromotionRule(values.rule ? resolve(values.rule) : undefined).rule);
+  write('promotion-report.json', promotion);
+  console.log('Promotion comparison ' + promotion.status + ('verdict' in promotion ? ' (' + promotion.verdict + ')' : '') + ': ' + out);
+  process.exit(promotion.status === 'completed' ? 0 : promotion.status === 'refused' ? 1 : 2);
+}
 if (values.mode === 'baseline') {
   if (!values.runs) throw new Error('Baseline needs --runs');
-  const runs = values.runs.split(',').filter(Boolean).map(directory => {
-    const at = resolve(directory);
-    return { source: directory, manifest: readJson(join(at, 'manifest.json')), report: readJson(join(at, 'report.json')),
-      taskset: readJson(join(at, 'taskset.json')),
-      rows: existsSync(join(at, 'reviewed-rows.json')) ? readJson(join(at, 'reviewed-rows.json'))
-        : existsSync(join(at, 'rows.jsonl')) ? readRows(join(at, 'rows.jsonl')) : [] };
-  });
-  const baseline = baselineReport(runs);
+  const baseline = baselineReport(loadRuns(values.runs));
   write('baseline-report.json', baseline);
   console.log('Baseline ' + baseline.status + ': ' + out);
   process.exit(baseline.status === 'completed' ? 0 : baseline.status === 'refused' ? 1 : 2);
