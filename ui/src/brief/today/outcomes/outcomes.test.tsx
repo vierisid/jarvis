@@ -32,7 +32,31 @@ async function render(binding?: OutcomeBinding, mode: "preview" | "live" = "prev
 function readyData(binding = outcomeFixture()): OutcomeSummary {
   if (binding.state.status !== "ready") throw new Error("Expected ready fixture"); return binding.state.data;
 }
-const text = () => host.textContent!;
+// Read text exposed to assistive technology, excluding decorative glyphs.
+// This intentionally does not treat aria-label on a generic span as readable text.
+function exposedText(node: Node): string {
+  if (node.nodeType === Node.TEXT_NODE) return node.textContent ?? "";
+  if (node instanceof Element && node.matches('[aria-hidden="true"], [hidden]')) return "";
+  return [...node.childNodes].map(exposedText).join("");
+}
+const text = () => exposedText(host);
+
+test("animated numbers expose one complete formatted value through updates", async () => {
+  const { OutcomeNumber } = await import("./Values");
+  for (const [value, expected] of [[90, "90"], [0, "0"], [1234.5, "1,234.5"], [-2, "-2"], [.001, "0.001"], [10, "10"]] as const) {
+    await React.act(async () => root.render(<OutcomeNumber value={value} />));
+    const number = host.querySelector(".brief-outcome-number")!;
+    expect(exposedText(number)).toBe(expected);
+    expect(number.hasAttribute("aria-label")).toBe(false);
+    expect([...number.querySelectorAll("[data-value-glyph]")].map(glyph => glyph.textContent).join("")).toBe(expected);
+    expect([...number.querySelectorAll("[data-value-glyph]")].every(glyph => glyph.closest('[aria-hidden="true"]'))).toBe(true);
+  }
+});
+
+test("an unknown weekly change exposes its meaning rather than an unnamed dash", async () => {
+  await render(outcomeFixture("unknown-goal"));
+  expect(exposedText(host.querySelector(".brief-outcome-unknown")!)).toBe("Weekly change unknown");
+});
 
 test("live values require a live owner and both outcome and measurement gates", async () => {
   const provider = { readiness: () => "ready" as const };
@@ -113,7 +137,7 @@ test("reaching a two-digit target retains the denominator and its reserved numer
   await render(outcomeFixture("near-complete", true));
   expect(host.querySelector(".brief-outcome-denominator")).toBe(denominator);
   expect(fraction.style.getPropertyValue("--goal-count-width")).toBe("2ch");
-  expect(host.querySelector('.brief-outcome-number[aria-label="10"]')).not.toBeNull();
+  expect(exposedText(fraction.querySelector(".brief-outcome-number")!)).toBe("10");
   expect(host.querySelector('.brief-progress--complete[aria-label="10 of 10 design partners signed"]')).not.toBeNull();
 });
 

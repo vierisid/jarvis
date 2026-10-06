@@ -34,7 +34,7 @@ export function Outcomes({ mode, binding, reducedMotion = false }: { mode: "live
         <div className="brief-outcome-goal" key={data.goal?.goalId ?? "no-goal"}>
           {!data.goal ? <div className="brief-outcome-missing"><strong>Goal movement</strong><p>No measured goal linked yet</p></div> : <>
             <div className="brief-outcome-delta" data-positive={qualified(data.goal.change) && data.goal.change.value > 0}>
-              {qualified(data.goal.change) ? <strong><span>{data.goal.change.value > 0 ? "+" : ""}</span><OutcomeNumber value={data.goal.change.value} reducedMotion={reduced} /></strong> : <strong className="brief-outcome-unknown" aria-label="Weekly change unknown">—</strong>}
+              {qualified(data.goal.change) ? <strong><span>{data.goal.change.value > 0 ? "+" : ""}</span><OutcomeNumber value={data.goal.change.value} reducedMotion={reduced} /></strong> : <strong className="brief-outcome-unknown"><span className="brief-sr-only">Weekly change unknown</span><span aria-hidden="true">—</span></strong>}
               <span className="brief-type-body">{data.goal.changeLabel}<small className="brief-secondary">this week</small></span>
             </div>
             <div className="brief-outcome-goal-progress">
