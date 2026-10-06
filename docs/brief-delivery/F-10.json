@@ -162,5 +162,73 @@
   ],
   "rollback": "Unset the activation flag and restart. Retain additive action tables, request keys, preparation records and workflows. Already approved workflows stay enabled; pause them explicitly using existing workflow controls if needed.",
   "guide": "docs/brief-opportunity-activation.md",
-  "next_task": "F-11 not started"
+  "next_task": "F-11 not started",
+  "review_corrections": {
+    "reviewed_head": "7782e7786123a97702e27842b801d46b16397b9e",
+    "same_pr": "https://github.com/vierisid/jarvis/pull/770",
+    "findings": [
+      {
+        "id": "R1",
+        "severity": "major",
+        "fix": "Observe pending trigger registration without refreshing or consuming its backoff. Persist observed_pending additively so a replacement worker cannot restart an exhausted budget; explicit same-key retry resets it.",
+        "coverage": "Actual TriggerManager with controlled scheduled callback: repeated receipt reconciliation preserves one timer/attempt, scheduled recovery is observed, exhaustion stays blocked across workers, explicit retry starts a new budget, and existing receipt schema upgrades preserve decisions/keys."
+      },
+      {
+        "id": "R2",
+        "severity": "major",
+        "fix": "Retain a warning-bearing engine subscription record after complete local registration failure so teardown still owns ON_DISABLE and cached-state cleanup. Repair local subscriptions from cached state.",
+        "coverage": "Failed cron followed by pause or shutdown runs ON_DISABLE once, clears engine state, and re-enable runs ON_ENABLE freshly. Complete and partial local repair do not repeat remote hooks."
+      },
+      {
+        "id": "R3",
+        "severity": "minor",
+        "fix": "After dismissal receipt commit, notify the preparation provider to abort only the matching dismissed active revision. F09 uses the same guarded cancellation path; receipt replay can repeat it safely.",
+        "coverage": "An unresponsive composer is cancelled and the queued proposal completes before the old promise resolves; late completion cannot attach a flow. Receipt-insert rollback preserves active preparation."
+      }
+    ],
+    "verification": {
+      "red": {
+        "logs": [
+          "docs/brief-delivery/evidence/F-10/review-red.log",
+          "docs/brief-delivery/evidence/F-10/review-exhaustion-red.log"
+        ],
+        "result": "All three original findings reproduced in four failures; the exhaustion regression also failed before correction."
+      },
+      "focused": {
+        "log": "docs/brief-delivery/evidence/F-10/review-green.log",
+        "passed": 7,
+        "failed": 0,
+        "assertions": 80
+      },
+      "typescript": {
+        "log": "docs/brief-delivery/evidence/F-10/review-typescript.log",
+        "exit_code": 0
+      },
+      "affected": {
+        "status": "passed",
+        "command_file": "docs/brief-delivery/evidence/F-10/review-affected-command.txt",
+        "log": "docs/brief-delivery/evidence/F-10/review-affected.log",
+        "passed": 441,
+        "skipped": 2,
+        "failed": 0,
+        "assertions": 3577,
+        "files": 28,
+        "initial_run": "Four inherited preparation beforeEach/afterEach hooks exceeded the default five-second limit while TypeScript ran concurrently. No assertion failures. Re-ran sequentially with --timeout 15000; all passed. Application timeouts are unchanged.",
+        "initial_log": "docs/brief-delivery/evidence/F-10/review-affected-initial.log"
+      },
+      "q13_integration": {
+        "status": "passed",
+        "command_file": "docs/brief-delivery/evidence/F-10/review-q13-command.txt",
+        "log": "docs/brief-delivery/evidence/F-10/review-q13-integration.log",
+        "dependency_commit": "0d455494f34b4045a0b95498a81e9bd389c6ffeb",
+        "passed": 70,
+        "failed": 0,
+        "assertions": 434,
+        "files": 3,
+        "sources_restored": true,
+        "method": "Same temporary dependency overlay as initial verification; restored in finally and checked byte-for-byte."
+      },
+      "guards": "Normal required commit checks; final outcome and published SHA will be recorded in the PR description."
+    }
+  }
 }

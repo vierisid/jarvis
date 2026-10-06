@@ -179,8 +179,17 @@ export class PreparedOpportunities {
       if (!row.dismissed_at) this.db.run(`UPDATE prepared_opportunities SET dismissed_at = ?, state = CASE WHEN state IN ('queued','running') THEN 'failed' ELSE state END,
         lease_token = NULL, lease_until = 0, updated_at = ? WHERE id = ?`, [Date.now(), Date.now(), id]);
     }).immediate();
-    if (this.active?.job.id === id) this.active.abort.abort();
+    this.abortDismissed(id, revision);
     return this.get(id);
+  }
+  /** Release the worker only after a matching dismissal has committed. */
+  abortDismissed(id: string, revision: string): void {
+    const active = this.active;
+    if (!this.currentDatabase() || active?.job.id !== id || active.job.revision !== revision) return;
+    const dismissed = this.db.query<{ id: string }, [string, string]>(
+      'SELECT id FROM prepared_opportunities WHERE id = ? AND revision = ? AND dismissed_at IS NOT NULL AND accepted_at IS NULL',
+    ).get(id, revision);
+    if (dismissed) active.abort.abort();
   }
   get(id: string): PreparedOpportunityView {
     if (!this.currentDatabase()) throw new PreparedRequestError('Prepared opportunities are unavailable', 503);
