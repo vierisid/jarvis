@@ -1,0 +1,6 @@
+$ bun test --preload ./src/test-preload.ts src/actions/tools/job-contract.test.ts src/actions/tools/workflow-contract.test.ts src/actions/tools/tool-description-budget.test.ts src/workflows/adapters/untrusted-reach.test.ts
+src/actions/tools/workflow-contract.test.ts:
+ 106 pass
+ 0 fail
+ 358 expect() calls
+Ran 106 tests across 4 files. [415.00ms]

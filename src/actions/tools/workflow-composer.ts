@@ -9,6 +9,7 @@
  */
 
 import { planningPrompt, type PlanningPolicy, type CompositionProvenance } from './composition-provenance';
+import { checkJobContract, JobContractError, validateJobContract, type ContractReport, type JobContract } from './job-contract';
 import type {
   PieceInputField,
   PieceInputSchema,
@@ -107,6 +108,8 @@ export interface ComposeRequest {
   name: string;
   /** Plain-English description from the user. */
   description: string;
+  /** What the caller states explicitly about the job; the composed graph must keep it (job-contract.ts). */
+  contract?: JobContract;
 }
 
 /** Versioned source of intent. Preserve the caller's wording, including
@@ -117,6 +120,8 @@ export interface WorkflowJobSpecification {
   schemaVersion: 1;
   name: string;
   description: string;
+  /** The caller's explicit contract, as given. Absent when none was stated. */
+  contract?: JobContract;
 }
 
 export interface CompositionCandidate {
@@ -130,13 +135,16 @@ interface CompositionContext extends CompositionCandidate {
 }
 
 export function jobSpecification(req: ComposeRequest): WorkflowJobSpecification {
-  return Object.freeze({ schemaVersion: 1, name: req.name, description: req.description });
+  return Object.freeze({ schemaVersion: 1, name: req.name, description: req.description,
+    ...(req.contract !== undefined ? { contract: structuredClone(req.contract) } : {}) });
 }
 
 export interface ComposeOk {
   ok: true;
   compositionRecordId?: string;
   flow: ComposedFlow;
+  /** With a contract: what the check proved and what a person must still confirm. */
+  contractReport?: ContractReport;
   /** The raw LLM reply, kept for debugging / logging. */
   rawResponse: string;
 }
@@ -370,6 +378,14 @@ async function composeFlowWithinBudget(
   req.signal?.throwIfAborted();
   if (!req.name.trim()) return { ok: false, errors: ["name is required"], rawResponse: null };
   if (!req.description.trim()) return { ok: false, errors: ["description is required"], rawResponse: null };
+  // A contract that cannot be met, or cannot be read, fails before any provider request.
+  let contract: JobContract | undefined;
+  if (req.contract !== undefined) {
+    try { contract = validateJobContract(req.contract); } catch (e) {
+      if (e instanceof JobContractError) return { ok: false, errors: [e.message], rawResponse: null };
+      throw e;
+    }
+  }
   const context: CompositionContext = {
     jobSpecification: jobSpecification(req), previousResponse: null, previousGraph: null, errors: [],
   };
@@ -380,7 +396,7 @@ async function composeFlowWithinBudget(
   // Falls back to the one-shot path when the client has no tool support or
   // the model doesn't engage with the tools (composeWithTools returns null).
   if (deps.llm.chatTools) {
-    const viaTools = await composeWithTools(deps, req, context);
+    const viaTools = await composeWithTools(deps, req, context, contract);
     req.signal?.throwIfAborted();
     if (viaTools) return viaTools;
     // composeWithTools returned null: either the turn-1 tool call errored in a
@@ -389,7 +405,7 @@ async function composeFlowWithinBudget(
     // this is just the fallback marker.
     logAttempt(1, "tool-loop-fallback", "tool loop produced no flow on turn 1; using one-shot prompt");
   }
-  return composeOneShot(deps, req, context);
+  return composeOneShot(deps, req, context, contract);
 }
 
 function rememberCandidate(deps: ComposeDeps, context: CompositionContext, raw: string, parsed: unknown, errors: string[]): void {
@@ -440,6 +456,7 @@ async function composeOneShot(
   deps: ComposeDeps,
   req: ComposeRequest,
   context: CompositionContext,
+  contract: JobContract | undefined,
 ): Promise<ComposeResult> {
   const catalogText = renderCatalog(deps.pieceRegistry);
   const toolsText = renderTools(deps.tools, deps.toolNames);
@@ -498,11 +515,11 @@ async function composeOneShot(
       continue;
     }
 
-    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
+    const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
     rememberCandidate(deps, context, raw, parsed, validation.ok ? [] : validation.errors);
     if (validation.ok) {
       if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
-      return { ok: true, flow: validation.flow, rawResponse: raw };
+      return accepted(validation, raw);
     }
 
     lastErrors = validation.errors;
@@ -559,6 +576,7 @@ async function composeWithTools(
   deps: ComposeDeps,
   req: ComposeRequest,
   context: CompositionContext,
+  contract: JobContract | undefined,
 ): Promise<ComposeResult | null> {
   const toolSpecs = toolSpecMap(deps);
   const validRoleIds = validRoleIdSet(deps);
@@ -626,11 +644,11 @@ async function composeWithTools(
           inlineErrors = [`response was not valid JSON: ${(e as Error).message}`];
         }
         if (!inlineErrors) {
-          const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
+          const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
           if (validation.ok) {
             rememberCandidate(deps, context, text, parsed, []);
             logAttempt(turn, "tool-loop-inline-json", null);
-            return { ok: true, flow: validation.flow, rawResponse: text };
+            return accepted(validation, text);
           }
           inlineErrors = validation.errors;
           lastErrors = validation.errors;
@@ -673,11 +691,11 @@ async function composeWithTools(
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
         lastRaw = safeStringify(flowArg);
-        const validation = validateComposedFlow(flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
+        const validation = acceptComposedFlow(contract, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
         rememberCandidate(deps, context, lastRaw, flowArg, validation.ok ? [] : validation.errors);
         if (validation.ok) {
           if (submits > 1) logAttempt(submits, "tool-loop-success-after-retry", null);
-          return { ok: true, flow: validation.flow, rawResponse: lastRaw };
+          return accepted(validation, lastRaw);
         }
         lastErrors = validation.errors;
         logAttempt(submits, "tool-loop-validation-error", validation.errors.join("; "));
@@ -1520,8 +1538,30 @@ function resolvePieceByName(
 
 /* ------------------------------------------------------------- validation */
 
-interface ValidationOk { ok: true; flow: ComposedFlow }
+interface ValidationOk { ok: true; flow: ComposedFlow; report?: ContractReport }
 interface ValidationFail { ok: false; errors: string[] }
+
+/**
+ * Structural validation, then the job contract. Contract violations go back to
+ * the model like any other validation error, so the bounded repair loop works
+ * on them, and every candidate is checked against the same contract: a repair
+ * cannot drop a requirement and pass. Every validation argument is forwarded
+ * as given, so a check added to `validateComposedFlow` reaches all three
+ * acceptance points through this one call.
+ */
+function acceptComposedFlow(
+  contract: JobContract | undefined,
+  ...args: Parameters<typeof validateComposedFlow>
+): ValidationOk | ValidationFail {
+  const validation = validateComposedFlow(...args);
+  if (!validation.ok || !contract) return validation;
+  const { violations, report } = checkJobContract(validation.flow.trigger, contract);
+  return violations.length ? { ok: false, errors: violations } : { ...validation, report };
+}
+
+function accepted(validation: ValidationOk, rawResponse: string): ComposeOk {
+  return { ok: true, flow: validation.flow, rawResponse, ...(validation.report ? { contractReport: validation.report } : {}) };
+}
 
 function validateComposedFlow(
   raw: unknown,

@@ -3,7 +3,8 @@ import { createCompositionJournal } from "../../workflows/db/repos/workflow-comp
 import { composeFlow, jobSpecification, type ComposeDeps, type ComposeRequest, type ComposeResult } from "./workflow-composer";
 
 /** Production entrypoint for both chat and opportunity composition. Validation
- * is only structural; it does not prove semantic fidelity to a free-text job.
+ * is structural, plus the caller's job contract when one is stated; neither
+ * proves semantic fidelity to a free-text job.
  */
 export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequest): Promise<ComposeResult & { compositionRecordId: string }> {
   const request = { ...input };

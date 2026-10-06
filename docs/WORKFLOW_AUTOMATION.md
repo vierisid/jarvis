@@ -1101,12 +1101,16 @@ Malformed text does not erase the last parseable graph. The specification is
 authoritative over conflicting candidate data; repair instructions explicitly
 preserve the requested trigger, output, destination and negative constraints.
 
-Specification version 1 is `{ schemaVersion: 1, name, description }`. It preserves
-the caller's wording rather than inferring structured constraints with another
-model. For accepted suggestions, the description includes the accepted expected
-outcome. Structural validation still cannot prove fidelity to arbitrary natural
-language; the regression tests exercise context transport with synthetic providers,
-not live-model success rates.
+Specification version 1 is `{ schemaVersion: 1, name, description, contract? }`. It
+preserves the caller's wording rather than inferring structured constraints with
+another model. For accepted suggestions, the description includes the accepted
+expected outcome. The optional `contract` is the caller's explicit job contract:
+every candidate is checked against it and its violations feed the same repair
+loop (`docs/workflow-job-contract.md`). `manage_workflow publish` and `enable`
+recheck the graph about to run against it and return the report, advisory like
+the OS warnings. Neither check can prove fidelity to
+arbitrary natural language; the regression tests exercise context transport with
+synthetic providers, not live-model success rates.
 
 Both production entry points use `composePersistedFlow`, which saves the
 specification to `workflow_composition` before the first provider request and
@@ -1116,8 +1120,8 @@ when the chat tool caps its returned `rawResponse`. The resulting flow metadata
 contains `compositionRecordId`; chat also returns that ID on success or a normal
 composition failure. The record is readable with `getWorkflowComposition(id)`.
 
-Records have three states: `COMPOSING`, `VALIDATED` (structural checks passed), and
-`FAILED`. `VALIDATED` does not mean a draft was attached, published, or executed.
+Records have three states: `COMPOSING`, `VALIDATED` (structural checks passed, and
+the job contract when one was stated), and `FAILED`. `VALIDATED` does not mean a draft was attached, published, or executed.
 An interrupted attempt may remain `COMPOSING` with its last checkpoint after a
 restart; this table is authoring provenance, not a queue, and never resumes work
 or spends on its own. Suggestion retries continue to use their existing explicit
