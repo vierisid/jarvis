@@ -1,0 +1,4 @@
+$ bun run eval:workflows --mode plan --out /tmp/q03-run/plan
+Evaluation not run Manifest: /tmp/q03-run/plan
+exit=0
+scheduled per policy: {'baseline-v1': 12, 'deterministic-first-v1': 12} | same tasks, repeats and condition: True
