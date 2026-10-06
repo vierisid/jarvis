@@ -38,7 +38,7 @@ async function hover(enter: boolean) { await React.act(async () => {
   if (enter) stage.dispatchEvent(new PointerEvent("pointermove", { bubbles: true, pointerType: "mouse", clientX: 101, clientY: 101 }));
 }); }
 const next = () => ({ status: "ready" as const, data: { ...samplePaper("invitation", false), queueCount: 1 } });
-function receipt(overrides: Partial<Extract<DecisionOperation, { state: "confirmed" }>> = {}): DecisionOperation {
+function receipt(overrides: Partial<Extract<DecisionOperation, { state: "confirmed" }>> = {}): Extract<DecisionOperation, { state: "confirmed" }> {
   const request = requests.at(-1)!;
   return { ...request, state: "confirmed", effect: request.action === "approve" ? "committed" : "not_started", ...overrides };
 }
@@ -103,6 +103,70 @@ test("approval without a committed effect is not completion", async () => {
   await wait(450); expect(phase()).toBe("blocked"); expect(host.textContent).not.toContain("Execution confirmed");
 });
 
+test("accepting unstarted work advances without claiming execution", async () => {
+  const data = { ...samplePaper("ready", false), approveResult: "accepted" as const };
+  data.decision = { ...data.decision, approval: null, workStatus: "proposed" };
+  data.actionLabels = { approve: "Accept step" };
+  binding = { ...binding, state: { status: "ready", data } };
+  await render(); await click("Accept step");
+  binding = { ...binding, state: next(), operation: { ...receipt({ effect: "not_started" }), result: "accepted" } }; await render();
+  expect(phase()).toBe("confirmed");
+  expect(host.querySelector(".brief-status")!.textContent).toBe("Step accepted");
+  expect(host.querySelector(".brief-decision-receipt")!.textContent).toBe("Step accepted · Not started");
+  expect(host.textContent).not.toContain("Execution confirmed");
+  await finish(); expect(section().dataset.decisionId).toBe("fixture-decision-invitation");
+});
+
+test("permission approval has its own receipt without claiming execution", async () => {
+  const data = { ...samplePaper("ready", false), approveResult: "permission_granted" as const };
+  data.actionLabels = { approve: "Grant permission" };
+  binding = { ...binding, state: { status: "ready", data } };
+  await render(); await click("Grant permission");
+  binding = { ...binding, state: next(), operation: { ...receipt({ effect: "not_started" }), result: "permission_granted" } }; await render();
+  expect(phase()).toBe("confirmed");
+  expect(host.querySelector(".brief-status")!.textContent).toBe("Permission granted");
+  expect(host.querySelector(".brief-decision-receipt")!.textContent).toBe("Permission granted · Not started");
+  expect(host.textContent).not.toContain("Execution confirmed");
+  await finish(); expect(section().dataset.decisionId).toBe("fixture-decision-invitation");
+});
+
+test("a non-execution receipt cannot downgrade Approve & send", async () => {
+  await render(); await click("Approve & send");
+  for (const result of ["accepted", "permission_granted"] as const) {
+    binding = { ...binding, state: next(), operation: { ...receipt({ effect: "not_started" }), result } }; await render();
+    expect(phase()).toBe("blocked"); expect(section().dataset.decisionId).toBe("fixture-decision-follow-up");
+    expect(host.textContent).not.toContain("Execution confirmed");
+  }
+});
+
+test("approval receipts must match the reviewed meaning and effect in every direction", () => {
+  for (const expected of ["accepted", "permission_granted", "executed"] as const) {
+    const paper = { ...samplePaper("ready", false), approveResult: expected };
+    const current: DecisionTransition = { paper, action: "approve", requestId: "a", phase: "pending", message: "Pending", tone: "attention" };
+    for (const result of ["accepted", "permission_granted", "executed"] as const) {
+      for (const effect of ["committed", "not_started"] as const) {
+        const view: DecisionBinding = { source: "fixture", state: next(), operation: { state: "confirmed", action: "approve",
+          decisionId: paper.decision.decisionId, revision: paper.decision.revision, requestId: "a", result, effect } };
+        const matched = result === expected && effect === (expected === "executed" ? "committed" : "not_started");
+        expect(reconcileDecision(current, view).phase).toBe(matched ? "confirmed" : "blocked");
+      }
+    }
+  }
+});
+
+test("non-execution acknowledgments cannot hide a canonical failed or uncertain effect", () => {
+  for (const result of ["accepted", "permission_granted"] as const) {
+    const paper = { ...samplePaper("ready", false), approveResult: result };
+    const current: DecisionTransition = { paper, action: "approve", requestId: "a", phase: "pending", message: "Pending", tone: "attention" };
+    for (const outcome of ["failed", "unknown", "blocked"] as const) {
+      const data = structuredClone(paper); data.decision.approval!.executionOutcome = outcome;
+      const view: DecisionBinding = { source: "fixture", state: { status: "ready", data }, operation: { state: "confirmed", action: "approve",
+        decisionId: paper.decision.decisionId, revision: paper.decision.revision, requestId: "a", result, effect: "not_started" } };
+      expect(reconcileDecision(current, view).phase).toBe("blocked");
+    }
+  }
+});
+
 test("errors, conflicts and unknown outcomes keep the affected paper, including when another item is supplied", async () => {
   await render(); await click("Approve & send");
   for (const state of ["error", "conflict", "unknown"] as const) {
@@ -153,11 +217,22 @@ test("canonical failed or unknown outcome overrides even a conflicting optimisti
   }
 });
 
-test("a failure received during settlement cancels advancement", async () => {
+test("a failure received during confirmation cancels advancement", async () => {
   await render(); await click("Approve & send"); binding = { ...binding, state: next(), operation: receipt() }; await render();
   expect(phase()).toBe("confirmed");
   binding = { ...binding, operation: { ...requests[0]!, state: "error", message: "Execution failed" } }; await render();
   await wait(450); expect(phase()).toBe("blocked"); expect(section().dataset.decisionId).toBe("fixture-decision-follow-up");
+});
+
+test("a failure received during non-reduced settlement cancels advancement", async () => {
+  reduced = false;
+  await render(); await hover(true); await click("Approve & send");
+  binding = { ...binding, state: next(), operation: receipt() }; await render();
+  expect(section().dataset.reduced).toBe("false"); expect(phase()).toBe("confirmed");
+  await wait(395); expect(phase()).toBe("settling");
+  binding = { ...binding, operation: { ...requests[0]!, state: "error", message: "Execution failed" } }; await render();
+  await wait(300); expect(phase()).toBe("blocked"); expect(section().dataset.decisionId).toBe("fixture-decision-follow-up");
+  expect(host.querySelector(".brief-decision-receipt")!.textContent).toBe("Execution failed");
 });
 
 test("keyboard focus follows the next Review path without stealing focus from another control", async () => {

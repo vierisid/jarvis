@@ -1,7 +1,7 @@
 import type { BriefDecision } from "../../../../../src/brief/contracts";
 import type { BriefViewPort } from "../../contracts";
 import { isBriefCapabilityEnabled } from "../../../../../src/brief/capabilities";
-import type { DecisionOperation } from "../decision-transition/controller";
+import type { ApprovalResult, DecisionOperation } from "../decision-transition/controller";
 
 /** Presentation supplied by F-12. Never parse raw tool arguments to invent a document. */
 export interface DecisionPaper {
@@ -18,6 +18,9 @@ export interface DecisionPaper {
   };
   /** Exact server-approved language, e.g. Approve & send versus Approve. */
   actionLabels: Partial<Record<DecisionAction, string>>;
+  /** Owner-declared approve semantics for this revision, never inferred from its label.
+   * Omitted means execution. Acceptance/permission require explicit matching receipts. */
+  approveResult?: ApprovalResult;
   queueCount: number | null;
 }
 export type DecisionAction = "approve" | "keep_draft" | "reject";

@@ -2,6 +2,7 @@
   "task": "D-08",
   "title": "Animate local decisions and stack advancement",
   "date": "2026-10-05",
+  "updated": "2026-10-06",
   "track": "dashboard",
   "status": "implemented",
   "merged": false,
@@ -20,9 +21,9 @@
   "owns": ["ui/src/brief/today/decision-transition/**", "D-07 HeroPaper/binding integration", "Isolated Today fixture owner and entry isolation test", "docs/brief-delivery/D-08.*", "docs/brief-delivery/evidence/D-08/**"],
   "excludes": ["Canonical queue storage or writers", "Backend decision or approval semantics", "Durable idempotency/reconnect", "Goal progress calculations", "D-09 and later tasks", "Live activation"],
   "tests": [
-    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 123, "assertions": 2825, "files": 11},
+    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 129, "assertions": 2871, "files": 11},
     {"command": "bun x tsc --noEmit", "result": "pass"},
-    {"command": "bun run build:ui", "result": "pass", "build": "index-sjfs5htj.js", "note": "Existing @theme/@tailwind warnings."},
+    {"command": "bun run build:ui", "result": "pass", "build": "index-hseexw1s.js", "note": "Existing @theme/@tailwind warnings."},
     {"command": "git diff --check", "result": "pass"}
   ],
   "browser_checks": [
@@ -34,6 +35,23 @@
   ],
   "regression": {"case": "Expanded review leaves next hero offscreen", "red": "scrollTop 349 instead of 0", "green": "scrollTop 0; browser restored 0 to 0 and narrow Review remained visible"},
   "evidence": "evidence/D-08/browser-checks.json",
+  "review_corrections": {
+    "date": "2026-10-06",
+    "reviewed_head": "9b99cb36dbdaa51de2841ac93b5c6cd1338e0b63",
+    "inspected_main": "abb14deb59f1ca3a84227be9a2035687b29dea34",
+    "changes": [
+      "Owner-declared accepted, permission_granted and executed results require matching receipts; omitted meanings retain strict execution semantics.",
+      "Acceptance and permission use neutral Not started receipts; Approve & send still requires a committed effect.",
+      "Non-reduced interruption test reaches the actual settling phase before injecting a failure; confirmation interruption remains separately covered."
+    ],
+    "red_green": {"before": "19 passed, 2 failed: acceptance and permission were blocked", "after": "Both pass; final affected suite 129 passed, 0 failed"},
+    "focused_tests": 23,
+    "result_effect_matrix_cases": 18,
+    "contradictory_canonical_outcomes": 6,
+    "browser_evidence": "evidence/D-08/review-corrections.json",
+    "screenshots": ["evidence/D-08/review-acceptance-light.jpg", "evidence/D-08/review-permission-dark.jpg"],
+    "coverage": "Correction checks cover Light acceptance, Dark rail/chat permission and execution, with next-paper handoff. The original eight-state shell matrix above remains original-delivery evidence, not a new full matrix run."
+  },
   "limitations": [
     "The optional F-12/F-14 presentation receipt seam is documented but not wired to live writers.",
     "Request tokens correlate local attempts and do not provide server idempotency.",

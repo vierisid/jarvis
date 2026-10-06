@@ -27,7 +27,7 @@ export function TodaySpecimen() {
     <div className="brief-today-review-toolbar" aria-label="Isolated review controls">
       <span>D-08 · Isolated decision stack</span>
       <label>Decision <select aria-label="Decision scenario" value={scenario} onChange={event => setScenario(event.target.value)}>
-        {["ready", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>
+        {["ready", "acceptance", "permission", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>
       <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>Switch to {theme === "light" ? "dark" : "light"}</button>
       <label><input type="checkbox" checked={long} onChange={e => setLong(e.target.checked)} /> Long document</label>
       <label><input type="checkbox" checked={reduced} onChange={e => setReduced(e.target.checked)} /> Reduce motion</label>

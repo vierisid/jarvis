@@ -1,8 +1,10 @@
 import type { DecisionAction, DecisionBinding, DecisionPaper } from "../hero-paper/model";
 
+export type ApprovalResult = "accepted" | "permission_granted" | "executed";
+
 /** Presentation receipts supplied by the existing operation owner, not a new wire API.
- * confirmed requires a reconciled canonical write/effect. Permission approval alone is
- * insufficient. Echo the attempt, source identity and reviewed revision without alteration.
+ * confirmed requires the reconciled result of the exact requested operation. Permission
+ * alone cannot confirm execution. Echo the attempt, source identity and reviewed revision.
  */
 export type DecisionOperation = {
   decisionId: string;
@@ -17,6 +19,8 @@ export type DecisionOperation = {
   state: "confirmed";
   action: DecisionAction;
   effect: "committed" | "not_started";
+  /** Approve result only. Omission retains the original execution-only contract. */
+  result?: ApprovalResult;
 };
 
 export const DECISION_TIMING = { confirmation: 380, settlement: 220, arrival: 220 } as const;
@@ -30,10 +34,14 @@ export interface DecisionTransition {
   tone: "attention" | "success" | "error" | "neutral";
 }
 
-export function confirmation(action: DecisionAction) {
-  return action === "approve" ? { message: "Execution confirmed", tone: "success" as const }
-    : action === "keep_draft" ? { message: "Draft kept · Nothing sent", tone: "neutral" as const }
-      : { message: "Rejected · Nothing sent", tone: "error" as const };
+export function confirmation(action: DecisionAction, result: ApprovalResult = "executed") {
+  if (action === "approve") {
+    if (result === "accepted") return { label: "Step accepted", message: "Step accepted · Not started", tone: "neutral" as const };
+    if (result === "permission_granted") return { label: "Permission granted", message: "Permission granted · Not started", tone: "neutral" as const };
+    return { label: "Execution confirmed", message: "Execution confirmed", tone: "success" as const };
+  }
+  return action === "keep_draft" ? { label: "Draft kept", message: "Draft kept · Nothing sent", tone: "neutral" as const }
+    : { label: "Rejected", message: "Rejected · Nothing sent", tone: "error" as const };
 }
 
 /** Retains only the outgoing visual object. The owner still owns the queue and next item. */
@@ -51,10 +59,15 @@ export function reconcileDecision(current: DecisionTransition, binding: Decision
   if (!operation || operation.decisionId !== current.paper.decision.decisionId
     || operation.revision !== current.paper.decision.revision || operation.requestId !== current.requestId) return current;
   if (operation.state === "pending") return current;
+  // The owner declares the requested meaning before dispatch, on this reviewed revision.
+  // A response cannot downgrade Approve & send into mere acceptance or permission.
+  const expectedResult = current.paper.approveResult ?? "executed";
+  const expectedEffect = current.action === "approve" && expectedResult === "executed" ? "committed" : "not_started";
   if (operation.state === "confirmed" && operation.action === current.action
-    && operation.effect === (current.action === "approve" ? "committed" : "not_started")) {
+    && operation.effect === expectedEffect
+    && (current.action === "approve" ? (operation.result ?? "executed") === expectedResult : operation.result === undefined)) {
     if (!["pending", "blocked"].includes(current.phase)) return current;
-    return { ...current, phase: "confirmed", ...confirmation(current.action) };
+    return { ...current, phase: "confirmed", ...confirmation(current.action, expectedResult) };
   }
   const message = operation.state === "conflict" ? "This decision changed. Refresh before reviewing it again."
     : operation.state === "error" ? operation.message || "The action failed. Check the outcome before trying again."

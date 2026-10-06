@@ -4,7 +4,7 @@ import { BriefButton, BriefIconButton } from "../../components/controls";
 import { useBriefMotion } from "../../motion";
 import { canAct, decisionStatus, decisionTone, type DecisionAction, type DecisionBinding, type DecisionPaper } from "./model";
 import { useDecisionTransition } from "../decision-transition/useDecisionTransition";
-import type { DecisionTransition } from "../decision-transition/controller";
+import { confirmation, type DecisionTransition } from "../decision-transition/controller";
 import "../decision-transition/decision-transition.css";
 import "./hero-paper.css";
 
@@ -103,7 +103,7 @@ function Decision({ item, binding, reducedMotion, transition, arriving, request 
   return <section className="brief-today-decision" data-tone={tone} data-review={review} data-decision-id={item.decision.decisionId}
     data-transition={transition?.phase ?? (arriving ? "arriving" : "idle")} data-reduced={reducedMotion} aria-labelledby={`${id}-summary`}>
     <div className="brief-today-decision-summary">
-      <div className="brief-today-decision-meta"><span className={`brief-status brief-status--${tone}`}>{transition ? transition.phase === "pending" ? "Confirming decision" : transition.phase === "blocked" ? "Check the outcome" : transition.action === "approve" ? "Execution confirmed" : transition.action === "keep_draft" ? "Draft kept" : "Rejected" : decisionStatus(item)}</span>
+      <div className="brief-today-decision-meta"><span className={`brief-status brief-status--${tone}`}>{transition ? transition.phase === "pending" ? "Confirming decision" : transition.phase === "blocked" ? "Check the outcome" : confirmation(transition.action, item.approveResult).label : decisionStatus(item)}</span>
         {item.queueCount !== null && <span className="brief-type-utility brief-secondary">{item.queueCount} {item.queueCount === 1 ? "action" : "actions"}</span>}</div>
       <h2 id={`${id}-summary`} className="brief-type-hero-heading">{item.summary}</h2>
       <p className="brief-type-body brief-secondary">{item.description}</p>

@@ -30,7 +30,9 @@ export function useDecisionPreview(scenario: string, long: boolean) {
       setOperation({ ...identity, state: "pending" });
       timer.current = setTimeout(() => {
         if (result === "confirmed") {
-          setOperation({ ...identity, state: "confirmed", action, effect: action === "approve" ? "committed" : "not_started" });
+          const approvedResult = paper?.approveResult ?? "executed";
+          setOperation({ ...identity, state: "confirmed", action, result: action === "approve" ? approvedResult : undefined,
+            effect: action === "approve" && approvedResult === "executed" ? "committed" : "not_started" });
           setQueue(items => items.filter(item => item.decision.decisionId !== decision.decisionId));
         } else if (result === "conflict") {
           setOperation({ ...identity, state: "conflict" });
@@ -53,6 +55,20 @@ function withReject(item: DecisionPaper): DecisionPaper {
 }
 function samples(scenario: string, long: boolean) {
   const first = withReject(samplePaper(scenario, long));
+  if (scenario === "acceptance") {
+    first.approveResult = "accepted";
+    first.decision = { ...first.decision, approval: null, workStatus: "proposed", actions: ["approve", "reject", "inspect"] };
+    first.actionLabels = { approve: "Accept step", reject: "Reject" };
+    first.title = "Plan the pilot"; first.summary = "A useful next step\nis ready to accept.";
+    first.description = "Accept the proposed work. Nothing starts automatically."; first.reviewLabel = "Review step";
+    first.document = { subject: "Agree the pilot scope", paragraphs: ["Confirm the success criteria with Alex before preparing the pilot."] };
+  } else if (scenario === "permission") {
+    first.approveResult = "permission_granted";
+    first.actionLabels = { approve: "Grant permission", reject: "Reject" };
+    first.title = "Permission request"; first.summary = "The next operation\nneeds your permission.";
+    first.description = "Grant permission to continue. Execution is tracked separately."; first.reviewLabel = "Review permission";
+    first.document = { subject: "Allow the reviewed operation", paragraphs: ["This confirms permission only, before the operation starts."] };
+  }
   const second = withReject(samplePaper("ready", long));
   second.decision = { ...second.decision, decisionId: "fixture-decision-investor", workItemId: "fixture-work-investor",
     approval: { ...second.decision.approval!, approvalId: "fixture-approval-investor" } };
