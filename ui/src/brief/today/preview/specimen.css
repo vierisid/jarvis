@@ -5,11 +5,6 @@
 .brief-root .brief-today-review-toolbar small { flex-basis:100%; font-size:12px; }
 .brief-root .brief-today-review-viewport { flex:1; min-height:540px; }
 .brief-root .brief-today-review-viewport > .brief-navigation { height:100%; }
-.brief-root .brief-today-sample-opportunity { padding:22px; }
-.brief-root .brief-today-sample-opportunity h3 { margin:0 0 24px; }
-.brief-root .brief-today-sample-opportunity small { font-size:12px; color:var(--brief-secondary); }
-.brief-root .brief-today-sample-opportunity p { font:400 14px/22px var(--brief-sans); margin:8px 0 20px; }
-.brief-root .brief-today-sample-opportunity strong { display:flex; align-items:center; gap:8px; font-size:14px; }
 .brief-root .sample-conversation-tabs { padding:8px 12px; margin-right:36px; background:var(--brief-soft); border-radius:var(--brief-corner-control); font-size:13px; }
 .brief-root .sample-conversation-thread { flex:1; min-height:0; overflow:auto; padding-top:36px; }
 .brief-root .sample-conversation-thread h2 { margin:0; }

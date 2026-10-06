@@ -1,0 +1,45 @@
+{
+  "task": "D-11",
+  "title": "Build the Today opportunity stack",
+  "date": "2026-10-06",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-11",
+  "stack_base": "brief/d-10",
+  "baseline": "6f2dc90176fb7e4860864feff7bd50543b9d46c2",
+  "inspected_main": "c3ed5d220c83683a14870677633aa1c4da2b0a1c",
+  "head": { "ref": "brief/d-11", "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-11.json" },
+  "dependency_prs": ["https://github.com/vierisid/jarvis/pull/752"],
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-11",
+  "preview": "http://127.0.0.1:4391/?brief=preview&specimen=today&review=d11-9mh0vv42#/_brief_preview",
+  "activation_dependencies": ["F-09 prepared snapshots and Q-13 readiness", "F-10 durable exact-version activation/dismissal", "Existing Today and shell gates", "D-33 release approval"],
+  "owns": ["ui/src/brief/today/opportunity-stack/**", "Isolated Today preview and opportunity fixtures", "docs/brief-delivery/D-11.*", "docs/brief-delivery/evidence/D-11/**"],
+  "excludes": ["Opportunity generation/preparation", "Durable proposal writes or real activation", "New domain schema or endpoint", "Credential setup", "Live owner/room registration", "Goal scoring, business outcomes or workflow execution", "D-12 conversation tabs"],
+  "figma": { "file": "eNfKeirIKLZLlZEasrurZa", "page": "81:2", "nodes": ["81:3", "81:212", "685:309783"], "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded", "reference": "ui/src/brief/today/opportunity-stack/figma-reference.json", "inspection": "Saved native UI-16 extracts and final roadmap, not a fresh editor session" },
+  "checks": [
+    { "command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "exit_code": 0, "tests": 197, "assertions": 3429, "files": 14, "evidence": "evidence/D-11/review-affected-tests.log", "result": "pass" },
+    { "command": "bun x tsc --noEmit", "exit_code": 0, "result": "pass" },
+    { "command": "bun run build:ui", "exit_code": 0, "evidence": "evidence/D-11/review-build.log", "result": "pass", "warnings": "Existing @theme/@tailwind warnings" },
+    { "command": "git diff --check", "exit_code": 0, "result": "pass" }
+  ],
+  "focused_tests": 32,
+  "focused_assertions": 261,
+  "review_corrections": {
+    "reviewed_head": "cf62eb4b93d8c1ecc409a0cef8f5bcba72e6318a",
+    "findings": [
+      { "id": "R1", "status": "fixed", "change": "Next can complete local navigation through stale snapshots; action dispatch and confirmation remain fresh-only." },
+      { "id": "R2", "status": "fixed", "change": "Attempts retain stable neighbouring identities so removal/reordering cannot skip the expected successor." }
+    ],
+    "red": { "evidence": "evidence/D-11/review-regressions-red.log", "failed_cases": 8 },
+    "green": { "evidence": "evidence/D-11/review-regressions-green.log", "tests": 32, "assertions": 261 },
+    "browser": { "evidence": "evidence/D-11/review-browser-results.json", "script": "evidence/D-11/review-browser-check.cjs", "shell_combinations": 8, "stale_next_cycles": 80, "reordered_action_cases": 16, "reduced_motion_cases": 8, "errors": 0 }
+  },
+  "mutation": { "result": "rejected and restored", "guard": "required connection availability", "evidence": "evidence/D-11/binding-mutation.log" },
+  "browser": { "evidence": "evidence/D-11/browser-results.json", "script": "evidence/D-11/browser-check.cjs", "shell_combinations": 8, "next_cycles": 80, "focus_recovery_cycles": 10, "read_preparation_states": 9, "failure_results": 4, "reduced_motion": true, "narrow_long_content": "390px" },
+  "limits": ["Isolated fixture owner only; live F-09/F-10 integration untested and gated", "Locks/receipts are local presentation state; backend must enforce idempotency and restore terminal state after reload", "All required binding enumeration and Q-13 readiness belong to the owner", "Browser inspection is not screen-reader certification, a mobile keyboard test or measured frame-rate performance", "Long narrow and chat-open screenshots are scrolled to the opportunity/action region"],
+  "rollback": "Keep default entry/capabilities off or revert D-11. No migration or real business effect to undo.",
+  "next": "D-12: Build the conversation tab strip; separate worktree/PR, not started."
+}
