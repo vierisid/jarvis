@@ -1,23 +1,44 @@
-Full suite on brief/q-04 at 5b86ca80 (local WSL2)
+Full suite on brief/q-04 at 1b64360b (local WSL2, machine shared with other sessions; load average about 2.8)
 $ bun test --preload ./src/test-preload.ts
- 7756 pass
+ 7760 pass
  86 skip
- 9 fail
- 55423 expect() calls
-Ran 7851 tests across 425 files. [655.66s]
+ 14 fail
+ 55498 expect() calls
+Ran 7860 tests across 425 files. [1051.01s]
 
 Failures:
-(fail) browser local-file lockdown (integration, #521) > (unnamed) [220.73ms]
-(fail) browser primitives (integration) > (unnamed) [312.71ms]
-(fail) end to end, against a real process > reaps an engine whose owner really did die [58.73ms]
-(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [308.67ms]
-(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [321.89ms]
-(fail) page-writable element refs (#592, integration) > (unnamed) [816.33ms]
-(fail) webapp template delivery via browser tools (integration) > (unnamed) [229.64ms]
-(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [115.54ms]
-(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [168.83ms]
+(fail) A1 preserves a committed effect receipt after cancellation and restart [5404.83ms]
+(fail) a long message cannot make scoring quadratic on the recall path [5902.92ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [327.85ms]
+(fail) browser primitives (integration) > (unnamed) [309.89ms]
+(fail) compiled ask piece asserts the outcome > a refused request is reported with its status and reason [6190.58ms]
+(fail) compiled ask piece asserts the outcome > an approval pauses before the piece expects an outcome [5516.95ms]
+(fail) end to end, against a real process > reaps an engine whose owner really did die [50.03ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [615.02ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [533.44ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [817.80ms]
+(fail) recall caps the evidence ledger so a repeated assertion cannot grow the prompt without bound [8446.68ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [469.66ms]
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [82.63ms]
+(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [168.42ms]
 
-All 9 also fail on the base with no Q work applied (below): git config lint, six Chromium launches and two engine-reaper tests on this machine. Q-04 changes none of those areas.
+9 of the 14 also fail on the base with no Q work applied (below): git config lint, six Chromium launches and two engine-reaper tests on this machine.
+The other 5 timed out at 5 to 8 seconds under load (the run took 1,051 s against 655 s for the first one): an effect receipt across restart, two compiled ask piece cases and two recall cases. None touches workflow composition. Their four files pass three runs in a row on their own:
+$ bun test --preload ./src/test-preload.ts src/workflows/runtime/llm-output-outcomes.test.ts src/workflows/runtime/cancellation-authority.integration.test.ts src/vault/facts.test.ts src/vault/recall-ranking.test.ts
+== run 1
+ 99 pass
+ 0 fail
+Ran 99 tests across 4 files. [53.60s]
+== run 2
+ 99 pass
+ 0 fail
+Ran 99 tests across 4 files. [57.06s]
+== run 3
+ 99 pass
+ 0 fail
+Ran 99 tests across 4 files. [50.26s]
+
+CI on the final head runs the full suite.
 
 Baseline: the same test files on brief/foundations 462d955d with no Q work applied
 $ bun test --preload ./src/test-preload.ts src/sites/git-config-lint.test.ts src/workflows/runner/engine-runtime/engine-reaper.test.ts src/actions/browser/browser-local-files.test.ts src/actions/browser/browser-primitives.test.ts src/actions/browser/fixtures/headless-chromium.test.ts src/actions/browser/page-writable-element-refs.test.ts src/actions/tools/browser-template-delivery.test.ts
