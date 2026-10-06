@@ -1,0 +1,374 @@
+Revert checks for Q-18 at 9a298152: each guarantee removed in turn, its test run, the source restored.
+Each entry gives the exact text removed from src/goals/next-action.ts and what replaced it, so any check can be repeated by hand.
+
+[DETECTED] a new step may duplicate an open commitment or work item
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "if (duplicate) { exclude('start_step', goal.title, `Already committed as ${quote(duplicate.text)}.`); continue; }"
+    replace with: "if (false) { continue; }"
+    fails: founder-review scenarios > duplicate-commitment: The founder already committed to calling Ana about invoice 1042. [1.15ms]
+    fails: next-action planner > excluded options say why they were left out [0.77ms]
+    fails: live observation > reads goals, open work, commitments and workflow readiness, and writes nothing [555.68ms]
+
+[DETECTED] open work titles no longer count as commitments
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: ", ...open.map(w => w.title)]\n    .map("
+    replace with: "]\n    .map("
+    fails: next-action planner > excluded options say why they were left out [1.19ms]
+
+[DETECTED] a goal behind a dependency or inactive parent gets a new step
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  57 pass 7 fail
+    remove: "    if (hold) {\n      if (!acceptedFor.has(goal.id)"
+    replace with: "    if (false) {\n      if (!acceptedFor.has(goal.id)"
+    fails: founder-review scenarios > blocked-by-dependency: Sending the new price list depends on approving the new prices, which is not done. [0.93ms]
+    fails: founder-review scenarios > paused-parent: The only key result belongs to a paused objective. [0.52ms]
+    fails: founder-review scenarios > inherited-dependency: Emailing the price list, due in three days, sits under a milestone that waits on approving the new prices. [0.70ms]
+    fails: next-action planner > excluded options say why they were left out [0.95ms]
+    fails: next-action planner > the plan lists at most 20 alternatives, reasons first, and counts what it left out [1.26ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [6.47ms]
+    fails: live observation > every goal is read, past a thousand [950.48ms]
+
+[DETECTED] accepted work behind a hold is offered as doable
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "if (hold) { exclude('continue_work', work.title, `Not now: ${hold.reason}.`); continue; }"
+    replace with: "if (false) { continue; }"
+    fails: founder-review scenarios > accepted-work-waits-on-dependency: Accepted work on the price-list goal is ready, but that goal waits on approving the new prices. [0.80ms]
+    fails: next-action planner > excluded options say why they were left out [1.87ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [4.66ms]
+
+[DETECTED] a full day still gets new work
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  59 pass 5 fail
+    remove: "const pool = full ? candidates.filter(c => c.load !== 'adds') : candidates;"
+    replace with: "const pool = candidates;"
+    fails: founder-review scenarios > full-queue: Five items are running, the daily limit, and a new step is available. [1.04ms]
+    fails: next-action planner > excluded options say why they were left out [3.50ms]
+    fails: next-action planner > a full day still offers what adds no work, and says what it held back [1.31ms]
+    fails: next-action planner > plain commitments fill the day only when due by its end, and back an abstention as evidence [1.00ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [5.39ms]
+
+[DETECTED] work on a concrete goal that passed is started again
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  53 pass 11 fail
+    remove: "if (result?.verdict === 'passed' && (CONCRETE.has(goal.level) || goal.score >= 1)) {"
+    replace with: "if (false) {"
+    fails: founder-review scenarios > already-done: Reminder work was checked done two days ago, but the goal is still open. A pricing goal has a startable step. [0.95ms]
+    fails: founder-review scenarios > already-done-only: Reminder work was checked done two days ago, the goal is still open, and nothing else is active. [0.48ms]
+    fails: founder-review scenarios > proposal-for-done-goal: Reminder work was checked done two days ago. This morning's fallback plan proposed working on the same goal again. [0.81ms]
+    fails: founder-review scenarios > done-long-ago: Reminder work was checked done ten days ago; the goal is still open and nothing else is active. [0.57ms]
+    fails: founder-review scenarios > closed-in-tasks: Accepted reminder work was marked done in Tasks yesterday, without a result check. [0.44ms]
+    fails: founder-review scenarios > full-day-closes-goal: Five items are running, the daily limit. A goal's work was checked done yesterday, and another goal has a startable step. [0.74ms]
+    fails: next-action planner > excluded options say why they were left out [2.79ms]
+    fails: next-action planner > an option that adds no work says why it beats doing nothing [0.83ms]
+    fails: next-action planner > a full day still offers what adds no work, and says what it held back [0.63ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [3.17ms]
+    fails: live observation > a goal's latest result is read however old, from a check or from Tasks [756.27ms]
+
+[DETECTED] a goal whose steps are all complete is not closed
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "if (children.length && children.every(g => g.status === 'completed')) {"
+    replace with: "if (false) {"
+    fails: founder-review scenarios > all-steps-complete: Every task under the invoice key result is complete, but the key result is still open. [0.71ms]
+
+[DETECTED] a stale goal gets a new task
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  57 pass 7 fail
+    remove: "if (stale) { add('review_goal',"
+    replace with: "if (false) { add('review_goal',"
+    fails: founder-review scenarios > stale-goal: A newsletter goal has had no progress or work for six weeks. [0.75ms]
+    fails: founder-review scenarios > stale-and-fresh: The newsletter goal is stale; a pricing goal created this week has a startable step. [0.71ms]
+    fails: next-action planner > a proposal is offered only when its goal could take it [1.10ms]
+    fails: next-action planner > an option that adds no work says why it beats doing nothing [1.00ms]
+    fails: next-action planner > a full day still offers what adds no work, and says what it held back [0.92ms]
+    fails: next-action planner > a goal activated recently is not stale, however old it is [0.81ms]
+    fails: live observation > a resume counts as activation, so a long-idle goal resumed today is not stale [649.31ms]
+
+[DETECTED] a failed attempt is retried without asking
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "if (last?.verdict === 'failed') {"
+    replace with: "if (false) {"
+    fails: founder-review scenarios > last-attempt-failed: The last reminder attempt failed its check: three reminders bounced. [0.83ms]
+    fails: next-action planner > questions say what the answer unblocks [0.63ms]
+    fails: next-action planner > text from outside the plan, such as a failed step's error, is quoted short [0.82ms]
+
+[DETECTED] a goal with no concrete step gets an invented one
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "if (!CONCRETE.has(goal.level)) {"
+    replace with: "if (false) {"
+    fails: founder-review scenarios > no-concrete-step: The objective has no tasks under it yet. [0.72ms]
+    fails: next-action planner > questions say what the answer unblocks [1.01ms]
+    fails: next-action planner > a question of its own is not replaced by a tie [0.59ms]
+
+[DETECTED] a tie between goals is settled by a coin flip
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  62 pass 2 fail
+    remove: "if (best.question || tied) {"
+    replace with: "if (best.question) {"
+    fails: founder-review scenarios > tie-between-goals: Two goals with no deadlines, the same health and no order between them each have a startable step. [0.90ms]
+    fails: next-action planner > questions say what the answer unblocks [0.77ms]
+
+[DETECTED] work whose workflow cannot run is offered as doable
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "      if (!state.ready) {"
+    replace with: "      if (false) {"
+    fails: founder-review scenarios > unavailable-integration: Accepted follow-up work runs a workflow whose Gmail account is disconnected. Another goal has a startable step. [1.23ms]
+    fails: next-action planner > an option that adds no work says why it beats doing nothing [0.65ms]
+    fails: live observation > reads goals, open work, commitments and workflow readiness, and writes nothing [817.53ms]
+
+[DETECTED] starting new work outranks checking finished work
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  60 pass 4 fail
+    remove: "check_result: 0, resolve_blocker: 1,"
+    replace with: "check_result: 9, resolve_blocker: 1,"
+    fails: founder-review scenarios > check-finished-run: This week's invoice reminders ran and finished. Pricing work is also waiting. [11.40ms]
+    fails: founder-review scenarios > old-proposals: Proposals from earlier mornings were never decided and one was rejected. This morning a run finished. [0.43ms]
+    fails: next-action planner > a recommendation names its goal and revision, its evidence, why it beats doing nothing and the runner-up, and when it expires [0.71ms]
+    fails: next-action planner > under a held goal, settling what happened goes on and moving forward waits [0.55ms]
+
+[DETECTED] a failed run nobody settled is not open
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "return OPEN_WORK.has(w.status) || (w.status === 'failed' && !w.check);"
+    replace with: "return OPEN_WORK.has(w.status);"
+    fails: founder-review scenarios > failed-run: The reminder run failed and nobody has looked at it. [0.89ms]
+    fails: next-action planner > under a held goal, settling what happened goes on and moving forward waits [0.69ms]
+    fails: next-action planner > text from outside the plan, such as a failed step's error, is quoted short [0.58ms]
+
+[DETECTED] the basis depends on the clock
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "snapshot: { ...snapshot, now: undefined } })"
+    replace with: "snapshot })"
+    fails: next-action planner > the basis ignores the clock and changes with any input [1.13ms]
+
+[DETECTED] the expiry ignores the deadline
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "...(due !== null && due > now ? [due] : [])"
+    replace with: ""
+    fails: next-action planner > a deadline inside the window, the goal's or a parent's, brings the expiry forward [0.83ms]
+
+[DETECTED] an undecided proposal from before today is open
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "    if (w.status === 'proposed') return w.createdAt >= snapshot.dayStart;\n"
+    replace with: ""
+    fails: next-action planner > a proposal from before today is not open work and does not fill the day [1.03ms]
+
+[DETECTED] the observer reads rejected and old undecided proposals
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "AND (json_extract(w.decision, '$.outcome') = 'accepted' OR (w.decision IS NULL AND c.created_at >= ?))"
+    replace with: "AND (1 OR ? IS NOT NULL)"
+    fails: live observation > old, rejected and settled work is not read, and open work is bounded newest first [503.24ms]
+
+[DETECTED] the observer keeps the oldest open work, not the newest
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  62 pass 2 fail
+    remove: "ORDER BY c.created_at DESC, w.work_id LIMIT ?"
+    replace with: "ORDER BY c.created_at, w.work_id LIMIT ?"
+    fails: live observation > reads goals, open work, commitments and workflow readiness, and writes nothing [549.63ms]
+    fails: live observation > old, rejected and settled work is not read, and open work is bounded newest first [719.71ms]
+
+[DETECTED] a proposal behind a hold is offered
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "if (hold) { exclude('decide_work', work.title, `Not now: ${hold.reason}.`); continue; }"
+    replace with: "if (false) { continue; }"
+    fails: next-action planner > a proposal is offered only when its goal could take it [0.87ms]
+
+[DETECTED] a proposal for a goal that looks done is offered
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "if (done) { exclude('decide_work',"
+    replace with: "if (false) { exclude('decide_work',"
+    fails: founder-review scenarios > proposal-for-done-goal: Reminder work was checked done two days ago. This morning's fallback plan proposed working on the same goal again. [0.87ms]
+    fails: next-action planner > excluded options say why they were left out [1.66ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [9.15ms]
+
+[DETECTED] a proposal for a stale goal is offered
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "if (stale) { exclude('decide_work',"
+    replace with: "if (false) { exclude('decide_work',"
+    fails: next-action planner > a proposal is offered only when its goal could take it [1.29ms]
+
+[DETECTED] a proposal hides its goal's review
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  60 pass 4 fail
+    remove: "const acceptedFor = new Set(open.filter(accepted).flatMap("
+    replace with: "const acceptedFor = new Set(open.flatMap("
+    fails: founder-review scenarios > proposal-for-done-goal: Reminder work was checked done two days ago. This morning's fallback plan proposed working on the same goal again. [0.82ms]
+    fails: next-action planner > excluded options say why they were left out [3.34ms]
+    fails: next-action planner > a proposal is offered only when its goal could take it [1.61ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [13.10ms]
+
+[DETECTED] parents' dependencies are not inherited
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "for (const [index, g] of lineage.entries()) {"
+    replace with: "for (const [index, g] of lineage.slice(0, 1).entries()) {"
+    fails: founder-review scenarios > inherited-dependency: Emailing the price list, due in three days, sits under a milestone that waits on approving the new prices. [1.01ms]
+    fails: next-action planner > excluded options say why they were left out [1.68ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [12.82ms]
+
+[DETECTED] a parent waiting on its own step holds that step
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "          if (position >= 0 && position < index) continue; // a parent waiting on its own step does not hold that step\n"
+    replace with: ""
+    fails: next-action planner > a dependency that can never finish asks for a fix [1.27ms]
+
+[DETECTED] the observer does not read settled results
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "      lastResult: result ? { workId: result.work_id"
+    replace with: "      lastResult: false ? { workId: result.work_id"
+    fails: live observation > a goal's latest result is read however old, from a check or from Tasks [406.38ms]
+
+[DETECTED] the observer ignores work closed in Tasks
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "OR c.status = 'completed'\n"
+    replace with: "\n"
+    fails: live observation > a goal's latest result is read however old, from a check or from Tasks [355.24ms]
+
+[DETECTED] a proposal dismissed in Tasks counts as a failed attempt
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "OR (c.status = 'failed' AND json_extract(w.decision, '$.outcome') = 'accepted'))"
+    replace with: "OR c.status = 'failed')"
+    fails: live observation > a goal's latest result is read however old, from a check or from Tasks [362.97ms]
+
+[DETECTED] work closed in Tasks stays open
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  62 pass 2 fail
+    remove: "    if (w.commitmentStatus === 'completed' || w.commitmentStatus === 'failed') return false;\n"
+    replace with: ""
+    fails: founder-review scenarios > closed-in-tasks: Accepted reminder work was marked done in Tasks yesterday, without a result check. [0.55ms]
+    fails: next-action planner > questions say what the answer unblocks [0.99ms]
+
+[DETECTED] a finished commitment with the goal's title is ignored
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  62 pass 2 fail
+    remove: "    return finished ? { reason:"
+    replace with: "    return false ? { reason:"
+    fails: founder-review scenarios > done-without-link: A commitment with the goal's exact title was finished three days ago, without a link to the goal. [0.66ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [16.04ms]
+
+[DETECTED] a timer or outside wait is offered as yours
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  60 pass 4 fail
+    remove: "&& (w.blocker.waitsFor === 'timer' || w.blocker.waitsFor === 'outside'));"
+    replace with: "&& false);"
+    fails: founder-review scenarios > timer-wait: A follow-up workflow is in its three-day wait. A pricing goal has a startable step. [0.80ms]
+    fails: next-action planner > a wait that ends by itself or on an outside call is not offered, but counts toward the day [0.50ms]
+    fails: next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [11.92ms]
+    fails: live observation > a waiting run says who resumes it, and planning over runs writes nothing [420.46ms]
+
+[DETECTED] the observer treats a timer as yours
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "  if (waitpoint?.type === 'TIMER') return 'timer';\n"
+    replace with: ""
+    fails: live observation > a waiting run says who resumes it, and planning over runs writes nothing [445.99ms]
+
+[DETECTED] the observer treats every webhook wait as an outside call
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "return step?.settings?.pieceName === WEBHOOK_PIECE ? 'outside' : 'you';"
+    replace with: "return 'outside';"
+    fails: live observation > a waiting run says who resumes it, and planning over runs writes nothing [597.05ms]
+
+[DETECTED] an answer under a held goal is offered
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "if (hold && kind !== 'run_failure' && kind !== 'missing_run') {"
+    replace with: "if (false) {"
+    fails: founder-review scenarios > approval-under-paused-goal: A run waits for approval to send, but its goal was paused yesterday. [0.69ms]
+    fails: next-action planner > excluded options say why they were left out [2.33ms]
+    fails: next-action planner > under a held goal, settling what happened goes on and moving forward waits [0.58ms]
+
+[DETECTED] a parent's deadline is ignored
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "return [deadlineOf(goal)?.deadline ?? Number.MAX_SAFE_INTEGER,"
+    replace with: "return [goal.deadline ?? Number.MAX_SAFE_INTEGER,"
+    fails: founder-review scenarios > parent-deadline: A task under a key result due tomorrow, and a standalone task due in five days. [0.73ms]
+    fails: next-action planner > a deadline inside the window, the goal's or a parent's, brings the expiry forward [0.96ms]
+    fails: next-action planner > the rationale names what separated two options of one kind [0.65ms]
+
+[DETECTED] goal order skips the levels in between
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "lineage.map(g => rank(g.sortOrder)).reverse().join('.')"
+    replace with: "rank(lineage.at(-1)!.sortOrder) + rank(goal.sortOrder)"
+    fails: next-action planner > steps you already ordered, at any level, are not asked about [0.65ms]
+
+[DETECTED] the rationale always blames the deadline
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  62 pass 2 fail
+    remove: "DECIDED_BY[field] ??"
+    replace with: "DECIDED_BY[0] ??"
+    fails: next-action planner > steps you already ordered, at any level, are not asked about [0.74ms]
+    fails: next-action planner > the rationale names what separated two options of one kind [0.96ms]
+
+[DETECTED] a full day hides options that add no work
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "const pool = full ? candidates.filter(c => c.load !== 'adds') : candidates;"
+    replace with: "const pool = full && candidates[0]?.load === 'adds' ? [] : candidates;"
+    fails: next-action planner > a full day still offers what adds no work, and says what it held back [0.86ms]
+
+[DETECTED] a dependency that can never finish holds the goal silently
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  62 pass 2 fail
+    remove: "    if (hold?.impossible) {"
+    replace with: "    if (false) {"
+    fails: founder-review scenarios > impossible-dependency: The launch email waits on a beta goal that was killed. [0.81ms]
+    fails: next-action planner > a dependency that can never finish asks for a fix [0.48ms]
+
+[DETECTED] goals waiting on each other are not detected
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "if (waitsOn(dependency, own)) return"
+    replace with: "if (false) return"
+    fails: next-action planner > a dependency that can never finish asks for a fix [0.96ms]
+
+[DETECTED] activation is not activity
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  62 pass 2 fail
+    remove: "const lastActivity = (goal: PlanGoal) => Math.max(goal.createdAt, goal.activatedAt ?? 0,"
+    replace with: "const lastActivity = (goal: PlanGoal) => Math.max(goal.createdAt,"
+    fails: next-action planner > a goal activated recently is not stale, however old it is [0.70ms]
+    fails: live observation > a resume counts as activation, so a long-idle goal resumed today is not stale [445.49ms]
+
+[DETECTED] the observer ignores resumes
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "activatedAt: Math.max(g.started_at ?? 0, resumed.get(id) ?? 0) || null,"
+    replace with: "activatedAt: g.started_at,"
+    fails: live observation > a resume counts as activation, so a long-idle goal resumed today is not stale [434.71ms]
+
+[DETECTED] the observer caps goals at 1,000
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "'SELECT id FROM goals ORDER BY sort_order, created_at, id'"
+    replace with: "'SELECT id FROM goals ORDER BY sort_order, created_at, id LIMIT 1000'"
+    fails: live observation > every goal is read, past a thousand [705.23ms]
+
+[DETECTED] exclusions are cut before lower ranks
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  61 pass 3 fail
+    remove: "const all = [...draft.considered, ...exclusions].sort((a, b) => group(a) - group(b));"
+    replace with: "const all = [...draft.considered, ...exclusions];"
+    fails: next-action planner > under a held goal, settling what happened goes on and moving forward waits [0.81ms]
+    fails: next-action planner > the plan lists at most 20 alternatives, reasons first, and counts what it left out [1.13ms]
+    fails: live observation > reads goals, open work, commitments and workflow readiness, and writes nothing [549.86ms]
+
+[DETECTED] an option that adds no work gets the goal-review wording
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "restore_capability: 'it lets accepted work run', "
+    replace with: ""
+    fails: next-action planner > an option that adds no work says why it beats doing nothing [0.67ms]
+
+[DETECTED] a tie replaces a question of its own
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: " && !best.question && !runnerUp.question"
+    replace with: ""
+    fails: next-action planner > a question of its own is not replaced by a tie [0.88ms]
+
+[DETECTED] a day full of commitments abstains without evidence
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "...dueToday.slice(0, 5).map(commitmentEvidence),"
+    replace with: ""
+    fails: next-action planner > plain commitments fill the day only when due by its end, and back an abstention as evidence [0.96ms]
+
+[DETECTED] dates are written in UTC
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "const day = dateFormatter(snapshot.timeZone);"
+    replace with: "const day = dateFormatter('UTC');"
+    fails: next-action planner > dates are written in the user's time zone [0.86ms]
+
+[DETECTED] every plain commitment fills the day
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "c.whenDue !== null && c.whenDue < snapshot.dayEnd"
+    replace with: "true"
+    fails: next-action planner > plain commitments fill the day only when due by its end, and back an abstention as evidence [1.03ms]
+
+[DETECTED] outside text is quoted at any length
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "const clip = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 3)}...` : text;"
+    replace with: "const clip = (text: string, _max: number) => text;"
+    fails: next-action planner > text from outside the plan, such as a failed step's error, is quoted short [1.22ms]
+
+[DETECTED] run progress changes the basis
+    file: src/goals/next-action.ts  test: src/goals/next-action.test.ts  exit: 1  63 pass 1 fail
+    remove: "activityAt: Math.max(row.updated_at, w.run?.finishTime ?? 0),"
+    replace with: "activityAt: w.updatedAt,"
+    fails: live observation > a run moving through its steps leaves the basis alone; finishing changes it [1000.20ms]
+
+51 of 51 removals fail their tests.

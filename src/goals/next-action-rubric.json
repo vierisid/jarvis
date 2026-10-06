@@ -1,0 +1,19 @@
+{
+  "id": "next-action-review-v1",
+  "status": "approved",
+  "statusNote": "Approved by Vieri on 6 October 2026, with all 34 scenarios in next-action-scenarios.json. The approval covers these criteria and the pass rule; a change to either needs his review again.",
+  "unit": "One planner result for one scenario.",
+  "criteria": [
+    { "id": "useful", "question": "Does the action move an active goal forward, or close or unblock open work?" },
+    { "id": "achievable", "question": "Can the founder do it now, with nothing (a dependency, a paused parent, a missing integration) blocking it?" },
+    { "id": "not_duplicate", "question": "Is it free of duplication with open commitments, open work and work already checked done?" },
+    { "id": "explained", "question": "From the rationale alone, can you say why it beats doing nothing new and beats the runner-up?" },
+    { "id": "honest", "question": "Where the planner cannot know the right step, does it ask a useful question or abstain instead of inventing one?" },
+    { "id": "workload", "question": "Does it avoid adding new work when the day is already full?" }
+  ],
+  "pass": "Every scenario meets its expectation, and the reviewer answers yes to every criterion for every scenario. A no on any criterion is a defect to fix or an expectation to change.",
+  "nonClaims": [
+    "The ranking is a stated preference order, not a measured optimum.",
+    "Accepting a recommendation is not goal progress; only checked results move a goal."
+  ]
+}
