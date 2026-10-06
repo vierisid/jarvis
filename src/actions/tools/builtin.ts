@@ -44,6 +44,7 @@ import {
   secretListRefusal, secretRead, secretReadRefusal, secretRefusalTextFor, secretScanRefusal, siteGitRefusal,
 } from './file-path-policy.ts';
 import { forCard } from '../../util/card-text.ts';
+import { failedToolResult } from '../progress-context.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 
@@ -213,17 +214,17 @@ function readJudgedFile(filePath: string, requested: unknown, scanOnly: boolean)
     fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK | fsConstants.O_NOCTTY);
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code;
-    if (code === 'ENOENT') return `Error: File not found: ${filePath}`;
-    if (code === 'EACCES') return `Error: Permission denied: ${filePath}`;
-    return `Error: Cannot read ${filePath}: ${code ?? 'open failed'}`;
+    if (code === 'ENOENT') return failedToolResult(`Error: File not found: ${filePath}`);
+    if (code === 'EACCES') return failedToolResult(`Error: Permission denied: ${filePath}`);
+    return failedToolResult(`Error: Cannot read ${filePath}: ${code ?? 'open failed'}`);
   }
   try {
     const st = fstatSync(fd);
-    if (!st.isFile()) return `Error: Not a regular file: ${filePath}`;
+    if (!st.isFile()) return failedToolResult(`Error: Not a regular file: ${filePath}`);
     // Identity, which no spelling and no race can change. An inode of 0 is not
     // an identity: some network and Windows volumes report it for every file,
     // and a cached `dev:0` would then refuse everything on that volume.
-    if (st.ino && isSecretInode(st.dev, st.ino)) return secretInodeRefusal(requested);
+    if (st.ino && isSecretInode(st.dev, st.ino)) return failedToolResult(secretInodeRefusal(requested));
     // Where the descriptor really landed, which can differ from the path if it
     // was retargeted after the pre-checks. A definite verdict refuses; a
     // scan-only one is carried into the scan below, or a shell rc swapped in
@@ -235,7 +236,7 @@ function readJudgedFile(filePath: string, requested: unknown, scanOnly: boolean)
       // Refuse naming the path the CALLER asked for: `landed` is the resolved
       // path, and putting that in a model-facing message would disclose where a
       // symlink really goes.
-      if (hit && !hit.scanOnly) return secretRefusalTextFor(requested, hit);
+      if (hit && !hit.scanOnly) return failedToolResult(secretRefusalTextFor(requested, hit));
       if (hit?.scanOnly) scan = true;
     }
 
@@ -253,7 +254,7 @@ function readJudgedFile(filePath: string, requested: unknown, scanOnly: boolean)
     // what is RETURNED is enough: anything past the limit is not returned.
     if (scan) {
       const name = scanForDaemonSecrets(content);
-      if (name) return secretScanRefusal(requested, name);
+      if (name) return failedToolResult(secretScanRefusal(requested, name));
     }
     if (!truncated) return content;
     // A procfs stream reports size 0 while still having bytes, so there is no
@@ -318,7 +319,7 @@ export const runCommandTool: ToolDefinition = {
       }, 'terminal');
     }
 
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
 
     const command = params.command as string;
     const explicitCwd = params.cwd as string | undefined;
@@ -326,6 +327,7 @@ export const runCommandTool: ToolDefinition = {
     const timeout = (params.timeout as number) || undefined;
 
     const result = await terminal.execute(command, { cwd, timeout });
+    if (result.exitCode !== 0) failedToolResult(undefined);
 
     let output = '';
     if (result.stdout) output += result.stdout;
@@ -360,34 +362,34 @@ export const readFileTool: ToolDefinition = {
   freezeArguments: freezePath,
   execute: async (params) => {
     const refused = siteGitRefusalFor(params);
-    if (refused) return refused;
+    if (refused) return failedToolResult(refused);
     // Classified once, before routing: a sidecar on this machine opens these
     // same files, and a routed path is judged by spelling.
     const verdict = secretVerdict(params);
-    if (verdict.refusal) return verdict.refusal;
+    if (verdict.refusal) return failedToolResult(verdict.refusal);
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'read_file', { path: params.path }, 'filesystem');
     }
 
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
 
     const rawPath = params.path as string;
     const baseCwd = getDefaultCwd() || policyHome();
     const filePath = resolve(baseCwd, rawPath);
 
     if (!existsSync(filePath)) {
-      return `Error: File not found: ${filePath}`;
+      return failedToolResult(`Error: File not found: ${filePath}`);
     }
 
     const stat = statSync(filePath);
     if (stat.isDirectory()) {
-      return `Error: Path is a directory, not a file: ${filePath}`;
+      return failedToolResult(`Error: Path is a directory, not a file: ${filePath}`);
     }
     // A FIFO blocks readFileSync, and the whole daemon with it, until a
     // writer shows up; a device like /dev/zero reports size 0 and never ends.
     if (!stat.isFile()) {
-      return `Error: Not a regular file: ${filePath}`;
+      return failedToolResult(`Error: Not a regular file: ${filePath}`);
     }
 
     // A file that may hold the daemon's environment is returned only if its
@@ -474,13 +476,13 @@ export const writeFileTool: ToolDefinition = {
   freezeArguments: freezePath,
   execute: async (params) => {
     const refused = siteGitRefusalFor(params);
-    if (refused) return refused;
+    if (refused) return failedToolResult(refused);
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'write_file', { path: params.path, content: params.content }, 'filesystem');
     }
 
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
 
     const rawPath = params.path as string;
     const baseCwd = getDefaultCwd() || policyHome();
@@ -492,7 +494,7 @@ export const writeFileTool: ToolDefinition = {
     } catch { /* new file */ }
     // Opening a FIFO for writing blocks until a reader appears, and the
     // daemon with it; a device is not a file either.
-    if (existing && !existing.isFile()) return `Error: Not a regular file: ${filePath}`;
+    if (existing && !existing.isFile()) return failedToolResult(`Error: Not a regular file: ${filePath}`);
 
     // A file with other hard links is replaced, not written in place, as the
     // site tools do (#516): bun's hardlink backend links node_modules to its
@@ -539,27 +541,27 @@ export const listDirectoryTool: ToolDefinition = {
   freezeArguments: freezePath,
   execute: async (params) => {
     const refused = siteGitRefusalFor(params);
-    if (refused) return refused;
+    if (refused) return failedToolResult(refused);
     const secret = secretListRefusal(params.path, { bases: relativeBases() });
-    if (secret) return secret;
+    if (secret) return failedToolResult(secret);
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'list_directory', { path: params.path }, 'filesystem');
     }
 
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
 
     const rawPath = params.path as string;
     const baseCwd = getDefaultCwd() || policyHome();
     const dirPath = resolve(baseCwd, rawPath);
 
     if (!existsSync(dirPath)) {
-      return `Error: Directory not found: ${dirPath}`;
+      return failedToolResult(`Error: Directory not found: ${dirPath}`);
     }
 
     const stat = statSync(dirPath);
     if (!stat.isDirectory()) {
-      return `Error: Path is a file, not a directory: ${dirPath}`;
+      return failedToolResult(`Error: Path is a file, not a directory: ${dirPath}`);
     }
 
     const entries = readdirSync(dirPath);
@@ -674,7 +676,7 @@ export const getClipboardTool: ToolDefinition = {
     const target = params.target as string | undefined;
     const auto = target || autoTargetForCapability('clipboard');
     if (auto) return routeToSidecar(auto, 'get_clipboard', {}, 'clipboard');
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       const content = localClipboardRead();
       return content || '[clipboard is empty]';
@@ -704,7 +706,7 @@ export const setClipboardTool: ToolDefinition = {
     const target = params.target as string | undefined;
     const auto = target || autoTargetForCapability('clipboard');
     if (auto) return routeToSidecar(auto, 'set_clipboard', { content: params.content }, 'clipboard');
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       localClipboardWrite(params.content as string);
       return 'Clipboard updated.';
@@ -729,7 +731,7 @@ export const captureScreenTool: ToolDefinition = {
     const target = params.target as string | undefined;
     const auto = target || autoTargetForCapability('screenshot');
     if (auto) return routeToSidecar(auto, 'capture_screen', {}, 'screenshot');
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       const base64 = localCaptureScreen();
       return JSON.stringify({ type: 'inline', mime_type: 'image/png', data: base64 });
@@ -754,7 +756,7 @@ export const getSystemInfoTool: ToolDefinition = {
     const target = params.target as string | undefined;
     const auto = target || autoTargetForCapability('system_info');
     if (auto) return routeToSidecar(auto, 'get_system_info', {}, 'system_info');
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     return JSON.stringify(localSystemInfo(), null, 2);
   },
 };
@@ -1197,7 +1199,7 @@ export const browserNavigateTool: ToolDefinition = {
     try {
       url = checkNavigationUrl(params.url as string);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
     const target = resolveBrowserTarget(params, 'browser_navigate');
     if (target) {
@@ -1206,13 +1208,13 @@ export const browserNavigateTool: ToolDefinition = {
       reportSkippedPlaybook('browser_navigate', target, read);
       return globalWebappTemplateDelivery.withInstructions(read.text, read.pageUrl);
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       const snap = await browser.navigate(url);
       return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1235,13 +1237,13 @@ export const browserSnapshotTool: ToolDefinition = {
       reportSkippedPlaybook('browser_snapshot', target, read);
       return globalWebappTemplateDelivery.withInstructions(read.text, read.pageUrl);
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       const snap = await browser.snapshot();
       return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1282,15 +1284,15 @@ export const browserClickTool: ToolDefinition = {
         double: params.double,
       }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       return await browser.click(params.element_id as number, {
         button: params.button === 'right' ? 'right' : 'left',
         double: (params.double as boolean) ?? false,
       });
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1317,12 +1319,12 @@ export const browserHoverTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_hover', { element_id: params.element_id }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       return await browser.hover(params.element_id as number);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1349,12 +1351,12 @@ export const browserPressKeyTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_press_key', { key: params.key }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       return await browser.pressKey(params.key as string);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1401,8 +1403,8 @@ export const browserTypeTool: ToolDefinition = {
         append: params.append,
       }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       return await browser.type(
         params.element_id as number,
@@ -1411,7 +1413,7 @@ export const browserTypeTool: ToolDefinition = {
         (params.append as boolean) ?? false,
       );
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1432,8 +1434,8 @@ export const browserScreenshotTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_screenshot', {}, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       const { base64, mimeType } = await browser.screenshotBuffer();
       return {
@@ -1443,7 +1445,7 @@ export const browserScreenshotTool: ToolDefinition = {
         ],
       } satisfies ToolResult;
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1549,16 +1551,16 @@ export const browserUploadFileTool: ToolDefinition = {
     // No sidecar route exists for uploads, so the generic "use a sidecar"
     // guidance would send the agent in circles - say so explicitly.
     if (isLocalBrowserDisabled()) {
-      return 'Error: browser_upload_file requires the LOCAL browser, which is disabled on this machine (browser.local: false), and file upload has no sidecar route yet. This action is unavailable - do NOT retry.';
+      return failedToolResult('Error: browser_upload_file requires the LOCAL browser, which is disabled on this machine (browser.local: false), and file upload has no sidecar route yet. This action is unavailable - do NOT retry.');
     }
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       return await browser.uploadFile(
         params.file_path as string,
         params.selector as string | undefined,
       );
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1593,14 +1595,14 @@ export const browserScrollTool: ToolDefinition = {
         amount: params.amount,
       }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       const direction = (params.direction as string) === 'up' ? 'up' : 'down';
       const amount = params.amount as number | undefined;
       return await browser.scroll(direction, amount);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
   },
 };
@@ -1627,8 +1629,8 @@ export const browserEvaluateTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_evaluate', { expression: params.expression }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return failedToolResult(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return failedToolResult(LOCAL_DISABLED_MSG);
     try {
       const result = await browser.evaluate(params.expression as string);
       if (result === undefined || result === null) return '(no return value)';
@@ -1642,7 +1644,7 @@ export const browserEvaluateTool: ToolDefinition = {
       return truncateMarked(text, MAX_PAGE_CONTROLLED_REPLY);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return `Error: ${truncateMarked(message, MAX_PAGE_CONTROLLED_REPLY)}`;
+      return failedToolResult(`Error: ${truncateMarked(message, MAX_PAGE_CONTROLLED_REPLY)}`);
     }
   },
 };
@@ -1705,7 +1707,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
           const snap = await ctrl.navigate(params.url as string);
           return templateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },
@@ -1719,7 +1721,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
           const snap = await ctrl.snapshot();
           return templateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },
@@ -1735,7 +1737,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
             double: (params.double as boolean) ?? false,
           });
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },
@@ -1753,7 +1755,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
             (params.append as boolean) ?? false,
           );
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },
@@ -1766,7 +1768,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
         try {
           return await ctrl.hover(params.element_id as number);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },
@@ -1779,7 +1781,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
         try {
           return await ctrl.pressKey(params.key as string);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },
@@ -1794,7 +1796,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
           const amount = params.amount as number | undefined;
           return await ctrl.scroll(direction, amount);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },
@@ -1809,7 +1811,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
           if (result === undefined || result === null) return '(no return value)';
           return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },
@@ -1828,7 +1830,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
             ],
           } satisfies ToolResult;
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return failedToolResult(`Error: ${err instanceof Error ? err.message : String(err)}`);
         }
       },
     },

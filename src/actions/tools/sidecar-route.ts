@@ -19,6 +19,7 @@ import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
 import { compareSemver, parseSemver } from '../../sidecar/compat.ts';
 import { getMachineScope } from '../machine-scope.ts';
+import { failedToolResult } from '../progress-context.ts';
 
 let sidecarManager: SidecarManager | null = null;
 
@@ -429,6 +430,7 @@ async function dispatchToSidecar(
   // contract. Classification happens here, never by parsing display text.
   const fail = (status: ActionFailure['status'], code: string, message: string,
     effect: ActionFailure['effect'] = 'not_started'): SidecarDispatch => {
+    failedToolResult(undefined);
     if (typedErrors) throw new ActionOutcomeError({ status, code, message, effect });
     return { kind: 'message', text: message, code };
   };
@@ -472,6 +474,13 @@ async function dispatchToSidecar(
   try {
     const result = await sidecarManager.dispatchRPC(sidecar.id, method, params);
 
+    // This is the run_command handler's receipt, before display serialization.
+    // Other methods can return arbitrary file/page data with similar field names.
+    if (method === 'run_command' && result && typeof result === 'object'
+      && 'exit_code' in result && typeof result.exit_code === 'number' && result.exit_code !== 0) {
+      failedToolResult(undefined);
+    }
+
     if (result === 'detached') {
       // The RPC outlived the initial timeout. Detached completions are only
       // console-logged (manager.ts onDetachedComplete) — the result never
@@ -506,6 +515,7 @@ async function dispatchToSidecar(
     return { kind: 'reply', result };
   } catch (err) {
     if (err instanceof ActionOutcomeError) {
+      failedToolResult(undefined);
       if (typedErrors) throw err;
       return { kind: 'message', text: `Error [${describeMachine(sidecar)}]: ${err.message}` };
     }

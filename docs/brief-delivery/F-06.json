@@ -1,0 +1,177 @@
+{
+  "task": "F-06",
+  "title": "Expose safe, typed visible progress",
+  "date": "2026-10-06",
+  "branch": "brief/f-06",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-06",
+  "baseline": "f98cd312ca0b450bb5180320fc8c0491757cae67",
+  "baseline_ref": "origin/brief/f-05",
+  "main_checked": "abb14deb59f1ca3a84227be9a2035687b29dea34",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-06.json"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:212",
+    "visual_check": "not_applicable: F-06 owns producer and adapter; D-15 owns rendering"
+  },
+  "status": {
+    "merge": "not_merged",
+    "release_enabled": false,
+    "publication": "Stacked PR against brief/f-05; exact head and remote checks are recorded in its description."
+  },
+  "dependencies": {
+    "roadmap_merge_after": [
+      "F-01"
+    ],
+    "roadmap_enable_after": [
+      "F-03"
+    ],
+    "implementation_uses": [
+      "F-01",
+      "F-02",
+      "F-03",
+      "F-04"
+    ],
+    "stack_base": "F-05",
+    "reason": "Owner-approved unmerged stack supersedes origin/main start. The producer uses F-03 transport/replay and the browser adapter uses F-04 state. F-05 is the stack parent, not a requirement to enable attachments. D-15 owns rendering."
+  },
+  "activation": {
+    "capability": "chatProgress",
+    "flags": [
+      "JARVIS_BRIEF_CONVERSATIONS=1",
+      "JARVIS_BRIEF_CHAT_TRANSPORT=1",
+      "JARVIS_BRIEF_CHAT_PROGRESS=1"
+    ],
+    "browser_flag": "JARVIS_BRIEF_CHAT_STATE=1",
+    "default": "off",
+    "readiness": "Actual live transport provider plus enabled conversation/chatTransport dependencies; gate captured at turn admission."
+  },
+  "implementation": [
+    "Optional asynchronous execution observations for actual tool dispatch, turn-bound sub-agent lifecycle and scoped task broadcasts; detached AgentTaskManager work clears turn progress while retaining execution/authority scope.",
+    "Bounded fixed-label projection with host UUIDs, immutable order and phases, optional canonical goal/fact/run references, and no arbitrary source prose or full tool arguments.",
+    "Durable existing conversation events; indexed per-turn lookup and atomic unfinished-activity settlement with terminal answer on completion, cancellation or restart.",
+    "Browser capability discovery, stable ordered rows, terminal immutability and explicit non-live replay metadata for D-15. No production rendering changes."
+  ],
+  "acceptance": [
+    {
+      "check": "Sensitive arguments, fake errors and malicious source text cannot leak into labels",
+      "status": "passed",
+      "evidence": "Projection canaries, prototype-like names, actual registry and AgentService failure, authenticated WebSocket bridge, canonical record content exclusion."
+    },
+    {
+      "check": "Completed activities remain still and ordered across rehydration",
+      "status": "passed",
+      "evidence": "More-than-one-page replay yields identical final rows and terminal answer; delayed starts and duplicate terminals preserve first position; all restored rows have live=false. D-15 must consume this metadata."
+    },
+    {
+      "check": "No cross-conversation events or false success after cancellation/restart",
+      "status": "passed",
+      "evidence": "Interleaved actual tools, late completion after cancellation, disk database restart, idempotent recovery, tool failure distinct from successful explanatory answer."
+    },
+    {
+      "check": "Progress is opt-in and cannot alter execution effects",
+      "status": "passed",
+      "evidence": "Enabled/provider matrix, nested disabled and concurrent observer isolation, observer exceptions preserve exact tool return/throw and execution count."
+    }
+  ],
+  "manual_checks": {
+    "main_and_open_prs": "Fetched main and open PRs before implementation; no competing F-06 progress implementation found. F-05 exact dependency head passed its full CI.",
+    "visual": "No rendering changes; no screenshot claimed. D-15 owns actual motion verification.",
+    "external_effects": "Isolated databases, temporary-file reads, harmless local shell commands, fake model/sidecar fixtures and headless test-browser sessions only. No user records, desktop actions, live daemon activation or deployment."
+  },
+  "limitations": [
+    "Activity admission is bounded to 128 per turn. Overflow observations are omitted while admitted rows can still finish.",
+    "Progress is best-effort under storage/observer failure and does not replace the execution audit ledger.",
+    "Completed means a call returned. Legacy adapters must explicitly mark known returned failures; arbitrary returned strings and object shapes are never parsed for status.",
+    "Optional references require explicit trusted producer IDs; they are not inferred from arbitrary tool arguments or results.",
+    "Agent pause or exhaustion maps to failed because the contract has only started/completed/failed.",
+    "Detached background agent rows are excluded from turn-bound progress; their task manager status/result remains authoritative. The handoff tool itself is observed.",
+    "Source data already in model answer text is outside the fixed-label progress projector.",
+    "Production UI mounting, presentation, interaction and motion remain D-line work. F-07 is not implemented."
+  ],
+  "rollback": "Disable chatProgress and its future D-15 presentation, preserve historical additive events, and never replay accepted turns or delete user content.",
+  "quick_verification": "docs/brief-chat-progress.md",
+  "next_task": "F-07 not started",
+  "initial_verification": {
+    "focused": {
+      "command": "bun test src/brief/progress.test.ts src/brief/progress-transport.test.ts src/actions/progress-context.test.ts src/daemon/agent-service-progress.test.ts src/daemon/ws-service-conversation.test.ts src/agents/sub-agent-runner.test.ts ui/src/brief/chat/store.test.ts",
+      "passed": 57,
+      "failed": 0,
+      "assertions": 407,
+      "files": 7,
+      "log": "docs/brief-delivery/evidence/F-06/focused.log"
+    },
+    "affected": {
+      "command_file": "docs/brief-delivery/evidence/F-06/affected-command.txt",
+      "passed": 414,
+      "failed": 0,
+      "assertions": 3459,
+      "files": 41,
+      "log": "docs/brief-delivery/evidence/F-06/affected.log"
+    },
+    "mutations": {
+      "rejected": 5,
+      "total": 5,
+      "sources_restored": true,
+      "evidence": "docs/brief-delivery/evidence/F-06/mutations.json"
+    },
+    "typescript": "passed: bun x tsc --noEmit",
+    "ui_build": "passed: bun run build:ui; existing @theme/@tailwind warnings",
+    "browser_bundle": "passed: bun build ui/src/brief/chat/provider.tsx --target=browser; 16 modules, no server runtime imports",
+    "guards": "Normal pre-commit hook required; result recorded in PR description.",
+    "full_suite": "Remote CI result reported separately against exact pushed head; not inferred from affected tests."
+  },
+  "review_fixes": {
+    "reviewed_head": "31daed3c9c685f7aa6265032fdcda8da1be85d63",
+    "findings_fixed": [
+      "Removed arbitrary result-content failure inference. Trusted built-in failure branches, local command exit codes, sidecar RPC errors and remote command receipts mark their own invocation without changing returned data or exceptions.",
+      "Detached agent execution, nested tools and lifecycle callbacks no longer inherit the parent turn progress observer. Actual background results and execution checkpoints/cancellation signals are preserved.",
+      "Added idempotent brief_chat_events(turn_id, sequence) index; fresh and upgraded on-disk vaults retain history and avoid full-table scan and temporary sort during settlement."
+    ],
+    "red": {
+      "command": "bun test src/actions/progress-tools.test.ts src/actions/progress-context.test.ts src/brief/progress-transport.test.ts src/vault/chat-turns.test.ts",
+      "passed": 18,
+      "failed": 13,
+      "log": "docs/brief-delivery/evidence/F-06/review-red.log",
+      "note": "New regressions against reviewed production code, before fixes. The final suite also expands protocol, nested-outcome and execution-scope coverage."
+    },
+    "green": {
+      "passed": 37,
+      "failed": 0,
+      "assertions": 180,
+      "files": 5,
+      "log": "docs/brief-delivery/evidence/F-06/review-green.log",
+      "note": "Targeted intermediate run; final focused/affected runs also use the on-disk upgrade fixture that replaced a Bun-only cache API."
+    }
+  },
+  "verification": {
+    "focused": {
+      "command": "bun test src/brief/progress.test.ts src/brief/progress-transport.test.ts src/actions/progress-context.test.ts src/daemon/agent-service-progress.test.ts src/daemon/ws-service-conversation.test.ts src/agents/sub-agent-runner.test.ts ui/src/brief/chat/store.test.ts src/actions/progress-tools.test.ts src/agents/task-manager.test.ts src/vault/chat-turns.test.ts",
+      "passed": 79,
+      "failed": 0,
+      "assertions": 527,
+      "files": 10,
+      "log": "docs/brief-delivery/evidence/F-06/review-focused.log"
+    },
+    "typescript": {
+      "command": "bun x tsc --noEmit",
+      "exit_code": 0,
+      "log": "docs/brief-delivery/evidence/F-06/review-typescript.log"
+    },
+    "full_suite": "Exact pushed-head CI is recorded in the PR description, not inferred from local tests.",
+    "affected": {
+      "command_file": "docs/brief-delivery/evidence/F-06/review-affected-command.txt",
+      "passed": 1432,
+      "failed": 1,
+      "skipped": 3,
+      "assertions": 15443,
+      "files": 85,
+      "log": "docs/brief-delivery/evidence/F-06/review-affected.log",
+      "limitation": "Existing browser-local-files DevTools test receives a transient colon URL instead of chrome-error:// on local Chromium 143. Identical failure reproduced with all five modified production files restored to reviewed head; all fixes restored byte-for-byte afterward. No unrelated browser code changed.",
+      "baseline_log": "docs/brief-delivery/evidence/F-06/review-baseline-browser.log"
+    },
+    "host_browser_setup": "Initial system Chromium launcher could not start (6 fixture failures). Reused already installed Playwright Chromium via CHROME_PATH without installation; raw first-run log retained as review-affected-host-chromium.log."
+  }
+}

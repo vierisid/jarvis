@@ -1,0 +1,47 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/progress-transport.test.ts:
+Unexpected parameters for tool 'read_file': token
+(pass) typed progress is opt-in and requires its live provider (enabled=true, registered=true) [18.42ms]
+Unexpected parameters for tool 'read_file': token
+46 |   const f = fixture(async function* () { await registry.execute('read_file', { token: 'PRIVATE ARGUMENT' }); yield done(); }, enabled, registered);
+47 |   const socket = f.client();
+48 |   try {
+49 |     await f.send(socket, f.input('A')); await f.transport.idle();
+50 |     const rows = activities(f.events(socket));
+51 |     expect(rows).toHaveLength(enabled && registered ? 2 : 0);
+                      ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 0
+Received length: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress-transport.test.ts:51:18)
+(fail) typed progress is opt-in and requires its live provider (enabled=false, registered=true) [12.33ms]
+Unexpected parameters for tool 'read_file': token
+46 |   const f = fixture(async function* () { await registry.execute('read_file', { token: 'PRIVATE ARGUMENT' }); yield done(); }, enabled, registered);
+47 |   const socket = f.client();
+48 |   try {
+49 |     await f.send(socket, f.input('A')); await f.transport.idle();
+50 |     const rows = activities(f.events(socket));
+51 |     expect(rows).toHaveLength(enabled && registered ? 2 : 0);
+                      ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 0
+Received length: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress-transport.test.ts:51:18)
+(fail) typed progress is opt-in and requires its live provider (enabled=true, registered=false) [11.02ms]
+(pass) canonical evidence references expose only existing IDs, never stored goal or fact content [12.87ms]
+Unexpected parameters for tool 'web_search': name, token
+Unexpected parameters for tool 'web_search': name, token
+(pass) interleaved real tools stay in their originating conversations and late completion cannot undo cancellation [13.55ms]
+Unexpected parameters for tool 'read_file': secret
+(pass) tool failure stays distinct from a completed answer; paged replay restores identical still, ordered rows [85.69ms]
+(pass) restart settles unfinished activities once without claiming an interrupted answer succeeded [281.34ms]
+
+ 5 pass
+ 2 fail
+ 28 expect() calls
+Ran 7 tests across 1 file. [462.00ms]

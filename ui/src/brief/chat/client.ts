@@ -9,6 +9,7 @@ import { ConversationStore, type ChatSnapshot } from './store';
 
 export interface ChatClientState {
   attachmentsEnabled: boolean;
+  progressEnabled: boolean;
   mode: 'disabled' | 'loading' | 'scoped' | 'legacy' | 'unavailable';
   reason: string | null;
   error: string | null;
@@ -23,7 +24,7 @@ const activeTurn = (state: string) => state === 'queued' || state === 'running';
 export class BriefConversationClient {
   readonly store: ConversationStore;
   readonly attachments: DraftAttachments;
-  private state: ChatClientState = { attachmentsEnabled: false, mode: 'disabled', reason: null, error: null, connected: false, pending: 0, pendingSends: [] };
+  private state: ChatClientState = { attachmentsEnabled: false, progressEnabled: false, mode: 'disabled', reason: null, error: null, connected: false, pending: 0, pendingSends: [] };
   private listeners = new Set<() => void>();
   private lifetime = new AbortController();
   private generation = 0;
@@ -55,7 +56,7 @@ export class BriefConversationClient {
     try {
       const capabilities = await this.api.capabilities(this.lifetime.signal);
       if (generation !== this.generation) return;
-      this.patch({ attachmentsEnabled: isBriefCapabilityEnabled(capabilities, 'chatAttachments') });
+      this.patch({ attachmentsEnabled: isBriefCapabilityEnabled(capabilities, 'chatAttachments'), progressEnabled: isBriefCapabilityEnabled(capabilities, 'chatProgress') });
       if (!canUseChat(capabilities)) { this.patch({ mode: 'legacy', reason: 'Conversation tabs are not enabled on this backend.' }); return; }
       const tabs = await this.api.tabs(this.lifetime.signal);
       if (generation !== this.generation) return;
@@ -73,7 +74,7 @@ export class BriefConversationClient {
     this.syncRequests.clear(); this.subscriptions.clear();
     for (const id of this.historyRequests.keys()) this.store.setHistoryState(id, 'error', 'Earlier message loading was interrupted.');
     this.historyRequests.clear(); this.queue = Promise.resolve();
-    this.patch({ mode: 'disabled', connected: false, pending: 0, attachmentsEnabled: false });
+    this.patch({ mode: 'disabled', connected: false, pending: 0, attachmentsEnabled: false, progressEnabled: false });
   }
   private failedDiscovery(error: unknown) {
     if (error instanceof ChatApiError && (error.status === 404 || error.status === 501)) this.patch({ mode: 'legacy', reason: 'This backend supports single chat only.', connected: false });
@@ -86,7 +87,7 @@ export class BriefConversationClient {
       // Recheck readiness on each actual connection, never on room/theme renders.
       const capabilities = await this.api.capabilities(this.lifetime.signal);
       if (generation !== this.generation || this.socket !== socket) return;
-      this.patch({ attachmentsEnabled: isBriefCapabilityEnabled(capabilities, 'chatAttachments') });
+      this.patch({ attachmentsEnabled: isBriefCapabilityEnabled(capabilities, 'chatAttachments'), progressEnabled: isBriefCapabilityEnabled(capabilities, 'chatProgress') });
       if (!canUseChat(capabilities)) { this.patch({ mode: 'legacy', reason: 'Conversation tabs are no longer enabled.', connected: false }); return; }
       const restore = this.queue.then(async () => {
         if (generation !== this.generation || this.socket !== socket) return;

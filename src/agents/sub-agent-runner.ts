@@ -21,6 +21,7 @@ import type { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
 import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
+import { beginExecutionActivity } from '../actions/progress-context.ts';
 import type { TierMap } from '../llm/tiers.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { decideTools } from '../actions/tools/tool-relevance/filter.ts';
@@ -602,6 +603,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   // Set the task on the agent
   agent.setTask(task);
   agent.activate();
+  const finishActivity = beginExecutionActivity('agent');
 
   // A resumed run continues its saved log; a fresh one starts from the
   // system prompt (static half cache-marked, per-task context dynamic).
@@ -642,15 +644,18 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     messages, toolsUsed: [...toolsUsed], tokensUsed: { ...totalUsage }, sequence, iteration,
     taint: [...taint], failedToolCalls: [...failedToolCalls],
   });
-  const finish = (partial: Pick<SubAgentResult, 'success' | 'response' | 'terminationReason'> & Partial<SubAgentResult>): SubAgentResult => ({
-    toolsUsed: [...new Set(toolsUsed)],
-    tokensUsed: totalUsage,
-    messages,
-    sequence,
-    failedToolCalls: [...failedToolCalls],
-    taint: [...taint],
-    ...partial,
-  });
+  const finish = (partial: Pick<SubAgentResult, 'success' | 'response' | 'terminationReason'> & Partial<SubAgentResult>): SubAgentResult => {
+    finishActivity(partial.success && partial.terminationReason === 'completed' ? 'completed' : 'failed');
+    return {
+      toolsUsed: [...new Set(toolsUsed)],
+      tokensUsed: totalUsage,
+      messages,
+      sequence,
+      failedToolCalls: [...failedToolCalls],
+      taint: [...taint],
+      ...partial,
+    };
+  };
 
   // A cancellation is not an agent error: the caller stopped the run and
   // must not record anything for it.

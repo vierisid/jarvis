@@ -9,6 +9,7 @@ import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { BriefConversationProvider } from '../brief/conversations.ts';
 import { BriefChatTransport } from '../brief/chat-transport.ts';
 import { registerChatTransport } from '../brief/registrations/chat-transport.ts';
+import { registerChatProgress } from '../brief/registrations/chat-progress.ts';
 import { registerConversations } from '../brief/registrations/conversations.ts';
 import { createBriefCapabilities } from '../brief/registrations/index.ts';
 import type { BriefChatEvent } from '../brief/contracts.ts';
@@ -17,7 +18,7 @@ import type { LLMStreamEvent } from '../llm/provider.ts';
 const done = (): LLMStreamEvent => ({ type: 'done', response: { content: 'Answer', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } });
 async function until(check: () => boolean) { const end = Date.now() + 2000; while (!check()) { if (Date.now() > end) throw new Error('WebSocket fixture timed out'); await Bun.sleep(1); } }
 
-test('authenticated WebSocket routing gates the feature, scopes approvals and preserves legacy mirroring', async () => {
+for (const progress of [false, true]) test(`authenticated WebSocket routing gates the feature, scopes approvals and preserves legacy mirroring (progress=${progress})`, async () => {
   initDatabase(':memory:', { quiet: true });
   const config = { onboarding: { setup_completed_at: new Date().toISOString() } };
   const fakeAgent = { setDelegationCallback: () => {}, getConfig: () => config,
@@ -40,7 +41,7 @@ test('authenticated WebSocket routing gates the feature, scopes approvals and pr
       yield { type: 'text', text: 'Scoped reply' } as LLMStreamEvent; yield done();
     })() };
   } }, send: (client, message) => service.getServer().sendToClient(client, message) });
-  const registrations = [...registerConversations(conversations), ...registerChatTransport(transport)];
+  const registrations = [...registerConversations(conversations), ...registerChatTransport(transport), ...registerChatProgress(transport)];
   service.setBriefChatTransport(transport, createBriefCapabilities(registrations, ['conversations']));
   const clients: WebSocket[] = [];
   try {
@@ -62,12 +63,19 @@ test('authenticated WebSocket routing gates the feature, scopes approvals and pr
     scoped.send('brief_chat_send', send);
     await until(() => scoped.frames.some(frame => frame.type === 'brief_chat_error'));
     expect(generations).toBe(0); expect(conversations.repository.messages(a.conversationId).items).toEqual([]);
-    service.setBriefChatTransport(transport, createBriefCapabilities(registrations, ['conversations', 'chatTransport']));
+    service.setBriefChatTransport(transport, createBriefCapabilities(registrations, ['conversations', 'chatTransport', ...(progress ? ['chatProgress' as const] : [])]));
     scoped.send('brief_chat_send', send);
     await until(() => scoped.frames.some(frame => frame.type === 'brief_chat_event' && (frame.payload as BriefChatEvent).payload.kind === 'terminal'));
     const events = scoped.frames.filter(frame => frame.type === 'brief_chat_event').map(frame => frame.payload as BriefChatEvent);
     expect(events.every(event => event.conversationId === a.conversationId && event.turnId === 'turn-a' && event.requestId === 'request-a')).toBe(true);
     expect(events.filter(event => event.payload.kind === 'activity')).toHaveLength(2);
+    if (progress) {
+      const activity = events.flatMap(event => event.payload.kind === 'activity' ? [event.payload.activity] : []);
+      expect(activity.map(row => row.phase)).toEqual(['started', 'failed']);
+      expect(activity[0]?.activityId).toBe(activity[1]?.activityId);
+      expect(activity[0]?.kind).toBe('task');
+      expect(JSON.stringify(scoped.frames)).not.toContain('Private name');
+    }
     expect(events.find(event => event.payload.kind === 'approval')?.payload).toEqual({ kind: 'approval', approvalId: 'stable-approval', status: 'pending' });
     expect(legacy.frames.some(frame => frame.type === 'brief_chat_event')).toBe(false);
     expect(mirror.frames.some(frame => frame.type === 'brief_chat_event')).toBe(false);

@@ -7,6 +7,7 @@ import { ActionOutcomeError } from '../actions/action-outcome';
 import type { LLMToolCall } from '../llm/provider';
 import { withExecutionScope } from '../actions/execution-scope';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../roles/untrusted';
+import { withExecutionProgress, type ExecutionActivity } from '../actions/progress-context';
 
 const approval = { effectId: 'effect', approvalId: 'approval', waitpointId: 'waitpoint' };
 const write = (id: string): LLMToolCall => ({ id, name: 'write_file', arguments: { path: '/tmp/synthetic', content: 'hello' } });
@@ -57,6 +58,20 @@ const toolMessages = (result: SubAgentResult) => result.messages.filter(m => m.r
 const resumeFrom = (r: SubAgentResult, extra: Partial<SubAgentCheckpoint> = {}) => ({
   messages: r.messages, toolsUsed: r.toolsUsed, tokensUsed: r.tokensUsed, sequence: r.sequence!, iteration: r.paused!.iteration,
   taint: r.taint ?? [], failedToolCalls: r.failedToolCalls ?? [], pending: r.paused!, ...extra,
+});
+
+test('real sub-agent lifecycle reports completion and model failure without generated prose', async () => {
+  for (const fail of [false, true]) {
+    const events: ExecutionActivity[] = [];
+    const model = llm([], 'PRIVATE generated answer');
+    if (fail) model.manager.chatTier = async () => { throw Error('PRIVATE model error'); };
+    const result = await withExecutionProgress(event => events.push(event), () => runSubAgent({ agent: agent(), task: 'PRIVATE task', context: 'PRIVATE context',
+      llmManager: model.manager, toolRegistry: registry().r, maxIterations: 2 }));
+    expect(result.success).toBe(!fail);
+    expect(events.map(event => [event.kind, event.phase])).toEqual([['agent', 'started'], ['agent', fail ? 'failed' : 'completed']]);
+    expect(events[0]?.executionId).toBe(events[1]?.executionId);
+    expect(JSON.stringify(events)).not.toContain('PRIVATE');
+  }
 });
 
 describe('governed tool calls in a sub-agent', () => {

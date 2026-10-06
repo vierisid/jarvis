@@ -57,6 +57,7 @@ import type { FileEntry } from '../sites/types.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
+import { reportExecutionActivity } from '../actions/progress-context.ts';
 
 type VoiceSession = {
   requestId: string;
@@ -884,7 +885,8 @@ export class WebSocketService implements Service {
   }): void {
     const turn = currentBriefTurn();
     if (turn) {
-      turn.progress(event.type === 'task_started' ? 'started' : event.type === 'task_completed' ? 'completed' : 'failed');
+      const phase = event.type === 'task_started' ? 'started' : event.type === 'task_completed' ? 'completed' : 'failed';
+      if (!reportExecutionActivity({ kind: 'task', executionId: event.task_id, phase })) turn.progress(phase);
       return;
     }
     const message: WSMessage = {
