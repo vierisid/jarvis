@@ -1,5 +1,6 @@
-import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from "bun:test";
+import { afterAll, afterEach, beforeAll, beforeEach, expect, spyOn, test } from "bun:test";
 import { GlobalRegistrator } from "@happy-dom/global-registrator";
+import { BRIEF_MOTION } from "../../motion";
 import { bindConversationTabs, chatTabId, chatTabWidth, tabsMode, type ConversationTabsBinding, type ConversationTabsOwner } from "./model";
 
 GlobalRegistrator.register({ url: "http://localhost:4392/" });
@@ -24,9 +25,9 @@ beforeEach(() => {
 });
 afterEach(async () => { await React.act(async () => root.unmount()); host.remove(); });
 afterAll(() => GlobalRegistrator.unregister());
-async function render(mode: "live" | "preview" = "preview", dark = false) {
+async function render(mode: "live" | "preview" = "preview", dark = false, reducedMotion = true) {
   await React.act(async () => root.render(<div className="brief-root" data-brief-theme={dark ? "dark" : "light"}>
-    <ConversationTabStrip mode={mode} binding={binding} panelId="test-panel" reducedMotion />
+    <ConversationTabStrip mode={mode} binding={binding} panelId="test-panel" reducedMotion={reducedMotion} />
     <div id="test-panel" role="tabpanel" aria-labelledby={binding.activeId ? chatTabId("test-panel", binding.activeId) : undefined}/>
     <textarea aria-label="Draft"/><button aria-label="Close conversation">X</button>
   </div>));
@@ -37,6 +38,86 @@ const plus = () => host.querySelector<HTMLButtonElement>('[aria-label="New conve
 async function click(button: HTMLButtonElement) { await React.act(async () => button.click()); await render(); }
 async function key(button: HTMLButtonElement, key: string) { await React.act(async () => button.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true }))); }
 async function focus(button: HTMLElement) { await React.act(async () => button.focus()); }
+
+// Hold only tab-settlement deadlines. React, focus and animation frames still run
+// normally, so the race does not depend on a CI machine completing within 180ms.
+function holdTabSettlement() {
+  const schedule = globalThis.setTimeout, cancel = globalThis.clearTimeout;
+  const waiting = new Map<ReturnType<typeof setTimeout>, () => void>();
+  const timeout = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void, delay?: number, ...args: unknown[]) => {
+    if (delay !== BRIEF_MOTION.selection.enter) return schedule(callback, delay, ...args);
+    const timer = schedule(() => {}, 60_000);
+    waiting.set(timer, callback);
+    return timer;
+  }) as typeof setTimeout);
+  const clear = spyOn(globalThis, "clearTimeout").mockImplementation(timer => {
+    waiting.delete(timer as ReturnType<typeof setTimeout>); cancel(timer as Parameters<typeof cancel>[0]);
+  });
+  return {
+    async finish() { await React.act(async () => {
+      for (const [timer, callback] of [...waiting]) { waiting.delete(timer); cancel(timer); callback(); }
+    }); },
+    restore() { for (const timer of waiting.keys()) cancel(timer); clear.mockRestore(); timeout.mockRestore(); },
+  };
+}
+
+test("a tab closed before entry settles keeps the same inert element through its exit", async () => {
+  const clock = holdTabSettlement();
+  try {
+    await render("preview", false, false);
+    expect(host.querySelector('[data-reduced-motion="false"]')).not.toBeNull();
+    await binding.actions.add(); await render("preview", false, false);
+    const entering = tab("new-1"), slot = entering.closest(".brief-chat-tab-slot")!;
+    await focus(entering);
+    await React.act(async () => close("new-1").click()); await render("preview", false, false);
+    expect(tab("new-1") === entering).toBe(true);
+    expect(slot.getAttribute("data-exiting")).toBe("true");
+    expect(slot.hasAttribute("inert")).toBe(true);
+    expect(slot.getAttribute("aria-hidden")).toBe("true");
+    expect(entering.tabIndex).toBe(-1);
+    expect(document.activeElement).toBe(tab("b"));
+    await React.act(async () => close("new-1").click());
+    expect(calls).toEqual(["add", "close:new-1"]);
+    await clock.finish();
+    expect(tab("new-1")).toBeNull(); expect(tab("b").getAttribute("aria-selected")).toBe("true");
+  } finally { clock.restore(); }
+});
+
+test("rapid add-close-reopen keeps identity and a stale exit cannot remove the returned tab", async () => {
+  const clock = holdTabSettlement();
+  try {
+    await render("preview", false, false);
+    await binding.actions.add(); await render("preview", false, false);
+    const entry = binding.tabs.at(-1)!, entering = tab(entry.id);
+    await binding.actions.close(entry.id); await render("preview", false, false);
+    expect(tab(entry.id) === entering).toBe(true);
+    binding = { ...binding, tabs: [...binding.tabs, entry], activeId: entry.id };
+    await render("preview", false, false);
+    expect(tab(entry.id) === entering).toBe(true);
+    expect(entering.closest(".brief-chat-tab-slot")!.hasAttribute("inert")).toBe(false);
+    await clock.finish();
+    expect(tab(entry.id) === entering).toBe(true); expect(entering.getAttribute("aria-selected")).toBe("true");
+    await binding.actions.close(entry.id); await render("preview", false, false);
+    expect(tab(entry.id) === entering).toBe(true);
+    await clock.finish(); expect(tab(entry.id)).toBeNull();
+  } finally { clock.restore(); }
+});
+
+test("reduced motion removes an interrupted entrant immediately without leaving a ghost", async () => {
+  const clock = holdTabSettlement();
+  try {
+    await render("preview", false, false);
+    await binding.actions.add(); await render("preview", false, false);
+    const entering = tab("new-1");
+    await binding.actions.close("new-1"); await render("preview", false, false);
+    expect(tab("new-1") === entering).toBe(true);
+    await render("preview", false, true);
+    expect(tab("new-1")).toBeNull();
+    await clock.finish();
+    expect(host.querySelectorAll('[role="tab"]').length).toBe(2);
+    expect(tab("b").getAttribute("aria-selected")).toBe("true");
+  } finally { clock.restore(); }
+});
 
 test("F-04 structural port projects stable identities and delegates only metadata operations", async () => {
   const owner: ConversationTabsOwner = { status: binding.status, state: { workspaceId: "workspace", order: ["b", "a"], activeId: "b", conversations: { a: { conversation: { title: "A" } }, b: { conversation: { title: "B" } } } }, client: binding.actions };

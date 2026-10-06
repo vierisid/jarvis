@@ -59,6 +59,15 @@ function ScopedTabs({ binding, panelId, reducedMotion }: Props & { binding: Conv
     observer?.observe(element);
     return () => observer?.disconnect();
   }, []);
+  useLayoutEffect(() => {
+    // Retain entrants on their first commit, before they can be closed again.
+    // Waiting until settlement loses a tab removed during its entry animation.
+    setDisplayed(previous => {
+      const retained = new Set(previous.map(tab => tab.id));
+      const added = tabs.filter(tab => !retained.has(tab.id));
+      return added.length ? [...previous, ...added] : previous;
+    });
+  }, [idsKey]);
   useEffect(() => {
     const finish = () => { setDisplayed(tabs); initialIds.current = new Set(tabs.map(tab => tab.id)); };
     if (reduced) { finish(); return; }
