@@ -1,0 +1,19 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/tab-strip/ConversationTabStrip.test.tsx:
+43 |   const view = bindConversationTabs(owner, "live");
+44 |   expect(view.tabs.map(tab => tab.id)).toEqual(["b", "a"]); expect(view.activeId).toBe("b");
+45 |   await view.actions.select("b"); await view.actions.close("a"); await view.actions.add();
+46 |   expect(calls).toEqual(["select:b", "close:a", "add"]);
+47 |   expect(Object.keys(view.actions).sort()).toEqual(["add", "close", "select"]);
+48 |   expect(tabsMode("live", view)).toBe("scoped"); expect(tabsMode("preview", view)).toBe("disabled");
+                                                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "disabled"
+Received: "scoped"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-12/ui/src/brief/chat/tab-strip/ConversationTabStrip.test.tsx:48:84)
+(fail) F-04 structural port projects stable identities and delegates only metadata operations [10.54ms]
+Ran 1 test across 1 file. [230.00ms]
+Bailed out after 1 failure

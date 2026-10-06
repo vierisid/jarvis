@@ -10,6 +10,7 @@ import { MotionSpecimen } from "../motion/MotionSpecimen";
 import { NavigationSpecimen } from "../shell/navigation/NavigationSpecimen";
 import { PebbleSpecimen } from "../shell/pebble-layout/PebbleSpecimen";
 import { TodaySpecimen } from "../today/preview/TodaySpecimen";
+import { ChatTabsSpecimen } from "../chat/tab-strip/preview/ChatTabsSpecimen";
 
 interface PreviewModel { note: string }
 const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<PreviewModel>("No live provider is connected in this preview."), source: "fixture" }),
@@ -34,6 +35,7 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
+  if (specimen === "chat-tabs") return <ChatTabsSpecimen />;
   if (specimen === "today") return <TodaySpecimen />;
   return specimen === "pebble" ? <PebbleSpecimen /> : specimen === "navigation" ? <NavigationSpecimen /> : specimen === "motion" ? <MotionSpecimen /> : specimen === "controls" ? <ControlSpecimen /> : specimen === "styles" ? <StyleSpecimen /> : <FoundationControls />;
 }

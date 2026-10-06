@@ -1,0 +1,21 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/tab-strip/ConversationTabStrip.test.tsx:
+(pass) F-04 structural port projects stable identities and delegates only metadata operations [9.61ms]
+(pass) 112px minimum and ordinary widths match native starting geometry [0.68ms]
+(pass) non-scoped and wrong-source states cannot issue tab actions or look like an empty collection [14.81ms]
+(pass) selected identity, panel linkage and roving focus remain separate [53.46ms]
+(pass) closing inactive chat dispatches its exact ID without selecting it or cancelling another chat [16.35ms]
+(pass) focused active closure follows owner selection and final closure focuses plus without creating history [24.13ms]
+(pass) background removal cannot steal composer focus [11.58ms]
+(pass) ten add/close cycles leave surviving tab identities and selected chat intact [129.26ms]
+(pass) duplicate titles, long names and remote reorder retain ID-specific close targets [9.88ms]
+(pass) failed writes preserve tabs and focus, report locally and allow a retry [12.03ms]
+(pass) pending writes block repeated clicks and owner pending counts are respected [9.24ms]
+(pass) mode loss/unmount during a write cannot apply a stale local confirmation [6.04ms]
+(pass) a replacement workspace does not inherit a pending lock or late error [8.51ms]
+
+ 13 pass
+ 0 fail
+ 120 expect() calls
+Ran 13 tests across 1 file. [549.00ms]

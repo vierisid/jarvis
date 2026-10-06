@@ -18,7 +18,7 @@ import { RecentActivity } from "../activity/RecentActivity";
 import { outcomeFixture, activityFixture } from "./outcomeFixtures";
 import "./specimen.css";
 
-export function TodaySpecimen() {
+export function TodaySpecimen({ conversation, reviewTools }: { conversation?: React.ReactNode | ((reduced: boolean) => React.ReactNode); reviewTools?: React.ReactNode } = {}) {
   const [route, setRoute] = useState<BriefRoute>({ room: "today", selection: {} });
   const [sidebar, setSidebar] = useState<"expanded" | "rail">("expanded");
   const [chatOpen, setChatOpen] = useState(false);
@@ -77,15 +77,16 @@ export function TodaySpecimen() {
   } } } };
   return <div className="brief-root brief-today-specimen" data-brief-theme={theme}>
     <div className="brief-today-review-toolbar" aria-label="Isolated review controls">
-      <span>D-11 · Isolated Today opportunities</span>
-      <label>Decision <select aria-label="Decision scenario" value={scenario} onChange={event => setScenario(event.target.value)}>
-        {["ready", "acceptance", "permission", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>
+      <span>{reviewTools ? "D-12 · Isolated conversation tabs" : "D-11 · Isolated Today opportunities"}</span>
+      {reviewTools}
+      {!reviewTools && <label>Decision <select aria-label="Decision scenario" value={scenario} onChange={event => setScenario(event.target.value)}>
+        {["ready", "acceptance", "permission", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>}
       <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>Switch to {theme === "light" ? "dark" : "light"}</button>
-      <label><input type="checkbox" checked={long} onChange={e => setLong(e.target.checked)} /> Long document</label>
+      {!reviewTools && <label><input type="checkbox" checked={long} onChange={e => setLong(e.target.checked)} /> Long document</label>}
       <label><input type="checkbox" checked={reduced} onChange={e => setReduced(e.target.checked)} /> Reduce motion</label>
       <label>Width <select aria-label="Review width" value={width} onChange={e => { setWidth(e.target.value); if (e.target.value === "390") setSidebar("rail"); }}>
         <option value="1440">1440px</option><option value="1200">1200px</option><option value="390">390px</option><option value="fluid">Fit window</option></select></label>
-      <label>Result <select aria-label="Simulated operation result" value={sample.result} onChange={e => sample.setResult(e.target.value)}>
+      {!reviewTools && <><label>Result <select aria-label="Simulated operation result" value={sample.result} onChange={e => sample.setResult(e.target.value)}>
         {["confirmed", "conflict", "failed", "unknown"].map(value => <option key={value}>{value}</option>)}</select></label>
       <button onClick={sample.append}>Append goal step</button><button onClick={sample.reset}>Reset example</button>
       <button onClick={sample.remount}>Reload authoritative view</button>
@@ -102,11 +103,12 @@ export function TodaySpecimen() {
       <button onClick={() => setOpportunityReversed(value => !value)}>Reverse opportunity list</button>
       <button onClick={() => { setOpportunityReset(n => n + 1); setOpportunityCalls(0); setOpportunityReversed(false); }}>Reset opportunities</button><span aria-label="Opportunity action calls">{opportunityCalls}</span>
       <small>Simulated receipts only. No email or workflow executes.</small>
-      <small>Illustrative outcome evidence only. Recommendations and opportunities use simulated owners. Conversation remains a layout fixture.</small>
+      <small>Illustrative outcome evidence only. Recommendations and opportunities use simulated owners. Conversation remains a layout fixture.</small></>}
+      {reviewTools && <small>Illustrative conversations only. No live account, message, model or workflow is connected.</small>}
     </div>
     <div className="brief-today-review-viewport" style={{ width: width === "fluid" ? "100%" : Number(width) }}>
       <NavigationShell shell={shell} rooms={{ today: { id: "today", title: "Today" } }} binding={binding} reducedMotion={reduced}
-        conversation={{ source: "fixture", content: <Conversation /> }}>
+        conversation={{ source: "fixture", content: typeof conversation === "function" ? conversation(reduced) : conversation ?? <Conversation /> }}>
         {route.room === "today" ? <TodayLayout key={sample.generation} shell={shell} greeting="Good morning, Vieri." dateLabel="Thursday, 17 September" dateTime="2026-09-17" decision={sample.binding} reducedMotion={reduced}
           slots={{ queueNotice: <GoalQueueCue handoff={handoff} />, goal: <GoalCard handoff={handoff} />, outcomes: <Outcomes mode={shell.mode} binding={outcomes} reducedMotion={reduced} />, activity: <RecentActivity mode={shell.mode} binding={activityFixture(outcomeScenario, actionable)} onOpen={shell.navigate} />, opportunities: <OpportunityStack key={opportunityReset} mode={shell.mode} binding={opportunities} reducedMotion={reduced} /> }} />
           : <><h1 className="brief-type-room-title">Isolated Today review</h1><BriefButton onClick={() => setRoute({ room: "today", selection: {} })}>Return to Today</BriefButton></>}
