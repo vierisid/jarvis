@@ -1,0 +1,107 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 2 success-after-retry
+Database initialized at: :memory:
+[compose] attempt 1 tool-loop-inline-validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 1 tool-loop-fallback (tool loop produced no flow on turn 1; using one-shot prompt)
+Database initialized at: :memory:
+[compose] attempt 1 tool-loop-validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 2 tool-loop-success-after-retry
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 2 exhausted (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-f08-9iSZF3/test.db
+Database initialized at: /tmp/jarvis-f08-9iSZF3/test.db
+Database initialized at: :memory:
+Database initialized at: :memory:
+[compose] attempt 1 tool-loop-blocked (The selected account cannot send to the requested destination.)
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient connection @fixture/piece-account has a conflicting piece version in the graph.; Selected ingredi...)
+[compose] attempt 2 exhausted (Selected ingredient connection @fixture/piece-account has a conflicting piece version in the graph.; Selected ingredi...)
+[compose] attempt 1 validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 2 exhausted (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient connection connection-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...)
+[compose] attempt 2 success-after-retry
+Database initialized at: :memory:
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient library action @fixture/piece-account/send requires a selected, compatible connection as its auth...)
+[compose] attempt 2 exhausted (Selected ingredient library action @fixture/piece-account/send requires a selected, compatible connection as its auth...)
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+
+src/brief/composition-ingredients.test.ts:
+(pass) typed identities survive repairs in the prompt, receipt and journal without credentials or labels [33.14ms]
+(pass) tool inline candidates cannot omit a required selection [20.38ms]
+(pass) tool submit_flow candidates cannot omit a required selection [19.62ms]
+(pass) same piece with another account is a blocker, never a silent substitution [18.63ms]
+(pass) invalid selection blocks before provider calls: missing-id [17.78ms]
+(pass) invalid selection blocks before provider calls: foreign-project [16.52ms]
+(pass) invalid selection blocks before provider calls: foreign-owner [16.49ms]
+(pass) invalid selection blocks before provider calls: inactive [17.13ms]
+(pass) invalid selection blocks before provider calls: piece-mismatch [17.23ms]
+(pass) invalid selection blocks before provider calls: auth-mismatch [16.33ms]
+(pass) invalid selection blocks before provider calls: ambiguous [16.88ms]
+(pass) invalid selection blocks before provider calls: unsafe-binding [16.78ms]
+(pass) invalid selection blocks before provider calls: package-version [16.61ms]
+(pass) invalid selection blocks before provider calls: action-version [17.45ms]
+(pass) invalid selection blocks before provider calls: unknown-action [16.43ms]
+(pass) invalid selection blocks before provider calls: missing-auth [16.65ms]
+(pass) selection change during the model call prevents draft attachment: revoke [18.26ms]
+(pass) saved pins refuse readiness, enable and publish after revoke [19.62ms]
+(pass) selection change during the model call prevents draft attachment: remove [17.59ms]
+(pass) saved pins refuse readiness, enable and publish after remove [18.87ms]
+(pass) selection change during the model call prevents draft attachment: retarget [17.01ms]
+(pass) saved pins refuse readiness, enable and publish after retarget [17.95ms]
+(pass) selection change during the model call prevents draft attachment: replace [17.11ms]
+(pass) saved pins refuse readiness, enable and publish after replace [18.35ms]
+(pass) selection change during the model call prevents draft attachment: piece-version [18.76ms]
+(pass) saved pins refuse readiness, enable and publish after piece-version [20.42ms]
+(pass) selection change during the model call prevents draft attachment: action-version [18.05ms]
+(pass) saved pins refuse readiness, enable and publish after action-version [19.68ms]
+(pass) graph/metadata edits cannot drop saved requirements, including on a live draft [20.00ms]
+(pass) idempotency retains selections across provider restart and rejects a changed pin or requirement [19.67ms]
+(pass) saved selections and readiness pins survive closing and reopening the database [559.58ms]
+(pass) F07 schema upgrade preserves old rows and allows old inserts without the new column [23.16ms]
+(pass) explicit inability to use selected ingredients keeps its explanation and creates no draft [17.49ms]
+(pass) a conflicting graph pin and a decorative auth field cannot satisfy required selections [19.02ms]
+(pass) long multiple selections all survive repair without truncation [20.22ms]
+(pass) nested actions satisfy requirements; action-free fallback cannot [22.59ms]
+(pass) optional selections can be unused, but are still validated and never substitute auth [20.81ms]
+(pass) safe discovery uses typed choices, bounded pagination and no encrypted data [21.64ms]
+(pass) strict wire selections reject unknown fields, secrets, malformed versions and excess count [16.98ms]
+(pass) ingredient API is default-off, provider-bound and dependent on workflow composition [23.58ms]
+
+ 40 pass
+ 0 fail
+ 223 expect() calls
+Ran 40 tests across 1 file. [1347.00ms]

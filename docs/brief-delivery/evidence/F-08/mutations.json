@@ -1,0 +1,45 @@
+{
+  "sources_restored": true,
+  "results": [
+    {
+      "mutation": "required-use",
+      "source": "src/workflows/runtime/composition-ingredients.ts",
+      "test": "same piece with another account",
+      "exit_code": 1,
+      "rejected": true,
+      "log": "docs/brief-delivery/evidence/F-08/required-use-mutation.log"
+    },
+    {
+      "mutation": "readiness-pins",
+      "source": "src/workflows/db/repos/composition-ingredients.ts",
+      "test": "saved pins refuse readiness, enable and publish after replace",
+      "exit_code": 1,
+      "rejected": true,
+      "log": "docs/brief-delivery/evidence/F-08/readiness-pins-mutation.log"
+    },
+    {
+      "mutation": "completion-revalidation",
+      "source": "src/brief/composition.ts",
+      "test": "selection change during the model call prevents draft attachment: replace",
+      "exit_code": 1,
+      "rejected": true,
+      "log": "docs/brief-delivery/evidence/F-08/completion-revalidation-mutation.log"
+    },
+    {
+      "mutation": "replay-selection-identity",
+      "source": "src/brief/composition.ts",
+      "test": "idempotency retains selections",
+      "exit_code": 1,
+      "rejected": true,
+      "log": "docs/brief-delivery/evidence/F-08/replay-selection-identity-mutation.log"
+    },
+    {
+      "mutation": "action-contract-pin",
+      "source": "src/workflows/db/repos/composition-ingredients.ts",
+      "test": "invalid selection blocks before provider calls: action-version",
+      "exit_code": 1,
+      "rejected": true,
+      "log": "docs/brief-delivery/evidence/F-08/action-contract-pin-mutation.log"
+    }
+  ]
+}

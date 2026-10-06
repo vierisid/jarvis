@@ -1,0 +1,26 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+
+src/brief/composition-ingredients.test.ts:
+110 |       case 'action-version': piece.actions.send!.description = 'New contract'; break;
+111 |       case 'unknown-action': (input[1] as Extract<CompositionIngredient, { kind: 'library-action' }>).actionName = 'unknown'; break;
+112 |       case 'missing-auth': input.shift(); break;
+113 |     }
+114 |     let calls = 0; const job = await submit(provider({ async chat() { calls++; return { text: '{}' }; } }), input);
+115 |     expect(calls).toBe(0); expect(job).toMatchObject({ state: 'blocked', workflow: null, blocker: { code: 'ingredient_unavailable' } });
+                        ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:115:19)
+(fail) invalid selection blocks before provider calls: action-version [22.93ms]
+
+ 0 pass
+ 39 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [53.00ms]

@@ -139,6 +139,8 @@ export interface PieceCatalogAuth {
 }
 
 export interface PieceCatalogEntry {
+  /** Installed package version, including entries served from metadata caches. */
+  version?: string;
   /** Upstream package name -- e.g. `@jarvispieces/piece-jarvis-ask`. */
   name: string;
   displayName: string;
@@ -567,7 +569,7 @@ export async function buildPieceCatalog(
     const contentHash = pieceContentHash(piece.dir);
     const own = userCache?.get(key);
     if (own && own.contentHash === contentHash) {
-      out.push(own.entry);
+      out.push({ ...own.entry, version: piece.version });
       userEntries[key] = own;
       continue;
     }
@@ -575,7 +577,7 @@ export async function buildPieceCatalog(
       .map((m) => m.get(key))
       .find((e) => e != null && e.contentHash === contentHash);
     if (shared) {
-      out.push(shared.entry);
+      out.push({ ...shared.entry, version: piece.version });
       continue;
     }
     misses.push({ piece, contentHash });
@@ -625,7 +627,7 @@ export async function buildPieceCatalog(
             pieceTimeoutMs,
             `extract ${piece.name}@${piece.version} timed out after ${pieceTimeoutMs}ms`,
           );
-          const entry = metadataToCatalogEntry(meta);
+          const entry = { ...metadataToCatalogEntry(meta), version: piece.version };
           out.push(entry);
           userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
           extracted++;

@@ -1,0 +1,24 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+
+src/brief/composition-ingredients.test.ts:
+133 |   });
+134 |   test(`saved pins refuse readiness, enable and publish after ${change}`, async () => {
+135 |     const p = provider(), job = await submit(p); expect(job.state).toBe('draft_ready'); p.stop();
+136 |     mutate();
+137 |     const { flowId, versionId } = job.workflow!;
+138 |     expect(versionReadiness(flowId, versionId).issues.some(i => i.code === 'INGREDIENT')).toBe(true);
+                                                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:138:91)
+(fail) saved pins refuse readiness, enable and publish after replace [27.88ms]
+
+ 0 pass
+ 39 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [60.00ms]

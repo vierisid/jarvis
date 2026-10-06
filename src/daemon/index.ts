@@ -1,3 +1,4 @@
+import { registerCompositionIngredients } from '../brief/registrations/composition-ingredients';
 import { registerChatAttachments } from '../brief/registrations/chat-attachments';
 import { registerChatProgress } from '../brief/registrations/chat-progress';
 import { BriefAttachmentProvider } from '../brief/attachments';
@@ -4984,6 +4985,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (process.env.JARVIS_BRIEF_CHAT_ATTACHMENTS === '1') briefEnabled.push('chatAttachments');
     if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     if (process.env.JARVIS_BRIEF_CHAT_PROGRESS === '1') briefEnabled.push('chatProgress');
+    if (process.env.JARVIS_BRIEF_COMPOSITION_INGREDIENTS === '1') briefEnabled.push('compositionIngredients');
     if (process.env.JARVIS_BRIEF_WORKFLOW_COMPOSITION === '1') briefEnabled.push('workflowComposition');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
@@ -4991,6 +4993,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerChatAttachments(briefAttachments),
       ...registerChatProgress(briefChatTransport),
       ...registerWorkflowComposition(briefWorkflowComposition),
+      ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {

@@ -13,7 +13,7 @@ export interface PersistedCompositionOptions {
  * is only structural; it does not prove semantic fidelity to a free-text job.
  */
 export async function composePersistedFlow(deps: ComposeDeps, input: ComposeRequest, options: PersistedCompositionOptions = {}): Promise<ComposeResult & { compositionRecordId: string }> {
-  const request = { ...input };
+  const request = { ...input, ingredients: input.ingredients ? structuredClone(input.ingredients) : undefined };
   request.signal?.throwIfAborted();
   const snapshot = snapshotComposition(deps);
   const journal = getWorkflowDb().transaction(() => {

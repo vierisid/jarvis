@@ -2,7 +2,7 @@
 
 F-07 supplies the authenticated API and durable service that turns a natural-language prompt into a populated, disabled draft. It uses the existing high-tier composer, composition journal and canonical draft repositories. This PR follows the owner's unmerged stack on F-06 (`23979f3bebab09a68c140aad3cb1843865fef150`).
 
-There is no production UI change. D-16 owns the workflow prompt presentation and should consume this API. The old WorkflowsRoom creation handler is not rewired here. F-08 connection/library ingredient selection is not implemented; extra request fields are rejected instead of silently ignored.
+There is no production UI change. D-16 owns the workflow prompt presentation and should consume this API. The old WorkflowsRoom creation handler is not rewired here. F-08 adds optional typed connection/library selections behind its separate default-off capability; see [the ingredient contract](brief-composition-ingredients.md). Unknown fields are still rejected.
 
 ## Activation and API
 
@@ -12,7 +12,7 @@ All routes use the existing panel-session authentication and CORS adapter, with 
 
 | Method and path | Result |
 | --- | --- |
-| `POST /api/brief/workflow-compositions` | `{requestId, prompt, name?}` becomes `{job, created}`; 202 for a new queued job, 200 for an exact replay. |
+| `POST /api/brief/workflow-compositions` | `{requestId, prompt, name?, ingredients?}` becomes `{job, created}`; 202 for a new queued job, 200 for an exact replay. |
 | `GET /api/brief/workflow-compositions/:id` | Current job receipt. Unknown or other-project IDs return 404. |
 | `GET /api/brief/workflow-compositions?requestId=KEY` | Exact request recovery as `{jobs: []}` or `{jobs: [job]}`. Without the query, returns the latest 100 jobs. |
 | `POST /api/brief/workflow-compositions/:id/cancel` | Cancels queued/running work. Repeated cancellation and cancellation after completion preserve the terminal receipt. |

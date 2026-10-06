@@ -1,0 +1,24 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+
+src/brief/composition-ingredients.test.ts:
+88 | });
+89 |
+90 | test('same piece with another account is a blocker, never a silent substitution', async () => {
+91 |   connection('other-id', 'other-account');
+92 |   const job = await submit(provider({ async chat() { return { text: JSON.stringify(graph('send', 'other-account')) }; } }));
+93 |   expect(job.state).toBe('blocked'); expect(job.blocker!.details.join(' ')).toContain('Selected ingredient');
+                         ^
+error: expect(received).toBe(expected)
+
+Expected: "blocked"
+Received: "draft_ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:93:21)
+(fail) same piece with another account is a blocker, never a silent substitution [29.26ms]
+
+ 0 pass
+ 39 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [70.00ms]

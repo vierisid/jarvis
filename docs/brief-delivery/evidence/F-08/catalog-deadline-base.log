@@ -1,0 +1,88 @@
+bun test v1.4.2 (744846f84)
+[compose] attempt 1 tool-loop-error (tool call failed (network); not falling back: LLM request to fixture timed out after 90000ms)
+[compose] attempt 1 tool-loop-error (tool call failed (unknown); not falling back: upstream unexpectedly closed)
+[compose] attempt 1 tool-loop-error (tool call failed (server); not falling back: 500 internal server error: tools not supported (misleading body))
+[compose] attempt 1 tool-loop-error (tool call failed (bad_request); not falling back: 400 invalid JSON schema)
+[compose] attempt 1 tool-loop-error (tool call failed (not_found); not falling back: 404 model not found)
+[compose] attempt 1 tool-loop-error (tool call failed (network); not falling back: tools not supported (misleading body))
+[compose] attempt 1 tool-loop-error (tool call failed (content_policy); not falling back: tools not supported (misleading body))
+[compose] attempt 1 tool-loop-error (tools unsupported; falling back to one-shot: tools not supported)
+[compose] attempt 1 tool-loop-fallback (tool loop produced no flow on turn 1; using one-shot prompt)
+[compose] attempt 1 tool-loop-error (tools unsupported; falling back to one-shot: 400: This model does not support tools)
+[compose] attempt 1 tool-loop-fallback (tool loop produced no flow on turn 1; using one-shot prompt)
+[compose] attempt 1 tool-loop-error (tools unsupported; falling back to one-shot: Capability unavailable)
+[compose] attempt 1 tool-loop-fallback (tool loop produced no flow on turn 1; using one-shot prompt)
+[compose] attempt 1 tool-loop-error (tools unsupported; falling back to one-shot: tools not supported)
+[compose] attempt 1 tool-loop-fallback (tool loop produced no flow on turn 1; using one-shot prompt)
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 11 chars, ends "..{unfinished"))
+[compose] attempt 1 tool-loop-error (tools unsupported; falling back to one-shot: Provider 'text-only' failed after 1 attempt:
+  attempt 1: 400: This mode...)
+[compose] attempt 1 tool-loop-fallback (tool loop produced no flow on turn 1; using one-shot prompt)
+
+src/workflows/runtime/piece-catalog.test.ts:
+(pass) PieceCatalog (unit) > PieceCatalog.list/get round-trips initial entries [0.37ms]
+(pass) PieceCatalog (unit) > metadataToCatalogEntry maps actions + triggers verbatim [0.56ms]
+(pass) PieceCatalog (unit) > metadataToCatalogEntry attaches dynamicSampleData to jarvis-trigger:on_event [0.23ms]
+(pass) PieceCatalog (unit) > metadataToCatalogEntry promotes on_event's eventType field to an enum populated from WORKFLOW_EVENT_TYPES [0.61ms]
+(pass) PieceCatalog (unit) > metadataToCatalogEntry promotes run_workflow's `flow` field to flow_ref [0.16ms]
+(pass) PieceCatalog (unit) > metadataToCatalogEntry does NOT promote `flow` fields on unrelated pieces [0.06ms]
+(pass) PieceCatalog (unit) > metadataToCatalogEntry does NOT attach dynamicSampleData to unrelated pieces [0.05ms]
+(pass) PieceCatalog (unit) > propsToInputSchema maps every supported PropertyType [0.24ms]
+(pass) PieceCatalog (unit) > propsToInputSchema falls back to 'json' on unknown types [0.10ms]
+(pass) PieceCatalog (unit) > propsToInputSchema propagates placeholder for text/number widgets [0.06ms]
+(pass) PieceCatalog (unit) > discoverPieces reads name/version from each direct subdir's package.json [4.48ms]
+(pass) PieceCatalog (unit) > discoverPieces skips packages whose name doesn't match the piece-<id> convention [4.09ms]
+(pass) PieceCatalog (unit) > discoverPieces dedupes by name across roots and reports conflicts [3.07ms]
+(pass) PieceCatalog (unit) > discoverPieces tolerates missing roots and malformed package.json [1.70ms]
+(pass) PieceCatalog (unit) > computeCatalogCacheKey tracks the bundle; piece source moves pieceContentHash instead [5.06ms]
+(pass) PieceCatalog (unit) > readCachedEntries: key mismatch, malformed file, and the PRE-per-entry shape all read as a miss [1.42ms]
+(pass) PieceCatalog (unit) > per-entry cache: shared file serves hits without an engine spawn; only misses extract; user file excludes shared-served entries [5.69ms]
+(pass) PieceCatalog (unit) > buildPieceCatalog isolates per-piece failures, surfaces them, still returns the catalog [3.49ms]
+(pass) PieceCatalog (unit) > a TIMEOUT destroys the engine, and the next piece gets a fresh one [24.17ms]
+(pass) PieceCatalog (unit) > an ERROR REPLY keeps the engine, because the engine answered [3.48ms]
+(pass) PieceCatalog (unit) > gives up after N consecutive TIMEOUTS instead of paying the budget on every piece [69.28ms]
+(pass) PieceCatalog (unit) > error replies NEVER trip the give-up, however many land in a row [7.26ms]
+(pass) PieceCatalog (unit) > a success resets the timeout streak [66.83ms]
+(pass) PieceCatalog (unit) > a replacement engine that cannot start ends the build with the rest reported, not thrown [24.02ms]
+(pass) PieceCatalog (unit) > buildPieceCatalog enforces per-piece timeout and surfaces the timeout reason [27.60ms]
+(pass) PieceCatalog (unit) > buildPieceCatalog skips remaining pieces once the overall deadline is exceeded [167.82ms]
+(pass) PieceCatalog (unit) > buildPieceCatalog does NOT write the cache file when failures are present [2.31ms]
+(pass) PieceCatalog (unit) > JarvisPieceRegistry structurally satisfies the PieceLookup interface [0.23ms]
+(skip) PieceCatalog (engine end-to-end) > extracts metadata for every Jarvis-native piece via the real engine
+
+src/actions/tools/workflow-composition-timeout.test.ts:
+(pass) provider failure does not become a tool-support fallback: LLM request to fixture timed out after 90000ms [2.68ms]
+(pass) provider failure does not become a tool-support fallback: upstream unexpectedly closed [0.29ms]
+(pass) provider failure does not become a tool-support fallback: 500 internal server error: tools not supported (misleading body) [0.17ms]
+(pass) provider failure does not become a tool-support fallback: 400 invalid JSON schema [0.21ms]
+(pass) provider failure does not become a tool-support fallback: 404 model not found [0.10ms]
+(pass) provider failure does not become a tool-support fallback: tools not supported (misleading body) [0.09ms]
+(pass) provider failure does not become a tool-support fallback: tools not supported (misleading body) [0.09ms]
+(pass) explicit unsupported tools still permit one-shot composition: tools not supported [2.88ms]
+(pass) explicit unsupported tools still permit one-shot composition: 400: This model does not support tools [0.33ms]
+(pass) explicit unsupported tools still permit one-shot composition: Capability unavailable [0.37ms]
+(pass) one deadline covers tools, fallback and a provider that ignores abort [0.97ms]
+(pass) repairs share the original budget and never accept a late valid result [0.51ms]
+(pass) caller cancellation settles promptly and does not create a fallback from a late error [0.52ms]
+(pass) success disposes the composition timer [35.59ms]
+(pass) synchronous work that overruns the deadline cannot start a repair [20.69ms]
+(pass) a result finished after the deadline is a typed failure, not a success [0.35ms]
+(pass) an already-cancelled composition makes no provider call [0.18ms]
+(pass) invalid budget 0 is rejected before dispatch [0.12ms]
+(pass) invalid budget -1 is rejected before dispatch [0.04ms]
+(pass) invalid budget Infinity is rejected before dispatch [0.03ms]
+(pass) invalid budget NaN is rejected before dispatch [0.01ms]
+(pass) invalid budget 2147483648 is rejected before dispatch [0.09ms]
+[LLM] Provider text-only failed (attempt 1/3) [no retry]: 400: This model does not support tools
+(pass) explicit unsupported tools survives the real manager and adapter as a capability code [2.36ms]
+[LLM] Provider slow failed (attempt 1/3): Try later
+(pass) the real tier router and composer share a budget during Retry-After [137.36ms]
+
+1 tests skipped:
+(skip) PieceCatalog (engine end-to-end) > extracts metadata for every Jarvis-native piece via the real engine
+
+ 52 pass
+ 1 skip
+ 0 fail
+ 173 expect() calls
+Ran 53 tests across 2 files. [788.00ms]

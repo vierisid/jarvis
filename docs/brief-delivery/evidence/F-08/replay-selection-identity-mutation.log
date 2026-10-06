@@ -1,0 +1,64 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+
+src/brief/composition-ingredients.test.ts:
+159 |   const job = p.get(accepted.job.jobId); expect(job.state).toBe('draft_ready'); p.stop();
+160 |   const restarted = provider();
+161 |   expect(restarted.submit({ ...input, ingredients: selections() })).toEqual({ created: false, job });
+162 |   for (const modified of ['required', 'pieceVersion'] as const) {
+163 |     const ingredients = selections(); if (modified === 'required') ingredients[0]!.required = false; else ingredients[0]!.pieceVersion = '2.0.0';
+164 |     expect(() => restarted.submit({ ...input, ingredients })).toThrow('different specification');
+                                                                    ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "different specification"
+
+Received function did not throw
+Received value: {
+  job: {
+    jobId: "mI0E6MptPhLqMrE9bxd3D",
+    requestId: "stable",
+    specification: {
+      name: "New workflow",
+      prompt: "Keep this wording",
+      ingredients: [
+        {
+          kind: "connection",
+          id: "@fixture/piece-account",
+          pieceName: "@fixture/piece-account",
+          pieceVersion: "1.2.3",
+          required: true,
+        }, {
+          kind: "library-action",
+          id: "@fixture/piece-account",
+          actionName: "send",
+          pieceVersion: "1.2.3",
+          actionVersion: "415bd71a92a2023bd18a655202679990a6a36083ee83faba09f79997cf712516",
+          required: true,
+        }
+      ],
+    },
+    state: "draft_ready",
+    progress: {
+      checkedCandidates: 1,
+    },
+    compositionId: "sQOX7BXsx5q47OL2t1MBK",
+    workflow: {
+      flowId: "biwJrRKJOg71bNH1YSqSQ",
+      versionId: "x5TFluUuUv1onvidxQZbY",
+    },
+    blocker: null,
+    createdAt: 1791297412936,
+    updatedAt: 1791297412943,
+  },
+  created: false,
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:164:63)
+(fail) idempotency retains selections across provider restart and rejects a changed pin or requirement [26.78ms]
+
+ 0 pass
+ 39 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [58.00ms]
