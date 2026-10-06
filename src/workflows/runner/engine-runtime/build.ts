@@ -720,9 +720,16 @@ function findSharedBundle(sharedRoot?: string | null): SharedBundleLookup {
  * the install tree + compiled-in constants; the old `STAGING_DIR/package.json`
  * guard was unsound and forced a pointless per-user staging install before a
  * prebuilt bundle could even be discovered.
+ *
+ * `bundleRoot` overrides the per-user cache root (default BUNDLE_ROOT,
+ * `~/.jarvis/cache/engine`), mirroring `sharedRoot` (#673). Production never
+ * passes it; it exists so the per-user cache's contract -- a bundle with NO
+ * manifest beside it is still returned -- can be asserted on behaviour, without
+ * a unit test seeding the developer's own cache.
  */
 export function findCachedBundle(opts?: {
   sharedRoot?: string | null;
+  bundleRoot?: string;
 }): { bundlePath: string; hash: string } | null {
   const shared = findSharedBundle(opts?.sharedRoot);
   if (shared.kind === "hit") return { bundlePath: shared.bundle.bundlePath, hash: shared.bundle.hash };
@@ -732,7 +739,7 @@ export function findCachedBundle(opts?: {
   // level. The caller's `buildEngineBundle` then BUILDS rather than adopts.
   if (shared.kind === "refused") return null;
   const hash = bundleHash();
-  const bundleDir = resolve(BUNDLE_ROOT, hash);
+  const bundleDir = resolve(opts?.bundleRoot ?? BUNDLE_ROOT, hash);
   const bundlePath = resolve(bundleDir, "main.js");
   if (!existsSync(bundlePath)) return null;
   // Mark it as in use for the cache pruner (#491): a daemon that resolves a

@@ -172,18 +172,24 @@ describe("engine bundle build", () => {
     });
 
     test("a shared root with no matching hash falls through to the per-user cache path", () => {
+      // Unconditional since #673: with `bundleRoot` pointing at a fixture the
+      // answer no longer depends on whether the developer machine happens to
+      // have a warm `~/.jarvis/cache/engine`, which is what used to force an
+      // `if (found)` around the only assertion.
       const root = resolve(tmpdir(), `shared-engine-miss-${Date.now()}`);
-      mkdirSync(root, { recursive: true });
+      const bundleRoot = resolve(tmpdir(), `user-engine-miss-${Date.now()}`);
       try {
+        mkdirSync(root, { recursive: true });
+        mkdirSync(resolve(bundleRoot, bundleHash()), { recursive: true });
         process.env.JARVIS_ENGINE_CACHE_ROOT = root;
-        const found = findCachedBundle();
-        // Either the developer machine has a warm per-user cache (found from
-        // BUNDLE_ROOT) or nothing at all — never a hit under the shared root.
-        if (found) {
-          expect(found.bundlePath.startsWith(root)).toBe(false);
-        }
+        // Nothing per-user either: nothing at all.
+        expect(findCachedBundle({ bundleRoot })).toBe(null);
+        // A per-user build: the miss falls through to it.
+        writeFileSync(resolve(bundleRoot, bundleHash(), "main.js"), "// built locally");
+        expect(findCachedBundle({ bundleRoot })?.bundlePath).toBe(resolve(bundleRoot, bundleHash(), "main.js"));
       } finally {
         rmSync(root, { recursive: true, force: true });
+        rmSync(bundleRoot, { recursive: true, force: true });
       }
     });
 
@@ -411,27 +417,33 @@ describe("engine bundle build", () => {
       });
 
       test("the per-user cache still needs no manifest", () => {
-        // Same uid, locally built: BUNDLE_ROOT is explicitly out of scope, and
-        // the fix must not have made the local fallback require a digest it
-        // never writes. `buildEngineBundle` writes main.js + main.js.meta.json
-        // and no .sha256, so asserting the absence of a manifest writer is the
-        // check that keeps this honest.
+        // Same uid, locally built: BUNDLE_ROOT is explicitly out of #624's
+        // scope, and `buildEngineBundle` writes main.js + main.js.meta.json and
+        // no .sha256. So the property is that `findCachedBundle()` still RETURNS
+        // a per-user bundle with no manifest beside it -- the one an over-broad
+        // extension of the shared-root check to every root would break.
         //
-        // SOURCE TEXT, and the limit is stated because it is a real one: what
-        // this cannot assert is that `findCachedBundle()` still RETURNS a
-        // per-user bundle lacking a manifest -- the property the name claims.
-        // `BUNDLE_ROOT` is a module constant with no test seam, so a behavioural
-        // version would have to seed the developer's own
-        // `~/.jarvis/cache/engine`, which no unit test should write to. Closing
-        // it means a `bundleRoot` option on `findCachedBundle` mirroring
-        // `sharedRoot`; until then this is the proxy, and the shared-root tests
-        // above are the behavioural half.
-        const localBuilder = readFileSync(resolve(import.meta.dir, "build.ts"), "utf8");
-        expect(localBuilder.includes('bundlePath + ".meta.json"')).toBe(true);
-        // No `[^)]*`: that stops at the first `)`, so a wrapped or nested call
-        // would slip past the very pattern meant to catch it.
-        const manifestWrites = localBuilder.match(/writeFileSync\([\s\S]{0,200}?\.sha256/gu);
-        expect(manifestWrites).toBe(null);
+        // BEHAVIOURAL since #673. This used to assert on build.ts's SOURCE TEXT
+        // (no `.sha256` writer), because BUNDLE_ROOT had no test seam and the
+        // alternative was seeding the developer's real cache. That proxy could
+        // not see the failure that matters: a manifest REQUIREMENT added to the
+        // per-user branch, with no writer anywhere, passed it. `bundleRoot`
+        // mirrors `sharedRoot`, so the claim is now tested as stated.
+        const bundleRoot = resolve(tmpdir(), `user-engine-nomanifest-${Date.now()}`);
+        const bundleDir = resolve(bundleRoot, bundleHash());
+        try {
+          // Exactly what `buildEngineBundle` leaves behind: no main.js.sha256.
+          mkdirSync(bundleDir, { recursive: true });
+          writeFileSync(resolve(bundleDir, "main.js"), "// built locally");
+          writeFileSync(resolve(bundleDir, "main.js.meta.json"), "{}");
+          // No shared root at all, so only the per-user branch can answer.
+          const { value: found, warnings } = withWarnings(() => findCachedBundle({ sharedRoot: null, bundleRoot }));
+          expect(found).toEqual({ bundlePath: resolve(bundleDir, "main.js"), hash: bundleHash() });
+          // Not refused quietly and not refused loudly either.
+          expect(warnings).toEqual([]);
+        } finally {
+          rmSync(bundleRoot, { recursive: true, force: true });
+        }
       });
 
       /**
