@@ -386,7 +386,23 @@ func captureScreenBytes() ([]byte, error) {
 	return os.ReadFile(tmpFile)
 }
 
+// captureWindowUnsupportedCode marks a capture_screen refused for naming a
+// window (#710). Returned before anything is captured.
+const captureWindowUnsupportedCode = "SCREENSHOT_WINDOW_UNSUPPORTED"
+
 func handleCaptureScreen(params map[string]any) (*RPCResult, error) {
+	// There is no window capture here: every platform's capture is the whole
+	// screen. A `pid` used to be ignored, so a request for one window came back
+	// as everything on the screen with nothing saying so (#710). The daemon
+	// refuses that before dispatching; this refuses it for one that predates
+	// that, before any pixels are read.
+	// Any pid at all, not only a number: an older daemon passes the model's
+	// arguments through as they came.
+	if pid, present := params["pid"]; present && pid != nil {
+		return nil, &codedError{code: captureWindowUnsupportedCode, err: fmt.Errorf(
+			"capture_screen captures the whole screen and cannot capture one window (pid %v), so nothing was captured; "+
+				"call it without pid for the whole screen", pid)}
+	}
 	data, err := captureScreenBytes()
 	if err != nil {
 		return nil, err

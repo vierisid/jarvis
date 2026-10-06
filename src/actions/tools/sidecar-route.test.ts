@@ -641,6 +641,26 @@ describe('a routed screenshot delivers an image (#658)', () => {
     expect(out.content[1]).toMatchObject({ type: 'image' });
   });
 
+  // #710: the sidecar's capture_screen has no window capture, so a routed
+  // desktop_screenshot({pid}) used to come back as the WHOLE desktop with
+  // nothing saying so. Refused before anything is captured instead: the other
+  // windows' pixels never leave the machine on a request that named one window.
+  test('a routed desktop_screenshot with a pid is refused before any capture', async () => {
+    let calls = 0;
+    setSidecarManagerRef(stubManager([shooter], async () => { calls++; return reply({ type: 'inline', mime_type: 'image/png', data: PIXELS }); }));
+    // pid 0 too, so a later `if (params.pid)` cannot reopen this.
+    for (const pid of [4242, 0]) {
+      const err = await rejection(() => screenshotTools()[0]!.execute({ target: shooter.id, pid }));
+      expect(err.outcome).toMatchObject({ status: 'blocked', code: 'SCREENSHOT_WINDOW_UNSUPPORTED', effect: 'not_started' });
+      expect(err.message).toContain('without pid');
+    }
+    expect(calls).toBe(0);
+    // Without a pid it is the ordinary whole-desktop capture.
+    const out = await screenshotTools()[0]!.execute({ target: shooter.id }) as ToolResult;
+    expect(out.content[1]).toMatchObject({ type: 'image' });
+    expect(calls).toBe(1);
+  });
+
   // A raw PNG of a large display can pass guardImageSize's 5 MB cap, and the
   // orchestrator then swaps the image for a placeholder -- no picture again. So
   // an over-cap capture is retaken compacted, once, with the daemon's own

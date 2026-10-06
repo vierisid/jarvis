@@ -618,13 +618,25 @@ export const desktopScreenshotTool: ToolDefinition = {
     },
     pid: {
       type: 'number',
-      description: 'Process ID of window to capture. Omit for full desktop screenshot.',
+      description: 'Process ID of window to capture. Honoured only when the screenshot is taken on this machine without a sidecar: whenever it goes to a sidecar, including one picked automatically when no target is given, a pid is refused, because a sidecar captures the whole screen. Omit for full desktop screenshot.',
       required: false,
     },
   },
   execute: async (params) => {
     const target = resolveDesktopTarget(params.target, 'screenshot', 'desktop_screenshot');
     if (target) {
+      // A sidecar's capture_screen has no window capture and used to ignore
+      // `pid`, so a request for ONE window came back as the whole desktop with
+      // nothing saying so (#710). Refused rather than widened or captioned:
+      // whatever else is on that screen -- another app, a password manager --
+      // was never asked for, and once its pixels are in a provider request
+      // there is no taking them back. Refusing costs the model one more call
+      // if it does want the whole desktop, and makes that its decision.
+      if (params.pid !== undefined && params.pid !== null) {
+        throw new ActionOutcomeError({ status: 'blocked', code: 'SCREENSHOT_WINDOW_UNSUPPORTED', effect: 'not_started',
+          message: 'Error: a sidecar can only capture the whole screen, not one window, so nothing was captured. '
+            + 'Call desktop_screenshot without pid if the whole screen is what you need, or use desktop_snapshot with this pid to read that window\'s elements.' });
+      }
       // The picture, as the local branch below returns it (#658).
       return routeScreenshotToSidecar(target, params, true);
     }
