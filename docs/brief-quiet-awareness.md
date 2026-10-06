@@ -13,6 +13,8 @@ F-11 stops ambient awareness from starting an assistant turn or interrupting cha
 | Explicit chat, research or enabled workflow subscription | Keep existing behavior and Authority checks. An explicitly configured workflow may still react to awareness. |
 | Authority request, emergency state or execution failure | Keep the existing governed delivery paths, including a dashboard connection with no open chat. |
 
+New error suggestions state only the observed error, in both delivery modes. They do not promise that research has started. The saved suggestion, API response and emitted event use the same wording; existing historical records are retained.
+
 The policy is limited to the AwarenessService callback and opportunity delivery callback. Screen capture, retention, configured perception, suggestion evaluation, goal activity routing, preparation records and the explicit research queue remain intact. Quiet mode prevents ambient events entering the automatic event reactor/coalescer as well as removing the direct error/struggle research calls. No database migration or second inbox is added.
 
 Prepared opportunities continue to use their existing durable records and reader. F-09/Q-13 preparation readiness is independent of quiet delivery. An opportunity card is not a claim that its proposal is qualified, approved or executed.
@@ -35,7 +37,9 @@ The fixture uses the real WebSocket service, workflow event bus, trigger manager
 4. Explicit workflow subscriptions still enqueue work; real capture ingestion still stores evidence.
 5. Only the exact flag value `1` enables quiet delivery. Unset, `0`, `true` and `yes` retain legacy behavior. The capabilities API reports the gate independently of other Brief features.
 
-The broader command and output are in `docs/brief-delivery/evidence/F-11/affected-command.txt` and `affected.log`. TypeScript uses `bun node_modules/typescript/bin/tsc --noEmit`.
+The review regressions additionally check saved/API/event wording and offline desktop acceptance/refusal. The policy has a separate injectable `desktopWithReceipt` sender so fixtures do not fall through to native notifications; it preserves the distinction between launching a process and receiving delivery acceptance. Run these checks alone with `bun test src/daemon/awareness-delivery-policy.test.ts -t "F11 review"`.
+
+The broader command and output are in `docs/brief-delivery/evidence/F-11/review-affected-command.txt` and `review-affected.log`. TypeScript uses `bun node_modules/typescript/bin/tsc --noEmit`.
 
 For an integration deployment, set `JARVIS_BRIEF_QUIET_AWARENESS=1` in that daemon's environment and restart, then check the authenticated `/api/brief/capabilities` response for `quietAwareness.enabled: true`. Keep chat closed while generating synthetic awareness and governed notification events; observe card/safety envelopes without proactive chat or TTS. This task did not change a running daemon or enable the flag in production.
 

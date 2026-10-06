@@ -1,0 +1,15 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/awareness-delivery-policy.test.ts:
+Database initialized at: :memory:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) F11 review R1: quiet error suggestions preserve evidence without promising research [54.38ms]
+(pass) F11 review R2: injected desktop receipt true controls offline legacy delivery [41.71ms]
+(pass) F11 review R2: injected desktop receipt false controls offline legacy delivery [35.10ms]
+
+ 3 pass
+ 20 filtered out
+ 0 fail
+ 20 expect() calls
+Ran 3 tests across 1 file. [342.00ms]

@@ -1,0 +1,1146 @@
+bun test v1.4.2 (744846f84)
+
+src/awareness/opportunities.test.ts:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) evidence-backed hypotheses > sidecar ingestion emits an explainable suggestion using actual persisted capture IDs [38.22ms]
+(pass) evidence-backed hypotheses > real capture writer supplies provenance without transition or session events [27.98ms]
+(pass) evidence-backed hypotheses > empty input, sparse activity, and unsupported tasks abstain [23.92ms]
+(pass) evidence-backed hypotheses > a long continuous session and replayed captures are not separate repetitions [23.99ms]
+(pass) evidence-backed hypotheses > same-day bursts, future and old data cannot pass recurrence [23.33ms]
+(pass) evidence-backed hypotheses > app names and arbitrary instructions never supply job or goal evidence [25.13ms]
+(pass) evidence-backed hypotheses > relevant active goals rank candidates without creating links [29.43ms]
+(pass) evidence-backed hypotheses > higher priority suggestions do not silently consume an opportunity [28.62ms]
+(pass) evidence-backed hypotheses > legacy act records interest only; dismiss prevents resurfacing in new engines [32.27ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) evidence-backed hypotheses > the ledger window is enforced on disk by retention, not only by suggestion evaluation [25.77ms]
+(pass) evidence-backed hypotheses > a suggestion already holding the opportunity identity is never reused as a proposal [26.26ms]
+(pass) evidence-backed hypotheses > capture retention keeps only minimal cues, and duplicate ingestion is idempotent [26.72ms]
+(pass) evidence-backed hypotheses > publication and capture ingestion roll back atomically on failure [28.80ms]
+(pass) validation and real-work feedback boundary > an existing vault upgrades additively without rewriting captures or inventing old evidence [514.99ms]
+(pass) validation and real-work feedback boundary > user confirmation supports an explicit goal link without score writes [22.83ms]
+(pass) validation and real-work feedback boundary > invalid, inactive, and unexplained goal links make no partial writes [20.45ms]
+(pass) validation and real-work feedback boundary > feedback rollback, conflicting retries, and duplicate work references cannot inflate metrics [21.67ms]
+(pass) validation and real-work feedback boundary > outcomes require confirmed work, real timestamps and a work reference [21.83ms]
+(pass) validation and real-work feedback boundary > registered daemon routes expose inspectable evidence and reject malformed requests [25.47ms]
+(pass) validation and real-work feedback boundary > a new process recovers evidence, confirmation and suppression after restart [441.39ms]
+
+src/awareness/prepared-opportunities.test.ts:
+Database initialized at: /tmp/jarvis-f09-5mzLBw/test.db
+Database initialized at: /tmp/jarvis-f09-5mzLBw/test.db
+(pass) one source creates one exact locked disabled snapshot across processing and restart [481.29ms]
+Database initialized at: /tmp/jarvis-f09-az0mMz/test.db
+(pass) dismissal during compose cannot return a visible ready proposal [444.02ms]
+Database initialized at: /tmp/jarvis-f09-uzxG1Q/test.db
+(pass) dismissal during qualify cannot return a visible ready proposal [436.26ms]
+Database initialized at: /tmp/jarvis-f09-v9Ij7d/test.db
+(pass) legacy dismissal prevents draft attachment [521.62ms]
+Database initialized at: /tmp/jarvis-f09-OdYdA5/test.db
+(pass) ready is withdrawn when goal changes [486.24ms]
+Database initialized at: /tmp/jarvis-f09-HOEiIi/test.db
+(pass) ready is withdrawn when version changes [1414.80ms]
+Database initialized at: /tmp/jarvis-f09-Ayn0t1/test.db
+(pass) ready is withdrawn when binding changes [444.82ms]
+Database initialized at: /tmp/jarvis-f09-4E6rx3/test.db
+(pass) ready is withdrawn when quality-missing changes [462.83ms]
+Database initialized at: /tmp/jarvis-f09-YMyLui/test.db
+(pass) specific missing setup blocks unconfirmed jobs without model calls [434.86ms]
+Database initialized at: /tmp/jarvis-f09-WUCkCH/test.db
+(pass) specific missing setup blocks unlinked jobs without model calls [533.05ms]
+Database initialized at: /tmp/jarvis-f09-Ln4RIF/test.db
+(pass) qualification for another snapshot is refused [641.26ms]
+Database initialized at: /tmp/jarvis-f09-eJ52TF/test.db
+(pass) background preparation has a durable daily budget across worker restart [631.19ms]
+Database initialized at: /tmp/jarvis-f09-cg2JGD/test.db
+(pass) timeout and expired leases are blocked, never automatically recomposed [608.47ms]
+Database initialized at: /tmp/jarvis-f09-aNZQ8S/test.db
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+(pass) retry archives the previous snapshot and refuses stale or terminal commands [542.29ms]
+Database initialized at: /tmp/jarvis-f09-bzyKlB/test.db
+(pass) sample outputs never reach public preparation data or subsequent model requests [582.42ms]
+Database initialized at: /tmp/jarvis-f09-ihXB5p/test.db
+(pass) missing optional Q13 compiles and prevents inference and activation [864.11ms]
+Database initialized at: /tmp/jarvis-f09-ZLucZB/test.db
+(pass) API gates, strict writes, concurrency tokens and no-store responses [682.01ms]
+Database initialized at: /tmp/jarvis-f09-DKipEo/test.db
+(pass) a changed confirmed job cannot attach the old composition [530.43ms]
+Database initialized at: /tmp/jarvis-f09-ecFj3Q/test.db
+(pass) attachment transaction failure leaves no orphan flow, and explicit retry succeeds [506.99ms]
+Database initialized at: /tmp/jarvis-f09-BhBrAE/test.db
+(pass) storage failures withdraw readiness, and recovery fences the abandoned inference [668.90ms]
+Database initialized at: /tmp/jarvis-f09-gpU0D6/test.db
+(pass) full queue rejects an explicit retry without losing its saved revision [682.78ms]
+(skip) real Q13 dry-run qualifies the exact disabled version and blocks missing fixtures
+Database initialized at: /tmp/jarvis-f09-PLXpuv/test.db
+(pass) publishing through another surface cannot leave an approval-eligible proposal [429.26ms]
+Database initialized at: /tmp/jarvis-f09-L1alRa/test.db
+(pass) shared ownership rejects legacy acceptance when F09 is queued [493.20ms]
+Database initialized at: /tmp/jarvis-f09-BpuF7b/test.db
+(pass) shared ownership rejects legacy acceptance when F09 is running [450.29ms]
+Database initialized at: /tmp/jarvis-f09-Avy4Cp/test.db
+(pass) shared ownership rejects legacy acceptance when F09 is ready [472.91ms]
+Database initialized at: /tmp/jarvis-f09-Jgxgau/test.db
+(pass) legacy ownership survives a blocked F09 row and permits legacy retry [504.86ms]
+Database initialized at: /tmp/jarvis-f09-MQpxLg/test.db
+(pass) old mixed queues reserve the prepared owner before either inference [541.72ms]
+Database initialized at: /tmp/jarvis-f09-9z51kZ/test.db
+(pass) old mixed queues reserve the legacy owner before either inference [515.30ms]
+Database initialized at: /tmp/jarvis-f09-HjYkhn/test.db
+(pass) private provider diagnostics stay in the linked journal [478.93ms]
+Database initialized at: /tmp/jarvis-f09-yvIRd0/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 2 exhausted (response was not valid JSON: JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 2 exhausted (response was not valid JSON: JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+(pass) private model diagnostics stay in the linked journal [622.15ms]
+Database initialized at: /tmp/jarvis-f09-ND7Euz/test.db
+(pass) pre-upgrade diagnostic text is sanitized when reading blocked proposals [479.25ms]
+Database initialized at: /tmp/jarvis-f09-a6MZTl/test.db
+(pass) journal is linked before inference and retained after dismiss [473.76ms]
+Database initialized at: /tmp/jarvis-f09-KTtBxH/test.db
+(pass) journal is linked before inference and retained after timeout [509.80ms]
+Database initialized at: /tmp/jarvis-f09-Udjf2o/test.db
+(pass) journal is linked before inference and retained after shutdown [457.66ms]
+Database initialized at: /tmp/jarvis-f09-9FvOLm/test.db
+(pass) failure to bind the journal rolls back before inference [436.79ms]
+Database initialized at: /tmp/jarvis-f09-C1yJDj/test.db
+(pass) deleted workflow has a distinct recovery blocker [523.63ms]
+Database initialized at: /tmp/jarvis-f09-cUe7hD/test.db
+(pass) deleted version has a distinct recovery blocker [487.84ms]
+Database initialized at: /tmp/jarvis-f09-vsv8fX/test.db
+(pass) legacy inference cannot attach after old mixed records resolve to prepared ownership [484.60ms]
+Database initialized at: /tmp/jarvis-f09-6HpwkA/test.db
+(pass) prepared inference cannot attach after old mixed records resolve to legacy ownership [464.10ms]
+
+src/awareness/opportunity-restart.test.ts:
+(pass) a fresh service recovers a pending proposal without captures or workflow events [580.82ms]
+(pass) a fresh service recovers a legacy proposal without captures or workflow events [521.22ms]
+
+src/awareness/suggestion-feedback.test.ts:
+Database initialized at: /tmp/jarvis-feedback-UiJ1YO/test.db
+Database initialized at: /tmp/jarvis-feedback-UiJ1YO/test.db
+(pass) durable suggestion feedback > dismissal, reasons and C6 identity survive database reopen [478.20ms]
+Database initialized at: /tmp/jarvis-feedback-5tbVaE/test.db
+Database initialized at: /tmp/jarvis-feedback-5tbVaE/test.db
+(pass) durable suggestion feedback > legacy duplicate aliases share feedback and one composition identity after upgrade [477.08ms]
+Database initialized at: /tmp/jarvis-feedback-oIec3s/test.db
+Database initialized at: /tmp/jarvis-feedback-oIec3s/test.db
+(pass) durable suggestion feedback > legacy dismissal flag on a later alias still suppresses acceptance [503.40ms]
+Database initialized at: /tmp/jarvis-feedback-lMddhq/test.db
+(pass) durable suggestion feedback > acceptance preserves evidence and only explicit active goal links [441.89ms]
+Database initialized at: /tmp/jarvis-feedback-xJjMzX/test.db
+(pass) durable suggestion feedback > acceptance is immutable and request IDs cannot change feedback [418.23ms]
+Database initialized at: /tmp/jarvis-feedback-1jFATo/test.db
+(pass) durable suggestion feedback > interest stays separate from acceptance and non-automation rhythms still work [424.19ms]
+Database initialized at: /tmp/jarvis-feedback-X9vXKz/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 11 chars, ends "..{unfinished"))
+[compose] attempt 2 success-after-retry
+Database initialized at: /tmp/jarvis-feedback-X9vXKz/test.db
+(pass) composition job and draft recovery > the production composer retains the accepted outcome during repair and links its durable record [449.56ms]
+Database initialized at: /tmp/jarvis-feedback-mZmVpc/test.db
+Database initialized at: /tmp/jarvis-feedback-mZmVpc/test.db
+(pass) composition job and draft recovery > concurrent accepts and workers create exactly one disabled draft, outside the LLM transaction [444.72ms]
+Database initialized at: /tmp/jarvis-feedback-axzm1a/test.db
+(pass) composition job and draft recovery > draft insert failure rolls back the flow and attachment; retry completes the same job [511.43ms]
+Database initialized at: /tmp/jarvis-feedback-gHP25O/test.db
+Database initialized at: /tmp/jarvis-feedback-gHP25O/test.db
+Database initialized at: /tmp/jarvis-feedback-gHP25O/test.db
+(pass) composition job and draft recovery > queued acceptance survives restart, failed composition remains discoverable and retry is idempotent [486.62ms]
+Database initialized at: /tmp/jarvis-feedback-LdQ7nz/test.db
+Database initialized at: /tmp/jarvis-feedback-LdQ7nz/test.db
+(pass) composition job and draft recovery > expired claims fail explicitly and late completion cannot attach a duplicate draft [458.17ms]
+Database initialized at: /tmp/jarvis-feedback-ICILGs/test.db
+Database initialized at: /tmp/jarvis-feedback-ICILGs/test.db
+(pass) composition job and draft recovery > shutdown fences late LLM completion across a database reopen [495.61ms]
+Database initialized at: /tmp/jarvis-feedback-Zrqsmg/test.db
+(pass) composition job and draft recovery > timeout releases the queue and retains an actionable failure [484.54ms]
+Database initialized at: /tmp/jarvis-feedback-POSUBl/test.db
+(pass) composition job and draft recovery > deleting a composed flow preserves its historical IDs and never silently creates a second draft [477.03ms]
+Database initialized at: /tmp/jarvis-feedback-0xggt0/test.db
+(pass) routes validate JSON, IDs, reason, conflicts and operate without an awareness service [459.94ms]
+Database initialized at: /tmp/jarvis-feedback-USNTaf/test.db
+Database initialized at: /tmp/jarvis-feedback-USNTaf/test.db
+(pass) routine discovery pages canonical proposals and decisions without a notification-age cutoff [464.11ms]
+
+src/awareness/awareness.test.ts:
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > createCapture + getCapture [20.17ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > createCapture persists sidecarId for fetch_capture routing [18.46ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > createCapture without sidecarId stores null (legacy rows) [19.59ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > getRecentCaptures with app filter [21.69ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > getCapturesInRange [20.46ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > getAppUsageStats attributes elapsed time, not capture count [25.05ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > getAppUsageStats is unmoved by a denser sampling rate [22.96ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > activeMsFrom caps away-from-keyboard gaps [19.62ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Sessions > create + get + update + end session [19.75ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Sessions > incrementSessionCaptureCount [20.76ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Sessions > getRecentSessions [19.44ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Suggestions > create + dismiss + act on suggestions [20.24ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Suggestions > getSuggestionStats [19.74ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Suggestions > getSuggestionCountSince [19.31ms]
+Database initialized at: :memory:
+(pass) ContextTracker > detects context changes [20.54ms]
+Database initialized at: :memory:
+(pass) ContextTracker > detects errors in OCR text [19.56ms]
+Database initialized at: :memory:
+(pass) ContextTracker > detects stuck state [19.83ms]
+Database initialized at: :memory:
+(pass) ContextTracker > extracts app name from window title [20.07ms]
+Database initialized at: :memory:
+(pass) ContextTracker > uses sidecar capturedAt timestamp when provided [23.48ms]
+Database initialized at: :memory:
+(pass) ContextTracker > falls back to Date.now() when capturedAt omitted [18.08ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine > generates error suggestion [19.49ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine > deduplicates suggestions [20.22ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine > knowledge suggestion body is readable prose, not the recall prompt format [25.61ms]
+Database initialized at: :memory:
+(pass) ContextGraph > creates app entity for new apps [17.32ms]
+(pass) AwarenessIntelligence — escalation gate > a quiet capture never escalates [0.20ms]
+(pass) AwarenessIntelligence — escalation gate > a window title change alone never escalates [0.04ms]
+(pass) AwarenessIntelligence — escalation gate > short OCR alone never escalates [0.03ms]
+(pass) AwarenessIntelligence — escalation gate > local signals escalate and pick the matching analysis [0.15ms]
+(pass) AwarenessIntelligence — escalation gate > an app switch escalates ambiently, then is silenced by its own cooldown [0.05ms]
+(pass) AwarenessIntelligence — escalation gate > a claim stamps the cooldown immediately, before any analysis runs [0.04ms]
+(pass) AwarenessIntelligence — escalation gate > an ambient claim also holds off signal escalations [0.04ms]
+(pass) AwarenessIntelligence — escalation gate > cloud vision disabled (Infinity cooldown) never escalates [0.03ms]
+(pass) AwarenessIntelligence — escalation gate > releasing an unused claim frees the cooldown again [0.07ms]
+(pass) AwarenessIntelligence — escalation gate > releasing restores the ambient cooldown too, and only once [0.06ms]
+(pass) AwarenessIntelligence — escalation gate > a stale release cannot reopen a newer claim [0.11ms]
+[Intelligence] the low tier cannot accept images (400 model does not support image input) — using the medium tier for awareness vision from here on.
+(pass) AwarenessIntelligence — escalation gate > a low tier that cannot see falls back to medium, then stays there [1.19ms]
+[Intelligence] awareness_general failed: upstream down
+(pass) AwarenessIntelligence — escalation gate > a vision failure on both tiers degrades to an empty analysis [0.23ms]
+Database initialized at: :memory:
+(pass) ContextTracker — redundant captures > flags a repeat capture with identical OCR text as redundant [18.58ms]
+Database initialized at: :memory:
+(pass) ContextTracker — redundant captures > a window change is never redundant [19.15ms]
+Database initialized at: :memory:
+(pass) ContextTracker — redundant captures > isAppSwitch ignores title-only churn [19.30ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine — break nudge > fires after 90 minutes of activity regardless of capture rate [29.59ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine — break nudge > does not fire for a short stretch of work [21.73ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine — break nudge > still fires for a reader whose screen goes static in stretches [28.73ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine — break nudge > does not count an idle stretch as work [20.80ms]
+[Intelligence] awareness_general failed: 429 rate limit exceeded
+(pass) Vision tier downgrade is only for a real refusal > a transient failure does not abandon the low tier [0.54ms]
+[Intelligence] awareness_general failed: 500 internal error
+[Intelligence] awareness_general failed: 500 internal error
+(pass) Vision tier downgrade is only for a real refusal > a 500 does not abandon the low tier either [0.31ms]
+Database initialized at: :memory:
+(pass) ContextTracker — stuck fires once per episode > a motionless window does not re-fire stuck on every capture [19.59ms]
+Database initialized at: :memory:
+(pass) ContextTracker — stuck fires once per episode > a new stall after activity is a new episode [19.61ms]
+Database initialized at: :memory:
+(pass) ContextTracker — redundancy uses the full OCR text > content changing under a long static header is not redundant [20.03ms]
+
+src/awareness/opportunity-delivery.test.ts:
+(pass) proposal and pending delivery commit atomically [21.04ms]
+(pass) failed notification retries the same ID and records delivery only after acceptance [22.85ms]
+[Awareness] Opportunity notification pending: offline
+(pass) a thrown transport error leaves the proposal pending for another worker [20.86ms]
+(pass) dismiss suppresses pending notification recovery [20.86ms]
+(pass) interest suppresses pending notification recovery [20.71ms]
+(pass) validate suppresses pending notification recovery [19.70ms]
+(pass) legacy pre-callback flags cannot suppress recovery or inflate delivery metrics [20.24ms]
+(pass) concurrent workers and flush calls share a claim until its lease expires [21.15ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: enable [22.48ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: disable [20.07ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: shutdown [22.05ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) rapid toggles before queued work settles honor the final setting [21.03ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a stop request blocks new capture events before queued shutdown begins [21.43ms]
+
+src/awareness/prepared-quality-adapter.test.ts:
+(pass) the adapter pins current bindings, labels simulation honestly and closes its runner [1.33ms]
+(pass) unsupported simulation stays illustrative and custom job edits require review [0.27ms]
+
+src/awareness/opportunity-abstention.test.ts:
+Database initialized at: :memory:
+(pass) ordinary app switching cannot substantiate a recurring business job [22.47ms]
+
+src/awareness/session-end.test.ts:
+(pass) app-switch end snapshots are deeply immutable and independent of the new session [23.42ms]
+(pass) a delayed app switch cannot end a session before it started [16.76ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Service stopped
+(pass) delayed captures do not shorten observed work or suppress its summary [21.80ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) shutdown cannot end a clock-skewed session before its last observation [19.40ms]
+(pass) an idle return to the same app closes the old session exactly once [19.42ms]
+(pass) an overnight capture gap does not stretch the ended session [17.91ms]
+(pass) explicit close returns one stable snapshot and a repeated close returns nothing [21.48ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Service stopped
+(pass) a listener cannot change the identity or apps subsequently used by summary inference [37.64ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (5min, Editor)
+[Awareness] Service stopped
+(pass) repeated serialized idle signals and a repeated returning capture produce one summary [22.10ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Pipeline error: synthetic suggestion failure
+[Awareness] Service stopped
+(pass) session-end delivery and summary do not depend on later suggestion success [21.63ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) shutdown emits one end snapshot without launching new summary work [21.93ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+[Awareness] Service stopped
+(pass) concurrent and later replays of a real ended session do not recompute its summary [20.57ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session-end listener failed: synthetic listener failure
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Session-end listener failed: synthetic listener failure
+[Awareness] Service stopped
+(pass) a throwing session-end listener does not discard the summary or the next session [22.57ms]
+
+src/awareness/suggestion-identity.test.ts:
+(pass) an upgrade gives pre-existing app-pair rows one stable identity across restart [396.49ms]
+
+src/awareness/capture-transitions.test.ts:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) serialized captures preserve a real transition and the ended session identity [22.15ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) native app identity takes precedence over an opaque window title [26.96ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) explicit context notifications before the capture do not erase or duplicate it [21.48ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) explicit context notifications after the capture do not erase or duplicate it [23.80ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a title-only transition keeps native app identity and repeated captures stay silent [22.30ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a genuine return to the same app is not removed by deduplication [25.83ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) explicit hints supply missing capture metadata without mutating the previous capture [23.12ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a stale explicit hint cannot revert a newer capture [25.49ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) complete capture metadata wins over conflicting hints and consumes them [30.45ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a future hint waits for a capture at its timestamp [27.19ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) explicit window hints do not leak into another sidecar capture [31.89ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) tracker hints leave previous snapshots intact and retain title-based legacy parsing [31.32ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) capture transitions reach the real knowledge suggestion path [49.17ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) the first metadata-free capture consumes an explicit native window hint [45.36ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a delayed hint does not replace a newer pending hint [54.79ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial capture metadata never borrows a title from a different app [57.23ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial title-only hints and captures retain compatible confirmed metadata [52.63ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial app-only hints and captures retain compatible confirmed metadata [50.94ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial title-only hints complement captures without losing native identity [44.31ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial app-only hints complement captures without losing native identity [38.45ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a conflicting title-only hint cannot borrow confirmed fields from another window [34.59ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a conflicting app-only hint cannot borrow confirmed fields from another window [33.06ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) native app identity keeps a title change out of the app-switch escalation path [27.34ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) delayed cloud analysis retains the predecessor of its own capture [31.75ms]
+
+src/authority/approval-delivery.test.ts:
+(pass) ApprovalDelivery > delivers normal-urgency requests to external channels [0.65ms]
+(pass) ApprovalDelivery > delivers urgent requests to external channels [0.14ms]
+(pass) ApprovalDelivery > channel message includes the approve/deny reply commands with the short id [0.37ms]
+(pass) ApprovalDelivery > always pushes to the websocket broadcaster [0.29ms]
+[ApprovalDelivery] Failed to send to external channels: 105 |   });
+106 |
+107 |   test('a channel send failure does not reject and does not skip the broadcaster', async () => {
+108 |     const delivery = new ApprovalDelivery();
+109 |     const broadcaster = new FakeBroadcaster();
+110 |     const sender = new FakeChannelSender({ throwOnSend: new Error('telegram down') });
+                                                                  ^
+error: telegram down
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/authority/approval-delivery.test.ts:110:61)
+
+(pass) ApprovalDelivery > a channel send failure does not reject and does not skip the broadcaster [0.69ms]
+(pass) ApprovalDelivery > resolves when no broadcaster or channel sender is wired [0.14ms]
+
+src/authority/authority.test.ts:
+(pass) AuthorityEngine > allows action when level meets requirement [0.53ms]
+(pass) AuthorityEngine > denies action when level is below requirement [0.08ms]
+(pass) AuthorityEngine > requires approval for governed categories [0.05ms]
+(pass) AuthorityEngine > does not require approval for non-governed categories [0.04ms]
+(pass) AuthorityEngine > per-action override: explicit deny [0.08ms]
+(pass) AuthorityEngine > per-action override: explicit allow with approval [0.05ms]
+(pass) AuthorityEngine > per-action override: explicit allow without approval [0.04ms]
+(pass) AuthorityEngine > role-specific override takes priority over global [0.04ms]
+(pass) AuthorityEngine > temporary grants override everything [0.07ms]
+(pass) AuthorityEngine > context rule: time_range [0.12ms]
+(pass) AuthorityEngine > context rule: tool_name [0.08ms]
+(pass) AuthorityEngine > describeRulesForAgent returns readable text [0.25ms]
+(pass) AuthorityEngine > all 13 action categories are checkable [0.19ms]
+(pass) getActionForTool > maps known tools by name [0.11ms]
+(pass) getActionForTool > falls back to category map for unknown tools [0.03ms]
+(pass) getActionForTool > defaults to execute_command for completely unknown tools [0.02ms]
+(pass) getActionForTool > an inherited Object.prototype key is not a mapping [0.06ms]
+(pass) EmergencyController > starts in normal state [0.21ms]
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) EmergencyController > pause blocks execution [0.11ms]
+[EmergencyController] System PAUSED — all tool execution suspended
+[EmergencyController] System RESUMED — tool execution restored
+(pass) EmergencyController > resume restores execution [0.08ms]
+[EmergencyController] System KILLED — all agents terminated
+(pass) EmergencyController > kill blocks execution [0.05ms]
+[EmergencyController] System KILLED — all agents terminated
+(pass) EmergencyController > cannot pause from killed state [0.03ms]
+[EmergencyController] System KILLED — all agents terminated
+[EmergencyController] System RESET — back to normal
+(pass) EmergencyController > reset restores from killed [0.06ms]
+[EmergencyController] System PAUSED — all tool execution suspended
+[EmergencyController] System RESUMED — tool execution restored
+(pass) EmergencyController > fires state change callback [0.10ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > creates and retrieves approval request [21.66ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > approve changes status [19.91ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > deny changes status [21.30ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > cannot approve already decided request [21.24ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > getPending returns only pending [20.92ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > findByShortId works [20.19ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > execution_mode defaults to deferred and persists when set inline [17.18ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > demoteToDeferred succeeds only while pending [18.84ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > demoteToDeferred fails after approval (inline gate keeps execution) [18.72ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > markExecuted updates fields [19.07ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > inline flow: gate waits, approve flips status, executor runs tool once [32.02ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) ApprovalManager > executeApproved refuses to run while system is paused [17.26ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > waitForResolution returns early when the signal aborts [48.46ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > expireOld expires old pending requests [16.47ms]
+Database initialized at: :memory:
+(pass) AuditTrail > logs and queries audit entries [17.81ms]
+Database initialized at: :memory:
+(pass) AuditTrail > getStats aggregates correctly [17.22ms]
+Database initialized at: :memory:
+(pass) AuthorityLearner > no suggestions below threshold [18.03ms]
+Database initialized at: :memory:
+(pass) AuthorityLearner > suggests after threshold consecutive approvals [17.96ms]
+Database initialized at: :memory:
+(pass) AuthorityLearner > denial resets consecutive count [18.29ms]
+Database initialized at: :memory:
+(pass) AuthorityLearner > markSuggestionSent prevents re-suggestion [18.05ms]
+(pass) approval learning exclusions > an ordinary approval trains the learner [1.03ms]
+(pass) approval learning exclusions > a taint-gated approval does not [0.48ms]
+(pass) approval learning exclusions > an above_level substitution does not [0.36ms]
+(pass) approval learning exclusions > and not when it also carries a profile label [0.33ms]
+
+src/roles/untrusted-import-guard.test.ts:
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > no production file locates a delimiter tag [39.24ms]
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > only the webapp template delivery mints a trusted trailer [30.56ms]
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > only one framing caller is a tool return; the rest frame a prompt [25.58ms]
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > nothing searches tool results for a site-instructions separator [68.21ms]
+(pass) the privileges in roles/untrusted.ts stay where they were argued for > every tool that attaches template instructions is framed, derived from the source [26.78ms]
+
+src/util/model-exec-env.test.ts:
+(pass) the daemon-secret rule > every listed daemon secret is stripped, in any case [0.41ms]
+(pass) the daemon-secret rule > the sources the header cites are the names on the list [0.20ms]
+(pass) the daemon-secret rule > an unclassified JARVIS_ name is stripped: a future secret fails closed [0.12ms]
+(pass) the daemon-secret rule > settings stay, and no daemon secret is on the settings list [0.66ms]
+(pass) the daemon-secret rule > the engine wiring names are known, internal, and stripped [0.26ms]
+(pass) the daemon-secret rule > the user's shell and desktop survive whole, their own credentials included [0.29ms]
+(pass) the daemon-secret rule > stripping removes exactly the daemon secrets and nothing else [0.26ms]
+(pass) modelExecEnv() > marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off [0.54ms]
+(pass) modelExecEnv() > flags the env key only when this process holds it or inherited the flag [64.62ms]
+(pass) modelExecEnv() > an extra cannot put a daemon secret back, nor can a spread of process.env [0.28ms]
+(pass) modelExecEnv() > an undefined extra removes the key; the result is always an object [0.15ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the scan sees the names it must (not blind) [0.14ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [0.57ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the three buckets do not overlap [0.12ms]
+(pass) the model-exec markers (#514) > the key check: 16 hex chars, stable, case-insensitive, and not the key [54.18ms]
+(pass) the model-exec markers (#514) > the marker is exactly "1"; the flag is a check value or an older parent's "1" [0.46ms]
+(pass) the model-exec markers (#514) > modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged [0.14ms]
+(pass) the model-exec markers (#514) > silent for a file-key install, marked or not [0.22ms]
+(pass) the model-exec markers (#514) > warns while the parent's key is missing or a different one is set; silent once it is back [0.22ms]
+(pass) the model-exec markers (#514) > the CLI warns only for a detached start or restart [0.12ms]
+
+src/daemon/api-approval-resolution.test.ts:
+(pass) status and listings surface an approval that never started, with its state [25.51ms]
+(pass) execute runs a not-started approval exactly once, then it is no longer a decision [19.70ms]
+(pass) an interrupted approval refuses execute and accepts close with a note [18.65ms]
+(pass) close tolerates a missing or non-object body and refuses a non-string note [18.65ms]
+(pass) approve and deny have nothing to flip on an unresolved row [19.36ms]
+
+src/daemon/api-brief.test.ts:
+(pass) Brief capabilities are registered with every feature disabled by default [0.59ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f-01-http-mXia8o/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) capability endpoint is protected by the real session gate, including after session expiry [18.77ms]
+(pass) API exposes live sanitized readiness using the injected provider registry [0.66ms]
+(pass) old conversation client sees unchanged payloads and stored history after a capability read [18.70ms]
+
+src/daemon/awareness-delivery-policy.test.ts:
+(pass) quiet error_detected preserves its workflow event and card signal without automatic assistance [0.77ms]
+(pass) quiet struggle_detected preserves its workflow event and card signal without automatic assistance [0.07ms]
+(pass) quiet stuck_detected preserves its workflow event and card signal without automatic assistance [0.06ms]
+(pass) quiet suggestion_ready preserves its workflow event and card signal without automatic assistance [0.06ms]
+(pass) quiet context_changed preserves its workflow event and card signal without automatic assistance [0.06ms]
+(pass) quiet opportunity transport with 0 accepting sockets never opens chat or falls back to another channel [0.50ms]
+(pass) quiet opportunity transport with 1 accepting sockets never opens chat or falls back to another channel [0.03ms]
+(pass) quiet opportunity event is published once; outbox delivery does not republish it [0.15ms]
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+(pass) flag undefined keeps legacy delivery available for rollback [1.38ms]
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+(pass) flag 0 keeps legacy delivery available for rollback [0.16ms]
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+(pass) flag true keeps legacy delivery available for rollback [0.12ms]
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+(pass) flag yes keeps legacy delivery available for rollback [0.10ms]
+Database initialized at: :memory:
+[CronScheduler] All jobs cancelled
+(pass) an enabled workflow still receives quiet awareness events through its real trigger manager [24.05ms]
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) governed approval, emergency and execution failure remain visible with chat closed (quiet=false) [24.93ms]
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) governed approval, emergency and execution failure remain visible with chat closed (quiet=true) [22.18ms]
+Database initialized at: /tmp/jarvis-f11-jldcA0/vault.db
+Database initialized at: /tmp/jarvis-f11-jldcA0/vault.db
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) offline quiet delivery retains its durable inbox and retries the same identity after restart [502.78ms]
+(pass) quiet capability accurately reports flag %s independently of other Brief features [0.70ms]
+(pass) quiet capability accurately reports flag 0 independently of other Brief features [0.21ms]
+(pass) quiet capability accurately reports flag true independently of other Brief features [0.12ms]
+(pass) quiet capability accurately reports flag 1 independently of other Brief features [0.11ms]
+Database initialized at: :memory:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) F11 review R1: quiet error suggestions preserve evidence without promising research [19.37ms]
+[WebSocketServer] Client disconnected. Total clients: 0
+(pass) F11 review R2: injected desktop receipt true controls offline legacy delivery [33.91ms]
+(pass) F11 review R2: injected desktop receipt false controls offline legacy delivery [32.31ms]
+
+src/daemon/opportunity-notification.test.ts:
+(pass) connected but dropping sockets and failed channels do not count as delivery [0.35ms]
+(pass) telegram acceptance establishes delivery [0.28ms]
+(pass) desktop acceptance establishes delivery [0.05ms]
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) WebSocket receipt delivers the same opportunity ID to a real client [28.14ms]
+[WebSocketServer] Broadcast failed: 0/1 clients received message
+(pass) WebSocket receipts exclude dropped frames and include queued frames [0.18ms]
+[WebSocketServer] Client disconnected. Total clients: 0
+(pass) native sender exit 0 determines its receipt [24.71ms]
+(pass) native sender exit 1 determines its receipt [23.84ms]
+
+src/sidecar/capability-predicate.test.ts:
+(pass) #611 servesCapability answers all three terms > yes when connected, advertised and not unavailable [0.07ms]
+(pass) #611 servesCapability answers all three terms > no when disconnected, whatever it advertises [0.04ms]
+(pass) #611 servesCapability answers all three terms > no for a capability it does not advertise [0.02ms]
+(pass) #611 servesCapability answers all three terms > no when advertised but reported unavailable [0.06ms]
+(pass) #611 servesCapability answers all three terms > FAIL-CLOSED on an absent capabilities array [0.03ms]
+(pass) #611 servesCapability answers all three terms > a missing connected flag is not a connected sidecar [0.02ms]
+(pass) #611 servesCapability answers all three terms > it answers exactly what the copies it replaced answered, and what the router answers [1.35ms]
+(pass) #611 the leaf stays a leaf, and its caller stays assertable alone > capability-predicate.ts imports nothing at all [0.27ms]
+(pass) #611 the leaf stays a leaf, and its caller stays assertable alone > capability-predicate.ts has no runtime requires or dynamic imports either [0.11ms]
+(pass) #611 the leaf stays a leaf, and its caller stays assertable alone > pebble-narration.ts imports only this leaf [0.17ms]
+(pass) #611 the leaf stays a leaf, and its caller stays assertable alone > pebble-narration.ts has no dynamic imports [0.07ms]
+(pass) #611 no copy of the predicate is left in the files that moved > ../daemon/pebble-narration.ts has no hand-rolled capability test of any shape [0.15ms]
+(pass) #611 no copy of the predicate is left in the files that moved > ../daemon/pebble-narration.ts routes the question through the shared predicate exactly once [0.10ms]
+(pass) #611 no copy of the predicate is left in the files that moved > ../actions/browser/remote-element-point.ts has no hand-rolled capability test of any shape [0.04ms]
+(pass) #611 no copy of the predicate is left in the files that moved > ../actions/browser/remote-element-point.ts routes the question through the shared predicate exactly once [0.04ms]
+(pass) #611 the record of the remaining copies is complete and enforced > it names every site that still holds its own version [0.08ms]
+(pass) #611 the record of the remaining copies is complete and enforced > it keeps flagging the one copy whose semantics differ [0.07ms]
+(pass) #611 the record of the remaining copies is complete and enforced > it states the drift rule in the non-inverted direction [0.09ms]
+(pass) #611 no seventh copy appears elsewhere in the tree > every file touching unavailable_capabilities is one we know about [31.43ms]
+
+src/goals/awareness-capture.integration.test.ts:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) native captures and explicit hint before produce one correct note [25.69ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) native captures and explicit hint after produce one correct note [22.19ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a real ended session matches its apps and does not invent a summary [22.45ms]
+
+src/goals/awareness-bridge.test.ts:
+(pass) serialized producer transition adds one attributed activity note without changing the goal [26.04ms]
+(pass) destination matches without attributing the departed window to current work [17.80ms]
+(pass) real title-only transition can attach to an active goal [20.23ms]
+(pass) inactive and unrelated goals receive no note [19.68ms]
+(pass) duplicate detection is not displaced by five newer manual notes [20.58ms]
+(pass) producer and consumer share v1, with compatibility for unversioned producer envelopes [24.57ms]
+(pass) rejects unknown version without writing activity [17.77ms]
+(pass) rejects string version without writing activity [20.85ms]
+(pass) rejects null version without writing activity [22.31ms]
+(pass) rejects missing destination without writing activity [22.57ms]
+(pass) rejects object text without writing activity [22.64ms]
+(pass) rejects missing timestamp without writing activity [23.45ms]
+(pass) rejects invalid timestamp without writing activity [23.33ms]
+(pass) rejects negative timestamp without writing activity [23.64ms]
+(pass) rejects unrelated event without writing activity [24.79ms]
+(pass) rejects invented legacy fields without writing activity [24.51ms]
+(pass) rejects bare data without writing activity [23.43ms]
+(pass) rejects array envelope without writing activity [28.54ms]
+(pass) rejects null envelope without writing activity [22.39ms]
+(pass) ignores unrelated extra text even when it repeats goal keywords [23.68ms]
+(pass) session activity uses its actual apps, not invented summary fields [23.61ms]
+(pass) an ended session without identity null is not attributed [22.92ms]
+(pass) an ended session without identity "" is not attributed [23.31ms]
+(pass) an ended session without identity "   " is not attributed [22.55ms]
+(pass) malformed session apps null are rejected [24.85ms]
+(pass) malformed session apps "Visual Studio Code" are rejected [22.26ms]
+(pass) malformed session apps {} are rejected [21.88ms]
+(pass) malformed session apps "Visual Studio Code" are rejected [22.03ms]
+(pass) activity throttling survives database reopen and expires after thirty minutes [411.67ms]
+
+src/brief/chat-transport.test.ts:
+(pass) interleaved streams, tab switch and one cancel isolate text, progress, history and TTS [31.26ms]
+(pass) duplicates, reconnect and stale cancel reconcile the original terminal without another generation [25.63ms]
+(pass) production limiter queues another conversation and a cancelled queued turn never calls the model [23.68ms]
+(pass) disabled transport, malformed frames and unavailable cursors never create turns [45.71ms]
+(pass) cancel ends audio immediately and suppresses a delayed provider chunk and duplicate terminal [31.93ms]
+(pass) model errors persist a sanitized failed terminal and preserve partial output for replay [20.28ms]
+(pass) subscription admission cannot orphan a queued turn and queue admission cannot append messages [75.15ms]
+(pass) resubscribing during speech never resumes a truncated audio stream [24.04ms]
+(pass) leaving before speech starts prevents audio after returning to the conversation [23.08ms]
+(pass) repeated queued cancellation releases retained jobs before the active turn ends [170.91ms]
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-ZlgTTF/db
+[CronScheduler] All jobs cancelled
+(pass) double approval activates only the reviewed version with manual registration [624.61ms]
+Database initialized at: /tmp/jarvis-f10-hsxONH/db
+[WebhookManager] Registered webhook for workflow "Cxh7w2N61FsC04dJQVJw4" at /webhooks/Cxh7w2N61FsC04dJQVJw4
+[WebhookManager] Unregistered webhook for workflow "Cxh7w2N61FsC04dJQVJw4"
+[CronScheduler] All jobs cancelled
+(pass) double approval activates only the reviewed version with webhook registration [522.29ms]
+Database initialized at: /tmp/jarvis-f10-krqZTl/db
+(pass) changed revision refuses approval before publication [536.65ms]
+Database initialized at: /tmp/jarvis-f10-GVPrWw/db
+(pass) changed goal refuses approval before publication [735.60ms]
+Database initialized at: /tmp/jarvis-f10-QfLKek/db
+(pass) changed version refuses approval before publication [790.36ms]
+Database initialized at: /tmp/jarvis-f10-FCiib6/db
+(pass) changed connection refuses approval before publication [899.53ms]
+Database initialized at: /tmp/jarvis-f10-KlV0hN/db
+(pass) changed target refuses approval before publication [1784.95ms]
+Database initialized at: /tmp/jarvis-f10-YFzM8e/db
+(pass) changed quality refuses approval before publication [1610.22ms]
+Database initialized at: /tmp/jarvis-f10-HYaLBJ/db
+(pass) publication and decision roll back together when receipt persistence fails [1590.07ms]
+Database initialized at: /tmp/jarvis-f10-xymXWY/db
+(pass) dismissal settles independently and supplies the next current ready proposal [1456.75ms]
+Database initialized at: /tmp/jarvis-f10-6w1Tis/db
+(pass) dismissal during preparation fences the late model result without publication [1591.20ms]
+Database initialized at: /tmp/jarvis-f10-9cWS1C/db
+(pass) all duplicate request keys stay bound to their original proposal, revision and action [1379.38ms]
+Database initialized at: /tmp/jarvis-f10-zy3TAC/db
+Database initialized at: /tmp/jarvis-f10-zy3TAC/db
+(pass) registration timeout returns a durable pending receipt, and process recovery never republishes [1009.32ms]
+Database initialized at: /tmp/jarvis-f10-Yl5Oa6/db
+(pass) registration failure stays actionable and explicit retry uses the same receipt [764.53ms]
+Database initialized at: /tmp/jarvis-f10-HRhxAr/db
+(pass) old blocked receipts cannot starve a new approval or later recovery observations [883.72ms]
+Database initialized at: /tmp/jarvis-f10-oZGGA0/db
+(pass) a silent registration refusal is never reported as registered [878.10ms]
+Database initialized at: /tmp/jarvis-f10-NtN9J8/db
+(pass) replaying approval after pause cannot restore the old workflow [540.32ms]
+Database initialized at: /tmp/jarvis-f10-619Wdv/db
+(pass) replaying approval after delete cannot restore the old workflow [581.47ms]
+Database initialized at: /tmp/jarvis-f10-FYW6iU/db
+(pass) replaying approval after republish cannot restore the old workflow [622.09ms]
+Database initialized at: /tmp/jarvis-f10-VtLPqU/db
+(pass) samples and private diagnostics never appear in an activation receipt [505.58ms]
+Database initialized at: /tmp/jarvis-f10-II57bE/db
+(pass) strict routes enforce both capability flags, provider identity and bounded streamed bodies [634.28ms]
+Database initialized at: /tmp/jarvis-f10-cGSTLW/db
+(pass) approval to activate does not grant Authority for a later notification [760.52ms]
+(skip) actual Q13 qualification approves the exact prepared snapshot without executing it
+Database initialized at: /tmp/jarvis-f10-Il8Egi/db
+[CronScheduler] All jobs cancelled
+(pass) F10 review R1: reconciliation preserves backoff and stops after exhaustion [623.44ms]
+Database initialized at: /tmp/jarvis-f10-KGnDO2/db
+[WebhookManager] Registered webhook for workflow "6ONSxoIIS8IYoaRN5SlD1" at /webhooks/6ONSxoIIS8IYoaRN5SlD1
+[WebhookManager] Unregistered webhook for workflow "6ONSxoIIS8IYoaRN5SlD1"
+[CronScheduler] All jobs cancelled
+(pass) F10 review R1: reconciliation preserves backoff and observes recovery [598.14ms]
+Database initialized at: /tmp/jarvis-f10-RDQkD6/db
+(pass) F10 review R3: committed dismissal aborts a hung composer and starts queued preparation [520.28ms]
+Database initialized at: /tmp/jarvis-f10-BCzdHH/db
+(pass) F10 review R3: rolled-back dismissal leaves active preparation running [528.85ms]
+Database initialized at: /tmp/jarvis-f10-ojcRE2/db
+(pass) F10 review R1: existing receipt schema upgrades without losing decisions or request keys [631.07ms]
+
+src/brief/capabilities.test.ts:
+(pass) production registration enables nothing, even when activation is requested without providers [3.93ms]
+(pass) installed and ready does not activate a feature without an explicit selection [0.10ms]
+(pass) readiness changes are reflected without restarting or retaining a stale true flag [0.18ms]
+(pass) transitive activation dependencies must themselves be enabled [0.15ms]
+(pass) dependency failure disables consumers on the next snapshot [0.11ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.16ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.06ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.02ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.02ms]
+(pass) duplicate and unknown registrations fail early, and registries do not share state [0.25ms]
+(pass) old or unsupported server response cannot enable new controls: null [0.02ms]
+(pass) old or unsupported server response cannot enable new controls: {}
+(pass) old or unsupported server response cannot enable new controls: {"error":"Not found"}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":2,"capabilities":{}}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":1,"capabilities":null}
+(pass) v1 clients accept additive fields but reject inconsistent booleans or unknown capability IDs [0.14ms]
+(pass) the fixed activation graph has only known dependencies and no cycles [0.18ms]
+(pass) contracts and capability consumer bundle for a browser without importing backend implementations [6.57ms]
+
+src/workflows/runtime/workflow-authority.test.ts:
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > a per-call UI review survives allowed policy and resumes exactly once [29.52ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > the effect receipt stores no delimiter, while the effect result keeps its shape [28.66ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > an explicit UI review never turns a policy denial into an approval [47.06ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > an old category-only approval cannot satisfy a new UI review requirement [28.25ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > inline expressions cannot call the host fetch function [26.60ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > urgent dashboard-only notifications do not broadcast to external recipients [28.03ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > legacy urgent proactive notifications retain their explicit broadcast behavior [28.59ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > tool: Authority denial prevents the effect [29.95ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) workflow effect boundary > tool: pause prevents the effect [30.93ms]
+Database initialized at: :memory:
+[EmergencyController] System KILLED — all agents terminated
+(pass) workflow effect boundary > tool: kill prevents the effect [39.34ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > notify: Authority denial prevents the effect [37.69ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) workflow effect boundary > notify: pause prevents the effect [39.31ms]
+Database initialized at: :memory:
+[EmergencyController] System KILLED — all agents terminated
+(pass) workflow effect boundary > notify: kill prevents the effect [39.64ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > context: Authority denial prevents the effect [48.55ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) workflow effect boundary > context: pause prevents the effect [54.28ms]
+Database initialized at: :memory:
+[EmergencyController] System KILLED — all agents terminated
+(pass) workflow effect boundary > context: kill prevents the effect [43.72ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > llm: Authority denial prevents the effect [47.25ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) workflow effect boundary > llm: pause prevents the effect [47.84ms]
+Database initialized at: :memory:
+[EmergencyController] System KILLED — all agents terminated
+(pass) workflow effect boundary > llm: kill prevents the effect [40.68ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > context reads and prompts are recorded as durable effects, not passed straight through [36.54ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > a governed read_data category pauses both halves of the exfiltration path [33.91ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > a pending context read answers 202 while a resolved one keeps its bare array shape [40.11ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > allowed effect executes once and returns its durable result on replay [42.77ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > tool: real approval, durable pause and single dispatch [55.52ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > notify: real approval, durable pause and single dispatch [59.71ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > approved effect rechecks denied before dispatch [57.74ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > approved effect rechecks expired before dispatch [49.84ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) workflow effect boundary > approved effect rechecks pause before dispatch [47.30ms]
+Database initialized at: :memory:
+[EmergencyController] System KILLED — all agents terminated
+(pass) workflow effect boundary > approved effect rechecks kill before dispatch [37.26ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > approved effect rechecks policy-change before dispatch [35.74ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > approved effect rechecks canceled before dispatch [33.50ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > approval cannot authorize changed parameters or an edited version [32.78ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path, target
+(pass) workflow effect boundary > builtin target is pinned to the reviewed sidecar, not a later default [34.63ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > a new sidecar cannot redirect an approved local write [43.65ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > missing identity and a different project never dispatch [38.41ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > a refused capability is audited, not silently rejected [45.15ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > unmapped tools do not default to read_data [61.48ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > missing authorityEngine fails closed [63.72ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > missing emergencyController fails closed [60.76ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > missing auditTrail fails closed [49.64ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > notification approval freezes expanded channels and recipient identities [48.73ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) workflow effect boundary > emergency during notification fan-out blocks later channels and records partial delivery [36.83ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > trusted typed adapter uses its declared business category and target [32.22ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > run_command cannot hide undeclared business effects [27.30ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > browser_click cannot hide undeclared business effects [26.10ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > browser_evaluate cannot hide undeclared business effects [24.69ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > a canceled run refuses through the shared cancellation fence [24.71ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) workflow effect boundary > the ambient execution scope carries Authority state, not just cancellation [25.74ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > concurrent callers cannot dispatch the same effect twice [24.98ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > slow approval delivery cannot overwrite a completed concurrent invocation [25.75ms]
+Database initialized at: :memory:
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > a failed dispatch never retries automatically [25.16ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > Authority waitpoints cannot be resumed through generic webhooks, and effects are inspectable [25.10ms]
+Database initialized at: :memory:
+[SubAgent:Workflow role] Tool write_file -> [AUTHORITY DENIED] write_file: Explicitly denied by override for workflow-default...
+(pass) workflow effect boundary > delegated agents retain their governed tool path under the workflow gate [31.37ms]
+Database initialized at: :memory:
+(pass) workflow effect boundary > a child workflow start obeys emergency and Authority before enqueue [26.06ms]
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-authority-1wQKat/test.db
+Database initialized at: /tmp/jarvis-authority-1wQKat/test.db
+Unexpected parameters for tool 'write_file': content, path
+Database initialized at: /tmp/jarvis-authority-1wQKat/test.db
+(pass) workflow effect boundary > approved effect and dispatch result survive a database restart [544.04ms]
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-uncertain-lmEVEo/test.db
+Database initialized at: /tmp/jarvis-uncertain-lmEVEo/test.db
+(pass) workflow effect boundary > a crash during dispatch leaves a durable uncertain outcome [462.77ms]
+Database initialized at: :memory:
+[engine d37d0380 stderr] (node:903128) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) workflow effect boundary > real engine rejects inline effects before dispatch when allowed [2194.37ms]
+Database initialized at: :memory:
+[engine 31277694 stderr] (node:903163) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 31277694 stderr] 109 | `)),socket2.removeListener("error",socketOnError),ws.setSocket(socket2,head,{allowSynchronousEvents:this.options.allowSynchronousEvents,maxPayload:this.options.maxPayload,skipUTF8Validation:this.options.skipUTF8Validation}),this.clients&&(this.clients.add(ws),ws.on("close",()=>{this.clients.delete(ws),this._shouldEmitClose&&!this.clients.size&&process.nextTick(emitClose,this)})),cb(ws,req)}};module2.exports=WebSocketServer2;function addListeners(server,map2){for(let event of Object.keys(map2))server.on(event,map2[event]);return function(){for(let event of Object.keys(map2))server.removeListener(event,map2[event])}}function emitClose(server){server._state=CLOSED,server.emit("close")}function socketOnError(){this.destroy()}function abortHandshake(socket2,code,message2,headers){message2=message2||http3.STATUS_CODES[code],headers={Connection:"close","Content-Type":"text/html","Content-Length":Buffer.byteLength(message2),...headers},socket2.once("finish",socket2.destroy),socket2.end(`HTTP/1.1 ${code} ${http3.STATU
+110 | `+Object.keys(headers).map(h=>`${h}: ${headers[h]}`).join(`\r
+111 | `)+`\r
+112 | \r
+113 | `+message2)}function abortHandshakeOrEmitwsClientError(server,req,socket2,code,message2,headers){if(server.listenerCount("wsClientError")){let err=new Error(message2);Error.captureStackTrace(err,abortHandshakeOrEmitwsClientError),server.emit("wsClientError",err,socket2,req)}else abortHandshake(socket2,code,message2,headers)}}});function tokenize(script){script.length>16384&&fail("source length limit");let tokens=[],i=0;for(;i<script.length;){let c=script[i];if(/\s/u.test(c)){i++;continue}if(tokens.length>=2048&&fail("token limit"),c==='"'||c==="'"){i++;let value2="",closed=!1;for(;i<script.length;){let next=script[i++];if(next===c){closed=!0;break}if(next!=="\\"){value2+=next;continue}let escaped=script[i++],escapes={n:`
+114 | `,r:"\r",t:"	",b:"\b",f:"\f","\\":"\\","'":"'",'"':'"',"/":"/"};if(escaped==="u"){let hex3=script.slice(i,i+4);/^[\da-f]{4}$/i.test(hex3)||fail("invalid Unicode escape"),value2+=String.fromCharCode(parseInt(hex3,16)),i+=4}else escaped&&Object.hasOwn(escapes,escaped)?value2+=escapes[escaped]:fail("invalid string escape")}closed||fail("unterminated string"),tokens.push({kind:"literal",value:value2})}else{let rest=script.slice(i),number4=rest.match(/^(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?/),identifier=rest.match(/^[$_\p{L}][$_\p{L}\p{N}]*/u),symbol25=rest.match(/^(?:===|!==|==|!=|<=|>=|&&|\|\||\?\?|\?\.|[.\[\](){},?:+*/%!<>-])/);number4?(tokens.push({kind:"literal",value:Number(number4[0])}),i+=number4[0].length):identifier?(tokens.push({kind:"identifier",value:identifier[0]}),i+=identifier[0].length):symbol25?(tokens.push({kind:"symbol",value:symbol25[0]}),i+=symbol25[0].length):fail("unsupported syntax")}}return tokens}function ownData(object3,key){typeof key!="string"&&(typeof key!="number"||!Number.isFinit
+
+WorkflowExpressionError: Unsupported workflow expression: function calls or other executable syntax in {{ fetch("http://127.0.0.1:44847/synthetic") }}. Workflow expressions are data only: property paths, literals, arithmetic, comparisons, logical and nullish operators, ternaries, arrays/objects and flattenNestedKeys(data, path). JavaScript methods, function calls, assignment and prototype access are no longer evaluated. Rewrite the expression as a data reference, or move the logic into a step whose effects Authority can govern.
+ source: "fetch(\"http://127.0.0.1:44847/synthetic\")",
+
+      at evaluateWorkflowExpression (/home/vierisid/.jarvis/cache/engine/2b0e24beb101aaca/main.js:114:3430)
+      at runScript (/home/vierisid/.jarvis/cache/engine/2b0e24beb101aaca/main.js:152:159)
+      at <anonymous> (/home/vierisid/.jarvis/cache/engine/2b0e24beb101aaca/main.js:250:200329)
+      at async tryCatch (/home/vierisid/.jarvis/cache/engine/2b0e24beb101aaca/main.js:250:69913)
+      at async tryCatchAndThrowOnEngineError (/home/vierisid/.jarvis/cache/engine/2b0e24beb101aaca/main.js:250:135175)
+      at async evalInScope (/home/vierisid/.jarvis/cache/engine/2b0e24beb101aaca/main.js:250:200246)
+
+[engine 31277694 stderr] [Progress] Initial payload upload failed 333 |
+334 | `)}
+335 | `}var AP_PAUSED_FLOW_TIMEOUT_DAYS=Number(process.env.AP_PAUSED_FLOW_TIMEOUT_DAYS),pieceExecutor={async handle({action,executionState,constants}){if(executionState.isCompleted({stepName:action.name}))return executionState;let resultExecution=await runWithExponentialBackoff(executionState,action,constants,executeAction2);return continueIfFailureHandler(resultExecution,action,constants)}},executeAction2=async({action,executionState,constants})=>{let stepStartTime=performance.now(),stepOutput=GenericStepOutput.create({input:{},type:"PIECE",status:"RUNNING"}),{data:executionStateResult,error:executionStateError}=await utils.tryCatchAndThrowOnEngineError(async()=>{if(isNil(action.settings.actionName))throw new EngineGenericError("ActionNameNotSetError","Action name is not set");let{pieceAction,piece}=await pieceLoader.getPieceAndActionOrThrow({pieceName:action.settings.pieceName,pieceVersion:action.settings.pieceVersion,actionName:action.settings.actionName,devPieces:constants.devPieces}),{resolvedInput,censoredInp
+336 | `}),originalLog.apply(console,args)};let originalWarn=console.warn;console.warn=function(...args){notifyClient?.stdout({message:args.join(" ")+`
+337 | `}),originalWarn.apply(console,args)};let originalError=console.error;console.error=function(...args){let sanitizedArgs=[...args];typeof args[0]=="string"&&ERROR_MESSAGES_TO_REDACT.some(m=>args[0].includes(m))&&(sanitizedArgs=[sanitizedArgs[0],"REDACTED"]),notifyClient?.stderr({message:sanitizedArgs.join(" ")+`
+338 | `}),originalError.apply(console,sanitizedArgs)},createRpcServer(socket,{executeOperation:async({operationType,operation})=>{runProgressService.init();try{let response=await execute2(operationType,operation);return JSON.parse(JSON.stringify(response))}finally{await runProgressService.shutdown()}}});let gc=global.gc;typeof gc=="function"&&setInterval(()=>{gc()},6e4),socket.connect()},getWorkerClient:()=>{if(!workerClient)throw new Error("Worker client not initialized");return workerClient},sendError:error48=>{notifyClient?.stderr({message:(0,import_node_util2.inspect)(error48)})},disconnect:()=>{socket?.disconnect(),socket=void 0,workerClient=void 0,notifyClient=void 0}};function buildSocketOptions(sandboxId){let base={path:"/worker/ws",auth:{sandboxId},autoConnect:!1,reconnection:!0};return process.env.AP_NETWORK_MODE==="STRICT"&&Object.assign(base,{agent:new import_node_http.default.Agent}),base}var zstdCompress=(0,import_node_util3.promisify)(import_node_zlib.zstdCompress),lock=new Mutex,updateLock=new Mutex
+
+ProgressUpdateError: {
+  "message": "Failed to upload execution state"
+}
+ cause: Response (30 bytes) {
+  ok: false,
+  url: "http://127.0.0.1:44717/v1/logs/BKqyFhVxODoU9bqdmzKeV?token=eyJhbGciOiJIUzI1NiJ9.eyJzYW5kYm94SWQiOiIzMTI3NzY5NGE5MjhlMTM3NzA4OGE5ZTYiLCJydW5JZCI6IkJLcXlGaFZ4T0RvVTlicWRtektlViIsInByb2plY3RJZCI6Impydl9wcm9qX2RlZmF1bHQiLCJpYXQiOjE3OTEzMTUzOTQsImV4cCI6MTc5MTMxODk5NH0.4RTGmcAMbUh3IfZdvdC50SNLav86VD1TeuCxMdR8L9s",
+  status: 401,
+  statusText: "Unauthorized",
+  headers: Headers {
+    "content-type": "application/json",
+    "date": "Tue, 06 Oct 2026 19:36:35 GMT",
+    "content-length": "30",
+  },
+  redirected: false,
+  bodyUsed: false,
+  Blob (30 bytes)
+},
+  type: "ENGINE",
+
+      at <anonymous> (/home/vierisid/.jarvis/cache/engine/2b0e24beb101aaca/main.js:338:3607)
+
+(pass) workflow effect boundary > real engine rejects inline effects before dispatch when denied [2124.92ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+[engine 31d3c464 stderr] (node:903195) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) workflow effect boundary > real engine rejects inline effects before dispatch when paused [2087.40ms]
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-preview-approval-clBZFY/test.db
+[engine 2133f3f4 stderr] (node:903227) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+Database initialized at: /tmp/jarvis-preview-approval-clBZFY/test.db
+[engine 7b3401a6 stderr] (node:903295) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > approved step preview retains scope and sample inputs after restart and job cleanup [4750.89ms]
+Database initialized at: :memory:
+[engine fe0a5b55 stderr] (node:903328) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 6de87c97 stderr] (node:903360) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+Unexpected parameters for tool 'write_file': content, path
+[engine b9d306a5 stderr] (node:903392) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+[engine b9d306a5 stderr] (Use `bun --trace-warnings ...` to show where the warning was created)
+Unexpected parameters for tool 'write_file': content, path
+(pass) workflow effect boundary > tool: real engine and worker pause, resume and preserve loop identity [6124.82ms]
+Database initialized at: :memory:
+[engine 228a79e6 stderr] (node:903424) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine fb160d74 stderr] (node:903490) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine bddf308a stderr] (node:903522) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+[engine bddf308a stderr] (Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) workflow effect boundary > notify: real engine and worker pause, resume and preserve loop identity [6224.82ms]
+
+src/workflows/adapters/untrusted-reach.test.ts:
+(pass) #573 premise 1: the reachable tool set is closed and known > the reachable set is exactly the reviewed table [0.07ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing is both reachable and refused as opaque [0.05ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the opaque refusals still include the navigate and shell family [0.06ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > each reachable tool is the untrusted source the table says, by real category [7.16ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the untrusted-source subset is the eight tools the decision is about [0.07ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > no source file outside the workflow runtime spells a workflowEffect declaration [1.32ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > a bounded tool name cannot be re-registered with different semantics [0.11ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing removes a tool from a registry in production [12.46ms]
+(pass) #573 premise 2: the routes out of the workflow data plane are enumerated > only the reviewed files outside src/workflows hold a run or a version object [9.61ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > an untrusted-source tool's result reaches the step unframed and byte-exact [0.56ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > a browser result reaches the step unframed too, matched by category [0.18ms]
+
+src/workflows/runner/triggers/manager.test.ts:
+Database initialized at: :memory:
+[CronScheduler] All jobs cancelled
+(pass) TriggerManager: lifecycle > start scans ENABLED flows; refresh reconciles status changes [19.87ms]
+Database initialized at: :memory:
+(pass) TriggerManager: lifecycle > EMPTY trigger: nothing registered [19.39ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "DOwnJTpfXVud5KCK4mFNn" at /webhooks/DOwnJTpfXVud5KCK4mFNn
+[WebhookManager] Unregistered webhook for workflow "DOwnJTpfXVud5KCK4mFNn"
+(pass) TriggerManager: lifecycle > refresh on a deleted flow tears down without throwing [23.54ms]
+Database initialized at: :memory:
+(pass) TriggerManager: jarvis-trigger on_event > publishing the configured event fires a flow run [24.55ms]
+Database initialized at: :memory:
+(pass) TriggerManager: jarvis-trigger on_event > filter narrows which events fire [23.62ms]
+Database initialized at: :memory:
+(pass) TriggerManager: jarvis-trigger on_event > malformed eventType is logged and skipped (no throw, no sub) [24.49ms]
+Database initialized at: :memory:
+(pass) TriggerManager: jarvis-trigger on_event > non-on_event triggerName is skipped [23.25ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "S47KxSxWl7TpZ0mTina4R" at /webhooks/S47KxSxWl7TpZ0mTina4R
+(pass) TriggerManager: webhook > registers a webhook on enable; ingress fires a flow run [24.46ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "J3V1bUKZ8scnYn8z1PDxF" at /webhooks/J3V1bUKZ8scnYn8z1PDxF
+(pass) TriggerManager: webhook > HMAC-protected webhook rejects unsigned requests [23.69ms]
+Database initialized at: :memory:
+(pass) TriggerManager: integration with canonical event taxonomy > flow subscribed to observer.clipboard_changed fires when published [23.02ms]
+Database initialized at: :memory:
+(pass) TriggerManager: integration with canonical event taxonomy > flow subscribed to awareness.context_changed fires when published [22.44ms]
+Database initialized at: :memory:
+(pass) TriggerManager: integration with canonical event taxonomy > flow with eventType filter fires only on matching commitment.overdue payload [23.02ms]
+Database initialized at: :memory:
+[CronScheduler] Scheduled job "flow:MjTLv2ehExyM9yXwMYLn8" (*/5 * * * *), next run: 2026-10-06T19:40:00.000Z
+[CronScheduler] Scheduled job "flow:RXvgj5CZ0465HvGuewI5O" (0 8 * * *), next run: 2026-10-07T08:00:00.000Z
+[CronScheduler] Scheduled job "flow:9LwKOoKp8L9Cdwli7qUxm" (0 * * * *), next run: 2026-10-06T20:00:00.000Z
+[CronScheduler] Cancelled job "flow:MjTLv2ehExyM9yXwMYLn8"
+[CronScheduler] Cancelled job "flow:RXvgj5CZ0465HvGuewI5O"
+[CronScheduler] Cancelled job "flow:9LwKOoKp8L9Cdwli7qUxm"
+[CronScheduler] All jobs cancelled
+(pass) TriggerManager: schedule > registers cron when expression is present (any of the three keys) [26.76ms]
+Database initialized at: :memory:
+(pass) TriggerManager: schedule > missing cron expression is logged and skipped [22.84ms]
+Database initialized at: :memory:
+[CronScheduler] Scheduled job "flow:Tt840KzWVcWW1rcRqS9KO" (0 * * * *), next run: 2026-10-06T20:00:00.000Z
+[CronScheduler] Cancelled job "flow:Tt840KzWVcWW1rcRqS9KO"
+[CronScheduler] All jobs cancelled
+(pass) TriggerManager: schedule > invalid cron expression is logged but does not destabilize start() [23.28ms]
+Database initialized at: :memory:
+(pass) TriggerManager: unknown trigger kinds > PIECE_TRIGGER with unknown pieceName is skipped [22.47ms]
+Database initialized at: :memory:
+(pass) TriggerManager: unknown trigger kinds > unknown trigger.type is skipped [21.81ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > ON_ENABLE persists schedule + registers cron; a cron tick polls the RUN hook and enqueues one run per event [49.74ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > ON_ENABLE is idempotent: persisted schedule is reused, no re-call to engine [21.27ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "izj8uVdI2eAlKV8DQxWOM" at /webhooks/izj8uVdI2eAlKV8DQxWOM
+[WebhookManager] Unregistered webhook for workflow "izj8uVdI2eAlKV8DQxWOM"
+(pass) TriggerManager: engine-managed triggers (Phase J) > ON_ENABLE returning webhook listeners (no schedule) surfaces a warning on tm.list() [22.48ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > concurrent refresh on the same flow serializes -- engine ON_ENABLE called exactly once [47.98ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > triggeredBy follows `trigger:<kind>` for both legacy and engine fires [49.03ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > engine poll enqueues one run per event (payload = event, no executeTrigger); empty poll enqueues nothing [72.34ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > engine ON_ENABLE failure is logged; flow stays manually runnable, no crash [16.73ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > a transient ON_ENABLE failure is retried on the backoff and the flow ends up registered [143.81ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > retries stop once the schedule is exhausted, and a disabled flow cancels its pending retry [236.39ms]
+Database initialized at: :memory:
+(pass) review: durable readiness refusals > a live cron refusal records a failed run and the next fire can recover [23.81ms]
+Database initialized at: :memory:
+[CronScheduler] Scheduled job "flow:eyOIF1sKuo0vhF0RUWjiF" (* * * * *), next run: 2026-10-06T19:37:00.000Z
+[CronScheduler] Cancelled job "flow:eyOIF1sKuo0vhF0RUWjiF"
+[CronScheduler] All jobs cancelled
+(pass) review: durable readiness refusals > startup refuses visibly once and can register after the binding is repaired [18.19ms]
+Database initialized at: :memory:
+(pass) review: durable readiness refusals > polling refusal is recorded before consuming events and recovers on the next tick [74.31ms]
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-readiness-poll-Nw07Nb/workflow.db
+Database initialized at: /tmp/jarvis-readiness-poll-Nw07Nb/workflow.db
+Database initialized at: :memory:
+(pass) review: durable readiness refusals > review R2: readiness lost during polling retains every consumed payload after restart without retrying it [546.21ms]
+Database initialized at: :memory:
+[CronScheduler] All jobs cancelled
+(pass) registration receipt refuses a failed engine cron with 0 working listeners [21.20ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "Vgu88jeVZ0SOtg7YsCEab" at /webhooks/Vgu88jeVZ0SOtg7YsCEab
+[WebhookManager] Unregistered webhook for workflow "Vgu88jeVZ0SOtg7YsCEab"
+[CronScheduler] All jobs cancelled
+(pass) registration receipt refuses a failed engine cron with 1 working listeners [23.19ms]
+Database initialized at: :memory:
+(pass) failed engine cron with 0 working listeners repairs locally without repeating remote hooks [23.83ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "HB6hN54sqDK7UOk37MzL4" at /webhooks/HB6hN54sqDK7UOk37MzL4
+[WebhookManager] Registered webhook for workflow "HB6hN54sqDK7UOk37MzL4" at /webhooks/HB6hN54sqDK7UOk37MzL4
+[WebhookManager] Unregistered webhook for workflow "HB6hN54sqDK7UOk37MzL4"
+(pass) failed engine cron with 1 working listeners repairs locally without repeating remote hooks [24.58ms]
+Database initialized at: :memory:
+(pass) F10 review R2: pause cleans engine state after local registration failure [26.00ms]
+Database initialized at: :memory:
+(pass) F10 review R2: stop cleans engine state after local registration failure [25.40ms]
+
+2 tests skipped:
+(skip) real Q13 dry-run qualifies the exact disabled version and blocks missing fixtures
+(skip) actual Q13 qualification approves the exact prepared snapshot without executing it
+
+ 513 pass
+ 2 skip
+ 0 fail
+ 2928 expect() calls
+Ran 515 tests across 28 files. [87.03s]
