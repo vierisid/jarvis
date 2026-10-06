@@ -1,0 +1,19 @@
+$ bun run copy:models
+$ mkdir -p ui/public/openwakeword/models ui/public/ort && cp node_modules/openwakeword-wasm-browser/models/melspectrogram.onnx node_modules/openwakeword-wasm-browser/models/embedding_model.onnx node_modules/openwakeword-wasm-browser/models/silero_vad.onnx node_modules/openwakeword-wasm-browser/models/hey_jarvis_v0.1.onnx ui/public/openwakeword/models/ && cp node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.wasm node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.jsep.mjs node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.mjs ui/public/ort/
+$ bun build ui/index.html ui/pebble.html --outdir ui/dist
+Bundled 831 modules in 470ms
+
+  index-hwp3az3d.js             5.51 MB    (entry point)
+  index.html                    1.51 KB    (entry point)
+  pebble-g0zwxntp.js            0.98 MB    (entry point)
+  pebble.html                   0.68 KB    (entry point)
+  index-q76v477h.css            0.56 MB    (asset)
+  pebble-6ax1vmhh.css           8.22 KB    (asset)
+  usejarvis-light-4vgmveny.svg  120.73 KB  (asset)
+  usejarvis-dark-82f128fv.svg   120.73 KB  (asset)
+
+warn: invalid @ rule encountered: '@theme'
+
+warn: invalid @ rule encountered: '@theme'
+
+warn: invalid @ rule encountered: '@tailwind'

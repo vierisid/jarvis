@@ -13,9 +13,9 @@ beforeEach(() => {
 });
 afterEach(async () => { await React.act(async () => root.unmount()); host.remove(); });
 afterAll(() => GlobalRegistrator.unregister());
-async function render(mode:"preview"|"live"="preview",theme="light") {
+async function render(mode:"preview"|"live"="preview",theme="light",report=(message:string)=>feedback.push(message)) {
   await React.act(async () => root.render(<div className="brief-root" data-brief-theme={theme}>
-    <AttachmentFan mode={mode} binding={binding} reducedMotion onFeedback={message => feedback.push(message)} />
+    <AttachmentFan mode={mode} binding={binding} reducedMotion onFeedback={report} />
     <input aria-label="Next field" defaultValue="Keep draft" />
   </div>));
 }
@@ -60,8 +60,9 @@ test("pending entry is deduplicated and a failed request can be retried",async()
 test("late picker result cannot report into another conversation",async()=>{
   let resolve!:(value:"attached")=>void, signal!:AbortSignal;
   binding.choose=async(_,s)=>{signal=s;return new Promise(yes=>resolve=yes);};
-  await render(); await click(toggle()); await click(row("document")); const count=feedback.length;
+  await render(); await click(toggle()); await click(row("document"));
   binding={...binding,conversationId:"b"}; await render(); expect(signal.aborted).toBe(true);
+  expect(feedback).toEqual(["Adding document…", ""]); const count=feedback.length;
   await React.act(async()=>resolve("attached")); expect(feedback.length).toBe(count); expect(menu().getAttribute("aria-hidden")).toBe("true");
 });
 test("source mismatch, missing identity and offline states never dispatch",async()=>{
@@ -129,4 +130,22 @@ test("closing Pebble during selection clears pending feedback without a success 
   await React.act(async()=>resolve("attached"));
   expect(feedback.at(-1)).toBe("");
   expect(feedback).not.toContain("Document attached.");
+});
+
+test("A to B to A clears only the cancelled request and keeps completed feedback",async()=>{
+  const status:Record<string,string>={b:"Existing B feedback"};
+  const report=(id:string)=>(message:string)=>{status[id]=message;return 0;};
+  let resolve!:(value:"attached")=>void;
+  binding.choose=()=>new Promise(yes=>resolve=yes);
+  await render("preview","light",report("a"));await click(toggle());await click(row("document"));
+  expect(status.a).toBe("Adding document…");
+  binding={...binding,conversationId:"b",choose:async()=>"attached"};
+  await render("preview","light",report("b"));
+  expect(status).toEqual({a:"",b:"Existing B feedback"});
+  await click(toggle());await click(row("image"));
+  binding={...binding,conversationId:"a"};await render("preview","light",report("a"));
+  expect(status).toEqual({a:"",b:"Image attached."});
+  await click(toggle());await click(row("screenshot"));
+  await React.act(async()=>resolve("attached"));
+  expect(status).toEqual({a:"Screenshot attached.",b:"Image attached."});
 });

@@ -24,4 +24,5 @@
 /* Short conversations fan sideways instead of covering tabs or shrinking targets. */
 .brief-root .brief-fan-layer[data-compact="true"] :is(.brief-fan-item,.brief-fan-item button) { width:44px; }
 .brief-root .brief-fan-layer[data-compact="true"] .brief-fan-name { position:absolute; bottom:44px; left:0; }
-.brief-root .brief-fan-layer[data-compact="true"] .brief-fan-reason { bottom:78px; left:auto; right:0; }
+/* Align the explanation to the fan origin, inside its mask and viewport. */
+.brief-root .brief-fan-layer[data-compact="true"] .brief-fan-reason { bottom:78px; left:calc(-1 * var(--brief-fan-choice-offset, 0px)); right:auto; max-width:min(210px, var(--brief-fan-hint-width, 210px)); }

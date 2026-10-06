@@ -29,7 +29,15 @@ function ScopedFan({ mode, binding, reducedMotion, onFeedback }: Props) {
   const openNow = useRef(open); openNow.current = open;
   const glyph = useBriefMotion<HTMLSpanElement>({ transform: `rotate(${open ? 45 : 0}deg)` }, { kind: "selection", active: open, reduced });
   const close = (restore = false) => { setOpen(false); if (restore) anchor.current?.focus({ preventScroll: true }); };
-  useEffect(() => { alive.current = true; return () => { alive.current = false; controller.current?.abort(); }; }, []);
+  useEffect(() => {
+    alive.current = true;
+    return () => {
+      // Abort clears only this request's captured conversation feedback. Retire
+      // callbacks afterward so later results cannot touch a replacement scope.
+      controller.current?.abort();
+      alive.current = false;
+    };
+  }, []);
   useEffect(() => { if (!available) { close(); if (controller.current) onFeedback(""); controller.current?.abort(); setBusy(false); } }, [available]);
   // Follow the actual composer during growth and shell reflow. No separate geometry owner.
   // The body portal escapes Pebble's clip; explicit theme prevents a mixed-theme menu.
@@ -45,7 +53,9 @@ function ScopedFan({ mode, binding, reducedMotion, onFeedback }: Props) {
       const next = Math.max(60, rect.top - top + 56);
       const headerBottom = target.closest(".brief-pebble-reading")?.querySelector(".brief-chat-tabs-header")?.getBoundingClientRect().bottom ?? 0;
       setCompact(rect.top - next - 104 < Math.max(8, headerBottom + 12));
-      element.style.left = `${Math.max(8, Math.min(rect.left, window.innerWidth - 174))}px`;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - 174));
+      element.style.left = `${left}px`;
+      element.style.setProperty("--brief-fan-hint-width", `${window.innerWidth - left - 8}px`);
       element.style.top = `${rect.top}px`;
       setDistance(previous => previous === next ? previous : next);
       setTheme(target.closest<HTMLElement>(".brief-root")?.dataset.briefTheme ?? document.documentElement.dataset.theme ?? "light");
@@ -139,7 +149,7 @@ function Choice({ kind, index, open, reduced, distance, compact, disabled, reaso
   }, [open, reduced, index]);
   const ref = useBriefMotion<HTMLDivElement>({ transform: `translate(${shown && compact ? index * 52 : 0}px, ${shown ? -(distance + (compact ? 0 : index * 52)) : 0}px)`, opacity: shown ? 1 : 0 }, { kind: "reveal", active: shown, reduced });
   const Icon = icons[kind], description = useId();
-  return <div ref={ref} className="brief-fan-item">
+  return <div ref={ref} className="brief-fan-item" style={{ "--brief-fan-choice-offset": `${compact ? index * 52 : 0}px` } as React.CSSProperties}>
     <button type="button" role="menuitem" data-choice={kind} aria-label={names[kind]} aria-disabled={disabled}
       aria-describedby={reason ? description : undefined} tabIndex={open ? 0 : -1} onClick={() => { if (!disabled) onChoose(); }}>
       <span className="brief-fan-circle"><Icon size={16} aria-hidden="true" /></span>

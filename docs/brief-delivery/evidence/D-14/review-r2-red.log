@@ -1,0 +1,9 @@
+AssertionError [ERR_ASSERTION]: Explanation is left-clipped: {"left":57,"right":267,"top":505,"bottom":557,"clipLeft":111,"hit":false,"width":390,"height":844}
+    at \\wsl.localhost\Ubuntu\home\vierisid\.cache\codex\jarvis-d-14\docs\brief-delivery\evidence\D-14\review-regressions.cjs:39:16 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
