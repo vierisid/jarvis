@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig, validateVoicePatch, resolveEngineIdleTtlMs, resolveEngineCacheRetention } from './config-merge.ts';
+import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig, validateVoicePatch, resolveEngineIdleTtlMs, resolveEngineCacheRetention, resolvePlanningPolicy } from './config-merge.ts';
 import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
 
 describe('mergeSTTConfig', () => {
@@ -251,6 +251,30 @@ describe('resolveEngineIdleTtlMs', () => {
 
   test('rejects non-numeric env values', () => {
     expect(resolveEngineIdleTtlMs(60_000, { JARVIS_ENGINE_IDLE_TTL_MS: 'fast' })).toBeUndefined();
+  });
+});
+
+describe('resolvePlanningPolicy', () => {
+  test('unset everywhere runs the default; the setting selects a known policy; the env var wins', () => {
+    expect(resolvePlanningPolicy(undefined, {})).toBe('baseline-v1');
+    expect(resolvePlanningPolicy('deterministic-first-v1', {})).toBe('deterministic-first-v1');
+    expect(resolvePlanningPolicy('deterministic-first-v1', { JARVIS_PLANNING_POLICY: 'baseline-v1' })).toBe('baseline-v1');
+    expect(resolvePlanningPolicy('baseline-v1', { JARVIS_PLANNING_POLICY: '' })).toBe('baseline-v1');
+  });
+
+  test('an unknown name never selects an unmeasured prompt, and warns once per value', () => {
+    const warn = console.warn;
+    const warnings: string[] = [];
+    console.warn = (line: string) => { warnings.push(line); };
+    try {
+      expect(resolvePlanningPolicy('deterministic-first-v2', {})).toBe('baseline-v1');
+      expect(resolvePlanningPolicy('deterministic-first-v2', {})).toBe('baseline-v1');
+      expect(resolvePlanningPolicy('baseline-v1', { JARVIS_PLANNING_POLICY: 'fastest' })).toBe('baseline-v1');
+      expect(resolvePlanningPolicy(42, {})).toBe('baseline-v1');
+    } finally { console.warn = warn; }
+    expect(warnings).toHaveLength(3);
+    expect(warnings[0]).toContain('workflows.planningPolicy');
+    expect(warnings[1]).toContain('JARVIS_PLANNING_POLICY');
   });
 });
 

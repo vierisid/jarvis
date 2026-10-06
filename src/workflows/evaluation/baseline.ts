@@ -54,10 +54,13 @@ const LIMITATIONS = [
   'Correction counts and times are reviewer-reported, not instrumented.',
 ];
 
-/** A sanitized, shareable baseline: aggregates and identities only. No job
- * text, prompts, responses, graphs, error text, URLs or reviewer notes. */
-export function baselineReport(runs: BaselineRun[], generatedAt = new Date()) {
-  if (!runs.length) throw new Error('A baseline needs at least one run');
+/**
+ * Splits hosted runs into those a report may use, those that never started,
+ * and the problems that refuse the whole report: anything but a hosted
+ * held-out measurement under a pinned frozen rubric with admin evidence and
+ * authorization, and runs whose rubrics, task sets or profiles do not match.
+ */
+export function matchedHostedRuns(runs: BaselineRun[]) {
   const problems: string[] = [], notRun: Array<{ profileId: string | null; reasons: string[] }> = [], valid: BaselineRun[] = [];
   for (const run of runs) {
     const m = run.manifest, before = problems.length;
@@ -78,6 +81,14 @@ export function baselineReport(runs: BaselineRun[], generatedAt = new Date()) {
   if (distinct(valid.map(r => r.manifest.rubric.sha256)) > 1) problems.push('Runs use different rubrics; compare only matched inputs.');
   if (distinct(valid.map(r => r.manifest.taskset.sha256)) > 1) problems.push('Runs use different task sets; compare only matched inputs.');
   if (distinct(valid.map(r => r.manifest.profile.id)) < valid.length) problems.push('More than one run measures the same profile.');
+  return { problems, notRun, valid };
+}
+
+/** A sanitized, shareable baseline: aggregates and identities only. No job
+ * text, prompts, responses, graphs, error text, URLs or reviewer notes. */
+export function baselineReport(runs: BaselineRun[], generatedAt = new Date()) {
+  if (!runs.length) throw new Error('A baseline needs at least one run');
+  const { problems, notRun, valid } = matchedHostedRuns(runs);
   if (problems.length) return { schemaVersion: 1 as const, kind: 'workflow-hosted-baseline' as const, status: 'refused' as const,
     generatedAt: generatedAt.toISOString(), problems };
   if (!valid.length) return { schemaVersion: 1 as const, kind: 'workflow-hosted-baseline' as const, status: 'not_run' as const,

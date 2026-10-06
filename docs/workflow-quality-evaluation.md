@@ -6,7 +6,17 @@ The composer records versioned planning inputs, and this runner measures generat
 
 Production composition retains the immutable job specification and adds `provenance`: prompt version, planning policy, and SHA-256 fingerprints of the catalog and environment contracts. Catalog/tool/role/target/library metadata is copied once before composition, so a refresh cannot silently change a repair's inputs. The specification and provenance survive restart in the existing composition journal. No database migration is needed.
 
-`baseline-v1` is the production default: the existing prompt, unchanged. `deterministic-first-v1` adds an instruction, in both prompt paths, to prefer typed actions, templates, conditions, loops and transformations before adding AI, and to report a blocker when required information is missing. It is only used when a caller selects it (the evaluation does) until a hosted comparison supports making it the default.
+`baseline-v1` is the production default: the existing prompt, unchanged. `deterministic-first-v1` adds an instruction, in both prompt paths, to prefer typed actions, templates, conditions, loops and transformations before adding AI, and to report a blocker when required information is missing. It stays opt-in until a hosted comparison supports making it the default (see Promotion comparison).
+
+## Planning policy in production
+
+Every production composition (chat and opportunity) runs the policy named by `JARVIS_PLANNING_POLICY`, or else by the user-owned setting `workflows.planningPolicy`, or else the default. The choice is read at each composition, and every attempt and repair of one composition runs the policy it started with. The env var applies from the next daemon start. A stored setting applies to the next composition after a settings reload (`POST /api/config/reload` or SIGHUP), but no screen or route edits `workflows` settings yet, so the env var is the practical switch. An unknown name falls back to `baseline-v1` with a warning, so a typo cannot select an unmeasured prompt. The evaluation passes its policy explicitly and ignores both.
+
+- **Opt in:** set `deterministic-first-v1`.
+- **Promote:** change `DEFAULT_PLANNING_POLICY` in a pull request that carries a `promote` comparison report.
+- **Roll back:** set `baseline-v1`. It selects the prior policy whether or not the candidate was promoted.
+
+Each composition's journal row records the prompt version and the policy that actually ran, and the created flow links to it through `compositionRecordId`. Prompts are retained by version: `composition-provenance.test.ts` pins every system and user prompt and tool definition the composer sends (both paths, with a repair) to `COMPOSER_PROMPT_VERSION`, and each policy's instruction text to its id. Changing the composer's wording without a new version, or a policy's instruction without a new id, fails that test, so rolling back always restores the prompt that was measured.
 
 The existing high-tier route remains unchanged. The hosted proxy resolves `uj-high` to the model a plan routes to; a client alias alone does not prove which model answered.
 
@@ -192,7 +202,7 @@ The importer rejects unknown/duplicate row IDs, changed row hashes and invalid m
 
 Every completed row has exactly one disposition, taken from structured fields (refusal records, explicit blocks, error codes), never from message wording: `passed`, `checks_failed`, `missed_abstention`, `false_abstention`, `composition_failed`, `composition_timeout`, `provider_error`, `routing_fallback`, `budget_stopped` or `harness_error`. Scheduled work that never ran is `not_run`. Only `passed` counts as success.
 
-Rates carry their counts and a 95% Wilson interval, and a rate without a denominator is null, never zero. Supported jobs report a valid graph, intent correct on the **first candidate** (the first submitted graph was accepted) and **after the bounded repair loop**, both automatically and with human review; a task counts as correct under review only if its automatic checks pass and the reviewer agrees. Abstention tasks report correct abstentions and missed ones, and false abstentions on supported jobs are counted separately. Unexpected effects count simulated notifications and tool calls beyond what a scenario expects (extra, duplicate or misdirected), unrequested AI calls and agent delegations, and integration steps a graph-only task did not ask for; a missing effect is a failure but not an unauthorized one. Composition time, requests and tokens per task, and review edits and time report p50, p90, p95 and the maximum. Usefulness and AI fidelity are reported as separate rates over the rows a reviewer judged; they never change intent correctness. With repeats, task-level rates count a task only when every scheduled repeat succeeded.
+Rates carry their counts and a 95% Wilson interval, and a rate without a denominator is null, never zero. Supported jobs report a valid graph, intent correct on the **first candidate** (the first submitted graph was accepted) and **after the bounded repair loop**, both automatically and with human review; a task counts as correct under review only if its automatic checks pass and the reviewer agrees. Abstention tasks report correct abstentions and missed ones, and false abstentions on supported jobs are counted separately. Unexpected effects count simulated notifications and tool calls beyond what a scenario expects (extra, duplicate or misdirected), unrequested AI calls and agent delegations, and integration steps a graph-only task did not ask for; a missing effect is a failure but not an unauthorized one. Unexpected effects are also split: `effects.unsafe` counts what reaches people or systems, and `effects.unrequestedAi` counts AI calls and agent delegations no scenario asked for. `ai` counts composed graphs whose AI steps exceed their task's `maxAiSteps`, and the excess steps. Composition time, requests and tokens per task, and review edits and time report p50, p90, p95 and the maximum. Usefulness and AI fidelity are reported as separate rates over the rows a reviewer judged; they never change intent correctness. With repeats, task-level rates count a task only when every scheduled repeat succeeded.
 
 ## Baseline report
 
@@ -203,5 +213,23 @@ bun run eval:workflows --mode baseline --runs /tmp/w8-reviewed,/tmp/w8-plus-revi
 `--runs` takes run directories or reviewed directories. The report is sanitized for sharing: aggregates and identities only, with no job text, prompts, responses, graphs, error text, URLs, pricing or reviewer notes. It is **refused** (exit 1) for smoke, plan or development runs, rows that are not hosted measurements, a missing or unpinned frozen rubric, missing admin evidence or authorization, runs on different rubrics or task sets, and two runs of the same profile. Hosted held-out runs that did not start make it **not_run** (exit 2), with their reasons.
 
 Natural-condition groups are judged against the frozen rubric: sample size, first-candidate and after-repair intent, unexpected effects, missed abstentions, median edits and correction time, and the per-plan budgets. Each verdict is `met`, `not_met`, `insufficient_sample`, `incomplete_review`, `not_measured`, `not_agreed` or `unknown_usage`. A small sample cannot pass a threshold, though it can fail one when even its upper bound is below the minimum. The overall verdict is `meets_rubric` only when everything is met. Injected-fault groups are reported without verdicts.
+
+## Promotion comparison
+
+```bash
+bun run eval:workflows --mode compare --runs /tmp/w8-reviewed --rule /private/planning-promotion-v1.frozen.json --out /tmp/w8-promotion
+```
+
+`--mode compare` judges `deterministic-first-v1` against `baseline-v1` under a promotion rule, by default `src/workflows/evaluation/rubric/planning-promotion-v1.json`. That rule ships **proposed**: freeze it with its approvers and date before the hosted runs it judges. A rule that is proposed, or frozen after a run started, is refused, so results cannot move the threshold. A changed threshold is a new rule id.
+
+It takes the same runs a baseline takes and refuses the same things, plus a run that did not schedule both policies on the same natural-condition tasks and repeats (`--policy both`, the default, does). For each profile it checks:
+
+- **Sample:** the release rubric's minimum supported and negative tasks.
+- **Unnecessary AI:** graph AI steps over each task's allowance, plus unrequested AI calls and delegations, must fall.
+- **Corrections:** first-candidate correctness and, with human review, median edits and correction time must improve: at least one better and none worse. A rule may relax this to `not_worse`.
+- **Safety:** unsafe effects and missed abstentions must not rise.
+- **Success:** after-repair task success may fall by at most `maxSuccessRegression` (5 points in the proposed rule).
+
+Each profile, and the report, is `promote`, `keep_baseline` (something failed) or `not_established` (pending reviews, a small sample or an incomplete run). Exit codes match the baseline: 0 completed, 1 refused, 2 not_run. The report is sanitized like a baseline: aggregates and identities only. A `promote` verdict is the evidence for changing the default, not the change.
 
 Results are written only to the `--out` directory; do not commit run output. Summarize a run in the PR or discussion that uses it.

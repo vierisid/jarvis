@@ -17,6 +17,7 @@
  */
 import type { STTConfig, TTSConfig, VoiceConfig } from '../config/types.ts';
 import { IMPACT_MAP } from '../roles/authority.ts';
+import { DEFAULT_PLANNING_POLICY, isPlanningPolicy, PLANNING_POLICIES, type PlanningPolicy } from '../actions/tools/composition-provenance.ts';
 
 type AnyRec = Record<string, unknown>;
 
@@ -218,6 +219,32 @@ export function resolveEngineIdleTtlMs(
     return undefined;
   }
   return raw;
+}
+
+let rejectedPolicy: string | null = null;
+/**
+ * The composer's production planning policy: JARVIS_PLANNING_POLICY wins over
+ * the user-owned `workflows.planningPolicy` setting, as with the idle TTL. An
+ * unknown name falls back to the default with one warning per value, so a typo
+ * can never select an unmeasured prompt. Unset means the default, which moves
+ * to the candidate only when a promotion comparison supports it (Q-03).
+ */
+export function resolvePlanningPolicy(
+  configured: unknown,
+  env: Record<string, string | undefined> = process.env,
+): PlanningPolicy {
+  const fromEnv = env['JARVIS_PLANNING_POLICY'];
+  const raw = fromEnv !== undefined && fromEnv !== '' ? fromEnv : configured;
+  if (raw === undefined || raw === null || raw === '') return DEFAULT_PLANNING_POLICY;
+  if (isPlanningPolicy(raw)) return raw;
+  const shown = JSON.stringify(raw);
+  if (rejectedPolicy !== shown) {
+    rejectedPolicy = shown;
+    console.warn(
+      `[Daemon] Ignoring planning policy ${shown} (${fromEnv ? 'JARVIS_PLANNING_POLICY' : 'workflows.planningPolicy'}): must be one of ${PLANNING_POLICIES.join(', ')}; using ${DEFAULT_PLANNING_POLICY}`,
+    );
+  }
+  return DEFAULT_PLANNING_POLICY;
 }
 
 /**
