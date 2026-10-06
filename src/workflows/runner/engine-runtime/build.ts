@@ -526,8 +526,13 @@ type SharedBundleLookup =
  * disclaim whatever follows. Same reasoning as `boundedReceiptText` (#634),
  * done locally because this module is the engine BUILDER and must not grow an
  * import into the daemon's role machinery.
+ *
+ * Exported only so `log-safe-path.probe.test.ts` can hold it to the same probe
+ * vector as the daemon's `inlineUntrusted` / `defangDelimiters` (#674): the two
+ * are deliberately separate implementations, so a shared test is what stops
+ * this copy drifting. Change one, run that test.
  */
-function logSafePath(value: string): string {
+export function logSafePath(value: string): string {
   // `Zl`/`Zp` as well as `Cc`/`Cf`: U+2028 LINE SEPARATOR and U+2029 PARAGRAPH
   // SEPARATOR are line terminators to a JavaScript parser and to several log
   // shippers, and neither is a control or format character, so the first two
