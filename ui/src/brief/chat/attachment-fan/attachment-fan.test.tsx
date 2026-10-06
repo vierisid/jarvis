@@ -114,3 +114,19 @@ test("keyboard can enter a fan already opened with the pointer",async()=>{
  await key(toggle(),"ArrowUp");expect(document.activeElement).toBe(row("document"));
  await key(row("document"),"ArrowRight");expect(document.activeElement).toBe(row("image"));
 });
+
+test("closing Pebble during selection clears pending feedback without a success receipt",async()=>{
+  let resolve!:(value:"attached")=>void, signal!:AbortSignal;
+  binding.choose=async(_,s)=>{signal=s;return new Promise(yes=>resolve=yes);};
+  await render();await click(toggle());await click(row("document"));
+  expect(feedback.at(-1)).toBe("Adding document…");
+  await React.act(async()=>{
+    host.firstElementChild!.setAttribute("inert","");
+    await new Promise(yes=>setTimeout(yes,0));
+  });
+  expect(signal.aborted).toBe(true);
+  expect(feedback.at(-1)).toBe("");
+  await React.act(async()=>resolve("attached"));
+  expect(feedback.at(-1)).toBe("");
+  expect(feedback).not.toContain("Document attached.");
+});

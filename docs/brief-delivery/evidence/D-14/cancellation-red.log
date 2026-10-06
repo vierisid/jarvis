@@ -1,0 +1,23 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/attachment-fan/attachment-fan.test.tsx:
+124 |     host.firstElementChild!.setAttribute("inert","");
+125 |     await new Promise(yes=>setTimeout(yes,0));
+126 |   });
+127 |   expect(signal.aborted).toBe(true);
+128 |   await React.act(async()=>resolve("attached"));
+129 |   expect(feedback.at(-1)).toBe("");
+                                ^
+error: expect(received).toBe(expected)
+
+Expected: ""
+Received: "Adding document…"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-14/ui/src/brief/chat/attachment-fan/attachment-fan.test.tsx:129:27)
+(fail) closing Pebble during selection clears pending feedback without a success receipt [145.93ms]
+
+ 0 pass
+ 17 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [583.00ms]

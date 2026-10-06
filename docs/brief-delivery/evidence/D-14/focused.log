@@ -1,25 +1,26 @@
 bun test v1.4.2 (744846f84)
 
 ui/src/brief/chat/attachment-fan/attachment-fan.test.tsx:
-(pass) three choices stay mounted across twenty reversals and retain composer value [496.29ms]
-(pass) keyboard reaches each choice; Escape closes only the fan and restores plus [29.50ms]
-(pass) unavailable Screenshot stays focusable with a reason but cannot capture [17.53ms]
-(pass) selection acknowledges once and returns focus to the origin [22.63ms]
-(pass) cancelled picker has no attachment receipt [29.47ms]
-(pass) pending entry is deduplicated and a failed request can be retried [36.85ms]
-(pass) late picker result cannot report into another conversation [28.71ms]
-(pass) source mismatch, missing identity and offline states never dispatch [28.14ms]
-(pass) theme changes preserve menu, selected focus and choice elements [17.03ms]
-(pass) outside focus closes the fan without stealing the new focus [18.48ms]
-(pass) unmount removes portal and cancels an outstanding selection [26.89ms]
-(pass) F-05 binding captures original chat through picker delay and delegates exact file [1.86ms]
-(pass) F-05 capture requires explicit device confirmation [1.24ms]
-(pass) F-05 does not upload after scope change, tab closure, disconnect or abort during picker [1.16ms]
-(pass) F-05 unsupported Screenshot and cancelled file picker have no external effect [0.74ms]
-(pass) F-05 superseded upload cannot report attached merely because its promise finished [0.84ms]
-(pass) keyboard can enter a fan already opened with the pointer [15.77ms]
+(pass) three choices stay mounted across twenty reversals and retain composer value [500.61ms]
+(pass) keyboard reaches each choice; Escape closes only the fan and restores plus [68.94ms]
+(pass) unavailable Screenshot stays focusable with a reason but cannot capture [35.50ms]
+(pass) selection acknowledges once and returns focus to the origin [47.25ms]
+(pass) cancelled picker has no attachment receipt [36.17ms]
+(pass) pending entry is deduplicated and a failed request can be retried [68.55ms]
+(pass) late picker result cannot report into another conversation [53.84ms]
+(pass) source mismatch, missing identity and offline states never dispatch [35.67ms]
+(pass) theme changes preserve menu, selected focus and choice elements [17.06ms]
+(pass) outside focus closes the fan without stealing the new focus [18.13ms]
+(pass) unmount removes portal and cancels an outstanding selection [18.60ms]
+(pass) F-05 binding captures original chat through picker delay and delegates exact file [2.76ms]
+(pass) F-05 capture requires explicit device confirmation [1.23ms]
+(pass) F-05 does not upload after scope change, tab closure, disconnect or abort during picker [1.04ms]
+(pass) F-05 unsupported Screenshot and cancelled file picker have no external effect [0.70ms]
+(pass) F-05 superseded upload cannot report attached merely because its promise finished [0.83ms]
+(pass) keyboard can enter a fan already opened with the pointer [21.66ms]
+(pass) closing Pebble during selection clears pending feedback without a success receipt [52.26ms]
 
- 17 pass
+ 18 pass
  0 fail
- 115 expect() calls
-Ran 17 tests across 1 file. [2.52s]
+ 120 expect() calls
+Ran 18 tests across 1 file. [1.51s]
