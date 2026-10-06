@@ -1,0 +1,736 @@
+{
+  "build": "index-det20498.js",
+  "samples": [
+    {
+      "at": 1791236546454,
+      "button": {
+        "height": 38.66202926635742,
+        "width": 111.85246276855467,
+        "x": 782.620849609375,
+        "y": 558.3193359375
+      },
+      "count": "Needs your review2 actions",
+      "focus": "Reset example",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236546919,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547074,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547149,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547223,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547290,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Confirming decision2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "pending",
+      "receipt": "Waiting for confirmation…",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547365,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547540,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547614,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547682,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547755,
+      "button": {
+        "height": 33.5341796875,
+        "width": 110.540283203125,
+        "x": 740.5260009765625,
+        "y": 539.8270263671875
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "1",
+      "phase": "confirmed",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999903, -0.0139622, 0.0139622, 0.999903, -12, -6)"
+    },
+    {
+      "at": 1791236547822,
+      "button": {
+        "height": 35.321533203125,
+        "width": 111.02327728271484,
+        "x": 757.868408203125,
+        "y": 552.5032958984375
+      },
+      "count": "Execution confirmed2 actions",
+      "focus": "\n  D-08 · Isolated decision stackDecision readyque",
+      "id": "fixture-decision-follow-up",
+      "opacity": "0.739902",
+      "phase": "settling",
+      "receipt": "Execution confirmed",
+      "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+      "transform": "matrix(0.999541, -0.0303005, 0.0303005, 0.999541, 3.95271, 6.48473)"
+    },
+    {
+      "at": 1791236547993,
+      "button": {
+        "height": 38.66202926635742,
+        "width": 111.85237884521484,
+        "x": 782.9471435546875,
+        "y": 560.996826171875
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "arriving",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548216,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.852294921875,
+        "x": 782.458984375,
+        "y": 553.01513671875
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "arriving",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548290,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548362,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548420,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548487,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548548,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548608,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548683,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548748,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548814,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548880,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236548954,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549026,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549108,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549191,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549263,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549338,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549410,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549476,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549549,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549624,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549688,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549763,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549828,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549900,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236549976,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236550042,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236550108,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236550183,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    },
+    {
+      "at": 1791236550256,
+      "button": {
+        "height": 38.6619873046875,
+        "width": 111.85237884521484,
+        "x": 782.458740234375,
+        "y": 553.0117797851562
+      },
+      "count": "Needs your review1 action",
+      "focus": "Review investor updateReview investor update",
+      "id": "fixture-decision-investor",
+      "opacity": "1",
+      "phase": "idle",
+      "receipt": "",
+      "summary": "Your investor update\nis ready to review.",
+      "transform": "matrix(0.998135, -0.0610485, 0.0610485, 0.998135, 26, 12)"
+    }
+  ]
+}

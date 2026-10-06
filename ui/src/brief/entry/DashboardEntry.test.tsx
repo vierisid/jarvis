@@ -97,8 +97,13 @@ test("Today review and illustrative decision actions never call live providers",
   await React.act(async () => approve.click());
   expect(host.textContent).toContain("Waiting for confirmation");
   expect(host.querySelector(".brief-today-decision")?.getAttribute("data-decision-id")).toBe("fixture-decision-follow-up");
-  await click("Reset sample request");
-  expect(host.textContent).toContain("Nothing was sent or executed");
+  await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 700)); });
+  expect(host.querySelector(".brief-today-decision")?.getAttribute("data-transition")).toBe("confirmed");
+  await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 400)); });
+  await React.act(async () => { await new Promise(resolve => setTimeout(resolve, 240)); });
+  expect(host.querySelector(".brief-today-decision")?.getAttribute("data-decision-id")).toBe("fixture-decision-investor");
+  await click("Reset example");
+  expect(host.textContent).toContain("No email or workflow executes");
   expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
   await route("http://localhost:4381/#/");
   expect(connections).toBe(1); expect(host.querySelector(".brief-pebble-companion")).toBeNull();

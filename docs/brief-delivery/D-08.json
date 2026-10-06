@@ -1,0 +1,65 @@
+{
+  "task": "D-08",
+  "title": "Animate local decisions and stack advancement",
+  "date": "2026-10-05",
+  "updated": "2026-10-06",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-08",
+  "baseline": "c3a981d2af08e878c5bbfba9793b43c6ed5d16ef",
+  "inspected_main": "2c70cf0fe436834bbd96cb06a7df615ff136f6e5",
+  "stack_base": "brief/d-07",
+  "dependency_prs": ["https://github.com/vierisid/jarvis/pull/739"],
+  "activation_dependencies": ["D-07", "F-12 canonical decision owner", "F-14 durable decision policy and execution receipts", "F-25 navigation compatibility", "D-33 release approval"],
+  "head": {"ref": "brief/d-08", "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-08.json"},
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-08",
+  "preview": "http://localhost:4388/?brief=preview&specimen=today#/_brief_preview",
+  "figma": {"file": "eNfKeirIKLZLlZEasrurZa", "nodes": ["81:3", "81:212", "633:146011"], "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded", "source": "ui-13-stack-settlement-2026-10-02/interaction-contract.json"},
+  "owns": ["ui/src/brief/today/decision-transition/**", "D-07 HeroPaper/binding integration", "Isolated Today fixture owner and entry isolation test", "docs/brief-delivery/D-08.*", "docs/brief-delivery/evidence/D-08/**"],
+  "excludes": ["Canonical queue storage or writers", "Backend decision or approval semantics", "Durable idempotency/reconnect", "Goal progress calculations", "D-09 and later tasks", "Live activation"],
+  "tests": [
+    {"command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "result": "pass", "tests": 129, "assertions": 2871, "files": 11},
+    {"command": "bun x tsc --noEmit", "result": "pass"},
+    {"command": "bun run build:ui", "result": "pass", "build": "index-hseexw1s.js", "note": "Existing @theme/@tailwind warnings."},
+    {"command": "git diff --check", "result": "pass"}
+  ],
+  "browser_checks": [
+    {"case": "All eight Light/Dark, expanded/rail, closed/open combinations advance once after receipt", "result": "pass", "button_delta_px": 0, "evidence": "evidence/D-08/shell-matrix.json"},
+    {"case": "Pending, confirmed, settlement, arrival and next identity are sampled in browser", "result": "pass", "evidence": "evidence/D-08/approval-timeline.json"},
+    {"case": "Goal append, reject, keep draft, ten rehovers on newly fronted invitation and empty stack", "result": "pass"},
+    {"case": "Failed/unknown owner projections survive paper remount without resend or false completion; conflict refresh reviews a new version", "result": "pass"},
+    {"case": "390px long document, reduced motion, restored scroll, visible next Review and retained chat identity", "result": "pass"}
+  ],
+  "regression": {"case": "Expanded review leaves next hero offscreen", "red": "scrollTop 349 instead of 0", "green": "scrollTop 0; browser restored 0 to 0 and narrow Review remained visible"},
+  "evidence": "evidence/D-08/browser-checks.json",
+  "review_corrections": {
+    "date": "2026-10-06",
+    "reviewed_head": "9b99cb36dbdaa51de2841ac93b5c6cd1338e0b63",
+    "inspected_main": "abb14deb59f1ca3a84227be9a2035687b29dea34",
+    "changes": [
+      "Owner-declared accepted, permission_granted and executed results require matching receipts; omitted meanings retain strict execution semantics.",
+      "Acceptance and permission use neutral Not started receipts; Approve & send still requires a committed effect.",
+      "Non-reduced interruption test reaches the actual settling phase before injecting a failure; confirmation interruption remains separately covered."
+    ],
+    "red_green": {"before": "19 passed, 2 failed: acceptance and permission were blocked", "after": "Both pass; final affected suite 129 passed, 0 failed"},
+    "focused_tests": 23,
+    "result_effect_matrix_cases": 18,
+    "contradictory_canonical_outcomes": 6,
+    "browser_evidence": "evidence/D-08/review-corrections.json",
+    "screenshots": ["evidence/D-08/review-acceptance-light.jpg", "evidence/D-08/review-permission-dark.jpg"],
+    "coverage": "Correction checks cover Light acceptance, Dark rail/chat permission and execution, with next-paper handoff. The original eight-state shell matrix above remains original-delivery evidence, not a new full matrix run."
+  },
+  "limitations": [
+    "The optional F-12/F-14 presentation receipt seam is documented but not wired to live writers.",
+    "Request tokens correlate local attempts and do not provide server idempotency.",
+    "Reload authoritative view remounts the paper against the retained fixture-owner projection; durable restart/reconnect requires F-12/F-14 integration proof.",
+    "Supporting cards and conversation bodies remain isolated layout fixtures for later tasks.",
+    "Chromium checks; no screen-reader, mobile keyboard, cross-browser or frame-rate certification.",
+    "Read exact-head GitHub checks for CI status; no full-repository local test claim."
+  ],
+  "rollback": "Leave default Today registration/view gate off; reverting this PR restores D-07 without data migrations, effect replay or history deletion.",
+  "next": "D-09, separate worktree and PR; not started."
+}

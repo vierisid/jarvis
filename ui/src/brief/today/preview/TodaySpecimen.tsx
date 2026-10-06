@@ -6,8 +6,7 @@ import { useTheme } from "../../../v2/shell/useTheme";
 import { NavigationShell } from "../../shell/navigation/NavigationShell";
 import { UNKNOWN_NAVIGATION, type BriefNavigationBinding } from "../../shell/navigation/model";
 import { TodayLayout } from "../layout/TodayLayout";
-import type { DecisionBinding } from "../hero-paper/model";
-import { samplePaper } from "./fixtures";
+import { useDecisionPreview } from "./useDecisionPreview";
 import "./specimen.css";
 
 export function TodaySpecimen() {
@@ -19,37 +18,32 @@ export function TodaySpecimen() {
   const [long, setLong] = useState(false);
   const [reduced, setReduced] = useState(false);
   const [width, setWidth] = useState("fluid");
-  const [action, setAction] = useState("");
-  const [pending, setPending] = useState(false);
+  const sample = useDecisionPreview(scenario, long);
   const shell = useMemo<BriefShellPort>(() => ({ mode: "preview", route, sidebar, setSidebar, chatOpen, setChatOpen, theme, setTheme, navigate: setRoute }), [route, sidebar, chatOpen, theme, setTheme]);
-  const paper = useMemo(() => samplePaper(scenario, long), [scenario, long]);
   const binding: BriefNavigationBinding = { capabilities: null, view: { source: "fixture", state: { status: "ready", data: {
     ...UNKNOWN_NAVIGATION, workspaceName: "Vieri’s workspace", connection: "connected", account: { name: "Vieri Balboni", plan: { status: "ready", data: "Pro plan" } }, badges: { workflows: 4, opportunities: 2, "needs-you": 1 },
   } } } };
-  const decision: DecisionBinding = { source: "fixture",
-    state: scenario === "loading" || scenario === "empty" ? { status: scenario } : scenario === "unavailable" ? { status: "unavailable", reason: "We couldn’t load your decisions. Your work is unchanged." }
-      : scenario === "stale" ? { status: "stale", data: paper, reason: "This decision needs refreshing before you act." } : { status: "ready", data: paper },
-    refresh: () => { setScenario("ready"); setAction(""); setPending(false); },
-    operation: pending ? { decisionId: paper.decision.decisionId, revision: paper.decision.revision, state: "pending" } : action ? { decisionId: paper.decision.decisionId, revision: paper.decision.revision, state: "error", message: action } : undefined,
-    onAction: (identity, selected) => { setAction(`Preview request: ${selected} · ${identity.decisionId}`); setPending(true); },
-  };
   return <div className="brief-root brief-today-specimen" data-brief-theme={theme}>
     <div className="brief-today-review-toolbar" aria-label="Isolated review controls">
-      <span>D-07 · Isolated Today review</span>
-      <label>Decision <select aria-label="Decision scenario" value={scenario} onChange={event => { setScenario(event.target.value); setPending(false); setAction(""); }}>
-        {["ready", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>
+      <span>D-08 · Isolated decision stack</span>
+      <label>Decision <select aria-label="Decision scenario" value={scenario} onChange={event => setScenario(event.target.value)}>
+        {["ready", "acceptance", "permission", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>
       <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>Switch to {theme === "light" ? "dark" : "light"}</button>
       <label><input type="checkbox" checked={long} onChange={e => setLong(e.target.checked)} /> Long document</label>
       <label><input type="checkbox" checked={reduced} onChange={e => setReduced(e.target.checked)} /> Reduce motion</label>
       <label>Width <select aria-label="Review width" value={width} onChange={e => { setWidth(e.target.value); if (e.target.value === "390") setSidebar("rail"); }}>
         <option value="1440">1440px</option><option value="1200">1200px</option><option value="390">390px</option><option value="fluid">Fit window</option></select></label>
-      {pending && <button onClick={() => { setPending(false); setAction("Preview only. Nothing was sent or executed."); }}>Reset sample request</button>}
+      <label>Result <select aria-label="Simulated operation result" value={sample.result} onChange={e => sample.setResult(e.target.value)}>
+        {["confirmed", "conflict", "failed", "unknown"].map(value => <option key={value}>{value}</option>)}</select></label>
+      <button onClick={sample.append}>Append goal step</button><button onClick={sample.reset}>Reset example</button>
+      <button onClick={sample.remount}>Reload authoritative view</button>
+      <small>Simulated receipts only. No email or workflow executes.</small>
       <small>Goal, outcomes and opportunities are layout fixtures for D-09 to D-11.</small>
     </div>
     <div className="brief-today-review-viewport" style={{ width: width === "fluid" ? "100%" : Number(width) }}>
       <NavigationShell shell={shell} rooms={{ today: { id: "today", title: "Today" } }} binding={binding} reducedMotion={reduced}
         conversation={{ source: "fixture", content: <Conversation /> }}>
-        {route.room === "today" ? <TodayLayout shell={shell} greeting="Good morning, Vieri." dateLabel="Thursday, 17 September" dateTime="2026-09-17" decision={decision} reducedMotion={reduced}
+        {route.room === "today" ? <TodayLayout key={sample.generation} shell={shell} greeting="Good morning, Vieri." dateLabel="Thursday, 17 September" dateTime="2026-09-17" decision={sample.binding} reducedMotion={reduced}
           slots={{ goal: <Goal />, outcomes: <Outcomes />, activity: <Activity />, opportunities: <Opportunity /> }} />
           : <><h1 className="brief-type-room-title">Isolated Today review</h1><BriefButton onClick={() => setRoute({ room: "today", selection: {} })}>Return to Today</BriefButton></>}
       </NavigationShell>
