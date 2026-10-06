@@ -30,10 +30,25 @@ export function createCompositionRoutes(capabilities: BriefCapabilities, json: (
       return response({ error: 'Workflow composition service is unavailable' }, 503);
     }
   };
+  const requireIngredients = (p: BriefCompositionProvider) => {
+    if (!capabilities.hasProvider('compositionIngredients', p)) throw new CompositionRequestError('Composition ingredients are unsupported', 501);
+    if (!capabilities.snapshot().capabilities.compositionIngredients.enabled) throw new CompositionRequestError('Composition ingredients are not available', 503);
+  };
   return {
+    '/api/brief/composition-ingredients': { GET: gated((req, p) => {
+      requireIngredients(p);
+      const params = new URL(req.url).searchParams, offset = Number(params.get('offset') ?? '0'), query = params.get('q') ?? '';
+      if (!Number.isSafeInteger(offset) || offset < 0 || offset > 1_000_000 || query.length > 128) throw new CompositionRequestError('Invalid ingredient query');
+      return response(p.ingredients(offset, query));
+    }) },
     '/api/brief/workflow-compositions': {
       GET: gated((req, p) => response({ jobs: p.list(new URL(req.url).searchParams.get('requestId') ?? undefined) })),
-      POST: gated(async (req, p) => { const result = p.submit(await body(req)); return response(result, result.created ? 202 : 200); }),
+      POST: gated(async (req, p) => {
+        const input = await body(req);
+        // Reject selections behind a disabled/missing provider; never silently ignore chips.
+        if (input && Object.hasOwn(input, 'ingredients')) requireIngredients(p);
+        const result = p.submit(input); return response(result, result.created ? 202 : 200);
+      }),
     },
     '/api/brief/workflow-compositions/:id': { GET: gated<JobRequest>((req, p) => response(p.get(req.params.id))) },
     '/api/brief/workflow-compositions/:id/cancel': { POST: gated<JobRequest>((req, p) => response(p.cancel(req.params.id))) },

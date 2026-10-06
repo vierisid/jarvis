@@ -1,0 +1,66 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+
+src/brief/composition-ingredients.test.ts:
+126 |     if (change === 'piece-version') piece.version = '9.0.0';
+127 |     if (change === 'action-version') piece.actions.send!.requireAuth = false;
+128 |   };
+129 |   test(`selection change during the model call prevents draft attachment: ${change}`, async () => {
+130 |     const job = await submit(provider({ async chat() { mutate(); return { text: JSON.stringify(graph()) }; } }));
+131 |     expect(job).toMatchObject({ state: 'blocked', workflow: null, blocker: { code: 'ingredient_unavailable' } });
+                      ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "blocker": {
+-     "code": "ingredient_unavailable",
++   "blocker": null,
++   "compositionId": "GGEwhbW89aPHrVVre1Kxh",
++   "createdAt": 1791297412871,
++   "jobId": "WL5enMs61mOT46aUU7pNo",
++   "progress": {
++     "checkedCandidates": 1,
+    },
+-   "state": "blocked",
+-   "workflow": null,
++   "requestId": "selection",
++   "specification": {
++     "ingredients": [
++       {
++         "id": "@fixture/piece-account",
++         "kind": "connection",
++         "pieceName": "@fixture/piece-account",
++         "pieceVersion": "1.2.3",
++         "required": true,
++       },
++       {
++         "actionName": "send",
++         "actionVersion": "415bd71a92a2023bd18a655202679990a6a36083ee83faba09f79997cf712516",
++         "id": "@fixture/piece-account",
++         "kind": "library-action",
++         "pieceVersion": "1.2.3",
++         "required": true,
++       },
++     ],
++     "name": "New workflow",
++     "prompt": "Use the chosen ingredients.",
++   },
++   "state": "draft_ready",
++   "updatedAt": 1791297412879,
++   "workflow": {
++     "flowId": "kOyhcZexcTY4jZRl3nOXT",
++     "versionId": "I7QLgaWKKIbQ81JxoEHni",
++   },
+  }
+
+- Expected  - 4
++ Received  + 34
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:131:17)
+(fail) selection change during the model call prevents draft attachment: replace [26.96ms]
+
+ 0 pass
+ 39 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [58.00ms]

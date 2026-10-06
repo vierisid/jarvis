@@ -1,0 +1,64 @@
+{
+  "task": "F-08 review corrections",
+  "date": "2026-10-06",
+  "reviewed_head": "4d2449d30051790d76923f94f02fb641cebe0ec2",
+  "publication": "Local correction only; not pushed. PR #755 still points to the reviewed implementation.",
+  "findings": [
+    {
+      "id": "R1",
+      "issue": "Live Library install/upsert dropped the version required by ingredient discovery and saved pins.",
+      "fix": "Extract the production callback and retain event.piece.resolvedVersion on catalog upsert. Same-version refresh preserves pins; version changes remain blocked.",
+      "verification": "Real callback with fixture engine metadata, real catalog projection, discovery, resolver, composition and readiness. Includes install, same-version refresh, update and uninstall."
+    },
+    {
+      "id": "R2",
+      "issue": "Preview readiness checked ingredient pins against stored inputs while the engine executed sample input overrides.",
+      "fix": "Share a non-mutating input transformation between readiness and execution. Ingredient checks see the effective preview graph after the compiler limit check.",
+      "verification": "Real sample-input PATCH and run POST reject another active account with 422 in chains, loops and router branches, creating no run or job. Matching-account input changes remain accepted; unrelated samples and stored graph remain unchanged. Executor check captures effective inputs."
+    }
+  ],
+  "verification": {
+    "before": {
+      "failed": 5,
+      "passed": 0,
+      "log": "review-regressions-before.log",
+      "note": "The live callback was extracted unchanged before adding the version correction. Preview production code was unchanged. All five new behavior cases failed."
+    },
+    "after": {
+      "passed": 6,
+      "failed": 0,
+      "assertions": 65,
+      "log": "review-regressions-after.log"
+    },
+    "focused": {
+      "command": "bun test src/brief/composition-ingredients.test.ts src/workflows/runner/engine-runtime/engine-flow-executor.test.ts",
+      "passed": 64,
+      "failed": 0,
+      "assertions": 352,
+      "log": "review-focused.log"
+    },
+    "affected": {
+      "command_file": "review-affected-command.txt",
+      "passed": 804,
+      "failed": 1,
+      "skipped": 1,
+      "assertions": 15556,
+      "files": 42,
+      "log": "review-affected.log",
+      "limitation": "Existing Library DELETE security-yank test returns 404 instead of 200. Reproduced alone on both corrected and reviewed production sources; unchanged by this patch. Opt-in real-engine catalog test skipped."
+    },
+    "base_comparison": {
+      "test": "DELETE works for a piece installed but no longer in the catalog (security-yank scenario)",
+      "base_log": "review-uninstall-base.log",
+      "corrected_log": "review-uninstall-isolated.log",
+      "result": "Same 404 versus expected 200 on both. All changed production sources restored after comparison."
+    },
+    "typescript": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit",
+      "exit_code": 0,
+      "log": "review-typescript.log"
+    },
+    "commit_hooks": "Normal pre-commit guards, related tests and TypeScript run during the correction commit. No bypass."
+  },
+  "scope": "Backend only. No UI screenshot, live model call, real credentials, activation, push, merge or next feature. Existing authoring flags remain default off."
+}

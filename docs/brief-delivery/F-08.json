@@ -1,0 +1,135 @@
+{
+  "task": "F-08",
+  "title": "Honor selected connection and library ingredients",
+  "date": "2026-10-06",
+  "branch": "brief/f-08",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-08",
+  "baseline": "b53fb22d53ed1337e4dacafa597e6776fe04c060",
+  "baseline_ref": "origin/brief/f-07",
+  "main_checked": "c3ed5d220c83683a14870677633aa1c4da2b0a1c",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-08.json"
+  },
+  "dependencies": {
+    "merge_after": [
+      "F-01",
+      "F-07"
+    ],
+    "enable_after": [
+      "F-07"
+    ],
+    "stack": "Owner-approved unmerged stack. F-07 is a compile dependency because this extends its real durable job service. No rebase of the parallel D or Q branches."
+  },
+  "concurrency": {
+    "main_reviewed": "Read recent main changes before implementation; no competing F-08 PR/worktree. F-07 correction pushed and all active exact-head CI passed.",
+    "overlap": "Q-03 PR #753 also edits workflow-composer.ts and composition-provenance.ts. Public APIs remain additive; retain Q-03 planning policy and regenerate its prompt pins for w8-3-ingredients during integration. No cross-chat messages or branch changes."
+  },
+  "source_review": {
+    "pinned_commit": "69211511",
+    "anchors": [
+      "A10 ui/src/v2/rooms/workflows/WorkflowsRoom.tsx",
+      "A11 src/actions/tools/composition-provenance.ts",
+      "A19 ui/src/v2/rooms/settings/tabs/SidecarTab.tsx"
+    ],
+    "baseline_comparison": "All three were unchanged from the audited source at the F-07 baseline; task-relevant sections re-read.",
+    "figma": {
+      "file": "eNfKeirIKLZLlZEasrurZa",
+      "node": "81:1313",
+      "visual": "Backend contract only; D-16 owns chips/prompt presentation. No visual delta or screenshot claimed."
+    }
+  },
+  "activation": {
+    "capability": "compositionIngredients",
+    "flag": "JARVIS_BRIEF_COMPOSITION_INGREDIENTS=1",
+    "dependency_flag": "JARVIS_BRIEF_WORKFLOW_COMPOSITION=1",
+    "default": "off",
+    "identity": "Both registrations reference the actual configured composition provider. Provider/database readiness and existing panel authentication are required."
+  },
+  "implementation": [
+    "Strict typed connection and installed library-action identities, required flags, package versions and deterministic action contract revisions, separate from prose; durable job/journal preservation and replay conflict checks.",
+    "Paged safe discovery and metadata-only validation of availability, project/account ownership, auth compatibility and binding ambiguity. Connection values, private metadata and labels never enter composition prompts.",
+    "All candidate paths and repairs enforce required use; incompatible inputs and unresolved ingredient requirements return blockers without substitution or installation.",
+    "Revalidate in atomic draft attachment; immutable flow requirements survive restart and are enforced by readiness, enable, publish, live-draft edits and nested-workflow validation even with authoring disabled.",
+    "Derive installed package versions on extraction and cache hits without additional engine starts or cache rebuild. Advance prompt provenance; preserve F-07 recovery and legacy requests."
+  ],
+  "acceptance": [
+    {
+      "check": "Connections and similarly named library nodes cannot be confused; no secrets in prompts",
+      "status": "passed",
+      "evidence": "Same exact ID across both kinds, unreadable credential/private-label canaries, foreign owner/project and auth mismatch tests."
+    },
+    {
+      "check": "Long/multiple selections survive repairs; invalid/incompatible nodes block instead of substitution",
+      "status": "passed",
+      "evidence": "22 long selections survive bounded repair; one-shot, inline-to-fallback and submit_flow paths tested; missing IDs/actions, wrong accounts, stale package/action versions and explicit report_blocked covered."
+    },
+    {
+      "check": "Removed/revoked/replaced connections revalidated before readiness/activation",
+      "status": "passed",
+      "evidence": "Metadata changes during inference create no draft; later revocation/deletion/retarget/replacement and version drift block readiness/enable/publish. Metadata/graph edits cannot erase pins. Disk reopen retains requirements."
+    },
+    {
+      "check": "No catalog rebuild or piece installation; additive contract and rollback",
+      "status": "passed",
+      "evidence": "Only existing catalog metadata and connection columns read. Cache tests prove versioned hits without new engines. F07 schema upgrade permits old inserts. Guide documents flag rollback and pre-F08 downgrade limits."
+    }
+  ],
+  "verification": {
+    "focused": {
+      "command": "bun test src/brief/composition-ingredients.test.ts",
+      "passed": 40,
+      "failed": 0,
+      "assertions": 223,
+      "log": "docs/brief-delivery/evidence/F-08/focused.log"
+    },
+    "affected": {
+      "command_file": "docs/brief-delivery/evidence/F-08/affected-command.txt",
+      "passed": 619,
+      "failed": 0,
+      "skipped": 1,
+      "assertions": 4300,
+      "files": 38,
+      "log": "docs/brief-delivery/evidence/F-08/affected.log",
+      "skip": "Real engine metadata extraction is opt-in via JARVIS_TEST_ENGINE_BUILD=1; fixture catalog/cache paths were exercised."
+    },
+    "typescript": {
+      "command": "bun x tsc --noEmit",
+      "exit_code": 0,
+      "log": "docs/brief-delivery/evidence/F-08/typescript.log"
+    },
+    "mutations": {
+      "rejected": 5,
+      "total": 5,
+      "sources_restored": true,
+      "evidence": "docs/brief-delivery/evidence/F-08/mutations.json"
+    },
+    "catalog_deadline_fixture": {
+      "initial": "Combined affected run: 618 passed, one skipped, one existing wall-clock deadline assertion failed (three pieces finished). Isolated original-source catalog/timeout pair passed; no base reproduction claim.",
+      "resolution": "Use a scoped controlled deadline clock in that test instead of real sleeps. Production deadline behavior is unchanged. Final combined suite passes.",
+      "logs": [
+        "docs/brief-delivery/evidence/F-08/affected-initial.log",
+        "docs/brief-delivery/evidence/F-08/catalog-deadline-base.log"
+      ]
+    },
+    "guards": "Normal commit hooks required; final results and exact pushed-head CI recorded in the PR description. No full-suite claim from affected tests."
+  },
+  "limitations": [
+    "Structural use and installed-contract availability, not proof of every natural-language constraint, branch execution or remote credential validity.",
+    "Current single-user/project identity is server-owned. Managed jarvis: credential sources without stable connection rows, unsupported external binding syntax and unversioned catalogs fail explicitly.",
+    "One installed version per piece; no historical package installation or parallel-version execution. Revalidation uses the current installed catalog and its normal refresh lifecycle.",
+    "Pinned requirements are immutable for the resulting flow. Changing selections requires a new composition request and key. Binary downgrade to pre-F08 code loses enforcement; keep these flows disabled before downgrade.",
+    "No D-16 UI, paid model calls, real credential use, live activation or deployment. F-09 is not started."
+  ],
+  "rollback": "Disable ingredient authoring/presentation; preserve job selections, journals, pins and drafts. Keep current readiness enforcement. Leave F08 workflows disabled before a pre-F08 binary downgrade. No replay or user-record deletion.",
+  "guide": "docs/brief-composition-ingredients.md",
+  "next_task": "F-09 not started",
+  "review_corrections": {
+    "receipt": "docs/brief-delivery/evidence/F-08/review-fixes.json",
+    "reviewed_head": "4d2449d30051790d76923f94f02fb641cebe0ec2",
+    "status": "Both findings corrected and locally verified; not pushed.",
+    "focused": "64 passed / 352 assertions",
+    "affected": "804 passed, 1 opt-in skip, 1 existing uninstall test failure reproduced on reviewed sources",
+    "typescript": "passed"
+  }
+}

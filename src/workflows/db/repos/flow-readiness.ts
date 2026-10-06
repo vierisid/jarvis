@@ -4,6 +4,9 @@ import { compileWorkflow, type ReadinessContext, type WorkflowReadiness } from '
 import type { PieceLookup } from '../../runtime/piece-catalog';
 import type { CredentialResolver } from '../../credentials/adapter';
 import { assertFlowVersionOwnership } from './flow-version-ownership';
+import { flowIngredientIssues } from './composition-ingredients';
+import { applyInputOverrides } from '../flow-graph';
+import type { FlowTriggerNode } from './flow-version';
 
 interface ReadinessServices { pieces?: PieceLookup; credentials?: CredentialResolver; tool?: ReadinessContext['tool']; roles?: ReadinessContext['roles'] }
 // Scoped to the live database, not a process-wide test flag. A missing catalog
@@ -128,7 +131,7 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
       if (!version) return 'Target workflow has no executable version';
       let trigger: unknown;
       try { trigger = JSON.parse(version.trigger); } catch { return 'Target workflow graph is unreadable'; }
-      const readiness = compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget));
+      const readiness = withIngredients(id, trigger, compileWorkflow(trigger, contextFor(id, [...ancestors, flowId], cache, budget)));
       cache.set(id, readiness);
       const first = readiness.issues[0];
       // Bounded with the same cuts the thrown message uses (#633), because this
@@ -150,15 +153,29 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
   };
 }
 
+function withIngredients(flowId: string, trigger: unknown, readiness: WorkflowReadiness): WorkflowReadiness {
+  // Avoid traversing malformed/oversized graphs a second time.
+  if (readiness.issues.some(i => i.code === 'LIMIT')) return readiness;
+  const issues = flowIngredientIssues(flowId, trigger, services.get(getWorkflowDb())?.pieces)
+    .map(message => ({ node: 'trigger', path: 'ingredients', code: 'INGREDIENT', message }));
+  return { ...readiness, ready: readiness.ready && issues.length === 0, issues: [...readiness.issues, ...issues].slice(0, 100) };
+}
+
 export function graphReadiness(flowId: string, trigger: unknown): WorkflowReadiness {
-  return compileWorkflow(trigger, contextFor(flowId));
+  return withIngredients(flowId, trigger, compileWorkflow(trigger, contextFor(flowId)));
 }
 export function versionReadiness(flowId: string, versionId: string, preview?: ReadinessContext['preview']): WorkflowReadiness {
   assertFlowVersionOwnership(flowId, versionId);
   const row = getWorkflowDb().query<{ trigger: string }, [string]>('SELECT trigger FROM flow_version WHERE id = ?').get(versionId)!;
   let trigger: unknown;
   try { trigger = JSON.parse(row.trigger); } catch { trigger = null; }
-  return compileWorkflow(trigger, { ...contextFor(flowId), preview });
+  const readiness = compileWorkflow(trigger, { ...contextFor(flowId), preview });
+  // Check the inputs the engine will actually execute, including account auth.
+  // Keep the compiler's traversal limit before making a second graph walk.
+  const effective = preview?.inputOverride && !readiness.issues.some(i => i.code === 'LIMIT')
+    ? applyInputOverrides(trigger as FlowTriggerNode, { [preview.stepName]: preview.inputOverride })
+    : trigger;
+  return withIngredients(flowId, effective, readiness);
 }
 export function assertVersionReady(flowId: string, versionId: string, preview?: ReadinessContext['preview']): void {
   const result = versionReadiness(flowId, versionId, preview);

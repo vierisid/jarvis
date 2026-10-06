@@ -8,7 +8,7 @@
  *     pieces, assert every piece + every action/trigger is captured.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, spyOn, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
@@ -494,6 +494,7 @@ describe("PieceCatalog (unit)", () => {
       });
       expect(failures).toEqual([]);
       expect(catalog.list().length).toBe(2);
+      expect(catalog.list().map(p => p.version)).toEqual(["0.0.1", "0.0.1"]);
       // Only the user's own piece was extracted.
       expect(extractedNames).toEqual(["@scope/piece-mine"]);
       expect(acquires).toBe(1);
@@ -512,6 +513,7 @@ describe("PieceCatalog (unit)", () => {
         reporter: () => {},
       });
       expect(second.catalog.list().length).toBe(2);
+      expect(second.catalog.list().map(p => p.version)).toEqual(["0.0.1", "0.0.1"]);
       expect(acquires).toBe(1);
     } finally {
       cleanup();
@@ -854,11 +856,14 @@ describe("PieceCatalog (unit)", () => {
         JSON.stringify({ name: `@scope/piece-${sub}`, version: "0.0.1" }),
       );
     }
-    let calls = 0;
+    let calls = 0, elapsed = 0;
+    // Control the deadline clock: wall-clock sleeps are vulnerable to clock
+    // adjustments and fake-timer state left by other files in a combined run.
+    const clock = spyOn(Date, 'now').mockImplementation(() => elapsed);
     const fakeHandle = {
       async extractPieceMetadata(o: { pieceName: string }) {
         calls++;
-        await new Promise((r) => setTimeout(r, 80));
+        elapsed += 80;
         return { name: o.pieceName };
       },
       async release() { /* noop */ },
@@ -878,6 +883,7 @@ describe("PieceCatalog (unit)", () => {
       expect(failures.some((f) => f.reason.includes("overall extraction deadline"))).toBe(true);
       expect(calls).toBeLessThan(3);
     } finally {
+      clock.mockRestore();
       cleanup();
     }
   });

@@ -12,6 +12,8 @@ export function ensureCompositionJobSchema(db: Database): void {
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,
       UNIQUE(project_id, request_id)
     )`);
+    const columns = db.query<{ name: string }, []>('PRAGMA table_info(brief_workflow_composition_jobs)').all();
+    if (!columns.some(c => c.name === 'ingredients')) db.run("ALTER TABLE brief_workflow_composition_jobs ADD COLUMN ingredients TEXT NOT NULL DEFAULT '[]'");
     db.run('CREATE INDEX IF NOT EXISTS idx_brief_composition_queue ON brief_workflow_composition_jobs(project_id, state, created_at, id)');
   }).immediate();
 }

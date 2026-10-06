@@ -3,7 +3,7 @@ import { PieceCatalog, type PieceCatalogEntry } from '../../workflows/runtime/pi
 import type { ComposeDeps } from './workflow-composer';
 
 export type PlanningPolicy = 'baseline-v1' | 'deterministic-first-v1';
-export const COMPOSER_PROMPT_VERSION = 'w8-2';
+export const COMPOSER_PROMPT_VERSION = 'w8-3-ingredients';
 // Production keeps the baseline prompt until a hosted comparison measures
 // deterministic-first against it; the evaluation passes a policy explicitly.
 export const DEFAULT_PLANNING_POLICY: PlanningPolicy = 'baseline-v1';

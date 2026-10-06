@@ -8,19 +8,21 @@ import { composePersistedFlow } from '../actions/tools/persisted-workflow-compos
 import type { ComposeDeps } from '../actions/tools/workflow-composer';
 import { COMPOSITION_LIMITS as limits, type BriefCompositionJob, type BriefComposeRequest } from './composition-contracts';
 import { ensureCompositionJobSchema } from './composition-schema';
+import { parseCompositionIngredients, type CompositionIngredient } from '../workflows/runtime/composition-ingredients';
+import { CompositionIngredients, saveFlowIngredients } from '../workflows/db/repos/composition-ingredients';
 
 export class CompositionRequestError extends Error {
   constructor(message: string, public readonly status = 400) { super(message); }
 }
 interface JobRow {
-  id: string; project_id: string; request_id: string; name: string; prompt: string;
+  id: string; project_id: string; request_id: string; name: string; prompt: string; ingredients: string;
   state: BriefCompositionJob['state']; checked_candidates: number;
   composition_id: string | null; flow_id: string | null; version_id: string | null;
   blocker: string | null; created_at: number; updated_at: number;
 }
 const terminal = (row: JobRow) => row.state !== 'queued' && row.state !== 'running';
 function project(row: JobRow): BriefCompositionJob {
-  return { jobId: row.id, requestId: row.request_id, specification: { name: row.name, prompt: row.prompt },
+  return { jobId: row.id, requestId: row.request_id, specification: { name: row.name, prompt: row.prompt, ...(row.ingredients !== '[]' ? { ingredients: JSON.parse(row.ingredients) } : {}) },
     state: row.state, progress: { checkedCandidates: row.checked_candidates }, compositionId: row.composition_id,
     workflow: row.flow_id && row.version_id ? { flowId: row.flow_id, versionId: row.version_id } : null,
     blocker: row.blocker ? JSON.parse(row.blocker) : null, createdAt: row.created_at, updatedAt: row.updated_at };
@@ -65,30 +67,37 @@ export class BriefCompositionProvider {
     return this.db.query<JobRow, [string]>('SELECT * FROM brief_workflow_composition_jobs WHERE project_id = ? ORDER BY created_at DESC, id DESC LIMIT 100').all(this.projectId).map(project);
   }
   submit(input: BriefComposeRequest): { job: BriefCompositionJob; created: boolean } {
-    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !['requestId', 'prompt', 'name'].includes(k))) throw new CompositionRequestError('Invalid composition fields');
+    if (!input || typeof input !== 'object' || Array.isArray(input) || Object.keys(input).some(k => !['requestId', 'prompt', 'name', 'ingredients'].includes(k))) throw new CompositionRequestError('Invalid composition fields');
     if (typeof input.requestId !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(input.requestId)) throw new CompositionRequestError('A stable requestId is required');
     if (typeof input.prompt !== 'string' || !input.prompt.trim()) throw new CompositionRequestError('Describe what this workflow should do');
     if (Buffer.byteLength(input.prompt, 'utf8') > limits.promptBytes) throw new CompositionRequestError('Prompt exceeds its size limit', 413);
     if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > limits.nameChars)) throw new CompositionRequestError('Invalid workflow name');
     const name = input.name ?? 'New workflow';
+    let selections: CompositionIngredient[];
+    try { selections = parseCompositionIngredients(input.ingredients); } catch (error) { throw new CompositionRequestError((error as Error).message); }
+    const ingredients = JSON.stringify(selections);
     // A POST may have passed the route gate before awaiting a slow body.
     if (this.recoveryNeeded) throw new CompositionRequestError('Workflow composer is unavailable', 503);
     const result = this.db.transaction(() => {
       const old = this.db.query<JobRow, [string, string]>('SELECT * FROM brief_workflow_composition_jobs WHERE project_id = ? AND request_id = ?').get(this.projectId, input.requestId);
       if (old) {
-        if (old.prompt !== input.prompt || old.name !== name) throw new CompositionRequestError('This requestId belongs to a different specification', 409);
+        if (old.prompt !== input.prompt || old.name !== name || old.ingredients !== ingredients) throw new CompositionRequestError('This requestId belongs to a different specification', 409);
         return { job: project(old), created: false };
       }
       if (this.readiness() !== 'ready') throw new CompositionRequestError('Workflow composer is unavailable', 503);
       const count = this.db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM brief_workflow_composition_jobs WHERE project_id = ? AND state IN ('queued','running')").get(this.projectId)!.n;
       if (count >= limits.pendingJobs) throw new CompositionRequestError('Composition queue is full; retry this request shortly', 429);
       const id = apId(), now = Date.now();
-      this.db.run(`INSERT INTO brief_workflow_composition_jobs(id, project_id, request_id, name, prompt, state, created_at, updated_at)
-        VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)`, [id, this.projectId, input.requestId, name, input.prompt, now, now]);
+      this.db.run(`INSERT INTO brief_workflow_composition_jobs(id, project_id, request_id, name, prompt, ingredients, state, created_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, 'queued', ?, ?)`, [id, this.projectId, input.requestId, name, input.prompt, ingredients, now, now]);
       return { job: this.get(id), created: true };
     }).immediate();
     this.kick();
     return result;
+  }
+  ingredients(offset = 0, query = '') {
+    if (this.readiness() !== 'ready') throw new CompositionRequestError('Workflow composer is unavailable', 503);
+    return new CompositionIngredients(this.db, this.dependencies!().pieceRegistry, this.projectId).list(offset, query);
   }
   cancel(id: string): BriefCompositionJob {
     this.db.transaction(() => {
@@ -169,11 +178,16 @@ export class BriefCompositionProvider {
       const owns = () => !this.stopped && this.currentDatabase() && this.active === active && this.row(row.id).state === 'running' && !active.abort.signal.aborted;
       try {
         const deps = this.dependencies!();
+        const selected = new CompositionIngredients(this.db, deps.pieceRegistry, this.projectId).resolve(JSON.parse(row.ingredients));
+        if (selected.issues.length) {
+          this.finish(row.id, 'blocked', { code: 'ingredient_unavailable', message: 'Selected ingredients are unavailable or incompatible. Review the saved selections.', details: selected.issues.slice(0, 6).map(s => s.slice(0, 500)) });
+          continue;
+        }
         const compose = composePersistedFlow({ ...deps, onCandidate: candidate => {
           if (!owns()) throw new Error('Composition is no longer active');
           this.db.run('UPDATE brief_workflow_composition_jobs SET checked_candidates = checked_candidates + 1, updated_at = ? WHERE id = ?', [Date.now(), row.id]);
           deps.onCandidate?.(candidate);
-        } }, { name: row.name, description: row.prompt, signal: active.abort.signal }, { projectId: this.projectId, onJournal: id => {
+        } }, { name: row.name, description: row.prompt, signal: active.abort.signal, ingredients: selected.ingredients }, { projectId: this.projectId, onJournal: id => {
           if (!owns()) throw new Error('Composition is no longer active');
           this.db.run('UPDATE brief_workflow_composition_jobs SET composition_id = ?, updated_at = ? WHERE id = ?', [id, Date.now(), row.id]);
         } });
@@ -192,7 +206,13 @@ export class BriefCompositionProvider {
         } else {
           this.db.transaction(() => {
             if (!owns()) return;
+            const issues = new CompositionIngredients(this.db, this.dependencies!().pieceRegistry, this.projectId).revalidate(selected.ingredients, result.flow.trigger);
+            if (issues.length) {
+              this.finish(row.id, 'blocked', { code: 'ingredient_unavailable', message: 'Selected ingredients changed or could not be used. Review the saved selections.', details: issues.slice(0, 6).map(s => s.slice(0, 500)) });
+              return;
+            }
             const flow = createFlow({ projectId: this.projectId, metadata: { compositionJobId: row.id, compositionRecordId: result.compositionRecordId } });
+            saveFlowIngredients(flow.id, selected.ingredients);
             const version = createDraftVersion({ flowId: flow.id, displayName: result.flow.displayName.trim() || row.name, trigger: result.flow.trigger });
             this.db.run("UPDATE brief_workflow_composition_jobs SET state = 'draft_ready', flow_id = ?, version_id = ?, updated_at = ? WHERE id = ?", [flow.id, version.id, Date.now(), row.id]);
           }).immediate();

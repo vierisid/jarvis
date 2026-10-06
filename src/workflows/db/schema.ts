@@ -23,6 +23,11 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  // Immutable authoring requirements. Graph edits and disabling F-08 cannot erase pins.
+  `CREATE TABLE IF NOT EXISTS workflow_composition_ingredients (
+    flow_id TEXT PRIMARY KEY REFERENCES flow(id) ON DELETE CASCADE,
+    ingredients TEXT NOT NULL
+  )`,
   // Authoring provenance, not an execution queue. Never replay on startup.
   `CREATE TABLE IF NOT EXISTS workflow_composition (
     id TEXT PRIMARY KEY,

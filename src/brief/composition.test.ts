@@ -327,11 +327,11 @@ test('a prepared disabled draft still faces canonical readiness checks before ac
   expect(getFlow(result.workflow!.flowId)!.status).toBe('DISABLED');
 });
 
-test('request validation bounds bytes and identifiers, rejects F08 fields, and preserves admitted wording', async () => {
+test('request validation bounds bytes and identifiers, rejects unknown fields, and preserves admitted wording', async () => {
   const p = provider();
   const invalid: unknown[] = [null, [], {}, { ...input, requestId: 'a/b' }, { ...input, requestId: 'x'.repeat(129) },
     { ...input, prompt: ' \n ' }, { ...input, prompt: 42 }, { ...input, prompt: 'é'.repeat(COMPOSITION_LIMITS.promptBytes / 2 + 1) },
-    { ...input, name: '' }, { ...input, name: 'x'.repeat(161) }, { ...input, ingredients: [] }, { ...input, projectId: 'foreign' }];
+    { ...input, name: '' }, { ...input, name: 'x'.repeat(161) }, { ...input, ingredients: [{ kind: "unknown" }] }, { ...input, projectId: 'foreign' }];
   for (const value of invalid) expect(() => p.submit(value as BriefComposeRequest)).toThrow();
   expect(p.list()).toEqual([]);
   const exact = 'é'.repeat(COMPOSITION_LIMITS.promptBytes / 2);
