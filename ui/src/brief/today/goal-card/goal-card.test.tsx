@@ -23,8 +23,8 @@ beforeAll(async () => {
 beforeEach(() => {host=document.createElement("div");document.body.append(host);root=createRoot(host);binding=goalFixture(outcomeFixture(),"ready",[front]);});
 afterEach(async () => {await React.act(async()=>root.unmount());host.remove();});
 afterAll(()=>GlobalRegistrator.unregister());
-function Example({binding, compact=false, dark=false, reduced=true}: {binding:GoalCardBinding;compact?:boolean;dark?:boolean;reduced?:boolean}) {
-  const handoff=useGoalHandoff("preview",binding,reduced);
+function Example({binding, compact=false, dark=false, reduced=true, mode="preview"}: {binding:GoalCardBinding;compact?:boolean;dark?:boolean;reduced?:boolean;mode?:"live"|"preview"}) {
+  const handoff=useGoalHandoff(mode,binding,reduced);
   return <div className="brief-root" data-brief-theme={dark?"dark":"light"}><div data-compact={compact}><GoalCard handoff={handoff}/></div><GoalQueueCue handoff={handoff}/></div>;
 }
 async function render(compact=false,dark=false) {await React.act(async()=>root.render(<Example binding={binding} compact={compact} dark={dark}/>));}
@@ -147,5 +147,100 @@ test("loading, empty and unavailable recommendations keep a local return; unknow
     await React.act(async()=>root.render(null));binding=goalFixture(outcomeFixture("unknown-goal"),scenario);await render();await open();
     expect(host.textContent).toContain("Progress not measured yet");expect(host.querySelector(".brief-goal-value")).toBeNull();expect(host.querySelector(".brief-goal-accept")).toBeNull();
     expect(document.activeElement?.textContent).toContain("Back to goal");
+  }
+});
+
+test("temporary recommendation loss retains the pending attempt and its response without a second dispatch",async()=>{
+  for (const settlesWhileMissing of [false, true]) {
+    await React.act(async()=>root.render(null));
+    binding=goalFixture(outcomeFixture(),"ready",[front]);
+    let calls=0, resolve!:(r:GoalAcceptResult)=>void, sent!:GoalAcceptRequest;
+    binding.onAccept=req=>{calls++;sent=req;return new Promise(r=>resolve=r);};
+    await render();await open();await click(".brief-goal-accept");
+    const ready=binding;
+    binding={...binding,recommendation:{status:"loading"}};await render();
+    if(settlesWhileMissing) await React.act(async()=>resolve(receipt(sent)));
+    binding={...ready,queue:{status:"ready",data:[front,destination]}};await render();
+    if(!host.querySelector(".brief-goal-accept"))await open();
+    await click(".brief-goal-accept");expect(calls).toBe(1);
+    if(!settlesWhileMissing) await React.act(async()=>resolve(receipt(sent)));
+    expect(feedback()).toBe("Added to Today");
+  }
+});
+
+test("interleaved recommendation requests retain separate results across an identity round trip",async()=>{
+  const pending=new Map<string,{request:GoalAcceptRequest;resolve:(r:GoalAcceptResult)=>void;reject:(error:Error)=>void}>();
+  let calls=0;
+  binding.onAccept=req=>{calls++;return new Promise((resolve,reject)=>pending.set(req.revision,{request:req,resolve,reject}));};
+  const first=binding;
+  if(first.recommendation.status!=="ready")throw Error("fixture");
+  const second={...first,recommendation:{status:"ready" as const,data:{...first.recommendation.data,revision:"rec-v2"}}};
+  await render();await open();await click(".brief-goal-accept");
+  binding=second;await render();await open();await click(".brief-goal-accept");
+  binding=first;await render();await open();await click(".brief-goal-accept");
+  expect(calls).toBe(2);
+  const newer=pending.get("rec-v2")!;
+  await React.act(async()=>newer.resolve(receipt(newer.request)));
+  expect(feedback()).toBe("Adding to Today…");
+  binding={...second,queue:{status:"ready",data:[front,destination]}};await render();await open();
+  expect(feedback()).toBe("Added to Today");
+  await React.act(async()=>pending.get("rec-v1")!.reject(Error("Late old failure")));
+  expect(feedback()).toBe("Added to Today");
+  binding=first;await render();await open();
+  expect(feedback()).toContain("not confirmed");
+  await click(".brief-goal-accept");expect(calls).toBe(2);
+});
+
+test("lost goal data does not replay a settled receipt or unlock a completed attempt on recovery",async()=>{
+  let calls=0;binding.onAccept=async req=>{calls++;return receipt(req);};
+  binding.queue={status:"ready",data:[front,destination]};
+  await render();await open();await click(".brief-goal-accept");await tick();
+  expect(host.querySelector("[data-work-item-id]")).not.toBeNull();
+  await tick(1250);
+  const ready=binding;
+  binding={...binding,state:{status:"unavailable",reason:"Reconnecting"}};await render();
+  binding={...ready,queue:{status:"ready",data:[]}};await render();
+  if(!host.querySelector(".brief-goal-accept"))await open();
+  await tick();expect(feedback()).toBe("Added to Today");
+  expect(host.querySelector("[data-work-item-id]")).toBeNull();
+  await click(".brief-goal-accept");expect(calls).toBe(1);
+});
+
+test("background recommendation revisions and recovery preserve focus and text in another control",async()=>{
+  const composer=document.createElement("textarea");composer.value="Keep my draft";document.body.append(composer);
+  try {
+    await render();await open();composer.focus();
+    if(binding.recommendation.status!=="ready")throw Error("fixture");
+    binding={...binding,recommendation:{status:"ready",data:{...binding.recommendation.data,revision:"rec-v2"}}};
+    await render();expect(document.activeElement===composer).toBe(true);expect(composer.value).toBe("Keep my draft");
+    await open();composer.focus();const ready=binding;
+    binding={...binding,recommendation:{status:"loading"}};await render();expect(document.activeElement===composer).toBe(true);
+    binding=ready;await render();expect(document.activeElement===composer).toBe(true);
+  } finally {composer.remove();}
+});
+
+test("an automatic recommendation close restores focus when its removed control held it",async()=>{
+  await render();await open();expect(document.activeElement?.textContent).toContain("Back to goal");
+  if(binding.recommendation.status!=="ready")throw Error("fixture");
+  binding={...binding,recommendation:{status:"ready",data:{...binding.recommendation.data,revision:"rec-v2"}}};
+  await render();expect(document.activeElement).toBe(host.querySelector(".brief-goal-next"));
+});
+
+test("callbacks from a replaced owner scope cannot overwrite a new request for the same identity",async()=>{
+  for(const lateResult of ["failed","rejected"] as const) {
+    await React.act(async()=>root.render(null));binding=goalFixture(outcomeFixture(),"ready",[front,destination]);
+    const pending:{request:GoalAcceptRequest;resolve:(r:GoalAcceptResult)=>void;reject:(e:Error)=>void}[]=[];
+    binding.onAccept=req=>new Promise((resolve,reject)=>pending.push({request:req,resolve,reject}));
+    await render();await open();await click(".brief-goal-accept");
+    await React.act(async()=>root.render(<Example binding={binding} mode="live"/>));
+    await render();if(!host.querySelector(".brief-goal-accept"))await open();
+    await click(".brief-goal-accept");expect(pending.length).toBe(2);
+    await React.act(async()=>pending[1]!.resolve(receipt(pending[1]!.request)));
+    expect(feedback()).toBe("Added to Today");
+    await React.act(async()=>{
+      if(lateResult==="failed")pending[0]!.resolve({...pending[0]!.request,state:"failed"});
+      else pending[0]!.reject(Error("Old owner response"));
+    });
+    expect(feedback()).toBe("Added to Today");
   }
 });

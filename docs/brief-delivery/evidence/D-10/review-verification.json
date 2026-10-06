@@ -1,0 +1,22 @@
+{
+  "reviewed_head": "c5d954ce74227357afec8aeaf787efaf1fccef26",
+  "findings": {
+    "R2": "fixed: background updates preserve external focus",
+    "R1": "fixed: per-identity attempts, request ID and lifecycle guards"
+  },
+  "tests": 165,
+  "assertions": 3168,
+  "focused_tests": 19,
+  "focused_assertions": 161,
+  "regression_before": {
+    "fail": 4,
+    "pass": 14
+  },
+  "typescript": "pass",
+  "build": "index-gp5knc4g.js",
+  "css": "index-ceh5pzvf.css",
+  "browser_cases": 4,
+  "background_focus_cycles": 40,
+  "evidence": "evidence/D-10/review-verification.json",
+  "live_provider_tested": false
+}
