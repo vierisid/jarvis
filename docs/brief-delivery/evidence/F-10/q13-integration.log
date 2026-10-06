@@ -1,0 +1,161 @@
+Q13 temporary source pin: 0d455494f34b4045a0b95498a81e9bd389c6ffeb
+bun test v1.4.2 (744846f84)
+
+src/awareness/prepared-opportunities.test.ts:
+Database initialized at: /tmp/jarvis-f09-hXJETE/test.db
+Database initialized at: /tmp/jarvis-f09-hXJETE/test.db
+(pass) one source creates one exact locked disabled snapshot across processing and restart [456.56ms]
+Database initialized at: /tmp/jarvis-f09-69NZfR/test.db
+(pass) dismissal during compose cannot return a visible ready proposal [445.24ms]
+Database initialized at: /tmp/jarvis-f09-BxxwF2/test.db
+(pass) dismissal during qualify cannot return a visible ready proposal [413.47ms]
+Database initialized at: /tmp/jarvis-f09-o56cqD/test.db
+(pass) legacy dismissal prevents draft attachment [414.76ms]
+Database initialized at: /tmp/jarvis-f09-DZSdNm/test.db
+(pass) ready is withdrawn when goal changes [425.73ms]
+Database initialized at: /tmp/jarvis-f09-amlSia/test.db
+(pass) ready is withdrawn when version changes [503.63ms]
+Database initialized at: /tmp/jarvis-f09-AICNqi/test.db
+(pass) ready is withdrawn when binding changes [606.70ms]
+Database initialized at: /tmp/jarvis-f09-ecrIOK/test.db
+(pass) ready is withdrawn when quality-missing changes [450.40ms]
+Database initialized at: /tmp/jarvis-f09-WoJBZY/test.db
+(pass) specific missing setup blocks unconfirmed jobs without model calls [411.90ms]
+Database initialized at: /tmp/jarvis-f09-ZvX85X/test.db
+(pass) specific missing setup blocks unlinked jobs without model calls [456.01ms]
+Database initialized at: /tmp/jarvis-f09-nPKPOI/test.db
+(pass) qualification for another snapshot is refused [493.31ms]
+Database initialized at: /tmp/jarvis-f09-96AaOG/test.db
+(pass) background preparation has a durable daily budget across worker restart [559.60ms]
+Database initialized at: /tmp/jarvis-f09-DYARQw/test.db
+(pass) timeout and expired leases are blocked, never automatically recomposed [480.46ms]
+Database initialized at: /tmp/jarvis-f09-k6ccR7/test.db
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+(pass) retry archives the previous snapshot and refuses stale or terminal commands [476.13ms]
+Database initialized at: /tmp/jarvis-f09-NQKkEP/test.db
+(pass) sample outputs never reach public preparation data or subsequent model requests [503.23ms]
+Database initialized at: /tmp/jarvis-f09-cYLuTS/test.db
+(pass) missing optional Q13 compiles and prevents inference and activation [422.94ms]
+Database initialized at: /tmp/jarvis-f09-RUzrq1/test.db
+(pass) API gates, strict writes, concurrency tokens and no-store responses [511.08ms]
+Database initialized at: /tmp/jarvis-f09-K214Hz/test.db
+(pass) a changed confirmed job cannot attach the old composition [601.99ms]
+Database initialized at: /tmp/jarvis-f09-GZjy7T/test.db
+(pass) attachment transaction failure leaves no orphan flow, and explicit retry succeeds [661.80ms]
+Database initialized at: /tmp/jarvis-f09-quFKMa/test.db
+(pass) storage failures withdraw readiness, and recovery fences the abandoned inference [590.46ms]
+Database initialized at: /tmp/jarvis-f09-UMuTVg/test.db
+(pass) full queue rejects an explicit retry without losing its saved revision [681.11ms]
+Database initialized at: /tmp/jarvis-f09-mR3zbI/test.db
+[engine 36bbd9c8 stderr] (node:833021) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 704076db stderr] (node:833053) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) real Q13 dry-run qualifies the exact disabled version and blocks missing fixtures [4837.62ms]
+Database initialized at: /tmp/jarvis-f09-n5GPaO/test.db
+(pass) publishing through another surface cannot leave an approval-eligible proposal [482.05ms]
+Database initialized at: /tmp/jarvis-f09-vkDfo2/test.db
+(pass) shared ownership rejects legacy acceptance when F09 is queued [422.65ms]
+Database initialized at: /tmp/jarvis-f09-doHNFb/test.db
+(pass) shared ownership rejects legacy acceptance when F09 is running [481.45ms]
+Database initialized at: /tmp/jarvis-f09-nST0Z6/test.db
+(pass) shared ownership rejects legacy acceptance when F09 is ready [461.96ms]
+Database initialized at: /tmp/jarvis-f09-E5BB2U/test.db
+(pass) legacy ownership survives a blocked F09 row and permits legacy retry [477.42ms]
+Database initialized at: /tmp/jarvis-f09-aKVdbC/test.db
+(pass) old mixed queues reserve the prepared owner before either inference [507.44ms]
+Database initialized at: /tmp/jarvis-f09-OMqHl3/test.db
+(pass) old mixed queues reserve the legacy owner before either inference [457.52ms]
+Database initialized at: /tmp/jarvis-f09-1bm8GA/test.db
+(pass) private provider diagnostics stay in the linked journal [464.16ms]
+Database initialized at: /tmp/jarvis-f09-A3u4TK/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 2 exhausted (response was not valid JSON: JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 2 exhausted (response was not valid JSON: JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+(pass) private model diagnostics stay in the linked journal [467.61ms]
+Database initialized at: /tmp/jarvis-f09-zAHHuK/test.db
+(pass) pre-upgrade diagnostic text is sanitized when reading blocked proposals [458.25ms]
+Database initialized at: /tmp/jarvis-f09-DqCBz6/test.db
+(pass) journal is linked before inference and retained after dismiss [461.11ms]
+Database initialized at: /tmp/jarvis-f09-hrNlHo/test.db
+(pass) journal is linked before inference and retained after timeout [530.90ms]
+Database initialized at: /tmp/jarvis-f09-whPJtn/test.db
+(pass) journal is linked before inference and retained after shutdown [492.17ms]
+Database initialized at: /tmp/jarvis-f09-svBaGU/test.db
+(pass) failure to bind the journal rolls back before inference [492.79ms]
+Database initialized at: /tmp/jarvis-f09-UxC2t1/test.db
+(pass) deleted workflow has a distinct recovery blocker [491.11ms]
+Database initialized at: /tmp/jarvis-f09-QM7zAx/test.db
+(pass) deleted version has a distinct recovery blocker [490.08ms]
+Database initialized at: /tmp/jarvis-f09-nEVYy2/test.db
+(pass) legacy inference cannot attach after old mixed records resolve to prepared ownership [481.08ms]
+Database initialized at: /tmp/jarvis-f09-HiJxkk/test.db
+(pass) prepared inference cannot attach after old mixed records resolve to legacy ownership [468.26ms]
+
+src/awareness/prepared-quality-adapter.test.ts:
+(pass) the adapter pins current bindings, labels simulation honestly and closes its runner [1.94ms]
+(pass) unsupported simulation stays illustrative and custom job edits require review [0.22ms]
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-fG9zA2/db
+[CronScheduler] All jobs cancelled
+(pass) double approval activates only the reviewed version with manual registration [474.89ms]
+Database initialized at: /tmp/jarvis-f10-CsbFP7/db
+[WebhookManager] Registered webhook for workflow "b4vOq0KhMUQJroqvndLOW" at /webhooks/b4vOq0KhMUQJroqvndLOW
+[WebhookManager] Unregistered webhook for workflow "b4vOq0KhMUQJroqvndLOW"
+[CronScheduler] All jobs cancelled
+(pass) double approval activates only the reviewed version with webhook registration [461.55ms]
+Database initialized at: /tmp/jarvis-f10-rn85w5/db
+(pass) changed revision refuses approval before publication [474.11ms]
+Database initialized at: /tmp/jarvis-f10-w7lJ4b/db
+(pass) changed goal refuses approval before publication [515.57ms]
+Database initialized at: /tmp/jarvis-f10-vy503K/db
+(pass) changed version refuses approval before publication [523.48ms]
+Database initialized at: /tmp/jarvis-f10-ix4JuN/db
+(pass) changed connection refuses approval before publication [515.31ms]
+Database initialized at: /tmp/jarvis-f10-yI6RMy/db
+(pass) changed target refuses approval before publication [714.13ms]
+Database initialized at: /tmp/jarvis-f10-TtmsZc/db
+(pass) changed quality refuses approval before publication [875.94ms]
+Database initialized at: /tmp/jarvis-f10-H4iHFf/db
+(pass) publication and decision roll back together when receipt persistence fails [959.72ms]
+Database initialized at: /tmp/jarvis-f10-dPftTf/db
+(pass) dismissal settles independently and supplies the next current ready proposal [697.14ms]
+Database initialized at: /tmp/jarvis-f10-Ra93bY/db
+(pass) all duplicate request keys stay bound to their original proposal, revision and action [564.38ms]
+Database initialized at: /tmp/jarvis-f10-txWojK/db
+Database initialized at: /tmp/jarvis-f10-txWojK/db
+(pass) registration timeout returns a durable pending receipt, and process recovery never republishes [503.72ms]
+Database initialized at: /tmp/jarvis-f10-3KeHD1/db
+(pass) registration failure stays actionable and explicit retry uses the same receipt [669.40ms]
+Database initialized at: /tmp/jarvis-f10-PWZtj0/db
+(pass) a silent registration refusal is never reported as registered [540.98ms]
+Database initialized at: /tmp/jarvis-f10-g2olCB/db
+(pass) replaying approval after pause cannot restore the old workflow [564.91ms]
+Database initialized at: /tmp/jarvis-f10-n2LQEF/db
+(pass) replaying approval after delete cannot restore the old workflow [761.99ms]
+Database initialized at: /tmp/jarvis-f10-yAJ16i/db
+(pass) replaying approval after republish cannot restore the old workflow [1819.42ms]
+Database initialized at: /tmp/jarvis-f10-o7ILx0/db
+(pass) samples and private diagnostics never appear in an activation receipt [4103.44ms]
+Database initialized at: /tmp/jarvis-f10-nUNa7G/db
+(pass) strict routes enforce both capability flags, provider identity and bounded streamed bodies [2023.65ms]
+Database initialized at: /tmp/jarvis-f10-5Er4xF/db
+(pass) approval to activate does not grant Authority for a later notification [1474.94ms]
+Database initialized at: /tmp/jarvis-f10-hdlr6a/db
+[engine b5fa2760 stderr] (node:833136) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[CronScheduler] All jobs cancelled
+(pass) actual Q13 qualification approves the exact prepared snapshot without executing it [3512.50ms]
+
+ 63 pass
+ 0 fail
+ 363 expect() calls
+Ran 63 tests across 3 files. [44.49s]
+
+EXIT_CODE=0
+OVERLAY_RESTORED=true

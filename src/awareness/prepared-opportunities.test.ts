@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -133,11 +133,16 @@ test('background preparation has a durable daily budget across worker restart', 
 
 test('timeout and expired leases are blocked, never automatically recomposed', async () => {
   const s = source(); let calls = 0;
-  const p = provider({ async chat() { calls++; return new Promise(() => {}); } }, gate(), 20);
-  const view = await prepared(p, s.id); expect(view.state).toBe('blocked'); expect(calls).toBe(1);
-  p.kick(); await p.idle(); expect(calls).toBe(1);
-  getDb().run("UPDATE prepared_opportunities SET state = 'running', lease_token = 'expired', lease_until = 0 WHERE id = ?", [view.proposalId]);
-  recoverCompositionLeases(getDb(), 'prepared_opportunities'); expect(p.get(view.proposalId).state).toBe('blocked');
+  // Hold lease time steady through synchronous DB setup. The real abort timer
+  // must interrupt the entered model, not lose its lease before inference starts.
+  const clock = spyOn(Date, 'now').mockReturnValue(Date.now());
+  try {
+    const p = provider({ async chat() { calls++; return new Promise(() => {}); } }, gate(), 20);
+    const view = await prepared(p, s.id); expect(view.state).toBe('blocked'); expect(calls).toBe(1);
+    p.kick(); await p.idle(); expect(calls).toBe(1);
+    getDb().run("UPDATE prepared_opportunities SET state = 'running', lease_token = 'expired', lease_until = 0 WHERE id = ?", [view.proposalId]);
+    recoverCompositionLeases(getDb(), 'prepared_opportunities'); expect(p.get(view.proposalId).state).toBe('blocked');
+  } finally { clock.mockRestore(); }
 });
 
 test('retry archives the previous snapshot and refuses stale or terminal commands', async () => {

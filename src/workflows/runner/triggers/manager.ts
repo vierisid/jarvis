@@ -180,6 +180,18 @@ export class TriggerManager {
     });
   }
 
+  /** Exact-version registration receipt; refresh resolving alone is not proof of a subscription. */
+  registrationState(flowId: string, versionId: string): 'registered' | 'pending' | 'blocked' | 'changed' {
+    const flow = getFlow(flowId), version = getFlowVersion(versionId);
+    if (!flow || flow.status !== 'ENABLED' || flow.published_version_id !== versionId || !version || version.flowId !== flowId) return 'changed';
+    if (ungrantedCodeSteps(flow, version.trigger)) return 'blocked';
+    try { assertVersionReady(flowId, versionId); } catch { return 'blocked'; }
+    if (version.trigger.type === 'EMPTY') return 'registered'; // Manual-only: no subscription or run is needed.
+    const sub = this.subs.get(flowId);
+    if (sub?.versionId === versionId && !sub.warning) return 'registered';
+    return this.inFlight.has(flowId) || this.enableRetries.has(flowId) ? 'pending' : 'blocked';
+  }
+
   /** Public surface for the webhook ingress route. */
   webhookManager(): WebhookManager {
     return this.webhooks;
@@ -237,7 +249,12 @@ export class TriggerManager {
       // Already registered against the right version -> no-op. This is what
       // makes concurrent refreshes idempotent: the first one through the lock
       // does the work; subsequent calls observe the active sub and skip.
-      if (existing && existing.versionId === desiredVersionId) return;
+      if (existing && existing.versionId === desiredVersionId) {
+        // Repair an incomplete local subscription from the cached engine state.
+        // Keep working webhook delivery and avoid ON_DISABLE / ON_ENABLE replay.
+        if (existing.kind === 'engine' && existing.warning) await this.register(flow);
+        return;
+      }
 
       // Either no sub yet, or a stale sub for a previous version. Tear down
       // the old one (clears engine state + ON_DISABLE) before registering
@@ -513,14 +530,20 @@ export class TriggerManager {
       );
     }
 
+    const noSubscription = !cronTearDown && !webhookTearDown;
+    // ON_ENABLE already owns engine state, even if every local subscription
+    // failed. Keep its teardown so pause/stop clears state and runs ON_DISABLE.
     const sub: ActiveSub = {
+      ...(noSubscription ? { warning: 'No trigger subscription could be registered; the flow is not firing.' }
+        : schedule?.cronExpression && !cronTearDown ? { warning: 'Cron registration failed; only webhook delivery is active.' } : {}),
       flowId: flow.id,
       versionId: version.id,
       kind: "engine",
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
-    this.clearEnableRetry(flow.id);
+    if (noSubscription) this.scheduleEnableRetry(flow.id, 'No trigger subscription could be registered');
+    else this.clearEnableRetry(flow.id);
   }
 
   /**

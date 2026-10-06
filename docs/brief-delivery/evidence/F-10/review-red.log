@@ -1,0 +1,86 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-tyzBsI/db
+[WebhookManager] Registered webhook for workflow "J7ktrHHTQ6Ak5sftLKHyO" at /webhooks/J7ktrHHTQ6Ak5sftLKHyO
+322 |   try {
+323 |     a.submit(view.proposalId, view.revision, 'backoff', 'approve'); await a.idle();
+324 |     expect(attempts).toBe(1); expect(scheduled).toBe(1);
+325 |     for (let i = 0; i < 3; i++) {
+326 |       getDb().run('UPDATE brief_opportunity_actions SET lease_until = 0'); a.kick(); await a.idle();
+327 |       expect(a.get(view.proposalId).registration.state).toBe('pending');
+                                                              ^
+error: expect(received).toBe(expected)
+
+Expected: "pending"
+Received: "registered"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-10/src/brief/opportunity-activation.test.ts:327:57)
+[WebhookManager] Unregistered webhook for workflow "J7ktrHHTQ6Ak5sftLKHyO"
+[CronScheduler] All jobs cancelled
+(fail) F10 review R1: reconciliation preserves the manager retry timer and budget [3182.03ms]
+Database initialized at: /tmp/jarvis-f10-MgcqgC/db
+342 |   } } }), gate());
+343 |   const first = p.ensure(source('dismiss-hung').id); await entered.promise;
+344 |   const next = p.ensure(source('queued').id), a = activation(p, fakeTriggers());
+345 |   try {
+346 |     a.submit(first.proposalId, first.revision, 'dismiss-hung', 'dismiss');
+347 |     expect(signal?.aborted).toBe(true);
+                                  ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-10/src/brief/opportunity-activation.test.ts:347:29)
+(fail) F10 review R3: committed dismissal aborts a hung composer and starts queued preparation [2454.73ms]
+Database initialized at: /tmp/jarvis-f10-U94OEH/db
+(pass) F10 review R3: rolled-back dismissal leaves active preparation running [2334.35ms]
+
+src/workflows/runner/triggers/manager.test.ts:
+Database initialized at: :memory:
+1092 |     await tm.refresh(flowId);
+1093 |     expect(tm.registrationState(flowId, versionId)).toBe('pending'); expect(cron.has(`flow:${flowId}`)).toBe(false);
+1094 |     expect(getFlowVersion(versionId)!.engineSchedule).not.toBeNull();
+1095 |     if (action === 'pause') { updateFlowStatus(flowId, 'DISABLED'); await tm.refresh(flowId); }
+1096 |     else await tm.stop();
+1097 |     expect(hooks).toEqual(['ON_ENABLE', 'ON_DISABLE']);
+                         ^
+error: expect(received).toEqual(expected)
+
+  [
+    "ON_ENABLE",
+-   "ON_DISABLE",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-10/src/workflows/runner/triggers/manager.test.ts:1097:19)
+(fail) F10 review R2: pause cleans engine state after local registration failure [49.80ms]
+Database initialized at: :memory:
+1092 |     await tm.refresh(flowId);
+1093 |     expect(tm.registrationState(flowId, versionId)).toBe('pending'); expect(cron.has(`flow:${flowId}`)).toBe(false);
+1094 |     expect(getFlowVersion(versionId)!.engineSchedule).not.toBeNull();
+1095 |     if (action === 'pause') { updateFlowStatus(flowId, 'DISABLED'); await tm.refresh(flowId); }
+1096 |     else await tm.stop();
+1097 |     expect(hooks).toEqual(['ON_ENABLE', 'ON_DISABLE']);
+                         ^
+error: expect(received).toEqual(expected)
+
+  [
+    "ON_ENABLE",
+-   "ON_DISABLE",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-10/src/workflows/runner/triggers/manager.test.ts:1097:19)
+(fail) F10 review R2: stop cleans engine state after local registration failure [41.35ms]
+
+ 1 pass
+ 56 filtered out
+ 4 fail
+ 20 expect() calls
+Ran 5 tests across 2 files. [8.68s]

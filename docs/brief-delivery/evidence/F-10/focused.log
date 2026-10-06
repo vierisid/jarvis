@@ -1,0 +1,51 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-xQyBXT/db
+[CronScheduler] All jobs cancelled
+(pass) double approval activates only the reviewed version with manual registration [1790.90ms]
+Database initialized at: /tmp/jarvis-f10-4LaczL/db
+[WebhookManager] Registered webhook for workflow "uPvCms3kI04sU0rFZEuMC" at /webhooks/uPvCms3kI04sU0rFZEuMC
+[WebhookManager] Unregistered webhook for workflow "uPvCms3kI04sU0rFZEuMC"
+[CronScheduler] All jobs cancelled
+(pass) double approval activates only the reviewed version with webhook registration [1695.06ms]
+Database initialized at: /tmp/jarvis-f10-EZN8Ix/db
+(pass) changed revision refuses approval before publication [1736.08ms]
+Database initialized at: /tmp/jarvis-f10-2dZqcx/db
+(pass) changed goal refuses approval before publication [1558.38ms]
+Database initialized at: /tmp/jarvis-f10-qV3fuW/db
+(pass) changed version refuses approval before publication [1143.92ms]
+Database initialized at: /tmp/jarvis-f10-6BVqIC/db
+(pass) changed connection refuses approval before publication [1238.64ms]
+Database initialized at: /tmp/jarvis-f10-5bvskm/db
+(pass) changed target refuses approval before publication [1295.48ms]
+Database initialized at: /tmp/jarvis-f10-ZZjC4A/db
+(pass) changed quality refuses approval before publication [1379.92ms]
+Database initialized at: /tmp/jarvis-f10-COzFHT/db
+(pass) publication and decision roll back together when receipt persistence fails [1607.92ms]
+Database initialized at: /tmp/jarvis-f10-X8WnmE/db
+(pass) dismissal settles independently and supplies the next current ready proposal [2622.19ms]
+Database initialized at: /tmp/jarvis-f10-txSSEU/db
+(pass) all duplicate request keys stay bound to their original proposal, revision and action [2082.88ms]
+Database initialized at: /tmp/jarvis-f10-LRL1sx/db
+Database initialized at: /tmp/jarvis-f10-LRL1sx/db
+(pass) registration timeout returns a durable pending receipt, and process recovery never republishes [2109.37ms]
+Database initialized at: /tmp/jarvis-f10-W6JmSG/db
+(pass) registration failure stays actionable and explicit retry uses the same receipt [1914.81ms]
+Database initialized at: /tmp/jarvis-f10-yYgPzo/db
+(pass) a silent registration refusal is never reported as registered [1942.46ms]
+Database initialized at: /tmp/jarvis-f10-Ik8QP3/db
+(pass) replaying approval after pause cannot restore the old workflow [1457.75ms]
+Database initialized at: /tmp/jarvis-f10-xKOG0P/db
+(pass) replaying approval after delete cannot restore the old workflow [2030.21ms]
+Database initialized at: /tmp/jarvis-f10-k9jsen/db
+(pass) replaying approval after republish cannot restore the old workflow [1679.41ms]
+Database initialized at: /tmp/jarvis-f10-QpFusT/db
+(pass) samples and private diagnostics never appear in an activation receipt [1376.71ms]
+Database initialized at: /tmp/jarvis-f10-L7V3X8/db
+(pass) strict routes enforce both capability flags, provider identity and bounded streamed bodies [1571.93ms]
+
+ 19 pass
+ 0 fail
+ 161 expect() calls
+Ran 19 tests across 1 file. [31.42s]

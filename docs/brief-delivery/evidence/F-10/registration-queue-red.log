@@ -1,0 +1,26 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-Y0YnpK/db
+192 |   triggers.registrationState = (flowId?: string) => {
+193 |     if (flowId?.startsWith('missing-')) { observed.add(flowId); return 'blocked'; }
+194 |     return triggers.registered ? 'registered' : 'blocked';
+195 |   };
+196 |   a.submit(view.proposalId, view.revision, 'new', 'approve'); await a.idle();
+197 |   expect(a.get(view.proposalId).registration.state).toBe('registered'); expect(triggers.calls).toBe(1);
+                                                          ^
+error: expect(received).toBe(expected)
+
+Expected: "registered"
+Received: "pending"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-10/src/brief/opportunity-activation.test.ts:197:53)
+(fail) old blocked receipts cannot starve a new approval or later recovery observations [580.52ms]
+
+ 0 pass
+ 22 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [652.00ms]
+
+EXIT_CODE=1

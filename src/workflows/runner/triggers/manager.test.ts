@@ -15,7 +15,7 @@ import {
   setPublishedVersion,
   updateFlowStatus,
 } from "../../db/repos/flow";
-import { createDraftVersion, lockVersion, updateDraftVersion } from "../../db/repos/flow-version";
+import { createDraftVersion, getFlowVersion, lockVersion, updateDraftVersion } from "../../db/repos/flow-version";
 import { queueStats } from "../../db/repos/job-queue";
 import { WorkflowEventBus } from "../../runtime/event-bus";
 import { TriggerManager } from "./manager";
@@ -1037,4 +1037,70 @@ describe('review: durable readiness refusals', () => {
     }
   });
 
+});
+
+
+for (const listeners of [[], [{ name: 'WEBHOOK', identifier: 'fixture' }]]) test(`registration receipt refuses a failed engine cron with ${listeners.length} working listeners`, async () => {
+  const { flowId, versionId } = publishFlowWithTrigger('registration receipt', {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'jarvis-trigger', triggerName: 'on_event', input: { eventType: 'test' } },
+  });
+  const tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [],
+    engineRuntime: { async acquire() { return { async executeTriggerHook() { return { scheduleOptions: { cronExpression: 'invalid' }, listeners }; }, async release() {} }; } } as any,
+  });
+  try {
+    await tm.refresh(flowId); expect(tm.registrationState(flowId, versionId)).toBe('blocked');
+    expect(tm.list()).toHaveLength(1); expect(queueStats().queued).toBe(0);
+    if (!listeners.length) expect(tm.list()[0]?.warning).toContain('not firing');
+    if (listeners.length) expect(tm.list()[0]?.warning).toContain('Cron registration failed');
+  } finally { await tm.stop(); }
+});
+
+
+for (const listeners of [[], [{ name: 'WEBHOOK', identifier: 'fixture' }]]) test(`failed engine cron with ${listeners.length} working listeners repairs locally without repeating remote hooks`, async () => {
+  const { flowId, versionId } = publishFlowWithTrigger('registration repair', {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'jarvis-trigger', triggerName: 'on_event', input: { eventType: 'test' } },
+  });
+  const cron = new FakeCronScheduler(), hooks: string[] = []; let fail = true;
+  const tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [],
+    cronScheduler: { schedule(id: string, expression: string, cb: () => void) { if (fail) throw Error('Temporary local failure'); cron.schedule(id, expression, cb); },
+      cancel(id: string) { cron.cancel(id); }, cancelAll() { cron.cancelAll(); } } as any,
+    engineRuntime: { async acquire() { return { async executeTriggerHook(hook: string) {
+      hooks.push(hook); return { scheduleOptions: { cronExpression: '* * * * *' }, listeners };
+    }, async release() {} }; } } as any,
+  });
+  try {
+    await tm.refresh(flowId); expect(tm.registrationState(flowId, versionId)).toBe('blocked');
+    fail = false; await Promise.all([tm.refresh(flowId), tm.refresh(flowId)]);
+    expect(tm.registrationState(flowId, versionId)).toBe('registered'); expect(cron.has(`flow:${flowId}`)).toBe(true);
+    expect(hooks).toEqual(['ON_ENABLE']); expect(tm.list()).toEqual([{ flowId, kind: 'engine' }]); expect(queueStats().queued).toBe(0);
+  } finally { await tm.stop(); }
+});
+
+
+for (const action of ['pause', 'stop']) test(`F10 review R2: ${action} cleans engine state after local registration failure`, async () => {
+  const { flowId, versionId } = publishFlowWithTrigger('failed local cron cleanup', {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'jarvis-trigger', triggerName: 'on_event', input: { eventType: 'test' } },
+  });
+  const hooks: string[] = [], cron = new FakeCronScheduler(); let fail = true;
+  const tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [60_000],
+    cronScheduler: { schedule(id: string, expression: string, cb: () => void) { if (fail) throw Error('Local cron unavailable'); cron.schedule(id, expression, cb); },
+      cancel(id: string) { cron.cancel(id); }, cancelAll() { cron.cancelAll(); } } as any,
+    engineRuntime: { async acquire() { return { async executeTriggerHook(hook: string) {
+      hooks.push(hook); return { scheduleOptions: { cronExpression: '* * * * *' }, listeners: [] };
+    }, async release() {} }; } } as any,
+  });
+  try {
+    await tm.refresh(flowId);
+    expect(tm.registrationState(flowId, versionId)).toBe('pending'); expect(cron.has(`flow:${flowId}`)).toBe(false);
+    expect(getFlowVersion(versionId)!.engineSchedule).not.toBeNull();
+    if (action === 'pause') { updateFlowStatus(flowId, 'DISABLED'); await tm.refresh(flowId); }
+    else await tm.stop();
+    expect(hooks).toEqual(['ON_ENABLE', 'ON_DISABLE']);
+    expect(getFlowVersion(versionId)).toMatchObject({ engineSchedule: null, engineListeners: null });
+    expect(tm.list()).toEqual([]); expect(queueStats().queued).toBe(0);
+    fail = false; updateFlowStatus(flowId, 'ENABLED'); await tm.refresh(flowId);
+    expect(hooks).toEqual(['ON_ENABLE', 'ON_DISABLE', 'ON_ENABLE']);
+    expect(tm.registrationState(flowId, versionId)).toBe('registered'); expect(cron.has(`flow:${flowId}`)).toBe(true);
+  } finally { await tm.stop(); }
+  expect(hooks).toEqual(['ON_ENABLE', 'ON_DISABLE', 'ON_ENABLE', 'ON_DISABLE']);
 });

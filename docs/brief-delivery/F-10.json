@@ -1,0 +1,234 @@
+{
+  "task": "F-10",
+  "title": "Approve prepared opportunities exactly once",
+  "date": "2026-10-06",
+  "branch": "brief/f-10",
+  "base_branch": "brief/f-09",
+  "baseline": "8614e886d3118fe08e06b1d4a5020f33419d6505",
+  "head": "Commit containing this receipt; published SHA and commit-guard results are recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-10",
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [
+      "F-09"
+    ],
+    "stack": "User-requested feature stack on corrected F-09; keep all PRs unmerged.",
+    "q13_integration_commit": "0d455494f34b4045a0b95498a81e9bd389c6ffeb",
+    "q13_implementation_included": false
+  },
+  "baseline_review": {
+    "main": "a0b56684d634d0d01106dbbca4b98b526c2276e9",
+    "open_prs_reviewed": [
+      "F-09 #766",
+      "Q-13 #737",
+      "Q-04 #765",
+      "D-11 #754",
+      "D-13 #764"
+    ],
+    "duplicate_implementation_found": false,
+    "parent_ci": "Corrected F-09 head has passing Tests, Docker, Windows, AppleScript and label checks."
+  },
+  "source_review": {
+    "pinned_commit": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "anchors": [
+      "A07 src/awareness/suggestion-composer.ts",
+      "A12 src/workflows/api/routes.ts",
+      "A13 src/workflows/runtime/effect-boundary.ts"
+    ],
+    "comparison": "Pinned sources and current changes inspected. Reuses canonical publish/readiness and trigger services. The Authority effect boundary is unchanged.",
+    "figma": {
+      "file": "eNfKeirIKLZLlZEasrurZa",
+      "node": "81:2931",
+      "visual": "Backend actions only; no UI change or screenshot claimed."
+    }
+  },
+  "activation": {
+    "capability": "opportunityActivation",
+    "flags": [
+      "JARVIS_BRIEF_PREPARED_OPPORTUNITIES=1",
+      "JARVIS_BRIEF_OPPORTUNITY_ACTIVATION=1"
+    ],
+    "default": "off",
+    "requires": "Current shared database, ready F09/Q13 preparation provider, configured trigger manager after startup.",
+    "release_enabled": false,
+    "merged": false
+  },
+  "implementation": [
+    "Additive action receipts and permanent request-key aliases; one decision per proposal and exact revision.",
+    "Synchronous source/goal/bindings/qualification recheck, exact locked version and digest validation, existing publication service; publication, acceptance and receipt commit atomically.",
+    "Recoverable registration lease and truthful pending/registered/blocked states. Restart observes runtime subscriptions; late workers are fenced and receipt replay never republishes.",
+    "Exact-version trigger observation detects silent and partial failures. Partial cron retries reuse cached state without repeating remote enable hooks.",
+    "Separate dismissal fences late preparation, leaves workflow disabled and exposes a rechecked next proposal ID.",
+    "Strict authenticated no-store action routes, bounded streaming request parsing, privacy-preserving receipts, independent capability gate.",
+    "No graph recomposition, latest-draft substitution, incidental manual run, blanket Authority approval or business-outcome claim."
+  ],
+  "acceptance": [
+    {
+      "check": "Double click, different keys and restart retain one exact publication",
+      "status": "passed",
+      "evidence": "Durable file-backed tests; one receipt/flow, newer unrelated draft ignored; post-restart replay guarded against any republish."
+    },
+    {
+      "check": "Changed revision, goal, graph, connection, target or quality prevents approval",
+      "status": "passed",
+      "evidence": "No publication, receipt, trigger call or run after refusal."
+    },
+    {
+      "check": "Registration interruptions and refusals remain recoverable",
+      "status": "passed",
+      "evidence": "Deferred refresh, database reopen, late completion fencing, silent failure, explicit retry and partial local registration repair."
+    },
+    {
+      "check": "Receipt failure rolls back publication and acceptance",
+      "status": "passed",
+      "evidence": "Injected SQLite receipt-insert refusal then same-key retry."
+    },
+    {
+      "check": "Acceptance grants no later effect permission",
+      "status": "passed",
+      "evidence": "Synthetic subsequent notification creates an Authority approval request with zero deliveries."
+    },
+    {
+      "check": "Dismissal is separate and supplies a current next identity",
+      "status": "passed",
+      "evidence": "Decision conflicts and no publication; final commit guards additionally exercise late-model dismissal."
+    }
+  ],
+  "verification": {
+    "affected": {
+      "status": "passed",
+      "command_file": "docs/brief-delivery/evidence/F-10/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-10/affected.log",
+      "passed": 431,
+      "skipped": 2,
+      "failed": 0,
+      "assertions": 3477,
+      "files": 28,
+      "skip": "Both actual-Q13 checks ran separately with the temporary dependency overlay."
+    },
+    "q13_integration": {
+      "status": "passed",
+      "command": "JARVIS_TEST_PREPARED_Q13=1 bun test src/brief/opportunity-activation.test.ts src/awareness/prepared-opportunities.test.ts src/awareness/prepared-quality-adapter.test.ts",
+      "method": "Temporary overlay of the pinned prepared-qualification.ts, prepared-dry-run.ts and effect-capabilities.ts; restored in finally with byte checks.",
+      "log": "docs/brief-delivery/evidence/F-10/q13-integration.log",
+      "passed": 63,
+      "failed": 0,
+      "assertions": 363,
+      "sources_restored": true
+    },
+    "registration_repair": {
+      "red": "docs/brief-delivery/evidence/F-10/registration-repair-red.log",
+      "green": "docs/brief-delivery/evidence/F-10/registration-repair.log",
+      "passed": 33,
+      "failed": 0,
+      "assertions": 108
+    },
+    "initial_findings": {
+      "log": "docs/brief-delivery/evidence/F-10/affected-initial.log",
+      "resolution": "An inherited 20 ms timeout fixture now freezes lease-clock time while retaining the real abort timer; Authority fixture now uses the runtime scoped piece identity. Both targeted regressions pass, then the full affected suite passes.",
+      "targeted_log": "docs/brief-delivery/evidence/F-10/fixture-corrections.log"
+    },
+    "typescript": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit",
+      "exit_code": 0,
+      "log": "docs/brief-delivery/evidence/F-10/typescript.log",
+      "scope": "Initial standalone check; final test/source changes are type checked again by the mandatory commit hook."
+    },
+    "guards": "Normal commit hooks require EE, migration, template, package, final related tests and TypeScript. An initial hook found three missing Authority-test dependencies; corrected with isolated synthetic services. Final published result recorded in PR.",
+    "manual_live_provider": "not_run; no real credentials, paid models, messages or production daemon changes",
+    "activation_final": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-10/activation-final.log",
+      "passed": 22,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 180,
+      "includes": "Fresh-provider replay after restart, late-model dismissal and 25 blocked receipts without starving new approvals or later recovery observations."
+    },
+    "registration_queue": {
+      "red": "docs/brief-delivery/evidence/F-10/registration-queue-red.log",
+      "green": "docs/brief-delivery/evidence/F-10/activation-final.log",
+      "resolution": "Pending receipts have priority; local in-flight IDs are excluded and blocked observations rotate through bounded batches."
+    }
+  },
+  "limitations": [
+    "Default off and unavailable until its F09/Q13 dependencies are configured. Actual Q13 integration was local and simulated.",
+    "Exactly-once local publication is not a remote-provider exactly-once delivery guarantee. Existing ON_ENABLE hooks can have external effects and retain their existing uncertainty semantics.",
+    "Approval commits before asynchronous trigger registration. Clients must read registration state; HTTP success and accepted proposal state alone do not prove a live subscription or completed run.",
+    "The next proposal ID is a navigation hint and must be fetched again before deciding. No dashboard binding or F11 work is included.",
+    "Full repository CI for the new published head is tracked on the PR, separately from local affected checks."
+  ],
+  "rollback": "Unset the activation flag and restart. Retain additive action tables, request keys, preparation records and workflows. Already approved workflows stay enabled; pause them explicitly using existing workflow controls if needed.",
+  "guide": "docs/brief-opportunity-activation.md",
+  "next_task": "F-11 not started",
+  "review_corrections": {
+    "reviewed_head": "7782e7786123a97702e27842b801d46b16397b9e",
+    "same_pr": "https://github.com/vierisid/jarvis/pull/770",
+    "findings": [
+      {
+        "id": "R1",
+        "severity": "major",
+        "fix": "Observe pending trigger registration without refreshing or consuming its backoff. Persist observed_pending additively so a replacement worker cannot restart an exhausted budget; explicit same-key retry resets it.",
+        "coverage": "Actual TriggerManager with controlled scheduled callback: repeated receipt reconciliation preserves one timer/attempt, scheduled recovery is observed, exhaustion stays blocked across workers, explicit retry starts a new budget, and existing receipt schema upgrades preserve decisions/keys."
+      },
+      {
+        "id": "R2",
+        "severity": "major",
+        "fix": "Retain a warning-bearing engine subscription record after complete local registration failure so teardown still owns ON_DISABLE and cached-state cleanup. Repair local subscriptions from cached state.",
+        "coverage": "Failed cron followed by pause or shutdown runs ON_DISABLE once, clears engine state, and re-enable runs ON_ENABLE freshly. Complete and partial local repair do not repeat remote hooks."
+      },
+      {
+        "id": "R3",
+        "severity": "minor",
+        "fix": "After dismissal receipt commit, notify the preparation provider to abort only the matching dismissed active revision. F09 uses the same guarded cancellation path; receipt replay can repeat it safely.",
+        "coverage": "An unresponsive composer is cancelled and the queued proposal completes before the old promise resolves; late completion cannot attach a flow. Receipt-insert rollback preserves active preparation."
+      }
+    ],
+    "verification": {
+      "red": {
+        "logs": [
+          "docs/brief-delivery/evidence/F-10/review-red.log",
+          "docs/brief-delivery/evidence/F-10/review-exhaustion-red.log"
+        ],
+        "result": "All three original findings reproduced in four failures; the exhaustion regression also failed before correction."
+      },
+      "focused": {
+        "log": "docs/brief-delivery/evidence/F-10/review-green.log",
+        "passed": 7,
+        "failed": 0,
+        "assertions": 80
+      },
+      "typescript": {
+        "log": "docs/brief-delivery/evidence/F-10/review-typescript.log",
+        "exit_code": 0
+      },
+      "affected": {
+        "status": "passed",
+        "command_file": "docs/brief-delivery/evidence/F-10/review-affected-command.txt",
+        "log": "docs/brief-delivery/evidence/F-10/review-affected.log",
+        "passed": 441,
+        "skipped": 2,
+        "failed": 0,
+        "assertions": 3577,
+        "files": 28,
+        "initial_run": "Four inherited preparation beforeEach/afterEach hooks exceeded the default five-second limit while TypeScript ran concurrently. No assertion failures. Re-ran sequentially with --timeout 15000; all passed. Application timeouts are unchanged.",
+        "initial_log": "docs/brief-delivery/evidence/F-10/review-affected-initial.log"
+      },
+      "q13_integration": {
+        "status": "passed",
+        "command_file": "docs/brief-delivery/evidence/F-10/review-q13-command.txt",
+        "log": "docs/brief-delivery/evidence/F-10/review-q13-integration.log",
+        "dependency_commit": "0d455494f34b4045a0b95498a81e9bd389c6ffeb",
+        "passed": 70,
+        "failed": 0,
+        "assertions": 434,
+        "files": 3,
+        "sources_restored": true,
+        "method": "Same temporary dependency overlay as initial verification; restored in finally and checked byte-for-byte."
+      },
+      "guards": "Normal required commit checks; final outcome and published SHA will be recorded in the PR description."
+    }
+  }
+}
