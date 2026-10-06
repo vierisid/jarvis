@@ -1,0 +1,185 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #1)
+126 |   binding=opportunityFixture("unavailable");await render();expect(count()).toBe("—");
+127 |   binding=opportunityFixture();binding={...binding,state:{status:"ready",data:data().map(card=>({...card,proposal:{...card.proposal,state:"accepted" as const}}))}};await render();expect(count()).toBe("0");expect(host.querySelector(".brief-opportunity-approve")).toBeNull();
+128 | });
+129 |
+130 | test("freshness loss during a navigation exit still settles the next cached proposal",async()=>{
+131 |   await render();await next();expect(phase()).toBe("exit");const ready=binding;
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "exit"
+Received: "enter"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:131:47)
+An update to OpportunityStack inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+(fail) freshness loss during a navigation exit still settles the next cached proposal [863.39ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #2)
+126 |   binding=opportunityFixture("unavailable");await render();expect(count()).toBe("—");
+127 |   binding=opportunityFixture();binding={...binding,state:{status:"ready",data:data().map(card=>({...card,proposal:{...card.proposal,state:"accepted" as const}}))}};await render();expect(count()).toBe("0");expect(host.querySelector(".brief-opportunity-approve")).toBeNull();
+128 | });
+129 |
+130 | test("freshness loss during a navigation exit still settles the next cached proposal",async()=>{
+131 |   await render();await next();expect(phase()).toBe("exit");const ready=binding;
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "exit"
+Received: "rest"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:131:47)
+(fail) freshness loss during a navigation exit still settles the next cached proposal [361.39ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #3)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [512.54ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #4)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [397.40ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #5)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [414.34ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #6)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [175.36ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #7)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [155.97ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #8)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [132.59ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #9)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [149.48ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #10)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [404.24ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #11)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [261.19ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #12)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [256.64ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #13)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [460.29ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #14)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [270.58ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #15)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [277.91ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #16)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [215.11ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #17)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [121.05ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #18)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [138.60ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #19)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [112.41ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #20)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [102.96ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #21)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [141.99ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #22)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [728.87ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #23)
+126 |   binding=opportunityFixture("unavailable");await render();expect(count()).toBe("—");
+127 |   binding=opportunityFixture();binding={...binding,state:{status:"ready",data:data().map(card=>({...card,proposal:{...card.proposal,state:"accepted" as const}}))}};await render();expect(count()).toBe("0");expect(host.querySelector(".brief-opportunity-approve")).toBeNull();
+128 | });
+129 |
+130 | test("freshness loss during a navigation exit still settles the next cached proposal",async()=>{
+131 |   await render();await next();expect(phase()).toBe("exit");const ready=binding;
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "exit"
+Received: "enter"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:131:47)
+An update to OpportunityStack inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+(fail) freshness loss during a navigation exit still settles the next cached proposal [202.69ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #24)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [423.66ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #25)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [262.83ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #26)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [234.29ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #27)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [262.56ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #28)
+126 |   binding=opportunityFixture("unavailable");await render();expect(count()).toBe("—");
+127 |   binding=opportunityFixture();binding={...binding,state:{status:"ready",data:data().map(card=>({...card,proposal:{...card.proposal,state:"accepted" as const}}))}};await render();expect(count()).toBe("0");expect(host.querySelector(".brief-opportunity-approve")).toBeNull();
+128 | });
+129 |
+130 | test("freshness loss during a navigation exit still settles the next cached proposal",async()=>{
+131 |   await render();await next();expect(phase()).toBe("exit");const ready=binding;
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "exit"
+Received: "enter"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:131:47)
+An update to OpportunityStack inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+(fail) freshness loss during a navigation exit still settles the next cached proposal [42.27ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #29)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [103.23ms]
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx: (run #30)
+(pass) freshness loss during a navigation exit still settles the next cached proposal [115.57ms]
+
+4 tests failed:
+(fail) freshness loss during a navigation exit still settles the next cached proposal [863.39ms]
+(fail) freshness loss during a navigation exit still settles the next cached proposal [361.39ms]
+(fail) freshness loss during a navigation exit still settles the next cached proposal [202.69ms]
+(fail) freshness loss during a navigation exit still settles the next cached proposal [42.27ms]
+
+ 26 pass
+ 930 filtered out
+ 4 fail
+ 160 expect() calls
+Ran 30 tests across 1 file. [12.45s]

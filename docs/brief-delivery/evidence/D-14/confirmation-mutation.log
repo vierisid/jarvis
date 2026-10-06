@@ -1,0 +1,23 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/attachment-fan/attachment-fan.test.tsx:
+90 |   const a=adapter();const bound=bindAttachmentFan(a.owner,a.pickers,"live");a.state.activeId="b";
+91 |   expect(await bound.choose("document",new AbortController().signal)).toBe("attached");expect(a.operations).toEqual([["a","document",a.file]]);
+92 | });
+93 | test("F-05 capture requires explicit device confirmation",async()=>{
+94 |   const a=adapter();await bindAttachmentFan(a.owner,a.pickers,"live").choose("screenshot",new AbortController().signal);expect(a.operations).toEqual([["a","desktop-a",true]]);
+95 |   a.pickers.screenshot=async()=>({deviceId:"desktop-a",confirmed:false as true});await expect(bindAttachmentFan(a.owner,a.pickers,"live").choose("screenshot",new AbortController().signal)).rejects.toThrow();expect(a.operations.length).toBe(1);
+                                                                                                                                                                                                          ^
+error: expect(received).rejects.toThrow(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-14/ui/src/brief/chat/attachment-fan/attachment-fan.test.tsx:95:198)
+(fail) F-05 capture requires explicit device confirmation [17.47ms]
+
+ 0 pass
+ 15 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [689.00ms]

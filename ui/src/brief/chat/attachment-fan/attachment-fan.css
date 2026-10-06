@@ -1,0 +1,27 @@
+.brief-root .brief-fan-toggle { position:relative; width:44px; height:44px; display:grid; place-items:center; border:0; border-radius:50%; background:transparent; padding:0; color:var(--brief-secondary); cursor:pointer; }
+.brief-root .brief-fan-toggle-surface { position:absolute; inset:6px; border-radius:50%; background:#141719; border:1px solid var(--brief-field-edge); opacity:0; transition:opacity 100ms ease-out; }
+.brief-root .brief-fan-toggle[data-intent="true"] .brief-fan-toggle-surface { opacity:1; }
+.brief-root .brief-fan-toggle[data-intent="true"] { color:white; }
+.brief-root .brief-fan-toggle[aria-disabled="true"] { cursor:default; opacity:.55; }
+.brief-root .brief-fan-toggle:focus-visible { outline:2px solid var(--brief-focus); outline-offset:-2px; }
+.brief-root .brief-fan-glyph { display:grid; place-items:center; width:12px; height:12px; z-index:1; }
+.brief-root.brief-fan-portal { position:relative; z-index:var(--brief-layer-menu,30); }
+.brief-root .brief-fan-layer { position:fixed; width:166px; height:44px; pointer-events:none; clip-path:inset(-200vh -400px 44px -8px); }
+.brief-root .brief-fan-item { position:absolute; top:0; left:0; width:166px; height:44px; opacity:0; }
+.brief-root .brief-fan-item button { position:relative; display:flex; align-items:center; gap:5px; width:166px; height:44px; padding:0; border:0; background:transparent; color:white; border-radius:22px 0 22px 22px; cursor:pointer; text-align:left; }
+.brief-root .brief-fan-layer[data-open="true"] .brief-fan-item button { pointer-events:auto; }
+.brief-root .brief-fan-circle { flex:none; display:grid; place-items:center; width:38px; height:38px; margin:3px; border:1px solid var(--brief-field-edge); border-radius:50%; background:#141719; box-sizing:border-box; }
+.brief-root .brief-fan-name { display:block; min-width:104px; padding:5px 11px; box-sizing:border-box; border:1px solid var(--brief-field-edge); border-radius:8px 0 8px 8px; background:#141719; color:#fff; font:400 13px/20px var(--brief-sans); opacity:0; transition:opacity 80ms ease-out; }
+.brief-root .brief-fan-item button:is(:hover,:focus-visible) .brief-fan-name { opacity:1; }
+.brief-root .brief-fan-item button:focus-visible { outline:2px solid var(--brief-focus); outline-offset:2px; }
+.brief-root .brief-fan-item button[aria-disabled="true"] { cursor:default; }
+.brief-root .brief-fan-item button[aria-disabled="true"] .brief-fan-circle { color:#A4ABB3; border-style:dashed; }
+.brief-root .brief-fan-reason { display:none; position:absolute; bottom:47px; left:3px; width:210px; max-width:calc(100vw - 32px); padding:8px 11px; border-radius:8px 0 8px 8px; border:1px solid var(--brief-field-edge); background:#141719; color:white; font:400 12px/17px var(--brief-sans); }
+.brief-root .brief-fan-item button:is(:hover,:focus-visible) .brief-fan-reason { display:block; }
+@media (prefers-reduced-motion:reduce) { .brief-root :is(.brief-fan-name,.brief-fan-toggle-surface) { transition:none; } }
+.brief-root .brief-fan-layer[data-reduced-motion="true"] .brief-fan-name { transition:none; }
+
+/* Short conversations fan sideways instead of covering tabs or shrinking targets. */
+.brief-root .brief-fan-layer[data-compact="true"] :is(.brief-fan-item,.brief-fan-item button) { width:44px; }
+.brief-root .brief-fan-layer[data-compact="true"] .brief-fan-name { position:absolute; bottom:44px; left:0; }
+.brief-root .brief-fan-layer[data-compact="true"] .brief-fan-reason { bottom:78px; left:auto; right:0; }

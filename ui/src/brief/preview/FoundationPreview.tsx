@@ -11,6 +11,7 @@ import { NavigationSpecimen } from "../shell/navigation/NavigationSpecimen";
 import { PebbleSpecimen } from "../shell/pebble-layout/PebbleSpecimen";
 import { TodaySpecimen } from "../today/preview/TodaySpecimen";
 import { ChatTabsSpecimen } from "../chat/tab-strip/preview/ChatTabsSpecimen";
+import { AttachmentSpecimen } from "../chat/attachment-fan/preview/AttachmentSpecimen";
 import { ComposerSpecimen } from "../chat/composer/preview/ComposerSpecimen";
 
 interface PreviewModel { note: string }
@@ -36,6 +37,7 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
+  if (specimen === "attachments") return <AttachmentSpecimen />;
   if (specimen === "composer") return <ComposerSpecimen />;
   if (specimen === "chat-tabs") return <ChatTabsSpecimen />;
   if (specimen === "today") return <TodaySpecimen />;
