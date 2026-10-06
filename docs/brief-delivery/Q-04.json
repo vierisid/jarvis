@@ -1,0 +1,101 @@
+{
+  "task": "Q-04",
+  "title": "Check generated workflows against the requested job",
+  "date": "2026-10-06",
+  "branch": "brief/q-04",
+  "worktree": "a checkout of brief/q-04",
+  "baseline": "462d955d54014e15ea003b5908860917642e5b34",
+  "baseline_ref": "brief/foundations (no merge prerequisites)",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-04.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "job contract checks for chat composition (manage_workflow compose and create rerouted to compose) when the caller states a contract; without one, composition is unchanged",
+    "release_enabled": false,
+    "publication": "PR #765 open against brief/foundations; https://github.com/vierisid/jarvis/pull/765"
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "page": "81:2",
+    "checkpoint": "UI-35; no visual changes in Q-04"
+  },
+  "ownership": {
+    "implementer": "Core-quality line",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [],
+  "enable_after": [],
+  "behavior": [
+    "A caller can state the checkable parts of a job as a structured contract: trigger (manual, schedule with cron and time zone, webhook, Jarvis event, or a piece's own trigger), sources, outputs, recipients, forbidden effects, pieces, actions, tools, channels and agents, and review items. manage_workflow compose takes it as an optional contract; nothing derives one from free text, and the description is never rewritten.",
+    "The composer validates the contract before any provider request. A contract that cannot be read (unknown fields, empty or oversized values, unknown effects or trigger kinds) or can never be met (it requires a step it forbids, notifies a channel its recipients exclude, or names a time zone other than the one schedules run in) fails with no provider call.",
+    "Every candidate, on the tool loop (submit_flow and inline JSON) and the one-shot path, is checked after structural validation. Departures are focused 'job contract:' errors naming the step and value, fed to the existing bounded repair loop. Every repair prompt carries the contract in the job specification and every repaired candidate is checked against the same contract, so a repair cannot drop a requirement and pass.",
+    "Rejected: a different trigger kind, cron, event, piece or trigger name; a missing source or output, or the nearest step with a wrong stated value; with outputs, a send no output names, including a notification to an extra channel, in router branches and loop bodies; with outputs or recipients, a send whose recipient is missing or decided at run time (including notifications to the connected channels); with recipients, a send to anyone else, cc and bcc included; a forbidden effect, piece, action, tool, channel or agent; a tool chosen at run time.",
+    "Effects are known for notify, Jarvis reads, bounded tools (effect-capabilities.ts) and governed piece actions (piece-effects.ts). A step whose effect is decided when it runs (an agent, another workflow, an ungoverned piece, a tool outside the bounded set) is a blocker when the job forbids an effect and a review item when it states outputs or recipients; the report then withholds the claims it cannot prove.",
+    "A passing composition returns contract: {verified, review}: what the check proved, and what a person must confirm before enabling the disabled draft. The journal keeps the contract with the job specification as the caller gave it.",
+    "Provider failures stay failures with their errorCode, also after a contract violation; only an explicit report_blocked is an abstention."
+  ],
+  "acceptance": [
+    {
+      "check": "A structurally valid graph with wrong destination or unwanted send is rejected",
+      "status": "passed",
+      "evidence": "src/actions/tools/job-contract.test.ts (wrong notification channel, draft to the wrong person, send and cc to someone the job does not allow, an extra channel, unwanted sends in the chain, a router branch and a loop body, run-time and missing recipients) and src/actions/tools/workflow-contract.test.ts (the composer rejects such a candidate and repairs it); evidence/Q-04/revert-checks.log"
+    },
+    {
+      "check": "Repair cannot erase negative constraints or convert provider failure into a successful abstention",
+      "status": "passed",
+      "evidence": "src/actions/tools/workflow-contract.test.ts: every repair prompt carries the forbidden effect and every candidate is checked against it; a provider failure after a violation returns errorCode without blocked on the one-shot path and the tool loop, while report_blocked is the only abstention; evidence/Q-04/revert-checks.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "7,756 pass, 86 skip, 9 fail of 7,851 tests across 425 files (local WSL2, 5b86ca80). All 9 also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. Q-04 changes none of those areas.",
+      "log": "evidence/Q-04/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/actions/tools/job-contract.test.ts src/actions/tools/workflow-contract.test.ts src/actions/tools/tool-description-budget.test.ts src/workflows/adapters/untrusted-reach.test.ts",
+      "result": "97 pass, 0 fail across 4 files",
+      "log": "evidence/Q-04/q04-tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-04/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-04/guards.log"
+    },
+    {
+      "command": "remove each of 69 guarantees in turn and run its test",
+      "result": "69 of 69 removals fail their tests; source restored. The log lists the file, the exact text removed and its replacement for each.",
+      "log": "evidence/Q-04/revert-checks.log"
+    }
+  ],
+  "quick_verify": {
+    "cwd": "repository root, on brief/q-04",
+    "command": "bun test --preload ./src/test-preload.ts src/actions/tools/job-contract.test.ts src/actions/tools/workflow-contract.test.ts",
+    "expected": "20 pass",
+    "screenshot": "not applicable: no visible UI changes"
+  },
+  "migration": "None. The contract is an optional field of the journaled job specification (schemaVersion 1, additive); older binaries ignore it. No schema or data change.",
+  "rollback": "Callers stop passing contract, and composition behaves as before. To remove the feature, revert the Q-04 commits; no data needs migrating.",
+  "limitations": [
+    "The check proves stated structure, not arbitrary language: tone, content and anything only a person can judge belong in review.",
+    "Opportunity composition passes no contract yet; only chat composition can state one.",
+    "Connection credentials stay deferred to activation, which already refuses to run without them.",
+    "A bounded tool counts at its mapped category; Authority can raise a single call when it runs (write_file to a shell startup file is execute_command), and the check does not predict that raise.",
+    "Values are compared exactly, so differently cased addresses differ.",
+    "Evaluation task specifications can carry a contract; no shipped task set does yet.",
+    "manage_workflow's emitted schema grew by about 460 B for the contract parameter; its #504 ceilings moved in their own commit with the reason."
+  ],
+  "found": [
+    "Every workflow schedule runs in one process-wide time zone (lib/cron-scheduler.ts); a per-flow timezone input is ignored by the trigger manager, so a contract checks the stated zone against that one instead of the graph.",
+    "An ungoverned piece runs without Authority, so the contract check is the only gate on what it sends; the check never reports it as verified."
+  ],
+  "next": "Have opportunity composition pass a contract built from the accepted proposal's explicit fields, and add contracts to evaluation task sets so hosted runs measure contract-checked composition. Both are separate cards."
+}
