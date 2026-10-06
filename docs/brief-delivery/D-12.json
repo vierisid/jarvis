@@ -20,13 +20,23 @@
   "excludes": ["Conversation lifecycle policy and durable state", "Messages, streams, cancellation, history deletion", "Live provider/host mounting", "D-13 composer/send design", "D-14 attachment menu", "Production activation"],
   "figma": { "file": "eNfKeirIKLZLlZEasrurZa", "page": "81:2", "nodes": ["81:212", "704:327787", "704:367654"], "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded", "reference": "ui/src/brief/chat/tab-strip/figma-reference.json", "inspection": "Saved native UI-17 extracts and roadmap; no fresh editor session" },
   "checks": [
-    { "command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "exit_code": 0, "tests": 210, "assertions": 3549, "files": 15, "evidence": "evidence/D-12/affected-tests.log", "result": "pass" },
-    { "command": "bun x tsc --noEmit", "exit_code": 0, "result": "pass", "evidence": "evidence/D-12/typescript.log" },
-    { "command": "bun run build:ui", "exit_code": 0, "result": "pass", "evidence": "evidence/D-12/build.log", "warnings": "Existing @theme/@tailwind warnings" },
+    { "command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts", "exit_code": 0, "tests": 213, "assertions": 3570, "files": 15, "evidence": "evidence/D-12/review-affected.log", "result": "pass" },
+    { "command": "bun x tsc --noEmit", "exit_code": 0, "result": "pass", "evidence": "evidence/D-12/review-typescript.log" },
+    { "command": "bun run build:ui", "exit_code": 0, "result": "pass", "evidence": "evidence/D-12/review-build.log", "warnings": "Existing @theme/@tailwind warnings" },
     { "command": "git diff --check", "exit_code": 0, "result": "pass" }
   ],
-  "focused_tests": 13,
-  "focused_assertions": 120,
+  "focused_tests": 16,
+  "focused_assertions": 141,
+  "review_correction": {
+    "finding": "R1: Closing a tab before its entry settles skipped the exit animation",
+    "reviewed_head": "be1511935933d7a230454c060e99aa263e95dd51",
+    "fix": "Retain entrants on their first layout commit until the existing exit settlement; preserve identity through rapid reopen",
+    "red": { "evidence": "evidence/D-12/review-red.log", "failed_regressions": 3, "existing_passes": 13 },
+    "green": { "evidence": "evidence/D-12/review-green.log", "tests": 16, "assertions": 141 },
+    "browser": { "script": "evidence/D-12/review-browser.cjs", "evidence": "evidence/D-12/review-browser-results.json", "interrupted_entries": 40, "themes": 2, "sidebar_states": 2, "result": "pass", "checks": ["Exit begins before 180ms entry completes", "Same element retained, inert and hidden during exit", "Real WAAPI exit starts from visible width and targets zero", "No ghost tabs after exit", "Plus and panel X stay fixed"] },
+    "f04_recheck": { "evidence": "evidence/D-12/review-f04-compatibility.log", "result": "pass" },
+    "ci": "Original reviewed head passed; correction-head CI must be checked after push."
+  },
   "browser": { "evidence": "evidence/D-12/browser-results.json", "script": "evidence/D-12/browser-check.cjs", "themes": 2, "sidebar_states": 2, "chat_states": "Closed/open/reopened in every desktop case", "add_close_cycles": 40, "hover_cycles": 40, "panel_reopen_cycles": 40, "checks": ["Per-chat fixture draft/reply/scroll retention", "Long-title overflow at 112px minimum", "Fixed plus/panel-close endpoints", "Manual roving focus", "Failed-write retry", "Final closure/new conversation", "Loading/legacy/unavailable/disabled", "System and local reduced motion", "390px touch controls"], "errors": 0 },
   "compatibility": { "branch": "brief/f-04", "head": "72f3078a4857e28ae6738c336f55f2988bf6f31b", "evidence": "evidence/D-12/f04-compatibility.log", "script": "evidence/D-12/f04-compatibility.tsx", "owner": "Actual F-04 client/store and in-memory lifecycle/turn repositories with in-process API", "mounted_ui": "D-12 ConversationTabStrip", "add_close_cycles": 10, "retained_histories": 12, "cancellation_calls": 0, "result": "pass", "production_mount": "not activated or tested" },
   "mutation": { "guard": "live/fixture source boundary", "result": "Focused structural-port test rejects removal; source restored and final suite passes", "evidence": "evidence/D-12/source-guard-mutation.log" },

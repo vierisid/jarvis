@@ -1,0 +1,63 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/tab-strip/ConversationTabStrip.test.tsx:
+68 |     expect(host.querySelector('[data-reduced-motion="false"]')).not.toBeNull();
+69 |     await binding.actions.add(); await render("preview", false, false);
+70 |     const entering = tab("new-1"), slot = entering.closest(".brief-chat-tab-slot")!;
+71 |     await focus(entering);
+72 |     await React.act(async () => close("new-1").click()); await render("preview", false, false);
+73 |     expect(tab("new-1") === entering).toBe(true);
+                                           ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-12/ui/src/brief/chat/tab-strip/ConversationTabStrip.test.tsx:73:39)
+(fail) a tab closed before entry settles keeps the same inert element through its exit [150.56ms]
+88 |   try {
+89 |     await render("preview", false, false);
+90 |     await binding.actions.add(); await render("preview", false, false);
+91 |     const entry = binding.tabs.at(-1)!, entering = tab(entry.id);
+92 |     await binding.actions.close(entry.id); await render("preview", false, false);
+93 |     expect(tab(entry.id) === entering).toBe(true);
+                                            ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-12/ui/src/brief/chat/tab-strip/ConversationTabStrip.test.tsx:93:40)
+(fail) rapid add-close-reopen keeps identity and a stale exit cannot remove the returned tab [32.05ms]
+108 |   try {
+109 |     await render("preview", false, false);
+110 |     await binding.actions.add(); await render("preview", false, false);
+111 |     const entering = tab("new-1");
+112 |     await binding.actions.close("new-1"); await render("preview", false, false);
+113 |     expect(tab("new-1") === entering).toBe(true);
+                                            ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-12/ui/src/brief/chat/tab-strip/ConversationTabStrip.test.tsx:113:39)
+(fail) reduced motion removes an interrupted entrant immediately without leaving a ghost [27.93ms]
+(pass) F-04 structural port projects stable identities and delegates only metadata operations [2.22ms]
+(pass) 112px minimum and ordinary widths match native starting geometry [0.89ms]
+(pass) non-scoped and wrong-source states cannot issue tab actions or look like an empty collection [6.53ms]
+(pass) selected identity, panel linkage and roving focus remain separate [40.21ms]
+(pass) closing inactive chat dispatches its exact ID without selecting it or cancelling another chat [21.46ms]
+(pass) focused active closure follows owner selection and final closure focuses plus without creating history [35.02ms]
+(pass) background removal cannot steal composer focus [18.57ms]
+(pass) ten add/close cycles leave surviving tab identities and selected chat intact [220.93ms]
+(pass) duplicate titles, long names and remote reorder retain ID-specific close targets [27.12ms]
+(pass) failed writes preserve tabs and focus, report locally and allow a retry [17.72ms]
+(pass) pending writes block repeated clicks and owner pending counts are respected [11.08ms]
+(pass) mode loss/unmount during a write cannot apply a stale local confirmation [11.85ms]
+(pass) a replacement workspace does not inherit a pending lock or late error [15.52ms]
+
+ 13 pass
+ 3 fail
+ 124 expect() calls
+Ran 16 tests across 1 file. [1130.00ms]
