@@ -1,21 +1,32 @@
-Full suite on brief/q-18 at 594a5a5c (local WSL2)
+Full suite on brief/q-18 at 9a298152 (local WSL2)
 $ bun test --preload ./src/test-preload.ts
- 7767 pass
- 88 skip
- 9 fail
- 55399 expect() calls
-Ran 7864 tests across 424 files. [517.75s]
+ 7799 pass
+ 86 skip
+ 10 fail
+ 55525 expect() calls
+Ran 7895 tests across 424 files. [575.53s]
 
 Failures:
-(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [57.54ms]
-(fail) page-writable element refs (#592, integration) > (unnamed) [306.92ms]
-(fail) browser primitives (integration) > (unnamed) [206.36ms]
-(fail) browser local-file lockdown (integration, #521) > (unnamed) [223.88ms]
-(fail) webapp template delivery via browser tools (integration) > (unnamed) [230.13ms]
-(fail) end to end, against a real process > reaps an engine whose owner really did die [28.14ms]
-(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [136.06ms]
-(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [206.51ms]
-(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [220.32ms]
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [52.35ms]
+(fail) workflow retry containment > restart preserves and executes the fresh webhook continuation after consuming its waitpoint [386.85ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [206.00ms]
+(fail) browser primitives (integration) > (unnamed) [205.44ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [222.61ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [235.72ms]
+(fail) end to end, against a real process > reaps an engine whose owner really did die [41.62ms]
+(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [150.64ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [205.72ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [218.67ms]
+
+Nine of these also fail on the base with no Q work applied (below): git config lint, six Chromium launches and two engine-reaper tests on this machine.
+
+The tenth, "workflow retry containment > restart preserves and executes the fresh webhook continuation after consuming its waitpoint" (src/workflows/queue/queue.test.ts), is a timing test. This run shared the machine with the revert checks. It passed in the full run at 45cc2d32 and in 3 of 3 runs of its file at 9a298152:
+$ bun test --preload ./src/test-preload.ts src/workflows/queue/queue.test.ts   (three times)
+ 40 pass
+ 0 fail
+Q-18 changes nothing under src/workflows except a reviewed row in the #573 inventory test.
+
+The full run at 45cc2d32 had the same nine plus the #573 inventory failure that 9a298152 fixes.
 
 Baseline: the same test files on brief/foundations 462d955d with no Q work applied (run 5 October for Q-13, same base commit)
 $ bun test --preload ./src/test-preload.ts src/sites/git-config-lint.test.ts src/workflows/runner/engine-runtime/engine-reaper.test.ts src/actions/browser/browser-local-files.test.ts src/actions/browser/browser-primitives.test.ts src/actions/browser/fixtures/headless-chromium.test.ts src/actions/browser/page-writable-element-refs.test.ts src/actions/tools/browser-template-delivery.test.ts
@@ -30,5 +41,3 @@ $ bun test --preload ./src/test-preload.ts src/sites/git-config-lint.test.ts src
 (fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [179.09ms]
 (fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [318.29ms]
 (fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [371.85ms]
-
-All 9 failures also fail on the baseline: git config lint, Chromium launch and engine-reaper tests on this machine. Q-18 changes none of those areas.
