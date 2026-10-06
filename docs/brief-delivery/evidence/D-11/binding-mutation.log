@@ -1,0 +1,23 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:
+43 | });
+44 | test("preparation, stale reads, missing binding credentials and absent writers never enable",async()=>{
+45 |   for(const scenario of ["preparing","blocked","missing-connection","stale","no-owner"]){
+46 |     await React.act(async()=>root.render(null));let calls=0;binding=opportunityFixture(scenario);
+47 |     if(scenario!=="no-owner")binding.onAction=async req=>{calls++;return opportunityReceipt(req);};
+48 |     await render();expect(host.querySelector(".brief-opportunity-approve")!.getAttribute("aria-disabled")).toBe("true");
+                                                                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: "true"
+Received: "false"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-11/ui/src/brief/today/opportunity-stack/opportunity-stack.test.tsx:48:108)
+(fail) preparation, stale reads, missing binding credentials and absent writers never enable [153.47ms]
+
+ 0 pass
+ 19 filtered out
+ 1 fail
+ 7 expect() calls
+Ran 1 test across 1 file. [584.00ms]

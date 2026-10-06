@@ -1,0 +1,38 @@
+.brief-root .brief-opportunity-stack { position:relative; min-width:0; padding-bottom:12px; container:brief-opportunity / inline-size; }
+.brief-root .brief-opportunity-navigation { position:absolute; right:0; top:-48px; display:flex; align-items:center; gap:12px; height:36px; }
+.brief-root .brief-opportunity-navigation > span { min-width:4ch; text-align:right; font-variant-numeric:tabular-nums; }
+.brief-root .brief-opportunity-tray { position:relative; isolation:isolate; }
+.brief-root .brief-opportunity-front { position:relative; }
+.brief-root .brief-opportunity-backing { position:absolute; inset:0; border:1px solid var(--brief-card-edge); border-radius:var(--brief-corner-card); pointer-events:none; transition:transform 160ms var(--brief-motion-ease, ease-out); }
+.brief-root .brief-opportunity-backing--near { inset-inline:7px; transform:translateY(6px); background:var(--brief-stack-near); }
+.brief-root .brief-opportunity-backing--far { inset-inline:14px; transform:translateY(12px); background:var(--brief-stack-far); }
+.brief-root .brief-opportunity-stack[data-phase="exit"] .brief-opportunity-backing--near { transform:translateY(2px); }
+.brief-root .brief-opportunity-stack[data-phase="exit"] .brief-opportunity-backing--far { transform:translateY(6px); }
+.brief-root .brief-opportunity-paper { position:relative; padding:20px 22px; min-height:400px; display:flex; flex-direction:column; overflow-wrap:anywhere; }
+.brief-root .brief-opportunity-title { margin:0 0 22px; max-width:15ch; }
+.brief-root .brief-opportunity-chain { display:grid; gap:20px; margin:0 0 24px; padding-left:22px; position:relative; }
+.brief-root .brief-opportunity-chain::before { content:""; position:absolute; left:3px; top:8px; bottom:48px; width:1px; background:var(--brief-card-edge); }
+.brief-root .brief-opportunity-chain > div { position:relative; }
+.brief-root .brief-opportunity-chain dt { font:400 12px/18px var(--brief-sans); color:var(--brief-secondary); margin:0 0 5px; }
+.brief-root .brief-opportunity-chain dt::before { content:""; position:absolute; left:-22px; top:6px; width:7px; height:7px; border-radius:50%; background:var(--brief-secondary); outline:4px solid var(--brief-card); }
+.brief-root .brief-opportunity-chain dd { margin:0; font:400 14px/20px var(--brief-sans); }
+.brief-root .brief-opportunity-automation dt { color:var(--brief-running-text); }
+.brief-root .brief-opportunity-automation dt::before { background:var(--brief-running-text); }
+.brief-root .brief-opportunity-goal dt { font-weight:600; font-size:14px; line-height:20px; color:var(--brief-positive); }
+.brief-root .brief-opportunity-goal dt::before { display:none; }
+.brief-root .brief-opportunity-goal dt svg { position:absolute; left:-27px; top:2px; background:var(--brief-card); }
+.brief-root .brief-opportunity-goal dd { color:var(--brief-secondary); }
+.brief-root .brief-opportunity-actions { display:flex; flex-wrap:wrap; align-items:center; gap:4px 8px; margin-top:auto; }
+.brief-root .brief-opportunity-actions .brief-button { padding-inline:8px; }
+.brief-root .brief-opportunity-dismiss { min-inline-size:76px; }
+.brief-root .brief-opportunity-feedback:not(.brief-sr-only) { margin-top:12px; color:var(--brief-secondary); }
+.brief-root .brief-opportunity-empty { min-height:260px; padding:24px 22px; overflow-wrap:anywhere; }
+.brief-root .brief-opportunity-empty h3 { margin:0 0 12px; }
+.brief-root .brief-today-layout[data-compact="true"] .brief-opportunity-title { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip:rect(0,0,0,0); white-space:nowrap; }
+.brief-root .brief-today-layout[data-compact="true"] .brief-opportunity-paper { min-height:260px; padding:18px 20px; }
+.brief-root .brief-today-layout[data-compact="true"] .brief-opportunity-chain { gap:16px; margin-bottom:20px; }
+.brief-root .brief-opportunity-stack[data-reduced="true"] .brief-opportunity-backing { transition:none; }
+@container brief-opportunity (max-width:290px) {
+  .brief-root .brief-opportunity-actions { flex-direction:column; align-items:flex-start; }
+}
+@media (prefers-reduced-motion:reduce) { .brief-root .brief-opportunity-backing { transition:none; } }
