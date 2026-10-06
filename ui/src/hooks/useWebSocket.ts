@@ -995,8 +995,8 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
         // Awareness events (context changes, suggestions, etc.)
         const awarenessEvent = payload.event as { type: string; data: Record<string, unknown> };
         if (awarenessEvent?.type === "suggestion_ready") {
-          // Suggestion events also arrive via broadcastNotification as chat messages,
-          // so no need to duplicate here — just log for debugging
+          // Inbox/card events must not become chat messages here. Quiet awareness
+          // deliberately delivers these without a proactive chat announcement.
           console.log("[WS] Awareness suggestion:", awarenessEvent.data.title);
         }
       } else if (payload.source === "sidecar_event" && payload.event?.type === "sidecar_disconnect") {
