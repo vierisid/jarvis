@@ -1,0 +1,98 @@
+bun test v1.4.2 (744846f84)
+
+src/awareness/opportunity-delivery.test.ts:
+(pass) proposal and pending delivery commit atomically [33.85ms]
+(pass) failed notification retries the same ID and records delivery only after acceptance [23.64ms]
+[Awareness] Opportunity notification pending: offline
+(pass) a thrown transport error leaves the proposal pending for another worker [23.27ms]
+(pass) dismiss suppresses pending notification recovery [29.04ms]
+(pass) interest suppresses pending notification recovery [27.16ms]
+(pass) validate suppresses pending notification recovery [26.83ms]
+(pass) legacy pre-callback flags cannot suppress recovery or inflate delivery metrics [20.02ms]
+(pass) concurrent workers and flush calls share a claim until its lease expires [20.41ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: enable [28.87ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: disable [22.61ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: shutdown [20.88ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) rapid toggles before queued work settles honor the final setting [20.01ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a stop request blocks new capture events before queued shutdown begins [22.60ms]
+
+src/daemon/awareness-delivery-policy.test.ts:
+(pass) quiet error_detected preserves its workflow event and card signal without automatic assistance [0.99ms]
+(pass) quiet struggle_detected preserves its workflow event and card signal without automatic assistance [0.07ms]
+(pass) quiet stuck_detected preserves its workflow event and card signal without automatic assistance [0.05ms]
+(pass) quiet suggestion_ready preserves its workflow event and card signal without automatic assistance [0.06ms]
+(pass) quiet context_changed preserves its workflow event and card signal without automatic assistance [0.04ms]
+(pass) quiet opportunity transport with 0 accepting sockets never opens chat or falls back to another channel [0.84ms]
+(pass) quiet opportunity transport with 1 accepting sockets never opens chat or falls back to another channel [0.04ms]
+(pass) quiet opportunity event is published once; outbox delivery does not republish it [0.18ms]
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+(pass) flag undefined keeps legacy delivery available for rollback [1.84ms]
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+(pass) flag 0 keeps legacy delivery available for rollback [0.26ms]
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+(pass) flag true keeps legacy delivery available for rollback [0.17ms]
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+(pass) flag yes keeps legacy delivery available for rollback [0.11ms]
+Database initialized at: :memory:
+[CronScheduler] All jobs cancelled
+(pass) an enabled workflow still receives quiet awareness events through its real trigger manager [41.02ms]
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) governed approval, emergency and execution failure remain visible with chat closed (quiet=false) [34.72ms]
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) governed approval, emergency and execution failure remain visible with chat closed (quiet=true) [21.12ms]
+Database initialized at: /tmp/jarvis-f11-xnBNuF/vault.db
+Database initialized at: /tmp/jarvis-f11-xnBNuF/vault.db
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) offline quiet delivery retains its durable inbox and retries the same identity after restart [558.87ms]
+
+src/daemon/opportunity-notification.test.ts:
+[WebSocketServer] Client disconnected. Total clients: 0
+(pass) connected but dropping sockets and failed channels do not count as delivery [2.71ms]
+(pass) telegram acceptance establishes delivery [1.26ms]
+(pass) desktop acceptance establishes delivery [0.25ms]
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) WebSocket receipt delivers the same opportunity ID to a real client [25.48ms]
+[WebSocketServer] Broadcast failed: 0/1 clients received message
+(pass) WebSocket receipts exclude dropped frames and include queued frames [0.22ms]
+[WebSocketServer] Client disconnected. Total clients: 0
+(pass) native sender exit 0 determines its receipt [26.30ms]
+(pass) native sender exit 1 determines its receipt [31.98ms]
+
+ 36 pass
+ 0 fail
+ 159 expect() calls
+Ran 36 tests across 3 files. [1230.00ms]

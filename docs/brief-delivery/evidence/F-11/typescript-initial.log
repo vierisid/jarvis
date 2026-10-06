@@ -1,0 +1,18 @@
+src/daemon/awareness-delivery-policy.test.ts(36,14): error TS2352: Conversion of type '() => void' to type '(title: string, body: string, options?: { urgency?: "normal" | "critical" | "low" | undefined; expireMs?: number | undefined; } | undefined) => boolean' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'void' is not comparable to type 'boolean'.
+src/daemon/awareness-delivery-policy.test.ts(43,66): error TS2322: Type '{ type: "context_changed" | "error_detected" | "stuck_detected" | "struggle_detected" | "session_started" | "session_ended" | "suggestion_ready"; timestamp: number; data: { errorText: string; ... 6 more ...; durationMs: number; }; }' is not assignable to type 'AwarenessEvent'.
+  Type '{ type: "context_changed" | "error_detected" | "stuck_detected" | "struggle_detected" | "session_started" | "session_ended" | "suggestion_ready"; timestamp: number; data: { errorText: string; ... 6 more ...; durationMs: number; }; }' is not assignable to type '{ type: "error_detected" | "stuck_detected" | "struggle_detected" | "session_started" | "suggestion_ready"; data: Record<string, unknown>; timestamp: number; }'.
+    Types of property 'type' are incompatible.
+      Type '"context_changed" | "error_detected" | "stuck_detected" | "struggle_detected" | "session_started" | "session_ended" | "suggestion_ready"' is not assignable to type '"error_detected" | "stuck_detected" | "struggle_detected" | "session_started" | "suggestion_ready"'.
+        Type '"context_changed"' is not assignable to type '"error_detected" | "stuck_detected" | "struggle_detected" | "session_started" | "suggestion_ready"'.
+src/daemon/awareness-delivery-policy.test.ts(114,33): error TS2352: Conversion of type '{ id: string; agent_id: string; agent_name: string; tool_name: string; tool_arguments: string; action_category: "message_send"; urgency: "urgent"; reason: string; context: string; status: "pending"; ... 5 more ...; execution_result: null; }' to type 'ApprovalRequest' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Types of property 'action_category' are incompatible.
+    Type '"message_send"' is not comparable to type 'ActionCategory'.
+src/daemon/awareness-delivery-policy.test.ts(120,53): error TS2339: Property 'source' does not exist on type '{}'.
+src/daemon/awareness-delivery-policy.test.ts(121,53): error TS2339: Property 'source' does not exist on type '{}'.
+src/daemon/awareness-delivery-policy.test.ts(123,82): error TS2339: Property 'source' does not exist on type '{}'.
+src/daemon/awareness-delivery-policy.test.ts(148,91): error TS2339: Property 'source' does not exist on type '{}'.
+src/daemon/awareness-delivery-policy.test.ts(149,43): error TS2571: Object is of type 'unknown'.
+src/daemon/awareness-delivery-policy.test.ts(150,63): error TS2367: This comparison appears to be unintentional because the types '"error" | "status" | "stream" | "command" | "notification" | "cancel" | "brief_chat_send" | "brief_chat_cancel" | "brief_chat_subscribe" | "brief_chat_unsubscribe" | "brief_chat_event" | ... 27 more ... | "settings_applied"' and '"audio"' have no overlap.
+src/daemon/index.ts(4995,83): error TS2448: Block-scoped variable 'sharedEventBus' used before its declaration.
+src/daemon/index.ts(4995,83): error TS2454: Variable 'sharedEventBus' is used before being assigned.

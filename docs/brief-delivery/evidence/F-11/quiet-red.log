@@ -1,0 +1,204 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/awareness-delivery-policy.test.ts:
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[Daemon] Error solution TTS delivered
+48 |   test(`quiet ${type} preserves its workflow event and card signal without automatic assistance`, async () => {
+49 |     const f = fixture(), observed: unknown[] = [], input = event(type);
+50 |     f.eventBus.subscribe(AWARENESS_EVENT_TYPE_MAP[type]!, e => { observed.push(e); });
+51 |     f.policy.handleEvent(input); await Bun.sleep(0);
+52 |     expect(observed).toEqual([{ ...input.data, _timestamp: 1234 }]);
+53 |     expect(f.messages).toHaveLength(1); expect(f.messages[0]!.type).toBe('notification');
+                            ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 1
+Received length: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:53:24)
+(fail) quiet error_detected preserves its workflow event and card signal without automatic assistance [12.73ms]
+[Daemon] Deep-researching struggle in Editor (score: 0.90)
+48 |   test(`quiet ${type} preserves its workflow event and card signal without automatic assistance`, async () => {
+49 |     const f = fixture(), observed: unknown[] = [], input = event(type);
+50 |     f.eventBus.subscribe(AWARENESS_EVENT_TYPE_MAP[type]!, e => { observed.push(e); });
+51 |     f.policy.handleEvent(input); await Bun.sleep(0);
+52 |     expect(observed).toEqual([{ ...input.data, _timestamp: 1234 }]);
+53 |     expect(f.messages).toHaveLength(1); expect(f.messages[0]!.type).toBe('notification');
+                            ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 1
+Received length: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:53:24)
+(fail) quiet struggle_detected preserves its workflow event and card signal without automatic assistance [0.48ms]
+49 |     const f = fixture(), observed: unknown[] = [], input = event(type);
+50 |     f.eventBus.subscribe(AWARENESS_EVENT_TYPE_MAP[type]!, e => { observed.push(e); });
+51 |     f.policy.handleEvent(input); await Bun.sleep(0);
+52 |     expect(observed).toEqual([{ ...input.data, _timestamp: 1234 }]);
+53 |     expect(f.messages).toHaveLength(1); expect(f.messages[0]!.type).toBe('notification');
+54 |     expect(f.calls).toEqual({ research: 0, reactor: 0, coalescer: 0, voice: 0, desktop: 0, channels: 0 });
+                         ^
+error: expect(received).toEqual(expected)
+
+  {
+    "channels": 0,
+-   "coalescer": 0,
++   "coalescer": 1,
+    "desktop": 0,
+    "reactor": 0,
+    "research": 0,
+    "voice": 0,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:54:21)
+(fail) quiet stuck_detected preserves its workflow event and card signal without automatic assistance [3.29ms]
+[Daemon] Awareness suggestion firing: "Review this"
+48 |   test(`quiet ${type} preserves its workflow event and card signal without automatic assistance`, async () => {
+49 |     const f = fixture(), observed: unknown[] = [], input = event(type);
+50 |     f.eventBus.subscribe(AWARENESS_EVENT_TYPE_MAP[type]!, e => { observed.push(e); });
+51 |     f.policy.handleEvent(input); await Bun.sleep(0);
+52 |     expect(observed).toEqual([{ ...input.data, _timestamp: 1234 }]);
+53 |     expect(f.messages).toHaveLength(1); expect(f.messages[0]!.type).toBe('notification');
+                            ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 1
+Received length: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:53:24)
+(fail) quiet suggestion_ready preserves its workflow event and card signal without automatic assistance [0.21ms]
+49 |     const f = fixture(), observed: unknown[] = [], input = event(type);
+50 |     f.eventBus.subscribe(AWARENESS_EVENT_TYPE_MAP[type]!, e => { observed.push(e); });
+51 |     f.policy.handleEvent(input); await Bun.sleep(0);
+52 |     expect(observed).toEqual([{ ...input.data, _timestamp: 1234 }]);
+53 |     expect(f.messages).toHaveLength(1); expect(f.messages[0]!.type).toBe('notification');
+54 |     expect(f.calls).toEqual({ research: 0, reactor: 0, coalescer: 0, voice: 0, desktop: 0, channels: 0 });
+                         ^
+error: expect(received).toEqual(expected)
+
+  {
+    "channels": 0,
+-   "coalescer": 0,
++   "coalescer": 1,
+    "desktop": 0,
+    "reactor": 0,
+    "research": 0,
+    "voice": 0,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:54:21)
+(fail) quiet context_changed preserves its workflow event and card signal without automatic assistance [0.14ms]
+55 |   });
+56 | }
+57 |
+58 | for (const accepted of [0, 1]) test(`quiet opportunity transport with ${accepted} accepting sockets never opens chat or falls back to another channel`, async () => {
+59 |   const f = fixture('1', accepted);
+60 |   expect(await f.policy.deliverOpportunity(suggestion)).toBe(accepted ? 'websocket' : null);
+                                                             ^
+error: expect(received).toBe(expected)
+
+Expected: null
+Received: "telegram"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:60:57)
+(fail) quiet opportunity transport with 0 accepting sockets never opens chat or falls back to another channel [1.32ms]
+56 | }
+57 |
+58 | for (const accepted of [0, 1]) test(`quiet opportunity transport with ${accepted} accepting sockets never opens chat or falls back to another channel`, async () => {
+59 |   const f = fixture('1', accepted);
+60 |   expect(await f.policy.deliverOpportunity(suggestion)).toBe(accepted ? 'websocket' : null);
+61 |   expect(f.messages).toHaveLength(1);
+                          ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 1
+Received length: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:61:22)
+(fail) quiet opportunity transport with 1 accepting sockets never opens chat or falls back to another channel [0.13ms]
+67 |   const f = fixture(), observed: unknown[] = [];
+68 |   f.eventBus.subscribe('awareness.suggestion_ready', e => { observed.push(e); });
+69 |   f.policy.handleEvent({ type: 'suggestion_ready', data: { id: suggestion.id, opportunityId: suggestion.id }, timestamp: 1234 });
+70 |   expect(f.messages).toHaveLength(0);
+71 |   await f.policy.deliverOpportunity(suggestion);
+72 |   expect(observed).toHaveLength(1); expect(f.messages).toHaveLength(1); expect(f.calls.coalescer).toBe(0);
+                                                            ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 1
+Received length: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:72:56)
+(fail) quiet opportunity event is published once; outbox delivery does not republish it [0.30ms]
+Database initialized at: :memory:
+[Daemon] Auto-researching error: "Synthetic screen error"
+[Daemon] Speaking error solution (45 chars): "A synthetic solution long enough to announce...."
+[CronScheduler] All jobs cancelled
+[Daemon] Error solution TTS delivered
+89 |       name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'jarvis-trigger', triggerName: 'on_event', input: { eventType: 'awareness.error_detected' } },
+90 |     } });
+91 |     lockVersion(version.id); setPublishedVersion(flow.id, version.id); updateFlowStatus(flow.id, 'ENABLED');
+92 |     await manager.start(); f.policy.handleEvent(event('error_detected'));
+93 |     expect(getWorkflowDb().query('SELECT id FROM workflow_job').all()).toHaveLength(1);
+94 |     expect(f.calls.research).toBe(0); expect(f.calls.reactor).toBe(0); expect(f.messages.every(m => m.type !== 'chat')).toBe(true);
+                                  ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:94:30)
+(fail) an enabled workflow still receives quiet awareness events through its real trigger manager [37.31ms]
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+(pass) governed approval, emergency and execution failure remain visible with chat closed (quiet=false) [24.58ms]
+[WebSocketServer] Started on ws://localhost:0/ws
+[WebSocketServer] Health endpoint: http://localhost:0/health
+[WebSocketServer] Client disconnected. Total clients: 0
+[WebSocketServer] Client connected. Total clients: 1
+[WebSocketServer] Stopped
+119 |     await waitFor(() => connection.received.some(m => m.type === 'workflow_event'));
+120 |     expect(connection.received.some(m => m.payload?.source === 'approval_request')).toBe(true);
+121 |     expect(connection.received.some(m => m.payload?.source === 'emergency_state')).toBe(true);
+122 |     expect(connection.received.find(m => m.type === 'workflow_event')?.payload).toMatchObject({ workflowId: 'flow-one', executionId: 'run-one' });
+123 |     expect(connection.received.some(m => m.type === 'notification' && m.payload?.source === 'awareness_event')).toBe(true);
+124 |     expect(connection.received.some(m => m.type === 'chat')).toBe(!quiet);
+                                                                   ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:124:62)
+(fail) governed approval, emergency and execution failure remain visible with chat closed (quiet=true) [19.99ms]
+Database initialized at: /tmp/jarvis-f11-UBIgPO/vault.db
+133 |     initWorkflowDb(path);
+134 |     for (let days = 1; days <= 3; days++) createCapture({ timestamp: now - days * 86400000, pixelChangePct: 0.5, appName: 'Accounting', windowTitle: 'Overdue invoices' });
+135 |     const item = refreshOpportunity()!, offline = fixture('1', 0);
+136 |     worker = new OpportunityDelivery(s => offline.policy.deliverOpportunity(s), () => now);
+137 |     await worker.flush(); await worker.flush();
+138 |     expect(getOpportunity(item.id)?.id).toBe(item.id); expect(getOpportunityMetrics().delivered).toBe(0);
+                                                                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-11/src/daemon/awareness-delivery-policy.test.ts:138:98)
+(fail) offline quiet delivery retains its durable inbox and retries the same identity after restart [482.85ms]
+
+ 1 pass
+ 4 filtered out
+ 11 fail
+ 36 expect() calls
+Ran 12 tests across 1 file. [960.00ms]
