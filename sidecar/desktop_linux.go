@@ -311,6 +311,13 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 // desktop_element_cache.go: 10s + 5s click + 10s keystroke = 25s).
 const atSPIWalkTimeout = 10 * time.Second
 
+// desktopPlatformName names this platform in an unsupported-action refusal.
+const desktopPlatformName = "Linux"
+
+// linuxReadBack is the read-back every Linux element action gets: the walk's
+// own budget for a click and ahead of a keystroke alike.
+var linuxReadBack = readBackPolicy{budget: atSPIWalkTimeout}
+
 // tryATSPI runs the embedded Python3 AT-SPI2 script and parses its output.
 func tryATSPI(pid, depth int, timeout time.Duration) (map[string]any, error) {
 	// Write script to a temp file to avoid shell escaping issues
@@ -345,84 +352,39 @@ func tryATSPI(pid, depth int, timeout time.Duration) (map[string]any, error) {
 // ── click_element ────────────────────────────────────────────────────
 
 func handleClickElement(params map[string]any) (*RPCResult, error) {
-	elemID, ok := params["element_id"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("missing required parameter: element_id")
-	}
-
-	action, _ := params["action"].(string)
-	if action == "" {
-		action = "click"
-	}
-	return clickElement(int(elemID), action, atSPIWalkTimeout, "")
+	return handleClickElementWith(params, linuxReadBack)
 }
 
-// clickElement acts on a cached element id. walkBudget bounds the read-back
-// that confirms it, so a caller with more to do after the click can keep the
-// whole RPC inside the daemon's timeout.
-func clickElement(id int, action string, walkBudget time.Duration, slowHint string) (*RPCResult, error) {
-	// The rect the element has NOW, confirmed to be the element the snapshot
-	// listed, or a refusal before anything is clicked (#661).
-	rect, err := resolveDesktopElement(id, walkBudget, slowHint)
-	if err != nil {
-		return nil, err
-	}
-
-	x := toInt(rect["x"]) + toInt(rect["w"])/2
-	y := toInt(rect["y"]) + toInt(rect["h"])/2
-
+// dispatchPointer moves the pointer to (x, y) and performs action there, for
+// clickElement (desktop_element_action.go), which has already confirmed the
+// element and the action.
+func dispatchPointer(action string, x, y int) error {
+	move := []string{"mousemove", "--sync", strconv.Itoa(x), strconv.Itoa(y)}
+	var click []string
 	switch action {
-	case "click":
-		if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
-			strconv.Itoa(x), strconv.Itoa(y), "click", "1"); err != nil {
-			return nil, fmt.Errorf("click failed: %w", err)
-		}
 	case "double_click":
-		if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
-			strconv.Itoa(x), strconv.Itoa(y), "click", "--repeat", "2", "1"); err != nil {
-			return nil, fmt.Errorf("double_click failed: %w", err)
-		}
+		click = []string{"click", "--repeat", "2", "1"}
 	case "right_click":
-		if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
-			strconv.Itoa(x), strconv.Itoa(y), "click", "3"); err != nil {
-			return nil, fmt.Errorf("right_click failed: %w", err)
-		}
-	case "focus":
-		if _, err := runWithTimeout(5*time.Second, "xdotool", "mousemove", "--sync",
-			strconv.Itoa(x), strconv.Itoa(y), "click", "1"); err != nil {
-			return nil, fmt.Errorf("focus failed: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("action '%s' is not supported on Linux (supported: click, double_click, right_click, focus)", action)
+		click = []string{"click", "3"}
+	default: // click, focus
+		click = []string{"click", "1"}
 	}
-
-	return &RPCResult{Result: map[string]any{"success": true, "action": action, "x": x, "y": y}}, nil
+	if _, err := runWithTimeout(pointerDispatchTimeout, "xdotool", append(move, click...)...); err != nil {
+		return fmt.Errorf("%s failed: %w", action, err)
+	}
+	return nil
 }
 
 // ── type_text ────────────────────────────────────────────────────────
 
 func handleTypeText(params map[string]any) (*RPCResult, error) {
-	text, _ := params["text"].(string)
-	if text == "" {
-		return nil, fmt.Errorf("missing required parameter: text")
-	}
-
-	// If element_id is given, click it first
-	if elemID, ok := params["element_id"].(float64); ok {
-		if _, err := clickElement(int(elemID), "click", atSPIWalkTimeout, ""); err != nil {
-			return nil, fmt.Errorf("failed to click element before typing: %w", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// "--" ends xdotool's option parsing, so text such as "-h" or
-	// "--file=/home/me/.ssh/id_ed25519" is typed literally instead of being
-	// read as an option (--file would type out the named file).
-	if _, err := runWithTimeout(10*time.Second, "xdotool", "type", "--delay", "12", "--", text); err != nil {
-		return nil, fmt.Errorf("type_text failed: %w", err)
-	}
-
-	return &RPCResult{Result: map[string]any{"success": true}}, nil
+	return handleTypeTextWith(params, linuxReadBack, func(text string) error {
+		// "--" ends xdotool's option parsing, so text such as "-h" or
+		// "--file=/home/me/.ssh/id_ed25519" is typed literally instead of being
+		// read as an option (--file would type out the named file).
+		_, err := runWithTimeout(keystrokeTimeout, "xdotool", "type", "--delay", "12", "--", text)
+		return err
+	})
 }
 
 // ── press_keys ───────────────────────────────────────────────────────

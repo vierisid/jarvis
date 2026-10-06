@@ -149,19 +149,12 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 	return &RPCResult{Result: tree}, nil
 }
 
-// jxaWalkTimeout bounds a snapshot's JXA walk and the read-back ahead of a
-// click (20s + 5s click = 25s). jxaTypeReadBackTimeout is the read-back ahead
-// of a keystroke, where 20s would put the call at 35s, past the daemon's 30s;
-// 10s brings it to Linux's 25s. See the budget note in desktop_element_cache.go.
-const (
-	jxaWalkTimeout         = 20 * time.Second
-	jxaTypeReadBackTimeout = 10 * time.Second
-)
+// The JXA walk's budgets (jxaWalkTimeout, jxaTypeReadBackTimeout) and the
+// read-back policies built from them live in desktop_element_action.go, where
+// Linux compiles and tests them too (#712).
 
-// jxaTypeSlowHint is what a type read-back that ran out of its shorter budget
-// tells the model: the click path has the full 20s, and typing without an
-// element_id types wherever the focus is, which is where that click put it.
-const jxaTypeSlowHint = ". If this window is slow to read, desktop_click the element first and then call desktop_type without element_id"
+// desktopPlatformName names this platform in an unsupported-action refusal.
+const desktopPlatformName = "macOS"
 
 // walkDarwinTree runs the JXA accessibility walk for one process. Ids are
 // indices in this walk's depth-first order, so the snapshot and the read-back
@@ -225,54 +218,26 @@ JSON.stringify({window_title: winTitle, pid: %d, element_count: elements.length,
 // ── click_element ────────────────────────────────────────────────────
 
 func handleClickElement(params map[string]any) (*RPCResult, error) {
-	elemID, ok := params["element_id"].(float64)
-	if !ok {
-		return nil, fmt.Errorf("missing required parameter: element_id")
-	}
-
-	action, _ := params["action"].(string)
-	if action == "" {
-		action = "click"
-	}
-	return clickElement(int(elemID), action, jxaWalkTimeout, "")
+	return handleClickElementWith(params, darwinClickReadBack)
 }
 
-// clickElement acts on a cached element id. walkBudget bounds the read-back
-// that confirms it, so a caller with more to do after the click can keep the
-// whole RPC inside the daemon's timeout.
-func clickElement(id int, action string, walkBudget time.Duration, slowHint string) (*RPCResult, error) {
-	// The rect the element has NOW, confirmed to be the element the snapshot
-	// listed, or a refusal before anything is clicked (#661).
-	rect, err := resolveDesktopElement(id, walkBudget, slowHint)
-	if err != nil {
-		return nil, err
-	}
-
-	x := toInt(rect["x"]) + toInt(rect["w"])/2
-	y := toInt(rect["y"]) + toInt(rect["h"])/2
-
+// dispatchPointer performs action at (x, y), for clickElement
+// (desktop_element_action.go), which has already confirmed the element and
+// the action.
+func dispatchPointer(action string, x, y int) error {
+	var err error
 	switch action {
-	case "click":
-		if err := clickAtCoords(x, y); err != nil {
-			return nil, fmt.Errorf("click_element failed: %w", err)
-		}
 	case "double_click":
-		if err := doubleClickAtCoords(x, y); err != nil {
-			return nil, fmt.Errorf("double_click failed: %w", err)
-		}
+		err = doubleClickAtCoords(x, y)
 	case "right_click":
-		if err := rightClickAtCoords(x, y); err != nil {
-			return nil, fmt.Errorf("right_click failed: %w", err)
-		}
-	case "focus":
-		if err := clickAtCoords(x, y); err != nil {
-			return nil, fmt.Errorf("focus failed: %w", err)
-		}
-	default:
-		return nil, fmt.Errorf("action '%s' is not supported on macOS (supported: click, double_click, right_click, focus)", action)
+		err = rightClickAtCoords(x, y)
+	default: // click, focus
+		err = clickAtCoords(x, y)
 	}
-
-	return &RPCResult{Result: map[string]any{"success": true, "action": action, "x": x, "y": y}}, nil
+	if err != nil {
+		return fmt.Errorf("%s failed: %w", action, err)
+	}
+	return nil
 }
 
 // clickAtCoords performs a left-click at the given screen coordinates.
@@ -280,7 +245,7 @@ func clickElement(id int, action string, walkBudget time.Duration, slowHint stri
 func clickAtCoords(x, y int) error {
 	// Try cliclick first (brew install cliclick)
 	if _, err := exec.LookPath("cliclick"); err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), pointerDispatchTimeout)
 		defer cancel()
 		return exec.CommandContext(ctx, "cliclick", fmt.Sprintf("c:%d,%d", x, y)).Run()
 	}
@@ -297,7 +262,7 @@ ev = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, pt, kCGMouseButtonLeft)
 CGEventPost(kCGHIDEventTap, ev)
 `, x, y)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pointerDispatchTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, "python3", "-c", pyScript).Run()
 }
@@ -305,32 +270,18 @@ CGEventPost(kCGHIDEventTap, ev)
 // ── type_text ────────────────────────────────────────────────────────
 
 func handleTypeText(params map[string]any) (*RPCResult, error) {
-	text, _ := params["text"].(string)
-	if text == "" {
-		return nil, fmt.Errorf("missing required parameter: text")
-	}
-
-	// If element_id is given, click it first to focus it
-	if elemID, ok := params["element_id"].(float64); ok {
-		if _, err := clickElement(int(elemID), "click", jxaTypeReadBackTimeout, jxaTypeSlowHint); err != nil {
-			return nil, fmt.Errorf("failed to click element before typing: %w", err)
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-
-	// Pass the text as an argv item rather than interpolating it into the
-	// script source. osascript args are real arguments (no shell, no string
-	// literal), so newlines/quotes/backslashes in `text` are data and cannot
-	// break out of the keystroke statement -- this is what prevents
-	// AppleScript injection via attacker/LLM-controlled text.
-	script := `on run argv
+	return handleTypeTextWith(params, darwinTypeReadBack, func(text string) error {
+		// Pass the text as an argv item rather than interpolating it into the
+		// script source. osascript args are real arguments (no shell, no string
+		// literal), so newlines/quotes/backslashes in `text` are data and cannot
+		// break out of the keystroke statement -- this is what prevents
+		// AppleScript injection via attacker/LLM-controlled text.
+		script := `on run argv
 	tell application "System Events" to keystroke (item 1 of argv)
 end run`
-	if _, err := runOsascriptArgs(script, 10*time.Second, text); err != nil {
-		return nil, fmt.Errorf("type_text failed: %w", err)
-	}
-
-	return &RPCResult{Result: map[string]any{"success": true}}, nil
+		_, err := runOsascriptArgs(script, keystrokeTimeout, text)
+		return err
+	})
 }
 
 // ── press_keys ───────────────────────────────────────────────────────
@@ -574,7 +525,7 @@ end tell`, pid)
 // doubleClickAtCoords performs a double-click at screen coordinates.
 func doubleClickAtCoords(x, y int) error {
 	if _, err := exec.LookPath("cliclick"); err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), pointerDispatchTimeout)
 		defer cancel()
 		return exec.CommandContext(ctx, "cliclick", fmt.Sprintf("dc:%d,%d", x, y)).Run()
 	}
@@ -591,7 +542,7 @@ for _ in range(2):
     CGEventPost(kCGHIDEventTap, ev)
     time.sleep(0.05)
 `, x, y)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pointerDispatchTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, "python3", "-c", pyScript).Run()
 }
@@ -599,7 +550,7 @@ for _ in range(2):
 // rightClickAtCoords performs a right-click at screen coordinates.
 func rightClickAtCoords(x, y int) error {
 	if _, err := exec.LookPath("cliclick"); err == nil {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), pointerDispatchTimeout)
 		defer cancel()
 		return exec.CommandContext(ctx, "cliclick", fmt.Sprintf("rc:%d,%d", x, y)).Run()
 	}
@@ -613,7 +564,7 @@ time.sleep(0.05)
 ev = CGEventCreateMouseEvent(None, kCGEventRightMouseUp, pt, kCGMouseButtonRight)
 CGEventPost(kCGHIDEventTap, ev)
 `, x, y)
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), pointerDispatchTimeout)
 	defer cancel()
 	return exec.CommandContext(ctx, "python3", "-c", pyScript).Run()
 }

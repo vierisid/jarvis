@@ -15,18 +15,12 @@ import (
 
 // uiaPerformAction executes an action on a cached element.
 func uiaPerformAction(state *uiaState, elementID int, action, value string) (map[string]any, error) {
-	elem, snap := state.cache.get(elementID)
-	if elem == nil {
-		return nil, desktopElementNotCached(elementID)
-	}
-	// Before ANY action, read-only ones included: get_value would otherwise
-	// hand back the text of whatever the pointer names now (#661). Not
-	// positional, because every action below goes through the live element
-	// and actionClick's fallback reads its bounds at click time. No generation
-	// check either: every call runs on the one COM thread, so a snapshot
-	// cannot refill the cache between this check and the action.
-	if why := desktopElementChange(snap, uiaElementPrint(elem), false); why != "" {
-		return nil, desktopElementStale(elementID, why)
+	// Before ANY action (#661; uia_element_guard.go). No generation check:
+	// every call runs on the one COM thread, so a snapshot cannot refill the
+	// cache between this check and the action.
+	elem, err := guardCachedElement(state.cache, elementID, uiaElementPrint)
+	if err != nil {
+		return nil, err
 	}
 
 	result := map[string]any{
@@ -34,8 +28,6 @@ func uiaPerformAction(state *uiaState, elementID int, action, value string) (map
 		"action":     action,
 		"success":    false,
 	}
-
-	var err error
 
 	switch action {
 	case "click":

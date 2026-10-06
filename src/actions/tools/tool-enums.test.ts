@@ -201,10 +201,10 @@ describe('advertised values match what the implementation accepts', () => {
    * `get_text` too, which is how the drift was visible in the first place.
    */
   test('every desktop_click action is one some sidecar dispatches, and every dispatched one is advertised', () => {
+    // Linux and macOS share one clickElement since #712.
     const dispatchers = [
       ['uia_actions_windows.go', 'uiaPerformAction'],
-      ['desktop_linux.go', 'clickElement'],
-      ['desktop_darwin.go', 'clickElement'],
+      ['desktop_element_action.go', 'clickElement'],
     ] as const;
     const accepted = new Set<string>();
     for (const [file, fn] of dispatchers) {
