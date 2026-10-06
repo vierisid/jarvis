@@ -1,0 +1,24 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/outcomes/outcomes.test.tsx:
+47 | });
+48 |
+49 | test("unknown, missing baseline, wrong units and missing provenance never become time claims", async () => {
+50 |   const invalid = [null, { ...fixtureMeasurement(90, "minutes"), baseline: null }, { ...fixtureMeasurement(90, "minutes"), baseline: 5 }, fixtureMeasurement(90, "seconds"), { ...fixtureMeasurement(90, "minutes"), provenance: [] }, fixtureMeasurement(NaN, "minutes"), fixtureMeasurement(-1, "minutes")];
+51 |   for (const measurement of invalid) {
+52 |     expect(qualifiedTime(measurement)).toBe(false);
+                                            ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-09/ui/src/brief/today/outcomes/outcomes.test.tsx:52:40)
+(fail) unknown, missing baseline, wrong units and missing provenance never become time claims [45.11ms]
+
+ 0 pass
+ 13 filtered out
+ 1 fail
+ 5 expect() calls
+Ran 1 test across 1 file. [229.00ms]

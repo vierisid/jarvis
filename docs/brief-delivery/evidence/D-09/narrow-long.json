@@ -1,0 +1,105 @@
+{
+  "activityBelow": true,
+  "compact": "true",
+  "counts": [
+    "2",
+    "6"
+  ],
+  "glyphs": [
+    {
+      "opacity": "1",
+      "text": "9"
+    },
+    {
+      "opacity": "1",
+      "text": "0"
+    },
+    {
+      "opacity": "1",
+      "text": "2"
+    },
+    {
+      "opacity": "1",
+      "text": "6"
+    },
+    {
+      "opacity": "1",
+      "text": "6"
+    }
+  ],
+  "overflows": [],
+  "progress": [
+    {
+      "class": "brief-progress brief-outcome-progress brief-progress--middle",
+      "label": "6 of 10 design partners with a signed pilot agreement",
+      "segments": [
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(0)",
+        "scaleX(0)",
+        "scaleX(0)",
+        "scaleX(0)"
+      ]
+    },
+    {
+      "class": "brief-progress brief-outcome-progress brief-progress--middle",
+      "label": "6 of 10 signed",
+      "segments": [
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(1)",
+        "scaleX(0)",
+        "scaleX(0)",
+        "scaleX(0)",
+        "scaleX(0)"
+      ]
+    }
+  ],
+  "rects": {
+    ".brief-outcome-delta > span": {
+      "h": 105.09375,
+      "w": 97.66667175292967,
+      "x": 225.6666717529297,
+      "y": 407.2083435058594
+    },
+    ".brief-outcome-denominator": {
+      "h": 54,
+      "w": 63.79166793823242,
+      "x": 163.125,
+      "y": 534.3021240234375
+    },
+    ".brief-outcome-goal-progress > p": {
+      "h": 39.97916793823242,
+      "w": 190.6666717529297,
+      "x": 132.6666717529297,
+      "y": 593.59375
+    },
+    ".brief-outcome-time > p": {
+      "h": 19.98958396911621,
+      "w": 190.6666717529297,
+      "x": 132.6666717529297,
+      "y": 344.5520935058594
+    },
+    ".brief-outcome-time-value": {
+      "h": 72.60417175292969,
+      "w": 190.6666717529297,
+      "x": 132.6666717529297,
+      "y": 263.94793701171875
+    },
+    ".brief-recent-activity": {
+      "h": 263.2395935058594,
+      "w": 236,
+      "x": 110,
+      "y": 732.2396240234375
+    }
+  },
+  "theme": "dark",
+  "week": "none"
+}
