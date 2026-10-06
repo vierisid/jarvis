@@ -2,11 +2,10 @@
   "schemaVersion": 1,
   "id": "planning-promotion-v1",
   "status": "proposed",
-  "source": "Q-03, Jarvis implementation roadmaps v1 (5 October 2026): when deterministic-first planning may replace baseline-v1 as the production default. Proposed thresholds, not measured results. Freeze with Vieri and Lapo before the hosted runs it judges; a changed threshold is a new rule id.",
+  "source": "Q-03, Jarvis implementation roadmaps v1 (5 October 2026): when deterministic-first planning may replace baseline-v1 as the production default. Proposed thresholds, not measured results. Freeze with Vieri and Lapo and commit the frozen rule before the hosted runs it judges: each run pins the rule it starts under, and a comparison is judged only by that rule. A changed threshold is a new rule id.",
   "frozen": null,
   "baseline": "baseline-v1",
   "candidate": "deterministic-first-v1",
   "measure": "human-reviewed",
-  "corrections": "improve",
   "maxSuccessRegression": 0.05
 }

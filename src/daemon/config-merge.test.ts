@@ -276,6 +276,35 @@ describe('resolvePlanningPolicy', () => {
     expect(warnings[0]).toContain('workflows.planningPolicy');
     expect(warnings[1]).toContain('JARVIS_PLANNING_POLICY');
   });
+
+  test('two bad values warn once each; after a valid read a reintroduced typo warns again', () => {
+    const warn = console.warn, log = console.log;
+    const warnings: string[] = [];
+    console.warn = (line: string) => { warnings.push(line); };
+    console.log = () => {};
+    try {
+      for (const value of ['typo-a', 'typo-b', 'typo-a', 'typo-b']) resolvePlanningPolicy(value, {});
+      expect(warnings).toHaveLength(2);
+      resolvePlanningPolicy('baseline-v1', {});
+      resolvePlanningPolicy('typo-a', {});
+      expect(warnings).toHaveLength(3);
+    } finally { console.warn = warn; console.log = log; }
+  });
+
+  test('the policy and where it came from are logged when they change, not at every composition', () => {
+    const log = console.log;
+    const lines: string[] = [];
+    console.log = (line: string) => { lines.push(line); };
+    try {
+      resolvePlanningPolicy(undefined, { JARVIS_PLANNING_POLICY: 'deterministic-first-v1' });
+      const before = lines.length;
+      resolvePlanningPolicy(undefined, { JARVIS_PLANNING_POLICY: 'deterministic-first-v1' });
+      expect(lines).toHaveLength(before);
+      resolvePlanningPolicy('baseline-v1', {});
+      expect(lines.at(-1)).toBe('[Daemon] Planning policy: baseline-v1 (workflows.planningPolicy)');
+      expect(lines).toHaveLength(before + 1);
+    } finally { console.log = log; }
+  });
 });
 
 describe('resolveEngineCacheRetention', () => {
