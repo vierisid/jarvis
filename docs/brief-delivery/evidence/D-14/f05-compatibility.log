@@ -1,0 +1,1 @@
+PASS actual F-05 client/store/DraftAttachments: captured conversation survives picker delay and selection change; exact Document/Image delegation; unavailable and cancelled Screenshot dispatch nothing; confirmed device delegated once; closed chat refuses delayed file; both drafts retained. In-memory repositories and synthetic attachment API, no real upload/capture/model.

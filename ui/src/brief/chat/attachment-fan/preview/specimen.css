@@ -1,0 +1,5 @@
+.d14-fixture-controls { position:fixed; bottom:8px; left:8px; max-width:420px; z-index:40; display:flex; flex-wrap:wrap; gap:6px 12px; padding:8px 12px; color:#13161a; border:1px solid #cbd3db; background:#fff; border-radius:8px 0 8px 8px; font:12px/18px system-ui; }
+.d14-fixture-controls label { display:flex; align-items:center; gap:4px; }
+.d14-fixture-controls output { flex-basis:100%; }
+.d14-fixture-controls output:empty { display:none; }
+@media (max-width:600px) { .d14-fixture-controls { top:58px; bottom:auto; left:6px; right:6px; max-width:none; font-size:11px; } }
