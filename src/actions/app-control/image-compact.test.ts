@@ -1,6 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { decodePng, downscaleToWidth, encodeJpeg, MAX_DECODE_BYTES, MAX_DECODE_PIXELS, MAX_IMAGE_SIDE, scaledQuantTable, screenshotCaption, screenshotForModel, SCREENSHOT_COMPACT, tooBigToSend } from './image-compact.ts';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { createInflate, deflateSync } from 'node:zlib';
+import { decodePng, decodeShrunkPng, downscaleToWidth, encodeJpeg, MAX_DECODE_BYTES, MAX_DECODE_PIXELS, MAX_IMAGE_SIDE, scaledQuantTable, screenshotCaption, screenshotForModel, SCREENSHOT_COMPACT, resetStreamingInflateCheck, streamingInflateWorks, tooBigToSend } from './image-compact.ts';
 import { corruptCrc, encodePng, noiseRgbRows, zeroBomb } from './fixtures/png.ts';
 
 describe('decodePng', () => {
@@ -293,5 +297,226 @@ describe('screenshotForModel (#711)', () => {
     const big = 'A'.repeat(5 * 1024 * 1024 + 4);
     expect(screenshotForModel(big, 'image/bmp')).toMatchObject({ ok: false, reason: expect.stringContaining('image/bmp') });
     expect(screenshotForModel(big, 'image/png')).toMatchObject({ ok: false, reason: expect.stringContaining('could not be compacted') });
+  });
+});
+
+// --- #748: decode and shrink row by row, never holding the full-size image ---
+
+const CHANNELS: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
+
+/**
+ * A w x h PNG of seeded random filtered bytes, each row with filter y % 5, so
+ * every filter runs on every depth. Any bytes are valid filtered data; a
+ * palette image gets a full 2^depth-entry palette (every index in range) and
+ * a partial tRNS (some pixels opaque, some not).
+ */
+function mixedPng(w: number, h: number, colorType: number, depth: number, seed: number, opts: { idatSplit?: number } = {}): Buffer {
+  let s = seed >>> 0;
+  const next = () => { s = (s * 1664525 + 1013904223) >>> 0; return s >>> 24; };
+  const rowBytes = Math.ceil((w * CHANNELS[colorType]! * depth) / 8);
+  const raw = new Uint8Array((rowBytes + 1) * h);
+  for (let y = 0; y < h; y++) {
+    raw[y * (rowBytes + 1)] = y % 5;
+    for (let i = 1; i <= rowBytes; i++) raw[y * (rowBytes + 1) + i] = next();
+  }
+  const entries = 1 << Math.min(depth, 8);
+  const palette = colorType === 3 ? Array.from({ length: entries * 3 }, next) : undefined;
+  const trns = colorType === 3 ? Array.from({ length: entries >> 1 || 1 }, next) : undefined;
+  return encodePng(w, h, colorType, depth, [], { palette, trns, idat: deflateSync(raw), idatSplit: opts.idatSplit });
+}
+
+/** Every colour type at every bit depth the spec allows for it. */
+const DEPTHS: Array<[number, number]> = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [2, 8], [2, 16], [3, 1], [3, 2], [3, 4], [3, 8], [4, 8], [4, 16], [6, 8], [6, 16]];
+/** Shrink targets: a large ratio, nothing to do, the height deciding, a ratio near 1, one column. */
+const TARGETS: Array<[number, number]> = [[13, Infinity], [100, Infinity], [50, 7], [66, Infinity], [1, Infinity]];
+
+const digest = (img: { width: number; height: number; rgba: Uint8Array }) =>
+  `${img.width}x${img.height}:${createHash('sha256').update(img.rgba).digest('hex')}`;
+
+/**
+ * The digest of every DEPTHS x TARGETS case through `shrink`. MATRIX_GOLDEN is
+ * what the batch pipeline -- full-size decodePng, then downscaleToWidth --
+ * produced at a0b56684, before #748 streamed it; the streamed path has to
+ * reproduce it byte for byte.
+ */
+function matrixDigest(shrink: (png: Uint8Array, mw: number, mh: number) => { width: number; height: number; rgba: Uint8Array }): string {
+  const lines: string[] = [];
+  for (const [ct, depth] of DEPTHS) {
+    const png = mixedPng(67, 29, ct, depth, ct * 31 + depth);
+    for (const [mw, mh] of TARGETS) lines.push(`${ct}/${depth}/${mw}x${mh}=${digest(shrink(png, mw, mh))}`);
+  }
+  return createHash('sha256').update(lines.join('\n')).digest('hex');
+}
+const MATRIX_GOLDEN = '8dfc5a89fe6123f00d58421e58e820765040e75a894d89aa446d16526effe184';
+
+const BOMB_748 = 256 * 1024 * 1024;
+
+describe('streamed decode and shrink (#748)', () => {
+  test('produces the same pixels as the batch pipeline did, for every depth, filter and shrink path', () => {
+    expect(matrixDigest((png, mw, mh) => decodeShrunkPng(png, mw, mh))).toBe(MATRIX_GOLDEN);
+    // And the whole-image decoder and the standalone downscale still agree with it.
+    expect(matrixDigest((png, mw, mh) => downscaleToWidth(decodePng(png), mw, mh))).toBe(MATRIX_GOLDEN);
+  });
+
+  test('a compacted capture is byte-for-byte the JPEG the batch pipeline sent', () => {
+    // The two compaction paths screenshotForModel has: over the byte cap
+    // (2000x1000 noise -> 1600x800) and over the side bound (400x9000).
+    const sha = (png: Buffer) => {
+      const shot = screenshotForModel(png.toString('base64'), 'image/png');
+      if (!shot.ok || shot.block.type !== 'image') throw new Error('not compacted');
+      return `${shot.width}x${shot.height}:${createHash('sha256').update(shot.block.source.data).digest('hex')}`;
+    };
+    expect(sha(encodePng(2000, 1000, 2, 8, noiseRgbRows(2000, 1000)))).toBe('1600x800:97971980f4e5bd6dfed47a8ab58a57ea61f829240c6ee6b0eea077472592279e');
+    const tall = Array.from({ length: 9000 }, (_, y) => Uint8Array.from({ length: 400 * 3 }, (_, i) => (y * 7 + i * 13) & 255));
+    expect(sha(encodePng(400, 9000, 2, 8, tall))).toBe('355x8000:ef88b4c18340c7b2561c4ffae7c1c99243a61a09dc00ba35911705cc825785ea');
+  });
+
+  test('image data split across many IDATs, or with empty ones, decodes as if it were one', () => {
+    for (const [ct, depth] of [[6, 8], [2, 16], [3, 2]] as Array<[number, number]>) {
+      const whole = digest(decodePng(mixedPng(67, 29, ct, depth, 5)));
+      for (const split of [1, 7, 4096]) expect(digest(decodePng(mixedPng(67, 29, ct, depth, 5, { idatSplit: split })))).toBe(whole);
+    }
+    const stream = deflateSync(Buffer.from([0, 1, 2, 3, 0, 4, 5, 6]));
+    const empty = new Uint8Array(0);
+    const png = encodePng(1, 2, 2, 8, [], { idats: [empty, stream.subarray(0, 3), empty, stream.subarray(3), empty] });
+    expect([...decodePng(png).rgba]).toEqual([1, 2, 3, 255, 4, 5, 6, 255]);
+  });
+
+  test('the zlib stream is held to what the header declares, whatever its shape', () => {
+    // 2x2 RGB: 2 rows of 1 + 6 bytes.
+    const rows = Buffer.from([0, 1, 2, 3, 4, 5, 6, 0, 7, 8, 9, 10, 11, 12]);
+    const png = (stream: Uint8Array, split?: number) => encodePng(2, 2, 2, 8, [], { idat: stream, idatSplit: split });
+    const want = [1, 2, 3, 255, 4, 5, 6, 255, 7, 8, 9, 255, 10, 11, 12, 255];
+    expect([...decodePng(png(deflateSync(rows))).rgba]).toEqual(want);
+    // Up to 64 bytes past the rows are tolerated, as libpng does; 65 are not.
+    expect([...decodePng(png(deflateSync(Buffer.concat([rows, Buffer.alloc(64)])))).rgba]).toEqual(want);
+    expect(() => decodePng(png(deflateSync(Buffer.concat([rows, Buffer.alloc(65)]))))).toThrow('PNG image data is longer than its header says');
+    expect(() => decodePng(png(deflateSync(Buffer.concat([rows, Buffer.alloc(65)])), 1))).toThrow('PNG image data is longer than its header says');
+    // One byte short of the rows.
+    expect(() => decodePng(png(deflateSync(rows.subarray(0, rows.length - 1))))).toThrow('PNG image data is shorter than its header says');
+    // Every row present but the stream cut before its end, or its checksum wrong.
+    const z = deflateSync(rows);
+    expect(() => decodePng(png(z.subarray(0, z.length - 4)))).toThrow('PNG image data is not a valid zlib stream');
+    const badSum = Buffer.from(z);
+    badSum[badSum.length - 1] = badSum[badSum.length - 1]! ^ 1;
+    expect(() => decodePng(png(badSum))).toThrow('PNG image data is not a valid zlib stream');
+    expect(() => decodePng(png(Buffer.from('not a zlib stream at all')))).toThrow('PNG image data is not a valid zlib stream');
+    // No image data at all.
+    expect(() => decodePng(encodePng(2, 2, 2, 8, [], { idats: [] }))).toThrow('PNG image data is not a valid zlib stream');
+    // Bytes after the end of the stream are not image data, and are ignored.
+    expect([...decodePng(png(Buffer.concat([z, Buffer.from('trailing')]))).rgba]).toEqual(want);
+    expect([...decodePng(encodePng(2, 2, 2, 8, [], { idats: [z, Buffer.from('trailing')] })).rgba]).toEqual(want);
+  });
+
+  test('the zip bomb is refused split across IDATs as it is in one', () => {
+    const bomb = zeroBomb(BOMB_748);
+    expect(() => decodePng(encodePng(100, 100, 2, 8, [], { idat: bomb, idatSplit: 8192 }))).toThrow('PNG image data is longer than its header says');
+  });
+
+  // Linux only: VmHWM is the kernel's own peak for this process image. Not
+  // getrusage's ru_maxrss, which Linux carries across exec from the spawning
+  // process -- under bun test that is the runner's peak, so a child measured
+  // that way reported 0 KB of growth however much it allocated.
+  test.skipIf(process.platform !== 'linux')('compacting a capture never holds a full-size copy of it (peak RSS, measured in a child process)', () => {
+    // 8100x2000 RGBA of zeros: 64.8 MB of rows and 64.8 MB of RGBA, but a
+    // PNG of ~63 KB, so the child holds next to nothing before the decode.
+    // The side is over MAX_IMAGE_SIDE, so screenshotForModel compacts it.
+    const W = 8100, H = 2000;
+    expect(W).toBeGreaterThan(MAX_IMAGE_SIDE);
+    const png = encodePng(W, H, 6, 8, [], { idat: zeroBomb((W * 4 + 1) * H) });
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-748-'));
+    try {
+      const file = join(dir, 'capture.png');
+      writeFileSync(file, png);
+      const script = `
+        import { readFileSync } from 'node:fs';
+        import { screenshotForModel } from ${JSON.stringify(join(import.meta.dir, 'image-compact.ts'))};
+        const hwm = () => Number(/VmHWM:\\s+(\\d+)/.exec(readFileSync('/proc/self/status', 'utf8'))[1]);
+        const base64 = readFileSync(${JSON.stringify(file)}).toString('base64');
+        const before = hwm();
+        const shot = screenshotForModel(base64, 'image/png');
+        console.log(JSON.stringify({ ok: shot.ok, width: shot.ok ? shot.width : 0, grewKb: hwm() - before }));`;
+      const out = Bun.spawnSync([process.execPath, '-e', script], { cwd: dir });
+      expect(out.exitCode).toBe(0);
+      const result = JSON.parse(out.stdout.toString().trim()) as { ok: boolean; width: number; grewKb: number };
+      expect(result).toMatchObject({ ok: true, width: SCREENSHOT_COMPACT.maxWidth });
+      // Less than one full-size copy of the image: the batch pipeline held
+      // three at once (the inflated rows, inflateSync's concatenation of
+      // them, the RGBA image) and measured +222 MB here; streamed, +22 to 27
+      // MB, of which ~15 MB is what compacting even an 8001x4 capture costs
+      // (most of it JSC's optimising compilers: +5 MB with them off).
+      const oneCopyKb = (W * H * 4) / 1024;
+      expect(result.grewKb).toBeLessThan(oneCopyKb);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a refused stream leaves no zlib error behind to crash the process later', async () => {
+    // Bun reports a zlib error from the incremental write by emitting 'error'
+    // on the stream after the call; with no listener that is an uncaught
+    // exception -- in the daemon, the end of the process. In a child, because
+    // inside a bun test callback Bun emits it during the call instead, which
+    // hides both that and a missed failure (the message below would read
+    // "longer than its header says" had the untouched write state been taken
+    // for a full buffer).
+    const script = `
+      import { decodePng } from ${JSON.stringify(join(import.meta.dir, 'image-compact.ts'))};
+      import { encodePng } from ${JSON.stringify(join(import.meta.dir, 'fixtures', 'png.ts'))};
+      import { deflateSync } from 'node:zlib';
+      process.on('uncaughtException', (err) => { console.log('uncaught: ' + err.message); process.exit(3); });
+      const z = deflateSync(Buffer.from([0, 1, 2, 3, 0, 4, 5, 6]));
+      const badSum = Buffer.from(z);
+      badSum[badSum.length - 1] ^= 1;
+      // A bad header, a stream cut short, a bad checksum: zlib's three ways to fail.
+      for (const idat of [Buffer.from('not zlib'), z.subarray(0, z.length - 4), badSum]) {
+        try { decodePng(encodePng(1, 2, 2, 8, [], { idat })); } catch (err) { console.log('refused: ' + err.message); }
+      }
+      await Bun.sleep(100);
+      console.log('alive');`;
+    const child = Bun.spawn([process.execPath, '-e', script], { stdout: 'pipe', stderr: 'pipe' });
+    const [stdout, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+    expect(stdout.trim().split('\n')).toEqual([
+      'refused: PNG image data is not a valid zlib stream',
+      'refused: PNG image data is not a valid zlib stream',
+      'refused: PNG image data is not a valid zlib stream',
+      'alive',
+    ]);
+    expect(code).toBe(0);
+  });
+
+  test('a runtime whose zlib lacks the incremental primitive, or mishandles it, is detected', () => {
+    // This runtime has it, so the streamed inflate is what the tests above ran.
+    expect(streamingInflateWorks()).toBe(true);
+    const probe = createInflate() as unknown as { _handle: object; close(): void };
+    const handleProto = Object.getPrototypeOf(probe._handle) as { writeSync: unknown };
+    probe.close();
+    const real = handleProto.writeSync;
+    try {
+      // Missing, and present but never reporting progress.
+      for (const stub of [undefined, () => {}]) {
+        handleProto.writeSync = stub;
+        resetStreamingInflateCheck();
+        expect(streamingInflateWorks()).toBe(false);
+      }
+    } finally {
+      handleProto.writeSync = real;
+      resetStreamingInflateCheck();
+    }
+    expect(streamingInflateWorks()).toBe(true);
+  });
+
+  test('without the primitive, the inflateSync fallback gives the same pixels and the same refusals', () => {
+    resetStreamingInflateCheck(false);
+    try {
+      expect(matrixDigest((png, mw, mh) => decodeShrunkPng(png, mw, mh))).toBe(MATRIX_GOLDEN);
+      expect(() => decodePng(encodePng(100, 100, 2, 8, [], { idat: zeroBomb(BOMB_748) }))).toThrow('PNG image data is longer than its header says');
+      const z = deflateSync(Buffer.from([0, 1, 2, 3, 0, 4, 5, 6]));
+      expect([...decodePng(encodePng(1, 2, 2, 8, [], { idats: [z.subarray(0, 3), z.subarray(3)] })).rgba]).toEqual([1, 2, 3, 255, 4, 5, 6, 255]);
+      expect(() => decodePng(encodePng(1, 2, 2, 8, [], { idat: z.subarray(0, z.length - 4) }))).toThrow('PNG image data is not a valid zlib stream');
+      expect(() => decodePng(encodePng(1, 2, 2, 8, [], { idat: deflateSync(Buffer.from([0, 1, 2, 3])) }))).toThrow('PNG image data is shorter than its header says');
+    } finally {
+      resetStreamingInflateCheck();
+    }
   });
 });

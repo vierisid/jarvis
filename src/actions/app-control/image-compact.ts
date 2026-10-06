@@ -27,7 +27,7 @@
  * tables with the IJG formula.
  */
 
-import { crc32, inflateSync } from 'node:zlib';
+import { constants as zlibConstants, createInflate, crc32, deflateSync, inflateSync } from 'node:zlib';
 import { guardImageSize, type ContentBlock } from '../../llm/provider.ts';
 
 /** The compact capture's parameters, shared with the routed fallback. */
@@ -49,21 +49,29 @@ const PNG_CHANNELS: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
  * and 2.3 GB (#711 review). The pixel bound alone was not enough (IMG-001):
  * bytes per pixel vary 8x across the colour types read here, and a 4.6 MB PNG
  * declaring 1600x40000 RGBA at 16 bits -- 64 MP, inside the pixel bound --
- * decoded for 3.6 s and +1.25 GB here. Two bounds because two buffers: the
- * inflated rows are width*height*bytes-per-pixel, and the RGBA output is
- * width*height*4 whatever the source depth.
+ * decoded for 3.6 s and +1.25 GB here. Two bounds because the two costs scale
+ * differently: inflating and unfiltering are per byte of raw rows
+ * (width*height*bytes-per-pixel), converting and averaging per pixel.
  *
  * 64 MP sits above the largest real desktop a root-window capture spans --
  * three 6K displays side by side, 18048x3384, are 61 MP -- and 256 MB is that
  * many pixels of 8-bit RGBA, so no actual screen is refused.
  *
- * WHAT THE BOUNDS ADMIT, measured here on the most expensive input inside them
- * (seeded noise, Paeth on every row): 8000x8000 8-bit RGBA decodes in 1.9 s
- * with +756 MB peak RSS, and 8000x4000 16-bit RGBA in 1.9 s with +633 MB.
- * That is the worst case of the decode, which is synchronous on the daemon's
- * thread. A real screen capture is far cheaper -- 5120x2880 decoded, shrunk
- * and encoded in 180 ms -- because screen content filters and inflates easily;
- * the bound is what keeps a hostile or broken file from costing more.
+ * WHAT THE BOUNDS ADMIT is now time, not memory. The decode streams (#748):
+ * rows are inflated, unfiltered and averaged into the shrunk image as they
+ * arrive, so neither the inflated rows nor a full-size RGBA image ever exists.
+ * Measured here, peak RSS over the process before the compaction, then time
+ * (decode, shrink and encode; the batch pipeline it replaced in brackets):
+ * 8000x8000 8-bit RGBA seeded noise with Paeth on every row, the most
+ * expensive input inside the bounds, +41 MB in 1.7 s [+1023 MB, 2.3 s];
+ * 8000x4000 16-bit, +35 MB in 1.5 s [+901 MB, 2.0 s]; a three-display
+ * 18048x3384 desktop, +27 MB in 0.38 s [+742 MB, 0.82 s]; 5120x2880, +32 MB in
+ * 0.15 s [+207 MB, 0.27 s]; 1x64000000, the most rows, +17 MB in 0.74 to
+ * 0.91 s [+514 MB, 0.71 to 0.76 s]. About 15 MB of each is what compacting
+ * even an 8001x4 capture costs, most of it JSC's optimising compilers. The
+ * time is synchronous on the daemon's thread; the bounds keep a hostile or
+ * broken file from costing more of it. The one shape memory still follows is
+ * width, since a row is held whole: see decodeRows.
  */
 export const MAX_DECODE_PIXELS = 64_000_000;
 export const MAX_DECODE_BYTES = 256_000_000;
@@ -75,16 +83,22 @@ export const MAX_DECODE_BYTES = 256_000_000;
  */
 export const MAX_IMAGE_SIDE = 8000;
 
-/**
- * Decode a non-interlaced PNG to 8-bit RGBA.
- *
- * Every colour type, bit depths 1/2/4/8 for grey and palette and 8/16 for the
- * rest (16-bit samples keep their high byte). A palette image's tRNS alpha is
- * applied; a grey or RGB image's tRNS (one colour key) is not, so those decode
- * opaque -- a screen capture never sets one. The inflate is bounded by the
- * size the header declares, and that by MAX_DECODE_PIXELS.
- */
-export function decodePng(png: Uint8Array): DecodedImage {
+/** A PNG's header, checked, and its image data still compressed. */
+type PngLayout = {
+  width: number;
+  height: number;
+  depth: number;
+  colorType: number;
+  channels: number;
+  rowBytes: number;
+  palette: Uint8Array | null;
+  paletteAlpha: Uint8Array | null;
+  /** The IDAT chunks' data, in order: one zlib stream split across them. */
+  idat: Uint8Array[];
+};
+
+/** Read and check a PNG's chunks; nothing is inflated here. */
+function readPng(png: Uint8Array): PngLayout {
   if (png.length < 8 || PNG_SIGNATURE.some((b, i) => png[i] !== b)) throw new Error('not a PNG image');
   const view = new DataView(png.buffer, png.byteOffset, png.byteLength);
   let width = 0, height = 0, depth = 0, colorType = -1, interlace = 0;
@@ -134,67 +148,224 @@ export function decodePng(png: Uint8Array): DecodedImage {
 
   const rowBytes = Math.ceil((width * channels * depth) / 8);
   if (rowBytes * height > MAX_DECODE_BYTES) throw new Error(`a ${width}x${height} image is larger than any screen this decodes`);
-  const stride = rowBytes + 1;
-  const expected = stride * height;
-  const compressed = idat.length === 1 ? idat[0]! : Buffer.concat(idat);
-  // Bounded by what the header declares (a little slack for an encoder's
-  // trailing bytes), so a stream cannot expand past what it claims to be. A
-  // stream that tries is refused with this message, not zlib's own text.
+  return { width, height, depth, colorType, channels, rowBytes, palette, paletteAlpha, idat };
+}
+
+/** How much inflated data is handed on at a time: the one inflate buffer. */
+const INFLATE_CHUNK = 64 * 1024;
+
+/**
+ * The incremental, synchronous zlib primitive under node:zlib: the native
+ * handle's `writeSync(flush, in, inOff, inLen, out, outOff, outLen)`, which
+ * leaves [availOut, availIn] in the stream's `_writeState`. It is what
+ * `inflateSync` itself runs on (zlibBufferSync -> processChunkSync, in Node's
+ * lib/zlib.js, which Bun ports), but `inflateSync` gathers the whole output
+ * and then concatenates it -- twice the image, briefly -- and the one public
+ * incremental API, `createInflate`, is asynchronous. Neither underscored name
+ * is documented, so `streamingInflateWorks` checks the pair before use.
+ */
+type InflateInternals = {
+  _handle?: { writeSync?: (flush: number, input: Uint8Array, inOff: number, inLen: number, out: Uint8Array, outOff: number, outLen: number) => void };
+  _writeState?: unknown;
+  on(event: 'error', listener: (err: unknown) => void): unknown;
+  close(): void;
+};
+
+/**
+ * Inflate one zlib stream given in `parts`, handing the output to `sink` in
+ * pieces of at most INFLATE_CHUNK bytes as it is produced, and refusing the
+ * stream as soon as it has produced more than `limit` bytes -- the bound that
+ * keeps a zip bomb from expanding past what the header declares. Returns how
+ * many bytes it produced. Bytes after the end of the stream are ignored, as
+ * `inflateSync` ignores them.
+ *
+ * Errors are not thrown by `writeSync`: Bun records them on the stream,
+ * leaves `_writeState` untouched, and emits 'error' -- in a script after the
+ * call returns, inside a bun test callback during it -- and an 'error' with no
+ * listener is an uncaught exception that ends the process (measured, Bun
+ * 1.3.8). So the state is set to an impossible value before each call, an
+ * untouched state is the failure, and an 'error' listener is always attached.
+ */
+function inflateStreaming(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Array) => void): number {
+  const inflater = createInflate() as unknown as InflateInternals;
+  let failed = false;
+  inflater.on('error', () => { failed = true; });
+  // No IDAT at all still runs one (empty) Z_FINISH write, so it is refused
+  // the way inflateSync refuses an empty buffer.
+  const inputs = parts.length > 0 ? parts : [new Uint8Array(0)];
+  let total = 0;
+  try {
+    const write = inflater._handle!.writeSync!.bind(inflater._handle);
+    const state = inflater._writeState as Uint32Array;
+    // Zeroed, not allocUnsafe: were a runtime ever to under-report availOut,
+    // the bytes it counted would be zeros, never stale heap.
+    const out = Buffer.alloc(INFLATE_CHUNK);
+    for (let k = 0; k < inputs.length; k++) {
+      const input = inputs[k]!;
+      // Z_FINISH on the last input is what turns a stream cut short into an
+      // error ("unexpected end of file"), exactly as in inflateSync.
+      const flush = k === inputs.length - 1 ? zlibConstants.Z_FINISH : zlibConstants.Z_NO_FLUSH;
+      let inOff = 0, availIn = input.length;
+      for (;;) {
+        state[0] = state[1] = 0xffffffff;
+        write(flush, input, inOff, availIn, out, 0, INFLATE_CHUNK);
+        const availOut = state[0]!, availInAfter = state[1]!;
+        if (failed || availOut > INFLATE_CHUNK || availInAfter > availIn) throw new Error('PNG image data is not a valid zlib stream');
+        const produced = INFLATE_CHUNK - availOut;
+        total += produced;
+        // Checked per INFLATE_CHUNK, before the piece is used: the stream is
+        // stopped within 64 KB of the bound, never inflated to its end.
+        if (total > limit) throw new Error('PNG image data is longer than its header says');
+        if (produced > 0) sink(out.subarray(0, produced));
+        inOff += availIn - availInAfter;
+        availIn = availInAfter;
+        // A full buffer means there may be more; anything else means this
+        // input is used up, or the stream has ended.
+        if (availOut !== 0) break;
+      }
+    }
+  } finally {
+    inflater.close();
+  }
+  return total;
+}
+
+/** The same contract by `inflateSync`, all at once: what a runtime without the primitive gets. */
+function inflateBatch(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Array) => void): number {
   let raw: Buffer;
   try {
-    raw = inflateSync(compressed, { maxOutputLength: expected + 64 });
+    raw = inflateSync(parts.length === 1 ? parts[0]! : Buffer.concat(parts), { maxOutputLength: limit });
   } catch (err) {
     const tooLong = err instanceof RangeError || (err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE';
     throw new Error(tooLong ? 'PNG image data is longer than its header says' : 'PNG image data is not a valid zlib stream');
   }
-  // Up to 64 trailing bytes past the rows are tolerated and ignored, as
-  // libpng does with a warning; any more never left inflateSync.
-  if (raw.length < expected) throw new Error('PNG image data is shorter than its header says');
+  sink(raw);
+  return raw.length;
+}
 
-  // Undo the per-row filters in place: each row's bytes follow its filter
-  // byte, and every predictor reads only bytes already unfiltered (earlier in
-  // this row, or the previous row).
-  const bpp = Math.max(1, (channels * depth) >> 3);
-  for (let y = 0; y < height; y++) {
-    const filter = raw[y * stride]!;
-    const row = y * stride + 1;
-    const prev = row - stride;
-    if (filter === 0) continue;
-    if (filter > 4) throw new Error(`unknown PNG filter ${filter}`);
-    for (let i = 0; i < rowBytes; i++) {
-      const a = i >= bpp ? raw[row + i - bpp]! : 0;
-      const b = y > 0 ? raw[prev + i]! : 0;
-      let pred: number;
-      if (filter === 1) pred = a;
-      else if (filter === 2) pred = b;
-      else if (filter === 3) pred = (a + b) >> 1;
-      else {
-        const c = y > 0 && i >= bpp ? raw[prev + i - bpp]! : 0;
-        const p = a + b - c;
-        const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
-        pred = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
-      }
-      raw[row + i] = (raw[row + i]! + pred) & 0xff;
+let streamingChecked: boolean | undefined;
+
+/**
+ * Whether this runtime's zlib has the incremental primitive and it behaves:
+ * the names exist, a known stream split in two inflates to exactly its data,
+ * and both kinds of broken stream are refused -- one cut short (an error at
+ * Z_FINISH) and one with a wrong checksum (a data error mid-call). Checked
+ * once per process. A runtime that fails it falls back to `inflateBatch` --
+ * correct, at the old memory cost -- rather than refusing every capture.
+ */
+export function streamingInflateWorks(): boolean {
+  if (streamingChecked !== undefined) return streamingChecked;
+  try {
+    const probe = createInflate() as unknown as InflateInternals;
+    let usable = false;
+    try {
+      usable = typeof probe._handle?.writeSync === 'function' && probe._writeState instanceof Uint32Array && probe._writeState.length >= 2;
+    } finally {
+      probe.close();
     }
+    if (!usable) return (streamingChecked = false);
+    // Known data, 3 * INFLATE_CHUNK + 5 patterned bytes so that inflating it
+    // fills the output buffer and continues more than once, as every real
+    // capture does; deflated by the batch API.
+    const PROBE_DATA = Buffer.alloc(3 * INFLATE_CHUNK + 5);
+    for (let i = 0; i < PROBE_DATA.length; i++) PROBE_DATA[i] = (i * 7 + (i >> 9)) & 0xff;
+    const PROBE_STREAM = deflateSync(PROBE_DATA);
+    const got = Buffer.alloc(PROBE_DATA.length);
+    let at = 0;
+    const half = PROBE_STREAM.length >> 1;
+    const length = inflateStreaming([PROBE_STREAM.subarray(0, half), PROBE_STREAM.subarray(half)], PROBE_DATA.length, (b) => {
+      if (at + b.length <= got.length) got.set(b, at);
+      at += b.length;
+    });
+    const refuses = (stream: Uint8Array) => {
+      try { inflateStreaming([stream], PROBE_DATA.length, () => {}); } catch { return true; }
+      return false;
+    };
+    const badSum = Buffer.from(PROBE_STREAM);
+    badSum[badSum.length - 1] = badSum[badSum.length - 1]! ^ 1;
+    streamingChecked = length === PROBE_DATA.length && at === length && got.equals(PROBE_DATA)
+      && refuses(PROBE_STREAM.subarray(0, PROBE_STREAM.length - 2)) && refuses(badSum);
+  } catch {
+    streamingChecked = false;
   }
+  return streamingChecked;
+}
 
-  const rgba = new Uint8Array(width * height * 4);
-  const sample = (row: number, index: number): number => {
+/**
+ * @internal Test only. Forget the check above so it runs again, or pin its
+ * answer so a test can drive the fallback (the batch API shares the native
+ * handle, so breaking the primitive breaks the fallback too).
+ */
+export function resetStreamingInflateCheck(pinned?: boolean): void {
+  streamingChecked = pinned;
+}
+
+/**
+ * Decode a checked PNG one row at a time: inflate, unfilter and convert
+ * each row to 8-bit RGBA, and hand it to `onRow` (the buffer is reused: copy
+ * what is kept). The whole image never exists at once, inflated or decoded --
+ * two rows of filtered bytes, one of RGBA and the 64 KB inflate buffer do.
+ * Those rows are small for any screen (18048 px of RGBA is 72 KB), but they
+ * are a row: an absurd geometry the caps still admit, 64000000x1, makes them
+ * the whole image again (+505 MB measured, against +760 MB batch).
+ *
+ * Every colour type, bit depths 1/2/4/8 for grey and palette and 8/16 for the
+ * rest (16-bit samples keep their high byte). A palette image's tRNS alpha is
+ * applied; a grey or RGB image's tRNS (one colour key) is not, so those decode
+ * opaque -- a screen capture never sets one. The inflate is bounded by the
+ * size the header declares, and that by MAX_DECODE_PIXELS and MAX_DECODE_BYTES.
+ *
+ * Rows are checked as they arrive, so of an image with several faults the
+ * first to surface is reported -- an unknown filter or a palette index can now
+ * come before a broken zlib stream that the batch decode named first. Either
+ * way the image is refused, never sent half-decoded.
+ */
+function decodeRows(layout: PngLayout, onRow: (rgba: Uint8Array, y: number) => void): void {
+  const { width, height, depth, colorType, channels, rowBytes, palette, paletteAlpha } = layout;
+  const stride = rowBytes + 1;
+  const expected = stride * height;
+  const bpp = Math.max(1, (channels * depth) >> 3);
+  const scale = depth < 8 ? 255 / ((1 << depth) - 1) : 1;
+  // The previous row starts as zeros: what every predictor reads above row 0.
+  let prev = new Uint8Array(rowBytes);
+  let cur = new Uint8Array(rowBytes);
+  const rgba = new Uint8Array(width * 4);
+
+  const sample = (row: Uint8Array, index: number): number => {
     // index counts samples within the row, at the image's bit depth.
-    if (depth === 8) return raw[row + index]!;
-    if (depth === 16) return raw[row + index * 2]!;
+    if (depth === 8) return row[index]!;
+    if (depth === 16) return row[index * 2]!;
     const perByte = 8 / depth;
-    const byte = raw[row + Math.floor(index / perByte)]!;
+    const byte = row[Math.floor(index / perByte)]!;
     const shift = 8 - depth * ((index % perByte) + 1);
     return (byte >> shift) & ((1 << depth) - 1);
   };
-  const scale = depth < 8 ? 255 / ((1 << depth) - 1) : 1;
-  for (let y = 0; y < height; y++) {
-    const row = y * stride + 1;
+
+  const finishRow = (filter: number, y: number): void => {
+    // Undo the row's filter in place: every predictor reads only bytes already
+    // unfiltered (earlier in this row, or the previous row).
+    if (filter > 4) throw new Error(`unknown PNG filter ${filter}`);
+    if (filter !== 0) {
+      for (let i = 0; i < rowBytes; i++) {
+        const a = i >= bpp ? cur[i - bpp]! : 0;
+        const b = prev[i]!;
+        let pred: number;
+        if (filter === 1) pred = a;
+        else if (filter === 2) pred = b;
+        else if (filter === 3) pred = (a + b) >> 1;
+        else {
+          const c = i >= bpp ? prev[i - bpp]! : 0;
+          const p = a + b - c;
+          const pa = Math.abs(p - a), pb = Math.abs(p - b), pc = Math.abs(p - c);
+          pred = pa <= pb && pa <= pc ? a : pb <= pc ? b : c;
+        }
+        cur[i] = (cur[i]! + pred) & 0xff;
+      }
+    }
     for (let x = 0; x < width; x++) {
-      const o = (y * width + x) * 4;
+      const o = x * 4;
       if (colorType === 3) {
-        const idx = sample(row, x);
+        const idx = sample(cur, x);
         // An index past the palette is an error in the spec, not black (IMG-003).
         if (idx * 3 >= palette!.length) throw new Error(`palette index ${idx} is past the ${palette!.length / 3}-entry palette`);
         rgba[o] = palette![idx * 3]!;
@@ -202,18 +373,183 @@ export function decodePng(png: Uint8Array): DecodedImage {
         rgba[o + 2] = palette![idx * 3 + 2]!;
         rgba[o + 3] = paletteAlpha && idx < paletteAlpha.length ? paletteAlpha[idx]! : 255;
       } else if (colorType === 0 || colorType === 4) {
-        const g = Math.round(sample(row, x * channels) * scale);
+        const g = Math.round(sample(cur, x * channels) * scale);
         rgba[o] = rgba[o + 1] = rgba[o + 2] = g;
-        rgba[o + 3] = colorType === 4 ? sample(row, x * channels + 1) : 255;
+        rgba[o + 3] = colorType === 4 ? sample(cur, x * channels + 1) : 255;
       } else {
-        rgba[o] = sample(row, x * channels);
-        rgba[o + 1] = sample(row, x * channels + 1);
-        rgba[o + 2] = sample(row, x * channels + 2);
-        rgba[o + 3] = colorType === 6 ? sample(row, x * channels + 3) : 255;
+        rgba[o] = sample(cur, x * channels);
+        rgba[o + 1] = sample(cur, x * channels + 1);
+        rgba[o + 2] = sample(cur, x * channels + 2);
+        rgba[o + 3] = colorType === 6 ? sample(cur, x * channels + 3) : 255;
       }
     }
+    onRow(rgba, y);
+    const done = prev;
+    prev = cur;
+    cur = done;
+  };
+
+  // Each row is its filter byte then rowBytes of data; the inflate hands them
+  // over in pieces that ignore row boundaries.
+  let y = 0;
+  let filter = -1; // -1 while the next byte is a row's filter byte
+  let filled = 0;
+  const take = (bytes: Uint8Array): void => {
+    let i = 0;
+    while (i < bytes.length && y < height) {
+      if (filter < 0) {
+        filter = bytes[i++]!;
+        filled = 0;
+        continue;
+      }
+      const n = Math.min(rowBytes - filled, bytes.length - i);
+      // A short copy by hand: a subarray per row is an allocation per row,
+      // which made a 1x64000000 image 5x slower than the batch decode.
+      if (n < 64) for (let k = 0; k < n; k++) cur[filled + k] = bytes[i + k]!;
+      else cur.set(bytes.subarray(i, i + n), filled);
+      filled += n;
+      i += n;
+      if (filled === rowBytes) {
+        finishRow(filter, y++);
+        filter = -1;
+      }
+    }
+    // Anything past the last row is an encoder's trailing bytes: up to 64 are
+    // tolerated and ignored, as libpng does with a warning; the inflate's
+    // bound refuses more.
+  };
+  const inflate = streamingInflateWorks() ? inflateStreaming : inflateBatch;
+  // Bounded by what the header declares, plus that slack.
+  const produced = inflate(layout.idat, expected + 64, take);
+  if (produced < expected) throw new Error('PNG image data is shorter than its header says');
+}
+
+/**
+ * Decode a non-interlaced PNG to 8-bit RGBA, whole: the decoder's reference
+ * form. A capture on its way to the model goes through `decodeShrunkPng`,
+ * which never holds the full-size image.
+ */
+export function decodePng(png: Uint8Array): DecodedImage {
+  const layout = readPng(png);
+  const whole = new AreaAverage(layout.width, layout.height, Infinity, Infinity);
+  decodeRows(layout, (row, y) => whole.addRow(row, y));
+  return whole.result();
+}
+
+/**
+ * Decode a PNG straight to its downscaled form -- `downscaleToWidth`'s sizes
+ * and arithmetic, byte for byte -- feeding each row into the average as it is
+ * decoded. Peak memory is the output plus a few rows (see decodeRows), so a
+ * three-display 18048x3384 capture no longer costs two full-size copies of
+ * itself on the way to a 1600x300 picture (#748). With nothing to shrink
+ * (within maxWidth and maxHeight) the output is the full-size image, as it
+ * always was: for a screenshot, up to 1600x8000, 51 MB.
+ */
+export function decodeShrunkPng(png: Uint8Array, maxWidth: number, maxHeight = Infinity): DecodedImage & { origWidth: number; origHeight: number } {
+  const layout = readPng(png);
+  const avg = new AreaAverage(layout.width, layout.height, maxWidth, maxHeight);
+  decodeRows(layout, (row, y) => avg.addRow(row, y));
+  return { ...avg.result(), origWidth: layout.width, origHeight: layout.height };
+}
+
+/**
+ * The area-average downscale, fed one source row at a time in order: each
+ * target row is the band of source rows sy0..sy1 it covers, so only that
+ * band's running sums are held -- `acc`, three per target column -- never the
+ * source image. With nothing to shrink it keeps the rows as they come.
+ *
+ * `acc` is a Float64Array, as the batch version's was, and must stay one:
+ * the sums are fractional wherever alpha is not 255 (r * a / 255), and the
+ * output has to round exactly as before. It cannot overflow or lose an
+ * integer: a cell's sum is at most 255 per source pixel, and a cell is at
+ * most the whole image, MAX_DECODE_PIXELS -- 1.6e10, far below 2^53. (An
+ * Int32 sum would wrap at 8.4 million pixels a cell.)
+ */
+class AreaAverage {
+  readonly width: number;
+  readonly height: number;
+  private readonly out: Uint8Array;
+  private readonly copy: boolean;
+  private readonly x0: Int32Array;
+  private readonly acc: Float64Array;
+  private dy = 0;
+  private sy0 = 0;
+  private sy1 = 0;
+
+  constructor(private readonly sw: number, private readonly sh: number, maxWidth: number, maxHeight: number) {
+    this.copy = sw <= maxWidth && sh <= maxHeight;
+    // Width first, the way the sidecar computes it; then, for an image still
+    // taller than maxHeight, the height decides.
+    let dw = Math.min(sw, maxWidth);
+    let dh = Math.max(1, Math.floor((sh * dw) / sw));
+    if (dh > maxHeight) {
+      dh = maxHeight;
+      dw = Math.max(1, Math.floor((sw * maxHeight) / sh));
+    }
+    // (Nothing to shrink gives dw = sw and dh = sh already.)
+    this.width = dw;
+    this.height = dh;
+    this.out = new Uint8Array(dw * dh * 4);
+    this.x0 = new Int32Array(this.copy ? 0 : dw + 1);
+    this.acc = new Float64Array(this.copy ? 0 : dw * 3);
+    if (this.copy) return;
+    for (let dx = 0; dx <= dw; dx++) this.x0[dx] = Math.floor((dx * sw) / dw);
+    this.band();
   }
-  return { width, height, rgba };
+
+  /**
+   * The source rows target row `dy` covers. dh <= sh (dw <= sw, and the
+   * height only shrinks after that), so each band is at least one row and the
+   * bands tile 0..sh in order with no gap or overlap: floor((dy+1)*sh/dh) is
+   * always past floor(dy*sh/dh).
+   */
+  private band(): void {
+    this.sy0 = Math.floor((this.dy * this.sh) / this.height);
+    this.sy1 = Math.max(this.sy0 + 1, Math.floor(((this.dy + 1) * this.sh) / this.height));
+  }
+
+  /** Source row `sy` (RGBA, sw pixels); rows must come in order, each once. */
+  addRow(row: Uint8Array, sy: number): void {
+    if (this.copy) { this.out.set(row, sy * this.sw * 4); return; }
+    while (this.dy < this.height && sy >= this.sy1) this.emit();
+    if (this.dy >= this.height) return;
+    const { x0, acc } = this;
+    for (let dx = 0; dx < this.width; dx++) {
+      const end = Math.max(x0[dx]! + 1, x0[dx + 1]!);
+      let r = 0, g = 0, b = 0;
+      for (let sx = x0[dx]!; sx < end; sx++) {
+        const p = sx * 4;
+        const a = row[p + 3]!;
+        if (a === 255) { r += row[p]!; g += row[p + 1]!; b += row[p + 2]!; }
+        else { r += (row[p]! * a) / 255; g += (row[p + 1]! * a) / 255; b += (row[p + 2]! * a) / 255; }
+      }
+      acc[dx * 3] = acc[dx * 3]! + r;
+      acc[dx * 3 + 1] = acc[dx * 3 + 1]! + g;
+      acc[dx * 3 + 2] = acc[dx * 3 + 2]! + b;
+    }
+  }
+
+  /** Write target row dy from its band's sums, and start the next band. */
+  private emit(): void {
+    const { x0, acc, out, dy } = this;
+    for (let dx = 0; dx < this.width; dx++) {
+      const n = (Math.max(x0[dx]! + 1, x0[dx + 1]!) - x0[dx]!) * (this.sy1 - this.sy0);
+      const o = (dy * this.width + dx) * 4;
+      out[o] = Math.round(acc[dx * 3]! / n);
+      out[o + 1] = Math.round(acc[dx * 3 + 1]! / n);
+      out[o + 2] = Math.round(acc[dx * 3 + 2]! / n);
+      out[o + 3] = 255;
+    }
+    acc.fill(0);
+    this.dy++;
+    if (this.dy < this.height) this.band();
+  }
+
+  /** The finished image, once every source row has been added. */
+  result(): DecodedImage {
+    if (!this.copy) while (this.dy < this.height) this.emit();
+    return { width: this.width, height: this.height, rgba: this.out };
+  }
 }
 
 /**
@@ -225,48 +561,9 @@ export function decodePng(png: Uint8Array): DecodedImage {
 export function downscaleToWidth(img: DecodedImage, maxWidth: number, maxHeight = Infinity): DecodedImage {
   const { width: sw, height: sh, rgba } = img;
   if (sw <= maxWidth && sh <= maxHeight) return img;
-  // Width first, the way the sidecar computes it; then, for an image still
-  // taller than maxHeight, the height decides.
-  let dw = Math.min(sw, maxWidth);
-  let dh = Math.max(1, Math.floor((sh * dw) / sw));
-  if (dh > maxHeight) {
-    dh = maxHeight;
-    dw = Math.max(1, Math.floor((sw * maxHeight) / sh));
-  }
-  const out = new Uint8Array(dw * dh * 4);
-  const x0 = new Int32Array(dw + 1);
-  for (let dx = 0; dx <= dw; dx++) x0[dx] = Math.floor((dx * sw) / dw);
-  const acc = new Float64Array(dw * 3);
-  for (let dy = 0; dy < dh; dy++) {
-    const sy0 = Math.floor((dy * sh) / dh);
-    const sy1 = Math.max(sy0 + 1, Math.floor(((dy + 1) * sh) / dh));
-    acc.fill(0);
-    for (let sy = sy0; sy < sy1; sy++) {
-      const rowOff = sy * sw * 4;
-      for (let dx = 0; dx < dw; dx++) {
-        const end = Math.max(x0[dx]! + 1, x0[dx + 1]!);
-        let r = 0, g = 0, b = 0;
-        for (let sx = x0[dx]!; sx < end; sx++) {
-          const p = rowOff + sx * 4;
-          const a = rgba[p + 3]!;
-          if (a === 255) { r += rgba[p]!; g += rgba[p + 1]!; b += rgba[p + 2]!; }
-          else { r += (rgba[p]! * a) / 255; g += (rgba[p + 1]! * a) / 255; b += (rgba[p + 2]! * a) / 255; }
-        }
-        acc[dx * 3] = acc[dx * 3]! + r;
-        acc[dx * 3 + 1] = acc[dx * 3 + 1]! + g;
-        acc[dx * 3 + 2] = acc[dx * 3 + 2]! + b;
-      }
-    }
-    for (let dx = 0; dx < dw; dx++) {
-      const n = (Math.max(x0[dx]! + 1, x0[dx + 1]!) - x0[dx]!) * (sy1 - sy0);
-      const o = (dy * dw + dx) * 4;
-      out[o] = Math.round(acc[dx * 3]! / n);
-      out[o + 1] = Math.round(acc[dx * 3 + 1]! / n);
-      out[o + 2] = Math.round(acc[dx * 3 + 2]! / n);
-      out[o + 3] = 255;
-    }
-  }
-  return { width: dw, height: dh, rgba: out };
+  const avg = new AreaAverage(sw, sh, maxWidth, maxHeight);
+  for (let sy = 0; sy < sh; sy++) avg.addRow(rgba.subarray(sy * sw * 4, (sy + 1) * sw * 4), sy);
+  return avg.result();
 }
 
 // --- Baseline JPEG encoder (ITU T.81), 4:2:0 like Go's image/jpeg ---
@@ -548,18 +845,17 @@ export function screenshotForModel(base64: string, mediaType: string): Screensho
   if (mediaType !== 'image/png') return { ok: false, reason: `the capture is ${mediaType}, which cannot be compacted here` };
   const bytes = Buffer.from(base64, 'base64');
   let jpeg: Uint8Array;
-  let decoded: DecodedImage;
-  let small: DecodedImage;
+  let small: ReturnType<typeof decodeShrunkPng>;
   try {
-    decoded = decodePng(bytes);
-    small = downscaleToWidth(decoded, SCREENSHOT_COMPACT.maxWidth, MAX_IMAGE_SIDE);
+    // Straight to the shrunk size, never the full-size image (#748).
+    small = decodeShrunkPng(bytes, SCREENSHOT_COMPACT.maxWidth, MAX_IMAGE_SIDE);
     jpeg = encodeJpeg(small, SCREENSHOT_COMPACT.jpegQuality);
   } catch (err) {
     return { ok: false, reason: `it could not be compacted (${err instanceof Error ? err.message : String(err)})` };
   }
   const compact: ContentBlock = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from(jpeg).toString('base64') } };
   if (tooBigToSend(compact)) return { ok: false, reason: 'it is too large to send even after compacting it' };
-  return { ok: true, block: compact, compacted: true, width: small.width, height: small.height, origWidth: decoded.width, origHeight: decoded.height };
+  return { ok: true, block: compact, compacted: true, width: small.width, height: small.height, origWidth: small.origWidth, origHeight: small.origHeight };
 }
 
 /**
