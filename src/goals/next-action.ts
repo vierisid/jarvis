@@ -186,7 +186,10 @@ type Draft = { considered: ConsideredAction[] } & (
 );
 
 const normalize = (text: string) => text.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
-const quote = (title: string) => `"${title.length > 120 ? `${title.slice(0, 117)}...` : title}"`;
+const clip = (text: string, max: number) => text.length > max ? `${text.slice(0, max - 3)}...` : text;
+const quote = (title: string) => `"${clip(title, 120)}"`;
+/** Text from outside the plan, such as a failed step's error message, is quoted short. */
+const REASON_MAX = 200;
 const sentence = (text: string) => text.charAt(0).toUpperCase() + text.slice(1);
 /** A sortable key for a goal order, an integer from 0 to 2^53 - 1. */
 const rank = (order: number) => String(Math.min(Math.max(Math.trunc(order) || 0, 0), Number.MAX_SAFE_INTEGER)).padStart(16, '0');
@@ -366,7 +369,7 @@ export function planNextAction(snapshot: PlanSnapshot): NextActionPlan {
         : kind === 'missing_run' ? `Close ${quote(work.title)} in Tasks: its run no longer exists`
         : kind === 'run_failure' ? `Find out why ${quote(work.title)} failed and record the outcome`
         : `Clear the blocker on ${quote(work.title)}`;
-      add('resolve_blocker', title, goal, work, [`Blocked: ${work.blocker?.reason ?? 'no reason recorded'}.`], evidence, 'reduces');
+      add('resolve_blocker', title, goal, work, [`Blocked: ${clip(work.blocker?.reason ?? 'no reason recorded', REASON_MAX)}.`], evidence, 'reduces');
       continue;
     }
     if (work.status === 'proposed') {
@@ -385,7 +388,7 @@ export function planNextAction(snapshot: PlanSnapshot): NextActionPlan {
       if (!state) { exclude('continue_work', work.title, 'Its workflow could not be checked.'); continue; }
       if (!state.ready) {
         add('restore_capability', `Fix what ${quote(work.title)} needs to run`, goal, work,
-          [`Its workflow is not ready: ${state.reason ?? 'unknown reason'}.`], evidence, 'none');
+          [`Its workflow is not ready: ${clip(state.reason ?? 'unknown reason', REASON_MAX)}.`], evidence, 'none');
         continue;
       }
       add('continue_work', `Run ${quote(work.title)}`, goal, work, [], evidence, 'reduces');
@@ -437,7 +440,7 @@ export function planNextAction(snapshot: PlanSnapshot): NextActionPlan {
       continue;
     }
     if (last?.verdict === 'failed') {
-      const how = last.checkId ? `failed its check (${last.summary})` : `was marked failed in Tasks on ${day(last.at)}`;
+      const how = last.checkId ? `failed its check (${clip(last.summary ?? '', REASON_MAX)})` : `was marked failed in Tasks on ${day(last.at)}`;
       add('start_step', `Retry ${quote(goal.title)} or change the approach`, goal, null, [`The last attempt, ${quote(last.title)}, ${how}.`],
         resultEvidence(last), 'adds', `The last attempt at ${quote(goal.title)} ${how}. Try again as it was, or change the approach first?`);
       continue;

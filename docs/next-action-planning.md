@@ -65,6 +65,11 @@ The goal revision is F-01's read projection, not a concurrency token: health
 and escalation updates change it too. To tell whether a stored recommendation
 still holds, F-13 compares `basis`, not the revision.
 
+Rationales and questions quote blocker reasons and check summaries, clipped to
+200 characters. For a failed run the reason is the failed step's error message,
+which is outside text. Show it to the user as data, and frame it as untrusted
+wherever plan text reaches a model, as `goals/rhythm.ts` does.
+
 ## Candidates and order
 
 Finishing, unblocking and closing come before starting:
@@ -174,4 +179,4 @@ bun run scripts/next-action-review-packet.ts --out review-packet.md
 bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts
 ```
 
-Expected: 63 pass.
+Expected: 64 pass.
