@@ -1,0 +1,110 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-composition.test.ts:
+Database initialized at: :memory:
+[WebSocketServer] Started on unix:/tmp/jarvis-f07-api-2OD6zM/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) real panel auth protects composition submission, recovery and cancellation; 202 does not wait for the model [97.42ms]
+Database initialized at: :memory:
+(pass) default-off, absent, unconfigured and mismatched providers cannot start composition [37.49ms]
+Database initialized at: :memory:
+(pass) request streams enforce actual byte limits, UTF-8/JSON validation and strict F07 fields [46.70ms]
+
+src/brief/composition.test.ts:
+Database initialized at: /tmp/jarvis-f07-z1qngp/test.db
+Database initialized at: /tmp/jarvis-f07-z1qngp/test.db
+(pass) durable receipt precedes the model; retries across every phase attach one disabled populated draft [1012.34ms]
+Database initialized at: /tmp/jarvis-f07-cBBkwn/test.db
+(pass) an uncertain response can be recovered by requestId and changed specifications conflict [878.23ms]
+Database initialized at: /tmp/jarvis-f07-pWaGKo/test.db
+(pass) job receipts and later composition prompts never forward captured workflow output [1081.30ms]
+Database initialized at: /tmp/jarvis-f07-tx5lo5/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 27 chars, ends "..{PRIVATE MALFORMED RESPONSE"))
+[compose] attempt 2 success-after-retry
+(pass) repair retains the exact specification and exposes candidate count without candidate contents [966.82ms]
+Database initialized at: /tmp/jarvis-f07-5uNIVF/test.db
+(pass) a trigger-only result is a useful blocker and cannot create an empty success [927.94ms]
+Database initialized at: /tmp/jarvis-f07-ERKqlr/test.db
+[compose] attempt 1 validation-error (step "report" references unknown piece "missing-piece")
+[compose] attempt 2 exhausted (step "report" references unknown piece "missing-piece")
+(pass) a populated graph with an unknown piece cannot bypass composer validation [1022.89ms]
+Database initialized at: /tmp/jarvis-f07-c1gl3w/test.db
+(pass) a LOOP_ON_ITEMS scaffold without any piece action is a blocker [899.13ms]
+Database initialized at: /tmp/jarvis-f07-2FnnsR/test.db
+(pass) a ROUTER scaffold without any piece action is a blocker [923.02ms]
+Database initialized at: /tmp/jarvis-f07-uVl3Ja/test.db
+(pass) a LOOP_ON_ITEMS containing a nested piece action remains a populated draft [884.14ms]
+Database initialized at: /tmp/jarvis-f07-ddKu1j/test.db
+(pass) a ROUTER containing a nested piece action remains a populated draft [924.68ms]
+Database initialized at: /tmp/jarvis-f07-pm3MsU/test.db
+[compose] attempt 1 tool-loop-blocked (Specify which destination should receive the report.)
+(pass) report_blocked preserves actionable reasons without attaching or running a draft [1077.47ms]
+Database initialized at: /tmp/jarvis-f07-T6kAGl/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 2 exhausted (response was not valid JSON: JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+(pass) provider errors and malformed responses stay out of the public failure receipt [968.23ms]
+Database initialized at: /tmp/jarvis-f07-wr1Vn2/test.db
+(pass) queued cancellation makes no model call; running cancellation aborts and rejects late results [929.12ms]
+Database initialized at: /tmp/jarvis-f07-CKXwB5/test.db
+(pass) cancellation frees the queue even if the model ignores abort [1211.57ms]
+Database initialized at: /tmp/jarvis-f07-bv4xPS/test.db
+(pass) timeout releases an uncooperative model and retains a durable retryable failure [980.38ms]
+Database initialized at: /tmp/jarvis-f07-UGsMCV/test.db
+Database initialized at: /tmp/jarvis-f07-UGsMCV/test.db
+(pass) restart records queued and running work as interrupted and never resumes it implicitly [948.55ms]
+Database initialized at: /tmp/jarvis-f07-3jFNt5/test.db
+(pass) graceful shutdown persists interrupted outcomes before aborting provider work [1118.79ms]
+Database initialized at: /tmp/jarvis-f07-sReHv1/test.db
+(pass) an interruption write failure cannot block shutdown or attach a late draft [943.97ms]
+Database initialized at: /tmp/jarvis-f07-zEmtVC/test.db
+(pass) failure to save result IDs rolls back both canonical draft rows [987.88ms]
+Database initialized at: /tmp/jarvis-f07-Lxu33K/test.db
+(pass) failure to bind journal identity rolls back before any model call [935.02ms]
+Database initialized at: /tmp/jarvis-f07-k0do8h/test.db
+(pass) a prepared disabled draft still faces canonical readiness checks before activation [1111.14ms]
+Database initialized at: /tmp/jarvis-f07-TAz4TF/test.db
+(pass) request validation bounds bytes and identifiers, rejects F08 fields, and preserves admitted wording [932.31ms]
+Database initialized at: /tmp/jarvis-f07-NIpTYu/test.db
+(pass) queue is bounded while idempotent repeats remain readable when it is full [1253.59ms]
+Database initialized at: /tmp/jarvis-f07-av8EOU/test.db
+(pass) project scope separates lookup, recovery, cancellation and idempotency keys [934.86ms]
+Database initialized at: /tmp/jarvis-f07-zu8EC5/test.db
+(pass) schema is additive and idempotent over saved receipts and journals [1072.58ms]
+
+src/actions/tools/persisted-workflow-composer.test.ts:
+Database initialized at: /tmp/jarvis-compose-intent-vxBGor/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 11 chars, ends "..{unfinished"))
+[compose] attempt 2 success-after-retry
+Database initialized at: /tmp/jarvis-compose-intent-vxBGor/test.db
+(pass) chat commits the specification and repair checkpoint before the next LLM call, then links the draft [976.45ms]
+Database initialized at: /tmp/jarvis-compose-intent-SEC5Im/test.db
+[compose] attempt 1 exhausted (step "bad" references unknown piece "missing")
+Database initialized at: /tmp/jarvis-compose-intent-SEC5Im/test.db
+(pass) failed composition retains its original spec, full candidate and focused errors across restart [916.92ms]
+Database initialized at: /tmp/jarvis-compose-intent-JubgnT/test.db
+[compose] attempt 1 validation-error (step "bad" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+(pass) caller mutation cannot change the saved specification or repair prompt [980.80ms]
+Database initialized at: /tmp/jarvis-compose-intent-LorHqO/test.db
+[compose] attempt 1 validation-error (step "bad" references unknown piece "missing")
+(pass) cancellation retains the checkpoint and never accepts the late candidate [893.24ms]
+Database initialized at: /tmp/jarvis-compose-intent-9BICpZ/test.db
+(pass) checkpoint failure stops before another LLM attempt or draft creation [862.37ms]
+Database initialized at: /tmp/jarvis-compose-intent-1WydqA/test.db
+Database initialized at: /tmp/jarvis-compose-intent-1WydqA/test.db
+(pass) an interrupted record remains inspectable after restart without becoming a runnable job [1121.40ms]
+Database initialized at: /tmp/jarvis-compose-intent-8ZIcFM/test.db
+Database initialized at: /tmp/jarvis-compose-intent-8ZIcFM/replacement.db
+(pass) a late completion cannot checkpoint into a replacement database [1869.60ms]
+Database initialized at: /tmp/jarvis-compose-intent-G65535/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 11 chars, ends "..{unfinished"))
+[compose] attempt 2 success-after-retry
+Database initialized at: /tmp/jarvis-compose-intent-G65535/test.db
+(pass) composition provenance is durable and catalog changes cannot alter a repair [1139.34ms]
+Database initialized at: /tmp/jarvis-compose-intent-rxK6Js/test.db
+(pass) production composition keeps the baseline prompt unless a policy is chosen [917.22ms]
+
+ 37 pass
+ 0 fail
+ 213 expect() calls
+Ran 37 tests across 3 files. [35.00s]

@@ -201,6 +201,15 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     is a generic gated reader, with no live
  *                                     provider registered in F-01; future
  *                                     providers still need boundary review.
+ *   brief/composition.ts              BENIGN. Calls createDraftVersion and
+ *                                     keeps only its newly created id in a
+ *                                     durable job receipt. It reads no run or
+ *                                     existing version, and supplies only the
+ *                                     saved user specification to the composer.
+ *                                     composition.test.ts writes hostile step
+ *                                     capture data to a completed draft and
+ *                                     verifies receipt/read/replay and later
+ *                                     model prompts never include that data.
  *   daemon/api-routes.ts               BENIGN. Holds a whole `FlowVersion` but
  *                                     reads only `displayName`/`schemaVersion`
  *                                     off it, and answers HTTP rather than a
@@ -218,6 +227,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'actions/tools/workflow-composer.ts',
   'awareness/suggestion-composer.ts',
   'brief/adapters.ts',
+  'brief/composition.ts',
   'brief/contracts.ts',
   'daemon/api-routes.ts',
   'goals/work-items.ts',

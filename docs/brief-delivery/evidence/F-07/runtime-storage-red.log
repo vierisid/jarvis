@@ -1,0 +1,96 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-f07-SWH6d5/test.db
+Database initialized at: /tmp/jarvis-f07-rF6wWo/test.db
+Database initialized at: /tmp/jarvis-f07-VJP7gk/test.db
+Database initialized at: /tmp/jarvis-f07-fd4f4e/test.db
+
+src/daemon/api-brief-composition.test.ts:
+103 |     const accepted = await submit(); expect(accepted.status).toBe(202);
+104 |     const { job } = await accepted.json();
+105 |     getWorkflowDb().exec(`CREATE TRIGGER reject_runtime_job_writes BEFORE UPDATE ON brief_workflow_composition_jobs
+106 |       BEGIN SELECT RAISE(ABORT, 'PRIVATE storage diagnostic'); END`);
+107 |     await p.idle();
+108 |     expect(caps.snapshot().capabilities.workflowComposition).toMatchObject({ ready: false, enabled: false });
+                                                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "enabled": false,
+-   "ready": false,
++   "enabled": true,
++   "ready": true,
++   "reason": null,
++   "state": "ready",
++   "supported": true,
+  }
+
+- Expected  - 2
++ Received  + 5
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/daemon/api-brief-composition.test.ts:108:62)
+(fail) runtime storage recovery makes receipts unavailable until abandoned jobs are settled [151.25ms]
+
+src/brief/composition.test.ts:
+264 |   db.exec(`CREATE TRIGGER reject_runtime_job_writes BEFORE UPDATE ON brief_workflow_composition_jobs
+265 |     BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END`);
+266 |   if (failure === 'provider failure') reply.resolve({ text: valid });
+267 |   await p.idle();
+268 |   expect(p.get(first.jobId).state).toBe('running');
+269 |   expect(p.readiness()).toBe('unavailable');
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:269:25)
+(fail) runtime storage recovery settles abandoned work after timeout without replaying it [1025.83ms]
+264 |   db.exec(`CREATE TRIGGER reject_runtime_job_writes BEFORE UPDATE ON brief_workflow_composition_jobs
+265 |     BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END`);
+266 |   if (failure === 'provider failure') reply.resolve({ text: valid });
+267 |   await p.idle();
+268 |   expect(p.get(first.jobId).state).toBe('running');
+269 |   expect(p.readiness()).toBe('unavailable');
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:269:25)
+(fail) runtime storage recovery settles abandoned work after provider failure without replaying it [1119.85ms]
+294 |   const p = provider({ async chat() { calls++; return reply.promise; } }, 30);
+295 |   const { job } = p.submit(input); await started(p, job.jobId);
+296 |   const db = getWorkflowDb();
+297 |   db.exec(`CREATE TRIGGER reject_runtime_job_writes BEFORE UPDATE ON brief_workflow_composition_jobs
+298 |     BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END`);
+299 |   await p.idle(); expect(p.readiness()).toBe('unavailable');
+                                              ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:299:41)
+(fail) runtime storage recovery relinquishes ownership on stop [960.44ms]
+294 |   const p = provider({ async chat() { calls++; return reply.promise; } }, 30);
+295 |   const { job } = p.submit(input); await started(p, job.jobId);
+296 |   const db = getWorkflowDb();
+297 |   db.exec(`CREATE TRIGGER reject_runtime_job_writes BEFORE UPDATE ON brief_workflow_composition_jobs
+298 |     BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END`);
+299 |   await p.idle(); expect(p.readiness()).toBe('unavailable');
+                                              ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:299:41)
+(fail) runtime storage recovery relinquishes ownership on replace database [1043.96ms]
+
+ 0 pass
+ 28 filtered out
+ 5 fail
+ 12 expect() calls
+Ran 5 tests across 2 files. [4.54s]

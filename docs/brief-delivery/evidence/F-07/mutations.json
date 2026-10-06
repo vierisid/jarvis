@@ -1,0 +1,36 @@
+{
+  "source_sha256": "f5891d4b1e34f153dffe19cea46485885e975d7fd600beb9bce24640409924ec",
+  "restored": true,
+  "results": [
+    {
+      "mutation": "replay-identity",
+      "test": "durable receipt precedes",
+      "exit_code": 1,
+      "rejected": true
+    },
+    {
+      "mutation": "empty-success",
+      "test": "a trigger-only result",
+      "exit_code": 1,
+      "rejected": true
+    },
+    {
+      "mutation": "atomic-result",
+      "test": "failure to save result IDs",
+      "exit_code": 1,
+      "rejected": true
+    },
+    {
+      "mutation": "restart-recovery",
+      "test": "restart records queued",
+      "exit_code": 1,
+      "rejected": true
+    },
+    {
+      "mutation": "whole-version-projection",
+      "test": "job receipts and later composition",
+      "exit_code": 1,
+      "rejected": true
+    }
+  ]
+}

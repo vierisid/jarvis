@@ -1,0 +1,24 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/composition.test.ts:
+Database initialized at: /tmp/jarvis-f07-CIMpRq/test.db
+226 |   const p = provider();
+227 |   getWorkflowDb().exec(`CREATE TRIGGER reject_result BEFORE UPDATE ON brief_workflow_composition_jobs WHEN NEW.state = 'draft_ready'
+228 |     BEGIN SELECT RAISE(ABORT, 'result write failed'); END`);
+229 |   const { job } = p.submit(input); await p.idle();
+230 |   expect(p.get(job.jobId)).toMatchObject({ state: 'failed', workflow: null, compositionId: expect.any(String) });
+231 |   expect(count('flow')).toBe(0); expect(count('flow_version')).toBe(0);
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:231:25)
+(fail) failure to save result IDs rolls back both canonical draft rows [454.62ms]
+
+ 0 pass
+ 23 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [496.00ms]

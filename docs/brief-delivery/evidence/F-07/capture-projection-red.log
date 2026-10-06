@@ -1,0 +1,64 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/composition.test.ts:
+Database initialized at: /tmp/jarvis-f07-JGVZey/test.db
+94 |   const p = provider({ async chat({ prompt }) { prompts.push(prompt); return { text: valid }; } });
+95 |   const first = p.submit(input).job; await p.idle(); const ready = p.get(first.jobId);
+96 |   const captures = { report: { output: canary } };
+97 |   getWorkflowDb().run('UPDATE flow_version SET sample_data = ? WHERE id = ?', [JSON.stringify(captures), ready.workflow!.versionId]);
+98 |   expect(getFlowVersion(ready.workflow!.versionId)!.sampleData).toEqual(captures);
+99 |   expect(p.get(first.jobId).workflow).toEqual({ flowId: ready.workflow!.flowId, versionId: ready.workflow!.versionId });
+                                           ^
+error: expect(received).toEqual(expected)
+
+  {
++   "agentIds": [],
++   "backupFiles": null,
++   "connectionIds": [],
++   "created": 1791292619623,
++   "displayName": "Private report",
++   "engineListeners": null,
++   "engineSchedule": null,
+    "flowId": "BV8pIWijH3BuBIaV5iIPM",
++   "id": "sYPfZTOqqeA7myjFIQSuZ",
++   "notes": [],
++   "sampleData": {
++     "report": {
++       "output": "UNTRUSTED_CAPTURE_ONLY",
++     },
++   },
++   "sampleInput": null,
++   "schemaVersion": "20",
++   "state": "DRAFT",
++   "trigger": {
++     "name": "trigger",
++     "nextAction": {
++       "name": "report",
++       "settings": {
++         "actionName": "ask",
++         "input": {
++           "prompt": "Draft the report without sending email or deleting files.",
++         },
++         "pieceName": "jarvis-ask",
++       },
++       "type": "PIECE",
++     },
++     "type": "EMPTY",
++   },
++   "updated": 1791292619623,
++   "updatedBy": null,
++   "valid": false,
+    "versionId": "sYPfZTOqqeA7myjFIQSuZ",
+  }
+
+- Expected  - 0
++ Received  + 35
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:99:39)
+(fail) job receipts and later composition prompts never forward captured workflow output [949.86ms]
+
+ 0 pass
+ 24 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [1032.00ms]
