@@ -40,8 +40,13 @@ permissions:
   contents: read
 
 env:
-  GO_VERSION: "1.25"
-  BUN_VERSION: "latest"
+  # No GO_VERSION: setup-go reads the exact version from sidecar/go.mod.
+  # There is no BUN_VERSION: nothing in this workflow runs Bun. It used to be
+  # `latest`, installed into publish-sidecar (id-token: write) and never used
+  # (#681).
+  # Exact npm for Trusted Publishing, never `latest`: keep it equal to
+  # NPM_VERSION in release-exec.yml, which says where the value comes from.
+  NPM_VERSION: "12.1.0"
   SIDECAR_BIN: jarvis
   DRY_RUN: ${{ inputs.dry_run || false }}
 
@@ -129,6 +134,9 @@ jobs:
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          # The Actions cache is writable by any run on main, and Go reuses
+          # cached modules and build output without re-verifying them (#681).
+          cache: false
           # Track sidecar/go.mod as the single source of the Go version.
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
@@ -411,17 +419,17 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
           registry-url: "https://registry.npmjs.org"
 
       - name: Ensure npm supports Trusted Publishing
-        run: npm install -g npm@latest
+        run: |
+          set -euo pipefail
+          npm install -g "npm@${NPM_VERSION}"
+          got="$(npm --version)"
+          [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 
       - name: Download all sidecar binaries
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1

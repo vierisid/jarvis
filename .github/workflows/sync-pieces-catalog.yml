@@ -105,6 +105,8 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
+          # The Actions cache is writable by any run on main; see #681.
+          no-cache: true
           bun-version: ${{ env.BUN_VERSION }}
 
       - run: bun install --frozen-lockfile
@@ -154,6 +156,8 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
+          # The Actions cache is writable by any run on main; see #681.
+          no-cache: true
           bun-version: ${{ env.BUN_VERSION }}
 
       - run: bun install --frozen-lockfile

@@ -39,7 +39,6 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  GO_VERSION: "1.25"
   MODULE: github.com/webview/webview_go
 
 jobs:
@@ -90,6 +89,9 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
+          # The Actions cache is writable by any run on main, and Go reuses
+          # cached modules and build output without re-verifying them (#681).
+          cache: false
           # Track sidecar/go.mod as the single source of the Go version.
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
