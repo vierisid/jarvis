@@ -80,8 +80,9 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
       // Prompts, all of them: no dispatch cap applies after the frame.
       // F-05 caps file text in the decoder before framing the model's user blocks.
       'brief/chat-transport.ts',
+      // F-11 moved the framed legacy awareness prompts out of daemon bootstrap.
+      'daemon/awareness-delivery-policy.ts',
       'daemon/event-reactor.ts',
-      'daemon/index.ts',
       'goals/rhythm.ts',
       'roles/prompt-builder.ts',
       'sites/prompt-context.ts',
