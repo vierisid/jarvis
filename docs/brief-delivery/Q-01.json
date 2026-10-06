@@ -3,7 +3,7 @@
   "title": "Establish the current hosted-model baseline",
   "date": "2026-10-05",
   "branch": "brief/q-01",
-  "worktree": "/home/vierisid/.cache/codex/jarvis-q-01",
+  "worktree": "a checkout of brief/q-01",
   "initial_baseline": "cd59a0e072ca739420c89a6fd9cd21bbbb793160",
   "baseline": "462d955d54014e15ea003b5908860917642e5b34",
   "baseline_ref": "brief/foundations (D-01 #701 and F-01 #702 on main 05039c3e)",
@@ -88,7 +88,7 @@
     }
   ],
   "quick_verify": {
-    "cwd": "/home/vierisid/.cache/codex/jarvis-q-01",
+    "cwd": "repository root, on brief/q-01",
     "command": "bun run eval:workflows --mode hosted --split heldout --out /tmp/q01-gate",
     "expected": "exit 2; /tmp/q01-gate/report.json is not_run with three reasons (profile missing, spend authorization missing, rubric proposed); no provider request",
     "evidence": "evidence/Q-01/hosted-gate-not-run.json, evidence/Q-01/baseline-not-run.json",
