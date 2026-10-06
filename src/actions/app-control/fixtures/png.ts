@@ -5,9 +5,13 @@
 
 import { crc32, deflateSync } from 'node:zlib';
 
-/** A minimal PNG writer for fixtures: one IDAT, every row with the given filter. */
+/**
+ * A minimal PNG writer for fixtures: every row with the given filter, in one
+ * IDAT unless `idatSplit` cuts the stream into IDATs of that many bytes or
+ * `idats` gives the IDATs' data outright.
+ */
 export function encodePng(width: number, height: number, colorType: number, depth: number, rows: Uint8Array[],
-  opts: { palette?: number[]; trns?: number[]; filter?: number; interlace?: number; idat?: Uint8Array } = {}): Buffer {
+  opts: { palette?: number[]; trns?: number[]; filter?: number; interlace?: number; idat?: Uint8Array; idatSplit?: number; idats?: Uint8Array[] } = {}): Buffer {
   const chunk = (type: string, data: Uint8Array): Buffer => {
     const head = Buffer.alloc(8);
     head.writeUInt32BE(data.length, 0);
@@ -21,14 +25,20 @@ export function encodePng(width: number, height: number, colorType: number, dept
   ihdr[8] = depth; ihdr[9] = colorType; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = opts.interlace ?? 0;
   const filter = opts.filter ?? 0;
   const raw = Buffer.concat(rows.map((r) => Buffer.concat([Buffer.from([filter]), Buffer.from(r)])));
+  // `idat` replaces the image data with already-compressed bytes, so a test
+  // can pair any declared geometry with any stream, CRCs still correct.
+  const stream = opts.idat ?? deflateSync(raw, { level: 1 });
+  let idats: Uint8Array[] = opts.idats ?? [stream];
+  if (!opts.idats && opts.idatSplit) {
+    idats = [];
+    for (let i = 0; i < stream.length; i += opts.idatSplit) idats.push(stream.subarray(i, i + opts.idatSplit));
+  }
   return Buffer.concat([
     Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
     chunk('IHDR', ihdr),
     ...(opts.palette ? [chunk('PLTE', Uint8Array.from(opts.palette))] : []),
     ...(opts.trns ? [chunk('tRNS', Uint8Array.from(opts.trns))] : []),
-    // `idat` replaces the image data with already-compressed bytes, so a test
-    // can pair any declared geometry with any stream, CRCs still correct.
-    chunk('IDAT', opts.idat ?? deflateSync(raw, { level: 1 })),
+    ...idats.map((d) => chunk('IDAT', d)),
     chunk('IEND', new Uint8Array()),
   ]);
 }
