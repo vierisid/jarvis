@@ -1,0 +1,9 @@
+AssertionError [ERR_ASSERTION]: {"ordered":["none"],"unordered":["none","none","none"],"tasks":["none","none"],"normal":["none","none","none","none","none","none","none","none"],"start":3,"checks":[{"checked":true,"disabled":true},{"checked":false,"disabled":true}],"overflow":false}
+    at \\wsl.localhost\Ubuntu\home\vierisid\.cache\codex\jarvis-d-15\docs\brief-delivery\evidence\D-15\review-browser.cjs:16:11 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}
