@@ -404,6 +404,16 @@ test('R6: malformed or unresolved supplied schemas cannot certify a dynamic inpu
 });
 
 
+test('both spellings of "starts with" are router operators; an operator the engine does not implement is not', () => {
+  const routerWith = (operator: string): any => ({ name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [
+    { branchType: 'CONDITION', conditions: [[{ operator, firstValue: '{{trigger.email}}', secondValue: 'billing@' }]] }, { branchType: 'FALLBACK' }] },
+    children: [step('a'), step('b')] });
+  // TEXT_START_WITH is the engine's value, saved by the dashboard; TEXT_STARTS_WITH is the key name composed workflows write.
+  for (const operator of ['TEXT_START_WITH', 'TEXT_STARTS_WITH']) expect(compile(graph(routerWith(operator))).issues).toEqual([]);
+  for (const operator of ['TEXT_STARTSWITH', 'STARTS_WITH'])
+    expect(compile(graph(routerWith(operator))).issues).toContainEqual(expect.objectContaining({ node: 'router', code: 'ROUTER' }));
+});
+
 test('router branch outputs join the continuation as runtime checks without leaking into siblings or out of loops', () => {
   const router: any = { name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [{ branchType: 'CONDITION', conditions: [[{ operator: 'EXISTS', firstValue: '{{trigger.email}}' }]] }, { branchType: 'FALLBACK' }] }, children: [step('a'), step('b')], nextAction: step('after', '{{a.out ?? b.out}}') };
   const result = compile(graph(router));

@@ -67,6 +67,11 @@ resolved nor included in the recorded router input; the saved graph is unchanged
 First-match routers also stop before resolving any later branch. All-match
 routers evaluate each branch; unvisited branches retain empty condition lists. Other router
 operators still reject missing values when evaluated, as do ordinary action inputs.
+A condition's operator must be one the engine implements. "Starts with" has two accepted
+spellings that mean the same test: `TEXT_START_WITH`, the engine's value, which the dashboard
+saves, and `TEXT_STARTS_WITH`, its enum key, which composed workflows write. Readiness rejects
+any other operator, and the engine fails the step on one it does not implement instead of
+treating the condition as met.
 Known JSON, object and array inputs are checked before activation, using their
 source property type and the engine's supported conversions. Catalog schema v8
 retains ordinary ARRAY row contracts. Required fields, known types and nested

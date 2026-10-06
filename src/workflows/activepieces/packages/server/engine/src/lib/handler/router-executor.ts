@@ -148,7 +148,15 @@ export function evaluateConditions(conditionGroups: BranchCondition[][]): boolea
                 throw new EngineGenericError('OperatorNotSetError', 'The operator is required but found to be undefined')
             }
 
-            switch (castedCondition.operator) {
+            // === JARVIS PATCH: one meaning for "starts with", and no silent match ===
+            // The enum's VALUE for starts-with is TEXT_START_WITH (what the dashboard
+            // saves); its KEY name, TEXT_STARTS_WITH, is what composed workflows write.
+            // Without a case for the key name, the condition fell through this switch
+            // and stayed true, so "starts with" matched every input.
+            const operator = (castedCondition.operator as string) === 'TEXT_STARTS_WITH'
+                ? BranchOperator.TEXT_STARTS_WITH : castedCondition.operator
+            // === END JARVIS PATCH ===
+            switch (operator) {
                 case BranchOperator.TEXT_CONTAINS: {
                     const firstValueContains = toLowercaseIfCaseInsensitive(castedCondition.firstValue, castedCondition.caseSensitive).includes(
                         toLowercaseIfCaseInsensitive(castedCondition.secondValue, castedCondition.caseSensitive),
@@ -295,6 +303,10 @@ export function evaluateConditions(conditionGroups: BranchCondition[][]): boolea
                 case BranchOperator.DOES_NOT_EXIST:
                     andGroup = andGroup && (castedCondition.firstValue === undefined || castedCondition.firstValue === null || castedCondition.firstValue === '')
                     break
+                // === JARVIS PATCH: an operator this switch does not implement fails the step instead of matching ===
+                default:
+                    throw new EngineGenericError('UnsupportedOperatorError', `Router condition operator ${String(operator)} is not supported`)
+                // === END JARVIS PATCH ===
             }
         }
         orOperator = orOperator || andGroup
