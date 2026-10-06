@@ -1,0 +1,40 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "entry": "81:212",
+  "specification": "731:414463",
+  "workbench": "729:374949",
+  "inspection": "Saved native UI-19 build/wiring/clearance scripts, README and final Light multiline prototype image; no fresh editor session",
+  "geometry": {
+    "toggle": 44,
+    "plus": 12,
+    "intent_surface": 32,
+    "choice_surface": 38,
+    "row_height": 44,
+    "row_pitch": 52,
+    "continuous_target_width": 166,
+    "label_corner": "8px 0 8px 8px",
+    "suggestion_clearance": 12
+  },
+  "motion_ms": {
+    "shared_reveal_enter": 200,
+    "shared_reveal_exit": 160,
+    "forward_reverse_stagger": 30,
+    "plus_rotation": 180,
+    "hover_surface": 100,
+    "label": 80
+  },
+  "runtime_adaptations": [
+    "Interruptible shared WAAPI replaces finite Figma phases; timers are cancelled on reversal.",
+    "Measure current composer/suggestions for arbitrary multiline clearance.",
+    "Short conversations use a horizontal fan at the same origin, preserving tab access and 44px targets.",
+    "Disabled Screenshot has a dashed circle, accessible reason and no dispatch.",
+    "Keyboard, OS/local reduced motion, fixed origin, theme inheritance and explicit F-05 delegation."
+  ],
+  "limits": [
+    "No real capture/upload in preview or visual tests.",
+    "Production host supplies native file picker and explicit device confirmation; F-05 owns attachment states, retry/remove and send admission.",
+    "No production activation or D-15 response work."
+  ]
+}

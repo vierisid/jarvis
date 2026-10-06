@@ -1,0 +1,160 @@
+{
+  "task": "D-14",
+  "title": "Build the reversible attachment fan",
+  "date": "2026-10-06",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "branch": "brief/d-14",
+  "stack_base": "brief/d-13",
+  "baseline": "12375f975a885fcf6d050a8e551c86b5dd062ee6",
+  "inspected_main": "538179e3a91edfaa435698cac94bc4ca41e6c873",
+  "head": {
+    "ref": "brief/d-14",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-14.json"
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-14",
+  "preview": "http://127.0.0.1:4394/?brief=preview&specimen=attachments#/_brief_preview",
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/764"
+  ],
+  "activation_dependencies": [
+    "F-05",
+    "Authenticated single conversation owner",
+    "Native picker/device confirmation",
+    "Attachment reference rendering/readiness/file-only-send integration",
+    "D-33 release checks"
+  ],
+  "figma": {
+    "reference": "ui/src/brief/chat/attachment-fan/figma-reference.json",
+    "inspection": "Saved native source and final imagery; no fresh editor"
+  },
+  "owns": [
+    "ui/src/brief/chat/attachment-fan/**",
+    "Two preview registration/slot seams",
+    "docs/brief-delivery/D-14.*",
+    "docs/brief-delivery/evidence/D-14/**"
+  ],
+  "checks": [
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "evidence": "evidence/D-14/review-affected.log",
+      "tests": 253,
+      "assertions": 3808,
+      "files": 17,
+      "result": "pass"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "evidence": "evidence/D-14/review-typescript.log",
+      "result": "pass"
+    },
+    {
+      "command": "bun run build:ui",
+      "evidence": "evidence/D-14/review-build.log",
+      "result": "pass",
+      "warnings": "Existing Tailwind at-rule warnings"
+    }
+  ],
+  "focused": {
+    "tests": 19,
+    "assertions": 125,
+    "evidence": "evidence/D-14/review-focused.log"
+  },
+  "mutation": {
+    "evidence": "evidence/D-14/confirmation-mutation.log",
+    "result": "Confirmation guard removal rejected; source restored"
+  },
+  "browser": {
+    "evidence": "evidence/D-14/browser-results.json",
+    "script": "evidence/D-14/browser-check.cjs",
+    "motion": "evidence/D-14/attachment-motion.mp4",
+    "themes": 2,
+    "sidebar_states": 2,
+    "reversal_cycles": 80,
+    "label_crossings": 240,
+    "narrow_touch_width": 390,
+    "errors": 0,
+    "keyboard_followup": "evidence/D-14/keyboard-browser.log",
+    "edge_script": "evidence/D-14/browser-edge-check.cjs",
+    "edge_evidence": "evidence/D-14/browser-edge.log",
+    "scope": "Original implementation run; fixes separately verified by review_fixes.browser"
+  },
+  "compatibility": {
+    "branch": "brief/f-05",
+    "head": "f98cd312ca0b450bb5180320fc8c0491757cae67",
+    "script": "evidence/D-14/f05-compatibility.ts",
+    "evidence": "evidence/D-14/f05-compatibility.log",
+    "owner": "Actual F-05 client/store/DraftAttachments; in-memory repository and synthetic attachment API",
+    "result": "pass",
+    "real_effects": false
+  },
+  "limits": [
+    "Production host integration remains gated",
+    "No OS file-dialog/capture, mobile keyboard or screen-reader certification",
+    "Horizontal fan for short conversations is a documented runtime adaptation"
+  ],
+  "ci": "Check current commit after push; local results do not certify CI.",
+  "rollback": "Keep Brief disabled or remove optional fan slot; no migration or external effect.",
+  "next": "D-15: activity and finished replies; not started.",
+  "known_test_instability": {
+    "test": "D-11 freshness loss during a navigation exit still settles the next cached proposal",
+    "baseline": "12375f975a885fcf6d050a8e551c86b5dd062ee6",
+    "baseline_repeats": 30,
+    "baseline_failures": 4,
+    "evidence": "evidence/D-14/baseline-timing-reproduction.log",
+    "failed_suite": "evidence/D-14/affected-timing-failure.log",
+    "disposition": "Existing reduced-motion timer assertion; D-14 does not alter opportunity-stack code or tests. Record for test-maintenance follow-up."
+  },
+  "test_timeout_note": {
+    "evidence": "evidence/D-14/affected-default-timeout.log",
+    "attempt": "Default 5-second timeout interrupted the unchanged 80-cycle hero test",
+    "final": "All 253 tests pass after review fixes with --timeout 15000; no pre-existing suite test/source changed"
+  },
+  "cancellation_regression": {
+    "red": "evidence/D-14/cancellation-red.log",
+    "result": "Immediate abort clears pending feedback; no receipt; unit and browser checks pass"
+  },
+  "review_fixes": {
+    "reviewed_head": "f78e705415e13f6c230e4cea013899c0807c6818",
+    "R1": {
+      "issue": "Pending feedback survives an A-to-B-to-A chat switch",
+      "fix": "Abort clears the captured scope before retiring callbacks; late results remain ignored",
+      "red": "evidence/D-14/review-r1-red.log",
+      "green": "evidence/D-14/review-focused.log"
+    },
+    "R2": {
+      "issue": "Compact Screenshot explanation is clipped at its left edge",
+      "fix": "Align explanation to the fan origin and constrain available viewport width",
+      "red": "evidence/D-14/review-r2-red.log",
+      "before": "evidence/D-14/review-before-compact-hint.png"
+    },
+    "browser": {
+      "script": "evidence/D-14/review-regressions.cjs",
+      "results": "evidence/D-14/review-browser-results.json",
+      "log": "evidence/D-14/review-browser.log",
+      "widths": [
+        390,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "interaction": [
+        "hover",
+        "keyboard focus"
+      ],
+      "checks": [
+        "A/B/A cancellation with draft retained",
+        "Explanation fully inside mask and viewport",
+        "Explanation left edge hit-testable",
+        "Escape return"
+      ],
+      "motion": "Reduced motion for settled geometry checks; original motion matrix not rerun",
+      "result": "pass",
+      "real_effects": false
+    }
+  }
+}

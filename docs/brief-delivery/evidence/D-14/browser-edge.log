@@ -1,0 +1,1 @@
+PASS pointer-open keyboard entry, ArrowRight and Tab return; closing Pebble aborts selection, clears pending feedback and restores entry without an attachment receipt.
