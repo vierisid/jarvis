@@ -173,6 +173,18 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     `blocker.reason`, which goals/rhythm.ts
  *                                     then DOES frame at the prompt boundary --
  *                                     the precedent this whole decision follows.
+ *   goals/next-action.ts               OPEN-ish, one hop like goals/work-items.ts.
+ *                                     It holds a whole `FlowVersion` only to
+ *                                     find a waiting step by name and read its
+ *                                     `pieceName`, and returns who resumes the
+ *                                     wait. It also quotes `blocker.reason`
+ *                                     from work-items.ts in a plan's
+ *                                     rationale, clipped to 200 characters;
+ *                                     for a failed run that is the step's
+ *                                     `failedStep.errorMessage`. The plan backs
+ *                                     What's next?, which a person reads; a
+ *                                     consumer that hands it to a model frames
+ *                                     it there, as goals/rhythm.ts does.
  *   actions/tools/workflow-composer.ts BENIGN. It imports only the
  *                                     `FlowTriggerNode` TYPE, so it holds no run
  *                                     or version at all, and its `sampleData`
@@ -220,6 +232,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'brief/adapters.ts',
   'brief/contracts.ts',
   'daemon/api-routes.ts',
+  'goals/next-action.ts',
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
 ];

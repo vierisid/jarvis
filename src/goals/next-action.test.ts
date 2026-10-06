@@ -261,6 +261,17 @@ describe('next-action planner', () => {
     expect(p.considered[2]!.why).toBe('Not now: the goal is paused.');
   });
 
+  test('text from outside the plan, such as a failed step\'s error, is quoted short', () => {
+    const error = `Gmail rejected the request: ${'x'.repeat(5_000)}`;
+    const failed = planNextAction(snap({ goals: [{ id: 'g2', title: 'Send invoice reminders' }],
+      work: [{ id: 'w1', title: 'Reminder batch 1', goal: 'g2', status: 'failed', run: 'r1', blocker: ['run_failure', error] }] }));
+    expect(recommended(failed).rationale).toContain(`Blocked: ${error.slice(0, 197)}....`);
+    const summary = `Three reminders bounced: ${'y'.repeat(5_000)}`;
+    const retry = planNextAction(snap({ goals: [{ id: 'g2', title: 'Send invoice reminders' }],
+      work: [{ id: 'w1', title: 'Reminder batch 1', goal: 'g2', status: 'failed', check: ['failed', summary, -1] }] }));
+    expect(asked(retry)).toBe(`The last attempt at "Send invoice reminders" failed its check (${summary.slice(0, 197)}...). Try again as it was, or change the approach first?`);
+  });
+
   test('the plan lists at most 20 alternatives, reasons first, and counts what it left out', () => {
     const s = snap({ goals: [
       ...Array.from({ length: 22 }, (_, i) => ({ id: `t${i}`, title: `Task ${i}`, deadline: i + 1 })),
