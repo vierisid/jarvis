@@ -25,16 +25,32 @@
 #      holds nothing and could decide everything. The issue and the PR link
 #      each other, and the issue says why each piece was held and how to clear it.
 #
-# Two jobs, because step 1 needs the action list of each candidate verified
-# version, and the only way to get it is to RUN that piece's code:
-#   inspect  reads those manifests inside a throwaway container, in a job with a
-#            read-only token that no process can see and no git credentials on
-#            disk. The container's PID namespace ends with it, so nothing the
-#            package starts survives into a later step. Its only output is a
-#            JSON artifact.
-#   sync     validates that JSON as untrusted input (scripts/lib/verified-sync.ts)
-#            and does everything that needs write access. It never runs piece
-#            code, and the PR it opens commits only the two generated files.
+# Three jobs, split by what each one handles and what it may write (#686).
+# Everything this workflow reads from outside -- the activepieces monorepo,
+# ~300 npm registry answers, the verified pieces' own code, and the
+# dependencies `bun install` runs lifecycle scripts for -- is handled in a job
+# whose token can read the repository and nothing else:
+#   inspect   reads the candidate verified versions' action lists, which means
+#             RUNNING that piece's code, inside a throwaway container with no
+#             git credentials on disk. The container's PID namespace ends with
+#             it, so nothing the package starts survives into a later step.
+#             Its only output is a JSON artifact.
+#   generate  validates that JSON as untrusted input
+#             (scripts/lib/verified-sync.ts), runs the generator against the
+#             monorepo and npm, runs the catalog tests and the type check, and
+#             renders the PR body and the review issue. Its outputs are an
+#             artifact of those files and four step outputs.
+#   publish   holds the write scopes: it copies the two generated files into
+#             its own checkout, opens the PR, dispatches the tests and keeps
+#             the review issue current. It installs nothing and runs no
+#             JavaScript, so the only third-party code that ever runs with
+#             the write token is the SHA-pinned actions and the gh CLI.
+# The generated files still cross from a read-only job into a write job --
+# that is the point of the workflow -- and they are TypeScript, so they are
+# data only until something imports them. Only the two named paths are
+# committed, to the PR branch, never to main; the first thing that runs them
+# is test.yml dispatched on that branch, with a read-only token, before a
+# person has reviewed the PR.
 #
 # Why a PR (not a direct commit):
 #   - Every catalog change is reviewable. Pieces can be renamed or removed
@@ -64,6 +80,17 @@ concurrency:
 # Nothing by default; each job asks for what it needs.
 permissions: {}
 
+env:
+  # Pinned, matching test.yml and .github/actions/bun-setup: every install
+  # below is --frozen-lockfile, and a floating Bun that migrates the lockfile
+  # format would fail the run with no repo change to blame. Bump all of them
+  # together, with the image digest in the inspect job.
+  BUN_VERSION: "1.3.14"
+  # Stands in for the PR URL in the review issue rendered by `generate`, which
+  # runs before the PR exists; `publish` substitutes the real URL. Rendering
+  # there instead would mean running repository JavaScript with the write token.
+  PR_URL_PLACEHOLDER: "@@CATALOG_SYNC_PR_URL@@"
+
 jobs:
   inspect:
     runs-on: ubuntu-latest
@@ -78,12 +105,13 @@ jobs:
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: ${{ env.BUN_VERSION }}
 
-      - run: bun install
+      - run: bun install --frozen-lockfile
 
       # The repo is mounted read-only and only /out is writable. The image is
-      # pinned so the extraction's toolchain does not move under it.
+      # pinned by digest so the extraction's toolchain does not move under it:
+      # a tag on Docker Hub can be re-pushed, a digest cannot.
       - name: Read verified piece manifests (runs piece code, contained)
         run: |
           set -euo pipefail
@@ -92,7 +120,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/repo:ro" \
             -v "$RUNNER_TEMP/inspection:/out" \
             -w /repo \
-            oven/bun:1.3.14 \
+            oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 \
             bun run scripts/inspect-verified-pieces.ts /out/inspection.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -102,7 +130,7 @@ jobs:
           if-no-files-found: error
           retention-days: 7
 
-  sync:
+  generate:
     needs: inspect
     runs-on: ubuntu-latest
     # A healthy run finishes in a few minutes. The ceiling guards the
@@ -110,21 +138,25 @@ jobs:
     # Retry-After: better to kill the job than burn hours of runner time
     # (the >10% transient-failure abort usually fires long before this).
     timeout-minutes: 30
+    # Read-only: this job installs dependencies, talks to npm and GitHub, and
+    # runs the generator over what they return.
     permissions:
-      contents: write
-      pull-requests: write
-      # The held-verified-bumps tracking issue.
-      issues: write
-      # Needed by the "Trigger tests" step to dispatch test.yml on the PR branch.
-      actions: write
+      contents: read
+    outputs:
+      verdict: ${{ steps.sync.outputs.verdict }}
+      has_changes: ${{ steps.sync.outputs.has_changes }}
+      held_count: ${{ steps.sync.outputs.held_count }}
+      inconclusive_count: ${{ steps.sync.outputs.inconclusive_count }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: latest
+          bun-version: ${{ env.BUN_VERSION }}
 
-      - run: bun install
+      - run: bun install --frozen-lockfile
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
@@ -133,18 +165,19 @@ jobs:
 
       # Run the generator. Writes catalog-generated.ts and
       # verified-manifests-generated.ts in place and, via --report, an analysed
-      # PR body to the runner temp dir (outside the repo, so
-      # create-pull-request never commits it). Verified manifests come only from
-      # the inspect job's JSON, so this job runs no piece code. Outputs:
+      # PR body to the runner temp dir. Verified manifests come only from the
+      # inspect job's JSON, so this job runs no piece code. Outputs:
       # `verdict` (safe | review), `has_changes`, `held_count`,
       # `inconclusive_count`.
       - name: Regenerate pieces catalog
         id: sync
-        run: >-
-          bun run scripts/sync-pieces-catalog.ts
-          --inspection "${{ runner.temp }}/inspection/inspection.json"
-          --report "${{ runner.temp }}/catalog-pr-body.md"
-          --held "${{ runner.temp }}/held.json"
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/catalog-sync"
+          bun run scripts/sync-pieces-catalog.ts \
+            --inspection "$RUNNER_TEMP/inspection/inspection.json" \
+            --report "$RUNNER_TEMP/catalog-sync/catalog-pr-body.md" \
+            --held "$RUNNER_TEMP/catalog-sync/held.json"
 
       # Make sure the regenerated catalog still passes the catalog tests
       # (id uniqueness, semver shape, etc.), that every verified piece's
@@ -155,14 +188,71 @@ jobs:
           bun test src/workflows/pieces-library/catalog.test.ts src/workflows/runtime/governed-pieces.test.ts
           bunx tsc --noEmit
 
+      # Rendered here, in the read-only job, twice: as it reads when this run
+      # opens no PR, and with a placeholder for the PR URL that `publish`
+      # fills in once the PR exists.
+      - name: Render the review issue
+        if: fromJSON(steps.sync.outputs.held_count || '0') > 0
+        env:
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/catalog-sync"
+          bun run scripts/render-review-issue.ts "$out/held.json" --run-url "$RUN_URL" > "$out/review-issue.md"
+          bun run scripts/render-review-issue.ts "$out/held.json" --run-url "$RUN_URL" \
+            --pr-url "$PR_URL_PLACEHOLDER" > "$out/review-issue-with-pr.md"
+
+      - name: Collect the generated files
+        run: |
+          set -euo pipefail
+          cp src/workflows/pieces-library/catalog-generated.ts \
+            src/workflows/pieces-library/verified-manifests-generated.ts \
+            "$RUNNER_TEMP/catalog-sync/"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: catalog-sync
+          path: ${{ runner.temp }}/catalog-sync
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    needs: generate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      pull-requests: write
+      # The held-verified-bumps tracking issue.
+      issues: write
+      # Needed by the "Trigger tests" step to dispatch test.yml on the PR branch.
+      actions: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: catalog-sync
+          path: ${{ runner.temp }}/catalog-sync
+
+      # Only the two files the PR commits are taken from the artifact, by
+      # name, whatever else it holds.
+      - name: Put the generated files in place
+        if: needs.generate.outputs.has_changes == 'true'
+        run: |
+          set -euo pipefail
+          for f in catalog-generated.ts verified-manifests-generated.ts; do
+            cp "$RUNNER_TEMP/catalog-sync/$f" "src/workflows/pieces-library/$f"
+          done
+
       # Found (or opened) BEFORE the PR, so the PR body can link it whichever
       # run created either. Its body is rewritten with the PR link below.
       - name: Find or open the review issue
         id: issue
-        if: fromJSON(steps.sync.outputs.held_count || '0') > 0
+        if: fromJSON(needs.generate.outputs.held_count || '0') > 0
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_BODY: ${{ runner.temp }}/catalog-pr-body.md
+          PR_BODY: ${{ runner.temp }}/catalog-sync/catalog-pr-body.md
         run: |
           set -euo pipefail
           label=verified-piece-review
@@ -186,12 +276,12 @@ jobs:
       # two generated files are committed, whatever else the run touched.
       - name: Open PR with catalog changes
         id: cpr
-        if: steps.sync.outputs.has_changes == 'true'
+        if: needs.generate.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
           commit-message: "chore: refresh pieces catalog"
-          title: "${{ steps.sync.outputs.verdict == 'safe' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}"
-          body-path: ${{ runner.temp }}/catalog-pr-body.md
+          title: "${{ needs.generate.outputs.verdict == 'safe' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}"
+          body-path: ${{ runner.temp }}/catalog-sync/catalog-pr-body.md
           branch: chore/sync-pieces-catalog
           add-paths: |
             src/workflows/pieces-library/catalog-generated.ts
@@ -211,7 +301,7 @@ jobs:
       # create the PR with a fine-grained PAT via the `token:` input above,
       # which makes CI trigger natively and show on the PR.)
       - name: Trigger tests on the PR branch
-        if: steps.sync.outputs.has_changes == 'true'
+        if: needs.generate.outputs.has_changes == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh workflow run test.yml --ref chore/sync-pieces-catalog -R "$GITHUB_REPOSITORY"
@@ -223,20 +313,24 @@ jobs:
       - name: Update or close the review issue
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          HELD_COUNT: ${{ steps.sync.outputs.held_count }}
-          INCONCLUSIVE_COUNT: ${{ steps.sync.outputs.inconclusive_count }}
+          HELD_COUNT: ${{ needs.generate.outputs.held_count }}
+          INCONCLUSIVE_COUNT: ${{ needs.generate.outputs.inconclusive_count }}
           ISSUE: ${{ steps.issue.outputs.number }}
           PR_URL: ${{ steps.cpr.outputs.pull-request-url }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          HELD_JSON: ${{ runner.temp }}/held.json
-          ISSUE_BODY: ${{ runner.temp }}/review-issue.md
         run: |
           set -euo pipefail
+          dir="$RUNNER_TEMP/catalog-sync"
           if [ "${HELD_COUNT:-0}" -gt 0 ]; then
-            args=("$HELD_JSON" --run-url "$RUN_URL")
-            if [ -n "$PR_URL" ]; then args+=(--pr-url "$PR_URL"); fi
-            bun run scripts/render-review-issue.ts "${args[@]}" > "$ISSUE_BODY"
-            gh issue edit "$ISSUE" --body-file "$ISSUE_BODY"
+            if [ -n "$PR_URL" ]; then
+              # Quoted pattern and replacement: literal text, and an `&` in
+              # the URL is not bash 5.2's patsub_replacement back-reference.
+              body="$(cat "$dir/review-issue-with-pr.md")"
+              printf '%s\n' "${body//"$PR_URL_PLACEHOLDER"/"$PR_URL"}" > "$dir/review-issue-body.md"
+            else
+              cp "$dir/review-issue.md" "$dir/review-issue-body.md"
+            fi
+            gh issue edit "$ISSUE" --body-file "$dir/review-issue-body.md"
           elif [ "${INCONCLUSIVE_COUNT:-0}" -eq 0 ]; then
             open=$(gh issue list --label verified-piece-review --state open --json number --jq '.[0].number // empty')
             if [ -n "$open" ]; then
