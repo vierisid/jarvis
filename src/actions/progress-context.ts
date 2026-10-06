@@ -1,5 +1,4 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
-import { isActionOutcome } from './action-outcome.ts';
 
 /** Internal observations only. Arguments, results, error text and agent prose never cross this port. */
 export interface ExecutionActivity {
@@ -10,6 +9,7 @@ export interface ExecutionActivity {
   refs?: Array<{ kind: 'goal' | 'fact' | 'run'; id: string }>;
 }
 const observer = new AsyncLocalStorage<((event: ExecutionActivity) => void) | undefined>();
+const toolOutcome = new AsyncLocalStorage<{ failed: boolean; settled: boolean }>();
 export function withExecutionProgress<T>(observe: ((event: ExecutionActivity) => void) | undefined, run: () => T): T {
   return observer.run(observe, run);
 }
@@ -30,23 +30,28 @@ export function beginExecutionActivity(kind: ExecutionActivity['kind'], toolName
   };
 }
 
-/** Legacy tools may return a failure instead of throwing. No result text is published. */
-function failedResult(value: unknown): boolean {
-  if (isActionOutcome(value)) return value.status !== 'succeeded';
-  if (value && typeof value === 'object') {
-    const result = value as Record<string, unknown>;
-    return result.success === false || result.ok === false || result.isError === true || !!result.error;
-  }
-  return typeof value === 'string' && /^(?:Error\b|\[(?:ERROR|ACTION_FAILED|NOT RUN|AUTHORITY DENIED)\])/i.test(value.trimStart());
+/**
+ * A trusted adapter marks a known failure where it occurs, retaining its legacy
+ * return value. Never infer status from file bytes, model prose or result shape.
+ * The outcome belongs to this invocation only, including nested/concurrent tools.
+ */
+export function failedToolResult<T>(result: T): T {
+  const outcome = toolOutcome.getStore();
+  if (observer.getStore() && outcome && !outcome.settled) outcome.failed = true;
+  return result;
 }
 export async function observeToolExecution<T>(name: string, run: () => Promise<T>): Promise<T> {
   if (!observer.getStore()) return run();
   const finish = beginExecutionActivity('tool', name);
-  try {
-    const result = await run();
-    let failed = false;
-    try { failed = failedResult(result); } catch { failed = true; }
-    finish(failed ? 'failed' : 'completed');
-    return result;
-  } catch (error) { finish('failed'); throw error; }
+  const outcome = { failed: false, settled: false };
+  return toolOutcome.run(outcome, async () => {
+    try {
+      const result = await run();
+      // Completion means the call returned, not proof that arbitrary content
+      // or an uninstrumented legacy tool's requested effect was successful.
+      finish(outcome.failed ? 'failed' : 'completed');
+      return result;
+    } catch (error) { finish('failed'); throw error; }
+    finally { outcome.settled = true; }
+  });
 }
