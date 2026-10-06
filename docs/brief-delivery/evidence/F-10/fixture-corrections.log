@@ -1,0 +1,17 @@
+bun test v1.4.2 (744846f84)
+
+src/awareness/prepared-opportunities.test.ts:
+Database initialized at: /tmp/jarvis-f09-w2T1F0/test.db
+(pass) timeout and expired leases are blocked, never automatically recomposed [492.12ms]
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-xOm6zK/db
+(pass) approval to activate does not grant Authority for a later notification [589.53ms]
+
+ 2 pass
+ 59 filtered out
+ 0 fail
+ 10 expect() calls
+Ran 2 tests across 2 files. [1166.00ms]
+
+EXIT_CODE=0

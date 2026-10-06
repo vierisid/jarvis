@@ -1,0 +1,106 @@
+bun test v1.4.2 (744846f84)
+
+src/workflows/runner/triggers/manager.test.ts:
+Database initialized at: :memory:
+[CronScheduler] All jobs cancelled
+(pass) TriggerManager: lifecycle > start scans ENABLED flows; refresh reconciles status changes [161.76ms]
+Database initialized at: :memory:
+(pass) TriggerManager: lifecycle > EMPTY trigger: nothing registered [86.89ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "aGJsQazgndXErQcORvBJh" at /webhooks/aGJsQazgndXErQcORvBJh
+[WebhookManager] Unregistered webhook for workflow "aGJsQazgndXErQcORvBJh"
+(pass) TriggerManager: lifecycle > refresh on a deleted flow tears down without throwing [80.97ms]
+Database initialized at: :memory:
+(pass) TriggerManager: jarvis-trigger on_event > publishing the configured event fires a flow run [123.07ms]
+Database initialized at: :memory:
+(pass) TriggerManager: jarvis-trigger on_event > filter narrows which events fire [136.02ms]
+Database initialized at: :memory:
+(pass) TriggerManager: jarvis-trigger on_event > malformed eventType is logged and skipped (no throw, no sub) [143.98ms]
+Database initialized at: :memory:
+(pass) TriggerManager: jarvis-trigger on_event > non-on_event triggerName is skipped [133.99ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "CsEuLwUG1muXeTLQUwGEs" at /webhooks/CsEuLwUG1muXeTLQUwGEs
+(pass) TriggerManager: webhook > registers a webhook on enable; ingress fires a flow run [99.50ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "JqWrek3xpVCwGFa2lJdtF" at /webhooks/JqWrek3xpVCwGFa2lJdtF
+(pass) TriggerManager: webhook > HMAC-protected webhook rejects unsigned requests [141.62ms]
+Database initialized at: :memory:
+(pass) TriggerManager: integration with canonical event taxonomy > flow subscribed to observer.clipboard_changed fires when published [122.14ms]
+Database initialized at: :memory:
+(pass) TriggerManager: integration with canonical event taxonomy > flow subscribed to awareness.context_changed fires when published [129.07ms]
+Database initialized at: :memory:
+(pass) TriggerManager: integration with canonical event taxonomy > flow with eventType filter fires only on matching commitment.overdue payload [102.34ms]
+Database initialized at: :memory:
+[CronScheduler] Scheduled job "flow:yFyE92VHSy5lWvhp5gD4G" (*/5 * * * *), next run: 2026-10-06T17:55:00.000Z
+[CronScheduler] Scheduled job "flow:ZGA99yk8y5U0Y4cxpS521" (0 8 * * *), next run: 2026-10-07T08:00:00.000Z
+[CronScheduler] Scheduled job "flow:mdMl8znDjZLZJVDuulU0Y" (0 * * * *), next run: 2026-10-06T18:00:00.000Z
+[CronScheduler] Cancelled job "flow:yFyE92VHSy5lWvhp5gD4G"
+[CronScheduler] Cancelled job "flow:ZGA99yk8y5U0Y4cxpS521"
+[CronScheduler] Cancelled job "flow:mdMl8znDjZLZJVDuulU0Y"
+[CronScheduler] All jobs cancelled
+(pass) TriggerManager: schedule > registers cron when expression is present (any of the three keys) [296.17ms]
+Database initialized at: :memory:
+(pass) TriggerManager: schedule > missing cron expression is logged and skipped [246.13ms]
+Database initialized at: :memory:
+[CronScheduler] Scheduled job "flow:hbU1B8yVkDN4E7ukHfRrT" (0 * * * *), next run: 2026-10-06T18:00:00.000Z
+[CronScheduler] Cancelled job "flow:hbU1B8yVkDN4E7ukHfRrT"
+[CronScheduler] All jobs cancelled
+(pass) TriggerManager: schedule > invalid cron expression is logged but does not destabilize start() [264.10ms]
+Database initialized at: :memory:
+(pass) TriggerManager: unknown trigger kinds > PIECE_TRIGGER with unknown pieceName is skipped [178.01ms]
+Database initialized at: :memory:
+(pass) TriggerManager: unknown trigger kinds > unknown trigger.type is skipped [106.45ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > ON_ENABLE persists schedule + registers cron; a cron tick polls the RUN hook and enqueues one run per event [159.74ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > ON_ENABLE is idempotent: persisted schedule is reused, no re-call to engine [84.90ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "buzgKPHopR7u88IYOPbHq" at /webhooks/buzgKPHopR7u88IYOPbHq
+[WebhookManager] Unregistered webhook for workflow "buzgKPHopR7u88IYOPbHq"
+(pass) TriggerManager: engine-managed triggers (Phase J) > ON_ENABLE returning webhook listeners (no schedule) surfaces a warning on tm.list() [117.72ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > concurrent refresh on the same flow serializes -- engine ON_ENABLE called exactly once [118.13ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > triggeredBy follows `trigger:<kind>` for both legacy and engine fires [112.48ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > engine poll enqueues one run per event (payload = event, no executeTrigger); empty poll enqueues nothing [145.23ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > engine ON_ENABLE failure is logged; flow stays manually runnable, no crash [67.59ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > a transient ON_ENABLE failure is retried on the backoff and the flow ends up registered [193.68ms]
+Database initialized at: :memory:
+(pass) TriggerManager: engine-managed triggers (Phase J) > retries stop once the schedule is exhausted, and a disabled flow cancels its pending retry [275.08ms]
+Database initialized at: :memory:
+(pass) review: durable readiness refusals > a live cron refusal records a failed run and the next fire can recover [113.27ms]
+Database initialized at: :memory:
+[CronScheduler] Scheduled job "flow:wpjYrwbhCKk0zCSGb8ngc" (* * * * *), next run: 2026-10-06T17:55:00.000Z
+[CronScheduler] Cancelled job "flow:wpjYrwbhCKk0zCSGb8ngc"
+[CronScheduler] All jobs cancelled
+(pass) review: durable readiness refusals > startup refuses visibly once and can register after the binding is repaired [118.90ms]
+Database initialized at: :memory:
+(pass) review: durable readiness refusals > polling refusal is recorded before consuming events and recovers on the next tick [157.56ms]
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-readiness-poll-bf8rYA/workflow.db
+Database initialized at: /tmp/jarvis-readiness-poll-bf8rYA/workflow.db
+Database initialized at: :memory:
+(pass) review: durable readiness refusals > review R2: readiness lost during polling retains every consumed payload after restart without retrying it [1247.34ms]
+Database initialized at: :memory:
+[CronScheduler] All jobs cancelled
+(pass) registration receipt refuses a failed engine cron with 0 working listeners [22.07ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "pj4tVFLcdHUC3ZuhhPl0j" at /webhooks/pj4tVFLcdHUC3ZuhhPl0j
+[WebhookManager] Unregistered webhook for workflow "pj4tVFLcdHUC3ZuhhPl0j"
+[CronScheduler] All jobs cancelled
+(pass) registration receipt refuses a failed engine cron with 1 working listeners [25.97ms]
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "yPslirvnB7pBskZiE56ui" at /webhooks/yPslirvnB7pBskZiE56ui
+[WebhookManager] Registered webhook for workflow "yPslirvnB7pBskZiE56ui" at /webhooks/yPslirvnB7pBskZiE56ui
+[WebhookManager] Unregistered webhook for workflow "yPslirvnB7pBskZiE56ui"
+(pass) partial engine registration retries local cron without repeating remote hooks [21.91ms]
+
+ 33 pass
+ 0 fail
+ 108 expect() calls
+Ran 33 tests across 1 file. [5.84s]
+
+EXIT_CODE=0

@@ -1,0 +1,64 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-nZPW8X/db
+[CronScheduler] All jobs cancelled
+(pass) double approval activates only the reviewed version with manual registration [524.83ms]
+Database initialized at: /tmp/jarvis-f10-Zkld0x/db
+[WebhookManager] Registered webhook for workflow "Lo2reUw4xbSpn2kgqnPZI" at /webhooks/Lo2reUw4xbSpn2kgqnPZI
+[WebhookManager] Unregistered webhook for workflow "Lo2reUw4xbSpn2kgqnPZI"
+[CronScheduler] All jobs cancelled
+(pass) double approval activates only the reviewed version with webhook registration [570.60ms]
+Database initialized at: /tmp/jarvis-f10-zwH6nF/db
+(pass) changed revision refuses approval before publication [547.07ms]
+Database initialized at: /tmp/jarvis-f10-3lLPwn/db
+(pass) changed goal refuses approval before publication [498.71ms]
+Database initialized at: /tmp/jarvis-f10-JLmNem/db
+(pass) changed version refuses approval before publication [566.12ms]
+Database initialized at: /tmp/jarvis-f10-tod7z6/db
+(pass) changed connection refuses approval before publication [602.14ms]
+Database initialized at: /tmp/jarvis-f10-YMN7sM/db
+(pass) changed target refuses approval before publication [507.53ms]
+Database initialized at: /tmp/jarvis-f10-c4jkO4/db
+(pass) changed quality refuses approval before publication [522.05ms]
+Database initialized at: /tmp/jarvis-f10-9bGBW9/db
+(pass) publication and decision roll back together when receipt persistence fails [649.99ms]
+Database initialized at: /tmp/jarvis-f10-nVxin7/db
+(pass) dismissal settles independently and supplies the next current ready proposal [1623.51ms]
+Database initialized at: /tmp/jarvis-f10-ZHlUY5/db
+(pass) dismissal during preparation fences the late model result without publication [1434.18ms]
+Database initialized at: /tmp/jarvis-f10-3hTFvj/db
+(pass) all duplicate request keys stay bound to their original proposal, revision and action [970.38ms]
+Database initialized at: /tmp/jarvis-f10-P2XTMJ/db
+Database initialized at: /tmp/jarvis-f10-P2XTMJ/db
+(pass) registration timeout returns a durable pending receipt, and process recovery never republishes [701.62ms]
+Database initialized at: /tmp/jarvis-f10-Zok9zc/db
+(pass) registration failure stays actionable and explicit retry uses the same receipt [555.54ms]
+Database initialized at: /tmp/jarvis-f10-31rFn1/db
+(pass) old blocked receipts cannot starve a new approval or later recovery observations [592.79ms]
+Database initialized at: /tmp/jarvis-f10-lUlZgW/db
+(pass) a silent registration refusal is never reported as registered [535.11ms]
+Database initialized at: /tmp/jarvis-f10-ss61RD/db
+(pass) replaying approval after pause cannot restore the old workflow [607.45ms]
+Database initialized at: /tmp/jarvis-f10-Y57TJk/db
+(pass) replaying approval after delete cannot restore the old workflow [548.03ms]
+Database initialized at: /tmp/jarvis-f10-8cmdMh/db
+(pass) replaying approval after republish cannot restore the old workflow [534.30ms]
+Database initialized at: /tmp/jarvis-f10-olrxjE/db
+(pass) samples and private diagnostics never appear in an activation receipt [564.17ms]
+Database initialized at: /tmp/jarvis-f10-eYHeAn/db
+(pass) strict routes enforce both capability flags, provider identity and bounded streamed bodies [711.06ms]
+Database initialized at: /tmp/jarvis-f10-JMod1d/db
+(pass) approval to activate does not grant Authority for a later notification [536.42ms]
+(skip) actual Q13 qualification approves the exact prepared snapshot without executing it
+
+1 tests skipped:
+(skip) actual Q13 qualification approves the exact prepared snapshot without executing it
+
+ 22 pass
+ 1 skip
+ 0 fail
+ 180 expect() calls
+Ran 23 tests across 1 file. [14.97s]
+
+EXIT_CODE=0

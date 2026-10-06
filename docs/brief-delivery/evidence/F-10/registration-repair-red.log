@@ -1,0 +1,28 @@
+bun test v1.4.2 (744846f84)
+
+src/workflows/runner/triggers/manager.test.ts:
+Database initialized at: :memory:
+[WebhookManager] Registered webhook for workflow "nRg40qI2cQBWDlrofqjSR" at /webhooks/nRg40qI2cQBWDlrofqjSR
+[WebhookManager] Unregistered webhook for workflow "nRg40qI2cQBWDlrofqjSR"
+1068 |     }, async release() {} }; } } as any,
+1069 |   });
+1070 |   try {
+1071 |     await tm.refresh(flowId); expect(tm.registrationState(flowId, versionId)).toBe('blocked');
+1072 |     fail = false; await Promise.all([tm.refresh(flowId), tm.refresh(flowId)]);
+1073 |     expect(tm.registrationState(flowId, versionId)).toBe('registered'); expect(cron.has(`flow:${flowId}`)).toBe(true);
+                                                           ^
+error: expect(received).toBe(expected)
+
+Expected: "registered"
+Received: "blocked"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-10/src/workflows/runner/triggers/manager.test.ts:1073:53)
+(fail) partial engine registration retries local cron without repeating remote hooks [190.91ms]
+
+ 0 pass
+ 32 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [331.00ms]
+
+EXIT_CODE=1
