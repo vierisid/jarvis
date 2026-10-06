@@ -1,0 +1,112 @@
+{
+  "task": "Q-03",
+  "title": "Promote a measured deterministic-first planning policy",
+  "date": "2026-10-06",
+  "branch": "brief/q-03",
+  "worktree": "a checkout of brief/q-03",
+  "baseline": "934f29ec6488c9e9cc0c5b9b21a5ae818d65ed89",
+  "baseline_ref": "brief/q-02 (Q-02 #734 on Q-01 #725 on brief/foundations): the comparison reuses Q-01's hosted gate and baseline validation and runs on Q-02's task sets",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-03.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "opt-in candidate, live policy selection and promotion comparison; the production default stays baseline-v1 until a comparison reports promote",
+    "release_enabled": false,
+    "publication": "PR #753 open against brief/q-02 (stacked on Q-02 #734 and Q-01 #725); https://github.com/vierisid/jarvis/pull/753",
+    "promotion": "not_run: the promotion rule and release rubric are proposed, no hosted profile is evidenced and no spend is authorized"
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "page": "81:2",
+    "checkpoint": "UI-35; no visual changes in Q-03"
+  },
+  "ownership": {
+    "implementer": "Core-quality line",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [],
+  "enable_after": [
+    "Q-01",
+    "Q-02"
+  ],
+  "behavior": [
+    "Production compositions (chat and opportunity) run the policy named by JARVIS_PLANNING_POLICY, else the user-owned workflows.planningPolicy setting, else baseline-v1. It is read at each composition; one composition's attempts and repairs keep the policy they started with. An unknown name falls back to baseline-v1 with one warning per value.",
+    "Opting in, promoting and rolling back are configuration changes: the candidate deterministic-first-v1 is opt-in; promotion is a change of DEFAULT_PLANNING_POLICY backed by a promote report; setting baseline-v1 always selects the prior policy.",
+    "Each composition's journal row records the prompt version and the policy that actually ran, and the flow links to it through compositionRecordId.",
+    "A test pins every system and user prompt and tool definition the composer sends, on both paths and through a repair, to COMPOSER_PROMPT_VERSION, and each policy's instruction text to its id, so rollback restores the measured prompt.",
+    "Measures split unnecessary AI (composed AI steps over each task's maxAiSteps, plus AI calls and delegations no scenario asked for) from unsafe effects (notifications, tool calls and external steps beyond the scenario).",
+    "eval:workflows --mode compare judges deterministic-first-v1 against baseline-v1 on matched hosted runs (same profile, task set, repeats and natural condition) under a promotion rule frozen before the runs: unnecessary AI must fall, corrections (first-candidate correctness and, when reviewed, median edits and correction time) must improve, unsafe effects and missed abstentions must not rise, and task success may drop by at most the rule's allowance. Verdict promote, keep_baseline or not_established; refused, not_run and completed exit 1, 2 and 0. The report is sanitized like the baseline."
+  ],
+  "acceptance": [
+    {
+      "check": "Candidate improves unnecessary-AI and correction measures without introducing unsafe effects or meaningful task-success regression",
+      "status": "not_run",
+      "evidence": "The gate is built and tested (src/workflows/evaluation/promotion.test.ts; evidence/Q-03/revert-checks.log). No hosted comparison has run: the promotion rule planning-promotion-v1 and release rubric workflow-release-v1 are proposed, no profile is evidenced and no spend is authorized (evidence/Q-03/cli-gate.log). Promotion waits for that evidence, as the card's boundary allows."
+    },
+    {
+      "check": "Rollback selects the prior policy; every composition records which policy actually ran",
+      "status": "passed",
+      "evidence": "src/actions/tools/composition-provenance.test.ts (live switch through the production composer: journal records and prompts sent; reset restores the default; the daemon installs the selector; prompt and instruction pins) and src/daemon/config-merge.test.ts; evidence/Q-03/revert-checks.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "7,781 pass, 86 skip, 7 fail of 7,874 tests across 427 files (local WSL2, 75323d2b). All 7 also fail on brief/foundations 462d955d with no Q work applied: git config lint and six Chromium launches on this machine. Q-03 changes none of those areas.",
+      "log": "evidence/Q-03/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/actions/tools/composition-provenance.test.ts src/workflows/evaluation/promotion.test.ts src/daemon/config-merge.test.ts",
+      "result": "50 pass, 0 fail across 3 files",
+      "log": "evidence/Q-03/q03-tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-03/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-03/guards.log"
+    },
+    {
+      "command": "remove each of 25 guarantees in turn and run its test",
+      "result": "25 of 25 removals fail their tests; source restored. The log lists the exact text removed and its replacement for each.",
+      "log": "evidence/Q-03/revert-checks.log"
+    },
+    {
+      "command": "bun run eval:workflows --mode plan --out DIR",
+      "result": "exit 0; both policies scheduled on the same 12 held-out tasks; no provider requests",
+      "log": "evidence/Q-03/cli-plan.log"
+    },
+    {
+      "command": "bun run eval:workflows --mode hosted --out DIR, then --mode compare --runs DIR",
+      "result": "hosted exit 2 not_run (no profile, no spend authorization, rubric proposed); compare exit 1 refused (promotion rule proposed)",
+      "log": "evidence/Q-03/cli-gate.log"
+    }
+  ],
+  "quick_verify": {
+    "cwd": "repository root, on brief/q-03",
+    "command": "bun test --preload ./src/test-preload.ts src/actions/tools/composition-provenance.test.ts src/workflows/evaluation/promotion.test.ts",
+    "expected": "16 pass",
+    "screenshot": "not applicable: no visible UI changes"
+  },
+  "migration": "None. One optional user setting (workflows.planningPolicy) and its env override; no schema or data change. Unset keeps baseline-v1.",
+  "rollback": "Set JARVIS_PLANNING_POLICY=baseline-v1 (next daemon start) or workflows.planningPolicy to baseline-v1 (next composition after a settings reload). To remove the feature, revert the Q-03 commits; production then always runs the default.",
+  "limitations": [
+    "The comparison has not run: it needs a frozen promotion rule and release rubric, an evidenced hosted profile and authorized spend. The candidate stays opt-in.",
+    "No screen or route edits workflows settings yet; JARVIS_PLANNING_POLICY is the practical switch.",
+    "Unnecessary AI counts AI steps over each task's allowance and unrequested AI calls in simulated scenarios; it does not judge whether an allowed AI step was needed.",
+    "Correction counts and times are reviewer-reported, not instrumented.",
+    "A promote verdict is evidence for changing the default, not the change; that remains a reviewed pull request."
+  ],
+  "found": [
+    "No route, screen or CLI writes the workflows settings section; its user-owned keys (engine TTL, cache retention, now the planning policy) are reachable only through env overrides or the settings store.",
+    "The composer's prompt version was a hand-maintained constant with nothing tying it to the text; the pin test now fails when the wording changes without a new version."
+  ],
+  "next": "Freeze planning-promotion-v1 and workflow-release-v1 with Vieri and Lapo, evidence a hosted profile and authorize spend, run the founder held-out set with both policies, review it blind, then compare. If the report says promote, change DEFAULT_PLANNING_POLICY in a reviewed pull request that carries it."
+}

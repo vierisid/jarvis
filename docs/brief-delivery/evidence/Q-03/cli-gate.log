@@ -1,0 +1,14 @@
+$ bun run eval:workflows --mode hosted --out /tmp/q03-run/hosted
+Evaluation not run: Hosted profile is missing (--profile). Spend authorization is missing (--authorization). Release rubric workflow-release-v1 is proposed, not frozen; freeze it with its approvers before a held-out run. Manifest: /tmp/q03-run/hosted
+exit=2
+status: not_run
+  - Hosted profile is missing (--profile).
+  - Spend authorization is missing (--authorization).
+  - Release rubric workflow-release-v1 is proposed, not frozen; freeze it with its approvers before a held-out run.
+
+$ bun run eval:workflows --mode compare --runs /tmp/q03-run/hosted --out /tmp/q03-run/compare
+$ bun run scripts/evaluate-workflow-quality.ts --mode compare --runs "/tmp/q03-run/hosted" --out "/tmp/q03-run/compare"
+Promotion comparison refused: /tmp/q03-run/compare
+exit=1
+status: refused
+  - Promotion rule planning-promotion-v1 is proposed, not frozen; freeze it before the runs it judges.

@@ -1,0 +1,30 @@
+$ bun test --preload ./src/test-preload.ts src/actions/tools/composition-provenance.test.ts src/workflows/evaluation/promotion.test.ts src/daemon/config-merge.test.ts
+bun test v1.4.2 (744846f84)
+
+src/daemon/config-merge.test.ts:
+[Daemon] Ignoring engine idle TTL 0 (workflows.engineIdleTtlMs): must be a positive number of ms; using default
+[Daemon] Ignoring engine idle TTL -5 (workflows.engineIdleTtlMs): must be a positive number of ms; using default
+[Daemon] Ignoring engine idle TTL "0" (JARVIS_ENGINE_IDLE_TTL_MS): must be a positive number of ms; using default
+[Daemon] Ignoring engine idle TTL "fast" (JARVIS_ENGINE_IDLE_TTL_MS): must be a positive number of ms; using default
+[Daemon] Ignoring -1 for workflows.engineCacheMaxBundles: must be a non-negative number; using default
+[Daemon] Ignoring -3 for workflows.engineCacheMaxAgeDays: must be a non-negative number; using default
+[Daemon] Ignoring "lots" for JARVIS_ENGINE_CACHE_MAX_BUNDLES: must be a non-negative number; using default
+
+src/actions/tools/composition-provenance.test.ts:
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+
+ 50 pass
+ 0 fail
+ 149 expect() calls
+Ran 50 tests across 3 files. [1463.00ms]
