@@ -86,3 +86,30 @@ test("a condensed activity falls back to its own summary rather than another res
  el.getBoundingClientRect=()=>({top:100} as DOMRect);el.querySelector("button")!.getBoundingClientRect=()=>({top:80,bottom:116} as DOMRect);
  restoreReading(el,{top:300,atBottom:false,anchor:"turn:t/activity:one",offset:10});expect(el.scrollTop).toBe(270);
 });
+
+test("delayed initial history preserves the saved reading position through empty loading and error states",async()=>{
+ const calls:{top:number;atBottom:boolean}[]=[];
+ const height=Object.getOwnPropertyDescriptor(HTMLElement.prototype,"clientHeight");
+ const scrollHeight=Object.getOwnPropertyDescriptor(HTMLElement.prototype,"scrollHeight");
+ Object.defineProperty(HTMLElement.prototype,"clientHeight",{configurable:true,get(){return this.classList.contains("brief-message-scroll")?300:0;}});
+ Object.defineProperty(HTMLElement.prototype,"scrollHeight",{configurable:true,get(){return this.querySelector(".brief-reply-prose")?2000:100;}});
+ try {
+  binding.chat={...chat(),messages:[],turns:{},activity:{},history:{state:"idle",cursor:null},scroll:{top:480,atBottom:false}};
+  binding.saveScroll=position=>calls.push({...position});
+  await render();
+  const viewport=host.querySelector<HTMLElement>(".brief-message-scroll")!;
+  for(const state of ["loading","error","loading"] as const){
+   binding.chat.history={state,cursor:null};await render();
+   await React.act(async()=>viewport.dispatchEvent(new Event("scroll")));
+  }
+  expect(calls).toEqual([]);
+  binding.chat={...chat(),scroll:{top:480,atBottom:false}};await render();
+  expect(viewport.scrollTop).toBe(480);
+  expect(host.querySelector(".brief-reply-latest")).not.toBeNull();
+  const a=binding;binding={...a,conversationId:"b",chat:{...chat(),messages:[],turns:{},activity:{},scroll:{top:0,atBottom:true}}};await render();binding=a;await render();
+  expect(host.querySelector<HTMLElement>(".brief-message-scroll")!.scrollTop).toBe(480);
+ } finally {
+  if(height)Object.defineProperty(HTMLElement.prototype,"clientHeight",height);else delete (HTMLElement.prototype as any).clientHeight;
+  if(scrollHeight)Object.defineProperty(HTMLElement.prototype,"scrollHeight",scrollHeight);else delete (HTMLElement.prototype as any).scrollHeight;
+ }
+});

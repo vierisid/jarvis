@@ -38,10 +38,14 @@ export function restoreReading(element: HTMLElement, reading: ReadingSnapshot) {
 }
 
 export function useReadingPosition(viewport: RefObject<HTMLDivElement | null>, content: RefObject<HTMLDivElement | null>, memory: ThreadMemory,
-  save: (position: ReadingPosition) => void, revision: unknown) {
+  save: (position: ReadingPosition) => void, revision: unknown, historyReady: boolean) {
   const [following, setFollowing] = useState(memory.reading.atBottom);
-  const lastSaved = useRef<ReadingPosition>(memory.reading);
+  const lastSaved = useRef<ReadingPosition>({ ...memory.reading });
   const saveLatest = useRef(save); saveLatest.current = save;
+  // The owner restores local scroll before asynchronous history. An empty loading
+  // viewport is not proof that the reader reached the bottom. The observer must
+  // read current readiness rather than capture its initial mount value.
+  const ready = useRef(historyReady); ready.current = historyReady;
   const applying = useRef(false);
   const persist = (position: ReadingPosition) => {
     if (lastSaved.current.top === position.top && lastSaved.current.atBottom === position.atBottom) return;
@@ -49,12 +53,12 @@ export function useReadingPosition(viewport: RefObject<HTMLDivElement | null>, c
     saveLatest.current(lastSaved.current);
   };
   const capture = (preferred?: HTMLElement) => {
-    const el = viewport.current; if (!el || !el.clientHeight) return;
+    const el = viewport.current; if (!ready.current || !el || !el.clientHeight) return;
     memory.reading = captureReading(el, preferred);
     setFollowing(memory.reading.atBottom); persist(memory.reading);
   };
   const restore = () => {
-    const el = viewport.current; if (!el || !el.clientHeight) return;
+    const el = viewport.current; if (!ready.current || !el || !el.clientHeight) return;
     applying.current = true;
     restoreReading(el, memory.reading);
     // Keep the semantic anchor while a sidebar reflow changes width repeatedly.
@@ -63,7 +67,7 @@ export function useReadingPosition(viewport: RefObject<HTMLDivElement | null>, c
     setFollowing(nearBottom(el));
     persist(memory.reading); applying.current = false;
   };
-  useLayoutEffect(restore, [revision]);
+  useLayoutEffect(restore, [revision, historyReady]);
   useLayoutEffect(() => {
     const el = viewport.current, body = content.current;
     if (!el || !body) return;

@@ -1,0 +1,40 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/message/ConversationMessages.test.tsx:
+(pass) quiet user and unboxed answer share one scoped thread; activity starts collapsed [44.52ms]
+(pass) twenty open/close cycles retain the same reply and local preference across tabs [107.25ms]
+(pass) workspace change drops view preferences even if chat IDs are reused [11.32ms]
+(pass) only current live activity moves; completed and replayed activities never move [7.21ms]
+(pass) disconnect stops the current marker without losing partial content [5.93ms]
+(pass) terminal failure keeps the partial answer and does not expose the raw error [4.33ms]
+(pass) cancellation is not completion; unfinished activity does not claim success [4.99ms]
+(pass) completion shows output immediately and condenses untouched working details [4.49ms]
+(pass) missing progress produces a generic working state, not invented activity [2.51ms]
+(pass) foreign conversations, requests, raw tool/system messages and unsafe labels stay out [4.51ms]
+(pass) markdown supports tables/code and safe links without HTML or remote image effects [11.21ms]
+(pass) URLs reject executable, relative, credentials and malformed destinations [1.23ms]
+(pass) gates never substitute fixture history in live mode [1.08ms]
+(pass) owner binding captures the exact conversation for scroll and history [0.82ms]
+(pass) stable activity order and turn identity survive interleaved response arrival [0.42ms]
+(pass) history retry uses one existing owner without hiding retained messages [5.48ms]
+(pass) semantic scroll anchor survives growth above it and only bottom readers follow [3.59ms]
+(pass) a condensed activity falls back to its own summary rather than another response [0.83ms]
+102 |    binding.chat.history={state,cursor:null};await render();
+103 |    await React.act(async()=>viewport.dispatchEvent(new Event("scroll")));
+104 |   }
+105 |   expect(calls).toEqual([]);
+106 |   binding.chat={...chat(),scroll:{top:480,atBottom:false}};await render();
+107 |   expect(viewport.scrollTop).toBe(480);
+                                   ^
+error: expect(received).toBe(expected)
+
+Expected: 480
+Received: 1700
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-15/ui/src/brief/chat/message/ConversationMessages.test.tsx:107:30)
+(fail) delayed initial history preserves the saved reading position through empty loading and error states [10.03ms]
+
+ 18 pass
+ 1 fail
+ 119 expect() calls
+Ran 19 tests across 1 file. [701.00ms]

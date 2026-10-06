@@ -42,7 +42,12 @@
 .brief-root .brief-reply-prose > :last-child { margin-bottom:0; }
 .brief-root .brief-reply-prose p { margin:0 0 20px; }
 .brief-root .brief-reply-prose :is(ul,ol) { padding-left:24px; margin:0 0 24px; }
+.brief-root .brief-reply-prose ol { list-style-type:decimal; }
+.brief-root .brief-reply-prose ul { list-style-type:disc; }
+.brief-root .brief-reply-prose ul ul { list-style-type:circle; }
 .brief-root .brief-reply-prose li { padding-left:2px; margin:0 0 10px; }
+.brief-root .brief-reply-prose li.task-list-item { list-style-type:none; }
+.brief-root .brief-reply-prose li.task-list-item > input[type="checkbox"] { margin-left:-20px; margin-right:6px; }
 .brief-root .brief-reply-prose a { color:var(--brief-running-text); text-decoration:underline; text-underline-offset:3px; }
 .brief-root .brief-reply-prose a:focus-visible { outline:2px solid var(--brief-focus); outline-offset:2px; }
 .brief-root .brief-reply-prose pre { overflow:auto; max-width:100%; background:var(--brief-soft); border-radius:var(--brief-corner-control); padding:12px; font:400 12px/19px var(--brief-mono); white-space:pre; }

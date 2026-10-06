@@ -32,8 +32,9 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
   React.useEffect(() => () => { generation.current++; }, []);
   const reduced = useBriefReducedMotion(reducedMotion);
   const items = threadItems(binding);
-  const scroll = useReadingPosition(viewport, content, memory, binding.saveScroll, items);
   const history = binding.chat!.history;
+  const historyReady = history.state !== "idle" && (items.length > 0 || history.state === "ready");
+  const scroll = useReadingPosition(viewport, content, memory, binding.saveScroll, items, historyReady);
   const loadOlder = async () => {
     if (loading || !binding.loadOlder) return;
     const mine = generation.current; setLoading(true); setHistoryFailed(false);
@@ -44,8 +45,8 @@ function Thread({ binding, panelId, labelledBy, reducedMotion, memory }: {
     <div ref={viewport} className="brief-message-scroll" tabIndex={0} role="region" aria-label="Conversation messages" onScroll={scroll.onScroll}>
       <div ref={content} className="brief-message-content">
         {history.cursor && binding.loadOlder && <button type="button" className="brief-history-button" disabled={loading || history.state === "loading"} onClick={loadOlder}>{loading || history.state === "loading" ? "Loading earlier messages…" : "Load earlier messages"}</button>}
-        {(historyFailed || history.state === "error") && <p className="brief-message-notice" role="status">Earlier messages could not be loaded. Your current messages are still here.</p>}
-        {!items.length && <h2 className="brief-type-section-heading brief-message-empty">{history.state === "loading" ? "Loading conversation…" : "What are we moving forward?"}</h2>}
+        {(historyFailed || history.state === "error") && <p className="brief-message-notice" role="status">{items.length ? "Earlier messages could not be loaded. Your current messages are still here." : "Conversation history could not be loaded."}</p>}
+        {!items.length && history.state !== "error" && <h2 className="brief-type-section-heading brief-message-empty">{history.state === "idle" || history.state === "loading" ? "Loading conversation…" : "What are we moving forward?"}</h2>}
         {items.map(item => {
           if (item.kind === "user") return <article key={item.key} data-thread-item={item.key} className="brief-user-message" aria-label="Your message"><p data-reading-anchor="user">{item.message.content}</p></article>;
           const { turn, activities, message } = item;

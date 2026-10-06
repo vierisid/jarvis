@@ -98,5 +98,31 @@
   ],
   "ci": "Check current commit after push; local results do not certify CI.",
   "rollback": "Keep Brief disabled or remove the optional message module; no migration/external effects.",
-  "next": "D-16: workflow creation and recent work; not started."
+  "next": "D-16: workflow creation and recent work; not started.",
+  "review_corrections": {
+    "reviewed_head": "32090619e45aa37d78e6fd9b88dff8e73943432e",
+    "findings": [
+      "R1: delayed history reading restoration",
+      "R2: Markdown list markers"
+    ],
+    "affected_tests": 272,
+    "affected_assertions": 3929,
+    "focused_tests": 19,
+    "focused_assertions": 121,
+    "red_evidence": [
+      "evidence/D-15/review-r1-red.log",
+      "evidence/D-15/review-r2-red.log"
+    ],
+    "verification": [
+      "evidence/D-15/review-affected.log",
+      "evidence/D-15/review-focused.log",
+      "evidence/D-15/review-typescript.log",
+      "evidence/D-15/review-build.log",
+      "evidence/D-15/review-f06-compatibility.log",
+      "evidence/D-15/review-original-browser.log",
+      "evidence/D-15/review-browser-results.json"
+    ],
+    "browser_cases": 16,
+    "production_enabled": false
+  }
 }

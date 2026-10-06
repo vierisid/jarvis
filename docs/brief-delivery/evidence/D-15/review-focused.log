@@ -1,0 +1,27 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/message/ConversationMessages.test.tsx:
+(pass) quiet user and unboxed answer share one scoped thread; activity starts collapsed [39.94ms]
+(pass) twenty open/close cycles retain the same reply and local preference across tabs [97.97ms]
+(pass) workspace change drops view preferences even if chat IDs are reused [10.20ms]
+(pass) only current live activity moves; completed and replayed activities never move [5.08ms]
+(pass) disconnect stops the current marker without losing partial content [4.53ms]
+(pass) terminal failure keeps the partial answer and does not expose the raw error [3.09ms]
+(pass) cancellation is not completion; unfinished activity does not claim success [4.70ms]
+(pass) completion shows output immediately and condenses untouched working details [3.95ms]
+(pass) missing progress produces a generic working state, not invented activity [1.94ms]
+(pass) foreign conversations, requests, raw tool/system messages and unsafe labels stay out [5.27ms]
+(pass) markdown supports tables/code and safe links without HTML or remote image effects [9.47ms]
+(pass) URLs reject executable, relative, credentials and malformed destinations [0.46ms]
+(pass) gates never substitute fixture history in live mode [1.00ms]
+(pass) owner binding captures the exact conversation for scroll and history [0.43ms]
+(pass) stable activity order and turn identity survive interleaved response arrival [0.39ms]
+(pass) history retry uses one existing owner without hiding retained messages [5.95ms]
+(pass) semantic scroll anchor survives growth above it and only bottom readers follow [3.24ms]
+(pass) a condensed activity falls back to its own summary rather than another response [0.80ms]
+(pass) delayed initial history preserves the saved reading position through empty loading and error states [10.46ms]
+
+ 19 pass
+ 0 fail
+ 121 expect() calls
+Ran 19 tests across 1 file. [423.00ms]
