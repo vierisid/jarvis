@@ -38,7 +38,10 @@ export function ComposerSpecimen() {
     status: { mode, connected, pending: 0, pendingSends, error: null },
     state: { workspaceId: "composer-preview", order, activeId, conversations: chats },
     client: {
-      store: { setDraft: (id: string, text: string) => setChats(previous => ({ ...previous, [id]: { ...previous[id]!, draft: text } })) },
+      store: {
+        setDraft: (id: string, text: string) => setChats(previous => ({ ...previous, [id]: { ...previous[id]!, draft: text } })),
+        dismissError: (id: string) => setChats(previous => ({ ...previous, [id]: { ...previous[id]!, error: null } })),
+      },
       add: async () => {
         const id = `chat-${++serial.current}`;
         setChats(previous => ({ ...previous, [id]: { conversation: { title: `New chat ${serial.current}` }, draft: "", error: null, turns: {}, sent: [], answer: "" } }));
@@ -52,6 +55,7 @@ export function ComposerSpecimen() {
       },
       send: async (id: string, text: string) => {
         if (!connected) throw Error("Offline fixture");
+        setChats(previous => ({ ...previous, [id]: { ...previous[id]!, error: null } }));
         const ref = { conversationId: id, turnId: `turn-${++turns.current}`, requestId: `request-${turns.current}` };
         setSendCount(count => count + 1); setPendingSends(previous => [...previous, ref]);
         await new Promise(resolve => setTimeout(resolve, 300));
@@ -62,11 +66,18 @@ export function ComposerSpecimen() {
           sent: [...previous[id]!.sent, text], answer: "", turns: { ...previous[id]!.turns, [ref.turnId]: { ...ref, state: "running" } } } }));
         if (!hold) setTimeout(() => finish(ref, "completed"), 1500);
       },
-      cancel: async (ref: ComposerTurn) => {
-        setCancelCount(count => count + 1); await new Promise(resolve => setTimeout(resolve, 200));
-        if (!alive.current) return;
-        if (failStop) throw Error("Illustrative cancellation failure");
-        finish(ref, "cancelled");
+      cancel: (ref: ComposerTurn) => {
+        // Like F-04, dispatch returns synchronously; the owner reports later.
+        setCancelCount(count => count + 1);
+        setTimeout(() => {
+          if (!alive.current) return;
+          if (failStop) {
+            setChats(previous => ({ ...previous, [ref.conversationId]: { ...previous[ref.conversationId]!, error: "Could not stop the response. Try again." } }));
+          } else {
+            setChats(previous => ({ ...previous, [ref.conversationId]: { ...previous[ref.conversationId]!, error: null } }));
+            finish(ref, "cancelled");
+          }
+        }, 800);
       },
     },
   };

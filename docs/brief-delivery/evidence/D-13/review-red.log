@@ -1,0 +1,79 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/composer/ConversationComposer.test.tsx:
+(pass) F-04 binding captures the selected conversation and exact cancellation reference [83.18ms]
+(pass) a pending acceptance is cancellable by its original IDs and other chats cannot supply the turn [33.58ms]
+(pass) wrong sources, absent scope and non-scoped modes expose no writing or send action [111.46ms]
+(pass) suggestions prefill and focus, preserving existing writing and never sending [222.73ms]
+(pass) blank writing is inactive, Enter sends once, and Shift+Enter stays a newline [159.16ms]
+(pass) IME composition, native composing and keyCode 229 cannot send prematurely [138.79ms]
+(pass) send preserves exact text and keeps the draft until the owner accepts it [69.29ms]
+(pass) async send is deduplicated and a newer draft is never cleared by its completion [49.88ms]
+(pass) failed sending preserves draft, reports locally and permits a deliberate retry [56.47ms]
+119 | });
+120 |
+121 | test("active turns show Stop and cannot be resubmitted through Enter", async () => {
+122 |   binding.draft = "Next question"; binding.turn = { conversationId: "a", turnId: "t", requestId: "r" };
+123 |   await render(); expect(send()).toBeNull(); await key(); expect(calls).toEqual([]); await click(stop()); expect(calls).toEqual(["cancel:a"]);
+124 |   expect(input().value).toBe("Next question"); expect(status()).toBe("Stopping response…");
+                                                                      ^
+error: expect(received).toBe(expected)
+
+Expected: "Stopping response…"
+Received: ""
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/chat/composer/ConversationComposer.test.tsx:124:65)
+(fail) active turns show Stop and cannot be resubmitted through Enter [72.03ms]
+125 | });
+126 |
+127 | test("synchronous cancellation dispatch keeps feedback until the matching turn ends and permits retry", async () => {
+128 |   binding.draft = "Next question"; binding.turn = { conversationId: "a", turnId: "t", requestId: "r" };
+129 |   await render(); await click(stop());
+130 |   expect(status()).toBe("Stopping response…"); await render(); expect(status()).toBe("Stopping response…");
+                         ^
+error: expect(received).toBe(expected)
+
+Expected: "Stopping response…"
+Received: ""
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/chat/composer/ConversationComposer.test.tsx:130:20)
+(fail) synchronous cancellation dispatch keeps feedback until the matching turn ends and permits retry [44.09ms]
+138 | test("owner cancellation failure permits retry, and disconnect does not claim the turn stopped", async () => {
+139 |   binding.turn = { conversationId: "a", turnId: "t", requestId: "r" };
+140 |   await render(); await click(stop());
+141 |   binding = { ...binding, error: "Stop was not accepted." }; await render();
+142 |   expect(status()).toBe("Stop was not accepted."); expect(stop().getAttribute("aria-disabled")).toBe("false");
+143 |   await click(stop()); expect(status()).toBe("Stopping response…");
+                                              ^
+error: expect(received).toBe(expected)
+
+Expected: "Stopping response…"
+Received: "Stop was not accepted."
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/chat/composer/ConversationComposer.test.tsx:143:41)
+(fail) owner cancellation failure permits retry, and disconnect does not claim the turn stopped [152.54ms]
+152 |   binding.turn = { conversationId: "a", turnId: "old", requestId: "old-request" };
+153 |   binding.actions.cancel = () => new Promise<void>((_, reject) => { fail = () => reject(Error("late stop failure")); });
+154 |   await render(); await React.act(async () => stop().click()); expect(status()).toBe("Stopping response…");
+155 |   binding = { ...binding, turn: { conversationId: "a", turnId: "new", requestId: "new-request" },
+156 |     actions: { ...binding.actions, cancel: () => { calls.push("cancel:new"); } } }; await render();
+157 |   expect(status()).toBe(""); expect(stop().getAttribute("aria-disabled")).toBe("false");
+                         ^
+error: expect(received).toBe(expected)
+
+Expected: ""
+Received: "Stopping response…"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/chat/composer/ConversationComposer.test.tsx:157:20)
+(fail) a new turn cannot inherit a previous stop lock or its late dispatch failure [49.42ms]
+(pass) a pending stop has local feedback and a failed stop does not claim completion [52.31ms]
+(pass) offline and metadata-pending states block sends while keeping the existing draft [85.71ms]
+(pass) UTF-8 limit is validated without truncating multibyte writing [40.86ms]
+(pass) switching conversations or workspace cannot inherit a pending lock or late error [90.55ms]
+(pass) theme changes preserve the input element, focus, value and selection [25.94ms]
+(pass) composer has the fixed attachment seam without inventing an upload action [24.91ms]
+
+ 15 pass
+ 4 fail
+ 88 expect() calls
+Ran 19 tests across 1 file. [3.96s]

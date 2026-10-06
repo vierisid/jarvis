@@ -11,7 +11,8 @@ export function SendPebble({ disabled, stopping, working, reducedMotion, onClick
   const active = !disabled && !working && (hovered || focused);
   const ref = useBriefMotion<HTMLSpanElement>({ transform: `rotate(${active ? -45 : 0}deg)` },
     { kind: "settle", active, reduced: reducedMotion, immediate: disabled || working });
-  const label = stopping ? "Stopping response" : working ? "Stop response" : "Send";
+  // A dispatched stop can be retried until the owner confirms the turn ended.
+  const label = stopping ? (disabled ? "Stopping response" : "Retry stop") : working ? "Stop response" : "Send";
   return <BriefTooltip label={label} delay={350}>
     <button type="button" className="brief-composer-send" aria-label={label} aria-disabled={disabled}
       aria-busy={stopping || undefined} data-working={working} data-intent={active}

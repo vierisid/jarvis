@@ -1,0 +1,28 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/composer/ConversationComposer.test.tsx:
+(pass) F-04 binding captures the selected conversation and exact cancellation reference [31.61ms]
+(pass) a pending acceptance is cancellable by its original IDs and other chats cannot supply the turn [3.36ms]
+(pass) wrong sources, absent scope and non-scoped modes expose no writing or send action [47.61ms]
+(pass) suggestions prefill and focus, preserving existing writing and never sending [144.99ms]
+(pass) blank writing is inactive, Enter sends once, and Shift+Enter stays a newline [102.81ms]
+(pass) IME composition, native composing and keyCode 229 cannot send prematurely [112.40ms]
+(pass) send preserves exact text and keeps the draft until the owner accepts it [62.73ms]
+(pass) async send is deduplicated and a newer draft is never cleared by its completion [42.19ms]
+(pass) failed sending preserves draft, reports locally and permits a deliberate retry [47.06ms]
+(pass) active turns show Stop and cannot be resubmitted through Enter [34.53ms]
+(pass) synchronous cancellation dispatch keeps feedback until the matching turn ends and permits retry [35.32ms]
+(pass) owner cancellation failure permits retry, and disconnect does not claim the turn stopped [27.97ms]
+(pass) a new turn cannot inherit a previous stop lock or its late dispatch failure [20.82ms]
+(pass) a repeated owner failure with identical wording ends the new stop intent after error dismissal [20.94ms]
+(pass) a pending stop has local feedback and a failed stop does not claim completion [12.26ms]
+(pass) offline and metadata-pending states block sends while keeping the existing draft [31.02ms]
+(pass) UTF-8 limit is validated without truncating multibyte writing [7.89ms]
+(pass) switching conversations or workspace cannot inherit a pending lock or late error [21.97ms]
+(pass) theme changes preserve the input element, focus, value and selection [8.15ms]
+(pass) composer has the fixed attachment seam without inventing an upload action [7.04ms]
+
+ 20 pass
+ 0 fail
+ 109 expect() calls
+Ran 20 tests across 1 file. [2.03s]

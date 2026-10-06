@@ -44,10 +44,10 @@ test("F-04 binding captures the selected conversation and exact cancellation ref
   const owner: ComposerOwner = { status: { mode: "scoped", connected: true, pending: 0, pendingSends: [] },
     state: { workspaceId: "ws", activeId: "a", order: ["a", "b"], conversations: {
       a: { draft: "A", error: null, turns: { "turn-a": { ...ref, state: "running" } } }, b: { draft: "B", error: null, turns: {} } } },
-    client: { store: { setDraft: (id, text) => operations.push(["draft", id, text]) }, send: (id, text) => operations.push(["send", id, text]), cancel: ref => operations.push(["cancel", ref]) } };
+    client: { store: { setDraft: (id, text) => operations.push(["draft", id, text]), dismissError: id => operations.push(["clear-error", id]) }, send: (id, text) => operations.push(["send", id, text]), cancel: ref => operations.push(["cancel", ref]) } };
   const view = bindConversationComposer(owner, "live"); owner.state.activeId = "b";
   view.actions.setDraft("new A"); view.actions.send("A"); view.actions.cancel();
-  expect(operations).toEqual([["draft", "a", "new A"], ["send", "a", "A"], ["cancel", ref]]);
+  expect(operations).toEqual([["draft", "a", "new A"], ["send", "a", "A"], ["clear-error", "a"], ["cancel", ref]]);
   expect(view.maxBytes).toBe(65_536); expect(view.draft).toBe("A"); expect(view.turn).toMatchObject(ref);
   const next = bindConversationComposer(owner, "live"); expect(next.turn).toBeNull(); expect(() => next.actions.cancel()).toThrow();
 });
@@ -57,7 +57,7 @@ test("a pending acceptance is cancellable by its original IDs and other chats ca
   const refs: unknown[] = [];
   const owner: ComposerOwner = { status: { mode: "scoped", connected: true, pending: 0, pendingSends: [b, a] },
     state: { workspaceId: "ws", activeId: "a", order: ["a"], conversations: { a: { draft: "Draft", error: null, turns: {} } } },
-    client: { store: { setDraft() {} }, send() {}, cancel: ref => refs.push(ref) } };
+    client: { store: { setDraft() {}, dismissError() {} }, send() {}, cancel: ref => refs.push(ref) } };
   const view = bindConversationComposer(owner, "live"); view.actions.cancel(); expect(refs).toEqual([a]); expect(view.pendingAcceptance).toBe(true);
   owner.state.order = []; expect(composerAvailability("live", bindConversationComposer(owner, "live"))).toBe("empty");
   expect(() => bindConversationComposer(owner, "live").actions.send("No chat")).toThrow();
@@ -121,7 +121,53 @@ test("failed sending preserves draft, reports locally and permits a deliberate r
 test("active turns show Stop and cannot be resubmitted through Enter", async () => {
   binding.draft = "Next question"; binding.turn = { conversationId: "a", turnId: "t", requestId: "r" };
   await render(); expect(send()).toBeNull(); await key(); expect(calls).toEqual([]); await click(stop()); expect(calls).toEqual(["cancel:a"]);
-  expect(input().value).toBe("Next question"); expect(stop()).not.toBeNull();
+  expect(input().value).toBe("Next question"); expect(status()).toBe("Stopping response…");
+});
+
+test("synchronous cancellation dispatch keeps feedback until the matching turn ends and permits retry", async () => {
+  binding.draft = "Next question"; binding.turn = { conversationId: "a", turnId: "t", requestId: "r" };
+  await render(); await click(stop());
+  expect(status()).toBe("Stopping response…"); await render(); expect(status()).toBe("Stopping response…");
+  const retry = host.querySelector<HTMLButtonElement>('[aria-label="Retry stop"]')!;
+  expect(retry).not.toBeNull(); expect(retry.getAttribute("aria-disabled")).toBe("false");
+  await click(retry); expect(calls).toEqual(["cancel:a", "cancel:a"]); expect(status()).toBe("Stopping response…");
+  binding = { ...binding, turn: null }; await render();
+  expect(status()).toBe(""); expect(send().getAttribute("aria-disabled")).toBe("false"); expect(input().value).toBe("Next question");
+});
+
+test("owner cancellation failure permits retry, and disconnect does not claim the turn stopped", async () => {
+  binding.turn = { conversationId: "a", turnId: "t", requestId: "r" };
+  await render(); await click(stop());
+  binding = { ...binding, error: "Stop was not accepted." }; await render();
+  expect(status()).toBe("Stop was not accepted."); expect(stop().getAttribute("aria-disabled")).toBe("false");
+  await click(stop()); expect(status()).toBe("Stopping response…");
+  binding = { ...binding, connected: false }; await render(); expect(status()).toContain("Reconnecting");
+  expect(stop().getAttribute("aria-disabled")).toBe("true");
+  binding = { ...binding, connected: true }; await render();
+  expect(stop().getAttribute("aria-disabled")).toBe("false"); expect(binding.turn).not.toBeNull();
+});
+
+test("a new turn cannot inherit a previous stop lock or its late dispatch failure", async () => {
+  let fail!: () => void;
+  binding.turn = { conversationId: "a", turnId: "old", requestId: "old-request" };
+  binding.actions.cancel = () => new Promise<void>((_, reject) => { fail = () => reject(Error("late stop failure")); });
+  await render(); await React.act(async () => stop().click()); expect(status()).toBe("Stopping response…");
+  binding = { ...binding, turn: { conversationId: "a", turnId: "new", requestId: "new-request" },
+    actions: { ...binding.actions, cancel: () => { calls.push("cancel:new"); } } }; await render();
+  expect(status()).toBe(""); expect(stop().getAttribute("aria-disabled")).toBe("false");
+  await click(stop()); await React.act(async () => fail());
+  expect(status()).toBe("Stopping response…"); expect(calls).toEqual(["cancel:new"]);
+});
+
+test("a repeated owner failure with identical wording ends the new stop intent after error dismissal", async () => {
+  binding.turn = { conversationId: "a", turnId: "t", requestId: "r" }; binding.error = "Stop unavailable";
+  binding.actions.cancel = () => { binding = { ...binding, error: null }; };
+  await render(); await click(stop()); expect(status()).toBe("Stopping response…");
+  binding = { ...binding, error: "Stop unavailable" }; await render();
+  expect(status()).toBe("Stop unavailable"); expect(stop().getAttribute("aria-disabled")).toBe("false");
+  await click(stop()); expect(status()).toBe("Stopping response…");
+  binding = { ...binding, error: "Stop unavailable" }; await render();
+  expect(status()).toBe("Stop unavailable"); expect(stop().getAttribute("aria-disabled")).toBe("false");
 });
 
 test("a pending stop has local feedback and a failed stop does not claim completion", async () => {
