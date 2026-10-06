@@ -1,0 +1,78 @@
+{
+  "results": [
+    {
+      "theme": "light",
+      "rail": false,
+      "activityCycles": 10,
+      "panelReversals": 10,
+      "anchor": {
+        "text": "Keep one accountable owner for this step. Agree the success measure before choosing a date, and preserve anything still awaiting confirmation. Paragraph 4 stays in place while new activity arrives.",
+        "y": -54
+      },
+      "afterAnchor": -54,
+      "retained": 1250,
+      "afterPrepend": 1274,
+      "historyPrepend": true,
+      "bottomFollow": true,
+      "partialFailure": true,
+      "replayStill": true,
+      "reduced": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "activityCycles": 10,
+      "panelReversals": 10,
+      "anchor": {
+        "text": "Keep one accountable owner for this step. Agree the success measure before choosing a date, and preserve anything still awaiting confirmation. Paragraph 4 stays in place while new activity arrives.",
+        "y": -54
+      },
+      "afterAnchor": -54,
+      "retained": 1250,
+      "afterPrepend": 1274,
+      "historyPrepend": true,
+      "bottomFollow": true,
+      "partialFailure": true,
+      "replayStill": true,
+      "reduced": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "activityCycles": 10,
+      "panelReversals": 10,
+      "anchor": {
+        "text": "Keep one accountable owner for this step. Agree the success measure before choosing a date, and preserve anything still awaiting confirmation. Paragraph 4 stays in place while new activity arrives.",
+        "y": -54
+      },
+      "afterAnchor": -54,
+      "retained": 1250,
+      "afterPrepend": 1274,
+      "historyPrepend": true,
+      "bottomFollow": true,
+      "partialFailure": true,
+      "replayStill": true,
+      "reduced": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "activityCycles": 10,
+      "panelReversals": 10,
+      "anchor": {
+        "text": "Keep one accountable owner for this step. Agree the success measure before choosing a date, and preserve anything still awaiting confirmation. Paragraph 4 stays in place while new activity arrives.",
+        "y": -54
+      },
+      "afterAnchor": -54,
+      "retained": 1250,
+      "afterPrepend": 1274,
+      "historyPrepend": true,
+      "bottomFollow": true,
+      "partialFailure": true,
+      "replayStill": true,
+      "reduced": true
+    }
+  ],
+  "narrow": true,
+  "errors": []
+}

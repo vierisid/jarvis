@@ -1,0 +1,3 @@
+Unexpected parameters for tool 'read_file': name, secret
+Unexpected parameters for tool 'read_file': name, secret
+PASS actual F-06 transport/projector/store: interleaved A/B tools, cancel A, fail B tool with usable answer, secret canaries excluded, 3 snapshot pages restore identical still markup, exact original-chat scroll binding. No real model, file read or external effect.

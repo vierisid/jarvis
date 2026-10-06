@@ -1,0 +1,102 @@
+{
+  "task": "D-15",
+  "title": "Render activity and finished replies",
+  "date": "2026-10-06",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "branch": "brief/d-15",
+  "stack_base": "brief/d-14",
+  "baseline": "cd1357b58447758f20ae0f2017f92d3ba2e3a952",
+  "inspected_main": "538179e3a91edfaa435698cac94bc4ca41e6c873",
+  "head": {
+    "ref": "brief/d-15",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-15.json"
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-15",
+  "preview": "http://127.0.0.1:4395/?brief=preview&specimen=messages#/_brief_preview",
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/771"
+  ],
+  "activation_dependencies": [
+    "F-06",
+    "Single authenticated conversation provider",
+    "Combined conversation integration",
+    "D-33"
+  ],
+  "owns": [
+    "ui/src/brief/chat/message/**",
+    "ui/src/brief/chat/activity-renderers/**",
+    "One preview registration",
+    "docs/brief-delivery/D-15.*",
+    "docs/brief-delivery/evidence/D-15/**"
+  ],
+  "figma": {
+    "reference": "ui/src/brief/chat/message/figma-reference.json",
+    "inspection": "Saved native source/audit/exports; no fresh editor"
+  },
+  "checks": [
+    {
+      "command": "Affected Brief and onboarding tests --timeout 15000",
+      "tests": 271,
+      "assertions": 3925,
+      "files": 18,
+      "result": "pass",
+      "evidence": "evidence/D-15/affected.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-15/typescript.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-15/build.log",
+      "warnings": "Existing Tailwind at-rule warnings"
+    }
+  ],
+  "focused": {
+    "tests": 18,
+    "assertions": 117,
+    "evidence": "evidence/D-15/focused.log"
+  },
+  "mutation": {
+    "result": "Unsafe activity-label mutation rejected; source restored",
+    "evidence": "evidence/D-15/activity-label-mutation.log"
+  },
+  "browser": {
+    "script": "evidence/D-15/browser-check.cjs",
+    "evidence": "evidence/D-15/browser-results.json",
+    "themes": 2,
+    "sidebar_states": 2,
+    "activity_cycles": 40,
+    "panel_reversals": 40,
+    "narrow_width": 390,
+    "errors": 0,
+    "keyboard_cycles": 10,
+    "keyboard_evidence": "evidence/D-15/keyboard.log",
+    "narrow_final_line_visible": true,
+    "history_prepend": true
+  },
+  "compatibility": {
+    "branch": "brief/f-06",
+    "head": "23979f3bebab09a68c140aad3cb1843865fef150",
+    "script": "evidence/D-15/f06-compatibility.ts",
+    "evidence": "evidence/D-15/f06-compatibility.log",
+    "result": "pass",
+    "real_effects": false,
+    "snapshot_pages": 3
+  },
+  "limits": [
+    "Production host integration remains gated",
+    "No screen-reader or mobile-keyboard certification",
+    "Semantic block anchors refine persisted pixel scroll; not arbitrary font/layout certification",
+    "No raw reasoning/tool payloads; no inferred named evidence",
+    "External markdown images are text placeholders"
+  ],
+  "ci": "Check current commit after push; local results do not certify CI.",
+  "rollback": "Keep Brief disabled or remove the optional message module; no migration/external effects.",
+  "next": "D-16: workflow creation and recent work; not started."
+}
