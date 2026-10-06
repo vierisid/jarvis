@@ -1,0 +1,63 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/progress-transport.test.ts:
+Unexpected parameters for tool 'read_file': token
+(pass) typed progress is opt-in and requires its live provider (enabled=true, registered=true) [19.05ms]
+Unexpected parameters for tool 'read_file': token
+(pass) typed progress is opt-in and requires its live provider (enabled=false, registered=true) [12.40ms]
+Unexpected parameters for tool 'read_file': token
+(pass) typed progress is opt-in and requires its live provider (enabled=true, registered=false) [11.43ms]
+(pass) canonical evidence references expose only existing IDs, never stored goal or fact content [13.78ms]
+Unexpected parameters for tool 'web_search': name, token
+Unexpected parameters for tool 'web_search': name, token
+88 |   const a = f.input('A'), b = f.input('B'), ownerA = f.client(), ownerB = f.client(), legacy = f.client();
+89 |   try {
+90 |     await f.send(ownerA, a); await f.send(ownerB, b); await until(() => releases.size === 2);
+91 |     await f.transport.handle({ type: 'brief_chat_cancel', payload: { conversationId: a.conversationId, turnId: a.turnId, requestId: a.requestId }, timestamp: 0 }, ownerA, f.caps);
+92 |     releases.get('A')!(); releases.get('B')!(); await f.transport.idle();
+93 |     expect(activities(f.events(ownerA)).map(row => row.phase)).toEqual(['started', 'failed']);
+                                                                    ^
+error: expect(received).toEqual(expected)
+
+  [
+    "started",
+-   "failed",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress-transport.test.ts:93:64)
+(fail) interleaved real tools stay in their originating conversations and late completion cannot undo cancellation [14.13ms]
+Unexpected parameters for tool 'read_file': secret
+(pass) tool failure stays distinct from a completed answer; paged replay restores identical still, ordered rows [85.43ms]
+142 |     const activity: BriefActivity = { activityId: 'stable-activity', kind: 'tool', order: 1, phase: 'started', summary: 'Reading a file.', refs: [] };
+143 |     repository.activity(input, { kind: 'activity', activity });
+144 |     closeDb(); initDatabase(file, { quiet: true }); repository = new ChatTurnRepository(getDb());
+145 |     repository.recover(); const snapshot = repository.snapshot(input.conversationId, 0); repository.recover();
+146 |     expect(repository.snapshot(input.conversationId, 0)).toEqual(snapshot);
+147 |     expect(activities(snapshot.events).map(row => [row.activityId, row.phase])).toEqual([['stable-activity', 'started'], ['stable-activity', 'failed']]);
+                                                                                      ^
+error: expect(received).toEqual(expected)
+
+  [
+    [
+      "stable-activity",
+      "started",
+    ],
+-   [
+-     "stable-activity",
+-     "failed",
+-   ],
+  ]
+
+- Expected  - 4
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress-transport.test.ts:147:81)
+(fail) restart settles unfinished activities once without claiming an interrupted answer succeeded [281.95ms]
+
+ 5 pass
+ 2 fail
+ 21 expect() calls
+Ran 7 tests across 1 file. [465.00ms]

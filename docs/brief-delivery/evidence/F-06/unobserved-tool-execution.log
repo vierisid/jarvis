@@ -1,0 +1,31 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/agent-service-progress.test.ts:
+[Orchestrator] Executing "read_file" with NO authority engine wired: tool calls are ungated and unaudited
+Unexpected parameters for tool 'read_file': path
+[Orchestrator] Tool read_file → Error executing read_file: Tool 'read_file' execution failed: PRIVATE credential error...
+31 |   await withExecutionProgress(event => { const row = projector.project(event); if (row) rows.push(row); }, async () => {
+32 |     const input = { conversationId: 'a', turnId: 'turn', requestId: 'request', text: 'Inspect', history: [], contextKey: 'brief:a', signal: new AbortController().signal };
+33 |     for await (const _event of service.streamMessage(input.text, 'websocket', undefined, null, input.contextKey, input).stream) { /* Consume model output without any real provider or post-processing. */ }
+34 |   });
+35 |   expect(toolCalls).toBe(1); expect(modelCalls).toBe(2);
+36 |   expect(rows.map(row => row.phase)).toEqual(['started', 'failed']);
+                                          ^
+error: expect(received).toEqual(expected)
+
+- [
+-   "started",
+-   "failed",
+- ]
++ []
+
+- Expected  - 4
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/daemon/agent-service-progress.test.ts:36:38)
+(fail) the real classic model loop reports actual tool failure and never proposed calls or raw provider text as activity [16.91ms]
+
+ 0 pass
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [79.00ms]

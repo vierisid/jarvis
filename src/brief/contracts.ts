@@ -54,6 +54,9 @@ export interface BriefMessage extends BriefTurnRef {
 }
 export interface BriefActivity {
   activityId: string;
+  /** Additive F-06 fields. Order is assigned once within the originating turn. */
+  kind?: 'tool' | 'agent' | 'task';
+  order?: number;
   phase: 'started' | 'completed' | 'failed';
   /** Allowlisted, redacted commentary only. Never hidden reasoning or raw arguments. */
   summary: string;

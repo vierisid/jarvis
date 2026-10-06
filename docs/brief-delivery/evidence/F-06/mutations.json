@@ -1,0 +1,69 @@
+[
+  {
+    "mutation": "source-text-leak",
+    "file": "src/brief/progress.ts",
+    "command": "bun test src/brief/progress.test.ts",
+    "exit_code": 1,
+    "detected": true,
+    "failures": [
+      "(fail) one stable row advances once, ignores duplicate/late starts, and never interpolates source text [3.55ms]",
+      "(fail) unknown tool name __proto__ gets only fixed generic labels [0.15ms]",
+      "(fail) unknown tool name constructor gets only fixed generic labels [0.07ms]",
+      "(fail) unknown tool name <img src=x onerror=SECRET> gets only fixed generic labels [0.07ms]",
+      "(fail) unknown tool name Bearer SECRET gets only fixed generic labels [0.06ms]",
+      "(fail) unknown tool name read_file"
+    ],
+    "log": "docs/brief-delivery/evidence/F-06/source-text-leak.log",
+    "source_restored": true
+  },
+  {
+    "mutation": "disabled-gate-bypass",
+    "file": "src/brief/chat-transport.ts",
+    "command": "bun test src/brief/progress-transport.test.ts",
+    "exit_code": 1,
+    "detected": true,
+    "failures": [
+      "(fail) typed progress is opt-in and requires its live provider (enabled=false, registered=true) [12.33ms]",
+      "(fail) typed progress is opt-in and requires its live provider (enabled=true, registered=false) [11.02ms]"
+    ],
+    "log": "docs/brief-delivery/evidence/F-06/disabled-gate-bypass.log",
+    "source_restored": true
+  },
+  {
+    "mutation": "unfinished-activity-left-running",
+    "file": "src/vault/chat-turns.ts",
+    "command": "bun test src/brief/progress-transport.test.ts",
+    "exit_code": 1,
+    "detected": true,
+    "failures": [
+      "(fail) interleaved real tools stay in their originating conversations and late completion cannot undo cancellation [14.13ms]",
+      "(fail) restart settles unfinished activities once without claiming an interrupted answer succeeded [281.95ms]"
+    ],
+    "log": "docs/brief-delivery/evidence/F-06/unfinished-activity-left-running.log",
+    "source_restored": true
+  },
+  {
+    "mutation": "replay-animation",
+    "file": "ui/src/brief/chat/store.ts",
+    "command": "bun test ui/src/brief/chat/store.test.ts",
+    "exit_code": 1,
+    "detected": true,
+    "failures": [
+      "(fail) activity rows retain their first position and final phase across delayed starts and reconnect [2.43ms]"
+    ],
+    "log": "docs/brief-delivery/evidence/F-06/replay-animation.log",
+    "source_restored": true
+  },
+  {
+    "mutation": "unobserved-tool-execution",
+    "file": "src/actions/tools/registry.ts",
+    "command": "bun test src/daemon/agent-service-progress.test.ts",
+    "exit_code": 1,
+    "detected": true,
+    "failures": [
+      "(fail) the real classic model loop reports actual tool failure and never proposed calls or raw provider text as activity [16.91ms]"
+    ],
+    "log": "docs/brief-delivery/evidence/F-06/unobserved-tool-execution.log",
+    "source_restored": true
+  }
+]
