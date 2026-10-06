@@ -13,18 +13,21 @@ const { values } = parseArgs({ options: {
   condition: { type: 'string', default: 'natural' }, repeats: { type: 'string', default: '1' },
   profile: { type: 'string' }, authorization: { type: 'string' }, rubric: { type: 'string' }, 'max-requests': { type: 'string' },
   results: { type: 'string' }, reviews: { type: 'string' }, key: { type: 'string' }, runs: { type: 'string' }, rule: { type: 'string' },
-  taskset: { type: 'string', default: 'w8' }, reserve: { type: 'string' }, references: { type: 'string' }, help: { type: 'boolean' },
+  taskset: { type: 'string', default: 'w8' }, reserve: { type: 'string' }, references: { type: 'string' }, environment: { type: 'string' },
+  help: { type: 'boolean' },
 } });
 if (values.help) {
   console.log('Workflow quality: --mode plan|smoke|hosted|review-packet|review|baseline|compare --out NEW_DIRECTORY\n'
     + '--taskset w8|founder|founder-reserve (the reserve also needs --reserve FILE)\n'
     + '--split development|heldout --policy both|baseline-v1|deterministic-first-v1\n'
+    + '--environment ID runs the task set in an environment containing its own (founder-v2 or founder-v2-hosted: production-shaped)\n'
     + '--condition natural|malformed-first --repeats 1..20 [--rubric RUBRIC.json]\n'
     + 'Hosted: --profile PROFILE.json --authorization SPEND.json [--max-requests N, at most the authorized limit]\n'
     + 'Review packet: --results RUN/rows.jsonl (writes a blinded packet, its key and a template)\n'
     + 'Review: --results RUN/rows.jsonl --reviews REVIEWS.json [--key KEY.json for blinded reviews]\n'
     + 'Baseline: --runs RUN_OR_REVIEWED_DIRECTORY[,...]\n'
-    + 'Compare: --runs RUN_OR_REVIEWED_DIRECTORY[,...] [--rule PROMOTION_RULE.json] (deterministic-first against baseline-v1)\n'
+    + 'Compare: --runs RUN_OR_REVIEWED_DIRECTORY[,...] [--rule PROMOTION_RULE.json] (deterministic-first against baseline-v1;\n'
+    + '  hosted runs pin the rule they start under, and compare refuses any other)\n'
     + 'Plan is the default and makes no provider requests. Smoke requires development, unless --references FILE\n'
     + 'supplies answers kept outside the repository: that proves a held-out set is satisfiable and measures nothing.');
   process.exit(0);
@@ -54,7 +57,7 @@ const { fingerprint } = await import('../src/actions/tools/composition-provenanc
 const { fingerprintSource } = await import('../src/workflows/evaluation/source');
 const { sanitizedEnv } = await import('../src/util/subprocess-env');
 const { loadTasks, loadReserve, evaluateTask } = await import('../src/workflows/evaluation/runner');
-const { environmentFor } = await import('../src/workflows/evaluation/environment');
+const { environmentFor, extendsEnvironment } = await import('../src/workflows/evaluation/environment');
 const { reviewPacket, unblindReviews } = await import('../src/workflows/evaluation/review-packet');
 const { report, applyReviews } = await import('../src/workflows/evaluation/report');
 const { validateProfile, resolveAdminEvidence, MeasuredHostedProvider, COMPOSITION_ALIAS } = await import('../src/workflows/evaluation/hosted');
@@ -132,9 +135,15 @@ if (values.mode === 'baseline') {
 const rubric = loadRubric(values.rubric ? resolve(values.rubric) : undefined);
 const taskset = values.taskset === 'founder-reserve' ? loadReserve(resolve(values.reserve!))
   : loadTasks(values.split as 'development' | 'heldout', values.taskset);
-const environment = environmentFor(taskset.environment);
-const scheduled = policies.flatMap(policy => Array.from({ length: repeats }, (_, index) =>
-  taskset.tasks.filter(task => values.condition !== 'malformed-first' || !task.expectation.blocked).map(task => ({ taskId: task.id, policy, repeat: index + 1, condition: values.condition! })))).flat();
+const declared = environmentFor(taskset.environment);
+const environment = values.environment ? environmentFor(values.environment) : declared;
+if (!extendsEnvironment(environment, declared)) throw new Error('--environment ' + environment.id + ' does not contain ' + declared.id + ', the environment this task set was written for');
+// Both policies run each task and repeat back to back, so drift over the run and a budget stop affect them evenly.
+const scheduled = Array.from({ length: repeats }, (_, index) =>
+  taskset.tasks.filter(task => values.condition !== 'malformed-first' || !task.expectation.blocked)
+    .flatMap(task => policies.map(policy => ({ taskId: task.id, policy, repeat: index + 1, condition: values.condition! })))).flat();
+// Pinned at the start, so a comparison can only be judged by the rule the run began under.
+const promotionRule = loadPromotionRule(values.rule ? resolve(values.rule) : undefined);
 // A hosted run spends money and claims to measure a deployed profile, so it
 // starts only when the spend is authorized and, for the held-out set, the
 // profile is evidenced and the rubric was frozen first. Otherwise: not_run.
@@ -162,7 +171,9 @@ const manifest = {
   schemaVersion: 1, startedAt: startedAt.toISOString(), mode: values.mode, argv: process.argv.slice(2), bunVersion: Bun.version,
   head, ...source,
   taskset: { name: taskset.name, version: taskset.version, sha256: taskset.sha256, split: values.split, environment: taskset.environment },
+  environment: environment.id,
   rubric: { id: rubric.rubric.id, sha256: rubric.sha256, status: rubric.rubric.status, value: rubric.rubric },
+  promotionRule: { id: promotionRule.rule.id, sha256: promotionRule.sha256, status: promotionRule.rule.status, value: promotionRule.rule },
   profile: profile ?? null, profileEvidence: evidence, authorization,
   requestedAlias: values.mode === 'smoke' ? 'controlled-fixture' : COMPOSITION_ALIAS, maxRequests, maxTokens, scheduled,
   limitations: ['Synthetic tasks and simulated effects only; no live integration certification.',

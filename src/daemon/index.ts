@@ -86,7 +86,7 @@ import { WorkflowEventBus } from "../workflows/runtime/event-bus.ts";
 import { WorkflowEventBuffer } from "../workflows/runtime/event-buffer.ts";
 import { createComposerLlmClient } from "../actions/tools/composer-llm.ts";
 import { composePersistedFlow } from '../actions/tools/persisted-workflow-composer.ts';
-import { configurePlanningPolicy } from '../actions/tools/composition-provenance.ts';
+import { activePlanningPolicy, configurePlanningPolicy } from '../actions/tools/composition-provenance.ts';
 import { SuggestionComposer } from '../awareness/suggestion-composer.ts';
 import {
   bootstrapWorkflowEngine,
@@ -5046,6 +5046,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // workflows.planningPolicy setting, read at each composition so a settings
     // reload applies a change to the next one (Q-03).
     configurePlanningPolicy(() => resolvePlanningPolicy(jarvisConfig.workflows?.planningPolicy));
+    activePlanningPolicy(); // logs the starting policy and its source
 
     // Bootstrap the workflow engine: build/locate the bundle, compile pieces,
     // start the loopback SandboxApi, construct the EngineRuntime, extract the

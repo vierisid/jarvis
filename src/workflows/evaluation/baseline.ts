@@ -1,3 +1,4 @@
+import { basename } from 'node:path';
 import { fingerprint } from '../../actions/tools/composition-provenance';
 import { budgetFor, validateRubric, type Budget, type ReleaseRubric } from './rubric';
 import { measure, type Measures, type ScheduledItem } from './measures';
@@ -54,6 +55,9 @@ const LIMITATIONS = [
   'Correction counts and times are reviewer-reported, not instrumented.',
 ];
 
+/** A run named by its directory alone, so a shared report never carries a local path. */
+export const runLabel = (run: BaselineRun) => basename(run.source.replace(/[\\/]+$/, '')) || 'run';
+
 /**
  * Splits hosted runs into those a report may use, those that never started,
  * and the problems that refuse the whole report: anything but a hosted
@@ -64,16 +68,16 @@ export function matchedHostedRuns(runs: BaselineRun[]) {
   const problems: string[] = [], notRun: Array<{ profileId: string | null; reasons: string[] }> = [], valid: BaselineRun[] = [];
   for (const run of runs) {
     const m = run.manifest, before = problems.length;
-    if (m?.mode !== 'hosted') problems.push(run.source + ' is a ' + (m?.mode ?? 'unknown') + ' run; only hosted runs form a baseline.');
-    else if (m.taskset?.split !== 'heldout') problems.push(run.source + ' used the ' + m.taskset?.split + ' split; a baseline uses the held-out set.');
+    if (m?.mode !== 'hosted') problems.push(runLabel(run) + ' is a ' + (m?.mode ?? 'unknown') + ' run; only hosted runs form a baseline.');
+    else if (m.taskset?.split !== 'heldout') problems.push(runLabel(run) + ' used the ' + m.taskset?.split + ' split; a baseline uses the held-out set.');
     else if (run.report?.status === 'not_run') notRun.push({ profileId: m.profile?.id ?? null, reasons: run.report.reasons ?? [run.report.reason] });
     else {
-      if (!m.rubric?.value || fingerprint(m.rubric.value) !== m.rubric.sha256) problems.push(run.source + ' does not pin its rubric.');
-      else if (validateRubric(m.rubric.value).status !== 'frozen') problems.push(run.source + ' ran under an unfrozen rubric.');
-      if (!m.profileEvidence) problems.push(run.source + ' has no admin profile evidence.');
-      if (!m.authorization) problems.push(run.source + ' has no spend authorization.');
-      if (run.rows.some(r => r.kind !== 'hosted')) problems.push(run.source + ' contains rows that are not hosted measurements.');
-      if (run.taskset.sha256 !== m.taskset.sha256) problems.push(run.source + ' task set does not match its manifest.');
+      if (!m.rubric?.value || fingerprint(m.rubric.value) !== m.rubric.sha256) problems.push(runLabel(run) + ' does not pin its rubric.');
+      else if (validateRubric(m.rubric.value).status !== 'frozen') problems.push(runLabel(run) + ' ran under an unfrozen rubric.');
+      if (!m.profileEvidence) problems.push(runLabel(run) + ' has no admin profile evidence.');
+      if (!m.authorization) problems.push(runLabel(run) + ' has no spend authorization.');
+      if (run.rows.some(r => r.kind !== 'hosted')) problems.push(runLabel(run) + ' contains rows that are not hosted measurements.');
+      if (run.taskset.sha256 !== m.taskset.sha256) problems.push(runLabel(run) + ' task set does not match its manifest.');
       if (problems.length === before) valid.push(run);
     }
   }

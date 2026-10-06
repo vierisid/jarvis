@@ -10,13 +10,13 @@ Production composition retains the immutable job specification and adds `provena
 
 ## Planning policy in production
 
-Every production composition (chat and opportunity) runs the policy named by `JARVIS_PLANNING_POLICY`, or else by the user-owned setting `workflows.planningPolicy`, or else the default. The choice is read at each composition, and every attempt and repair of one composition runs the policy it started with. The env var applies from the next daemon start. A stored setting applies to the next composition after a settings reload (`POST /api/config/reload` or SIGHUP), but no screen or route edits `workflows` settings yet, so the env var is the practical switch. An unknown name falls back to `baseline-v1` with a warning, so a typo cannot select an unmeasured prompt. The evaluation passes its policy explicitly and ignores both.
+Every production composition (chat and opportunity) runs the policy named by `JARVIS_PLANNING_POLICY`, or else by the user-owned setting `workflows.planningPolicy`, or else the default. The choice is read at each composition, and every attempt and repair of one composition runs the policy it started with. The env var applies from the next daemon start. A stored setting applies to the next composition after a settings reload (`POST /api/config/reload` or SIGHUP), but no screen or route edits `workflows` settings yet, so the env var is the practical switch. An unknown name falls back to `baseline-v1` with one warning per value until a valid read, so a typo cannot select an unmeasured prompt. The daemon logs the policy and where it came from at start and whenever either changes. A direct call to the composer without a policy also follows the selector. The evaluation passes its policy explicitly and ignores both.
 
 - **Opt in:** set `deterministic-first-v1`.
 - **Promote:** change `DEFAULT_PLANNING_POLICY` in a pull request that carries a `promote` comparison report.
 - **Roll back:** set `baseline-v1`. It selects the prior policy whether or not the candidate was promoted.
 
-Each composition's journal row records the prompt version and the policy that actually ran, and the created flow links to it through `compositionRecordId`. Prompts are retained by version: `composition-provenance.test.ts` pins every system and user prompt and tool definition the composer sends (both paths, with a repair) to `COMPOSER_PROMPT_VERSION`, and each policy's instruction text to its id. Changing the composer's wording without a new version, or a policy's instruction without a new id, fails that test, so rolling back always restores the prompt that was measured.
+Each composition's journal row records the prompt version and the policy that actually ran, and the created flow links to it through `compositionRecordId`. Prompts are retained by version: `composition-provenance.test.ts` pins every system prompt, user prompt, tool result and tool definition the composer sends, on both paths and through a repair, to `COMPOSER_PROMPT_VERSION`. It does so in each environment shape production uses (bare; detailed tools, specialist roles, a library and mixed machines; the same without a library, as hosted installs show it; tool names only), and pins each policy's instruction text to its id. Changing the composer's wording without a new version, or a policy's instruction without a new id, fails that test, so rolling back always restores the prompt that was measured.
 
 The existing high-tier route remains unchanged. The hosted proxy resolves `uj-high` to the model a plan routes to; a client alias alone does not prove which model answered.
 
@@ -44,7 +44,7 @@ Limits:
 
 `founder` covers the jobs the product promises: meeting preparation and follow-up, invoice review, lead follow-up and recurring reports, plus requests that must be refused: missing information, missing capabilities, unsupported machines or UI automation, and one-off or judgment-heavy requests that need no automation. The development set has 16 tasks (11 supported, 5 to refuse); the held-out set has 66 (44 supported, 22 to refuse), above the release rubric's minimum of 40 and 20.
 
-They run in the `founder-v1` environment, defined in `src/workflows/evaluation/environment.ts`:
+They run in the `founder-v1` environment, defined in `src/workflows/evaluation/environment.ts`. `founder-v2` is the same with what a self-hosted daemon also shows the composer, the shipped specialist roles and the pieces library; `founder-v2-hosted` adds the roles only, as hosted installs manage pieces themselves. `--environment ID` runs a task set in an environment that contains its own, recorded in the manifest. `founder-v1` shows:
 
 - **Pieces:** notify, regex, Ask, triggers, context (memory search, commitments, recent activity), tool and agent, with their real metadata.
 - **Tools:** the seven bounded tools a workflow can actually invoke (read, write and list files, read and set the clipboard, capture the screen, desktop snapshot), using the real tool definitions projected exactly as the daemon shows them to the composer. Tools a workflow cannot run are not offered.
@@ -217,19 +217,28 @@ Natural-condition groups are judged against the frozen rubric: sample size, firs
 ## Promotion comparison
 
 ```bash
-bun run eval:workflows --mode compare --runs /tmp/w8-reviewed --rule /private/planning-promotion-v1.frozen.json --out /tmp/w8-promotion
+bun run eval:workflows --mode hosted --taskset founder --environment founder-v2 --profile PROFILE.json --authorization SPEND.json --out /tmp/promotion-run
+bun run eval:workflows --mode compare --runs /tmp/promotion-run-reviewed --out /tmp/promotion
 ```
 
-`--mode compare` judges `deterministic-first-v1` against `baseline-v1` under a promotion rule, by default `src/workflows/evaluation/rubric/planning-promotion-v1.json`. That rule ships **proposed**: freeze it with its approvers and date before the hosted runs it judges. A rule that is proposed, or frozen after a run started, is refused, so results cannot move the threshold. A changed threshold is a new rule id.
+`--mode compare` judges `deterministic-first-v1` against `baseline-v1` under the promotion rule `src/workflows/evaluation/rubric/planning-promotion-v1.json` (or `--rule FILE`). It ships **proposed**. To use it, freeze it with its approvers and date and commit the frozen rule before the hosted runs it judges. Every run pins the rule it starts under in its manifest, and a comparison is judged only by that rule: a run without a pin, a rule that differs from the pinned one, a proposed rule, or one frozen after the run started is refused. So results cannot move a threshold; a changed threshold is a new rule id.
 
-It takes the same runs a baseline takes and refuses the same things, plus a run that did not schedule both policies on the same natural-condition tasks and repeats (`--policy both`, the default, does). For each profile it checks:
+It takes the same runs a baseline takes and refuses the same things. It also refuses:
 
+- a run outside a production-shaped environment (`founder-v2` or `founder-v2-hosted`), which would not measure what production shows the composer;
+- a run that did not schedule both policies on the same natural-condition tasks and repeats (`--policy both`, the default, does, running each task under both back to back so drift and a budget stop affect them evenly);
+- runs that measured more than one composer prompt version.
+
+For each profile it checks:
+
+- **Complete:** every scheduled item ran. An incomplete group decides nothing.
 - **Sample:** the release rubric's minimum supported and negative tasks.
-- **Unnecessary AI:** graph AI steps over each task's allowance, plus unrequested AI calls and delegations, must fall.
-- **Corrections:** first-candidate correctness and, with human review, median edits and correction time must improve: at least one better and none worse. A rule may relax this to `not_worse`.
+- **Unnecessary AI:** on the graphs both policies composed, the AI each graph uses beyond its job's needs must fall. That is its AI steps over the task's allowance, or the most extra AI calls and delegations in any one scenario, whichever is larger, so one extra step counts once.
+- **Composed:** the candidate composes at least as many supported jobs and abstains falsely no more often, so avoiding AI by not composing is not an improvement.
+- **Corrections:** first-candidate correctness and, with human review, median edits and correction time must improve: at least one better and none worse.
 - **Safety:** unsafe effects and missed abstentions must not rise.
-- **Success:** after-repair task success may fall by at most `maxSuccessRegression` (5 points in the proposed rule).
+- **Success:** after-repair task success may fall by at most `maxSuccessRegression` (5 points in the proposed rule); a drop exactly at the allowance passes.
 
-Each profile, and the report, is `promote`, `keep_baseline` (something failed) or `not_established` (pending reviews, a small sample or an incomplete run). Exit codes match the baseline: 0 completed, 1 refused, 2 not_run. The report is sanitized like a baseline: aggregates and identities only. A `promote` verdict is the evidence for changing the default, not the change.
+Each profile is `promote`, `keep_baseline` (something failed) or `not_established` (an incomplete run, pending reviews or a small sample). The report promotes only when every profile does, every run completed, and the runs measured the composer prompt version the code sends now; it lists that version and each run's head, source fingerprint and environment. Exit codes match the baseline: 0 completed, 1 refused, 2 not_run or incomplete. The report is sanitized like a baseline: aggregates, fingerprints and run names only. A `promote` verdict is the evidence for changing the default, not the change.
 
 Results are written only to the `--out` directory; do not commit run output. Summarize a run in the PR or discussion that uses it.

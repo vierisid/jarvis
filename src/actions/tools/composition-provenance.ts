@@ -76,7 +76,8 @@ export function snapshotComposition(deps: ComposeDeps): { deps: ComposeDeps; pro
   };
 }
 
-export function planningPrompt(system: string, policy: PlanningPolicy = DEFAULT_PLANNING_POLICY): string {
+/** Without an explicit policy, the active one: a direct caller of the composer still follows the selector. */
+export function planningPrompt(system: string, policy: PlanningPolicy = activePlanningPolicy()): string {
   return system + POLICY_INSTRUCTIONS[policy];
 }
 
