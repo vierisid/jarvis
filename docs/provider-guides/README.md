@@ -30,6 +30,11 @@ Two related setup inconsistencies are corrected: LiteLLM and OpenAI-compatible
 onboarding now accept optional API keys, and Settings permits connection tests
 without a key for providers that explicitly declare their key optional.
 
+The Ollama and LiteLLM guides distinguish the two setup flows: onboarding can
+test the model entered in its form; Settings must first save the provider, assign
+and save its model in the model picker, then reopen the provider card to test.
+LiteLLM's custom alias saves when focus leaves the model field.
+
 ## Verification
 
 Verified on 2026-10-06: 115 affected tests / 402 assertions passed; UI build and
@@ -38,6 +43,16 @@ TypeScript passed. Browser checks covered all four providers at 1440, 820 and
 clipboard, keyboard focus, form retention, optional keys and ten backdrop closes
 under reduced motion. No browser runtime errors were observed. The build retains
 the existing Bun warnings for Tailwind at-rules.
+
+Review correction verified on 2026-10-06: 34 focused guide/API tests and 116
+assertions passed, and the browser checks above were rerun with fresh screenshots.
+An additional browser check followed the revised Settings sequence for Ollama
+and LiteLLM, calling the real `testLLMProvider` against simulated HTTP model
+servers. Both servers rejected the old test-before-model order and accepted the
+exact assigned model after saving (`llama3.1:8b` and `jarvis-local`). Settings
+persistence was in memory; no live model inference was used. Results and the two
+Settings guide screenshots are in `evidence/settings-*-sequence.png` and
+`evidence/settings-sequence-checks.json`.
 
 Run the affected suite and build from the repository root:
 
@@ -51,8 +66,9 @@ bunx tsc --noEmit
 
 Browser evidence in `evidence/` renders the actual onboarding and LLM Settings
 components against isolated API fixtures. No real account configuration, gateway,
-model download or inference was used. The connection success fixtures verify the
-form's request handling, not end-to-end provider availability.
+model download or inference was used. The broad browser matrix mocks connection
+success; the additional Settings sequence check exercises real connection-testing
+code with simulated model servers. Neither establishes live provider availability.
 
 Manual review:
 
@@ -63,7 +79,9 @@ Manual review:
 3. Cycle Tab and Shift+Tab, then close with Escape. Check focus returns and all
    entered fields are unchanged. Repeat with the close button and backdrop.
 4. Repeat from Settings / LLM when adding a provider and editing an existing one.
-   Keyless local setups must allow Test connection.
+   For Ollama and LiteLLM, add/save the provider, assign and save its model below,
+   then reopen the provider card and test. Click outside LiteLLM's alias field to
+   save it. Keyless local setups must allow Test connection.
 5. Review both themes at desktop, tablet and mobile widths. Scroll the guide;
    its footer remains accessible and the underlying page stays still.
 

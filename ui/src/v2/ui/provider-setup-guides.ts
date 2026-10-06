@@ -20,7 +20,7 @@ export const PROVIDER_SETUP_GUIDES: Record<string, ProviderSetupGuide> = {
     steps: [
       { title: "Install and open Ollama", text: "Download Ollama for Windows, macOS or Linux using the link below. Keep it running. On Linux, start ollama serve if the service is not already running." },
       { title: "Download a model", text: "Run this in your terminal. llama3.1:8b is an example that supports tools; choose a model that fits your available memory. The first download can take a few minutes.", code: "ollama pull llama3.1:8b", codeLabel: "Download example model" },
-      { title: "Connect it to Jarvis", text: "Select Ollama and enter the base URL below. Jarvis reads the installed models. Choose the exact model, including its tag, then use Test connection. In Settings, add or save the provider and assign the model in the model picker below." },
+      { title: "Connect it to Jarvis", text: "Select Ollama and enter the base URL below. During onboarding, choose the exact installed model, including its tag, then use Test connection. In Settings, first add or save the provider. In the model picker below, select that provider and its model. Once the model is saved, reopen the provider card and use Test connection. Testing before assigning a model can fail even when Ollama is running." },
     ],
     baseUrl: "http://localhost:11434",
     model: "llama3.1:8b",
@@ -50,7 +50,7 @@ export const PROVIDER_SETUP_GUIDES: Record<string, ProviderSetupGuide> = {
     steps: [
       { title: "Install the proxy", text: "Install uv using its installation guide below, then run this command. For this example, also start Ollama and download llama3.1:8b.", code: "uv tool install 'litellm[proxy]'", codeLabel: "Install LiteLLM" },
       { title: "Give your model an alias", text: "Save this as config.yaml. The alias jarvis-local is the model name you will enter in Jarvis.", code: "model_list:\n  - model_name: jarvis-local\n    litellm_params:\n      model: ollama_chat/llama3.1:8b\n      api_base: http://localhost:11434", codeLabel: "Example config.yaml" },
-      { title: "Start the proxy and connect", text: "Run the command below. Select LiteLLM in Jarvis, enter the URL and alias, then use Test connection. In Settings, add or save the provider before assigning the alias in the model picker below.", code: "litellm --config config.yaml --host 127.0.0.1 --port 4000", codeLabel: "Start LiteLLM" },
+      { title: "Start the proxy and connect", text: "Run the command below. During onboarding, select LiteLLM, enter the URL and alias, then use Test connection. In Settings, first add or save the provider with its URL and any required key. In the model picker below, select that provider and enter jarvis-local. Click outside the model field to save it. Once saved, reopen the provider card and use Test connection. Testing before assigning the alias can fail even when the proxy is running.", code: "litellm --config config.yaml --host 127.0.0.1 --port 4000", codeLabel: "Start LiteLLM" },
     ],
     baseUrl: "http://localhost:4000/v1",
     model: "jarvis-local",
