@@ -1,0 +1,54 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decisions.test.ts:
+Database initialized at: /tmp/jarvis-f12-lKPjGW/fixture.db
+90 |   decideWorkItem(work.id, { outcome: 'accepted', reason: 'Do it' });
+91 |   getDb().run('UPDATE commitment_work SET run_id = ? WHERE work_id = ?', [e.run.id, work.id]);
+92 |   updateRun(e.run.id, { status: 'SUCCEEDED' });
+93 |   checkWorkResult(work.id, { verdict: 'passed', summary: 'Legacy user check', evidence: [{ ref: 'fixture', description: 'fixture' }] });
+94 |   const projected = queue.get(`work:${work.id}`);
+95 |   expect(projected.state).toBe(status); expect(projected.workStatus).toBe('verified');
+                               ^
+error: expect(received).toBe(expected)
+
+Expected: "unknown"
+Received: "verified"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/brief/decisions.test.ts:95:27)
+(fail) unknown receipt cannot be hidden by a verified work result [537.74ms]
+Database initialized at: /tmp/jarvis-f12-4S7Dll/fixture.db
+90 |   decideWorkItem(work.id, { outcome: 'accepted', reason: 'Do it' });
+91 |   getDb().run('UPDATE commitment_work SET run_id = ? WHERE work_id = ?', [e.run.id, work.id]);
+92 |   updateRun(e.run.id, { status: 'SUCCEEDED' });
+93 |   checkWorkResult(work.id, { verdict: 'passed', summary: 'Legacy user check', evidence: [{ ref: 'fixture', description: 'fixture' }] });
+94 |   const projected = queue.get(`work:${work.id}`);
+95 |   expect(projected.state).toBe(status); expect(projected.workStatus).toBe('verified');
+                               ^
+error: expect(received).toBe(expected)
+
+Expected: "blocked"
+Received: "verified"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/brief/decisions.test.ts:95:27)
+(fail) blocked receipt cannot be hidden by a verified work result [671.28ms]
+Database initialized at: /tmp/jarvis-f12-fhcrB1/fixture.db
+90 |   decideWorkItem(work.id, { outcome: 'accepted', reason: 'Do it' });
+91 |   getDb().run('UPDATE commitment_work SET run_id = ? WHERE work_id = ?', [e.run.id, work.id]);
+92 |   updateRun(e.run.id, { status: 'SUCCEEDED' });
+93 |   checkWorkResult(work.id, { verdict: 'passed', summary: 'Legacy user check', evidence: [{ ref: 'fixture', description: 'fixture' }] });
+94 |   const projected = queue.get(`work:${work.id}`);
+95 |   expect(projected.state).toBe(status); expect(projected.workStatus).toBe('verified');
+                               ^
+error: expect(received).toBe(expected)
+
+Expected: "failed"
+Received: "verified"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/brief/decisions.test.ts:95:27)
+(fail) failed receipt cannot be hidden by a verified work result [557.42ms]
+
+ 0 pass
+ 14 filtered out
+ 3 fail
+ 3 expect() calls
+Ran 3 tests across 1 file. [1.83s]

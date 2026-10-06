@@ -1,0 +1,17 @@
+[
+  {
+    "mutation": "revision-guard",
+    "exit_code": 1,
+    "log": "docs/brief-delivery/evidence/F-12/revision-guard-red.log"
+  },
+  {
+    "mutation": "effect-truth",
+    "exit_code": 1,
+    "log": "docs/brief-delivery/evidence/F-12/effect-truth-red.log"
+  },
+  {
+    "mutation": "cursor-change",
+    "exit_code": 1,
+    "log": "docs/brief-delivery/evidence/F-12/cursor-change-red.log"
+  }
+]
