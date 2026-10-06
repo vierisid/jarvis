@@ -1,442 +1,674 @@
-Revert checks for Q-04 at 5b86ca80: each guarantee removed in turn, its test run, the source restored.
+Revert checks for Q-04 at b308ac03 (review fixes 1b64360b): each guarantee removed in turn, its test run, the source restored.
 Each entry gives the file, the exact text removed and what replaced it, so any check can be repeated by hand.
 
 [DETECTED] unknown fields are accepted
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "for (const key of Object.keys(value)) if (!keys.includes(key)) fail("
     replace with: "for (const key of Object.keys(value)) if (false) fail("
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [1.93ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [1.22ms]
 
 [DETECTED] an empty contract is accepted
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "  if (!Object.keys(contract).length) fail('it states nothing');\n"
     replace with: ""
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.74ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [1.06ms]
 
 [DETECTED] a cron without five fields is accepted
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "    if (cron !== undefined && cron.split(' ').length !== 5) fail('trigger.cron must have 5 fields');\n"
     replace with: ""
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.71ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.62ms]
 
 [DETECTED] a cron is not normalized
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "const normalizeCron = (cron: string) => cron.trim().split(/\\s+/).join(' ');"
     replace with: "const normalizeCron = (cron: string) => cron;"
-    fails: validating a contract > a stated contract is kept, normalized and copied [1.30ms]
+    fails: validating a contract > a stated contract is kept, normalized and copied [1.06ms]
 
 [DETECTED] the contract is not copied
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "if (value.recipients !== undefined) contract.recipients = texts(value.recipients, 'recipients');"
     replace with: "if (value.recipients !== undefined) contract.recipients = (texts(value.recipients, 'recipients'), value.recipients as string[]);"
-    fails: validating a contract > a stated contract is kept, normalized and copied [3.78ms]
+    fails: validating a contract > a stated contract is kept, normalized and copied [3.34ms]
 
-[DETECTED] a cron on a trigger that is not a schedule is accepted
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "    if ((t.cron !== undefined || t.timezone !== undefined) && kind !== 'schedule') fail('only a schedule trigger has a cron or timezone');\n"
+[DETECTED] a cron, cadence or zone on another trigger kind is accepted
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if ((t.cron !== undefined || t.every !== undefined || t.timezone !== undefined) && kind !== 'schedule') fail('only a schedule trigger has a cron, cadence or timezone');\n"
     replace with: ""
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.69ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.62ms]
 
 [DETECTED] an unknown trigger kind is accepted
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "    if (!TRIGGER_KINDS.includes(t.kind as ContractTriggerKind)) fail('trigger.kind must be manual, schedule, webhook, event or piece');\n"
     replace with: ""
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.74ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.60ms]
 
 [DETECTED] a piece trigger may omit its piece
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "    if (kind === 'piece' && t.piece === undefined) fail('a piece trigger must name its piece');\n"
     replace with: ""
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.82ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.63ms]
 
 [DETECTED] another trigger kind may name a piece
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "    if ((t.piece !== undefined || t.trigger !== undefined) && kind !== 'piece') fail('only a piece trigger names a piece and its trigger');\n"
     replace with: ""
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.57ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.62ms]
+
+[DETECTED] an unknown cadence is accepted
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (t.every !== undefined && !CADENCES.includes(t.every as ContractCadence)) fail('trigger.every must be hour, day, week or month');\n"
+    replace with: ""
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.63ms]
+
+[DETECTED] a cron that misses its cadence is accepted
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (cron && every && cadence(cron) !== every) unmet("
+    replace with: "    if (false) unmet("
+    fails: validating a contract > a contract no graph can keep is refused, naming why [1.68ms]
 
 [DETECTED] an unknown time zone is accepted
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "      if (!zone) fail(`trigger.timezone ${timezone} is not a known time zone`);\n"
     replace with: ""
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [1.14ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [0.97ms]
 
 [DETECTED] a schedule in another time zone is accepted
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
     remove: "      if (zone !== scheduleTimeZone()) unmet("
     replace with: "      if (false) unmet("
-    fails: validating a contract > a contract that can never be met is refused, naming why [1.13ms]
+    fails: validating a contract > a contract no graph can keep is refused, naming why [1.94ms]
+    fails: rechecking a stored contract > an edited graph is checked again, and a contract that no longer validates is reported, not thrown [2.13ms]
 
 [DETECTED] an unknown effect is accepted
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  8 pass 2 fail
     remove: "for (const effect of forbidden.effects) if (!Object.hasOwn(AUTHORITY_REQUIREMENTS, effect)) fail("
     replace with: "for (const effect of forbidden.effects) if (false) fail("
-    fails: production composition > the chat tool passes a stated contract and returns what to confirm; an unmeetable one is refused [814.67ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [795.62ms]
+    fails: production composition > create with a description reroutes to compose and keeps the contract [1847.66ms]
 
 [DETECTED] a notification is accepted as a source
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "    if (!notify) fail(`${where} cannot be a notification`);\n"
     replace with: ""
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [1.49ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [3.70ms]
+
+[DETECTED] auto is accepted as a channel to require
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (channels.includes('auto')) fail("
+    replace with: "    if (false) fail("
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [4.55ms]
 
 [DETECTED] a notification may be spelled as a piece
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "    if (samePiece(piece, NOTIFY)) fail("
     replace with: "    if (false) fail("
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [1.55ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [6.31ms]
 
 [DETECTED] a list may exceed 20 values
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "  if (!Array.isArray(value) || !value.length || value.length > MAX_ITEMS) fail(`${where} must list 1 to ${MAX_ITEMS} values`);"
     replace with: "  if (!Array.isArray(value) || !value.length) fail(`${where} must list 1 to ${MAX_ITEMS} values`);"
-    fails: validating a contract > a contract that cannot be read is refused before anything is composed [1.63ms]
+    fails: validating a contract > a contract that cannot be read is refused before anything is composed [5.30ms]
 
-[DETECTED] a required step may have a forbidden effect
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "    if (effect && forbidden?.effects?.includes(effect)) unmet("
+[DETECTED] an unmeetable contract reaches the composer
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  8 pass 2 fail
+    remove: "  meetable(contract);\n"
+    replace with: ""
+    fails: the composer holds a graph to the job contract > a contract that can never be met fails before any provider request [7.31ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [970.73ms]
+
+[DETECTED] a source that does not read is accepted
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (kind?.effect && !kind.open && kind.effect !== 'read_data') unmet("
     replace with: "    if (false) unmet("
-    fails: validating a contract > a contract that can never be met is refused, naming why [0.78ms]
+    fails: validating a contract > a contract no graph can keep is refused, naming why [3.46ms]
 
 [DETECTED] a contract may require and forbid one tool
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "    if ('tool' in s && forbidden?.tools?.includes(s.tool)) unmet("
     replace with: "    if (false) unmet("
-    fails: validating a contract > a contract that can never be met is refused, naming why [0.56ms]
+    fails: validating a contract > a contract no graph can keep is refused, naming why [1.27ms]
+
+[DETECTED] a contract may require and forbid an agent
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  8 pass 2 fail
+    remove: "    if (kind?.agent && forbidden?.agents) unmet("
+    replace with: "    if (false) unmet("
+    fails: the composer holds a graph to the job contract > a contract that can never be met fails before any provider request [7.38ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [688.23ms]
+
+[DETECTED] a required step may have a forbidden effect
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (kind?.effect && forbidden?.effects?.includes(kind.effect)) unmet("
+    replace with: "    if (false) unmet("
+    fails: validating a contract > a contract no graph can keep is refused, naming why [1.81ms]
+
+[DETECTED] a required open output may face what it could break
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (exposed.length) unmet("
+    replace with: "    if (false) unmet("
+    fails: validating a contract > a contract no graph can keep is refused, naming why [2.86ms]
 
 [DETECTED] a required notification may go where recipients do not allow
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
     remove: "      if (contract.recipients && !contract.recipients.includes(channel)) unmet("
     replace with: "      if (false) unmet("
-    fails: the composer holds a graph to the job contract > a contract that cannot be met fails before any provider request [2.96ms]
+    fails: the composer holds a graph to the job contract > a contract that can never be met fails before any provider request [7.05ms]
 
-[DETECTED] a different trigger kind passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "    if (kind !== want.kind) violations.push("
-    replace with: "    if (false) violations.push("
-    fails: checking a graph against the contract > the trigger and its schedule are what the job states [1.50ms]
+[DETECTED] a required output may be addressed outside the recipients
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "        if (contract.recipients && !contract.recipients.includes(v)) unmet("
+    replace with: "        if (false) unmet("
+    fails: validating a contract > a contract no graph can keep is refused, naming why [2.91ms]
 
-[DETECTED] a different cron passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "      if (want.cron && normalizeCron(cron ?? '') !== want.cron) violations.push("
-    replace with: "      if (false) violations.push("
-    fails: checking a graph against the contract > the trigger and its schedule are what the job states [2.24ms]
+[DETECTED] a required output may be addressed to a forbidden channel
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "        if (forbidden?.channels?.includes(v)) unmet("
+    replace with: "        if (false) unmet("
+    fails: validating a contract > a contract no graph can keep is refused, naming why [3.45ms]
 
-[DETECTED] cronExpression is not read
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "const cron = [input.cron_expression, input.cronExpression, input.expression].find("
-    replace with: "const cron = [input.cron_expression].find("
-    fails: checking a graph against the contract > the trigger and its schedule are what the job states [2.93ms]
-
-[DETECTED] a different event passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "      if (want.eventType && input.eventType !== want.eventType) violations.push("
-    replace with: "      if (false) violations.push("
-    fails: checking a graph against the contract > the trigger and its schedule are what the job states [2.55ms]
-
-[DETECTED] a different piece trigger passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "      if (want.piece && !samePiece(want.piece, piece)) violations.push("
-    replace with: "      if (false) violations.push("
-    fails: checking a graph against the contract > the trigger and its schedule are what the job states [4.11ms]
-
-[DETECTED] a different trigger name passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "      else if (want.trigger && name !== want.trigger) violations.push("
-    replace with: "      else if (false) violations.push("
-    fails: checking a graph against the contract > the trigger and its schedule are what the job states [3.82ms]
-
-[DETECTED] a missing source or output passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  9 pass 3 fail
-    remove: "      else violations.push(miss(want, steps, verb));"
-    replace with: "      else {}"
-    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [2.43ms]
-    fails: checking a graph against the contract > a recipient decided at run time, or missing, is a blocker [1.92ms]
-    fails: checking a graph against the contract > sources must be read with their stated values [1.26ms]
-
-[DETECTED] a wrong value is reported without naming it
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  9 pass 3 fail
-    remove: "      if (sameValue(value, actual[key])) continue;"
-    replace with: "      continue;"
-    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [5.44ms]
-    fails: checking a graph against the contract > a recipient decided at run time, or missing, is a blocker [2.77ms]
-    fails: checking a graph against the contract > sources must be read with their stated values [2.13ms]
-
-[DETECTED] a value decided at run time is reported as a wrong value
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "      return computed(actual[key])"
-    replace with: "      return false"
-    fails: checking a graph against the contract > a recipient decided at run time, or missing, is a blocker [2.66ms]
-
-[DETECTED] one requested channel is enough
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "    return want.notify.channels.every(c => reached.has(c));"
-    replace with: "    return want.notify.channels.some(c => reached.has(c));"
-    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [2.79ms]
-
-[DETECTED] output values are not compared
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  10 pass 2 fail
-    remove: "\n    && Object.entries(want.target ?? {}).every(([k, v]) => sameValue(v, step.input[k]));"
-    replace with: ";"
-    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [3.30ms]
-    fails: checking a graph against the contract > a recipient decided at run time, or missing, is a blocker [1.16ms]
-
-[DETECTED] tool param values are not compared
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "\n    && Object.entries(want.params ?? {}).every(([k, v]) => sameValue(v, paramsOf(step.input)[k]));"
-    replace with: ";"
-    fails: checking a graph against the contract > sources must be read with their stated values [1.24ms]
-
-[DETECTED] tool params given as JSON text are not read
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "  if (typeof params === 'string') {\n    try { const parsed = JSON.parse(params); if (object(parsed)) return parsed; } catch { /* not JSON */ }\n  }\n"
-    replace with: ""
-    fails: checking a graph against the contract > sources must be read with their stated values [1.13ms]
-
-[DETECTED] a send no output names passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "if (!contract.outputs.some(want => matches(s, want))) violations.push("
-    replace with: "if (false) violations.push("
-    fails: checking a graph against the contract > an unwanted send is rejected, even hidden in a router branch [1.95ms]
-
-[DETECTED] an unrequested notification passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "      } else if (!asked.size) violations.push("
-    replace with: "      } else if (!asked.size) void ("
-    fails: checking a graph against the contract > an unwanted send is rejected, even hidden in a router branch [4.07ms]
-
-[DETECTED] a notification to an extra channel passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "        if (!isExpression(r.value) && !asked.has(String(r.value))) violations.push("
-    replace with: "        if (false) violations.push("
-    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [1.65ms]
-
-[DETECTED] a send without a recipient passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "      if (!s.recipients.length) violations.push("
-    replace with: "      if (false) violations.push("
-    fails: checking a graph against the contract > a recipient decided at run time, or missing, is a blocker [4.61ms]
-
-[DETECTED] a recipient decided at run time passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "        if (isExpression(r.value)) violations.push(`step \"${s.name}\" decides its ${r.prop} at run time (${shown(r.value)}); the job needs it stated`);"
-    replace with: "        if (isExpression(r.value)) {}"
-    fails: checking a graph against the contract > a recipient decided at run time, or missing, is a blocker [1.78ms]
-
-[DETECTED] a send to someone the job does not allow passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "          violations.push(`step \"${s.name}\" sends to ${clip(r.value)}, which the job does not allow`);"
-    replace with: "          void 0;"
-    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [3.27ms]
-
-[DETECTED] cc and bcc are not checked
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "const RECIPIENT_PROPS = new Set(['receiver', 'to', 'cc', 'bcc',"
-    replace with: "const RECIPIENT_PROPS = new Set(['receiver', 'to',"
-    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [3.53ms]
-
-[DETECTED] an empty channel list counts as no recipient
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "(channels.length ? channels : ['auto'])"
-    replace with: "channels"
-    fails: checking a graph against the contract > a recipient decided at run time, or missing, is a blocker [3.86ms]
-
-[DETECTED] a tool chosen at run time passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  10 pass 2 fail
-    remove: "    for (const s of steps) if (s.runtimeTool) violations.push("
-    replace with: "    for (const s of steps) if (false) violations.push("
-    fails: checking a graph against the contract > a recipient decided at run time, or missing, is a blocker [7.06ms]
-    fails: checking a graph against the contract > a step whose effect is decided when it runs cannot pass a forbidden effect [1.95ms]
-
-[DETECTED] a forbidden effect passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  5 pass 3 fail
-    remove: "        if (s.effect && forbidden.effects.includes(s.effect)) violations.push("
-    replace with: "        if (false) violations.push("
-    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [23.61ms]
-    fails: the composer holds a graph to the job contract > a repair cannot drop a requirement: every candidate is checked against the same contract [4.87ms]
-    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [4.22ms]
-
-[DETECTED] an open step passes a forbidden effect
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "        else if (s.open) violations.push("
-    replace with: "        else if (false) violations.push("
-    fails: checking a graph against the contract > a step whose effect is decided when it runs cannot pass a forbidden effect [1.16ms]
-
-[DETECTED] any mapped tool counts as bounded
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "      ...(effect && BOUNDED_TOOL_NAMES.has(toolName) ? {} :"
-    replace with: "      ...(effect ? {} :"
-    fails: checking a graph against the contract > a step whose effect is decided when it runs cannot pass a forbidden effect [1.47ms]
+[DETECTED] a required send that cannot state its recipient is accepted under recipients
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "      if (props && !props.some(p => RECIPIENT_PROPS.has(p))) unmet("
+    replace with: "      if (false) unmet("
+    fails: validating a contract > a contract no graph can keep is refused, naming why [3.19ms]
 
 [DETECTED] an agent counts as bounded
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  10 pass 2 fail
-    remove: "    return { ...base, kind: 'agent', effect: 'spawn_agent', open: 'delegates to an agent, which chooses its own tools when it runs' };"
-    replace with: "    return { ...base, kind: 'agent', effect: 'spawn_agent' };"
-    fails: checking a graph against the contract > a step whose effect is decided when it runs cannot pass a forbidden effect [1.13ms]
-    fails: checking a graph against the contract > without a forbidden effect, a step that decides at run time is left for a person, never verified [1.43ms]
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "  if (samePiece(pieceName, AGENT)) return { effect: 'spawn_agent', open: 'delegates to an agent, which chooses its own tools when it runs', agent: true };"
+    replace with: "  if (samePiece(pieceName, AGENT)) return { effect: 'spawn_agent', agent: true };"
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [1.66ms]
+    fails: checking a graph against the contract > without anything forbidden, a step that decides when it runs is left for a person and never verified [2.48ms]
 
-[DETECTED] starting another workflow is not recognized
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "  if (samePiece('jarvis-trigger', pieceName))\n    return { ...base, kind: 'piece', effect: 'spawn_agent', open: 'starts another workflow, whose steps this check does not see' };\n"
-    replace with: ""
-    fails: checking a graph against the contract > a step whose effect is decided when it runs cannot pass a forbidden effect [1.54ms]
+[DETECTED] starting another workflow counts as bounded
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "  if (samePiece(pieceName, WORKFLOW)) return { effect: 'spawn_agent', open: 'starts another workflow, whose steps this check does not see' };"
+    replace with: "  if (samePiece(pieceName, WORKFLOW)) return { effect: 'spawn_agent' };"
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [1.73ms]
+
+[DETECTED] a raw API call counts as bounded by its category
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    return OPEN_ACTIONS.has(actionName) || !governed.known"
+    replace with: "    return !governed.known"
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [2.03ms]
 
 [DETECTED] an ungoverned piece counts as bounded
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  10 pass 2 fail
-    remove: "  return { ...base, kind: 'piece', effect: null, open: `uses ${pieceName}${actionName ? ' ' + actionName : ''}, which Jarvis does not govern` };"
-    replace with: "  return { ...base, kind: 'piece', effect: null };"
-    fails: checking a graph against the contract > a step whose effect is decided when it runs cannot pass a forbidden effect [1.22ms]
-    fails: checking a graph against the contract > without a forbidden effect, a step that decides at run time is left for a person, never verified [2.12ms]
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  16 pass 3 fail
+    remove: "  return { effect: null, open: `uses ${pieceName}${actionName ? ' ' + actionName : ''}, which Jarvis does not govern`, serviceOnly: true };"
+    replace with: "  return { effect: null };"
+    fails: validating a contract > a contract no graph can keep is refused, naming why [2.15ms]
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [1.25ms]
+    fails: checking a graph against the contract > naming an ungoverned piece as a source does not vouch for what else it does [1.34ms]
+
+[DETECTED] any mapped tool counts as bounded
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "  return effect && BOUNDED_TOOL_NAMES.has(toolName) ? { effect } :"
+    replace with: "  return effect ? { effect } :"
+    fails: validating a contract > a contract no graph can keep is refused, naming why [2.99ms]
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [2.01ms]
+
+[DETECTED] an open step is checked only against effects and channels
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "  if (!kind.serviceOnly) {"
+    replace with: "  if (false) {"
+    fails: validating a contract > a contract no graph can keep is refused, naming why [2.44ms]
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [1.85ms]
+
+[DETECTED] a piece acting through its own service counts as reaching Jarvis tools
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "  if (!kind.serviceOnly) {"
+    replace with: "  if (true) {"
+    fails: validating a contract > a contract some graph can keep is accepted [1.13ms]
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [2.39ms]
+
+[DETECTED] a write that addresses people reaches no one
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  15 pass 4 fail
+    remove: "  return (effect === 'write_data' || effect === 'modify_settings') && recipients.length ? { reach: 'address', recipients } : { recipients: [] };"
+    replace with: "  return { recipients: [] };"
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [4.77ms]
+    fails: checking a graph against the contract > a write that addresses people reaches them: calendar invitations and shares are checked like sends [0.85ms]
+    fails: checking a graph against the contract > an unwanted send is rejected, even hidden in a router branch or a loop [3.63ms]
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [1.24ms]
+
+[DETECTED] attendees are not recipients
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "'chat_id', 'attendees', 'attendee_email']);"
+    replace with: "'chat_id', 'attendee_email']);"
+    fails: checking a graph against the contract > a write that addresses people reaches them: calendar invitations and shares are checked like sends [1.26ms]
+
+[DETECTED] a share's user is not a recipient
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "'recipients', 'email', 'user_email', 'chat_id',"
+    replace with: "'recipients', 'email', 'chat_id',"
+    fails: checking a graph against the contract > a write that addresses people reaches them: calendar invitations and shares are checked like sends [2.21ms]
+
+[DETECTED] cc is not checked
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "const RECIPIENT_PROPS = new Set(['receiver', 'to', 'cc', 'bcc',"
+    replace with: "const RECIPIENT_PROPS = new Set(['receiver', 'to', 'bcc',"
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [5.74ms]
+
+[DETECTED] an empty channel list counts as no recipient
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "(channels.length ? channels : ['auto'])"
+    replace with: "channels"
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [3.54ms]
+
+[DETECTED] a tool chosen at run time is just open
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "      return { ...base, kind: 'tool', toolName, effect: null, open: 'chooses its tool at run time', runtimeTool: true };"
+    replace with: "      return { ...base, kind: 'tool', toolName, effect: null, open: 'chooses its tool at run time' };"
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [6.62ms]
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [2.58ms]
+
+[DETECTED] a send counts as a read
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "const reads = (s: Step) => s.effect === 'read_data' || !!s.open;"
+    replace with: "const reads = (_s: Step) => true;"
+    fails: checking a graph against the contract > sources must be read, with their stated values, by a step or the trigger [2.64ms]
+
+[DETECTED] the trigger cannot be a source
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (all.some(s => reads(s) && matches(s, want))) verified.push("
+    replace with: "    if (steps.some(s => reads(s) && matches(s, want))) verified.push("
+    fails: checking a graph against the contract > sources must be read, with their stated values, by a step or the trigger [2.95ms]
+
+[DETECTED] values compare only exactly
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "const sameValue = (want: ContractValue, got: unknown) => normalized(want) === normalized(got);"
+    replace with: "const sameValue = (want: ContractValue, got: unknown) => JSON.stringify(want) === JSON.stringify(got);"
+    fails: checking a graph against the contract > values compare the same way on both sides: a single value is a list of one, and numbers match their text [1.60ms]
+
+[DETECTED] a number does not match its text
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "  JSON.stringify(listOf(value).map(v => typeof v === 'string' ? v : JSON.stringify(v) ?? String(v)).sort());"
+    replace with: "  JSON.stringify(listOf(value).sort());"
+    fails: checking a graph against the contract > values compare the same way on both sides: a single value is a list of one, and numbers match their text [1.43ms]
+
+[DETECTED] output values are not compared
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  16 pass 3 fail
+    remove: "\n    && Object.entries(want.target ?? {}).every(([k, v]) => sameValue(v, step.input[k]));"
+    replace with: ";"
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [5.78ms]
+    fails: checking a graph against the contract > an unwanted send is rejected, even hidden in a router branch or a loop [5.32ms]
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [1.77ms]
+
+[DETECTED] tool param values are not compared
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "\n    && Object.entries(want.params ?? {}).every(([k, v]) => sameValue(v, paramsOf(step.input)[k]));"
+    replace with: ";"
+    fails: checking a graph against the contract > sources must be read, with their stated values, by a step or the trigger [2.43ms]
+
+[DETECTED] tool params given as JSON text are not read
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "  if (typeof params === 'string') {\n    try { const parsed = JSON.parse(params); if (object(parsed)) return parsed; } catch { /* not JSON */ }\n  }\n"
+    replace with: ""
+    fails: checking a graph against the contract > sources must be read, with their stated values, by a step or the trigger [2.01ms]
+
+[DETECTED] a wrong value is reported without naming it
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  16 pass 3 fail
+    remove: "      if (sameValue(value, actual[key])) continue;"
+    replace with: "      continue;"
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [4.05ms]
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [3.27ms]
+    fails: checking a graph against the contract > sources must be read, with their stated values, by a step or the trigger [2.89ms]
+
+[DETECTED] a value decided at run time is reported as a wrong value
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "      return { near, message: computed(actual[key])"
+    replace with: "      return { near, message: false"
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [1.67ms]
+
+[DETECTED] a different trigger kind passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "  if (kind !== want.kind) violations.push("
+    replace with: "  if (false) violations.push("
+    fails: checking a graph against the contract > the trigger, its schedule and its cadence are what the job states [1.59ms]
+
+[DETECTED] a different cron passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (want.cron && normalizeCron(cron ?? '') !== want.cron) violations.push("
+    replace with: "    if (false) violations.push("
+    fails: checking a graph against the contract > the trigger, its schedule and its cadence are what the job states [2.24ms]
+
+[DETECTED] cronExpression is not read
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "[input.cron_expression, input.cronExpression, input.expression]"
+    replace with: "[input.cron_expression]"
+    fails: checking a graph against the contract > the trigger, its schedule and its cadence are what the job states [2.96ms]
+
+[DETECTED] a schedule at another cadence passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    else if (want.every && cadence(cron ?? '') !== want.every) {"
+    replace with: "    else if (false) {"
+    fails: checking a graph against the contract > the trigger, its schedule and its cadence are what the job states [3.06ms]
+
+[DETECTED] a weekly cron is not weekly
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "  if (dom === '*' && one(dow)) return 'week';\n"
+    replace with: ""
+    fails: validating a contract > a stated contract is kept, normalized and copied [4.10ms]
+    fails: checking a graph against the contract > the trigger, its schedule and its cadence are what the job states [2.34ms]
+
+[DETECTED] a different event passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (want.eventType && input.eventType !== want.eventType) violations.push("
+    replace with: "    if (false) violations.push("
+    fails: checking a graph against the contract > the trigger, its schedule and its cadence are what the job states [3.96ms]
+
+[DETECTED] a different piece trigger passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (want.piece && !samePiece(want.piece, piece)) violations.push("
+    replace with: "    if (false) violations.push("
+    fails: checking a graph against the contract > the trigger, its schedule and its cadence are what the job states [4.70ms]
+
+[DETECTED] a different trigger name passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    else if (want.trigger && name !== want.trigger) violations.push("
+    replace with: "    else if (false) violations.push("
+    fails: checking a graph against the contract > the trigger, its schedule and its cadence are what the job states [5.33ms]
+
+[DETECTED] one requested channel is enough
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if ('notify' in want ? want.notify.channels.every(c => reached.has(c))"
+    replace with: "    if ('notify' in want ? want.notify.channels.some(c => reached.has(c))"
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [3.39ms]
+
+[DETECTED] a missing output passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "      violations.push(message);\n      if (near) nearMissed.add(near);"
+    replace with: "      if (near) nearMissed.add(near);"
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [2.82ms]
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [1.62ms]
+
+[DETECTED] a wrong-value step is also reported as unasked
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "      if (nearMissed.has(s)) continue;\n"
+    replace with: ""
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [5.09ms]
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [2.00ms]
+
+[DETECTED] a send or addressed write no output names passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "      } else if (!contract.outputs.some(want => matches(s, want))) {"
+    replace with: "      } else if (false) {"
+    fails: checking a graph against the contract > a write that addresses people reaches them: calendar invitations and shares are checked like sends [1.63ms]
+    fails: checking a graph against the contract > an unwanted send is rejected, even hidden in a router branch or a loop [1.60ms]
+
+[DETECTED] an unrequested notification passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "        if (!asked.size) { violations.push(`step \"${s.name}\" sends a notification the job did not ask for`); continue; }"
+    replace with: "        if (!asked.size) continue;"
+    fails: checking a graph against the contract > an unwanted send is rejected, even hidden in a router branch or a loop [9.47ms]
+
+[DETECTED] a notification to an extra channel passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "          else if (!asked.has(String(r.value))) violations.push("
+    replace with: "          else if (false) violations.push("
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [2.54ms]
+
+[DETECTED] a notification channel decided at run time passes the outputs
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "          if (isExpression(r.value)) violations.push(`step \"${s.name}\" decides its ${r.prop} at run time (${shown(r.value)}); the job needs it stated`);\n          else if (!asked"
+    replace with: "          if (isExpression(r.value)) {}\n          else if (!asked"
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [4.31ms]
+
+[DETECTED] a send without a recipient passes the recipients
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "      if (s.reach === 'send' && !s.recipients.length) violations.push("
+    replace with: "      if (false) violations.push("
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [3.99ms]
+
+[DETECTED] a recipient decided at run time passes the recipients
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "        if (isExpression(r.value)) violations.push(`step \"${s.name}\" decides its ${r.prop} at run time (${shown(r.value)}); the job needs it stated`);\n        else if (!contract.recipients"
+    replace with: "        if (isExpression(r.value)) {}\n        else if (!contract.recipients"
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [1.95ms]
+
+[DETECTED] a recipient the job does not allow passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  16 pass 3 fail
+    remove: "          violations.push(`step \"${s.name}\" ${s.reach === 'send' ? 'sends to' : 'addresses'} ${clip(r.value)}, which the job does not allow`);"
+    replace with: "          void 0;"
+    fails: checking a graph against the contract > a structurally valid graph with the wrong destination is rejected [2.55ms]
+    fails: checking a graph against the contract > a write that addresses people reaches them: calendar invitations and shares are checked like sends [0.85ms]
+    fails: rechecking a stored contract > an edited graph is checked again, and a contract that no longer validates is reported, not thrown [2.20ms]
+
+[DETECTED] a tool chosen at run time passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "    for (const s of steps) if (s.runtimeTool) violations.push("
+    replace with: "    for (const s of steps) if (false) violations.push("
+    fails: checking a graph against the contract > a destination the job constrains cannot be missing or decided at run time [5.77ms]
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [2.28ms]
+
+[DETECTED] a forbidden effect passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 3 fail
+    remove: "      if (s.effect && forbidden.effects?.includes(s.effect)) violations.push("
+    replace with: "      if (false) violations.push("
+    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [17.35ms]
+    fails: the composer holds a graph to the job contract > a repair cannot drop a requirement: every candidate is checked against the same contract [4.10ms]
+    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [6.00ms]
+
+[DETECTED] an open step passes what it could break
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "        if (exposed.length) violations.push("
+    replace with: "        if (false) violations.push("
+    fails: checking a graph against the contract > a step whose effects are decided when it runs cannot pass anything the job forbids that it could reach [0.93ms]
+
+[DETECTED] a forbidden piece as the trigger passes
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (forbidden.pieces?.some(p => samePiece(p, all[0]?.pieceName ?? ''))) violations.push("
+    replace with: "    if (false) violations.push("
+    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused, the trigger included [1.08ms]
 
 [DETECTED] a forbidden piece passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "      if (forbidden.pieces?.some(p => samePiece(p, s.pieceName))) violations.push("
     replace with: "      if (false) violations.push("
-    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused [1.42ms]
+    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused, the trigger included [1.63ms]
 
 [DETECTED] a forbidden action passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "      if (forbidden.actions?.includes(s.actionName)) violations.push("
     replace with: "      if (false) violations.push("
-    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused [1.25ms]
+    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused, the trigger included [1.18ms]
 
 [DETECTED] a forbidden tool passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "if (s.kind === 'tool' && typeof s.toolName === 'string' && forbidden.tools?.includes(s.toolName)) violations.push("
     replace with: "if (false) violations.push("
-    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused [1.22ms]
+    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused, the trigger included [1.62ms]
 
 [DETECTED] an agent passes when agents are forbidden
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "      if (s.kind === 'agent' && forbidden.agents) violations.push("
     replace with: "      if (false) violations.push("
-    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused [1.58ms]
+    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused, the trigger included [2.21ms]
 
 [DETECTED] the connected channels pass a forbidden channel
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "        if (forbidden.channels?.length && isExpression(r.value))"
     replace with: "        if (false)"
-    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused [1.52ms]
+    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused, the trigger included [1.94ms]
 
 [DETECTED] a forbidden channel passes
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
     remove: "        else if (forbidden.channels?.includes(String(r.value))) violations.push("
     replace with: "        else if (false) violations.push("
-    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused [1.51ms]
+    fails: checking a graph against the contract > forbidden pieces, actions, tools, channels and agents are refused, the trigger included [1.96ms]
 
 [DETECTED] an open step is not left for review
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
     remove: "    if (confirm.length) review.push("
     replace with: "    if (false) review.push("
-    fails: checking a graph against the contract > without a forbidden effect, a step that decides at run time is left for a person, never verified [1.67ms]
+    fails: checking a graph against the contract > without anything forbidden, a step that decides when it runs is left for a person and never verified [1.77ms]
+    fails: checking a graph against the contract > naming an ungoverned piece as a source does not vouch for what else it does [0.62ms]
 
-[DETECTED] an open step lets the report claim no extra sends
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "if (violations.length === before && !open.some(s => !named(s))) verified.push('sends nothing beyond the requested outputs');"
-    replace with: "if (violations.length === before) verified.push('sends nothing beyond the requested outputs');"
-    fails: checking a graph against the contract > without a forbidden effect, a step that decides at run time is left for a person, never verified [1.67ms]
+[DETECTED] an open step lets the report claim nothing else is sent
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "if (violations.length === before && !open.some(s => !namedOutput(s))) verified.push('nothing beyond"
+    replace with: "if (violations.length === before) verified.push('nothing beyond"
+    fails: checking a graph against the contract > without anything forbidden, a step that decides when it runs is left for a person and never verified [1.74ms]
+    fails: checking a graph against the contract > naming an ungoverned piece as a source does not vouch for what else it does [0.75ms]
 
 [DETECTED] an open step lets the report claim the recipients
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "    if (contract.recipients && violations.length === before && !open.length) verified.push("
-    replace with: "    if (contract.recipients && violations.length === before) verified.push("
-    fails: checking a graph against the contract > without a forbidden effect, a step that decides at run time is left for a person, never verified [1.78ms]
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  17 pass 2 fail
+    remove: "    if (violations.length === before && !open.length) verified.push(`reaches only"
+    replace with: "    if (violations.length === before) verified.push(`reaches only"
+    fails: checking a graph against the contract > without anything forbidden, a step that decides when it runs is left for a person and never verified [1.62ms]
+    fails: checking a graph against the contract > naming an ungoverned piece as a source does not vouch for what else it does [1.01ms]
 
-[DETECTED] a step the job names is reviewed as unrequested
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  11 pass 1 fail
-    remove: "    const confirm = [...(contract.outputs && !named(s) ? ['sends nothing the job did not ask for'] : []),"
-    replace with: "    const confirm = [...(contract.outputs ? ['sends nothing the job did not ask for'] : []),"
-    fails: checking a graph against the contract > without a forbidden effect, a step that decides at run time is left for a person, never verified [2.22ms]
+[DETECTED] naming a piece as a source vouches for its other actions
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "  const namedOutput = (s: Step) => (contract.outputs ?? []).some(want => pinned(want) && matches(s, want));"
+    replace with: "  const namedOutput = (s: Step) => [...contract.sources ?? [], ...contract.outputs ?? []].some(want => matches(s, want));"
+    fails: checking a graph against the contract > naming an ungoverned piece as a source does not vouch for what else it does [1.30ms]
+
+[DETECTED] an output naming only the action vouches for an open step
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "'piece' in want ? !!want.action && !!want.target : false;"
+    replace with: "'piece' in want ? !!want.action : false;"
+    fails: checking a graph against the contract > naming an ungoverned piece as a source does not vouch for what else it does [1.63ms]
 
 [DETECTED] the caller's review items are dropped
-    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  10 pass 2 fail
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  16 pass 3 fail
     remove: "  const review = [...contract.review ?? []];"
     replace with: "  const review: string[] = [];"
-    fails: checking a graph against the contract > a graph that keeps the contract passes, and says what it proved and what a person must confirm [3.23ms]
-    fails: checking a graph against the contract > without a forbidden effect, a step that decides at run time is left for a person, never verified [1.45ms]
+    fails: checking a graph against the contract > a graph that keeps the contract passes, and says what it proved and what a person must confirm [3.22ms]
+    fails: checking a graph against the contract > without anything forbidden, a step that decides when it runs is left for a person and never verified [1.29ms]
+    fails: rechecking a stored contract > an edited graph is checked again, and a contract that no longer validates is reported, not thrown [0.97ms]
+
+[DETECTED] a flow without a contract is rechecked
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "  if (stated === undefined || stated === null) return null;\n"
+    replace with: ""
+    fails: rechecking a stored contract > a flow composed without a contract has nothing to recheck [0.80ms]
+
+[DETECTED] a contract that no longer validates throws at recheck
+    file: src/actions/tools/job-contract.ts  test: src/actions/tools/job-contract.test.ts  exit: 1  18 pass 1 fail
+    remove: "    if (e instanceof JobContractError) return { verified: [], review: [], violations: [e.message] };"
+    replace with: "    if (false) return { verified: [], review: [], violations: [e.message] };"
+    fails: rechecking a stored contract > an edited graph is checked again, and a contract that no longer validates is reported, not thrown [2.18ms]
 
 [DETECTED] candidates are not checked against the contract
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  3 pass 5 fail
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  4 pass 6 fail
     remove: "  if (!validation.ok || !contract) return validation;"
     replace with: "  return validation;"
-    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [13.94ms]
-    fails: the composer holds a graph to the job contract > a repair cannot drop a requirement: every candidate is checked against the same contract [1.77ms]
-    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [3.32ms]
-    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [3.51ms]
-    fails: production composition > the chat tool passes a stated contract and returns what to confirm; an unmeetable one is refused [839.44ms]
+    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [12.48ms]
+    fails: the composer holds a graph to the job contract > a repair cannot drop a requirement: every candidate is checked against the same contract [1.70ms]
+    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [3.76ms]
+    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [2.08ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [545.63ms]
+    fails: production composition > create with a description reroutes to compose and keeps the contract [544.85ms]
 
 [DETECTED] a contract is not validated before the provider
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  6 pass 2 fail
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 3 fail
     remove: "    try { contract = validateJobContract(req.contract); } catch (e) {"
     replace with: "    try { contract = req.contract; } catch (e) {"
-    fails: the composer holds a graph to the job contract > a contract that cannot be met fails before any provider request [3.23ms]
-    fails: production composition > the chat tool passes a stated contract and returns what to confirm; an unmeetable one is refused [591.68ms]
+    fails: the composer holds a graph to the job contract > a contract that can never be met fails before any provider request [3.90ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [560.50ms]
+    fails: production composition > create with a description reroutes to compose and keeps the contract [566.63ms]
 
 [DETECTED] the job specification drops the contract
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  5 pass 3 fail
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  6 pass 4 fail
     remove: "    ...(req.contract !== undefined ? { contract: structuredClone(req.contract) } : {}) });"
     replace with: " });"
-    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [10.79ms]
-    fails: the composer holds a graph to the job contract > a repair cannot drop a requirement: every candidate is checked against the same contract [2.96ms]
-    fails: production composition > the journal keeps the contract with the job, as the caller gave it [706.85ms]
+    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [13.23ms]
+    fails: the composer holds a graph to the job contract > a repair cannot drop a requirement: every candidate is checked against the same contract [3.23ms]
+    fails: production composition > the journal keeps the contract with the job, as the caller gave it [542.49ms]
+    fails: production composition > publishing and enabling recheck the graph about to run against the contract it was composed under [517.46ms]
 
 [DETECTED] the report is not returned
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  5 pass 3 fail
-    remove: "  return { ok: true, flow: validation.flow, rawResponse, ...(validation.report ? { contract: validation.report } : {}) };"
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  6 pass 4 fail
+    remove: "  return { ok: true, flow: validation.flow, rawResponse, ...(validation.report ? { contractReport: validation.report } : {}) };"
     replace with: "  return { ok: true, flow: validation.flow, rawResponse };"
-    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [14.20ms]
-    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [2.66ms]
-    fails: production composition > the chat tool passes a stated contract and returns what to confirm; an unmeetable one is refused [919.42ms]
+    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [11.69ms]
+    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [3.91ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [553.23ms]
+    fails: production composition > create with a description reroutes to compose and keeps the contract [527.47ms]
 
 [DETECTED] the one-shot path skips the contract
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  4 pass 4 fail
-    remove: "    const validation = acceptComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, contract);\n    rememberCandidate(deps, context, raw,"
-    replace with: "    const validation = acceptComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, undefined);\n    rememberCandidate(deps, context, raw,"
-    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [13.13ms]
-    fails: the composer holds a graph to the job contract > a repair cannot drop a requirement: every candidate is checked against the same contract [2.36ms]
-    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [3.24ms]
-    fails: production composition > the chat tool passes a stated contract and returns what to confirm; an unmeetable one is refused [755.86ms]
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  5 pass 5 fail
+    remove: "    const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);\n    rememberCandidate(deps, context, raw,"
+    replace with: "    const validation = acceptComposedFlow(undefined, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);\n    rememberCandidate(deps, context, raw,"
+    fails: the composer holds a graph to the job contract > a valid graph that breaks the contract goes back for repair with focused errors and the contract; the kept one passes with its report [14.28ms]
+    fails: the composer holds a graph to the job contract > a repair cannot drop a requirement: every candidate is checked against the same contract [1.92ms]
+    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [2.42ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [560.05ms]
+    fails: production composition > create with a description reroutes to compose and keeps the contract [504.88ms]
 
 [DETECTED] inline JSON in the tool loop skips the contract
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 1 fail
-    remove: "          const validation = acceptComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, contract);\n          if (validation.ok) {"
-    replace with: "          const validation = acceptComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, undefined);\n          if (validation.ok) {"
-    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [2.88ms]
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
+    remove: "          const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);"
+    replace with: "          const validation = acceptComposedFlow(undefined, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);"
+    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [3.26ms]
 
 [DETECTED] submit_flow skips the contract
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  6 pass 2 fail
-    remove: "        const validation = acceptComposedFlow(flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, contract);"
-    replace with: "        const validation = acceptComposedFlow(flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, undefined);"
-    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [9.63ms]
-    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [3.07ms]
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  8 pass 2 fail
+    remove: "        const validation = acceptComposedFlow(contract, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);"
+    replace with: "        const validation = acceptComposedFlow(undefined, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);"
+    fails: the composer holds a graph to the job contract > the tool loop holds inline JSON to the contract too [4.64ms]
+    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [5.17ms]
 
 [DETECTED] a tool-loop provider failure becomes an abstention
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 1 fail
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
     remove: "      return {\n        ok: false,\n        errorCode: code,"
     replace with: "      return {\n        ok: false,\n        blocked: true,\n        errorCode: code,"
-    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [5.38ms]
+    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [4.43ms]
 
 [DETECTED] a one-shot provider failure becomes an abstention
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 1 fail
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
     remove: "      return {\n        ok: false,\n        errorCode: getLLMErrorCode(e),"
     replace with: "      return {\n        ok: false,\n        blocked: true,\n        errorCode: getLLMErrorCode(e),"
-    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [6.47ms]
+    fails: the composer holds a graph to the job contract > a provider failure after a contract violation is a failure, never an abstention [2.20ms]
 
 [DETECTED] compose drops the stated contract
-    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 1 fail
+    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  8 pass 2 fail
     remove: "await actCompose(requireString(params, \"name\"), requireString(params, \"description\"), deps, params[\"contract\"]),"
     replace with: "await actCompose(requireString(params, \"name\"), requireString(params, \"description\"), deps),"
-    fails: production composition > the chat tool passes a stated contract and returns what to confirm; an unmeetable one is refused [717.37ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [668.68ms]
+    fails: production composition > publishing and enabling recheck the graph about to run against the contract it was composed under [632.68ms]
 
 [DETECTED] create rerouted to compose drops the stated contract
-    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 1 fail
+    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
     remove: "const composed = await actCompose(name, description, deps, params[\"contract\"]);"
     replace with: "const composed = await actCompose(name, description, deps);"
-    fails: production composition > the chat tool passes a stated contract and returns what to confirm; an unmeetable one is refused [746.63ms]
+    fails: production composition > create with a description reroutes to compose and keeps the contract [599.10ms]
+
+[DETECTED] a null contract fails the compose
+    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
+    remove: "  const stated = contract ?? undefined;"
+    replace with: "  const stated = contract;"
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [614.95ms]
+
+[DETECTED] the report comes after the flow summary
+    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
+    remove: "    ...(result.contractReport ? { contractReport: result.contractReport } : {}),\n    flow: summarizeFlow(getFlow(flow.id) ?? flow),"
+    replace with: "    flow: summarizeFlow(getFlow(flow.id) ?? flow),\n    ...(result.contractReport ? { contractReport: result.contractReport } : {}),"
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [491.66ms]
 
 [DETECTED] the chat tool hides the report
-    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  7 pass 1 fail
-    remove: "    ...(result.contract ? { contract: result.contract } : {}),\n"
+    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  8 pass 2 fail
+    remove: "    ...(result.contractReport ? { contractReport: result.contractReport } : {}),\n"
     replace with: ""
-    fails: production composition > the chat tool passes a stated contract and returns what to confirm; an unmeetable one is refused [603.17ms]
+    fails: production composition > the chat tool passes a stated contract and returns its report first; invalid and unmeetable ones are refused; null is none [445.77ms]
+    fails: production composition > create with a description reroutes to compose and keeps the contract [444.08ms]
 
-69 of 69 removals fail their tests.
+[DETECTED] publish does not recheck the contract
+    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
+    remove: "  const report = contractRecheck(flow, target.trigger);"
+    replace with: "  const report = null;"
+    fails: production composition > publishing and enabling recheck the graph about to run against the contract it was composed under [463.51ms]
+
+[DETECTED] enable does not recheck the contract
+    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
+    remove: "  const report = published ? contractRecheck(updated, published.trigger) : null;"
+    replace with: "  const report = null;"
+    fails: production composition > publishing and enabling recheck the graph about to run against the contract it was composed under [476.00ms]
+
+[DETECTED] disable rechecks the contract too
+    file: src/actions/tools/manage-workflow.ts  test: src/actions/tools/workflow-contract.test.ts  exit: 1  9 pass 1 fail
+    remove: "status === \"ENABLED\" && updated.published_version_id ? getFlowVersion"
+    replace with: "updated.published_version_id ? getFlowVersion"
+    fails: production composition > publishing and enabling recheck the graph about to run against the contract it was composed under [491.29ms]
+
+103 of 103 removals fail their tests.
