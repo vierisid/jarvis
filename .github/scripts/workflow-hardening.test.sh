@@ -37,6 +37,13 @@
 #      job that runs `npm publish` with id-token runs no Bun and no dependency
 #      install or build; on the release path no checkout leaves its token in
 #      the repository config; and no registry login happens on a dry run.
+#   7. (#687) "Authority" also counts any use of the `secrets` context other
+#      than secrets.GITHUB_TOKEN (including toJSON(secrets)), and `secrets:
+#      inherit`; and every rule that reads steps descends into local
+#      composite actions (./.github/actions/*), recursively, with the caller
+#      inputs substituted. A local action that cannot be read, is not
+#      composite, or nests too deep is reported rather than skipped. Rule 5
+#      also refuses actions/cache restores where authority is held.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -75,6 +82,33 @@ const doc = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
 const jobs = doc.jobs ?? {};
 const out = [];
 const rule = process.env.RULE;
+// The steps of a job, with every local composite action expanded in place (#687),
+// recursively: a workflow that pins everything it names can otherwise reach
+// unpinned code one level down. In a composite step, ${{ inputs.X }} is
+// replaced by what the caller passes, or by the input default.
+const flatSteps = (steps, via = "", depth = 0) => {
+  const outSteps = [];
+  for (const st of steps ?? []) {
+    outSteps.push({ st, via });
+    const u = String(st.uses ?? "");
+    if (!u.startsWith("./") || /\.ya?ml$/.test(u)) continue;
+    // Every rule that reads steps would otherwise pass what it cannot see.
+    if (depth > 4) { out.push(via + u + ": local actions nested too deep to check"); continue; }
+    let action = null;
+    for (const f of ["action.yml", "action.yaml"])
+      try { action = Bun.YAML.parse(require("node:fs").readFileSync(process.env.REPO + "/" + u.slice(2).replace(/\/$/, "") + "/" + f, "utf8")); break; } catch {}
+    if (!action) { out.push(via + u + ": local action cannot be read, so it cannot be checked"); continue; }
+    if (action.runs?.using !== "composite") { out.push(via + u + ": local " + action.runs?.using + " action, which this test cannot look inside"); continue; }
+    // Input names are case-insensitive to GitHub.
+    const inputs = new Map();
+    for (const [k, v] of Object.entries(action.inputs ?? {})) inputs.set(k.toLowerCase(), v?.default ?? "");
+    for (const [k, v] of Object.entries(st.with ?? {})) inputs.set(k.toLowerCase(), v);
+    const fill = (x) => JSON.parse(JSON.stringify(x).replace(/\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}/g,
+      (m, k) => inputs.has(k.toLowerCase()) ? JSON.stringify(String(inputs.get(k.toLowerCase()))).slice(1, -1) : m));
+    outSteps.push(...flatSteps(action.runs.steps.map(fill), via + u + " > ", depth + 1));
+  }
+  return outSteps;
+};
 if (rule === "scoped" && doc.permissions === undefined)
   for (const [name, job] of Object.entries(jobs))
     if (job.permissions === undefined)
@@ -92,8 +126,18 @@ if (rule === "authority") {
     (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
   const on = doc.on ?? doc[true] ?? {};
   const triggers = typeof on === "string" ? [on] : Array.isArray(on) ? on : Object.keys(on);
+  // A secret is authority whatever the token scopes (#687): the code that
+  // can read it is the code this rule exists to pin. GITHUB_TOKEN is the
+  // token itself, whose scope the permissions blocks already describe.
+  // Read inside expressions only, so a `secrets:` mapping key does not count
+  // by itself (its values are expressions and do), and the whole context --
+  // toJSON(secrets), secrets[...] -- counts.
+  // Context names are case-insensitive to GitHub, and an expression can
+  // hold braces (format strings), so read up to the closing }} lazily.
+  const exprs = [...JSON.stringify({ env: doc.env, jobs }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].map((m) => m[1]);
+  const secret = exprs.some((e) => /\bsecrets\b(?!\s*\.\s*GITHUB_TOKEN\b)/i.test(e));
   if (grants(doc.permissions) || Object.values(jobs).some((j) => grants(j.permissions)) ||
-      triggers.includes("pull_request_target"))
+      triggers.includes("pull_request_target") || secret || Object.values(jobs).some((j) => j.secrets === "inherit"))
     out.push("yes");
 }
 if (rule === "untrusted") {
@@ -145,25 +189,15 @@ if (rule === "untrusted") {
       }
       return [l, expanded];
     });
-  // A local composite action is part of the job: read its run: steps too.
-  const localRuns = (uses) => {
-    const dir = process.env.REPO + "/" + uses.replace(/^\.\//, "");
-    for (const f of ["action.yml", "action.yaml"]) {
-      try {
-        const a = Bun.YAML.parse(require("node:fs").readFileSync(dir + "/" + f, "utf8"));
-        return (a?.runs?.steps ?? []).map((st) => typeof st.run === "string" ? st.run : "").join("\n");
-      } catch {}
-    }
-    return "";
-  };
   for (const [name, job] of Object.entries(jobs)) {
     const perm = job.permissions ?? doc.permissions;
     const held = writes(perm);
-    for (const [i, s] of (job.steps ?? []).entries()) {
+    // Local composite actions are part of the job (#687): flatSteps expands
+    // them, recursively, with inputs substituted.
+    for (const [i, { st: s, via: path }] of flatSteps(job.steps).entries()) {
       const label = name + ": step " + (s.name ?? s.id ?? s.uses ?? String(i));
-      const fromAction = typeof s.uses === "string" && s.uses.startsWith("./");
-      const run = typeof s.run === "string" ? s.run : fromAction ? localRuns(s.uses) : "";
-      const via = fromAction ? " (inside " + s.uses + ")" : "";
+      const run = typeof s.run === "string" ? s.run : "";
+      const via = path ? " (inside " + path.slice(0, -3) + ")" : "";
       for (const [t, bare] of lines(run)) {
         if (held && install.test(bare)) out.push(label + via + ": installs dependencies in a job holding " + JSON.stringify(perm) + ": " + t);
         if (held && thirdParty.test(bare)) out.push(label + via + ": processes third-party data in a job holding " + JSON.stringify(perm) + ": " + t);
@@ -206,8 +240,8 @@ if (rule === "mutable") {
     for (const [k, v] of Object.entries(job.env ?? {}))
       if (/version$/i.test(k) && floating(resolve(v, doc.env)))
         out.push(name + ": env." + k + " is " + JSON.stringify(v));
-    for (const [i, s] of (job.steps ?? []).entries()) {
-      const label = name + ": step " + (s.name ?? s.id ?? s.uses ?? String(i));
+    for (const [i, { st: s, via }] of flatSteps(job.steps).entries()) {
+      const label = name + ": step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (s.name ?? s.id ?? s.uses ?? String(i));
       const scopes = [s.env, job.env, doc.env];
       for (const [k, v] of Object.entries(s.env ?? {}))
         if (/version$/i.test(k) && floating(resolve(v, job.env, doc.env)))
@@ -253,6 +287,8 @@ if (rule === "mutable") {
       // the bytes from the Actions cache, which any run on main can write.
       if (uses.startsWith("oven-sh/setup-bun@") && String(s.with?.["no-cache"]) !== "true")
         out.push(label + ": setup-bun without no-cache: true restores Bun from the Actions cache");
+      if (/^actions\/cache(\/restore)?@/.test(uses))
+        out.push(label + ": restores from the Actions cache (writable by any run on main)");
       if (uses.startsWith("actions/setup-go@") && String(s.with?.cache) !== "false")
         out.push(label + ": setup-go without cache: false restores modules and build output from the Actions cache");
       if (uses.startsWith("docker/setup-qemu-action@")) {
@@ -278,7 +314,7 @@ if (rule === "narrow") {
   // Per-job authority on the release path (#682).
   const fs = require("node:fs");
   const writes = (perm, k) => perm === "write-all" || (perm && typeof perm === "object" && perm[k] === "write");
-  const refs = (o) => new Set([...JSON.stringify(o).matchAll(/\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]).filter((k) => k !== "GITHUB_TOKEN"));
+  const refs = (o) => new Set([...JSON.stringify(o).matchAll(/\bsecrets\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)/gi)].map((m) => m[1]).filter((k) => k.toUpperCase() !== "GITHUB_TOKEN"));
   // The release path: any workflow with a job in the `release` environment
   // (release-exec.yml and sidecar-release.yml). None of their jobs runs git
   // with credentials, so none needs the token left in the repository config.
@@ -300,6 +336,8 @@ if (rule === "narrow") {
         const on = called.on ?? called[true] ?? {};
         const declared = Object.keys(on.workflow_call?.secrets ?? {}).sort();
         const used = [...refs(called.jobs ?? {})].sort();
+        if ([...JSON.stringify(called.jobs ?? {}).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /\bsecrets\b(?!\s*\.)/i.test(m[1])))
+          out.push(name + ": " + job.uses + " reads the whole secrets context, so no list of secrets passed to it can be checked");
         // No `secrets:` at all passes nothing, which is the case that makes
         // the macOS signing steps silently skip.
         const given = job.secrets && typeof job.secrets === "object" ? job.secrets : {};
@@ -313,7 +351,8 @@ if (rule === "narrow") {
             out.push(name + ": passes " + k + " as " + JSON.stringify(v) + ", not secrets." + k);
       }
     }
-    const steps = job.steps ?? [];
+    // Composite actions expanded (#687): a local action is part of the job.
+    const steps = flatSteps(job.steps).map((x) => x.st);
     const runs = steps.map((st) => typeof st.run === "string" ? st.run : "").join("\n");
     // A job that can mint an npm publish token publishes, and runs no
     // dependency or repository build code: that happens in a job without it.
@@ -395,7 +434,7 @@ if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
     if (typeof job.uses === "string") uses.push([name, job.uses]);
-    for (const s of job.steps ?? []) if (typeof s.uses === "string") uses.push([name, s.uses]);
+    for (const { st, via } of flatSteps(job.steps)) if (typeof st.uses === "string") uses.push([name + (via ? " (via " + via.slice(0, -3) + ")" : ""), st.uses]);
   }
   for (const [name, u] of uses)
     if (!u.startsWith("./") && !/^[^@\s]+@[0-9a-f]{40}$/.test(u))
@@ -508,6 +547,62 @@ if [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
 else
 	no "reports: a read-only workflow that gains a write scope while using tags"
 fi
+# #687: a secret is authority on its own. test.yml stays read-only here and
+# only gains a secret reference; its tags must surface.
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n"));
+'
+if [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
+	ok "reports: a read-only workflow that reads a secret while using tags"
+else
+	no "reports: a read-only workflow that reads a secret while using tags"
+fi
+# ...and secrets.GITHUB_TOKEN alone is not: its scope is the permissions block.
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n"));
+'
+if [ -z "$(check authority "$copy")" ]; then
+	ok "a read-only workflow reading only secrets.GITHUB_TOKEN holds no authority"
+else
+	no "a read-only workflow reading only secrets.GITHUB_TOKEN holds no authority"
+fi
+# #687: the pin rule descends into local composite actions. bun-setup still
+# uses tags, so an authority workflow that starts using it must be reported.
+expect_caught 'a local composite action with tagged actions, used where authority is held' pinned "$WORKFLOWS/release.yml" \
+	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/bun-setup
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
+expect_caught 'a cached Bun inside a local composite action, used where authority is held' mutable "$WORKFLOWS/release.yml" \
+	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/bun-setup
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  ALL: ${{ toJSON(secrets) }}\n"));
+'
+if [ -n "$(check authority "$copy")" ]; then
+	ok "reports: a workflow that serialises the whole secrets context holds authority"
+else
+	no "reports: a workflow that serialises the whole secrets context holds authority"
+fi
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  K: ${{ format(\x27{0}\x27, SECRETS.SOME_KEY) }}\n"));
+'
+if [ -n "$(check authority "$copy")" ]; then
+	ok "reports: a secret read inside a format string, in upper case"
+else
+	no "reports: a secret read inside a format string, in upper case"
+fi
+expect_caught 'a local composite action that installs dependencies, in the job that publishes with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
+	'      - name: Ensure npm supports Trusted Publishing' $'      - uses: ./.github/actions/bun-setup\n      - name: Ensure npm supports Trusted Publishing'
+expect_caught 'a local action that does not exist' pinned "$WORKFLOWS/release.yml" \
+	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/nope
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
 expect_caught 'a major tag in a pull_request_target workflow' pinned "$WORKFLOWS/labeler.yml" \
 	'uses: actions/labeler@bf12e9b00b37c5c0ca2b87b79b2daf7891dbda13' 'uses: actions/labeler@v5'
 expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-release.yml" \
