@@ -1,0 +1,108 @@
+{
+  "task": "Q-02",
+  "title": "Expand workflow evaluations to the founder jobs",
+  "date": "2026-10-05",
+  "branch": "brief/q-02",
+  "worktree": "a checkout of brief/q-02",
+  "initial_baseline": "7c7e3e1e (brief/q-01, PR #725, on brief/foundations 462d955d)",
+  "baseline": "7c7e3e1e7c9c4e1377ec9b924dd95e64524a01cc",
+  "baseline_ref": "brief/q-01; stacked because Q-02 extends the same evaluator files",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-02.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "evaluation fixtures and tooling only; no product capability or flag",
+    "release_enabled": false,
+    "publication": "PR #734 open against brief/q-01 (stacked on Q-01 #725); https://github.com/vierisid/jarvis/pull/734"
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "page": "81:2",
+    "checkpoint": "UI-35; no visual changes in Q-02"
+  },
+  "ownership": {
+    "implementer": "Core-quality line",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [],
+  "enable_after": [],
+  "behavior": [
+    "founder task set: 16 development and 66 held-out tasks (44 supported, 22 to refuse) across meeting, invoice, lead and recurring-report jobs; held-out reference answers kept outside the repository.",
+    "Sealed reserve of 36 tasks outside the repository; tasks/founder-reserve-1.commitment.json pins its hash and a mismatching file is refused.",
+    "founder-v1 environment: context, tool and agent pieces; the seven bounded workflow tools from their real definitions; three machines, one offline; Gmail and Slack metadata graded on the graph, never executed. w8 unchanged.",
+    "Fake services answer from each scenario's sandbox: approval creates a real waitpoint and pauses the run; an offline machine blocks; a missing file errors; memory search matches entity names as production does.",
+    "Assertions: exact notifications, tool calls (tool, parameters, outcome) and agent delegations; expected run status; AI prompt inclusions and exclusions; structured forbidden constraints; connection-bound steps by action, connection and literal inputs.",
+    "--mode review-packet writes a blinded, shuffled packet and a separate key; reviews record usefulness and AI fidelity, reported apart from intent.",
+    "--mode smoke --references FILE proves a held-out or reserve set satisfiable without publishing answers; it measures nothing."
+  ],
+  "acceptance": [
+    {
+      "check": "Incorrect recipients, missing steps, invented facts, extra effects and unnecessary AI all fail explicit assertions",
+      "status": "passed",
+      "evidence": "src/workflows/evaluation/founder-tasks.test.ts (scenario assertions, AI fidelity, connection-bound steps, forbidden constraints, unexpected effects); evidence/Q-02/revert-checks.log"
+    },
+    {
+      "check": "Review rubric records edits and time rather than treating automatic success as zero correction",
+      "status": "passed",
+      "evidence": "Blind review template requires reviewer, intent, time and edits per row and adds usefulness and fidelity; founder-tasks.test.ts blinded review test"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "7,761 pass, 86 skip, 9 fail of 7,856 tests across 425 files (local WSL2). Seven also fail on brief/foundations without Q-01 or Q-02; two engine-reaper tests began failing on this machine during the session and fail identically on the unchanged Q-01 head, which passed them earlier locally and in CI. Q-02 changes no runner files.",
+      "log": "evidence/Q-02/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/workflows/evaluation/",
+      "result": "51 pass, 0 fail across 6 files",
+      "log": "evidence/Q-02/evaluation-tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-02/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "passed, exit 0; 100 templates, no errors or warnings",
+      "log": "evidence/Q-02/guards.log"
+    },
+    {
+      "command": "revert each of 15 guards in turn and run its test",
+      "result": "15 of 15 fail when their guard is removed; sources restored",
+      "log": "evidence/Q-02/revert-checks.log"
+    },
+    {
+      "command": "bun run eval:workflows --mode smoke --split development --taskset founder --out /tmp/q02-founder",
+      "result": "32 of 32 rows pass (16 tasks, both policies) through the real engine and outer worker",
+      "log": "evidence/Q-02/founder-development-smoke-report.json"
+    },
+    {
+      "command": "bun run eval:workflows --mode smoke --split heldout --taskset founder|founder-reserve --references FILE (answers outside the repository)",
+      "result": "held-out 66 of 66 and reserve 36 of 36 satisfiable; reserve hash accepted",
+      "log": "evidence/Q-02/satisfiability.log"
+    }
+  ],
+  "quick_verify": {
+    "cwd": "repository root, on brief/q-02",
+    "command": "bun run eval:workflows --mode smoke --split development --taskset founder --out /tmp/q02-founder",
+    "expected": "exit 0; all 32 rows pass, including an approval pause, an offline block, a missing file and a Gmail draft graded on its graph",
+    "screenshot": "not applicable: no visible UI changes"
+  },
+  "migration": "None. No schema, data or production behavior change.",
+  "rollback": "Revert the Q-02 commit. Older run directories remain readable.",
+  "limitations": [
+    "The workflow's own AI and agent replies are simulated; summary quality of the runtime model is left to blinded review.",
+    "Connection-bound integrations are never executed; they are graded on the composed graph with literal inputs.",
+    "Sandboxed tools return fixture data, not a real machine's.",
+    "No hosted model was run; Q-01's gates still apply to any paid run of the founder set."
+  ],
+  "found": [
+    "A router 'starts with' condition cannot be expressed correctly: the engine implements TEXT_START_WITH, readiness accepts only TEXT_STARTS_WITH, and the engine's condition evaluation passes any unknown operator. Not changed here; the held-out set includes a task that catches it."
+  ],
+  "next": "Q-03 waits for hosted Q-01/Q-02 results. Q-13 (stacked on F-01) and Q-18 unblock F-09 and F-13; keep all PRs unmerged."
+}

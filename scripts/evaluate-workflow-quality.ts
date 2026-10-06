@@ -12,16 +12,20 @@ const { values } = parseArgs({ options: {
   split: { type: 'string', default: 'heldout' }, policy: { type: 'string', default: 'both' },
   condition: { type: 'string', default: 'natural' }, repeats: { type: 'string', default: '1' },
   profile: { type: 'string' }, authorization: { type: 'string' }, rubric: { type: 'string' }, 'max-requests': { type: 'string' },
-  results: { type: 'string' }, reviews: { type: 'string' }, runs: { type: 'string' }, help: { type: 'boolean' },
+  results: { type: 'string' }, reviews: { type: 'string' }, key: { type: 'string' }, runs: { type: 'string' },
+  taskset: { type: 'string', default: 'w8' }, reserve: { type: 'string' }, references: { type: 'string' }, help: { type: 'boolean' },
 } });
 if (values.help) {
-  console.log('Workflow quality: --mode plan|smoke|hosted|review|baseline --out NEW_DIRECTORY\n'
+  console.log('Workflow quality: --mode plan|smoke|hosted|review-packet|review|baseline --out NEW_DIRECTORY\n'
+    + '--taskset w8|founder|founder-reserve (the reserve also needs --reserve FILE)\n'
     + '--split development|heldout --policy both|baseline-v1|deterministic-first-v1\n'
     + '--condition natural|malformed-first --repeats 1..20 [--rubric RUBRIC.json]\n'
     + 'Hosted: --profile PROFILE.json --authorization SPEND.json [--max-requests N, at most the authorized limit]\n'
-    + 'Review: --results RUN/rows.jsonl --reviews REVIEWS.json\n'
+    + 'Review packet: --results RUN/rows.jsonl (writes a blinded packet, its key and a template)\n'
+    + 'Review: --results RUN/rows.jsonl --reviews REVIEWS.json [--key KEY.json for blinded reviews]\n'
     + 'Baseline: --runs RUN_OR_REVIEWED_DIRECTORY[,...]\n'
-    + 'Plan is the default and makes no provider requests. Smoke requires development.');
+    + 'Plan is the default and makes no provider requests. Smoke requires development, unless --references FILE\n'
+    + 'supplies answers kept outside the repository: that proves a held-out set is satisfiable and measures nothing.');
   process.exit(0);
 }
 function integer(value: string, max: number, name: string) {
@@ -29,7 +33,8 @@ function integer(value: string, max: number, name: string) {
   if (!Number.isSafeInteger(n) || n < 1 || n > max) throw new Error(name + ' must be 1..' + max);
   return n;
 }
-if (!['plan', 'smoke', 'hosted', 'review', 'baseline'].includes(values.mode!)) throw new Error('Invalid mode');
+if (!['plan', 'smoke', 'hosted', 'review-packet', 'review', 'baseline'].includes(values.mode!)) throw new Error('Invalid mode');
+if (values.taskset === 'founder-reserve' && (values.split !== 'heldout' || !values.reserve)) throw new Error('The reserve is a held-out set and needs --reserve FILE');
 if (!['development', 'heldout'].includes(values.split!)) throw new Error('Invalid split');
 if (!['natural', 'malformed-first'].includes(values.condition!)) throw new Error('Invalid condition');
 const policies: PlanningPolicy[] = values.policy === 'both' ? ['baseline-v1', 'deterministic-first-v1']
@@ -37,7 +42,8 @@ const policies: PlanningPolicy[] = values.policy === 'both' ? ['baseline-v1', 'd
   : (() => { throw new Error('Invalid policy'); })();
 const repeats = integer(values.repeats!, 20, 'repeats');
 const requestedMaxRequests = values['max-requests'] === undefined ? undefined : integer(values['max-requests'], 1000, 'max-requests');
-if (values.mode === 'smoke' && values.split !== 'development') throw new Error('Smoke fixtures are development-only');
+if (values.mode === 'smoke' && values.split !== 'development' && !values.references) throw new Error('Smoke fixtures are development-only');
+if (values.references && values.mode !== 'smoke') throw new Error('--references only applies to smoke');
 if (!values.out) throw new Error('--out must be a new directory');
 const out = resolve(values.out);
 mkdirSync(out, { recursive: false });
@@ -46,7 +52,9 @@ process.env.JARVIS_WORKFLOW_DATA_DIR = join(out, 'runtime');
 const { fingerprint } = await import('../src/actions/tools/composition-provenance');
 const { fingerprintSource } = await import('../src/workflows/evaluation/source');
 const { sanitizedEnv } = await import('../src/util/subprocess-env');
-const { loadTasks, evaluateTask } = await import('../src/workflows/evaluation/runner');
+const { loadTasks, loadReserve, evaluateTask } = await import('../src/workflows/evaluation/runner');
+const { environmentFor } = await import('../src/workflows/evaluation/environment');
+const { reviewPacket, unblindReviews } = await import('../src/workflows/evaluation/review-packet');
 const { report, applyReviews } = await import('../src/workflows/evaluation/report');
 const { validateProfile, resolveAdminEvidence, MeasuredHostedProvider, COMPOSITION_ALIAS } = await import('../src/workflows/evaluation/hosted');
 const { validateAuthorization, authorizationProblems } = await import('../src/workflows/evaluation/authorization');
@@ -70,10 +78,20 @@ const append = (name: string, value: unknown) => {
 const readJson = (path: string) => JSON.parse(readFileSync(path, 'utf8'));
 const readRows = (path: string): EvaluationRow[] => readFileSync(path, 'utf8').trim().split('\n').filter(Boolean).map(line => JSON.parse(line));
 
+if (values.mode === 'review-packet') {
+  if (!values.results) throw new Error('Review packet needs --results');
+  const run = dirname(resolve(values.results));
+  const tasks = existsSync(join(run, 'taskset.json')) ? readJson(join(run, 'taskset.json')).tasks : [];
+  const blinded = reviewPacket(readRows(values.results), tasks);
+  write('packet.json', blinded.packet); write('key.json', blinded.key); write('review-template.json', blinded.template);
+  console.log('Blinded review packet: ' + out + ' (give reviewers packet.json and review-template.json; keep key.json apart)');
+  process.exit(0);
+}
 if (values.mode === 'review') {
   if (!values.results || !values.reviews) throw new Error('Review needs --results and --reviews');
   const rows = readRows(values.results);
-  const reviewed = applyReviews(rows, readJson(values.reviews));
+  const reviews = values.key ? unblindReviews(readJson(values.reviews), readJson(values.key)) : readJson(values.reviews);
+  const reviewed = applyReviews(rows, reviews);
   // Carry the run's own manifest and task set, so reviewed results remain a complete, comparable run.
   const run = dirname(resolve(values.results));
   const known = ['manifest.json', 'taskset.json', 'report.json'].every(name => existsSync(join(run, name)));
@@ -103,7 +121,9 @@ if (values.mode === 'baseline') {
   process.exit(baseline.status === 'completed' ? 0 : baseline.status === 'refused' ? 1 : 2);
 }
 const rubric = loadRubric(values.rubric ? resolve(values.rubric) : undefined);
-const taskset = loadTasks(values.split as 'development' | 'heldout');
+const taskset = values.taskset === 'founder-reserve' ? loadReserve(resolve(values.reserve!))
+  : loadTasks(values.split as 'development' | 'heldout', values.taskset);
+const environment = environmentFor(taskset.environment);
 const scheduled = policies.flatMap(policy => Array.from({ length: repeats }, (_, index) =>
   taskset.tasks.filter(task => values.condition !== 'malformed-first' || !task.expectation.blocked).map(task => ({ taskId: task.id, policy, repeat: index + 1, condition: values.condition! })))).flat();
 // A hosted run spends money and claims to measure a deployed profile, so it
@@ -132,7 +152,7 @@ const source = fingerprintSource(root, [
 const manifest = {
   schemaVersion: 1, startedAt: startedAt.toISOString(), mode: values.mode, argv: process.argv.slice(2), bunVersion: Bun.version,
   head, ...source,
-  taskset: { version: taskset.version, sha256: taskset.sha256, split: values.split },
+  taskset: { name: taskset.name, version: taskset.version, sha256: taskset.sha256, split: values.split, environment: taskset.environment },
   rubric: { id: rubric.rubric.id, sha256: rubric.sha256, status: rubric.rubric.status, value: rubric.rubric },
   profile: profile ?? null, profileEvidence: evidence, authorization,
   requestedAlias: values.mode === 'smoke' ? 'controlled-fixture' : COMPOSITION_ALIAS, maxRequests, maxTokens, scheduled,
@@ -162,7 +182,7 @@ if (values.mode === 'plan' || reasons.length) {
   const db = initWorkflowDb(join(out, 'evaluation.sqlite'));
   setUsageDatabase(db);
   const manager = new LLMManager();
-  const provider = values.mode === 'smoke' ? new SmokeProvider() : new MeasuredHostedProvider(profile!.baseUrl, key!, maxRequests!,
+  const provider = values.mode === 'smoke' ? new SmokeProvider(values.references ? readJson(values.references).answers : {}) : new MeasuredHostedProvider(profile!.baseUrl, key!, maxRequests!,
     event => append('events.jsonl', event), { maxTokens: maxTokens!, pinnedModel: COMPOSITION_ALIAS });
   manager.registerProvider(provider);
   manager.setTierAssignment('high', { provider: provider.name, model: values.mode === 'smoke' ? 'controlled-fixture' : COMPOSITION_ALIAS });
@@ -170,7 +190,7 @@ if (values.mode === 'plan' || reasons.length) {
   let engine: Awaited<ReturnType<typeof createEvaluationEngine>> | undefined;
   let failure: string | null = null;
   try {
-    engine = await createEvaluationEngine();
+    engine = await createEvaluationEngine(environment);
     write('catalog.json', { entries: engine.catalog.list(), sha256: fingerprint(engine.catalog.list()),
       bundleHash: engine.bundleHash, readinessValidator: engine.readiness });
     for (const item of scheduled) {

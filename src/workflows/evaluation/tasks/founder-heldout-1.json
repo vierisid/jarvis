@@ -1,0 +1,3137 @@
+{
+  "schemaVersion": 1,
+  "version": "founder-heldout-1",
+  "environment": "founder-v1",
+  "tasks": [
+    {
+      "id": "ho-prep-cedar",
+      "split": "heldout",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-prep-cedar",
+        "description": "When a calendar event is about to start (observer.calendar_event_starting), search my memory for the event title. If memory finds anything, ask Jarvis once for a two-line prep note using only what memory returned and send just that note to desktop. If memory finds nothing, send nothing. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.calendar_event_starting"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "known",
+          "payload": {
+            "eventType": "observer.calendar_event_starting",
+            "payload": {
+              "summary": "Cedar Labs",
+              "start": "2026-10-06T09:00:00Z"
+            }
+          },
+          "notifications": [
+            {
+              "message": "SIMULATED PREP",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED PREP",
+            "promptIncludes": [
+              "Cedar Labs",
+              "contract renews 1 March"
+            ]
+          },
+          "sandbox": {
+            "entities": [
+              {
+                "id": "m1",
+                "type": "concept",
+                "name": "Cedar Labs",
+                "properties": {
+                  "note": "contract renews 1 March"
+                }
+              },
+              {
+                "id": "m2",
+                "type": "concept",
+                "name": "Oak AG",
+                "properties": {
+                  "note": "pilot paused"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "unknown",
+          "payload": {
+            "eventType": "observer.calendar_event_starting",
+            "payload": {
+              "summary": "Dentist",
+              "start": "2026-10-06T12:00:00Z"
+            }
+          },
+          "notifications": [],
+          "sandbox": {
+            "entities": [
+              {
+                "id": "m2",
+                "type": "concept",
+                "name": "Oak AG",
+                "properties": {
+                  "note": "pilot paused"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-prep-birch",
+      "split": "heldout",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-prep-birch",
+        "description": "When a calendar event is about to start (observer.calendar_event_starting), search my memory for the event title. If memory finds anything, ask Jarvis once for a two-line prep note using only what memory returned and send just that note to dashboard. If memory finds nothing, send nothing. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.calendar_event_starting"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "known",
+          "payload": {
+            "eventType": "observer.calendar_event_starting",
+            "payload": {
+              "summary": "Birch Co",
+              "start": "2026-10-06T09:00:00Z"
+            }
+          },
+          "notifications": [
+            {
+              "message": "SIMULATED PREP",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED PREP",
+            "promptIncludes": [
+              "Birch Co",
+              "wants SSO before Q2"
+            ]
+          },
+          "sandbox": {
+            "entities": [
+              {
+                "id": "m1",
+                "type": "concept",
+                "name": "Birch Co",
+                "properties": {
+                  "note": "wants SSO before Q2"
+                }
+              },
+              {
+                "id": "m3",
+                "type": "concept",
+                "name": "Elm Ltd",
+                "properties": {
+                  "note": "churn risk"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "unknown",
+          "payload": {
+            "eventType": "observer.calendar_event_starting",
+            "payload": {
+              "summary": "Dentist",
+              "start": "2026-10-06T12:00:00Z"
+            }
+          },
+          "notifications": [],
+          "sandbox": {
+            "entities": [
+              {
+                "id": "m3",
+                "type": "concept",
+                "name": "Elm Ltd",
+                "properties": {
+                  "note": "churn risk"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-prep-maple",
+      "split": "heldout",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-prep-maple",
+        "description": "When a calendar event is about to start (observer.calendar_event_starting), search my memory for the event title. If memory finds anything, ask Jarvis once for a two-line prep note using only what memory returned and send just that note to telegram. If memory finds nothing, send nothing. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.calendar_event_starting"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "known",
+          "payload": {
+            "eventType": "observer.calendar_event_starting",
+            "payload": {
+              "summary": "Maple Health",
+              "start": "2026-10-06T09:00:00Z"
+            }
+          },
+          "notifications": [
+            {
+              "message": "SIMULATED PREP",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED PREP",
+            "promptIncludes": [
+              "Maple Health",
+              "referred by Ana Ruiz"
+            ]
+          },
+          "sandbox": {
+            "entities": [
+              {
+                "id": "m1",
+                "type": "concept",
+                "name": "Maple Health",
+                "properties": {
+                  "note": "referred by Ana Ruiz"
+                }
+              },
+              {
+                "id": "m4",
+                "type": "concept",
+                "name": "Pine Inc",
+                "properties": {
+                  "note": "budget frozen"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "unknown",
+          "payload": {
+            "eventType": "observer.calendar_event_starting",
+            "payload": {
+              "summary": "Dentist",
+              "start": "2026-10-06T12:00:00Z"
+            }
+          },
+          "notifications": [],
+          "sandbox": {
+            "entities": [
+              {
+                "id": "m4",
+                "type": "concept",
+                "name": "Pine Inc",
+                "properties": {
+                  "note": "budget frozen"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-draft-cedar-recap",
+      "split": "heldout",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-draft-cedar-recap",
+        "description": "When a webhook arrives, create a Gmail draft (never send it) using the connection founder-gmail, to ana@cedar.test, subject \"Recap of today\", body \"Thanks for the time today. Summary and next steps to follow.\"."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "actions": [
+            "@activepieces/piece-gmail:send_email"
+          ],
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-gmail",
+            "action": "gmail_create_draft",
+            "connection": "founder-gmail",
+            "input": {
+              "receiver": [
+                "ana@cedar.test"
+              ],
+              "subject": "Recap of today",
+              "body": "Thanks for the time today. Summary and next steps to follow."
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-draft-birch-intro",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-draft-birch-intro",
+        "description": "When a webhook arrives, create a Gmail draft (never send it) using the connection sales-gmail, to lee@birch.test, subject \"Intro from Jarvis\", body \"Great to connect. Would Tuesday at 10 work for a call?\"."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "actions": [
+            "@activepieces/piece-gmail:send_email"
+          ],
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-gmail",
+            "action": "gmail_create_draft",
+            "connection": "sales-gmail",
+            "input": {
+              "receiver": [
+                "lee@birch.test"
+              ],
+              "subject": "Intro from Jarvis",
+              "body": "Great to connect. Would Tuesday at 10 work for a call?"
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-draft-weekly-investors",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-draft-weekly-investors",
+        "description": "Every Friday at 16:00 (cron 0 16 * * 5), create a Gmail draft (never send it) using the connection founder-gmail, to investors@fund.test, subject \"Weekly update\", body \"Weekly update draft, numbers to be added.\"."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 16 * * 5"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "actions": [
+            "@activepieces/piece-gmail:send_email"
+          ],
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-gmail",
+            "action": "gmail_create_draft",
+            "connection": "founder-gmail",
+            "input": {
+              "receiver": [
+                "investors@fund.test"
+              ],
+              "subject": "Weekly update",
+              "body": "Weekly update draft, numbers to be added."
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-send-receipt",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-send-receipt",
+        "description": "When a webhook arrives, send an email right away through Gmail using the connection billing-gmail, to ap@oak.test, subject \"Receipt for invoice 1180\", body \"Payment received for invoice 1180. Thank you.\". Do not create drafts."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "actions": [
+            "@activepieces/piece-gmail:gmail_create_draft"
+          ],
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-gmail",
+            "action": "send_email",
+            "connection": "billing-gmail",
+            "input": {
+              "receiver": [
+                "ap@oak.test"
+              ],
+              "subject": "Receipt for invoice 1180",
+              "body": "Payment received for invoice 1180. Thank you."
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-send-confirmation",
+      "split": "heldout",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-send-confirmation",
+        "description": "When a webhook arrives, send an email right away through Gmail using the connection founder-gmail, to kim@pine.test, subject \"Confirmed: Thursday 15:00\", body \"Confirmed for Thursday at 15:00. See you then.\". Do not create drafts."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "actions": [
+            "@activepieces/piece-gmail:gmail_create_draft"
+          ],
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-gmail",
+            "action": "send_email",
+            "connection": "founder-gmail",
+            "input": {
+              "receiver": [
+                "kim@pine.test"
+              ],
+              "subject": "Confirmed: Thursday 15:00",
+              "body": "Confirmed for Thursday at 15:00. See you then."
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-standup-reminder",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-standup-reminder",
+        "description": "Every weekday at 08:50 (cron 50 8 * * 1-5), post exactly \"Standup in 10 minutes\" to the Slack channel C0STANDUP using the connection team-slack. Nothing else."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "50 8 * * 1-5"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-slack",
+            "action": "send_channel_message",
+            "connection": "team-slack",
+            "input": {
+              "channel": "C0STANDUP",
+              "text": "Standup in 10 minutes"
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-friday-metrics",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-friday-metrics",
+        "description": "Every Friday at 15:00 (cron 0 15 * * 5), post exactly \"Please add your weekly metrics to the sheet\" to the Slack channel C0METRICS using the connection team-slack. Nothing else."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 15 * * 5"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-slack",
+            "action": "send_channel_message",
+            "connection": "team-slack",
+            "input": {
+              "channel": "C0METRICS",
+              "text": "Please add your weekly metrics to the sheet"
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-dm-demo-booked",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-dm-demo-booked",
+        "description": "When a webhook arrives, send the Slack user U0ANA the direct message \"Your demo with Birch Co is booked\" using the connection team-slack."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-slack",
+            "action": "send_direct_message",
+            "connection": "team-slack",
+            "input": {
+              "userId": "U0ANA",
+              "text": "Your demo with Birch Co is booked"
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-dm-invoice-check",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-dm-invoice-check",
+        "description": "When a webhook arrives, send the Slack user U0FINANCE the direct message \"Please check the new supplier invoice\" using the connection finance-slack."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        },
+        "external": [
+          {
+            "piece": "@activepieces/piece-slack",
+            "action": "send_direct_message",
+            "connection": "finance-slack",
+            "input": {
+              "userId": "U0FINANCE",
+              "text": "Please check the new supplier invoice"
+            }
+          }
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-alert-invoice-subject",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-alert-invoice-subject",
+        "description": "When an email arrives (observer.email_received) whose subject contains \"Invoice\", send its subject exactly to desktop. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.email_received"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "observer.email_received",
+            "payload": {
+              "from": "billing@oak.test",
+              "subject": "Invoice 7731 is due",
+              "snippet": "Due Friday"
+            }
+          },
+          "notifications": [
+            {
+              "message": "Invoice 7731 is due",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.email_received",
+            "payload": {
+              "from": "kim@pine.test",
+              "subject": "Coffee next week?",
+              "snippet": "Free?"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-alert-billing-sender",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-alert-billing-sender",
+        "description": "When an email arrives (observer.email_received) whose from starts with \"billing@\", send its subject exactly to dashboard. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.email_received"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "observer.email_received",
+            "payload": {
+              "from": "billing@elm.test",
+              "subject": "Your October statement",
+              "snippet": "Attached"
+            }
+          },
+          "notifications": [
+            {
+              "message": "Your October statement",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.email_received",
+            "payload": {
+              "from": "ana@cedar.test",
+              "subject": "Billing question",
+              "snippet": "Hi"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-alert-overdue-subject",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-alert-overdue-subject",
+        "description": "When an email arrives (observer.email_received) whose subject contains \"Overdue\", send its subject exactly to telegram. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.email_received"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "observer.email_received",
+            "payload": {
+              "from": "ar@maple.test",
+              "subject": "Overdue: invoice 431",
+              "snippet": "30 days late"
+            }
+          },
+          "notifications": [
+            {
+              "message": "Overdue: invoice 431",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.email_received",
+            "payload": {
+              "from": "news@saas.test",
+              "subject": "Product update",
+              "snippet": "New"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-new-invoice-file",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-new-invoice-file",
+        "description": "When a watched file changes (observer.file_changed) and the change type is exactly \"created\" for a path containing \"/Invoices/\", send the file name exactly to dashboard. Ignore modifications and deletions. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.file_changed"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "created",
+          "payload": {
+            "eventType": "observer.file_changed",
+            "payload": {
+              "path": "/Users/founder/Invoices/oak-1180.pdf",
+              "eventType": "created",
+              "filename": "oak-1180.pdf",
+              "basePath": "/Users/founder/Invoices"
+            }
+          },
+          "notifications": [
+            {
+              "message": "oak-1180.pdf",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "modified",
+          "payload": {
+            "eventType": "observer.file_changed",
+            "payload": {
+              "path": "/Users/founder/Invoices/oak-1180.pdf",
+              "eventType": "modified",
+              "filename": "oak-1180.pdf",
+              "basePath": "/Users/founder/Invoices"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-new-contract-file",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-new-contract-file",
+        "description": "When a watched file changes (observer.file_changed) and the change type is exactly \"created\" for a path containing \"/Contracts/\", send the file name exactly to desktop. Ignore modifications and deletions. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.file_changed"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "created",
+          "payload": {
+            "eventType": "observer.file_changed",
+            "payload": {
+              "path": "/Users/founder/Contracts/birch-msa.docx",
+              "eventType": "created",
+              "filename": "birch-msa.docx",
+              "basePath": "/Users/founder/Contracts"
+            }
+          },
+          "notifications": [
+            {
+              "message": "birch-msa.docx",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "modified",
+          "payload": {
+            "eventType": "observer.file_changed",
+            "payload": {
+              "path": "/Users/founder/Contracts/birch-msa.docx",
+              "eventType": "deleted",
+              "filename": "birch-msa.docx",
+              "basePath": "/Users/founder/Contracts"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-overdue-invoices",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-overdue-invoices",
+        "description": "On a webhook, invoices is a list of invoices with a boolean overdue and a string reference. For each overdue invoice send its reference exactly to desktop. Never send anything for invoices that are not overdue. Use a loop, not AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "mixed",
+          "payload": {
+            "invoices": [
+              {
+                "overdue": true,
+                "reference": "INV-501"
+              },
+              {
+                "overdue": false,
+                "reference": "INV-502"
+              },
+              {
+                "overdue": true,
+                "reference": "INV-503"
+              }
+            ]
+          },
+          "notifications": [
+            {
+              "message": "INV-501",
+              "channels": [
+                "desktop"
+              ]
+            },
+            {
+              "message": "INV-503",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "empty",
+          "payload": {
+            "invoices": []
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-overdue-subscriptions",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-overdue-subscriptions",
+        "description": "On a webhook, subscriptions is a list of invoices with a boolean overdue and a string reference. For each overdue invoice send its reference exactly to telegram. Never send anything for invoices that are not overdue. Use a loop, not AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "mixed",
+          "payload": {
+            "subscriptions": [
+              {
+                "overdue": false,
+                "reference": "SUB-11"
+              },
+              {
+                "overdue": true,
+                "reference": "SUB-12"
+              }
+            ]
+          },
+          "notifications": [
+            {
+              "message": "SUB-12",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "empty",
+          "payload": {
+            "subscriptions": []
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-large-invoice-1000",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-large-invoice-1000",
+        "description": "On a webhook with amount and reference fields, when amount is strictly greater than 1000, send \"Review invoice <reference>\" (with the reference filled in) to dashboard. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "above",
+          "payload": {
+            "amount": 1450,
+            "reference": "INV-77"
+          },
+          "notifications": [
+            {
+              "message": "Review invoice INV-77",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "boundary",
+          "payload": {
+            "amount": 1000,
+            "reference": "INV-78"
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-large-invoice-250",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-large-invoice-250",
+        "description": "On a webhook with amount and reference fields, when amount is strictly greater than 250, send \"Review invoice <reference>\" (with the reference filled in) to desktop. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "above",
+          "payload": {
+            "amount": 251,
+            "reference": "PO-9"
+          },
+          "notifications": [
+            {
+              "message": "Review invoice PO-9",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "boundary",
+          "payload": {
+            "amount": 250,
+            "reference": "PO-10"
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-october-invoices-summary",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-october-invoices-summary",
+        "description": "Every month on the 1st at 09:00 (cron 0 9 1 * *), read /Users/founder/Invoices/october.csv on the Office Mac, ask Jarvis once to summarise exactly that file, and send only the summary to dashboard. If the file cannot be read, stop without sending anything. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 9 1 * *"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "present",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "SIMULATED SUMMARY",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "toolName": "read_file",
+              "params": {
+                "path": "/Users/founder/Invoices/october.csv",
+                "target": "Office Mac"
+              }
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED SUMMARY",
+            "promptIncludes": [
+              "INV-501",
+              "Oak AG",
+              "INV-502"
+            ]
+          },
+          "sandbox": {
+            "files": {
+              "/Users/founder/Invoices/october.csv": "INV-501,Oak AG,1200,overdue\nINV-502,Birch Co,300,paid"
+            }
+          }
+        },
+        {
+          "id": "missing",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "read_file",
+              "params": {
+                "path": "/Users/founder/Invoices/october.csv",
+                "target": "Office Mac"
+              },
+              "outcome": "error"
+            }
+          ],
+          "status": "FAILED",
+          "sandbox": {
+            "files": {}
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-kpi-file-summary",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-kpi-file-summary",
+        "description": "Every Monday at 08:30 (cron 30 8 * * 1), read /Users/founder/Reports/kpis.txt on the Office Mac, ask Jarvis once to summarise exactly that file, and send only the summary to telegram. If the file cannot be read, stop without sending anything. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "30 8 * * 1"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "present",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "SIMULATED SUMMARY",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "toolName": "read_file",
+              "params": {
+                "path": "/Users/founder/Reports/kpis.txt",
+                "target": "Office Mac"
+              }
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED SUMMARY",
+            "promptIncludes": [
+              "MRR 309.91",
+              "Trials 6"
+            ]
+          },
+          "sandbox": {
+            "files": {
+              "/Users/founder/Reports/kpis.txt": "MRR 309.91\nTrials 6\nChurned 1"
+            }
+          }
+        },
+        {
+          "id": "missing",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "read_file",
+              "params": {
+                "path": "/Users/founder/Reports/kpis.txt",
+                "target": "Office Mac"
+              },
+              "outcome": "error"
+            }
+          ],
+          "status": "FAILED",
+          "sandbox": {
+            "files": {}
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-hot-lead-70",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-hot-lead-70",
+        "description": "On a webhook from my lead form with name, company and score, when score is strictly greater than 70 send \"<name> from <company>\" (fields filled in) to dashboard. Otherwise do nothing. No AI or email."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true,
+          "pieces": [
+            "@activepieces/piece-gmail"
+          ]
+        }
+      },
+      "scenarios": [
+        {
+          "id": "hot",
+          "payload": {
+            "name": "Kim Park",
+            "company": "Pine Inc",
+            "score": 71
+          },
+          "notifications": [
+            {
+              "message": "Kim Park from Pine Inc",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "cold",
+          "payload": {
+            "name": "Joe Fox",
+            "company": "Ash GmbH",
+            "score": 70
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-hot-lead-50",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-hot-lead-50",
+        "description": "On a webhook from my lead form with name, company and score, when score is strictly greater than 50 send \"<name> from <company>\" (fields filled in) to telegram. Otherwise do nothing. No AI or email."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true,
+          "pieces": [
+            "@activepieces/piece-gmail"
+          ]
+        }
+      },
+      "scenarios": [
+        {
+          "id": "hot",
+          "payload": {
+            "name": "Lea Roth",
+            "company": "Elm Ltd",
+            "score": 88
+          },
+          "notifications": [
+            {
+              "message": "Lea Roth from Elm Ltd",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "cold",
+          "payload": {
+            "name": "Max Ho",
+            "company": "Fir SA",
+            "score": 12
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-hot-lead-90",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-hot-lead-90",
+        "description": "On a webhook from my lead form with name, company and score, when score is strictly greater than 90 send \"<name> from <company>\" (fields filled in) to desktop. Otherwise do nothing. No AI or email."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true,
+          "pieces": [
+            "@activepieces/piece-gmail"
+          ]
+        }
+      },
+      "scenarios": [
+        {
+          "id": "hot",
+          "payload": {
+            "name": "Ana Ruiz",
+            "company": "Cedar Labs",
+            "score": 95
+          },
+          "notifications": [
+            {
+              "message": "Ana Ruiz from Cedar Labs",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "cold",
+          "payload": {
+            "name": "Ivo Lin",
+            "company": "Yew BV",
+            "score": 90
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-new-lead-company",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-new-lead-company",
+        "description": "On a webhook with a company field, search my memory for the company. If memory finds nothing, send \"New lead: <company>\" (filled in) to dashboard. If memory already knows the company, send nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "new",
+          "payload": {
+            "company": "Willow AI"
+          },
+          "notifications": [
+            {
+              "message": "New lead: Willow AI",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "sandbox": {
+            "entities": [
+              {
+                "id": "k1",
+                "type": "concept",
+                "name": "Cedar Labs",
+                "properties": {
+                  "note": "customer"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "known",
+          "payload": {
+            "company": "Cedar Labs"
+          },
+          "notifications": [],
+          "sandbox": {
+            "entities": [
+              {
+                "id": "k1",
+                "type": "concept",
+                "name": "Cedar Labs",
+                "properties": {
+                  "note": "customer"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-new-lead-company-tg",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-new-lead-company-tg",
+        "description": "On a webhook with a company field, search my memory for the company. If memory finds nothing, send \"New lead: <company>\" (filled in) to telegram. If memory already knows the company, send nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "new",
+          "payload": {
+            "company": "Spruce Data"
+          },
+          "notifications": [
+            {
+              "message": "New lead: Spruce Data",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ],
+          "sandbox": {
+            "entities": [
+              {
+                "id": "k2",
+                "type": "concept",
+                "name": "Birch Co",
+                "properties": {
+                  "note": "prospect"
+                }
+              }
+            ]
+          }
+        },
+        {
+          "id": "known",
+          "payload": {
+            "company": "Birch Co"
+          },
+          "notifications": [],
+          "sandbox": {
+            "entities": [
+              {
+                "id": "k2",
+                "type": "concept",
+                "name": "Birch Co",
+                "properties": {
+                  "note": "prospect"
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-overdue-to-desktop",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-overdue-to-desktop",
+        "description": "When a commitment becomes overdue (commitment.overdue), send its text exactly to desktop. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "commitment.overdue"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "overdue",
+          "payload": {
+            "eventType": "commitment.overdue",
+            "payload": {
+              "id": "c1",
+              "what": "Follow up with the Cedar lead",
+              "when_due": 1759600000000
+            }
+          },
+          "notifications": [
+            {
+              "message": "Follow up with the Cedar lead",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ho-overdue-to-voice",
+      "split": "heldout",
+      "category": "lead_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-overdue-to-voice",
+        "description": "When a commitment becomes overdue (commitment.overdue), send its text exactly to voice. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "commitment.overdue"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "overdue",
+          "payload": {
+            "eventType": "commitment.overdue",
+            "payload": {
+              "id": "c1",
+              "what": "Follow up with the Cedar lead",
+              "when_due": 1759600000000
+            }
+          },
+          "notifications": [
+            {
+              "message": "Follow up with the Cedar lead",
+              "channels": [
+                "voice"
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ho-evening-digest",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-evening-digest",
+        "description": "Every weekday at 18:00 (cron 0 18 * * 1-5), list my pending commitments, ask Jarvis once to turn exactly those into a short digest, and send only the digest to dashboard. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 18 * * 1-5"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "digest",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "SIMULATED DIGEST",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED DIGEST",
+            "promptIncludes": [
+              "Reply to Birch about SSO",
+              "Review the Oak invoice"
+            ],
+            "promptExcludes": [
+              "Hire the designer"
+            ]
+          },
+          "sandbox": {
+            "commitments": [
+              {
+                "id": "c1",
+                "description": "Reply to Birch about SSO",
+                "status": "pending",
+                "dueAt": null,
+                "priority": "high"
+              },
+              {
+                "id": "c2",
+                "description": "Review the Oak invoice",
+                "status": "pending",
+                "dueAt": null,
+                "priority": "normal"
+              },
+              {
+                "id": "c3",
+                "description": "Hire the designer",
+                "status": "completed",
+                "dueAt": null,
+                "priority": "low"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-monday-digest",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-monday-digest",
+        "description": "Every Monday at 07:00 (cron 0 7 * * 1), list my pending commitments, ask Jarvis once to turn exactly those into a short digest, and send only the digest to telegram. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 7 * * 1"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "digest",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "SIMULATED DIGEST",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED DIGEST",
+            "promptIncludes": [
+              "Prepare the board deck"
+            ],
+            "promptExcludes": [
+              "Renew the domain"
+            ]
+          },
+          "sandbox": {
+            "commitments": [
+              {
+                "id": "c4",
+                "description": "Prepare the board deck",
+                "status": "pending",
+                "dueAt": null,
+                "priority": "high"
+              },
+              {
+                "id": "c5",
+                "description": "Renew the domain",
+                "status": "cancelled",
+                "dueAt": null,
+                "priority": "low"
+              }
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-weekly-review-file",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-weekly-review-file",
+        "description": "Every Friday at 18:00 (cron 0 18 * * 5), read my recent activity, ask Jarvis once to write a weekly review from it, and write that review to /Users/founder/Reviews/week.md on the Office Mac. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 18 * * 5"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "allowed",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/Reviews/week.md",
+                "content": "SIMULATED REVIEW",
+                "target": "Office Mac"
+              }
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED REVIEW",
+            "promptIncludes": [
+              "Designed the Brief dashboard",
+              "Answered investor questions"
+            ]
+          },
+          "sandbox": {
+            "activity": [
+              {
+                "id": "a1",
+                "appName": "Figma",
+                "windowTitle": "Brief",
+                "url": null,
+                "summary": "Designed the Brief dashboard"
+              },
+              {
+                "id": "a2",
+                "appName": "Gmail",
+                "windowTitle": "Inbox",
+                "url": null,
+                "summary": "Answered investor questions"
+              }
+            ]
+          }
+        },
+        {
+          "id": "needs-approval",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/Reviews/week.md",
+                "content": "SIMULATED REVIEW",
+                "target": "Office Mac"
+              },
+              "outcome": "approval_pending"
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED REVIEW",
+            "promptIncludes": [
+              "Designed the Brief dashboard",
+              "Answered investor questions"
+            ]
+          },
+          "status": "PAUSED",
+          "sandbox": {
+            "activity": [
+              {
+                "id": "a1",
+                "appName": "Figma",
+                "windowTitle": "Brief",
+                "url": null,
+                "summary": "Designed the Brief dashboard"
+              },
+              {
+                "id": "a2",
+                "appName": "Gmail",
+                "windowTitle": "Inbox",
+                "url": null,
+                "summary": "Answered investor questions"
+              }
+            ],
+            "approvals": [
+              "write_file"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-sunday-review-file",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-sunday-review-file",
+        "description": "Every Sunday at 20:00 (cron 0 20 * * 0), read my recent activity, ask Jarvis once to write a weekly review from it, and write that review to /Users/founder/Reviews/sunday.md on the Office Mac. No agents."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 20 * * 0"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "allowed",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/Reviews/sunday.md",
+                "content": "SIMULATED REVIEW",
+                "target": "Office Mac"
+              }
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED REVIEW",
+            "promptIncludes": [
+              "Planned the Q4 roadmap"
+            ]
+          },
+          "sandbox": {
+            "activity": [
+              {
+                "id": "a3",
+                "appName": "Notion",
+                "windowTitle": "Roadmap",
+                "url": null,
+                "summary": "Planned the Q4 roadmap"
+              }
+            ]
+          }
+        },
+        {
+          "id": "needs-approval",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/Reviews/sunday.md",
+                "content": "SIMULATED REVIEW",
+                "target": "Office Mac"
+              },
+              "outcome": "approval_pending"
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED REVIEW",
+            "promptIncludes": [
+              "Planned the Q4 roadmap"
+            ]
+          },
+          "status": "PAUSED",
+          "sandbox": {
+            "activity": [
+              {
+                "id": "a3",
+                "appName": "Notion",
+                "windowTitle": "Roadmap",
+                "url": null,
+                "summary": "Planned the Q4 roadmap"
+              }
+            ],
+            "approvals": [
+              "write_file"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-studio-capture",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-studio-capture",
+        "description": "Every weekday at 09:00 (cron 0 9 * * 1-5), capture the screen on the Studio PC, then send exactly \"Studio capture done\" to dashboard. If the capture fails, send nothing."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 9 * * 1-5"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "online",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "Studio capture done",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "toolName": "capture_screen",
+              "params": {
+                "target": "Studio PC"
+              }
+            }
+          ]
+        },
+        {
+          "id": "offline",
+          "payload": {},
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "capture_screen",
+              "params": {
+                "target": "Studio PC"
+              },
+              "outcome": "blocked"
+            }
+          ],
+          "status": "FAILED",
+          "sandbox": {
+            "offlineTargets": [
+              "Studio PC"
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-office-capture",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-office-capture",
+        "description": "Every day at 12:00 (cron 0 12 * * *), capture the screen on the Office Mac, then send exactly \"Office capture done\" to desktop. If the capture fails, send nothing."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 12 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "online",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "Office capture done",
+              "channels": [
+                "desktop"
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "toolName": "capture_screen",
+              "params": {
+                "target": "Office Mac"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ho-office-snapshot",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-office-snapshot",
+        "description": "Every weekday at 17:00 (cron 0 17 * * 1-5), take a desktop snapshot on the Office Mac and then send exactly \"Office desktop snapshot taken\" to dashboard."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 17 * * 1-5"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "snapshot",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "Office desktop snapshot taken",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "toolName": "desktop_snapshot",
+              "params": {
+                "target": "Office Mac"
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "ho-clipboard-invoice",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-clipboard-invoice",
+        "description": "When I copy text (observer.clipboard_changed) that contains \"INV-\", write exactly the copied text to /Users/founder/Invoices/copied.txt on the Office Mac. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.clipboard_changed"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "observer.clipboard_changed",
+            "payload": {
+              "content": "INV-2207 Birch Co 480 EUR",
+              "length": 25
+            }
+          },
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/Invoices/copied.txt",
+                "content": "INV-2207 Birch Co 480 EUR",
+                "target": "Office Mac"
+              }
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.clipboard_changed",
+            "payload": {
+              "content": "lunch at 1",
+              "length": 10
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-clipboard-po",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-clipboard-po",
+        "description": "When I copy text (observer.clipboard_changed) that contains \"PO-\", write exactly the copied text to /Users/founder/Orders/copied.txt on the Office Mac. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.clipboard_changed"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "observer.clipboard_changed",
+            "payload": {
+              "content": "PO-2207 Birch Co 480 EUR",
+              "length": 25
+            }
+          },
+          "notifications": [],
+          "tools": [
+            {
+              "toolName": "write_file",
+              "params": {
+                "path": "/Users/founder/Orders/copied.txt",
+                "content": "PO-2207 Birch Co 480 EUR",
+                "target": "Office Mac"
+              }
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.clipboard_changed",
+            "payload": {
+              "content": "lunch at 1",
+              "length": 10
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-session-customer",
+      "split": "heldout",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-session-customer",
+        "description": "When a focus session ends (awareness.session_ended) and its topic contains \"customer\", send \"Follow up on: <topic>\" (topic filled in) to dashboard. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "awareness.session_ended"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "awareness.session_ended",
+            "payload": {
+              "sessionId": "s1",
+              "topic": "customer onboarding for Pine",
+              "durationMs": 1800000
+            }
+          },
+          "notifications": [
+            {
+              "message": "Follow up on: customer onboarding for Pine",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "awareness.session_ended",
+            "payload": {
+              "sessionId": "s2",
+              "topic": "inbox zero",
+              "durationMs": 600000
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-session-investor",
+      "split": "heldout",
+      "category": "meeting_followup",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-session-investor",
+        "description": "When a focus session ends (awareness.session_ended) and its topic contains \"investor\", send \"Follow up on: <topic>\" (topic filled in) to telegram. Otherwise do nothing. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "awareness.session_ended"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "awareness.session_ended",
+            "payload": {
+              "sessionId": "s1",
+              "topic": "investor update prep",
+              "durationMs": 1800000
+            }
+          },
+          "notifications": [
+            {
+              "message": "Follow up on: investor update prep",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "awareness.session_ended",
+            "payload": {
+              "sessionId": "s2",
+              "topic": "inbox zero",
+              "durationMs": 600000
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-invoice-folder-note",
+      "split": "heldout",
+      "category": "recurring_report",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-invoice-folder-note",
+        "description": "Every Monday at 09:00 (cron 0 9 * * 1), list the folder /Users/founder/Invoices on the Office Mac, ask Jarvis once to write a one-line note naming exactly those files, and send only that note to dashboard."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 9 * * 1"
+        },
+        "maxAiSteps": 1,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "listing",
+          "payload": {},
+          "notifications": [
+            {
+              "message": "SIMULATED NOTE",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ],
+          "tools": [
+            {
+              "toolName": "list_directory",
+              "params": {
+                "path": "/Users/founder/Invoices",
+                "target": "Office Mac"
+              }
+            }
+          ],
+          "ai": {
+            "reply": "SIMULATED NOTE",
+            "promptIncludes": [
+              "oak-1180.pdf",
+              "birch-77.pdf"
+            ]
+          },
+          "sandbox": {
+            "files": {
+              "/Users/founder/Invoices/oak-1180.pdf": "x",
+              "/Users/founder/Invoices/birch-77.pdf": "x"
+            }
+          }
+        }
+      ]
+    },
+    {
+      "id": "ho-forward-stripe",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-forward-stripe",
+        "description": "When a desktop notification arrives (observer.notification_received) from the app \"Stripe\", send \"<title>: <body>\" (filled in) to dashboard. Ignore other apps. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.notification_received"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "observer.notification_received",
+            "payload": {
+              "app": "Stripe",
+              "title": "Payout sent",
+              "body": "480 EUR to your bank"
+            }
+          },
+          "notifications": [
+            {
+              "message": "Payout sent: 480 EUR to your bank",
+              "channels": [
+                "dashboard"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.notification_received",
+            "payload": {
+              "app": "Music",
+              "title": "Track",
+              "body": "x"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-forward-calendly",
+      "split": "heldout",
+      "category": "invoice_review",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-forward-calendly",
+        "description": "When a desktop notification arrives (observer.notification_received) from the app \"Calendly\", send \"<title>: <body>\" (filled in) to telegram. Ignore other apps. No AI."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.notification_received"
+        },
+        "maxAiSteps": 0,
+        "blocked": false,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ],
+        "forbidden": {
+          "agents": true
+        }
+      },
+      "scenarios": [
+        {
+          "id": "match",
+          "payload": {
+            "eventType": "observer.notification_received",
+            "payload": {
+              "app": "Calendly",
+              "title": "New booking",
+              "body": "Kim Park, Thursday 15:00"
+            }
+          },
+          "notifications": [
+            {
+              "message": "New booking: Kim Park, Thursday 15:00",
+              "channels": [
+                "telegram"
+              ]
+            }
+          ]
+        },
+        {
+          "id": "other",
+          "payload": {
+            "eventType": "observer.notification_received",
+            "payload": {
+              "app": "Music",
+              "title": "Track",
+              "body": "y"
+            }
+          },
+          "notifications": []
+        }
+      ]
+    },
+    {
+      "id": "ho-no-email-address",
+      "split": "heldout",
+      "category": "missing_info",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-no-email-address",
+        "description": "When a lead signs up, email Marco the welcome pack."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-no-slack-channel",
+      "split": "heldout",
+      "category": "missing_info",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-no-slack-channel",
+        "description": "Every Monday at 9 post the pipeline summary in the sales channel."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 9 * * 1"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-no-report-source",
+      "split": "heldout",
+      "category": "missing_info",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-no-report-source",
+        "description": "Every Monday morning send me the weekly revenue numbers."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 8 * * 1"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-unknown-machine",
+      "split": "heldout",
+      "category": "missing_info",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-unknown-machine",
+        "description": "Every evening save the day plan to my home iMac."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 20 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-which-gmail",
+      "split": "heldout",
+      "category": "missing_info",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-which-gmail",
+        "description": "When an invoice email arrives, forward it to my accountant."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.email_received"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-sms-reminder",
+      "split": "heldout",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-sms-reminder",
+        "description": "Every day at 8 text my cofounder the day plan by SMS."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 8 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-fax-contract",
+      "split": "heldout",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-fax-contract",
+        "description": "When a contract is signed, fax it to the bank."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-print-invoices",
+      "split": "heldout",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-print-invoices",
+        "description": "Every month print all open invoices."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 9 1 * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-hubspot-stage",
+      "split": "heldout",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-hubspot-stage",
+        "description": "When a demo is booked, move the deal to Demo stage in HubSpot."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-quickbooks-sync",
+      "split": "heldout",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-quickbooks-sync",
+        "description": "Every night sync paid invoices into QuickBooks."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 1 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-calendar-invite",
+      "split": "heldout",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-calendar-invite",
+        "description": "When a lead scores above 80, send them a calendar invite for a demo."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "webhook"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-voice-call-investor",
+      "split": "heldout",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-voice-call-investor",
+        "description": "Every Friday call each investor and read them the weekly update."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 16 * * 5"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-one-off-linkedin",
+      "split": "heldout",
+      "category": "no_automation",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-one-off-linkedin",
+        "description": "Write a LinkedIn post about our launch for me to publish today."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "manual"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-one-off-question",
+      "split": "heldout",
+      "category": "no_automation",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-one-off-question",
+        "description": "What is on my calendar tomorrow?"
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "manual"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-one-off-memo",
+      "split": "heldout",
+      "category": "no_automation",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-one-off-memo",
+        "description": "Turn these meeting notes into a short memo for the team right now."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "manual"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-judgment-investors",
+      "split": "heldout",
+      "category": "no_automation",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-judgment-investors",
+        "description": "Every day decide which investors deserve a personal follow-up and write to them."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 9 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-linux-cron",
+      "split": "heldout",
+      "category": "unsupported_target",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-linux-cron",
+        "description": "Every hour check disk space on my Linux server and alert me."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 * * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-click-export",
+      "split": "heldout",
+      "category": "unsupported_target",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-click-export",
+        "description": "Every morning open Chrome on the Office Mac, log in to Stripe and click Export."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 7 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-browse-competitors",
+      "split": "heldout",
+      "category": "unsupported_target",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-browse-competitors",
+        "description": "Every day check our three competitors' pricing pages and tell me what changed."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 10 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-delete-old-invoices",
+      "split": "heldout",
+      "category": "missing_capability",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-delete-old-invoices",
+        "description": "Every month delete invoices older than a year from the Invoices folder."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 3 1 * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-run-script",
+      "split": "heldout",
+      "category": "unsupported_target",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-run-script",
+        "description": "When a file lands in Imports, run my Python cleanup script on it."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "event",
+          "eventType": "observer.file_changed"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    },
+    {
+      "id": "ho-studio-only-windows",
+      "split": "heldout",
+      "category": "unsupported_target",
+      "specification": {
+        "schemaVersion": 1,
+        "name": "ho-studio-only-windows",
+        "description": "Every morning run the Windows backup app on my Linux workstation."
+      },
+      "expectation": {
+        "trigger": {
+          "kind": "schedule",
+          "cron": "0 6 * * *"
+        },
+        "maxAiSteps": 0,
+        "blocked": true,
+        "negativeConstraints": [
+          "No email, Slack or external messages unless the job asks for them.",
+          "Use only installed pieces, listed tools and named machines."
+        ]
+      },
+      "scenarios": []
+    }
+  ]
+}

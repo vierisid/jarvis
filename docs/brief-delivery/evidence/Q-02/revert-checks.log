@@ -1,0 +1,19 @@
+Q-02 revert checks, 5 October 2026 (each mutation applied to the Q-02 sources, its test run, then the source restored byte for byte)
+Each line removes or weakens one guard, runs the named test in founder-tasks.test.ts, and requires it to fail.
+
+CAUGHT  exact tool calls                 -> scenario assertions fail
+CAUGHT  one machine, two names           -> scenario assertions fail
+CAUGHT  approval pauses                  -> through the real engine
+CAUGHT  offline blocks                   -> through the real engine
+CAUGHT  listed tools only                -> the envelope admits only
+CAUGHT  bound connections only           -> the envelope admits only
+CAUGHT  named connection                 -> connection-bound steps are graded
+CAUGHT  no extra external steps          -> connection-bound steps are graded
+CAUGHT  forbidden agents                 -> forbidden agents, actions
+CAUGHT  AI must not see excluded facts   -> AI fidelity
+CAUGHT  agent delegations                -> scenario assertions fail
+CAUGHT  unexpected agents                -> unexpected effects count
+CAUGHT  fair task sets                   -> a task set that could not be graded
+CAUGHT  sealed reserve                   -> the sealed reserve
+CAUGHT  blind packet                     -> blinded review hides
+ALL GUARDS PINNED (15 of 15); every file restored afterwards.
