@@ -40,8 +40,8 @@
     {
       "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
       "evidence": "evidence/D-14/affected.log",
-      "tests": 251,
-      "assertions": 3798,
+      "tests": 252,
+      "assertions": 3803,
       "files": 17,
       "result": "pass"
     },
@@ -58,8 +58,8 @@
     }
   ],
   "focused": {
-    "tests": 17,
-    "assertions": 115,
+    "tests": 18,
+    "assertions": 120,
     "evidence": "evidence/D-14/focused.log"
   },
   "mutation": {
@@ -76,7 +76,9 @@
     "label_crossings": 240,
     "narrow_touch_width": 390,
     "errors": 0,
-    "keyboard_followup": "evidence/D-14/keyboard-browser.log"
+    "keyboard_followup": "evidence/D-14/keyboard-browser.log",
+    "edge_script": "evidence/D-14/browser-edge-check.cjs",
+    "edge_evidence": "evidence/D-14/browser-edge.log"
   },
   "compatibility": {
     "branch": "brief/f-05",
@@ -107,6 +109,10 @@
   "test_timeout_note": {
     "evidence": "evidence/D-14/affected-default-timeout.log",
     "attempt": "Default 5-second timeout interrupted the unchanged 80-cycle hero test",
-    "final": "All 251 tests pass with --timeout 15000; no existing test/source changed"
+    "final": "All 252 tests pass with --timeout 15000; no existing test/source changed"
+  },
+  "cancellation_regression": {
+    "red": "evidence/D-14/cancellation-red.log",
+    "result": "Immediate abort clears pending feedback; no receipt; unit and browser checks pass"
   }
 }

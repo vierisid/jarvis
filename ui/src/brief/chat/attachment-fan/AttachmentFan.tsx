@@ -82,12 +82,15 @@ function ScopedFan({ mode, binding, reducedMotion, onFeedback }: Props) {
     if (!available || !binding || busy || controller.current || (kind === "screenshot" && !binding.screenshot.available)) return;
     const request = new AbortController(); controller.current = request; setBusy(true);
     close(true); onFeedback(`Adding ${names[kind].toLowerCase()}…`);
+    const cancelled = () => { if (alive.current) onFeedback(""); };
+    request.signal.addEventListener("abort", cancelled, { once: true });
     try {
       const result = await binding.choose(kind, request.signal);
       if (alive.current && !request.signal.aborted) onFeedback(result === "attached" ? `${names[kind]} attached.` : "");
     } catch {
       if (alive.current && !request.signal.aborted) onFeedback(`Could not add ${names[kind].toLowerCase()}. Try again.`);
     } finally {
+      request.signal.removeEventListener("abort", cancelled);
       if (controller.current === request) controller.current = null;
       if (alive.current) setBusy(false);
     }
