@@ -17,7 +17,8 @@ function Glyph({ value, reduced }: { value: string; reduced: boolean }) {
 export function OutcomeNumber({ value, reducedMotion = false }: { value: number; reducedMotion?: boolean }) {
   const reduced = useBriefReducedMotion(reducedMotion);
   const text = formatNumber(value);
-  return <span className="brief-outcome-number" aria-label={text}>
+  return <span className="brief-outcome-number">
+    <span className="brief-sr-only">{text}</span>
     <span aria-hidden="true">{[...text].map((char, index) => <Glyph key={text.length - index} value={char} reduced={reduced} />)}</span>
   </span>;
 }

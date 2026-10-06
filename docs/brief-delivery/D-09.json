@@ -56,10 +56,10 @@
     {
       "command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
       "result": "pass",
-      "tests": 144,
-      "assertions": 2982,
+      "tests": 146,
+      "assertions": 3007,
       "files": 12,
-      "focused_tests": 15
+      "focused_tests": 17
     },
     {
       "command": "bun x tsc --noEmit",
@@ -68,7 +68,7 @@
     {
       "command": "bun run build:ui",
       "result": "pass",
-      "build": "index-rsz4cemd.js",
+      "build": "index-3eg61bg8.js",
       "css": "index-sjfk8zc9.css",
       "note": "Existing @theme/@tailwind warnings."
     },
@@ -134,5 +134,17 @@
     "Activity navigation example targets a route stub; no live run-details room is claimed."
   ],
   "rollback": "Leave default Today registration/capabilities off; revert D-09 without data migration or effect replay.",
-  "next": "D-10, separate worktree and PR; not started."
+  "next": "D-10, separate worktree and PR; not started.",
+  "review_correction": {
+    "finding": "R1",
+    "status": "fixed",
+    "evidence": [
+      "evidence/D-09/review-validation.json",
+      "evidence/D-09/review-browser.json",
+      "evidence/D-09/review-red.log",
+      "evidence/D-09/review-green.log",
+      "evidence/D-09/review-dark-compact.jpg"
+    ],
+    "note": "Ordinary complete numeric text replaces unsupported generic naming; animated glyphs stay hidden. Unknown-change placeholder uses the same fix. Earlier browser matrices retain their original build identity."
+  }
 }

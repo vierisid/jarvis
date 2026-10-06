@@ -1,0 +1,351 @@
+{
+  "kind": "DOM text/clipping inspection; not a screen reader session",
+  "cases": [
+    {
+      "case": "Light expanded closed",
+      "data": {
+        "build": [
+          "http://localhost:4389/index-3eg61bg8.js"
+        ],
+        "numbers": [
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 83.60417175292969,
+              "width": 86.125,
+              "x": 292.66668701171875,
+              "y": 707.6458740234375
+            },
+            "text": "90",
+            "visible": "90",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 55,
+              "width": 56.66666793823242,
+              "x": 656.2083740234375,
+              "y": 707.6458740234375
+            },
+            "text": "2",
+            "visible": "2",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 47.29166793823242,
+              "width": 48.72916793823242,
+              "x": 627.875,
+              "y": 910.8021240234376
+            },
+            "text": "6",
+            "visible": "6",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 38,
+              "width": 38.53125,
+              "x": 954.6666870117188,
+              "y": 323.3125
+            },
+            "text": "6",
+            "visible": "6",
+            "width": "1px"
+          }
+        ],
+        "unknown": []
+      }
+    },
+    {
+      "case": "Light 6 to 7 update",
+      "data": {
+        "build": [
+          "http://localhost:4389/index-3eg61bg8.js"
+        ],
+        "numbers": [
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 83.60417175292969,
+              "width": 86.125,
+              "x": 292.66668701171875,
+              "y": 707.6458740234375
+            },
+            "text": "90",
+            "visible": "90",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 55,
+              "width": 56.66666793823242,
+              "x": 656.2083740234375,
+              "y": 707.6458740234375
+            },
+            "text": "3",
+            "visible": "3",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 47.29166793823242,
+              "width": 48.72916793823242,
+              "x": 627.875,
+              "y": 910.8021240234376
+            },
+            "text": "7",
+            "visible": "7",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 38,
+              "width": 38.53125,
+              "x": 954.6666870117188,
+              "y": 323.3125
+            },
+            "text": "7",
+            "visible": "7",
+            "width": "1px"
+          }
+        ],
+        "unknown": []
+      }
+    },
+    {
+      "case": "Dark rail open",
+      "data": {
+        "build": [
+          "http://localhost:4389/index-3eg61bg8.js"
+        ],
+        "numbers": [
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 105.60417175292967,
+              "width": 108.79167175292967,
+              "x": 140.6666717529297,
+              "y": 731.9896240234375
+            },
+            "text": "90",
+            "visible": "90",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 55,
+              "width": 56.66666793823242,
+              "x": 536.0208740234375,
+              "y": 709.6458740234375
+            },
+            "text": "3",
+            "visible": "3",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 47.29166793823242,
+              "width": 48.72916793823242,
+              "x": 507.6875,
+              "y": 790.6458740234375
+            },
+            "text": "7",
+            "visible": "7",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 38,
+              "width": 38.53125,
+              "x": 825.6666870117188,
+              "y": 303.32293701171875
+            },
+            "text": "7",
+            "visible": "7",
+            "width": "1px"
+          }
+        ],
+        "unknown": []
+      }
+    },
+    {
+      "case": "Unknown weekly change",
+      "data": {
+        "build": [
+          "http://localhost:4389/index-3eg61bg8.js"
+        ],
+        "numbers": [
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 105.60417175292967,
+              "width": 108.79167175292967,
+              "x": 140.6666717529297,
+              "y": 379.34375
+            },
+            "text": "90",
+            "visible": "90",
+            "width": "1px"
+          }
+        ],
+        "unknown": [
+          "Weekly change unknown"
+        ]
+      }
+    },
+    {
+      "case": "Measured zero",
+      "data": {
+        "build": [
+          "http://localhost:4389/index-3eg61bg8.js"
+        ],
+        "numbers": [
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 105.60417175292967,
+              "width": 108.79167175292967,
+              "x": 140.6666717529297,
+              "y": 371.9895935058594
+            },
+            "text": "0",
+            "visible": "0",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 55,
+              "width": 56.66666793823242,
+              "x": 507.6875,
+              "y": 349.6458435058594
+            },
+            "text": "0",
+            "visible": "0",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 47.29166793823242,
+              "width": 48.72916793823242,
+              "x": 507.6875,
+              "y": 430.6458435058594
+            },
+            "text": "0",
+            "visible": "0",
+            "width": "1px"
+          },
+          {
+            "clipped": "rect(0px, 0px, 0px, 0px)",
+            "genericLabel": null,
+            "glyphsHidden": true,
+            "height": "1px",
+            "hidden": false,
+            "position": "absolute",
+            "rect": {
+              "height": 38,
+              "width": 38.53125,
+              "x": 825.6666870117188,
+              "y": 303.32293701171875
+            },
+            "text": "0",
+            "visible": "0",
+            "width": "1px"
+          }
+        ],
+        "unknown": []
+      }
+    }
+  ]
+}
