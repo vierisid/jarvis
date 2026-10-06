@@ -1,3 +1,6 @@
+import { PreparedOpportunities } from '../awareness/prepared-opportunities';
+import { loadPreparedQualityGate } from '../awareness/prepared-quality-adapter';
+import { registerPreparedOpportunities } from '../brief/registrations/prepared-opportunities';
 import { registerCompositionIngredients } from '../brief/registrations/composition-ingredients';
 import { registerChatAttachments } from '../brief/registrations/chat-attachments';
 import { registerChatProgress } from '../brief/registrations/chat-progress';
@@ -155,6 +158,7 @@ export interface DaemonConfig {
 
 let shutdownInProgress = false;
 let suggestionComposer: SuggestionComposer | null = null;
+let briefPreparedOpportunities: PreparedOpportunities | null = null;
 let briefWorkflowComposition: BriefCompositionProvider | null = null;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
@@ -337,6 +341,8 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
     // (window-state.ts), and phase 3 still calls it on the way out.
     flushWindowState();
   }
+  await briefPreparedOpportunities?.close();
+  briefPreparedOpportunities = null;
   suggestionComposer?.stop();
   suggestionComposer = null;
   briefWorkflowComposition?.stop();
@@ -4978,6 +4984,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     });
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
+    briefPreparedOpportunities = new PreparedOpportunities(getDb());
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
@@ -4985,6 +4992,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (process.env.JARVIS_BRIEF_CHAT_STATE === '1') briefEnabled.push('chatState');
     if (process.env.JARVIS_BRIEF_CHAT_PROGRESS === '1') briefEnabled.push('chatProgress');
     if (process.env.JARVIS_BRIEF_COMPOSITION_INGREDIENTS === '1') briefEnabled.push('compositionIngredients');
+    if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') briefEnabled.push('preparedOpportunities');
     if (process.env.JARVIS_BRIEF_WORKFLOW_COMPOSITION === '1') briefEnabled.push('workflowComposition');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
@@ -4992,6 +5000,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerChatAttachments(briefAttachments),
       ...registerChatProgress(briefChatTransport),
       ...registerWorkflowComposition(briefWorkflowComposition),
+      ...registerPreparedOpportunities(briefPreparedOpportunities),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
@@ -4999,6 +5008,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefConversations,
       briefAttachments,
       briefWorkflowComposition,
+      briefPreparedOpportunities,
       briefCapabilities,
       daemonStartedAt: Date.now(),
       healthMonitor,
@@ -5487,6 +5497,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           library: composerLibrary, executionTargets: collectExecutionTargets(),
         });
         briefWorkflowComposition?.configure(compositionDependencies);
+        if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
+          const quality = await loadPreparedQualityGate({ authority: authorityEngine,
+            tool: name => toolRegistry.get(name) ?? null,
+            targets: () => collectExecutionTargets().filter(t => !t.isHost).map(t => ({ ...t,
+              unavailableCapabilities: sidecarManager.listSidecars().find(s => s.id === t.id)?.unavailable_capabilities?.map(c => c.name),
+            })), credentials: credentialResolver,
+          }, engineBoot?.bundlePath);
+          briefPreparedOpportunities?.configure(compositionDependencies, quality);
+          briefPreparedOpportunities?.start();
+        }
         suggestionComposer = new SuggestionComposer(request => composePersistedFlow(compositionDependencies(), request));
         apiContext.suggestionComposer = suggestionComposer;
         suggestionComposer.start();

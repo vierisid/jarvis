@@ -1,0 +1,126 @@
+{
+  "task": "F-09",
+  "title": "Prepare opportunity workflows before presenting them",
+  "date": "2026-10-06",
+  "branch": "brief/f-09",
+  "base_branch": "brief/f-08",
+  "baseline": "5d9fafea32f0db1a221121ca90b6b5e4f8492a1d",
+  "head": "Commit containing this receipt; published SHA is recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-09",
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [
+      "Q-13"
+    ],
+    "stack": "User-requested feature stack on corrected F-08; keep all PRs unmerged.",
+    "q13_integration_commit": "0d455494f34b4045a0b95498a81e9bd389c6ffeb",
+    "q13_implementation_included": false
+  },
+  "baseline_review": {
+    "main": "00780abe",
+    "open_prs_reviewed": [
+      "F-08 #755",
+      "Q-13 #737",
+      "D-11 #754"
+    ],
+    "duplicate_implementation_found": false
+  },
+  "source_review": {
+    "pinned_commit": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "anchors": [
+      "A06 src/awareness/job-hypotheses.ts",
+      "A07 src/awareness/suggestion-composer.ts",
+      "A11 src/actions/tools/composition-provenance.ts"
+    ],
+    "comparison": "A06/A07 unchanged at baseline; A11 differs by the already-reviewed F08 prompt revision. Task-relevant sections and live Q13 implementation inspected.",
+    "figma": {
+      "file": "eNfKeirIKLZLlZEasrurZa",
+      "node": "81:2931",
+      "visual": "Backend API/provider only; no visible UI delta or screenshot claimed."
+    }
+  },
+  "activation": {
+    "capability": "preparedOpportunities",
+    "flag": "JARVIS_BRIEF_PREPARED_OPPORTUNITIES=1",
+    "default": "off",
+    "requires": "Configured composer, current shared workflow database, installed Q13 qualifier/dry runner, existing engine bundle. Fixed optional loader returns unavailable when absent; no static Q13 imports.",
+    "release_enabled": false,
+    "merged": false
+  },
+  "implementation": [
+    "Additive prepared snapshot, attempt budget and revision history tables; canonical source ID, exact locked disabled flow/version, confirmed specification/evidence/goal rationale and journal.",
+    "Shared durable composer lease helper, singleton prepared processing, rolling daily budget, per-proposal retries, queue/page limits and abort/deadline ownership fencing.",
+    "Separate preparing/blocked/ready/stale/dismissed/accepted projection; CAS dismissal/retry, no legacy acceptance or feedback writes. Accepted storage is reserved for F10.",
+    "Actual optional Q13 adapter checks live bindings, goals, Authority, exact graph and sample provenance at preparation and every read. Readiness loss and prior publication withdraw approval eligibility.",
+    "Authenticated, no-store, bounded and strict API; public projection excludes raw captured sample outputs and credentials. No approve, publish, enable, live send or manual run path."
+  ],
+  "acceptance": [
+    {
+      "check": "Restart and duplicate processing retain one exact snapshot",
+      "status": "passed",
+      "evidence": "Persistent database reopen, concurrent workers, canonical replay, rollback-on-attachment-failure and immutable locked version tests."
+    },
+    {
+      "check": "Dismissal during preparation never creates a new visible ready proposal",
+      "status": "passed",
+      "evidence": "Deferred composition and qualification tests, legacy dismissal, changed confirmation, timeouts, shutdown and storage failure fencing."
+    },
+    {
+      "check": "Ready requires current source, readiness and required bindings",
+      "status": "passed",
+      "evidence": "Changed goal/version/bindings, absent quality, mismatched qualification and publication elsewhere tests; actual Q13 real-engine integration."
+    },
+    {
+      "check": "Preview does not claim an effect occurred",
+      "status": "passed",
+      "evidence": "Only illustrative/sandbox provenance; simulated service markers, null real run ID, no live jobs/runs, no raw sample output in read/model requests."
+    },
+    {
+      "check": "Background cost bounded and rollback additive",
+      "status": "passed",
+      "evidence": "Three attempts per rolling day across restart, two attempts per proposal, queue saturation, explicit retry and state history tests."
+    }
+  ],
+  "verification": {
+    "affected": {
+      "status": "passed",
+      "command_file": "docs/brief-delivery/evidence/F-09/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-09/affected.log",
+      "passed": 300,
+      "failed": 0,
+      "skipped": 1,
+      "assertions": 2365,
+      "files": 25,
+      "skip": "The optional actual-Q13 integration ran separately with its source overlay."
+    },
+    "typescript": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit",
+      "exit_code": 0,
+      "log": "docs/brief-delivery/evidence/F-09/typescript.log"
+    },
+    "q13_integration": {
+      "status": "passed",
+      "method": "Temporary overlay of Q13 prepared-qualification.ts, prepared-dry-run.ts and its effect-capabilities.ts helper at the pinned commit; restored after test. No Q13 implementation committed.",
+      "command": "JARVIS_TEST_PREPARED_Q13=1 bun test src/awareness/prepared-opportunities.test.ts src/awareness/prepared-quality-adapter.test.ts",
+      "log": "docs/brief-delivery/evidence/F-09/q13-integration.log",
+      "passed": 25,
+      "failed": 0,
+      "assertions": 116,
+      "sources_restored": true
+    },
+    "guards": "Normal pre-commit EE, migrations, templates, package, related tests and TypeScript required; published outcome recorded in PR."
+  },
+  "limitations": [
+    "Default off and unavailable without Q13; integration is proven locally but the dependency is not merged into this feature branch.",
+    "Empty default synthetic fixture blocks model/context/tool steps requiring fixture values. Trusted integration may supply a fixture factory; HTTP cannot forge sample success. Unsupported graphs retain illustrative provenance and Q13 review requirements.",
+    "Custom confirmed job/outcome text adds an unverified constraint; structural validation does not prove every natural-language requirement.",
+    "Preparation may spend bounded model calls only when explicitly activated. No paid model calls, real credentials, live effects, activation or deployment were used for verification.",
+    "F10 acceptance/activation and dashboard presentation are not implemented by F09. Backend-only verification path is in the guide.",
+    "Parent F08 corrected head has green Docker/platform checks but full CI remains red after two different Chromium fixture setup/teardown failures; not treated as a feature verification pass."
+  ],
+  "rollback": "Unset the flag and restart; preserve additive tables, journals, history and disabled workflows. No down-migration, deletion or replay.",
+  "guide": "docs/brief-prepared-opportunities.md",
+  "next_task": "F-10 not started"
+}
