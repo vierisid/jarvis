@@ -1,6 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import { DEFAULT_IDS, getWorkflowDb } from '../workflows/db/index';
 import { apId } from '../workflows/db/ids';
+import { walkFlowNodes } from '../workflows/db/flow-graph';
 import { createFlow } from '../workflows/db/repos/flow';
 import { createDraftVersion } from '../workflows/db/repos/flow-version';
 import { composePersistedFlow } from '../actions/tools/persisted-workflow-composer';
@@ -157,7 +158,7 @@ export class BriefCompositionProvider {
             message: result.blocked ? 'More information or an available capability is needed.' : 'A valid workflow could not be prepared. Review the saved request and retry explicitly.',
             // Provider diagnostics and malformed-response excerpts stay in the journal.
             details: result.blocked ? result.errors.slice(0, 6).map(message => message.slice(0, 500)) : [] });
-        } else if (!result.flow.trigger.nextAction) {
+        } else if (!walkFlowNodes(result.flow.trigger).some(node => node.type === 'PIECE')) {
           this.finish(row.id, 'blocked', { code: 'insufficient_information', message: 'No workflow actions were prepared. Describe the action, its destination and when it should run.', details: [] });
         } else {
           this.db.transaction(() => {

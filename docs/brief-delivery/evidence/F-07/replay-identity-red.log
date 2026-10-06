@@ -1,13 +1,13 @@
 bun test v1.4.2 (744846f84)
 
 src/brief/composition.test.ts:
-Database initialized at: /tmp/jarvis-f07-lAGw1I/test.db
-75 |       }
-76 |       if (this.readiness() !== 'ready') throw new CompositionRequestError('Workflow composer is unavailable', 503);
-77 |       const count = this.db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM brief_workflow_composition_jobs WHERE project_id = ? AND state IN ('queued','running')").get(this.projectId)!.n;
-78 |       if (count >= limits.pendingJobs) throw new CompositionRequestError('Composition queue is full; retry this request shortly', 429);
-79 |       const id = apId(), now = Date.now();
-80 |       this.db.run(`INSERT INTO brief_workflow_composition_jobs(id, project_id, request_id, name, prompt, state, created_at, updated_at)
+Database initialized at: /tmp/jarvis-f07-Z39cQL/test.db
+76 |       }
+77 |       if (this.readiness() !== 'ready') throw new CompositionRequestError('Workflow composer is unavailable', 503);
+78 |       const count = this.db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM brief_workflow_composition_jobs WHERE project_id = ? AND state IN ('queued','running')").get(this.projectId)!.n;
+79 |       if (count >= limits.pendingJobs) throw new CompositionRequestError('Composition queue is full; retry this request shortly', 429);
+80 |       const id = apId(), now = Date.now();
+81 |       this.db.run(`INSERT INTO brief_workflow_composition_jobs(id, project_id, request_id, name, prompt, state, created_at, updated_at)
                    ^
 SQLiteError: UNIQUE constraint failed: brief_workflow_composition_jobs.project_id, brief_workflow_composition_jobs.request_id
       errno: 2067,
@@ -15,14 +15,14 @@ SQLiteError: UNIQUE constraint failed: brief_workflow_composition_jobs.project_i
        code: "SQLITE_CONSTRAINT_UNIQUE"
 
       at run (bun:sqlite:323:14)
-      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.ts:80:15)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.ts:81:15)
       at transaction (bun:sqlite:400:27)
-      at submit (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.ts:83:8)
-      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:61:35)
-(fail) durable receipt precedes the model; retries across every phase attach one disabled populated draft [818.84ms]
+      at submit (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.ts:84:8)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:65:35)
+(fail) durable receipt precedes the model; retries across every phase attach one disabled populated draft [521.56ms]
 
  0 pass
- 19 filtered out
+ 23 filtered out
  1 fail
  6 expect() calls
-Ran 1 test across 1 file. [888.00ms]
+Ran 1 test across 1 file. [564.00ms]

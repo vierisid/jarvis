@@ -1,13 +1,13 @@
 bun test v1.4.2 (744846f84)
 
 src/brief/composition.test.ts:
-Database initialized at: /tmp/jarvis-f07-QiCFaz/test.db
- 97 | });
- 98 |
- 99 | test('a trigger-only result is a useful blocker and cannot create an empty success', async () => {
-100 |   const p = provider({ async chat() { return { text: JSON.stringify({ displayName: 'Empty', trigger: { name: 'trigger', type: 'EMPTY' } }) }; } });
-101 |   const { job } = p.submit(input); await p.idle();
-102 |   expect(p.get(job.jobId)).toMatchObject({ state: 'blocked', workflow: null, blocker: { code: 'insufficient_information', message: expect.stringContaining('destination') } });
+Database initialized at: /tmp/jarvis-f07-grxPBc/test.db
+101 | });
+102 |
+103 | test('a trigger-only result is a useful blocker and cannot create an empty success', async () => {
+104 |   const p = provider({ async chat() { return { text: JSON.stringify({ displayName: 'Empty', trigger: { name: 'trigger', type: 'EMPTY' } }) }; } });
+105 |   const { job } = p.submit(input); await p.idle();
+106 |   expect(p.get(job.jobId)).toMatchObject({ state: 'blocked', workflow: null, blocker: { code: 'insufficient_information', message: expect.stringContaining('destination') } });
                                  ^
 error: expect(received).toMatchObject(expected)
 
@@ -16,9 +16,9 @@ error: expect(received).toMatchObject(expected)
 -     "code": "insufficient_information",
 -     "message": StringContaining "destination",
 +   "blocker": null,
-+   "compositionId": "fE8zgjdeQV6qZ76UvejOT",
-+   "createdAt": 1791291018925,
-+   "jobId": "pMmlxOWnbk18aUiVIIDVo",
++   "compositionId": "1vZzS52x3HIPjRszTrZ2O",
++   "createdAt": 1791291465617,
++   "jobId": "U5MpNoGTMKtxxaPa4ftFC",
 +   "progress": {
 +     "checkedCandidates": 1,
     },
@@ -33,21 +33,21 @@ error: expect(received).toMatchObject(expected)
 + ,
 +   },
 +   "state": "draft_ready",
-+   "updatedAt": 1791291018984,
++   "updatedAt": 1791291465641,
 +   "workflow": {
-+     "flowId": "tAiya5rfpvk0lVbTnP9UH",
-+     "versionId": "cd7ZV2vaevoqY0YLUeuSj",
++     "flowId": "NIUBcgOtDmZOw9zY0yLhl",
++     "versionId": "RjOYmY7w0oO2rLGTe4Q7X",
 +   },
   }
 
 - Expected  - 5
 + Received  + 20
 
-      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:102:28)
-(fail) a trigger-only result is a useful blocker and cannot create an empty success [1143.11ms]
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:106:28)
+(fail) a trigger-only result is a useful blocker and cannot create an empty success [511.70ms]
 
  0 pass
- 19 filtered out
+ 23 filtered out
  1 fail
  1 expect() calls
-Ran 1 test across 1 file. [1273.00ms]
+Ran 1 test across 1 file. [553.00ms]

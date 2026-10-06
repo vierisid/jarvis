@@ -38,7 +38,7 @@
   "implementation": [
     "Bounded authenticated job API with project-scoped stable request IDs, exact original specification, durable progress and cancellation.",
     "Reuse composePersistedFlow, baseline provenance/catalog snapshot, existing high-tier client and validated canonical draft attachment. Journal creation and job binding commit together before provider calls.",
-    "Atomic flow/version/result attachment creates only a populated disabled draft and never enables, publishes or executes it. Trigger-only results become useful blockers.",
+    "Atomic flow/version/result attachment creates only a populated disabled draft and never enables, publishes or executes it. Whole-graph traversal rejects candidates without a piece action, including empty loops and routers.",
     "Timeout, shutdown and restart retain the prompt and known IDs; late results are fenced. Exact replay returns the existing outcome; only an explicit new request ID retries terminal work."
   ],
   "acceptance": [
@@ -55,7 +55,7 @@
     {
       "check": "Populated disabled draft or useful blocker, never empty success",
       "status": "passed",
-      "evidence": "Actual composer validates a populated graph; trigger-only and report_blocked paths create no flow; unknown pieces fail validation; no runs created; canonical activation readiness still rejects unavailable pieces."
+      "evidence": "Actual composer validates populated and nested-piece graphs; trigger-only, empty loop/router and report_blocked paths create no flow; unknown pieces fail validation; no runs created; canonical activation readiness still rejects unavailable pieces."
     },
     {
       "check": "Cancellation, timeout and failed persistence do not multiply drafts",
@@ -71,17 +71,17 @@
   "verification": {
     "focused": {
       "command": "bun test src/brief/composition.test.ts src/daemon/api-brief-composition.test.ts src/actions/tools/persisted-workflow-composer.test.ts",
-      "passed": 32,
+      "passed": 36,
       "failed": 0,
-      "assertions": 193,
+      "assertions": 203,
       "files": 3,
       "log": "docs/brief-delivery/evidence/F-07/focused.log"
     },
     "affected": {
       "command_file": "docs/brief-delivery/evidence/F-07/affected-command.txt",
-      "passed": 509,
+      "passed": 513,
       "failed": 0,
-      "assertions": 3739,
+      "assertions": 3749,
       "files": 32,
       "log": "docs/brief-delivery/evidence/F-07/affected.log"
     },
@@ -103,6 +103,12 @@
       "failed_before_fix": 1,
       "log": "docs/brief-delivery/evidence/F-07/shutdown-storage-red.log",
       "green": "Included in final focused and affected runs; unwritable interruption storage cannot prevent abort or allow a late draft."
+    },
+    "empty_scaffold_regression": {
+      "red_commit": "a1015eab1471581d2be64a9f0accee1f09c9c432",
+      "failed_before_fix": 2,
+      "log": "docs/brief-delivery/evidence/F-07/empty-scaffold-red.log",
+      "green": "Final suites cover empty loops/routers as blockers and nested piece actions as populated drafts."
     }
   },
   "manual_checks": {
