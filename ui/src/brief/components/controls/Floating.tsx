@@ -62,7 +62,7 @@ export function FloatingSurface({ anchor, kind, children, onReady, placement, cl
   </div>, document.body);
 }
 
-export function BriefTooltip({ label, children, placement, disabled = false }: { label: string; children: ReactElement<HTMLAttributes<HTMLElement>>; placement?: "right"; disabled?: boolean }) {
+export function BriefTooltip({ label, children, placement, disabled = false, delay = 500 }: { label: string; children: ReactElement<HTMLAttributes<HTMLElement>>; placement?: "right"; disabled?: boolean; delay?: number }) {
   const id = useId();
   const anchor = useRef<HTMLSpanElement>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -83,16 +83,20 @@ export function BriefTooltip({ label, children, placement, disabled = false }: {
   useEffect(() => {
     if (!open) return;
     const escape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { suppressed.current = true; close(); }
+      if (event.key === "Escape") {
+        // Dismiss the topmost hint before the containing panel sees Escape.
+        event.preventDefault(); event.stopPropagation();
+        suppressed.current = true; close();
+      }
     };
-    document.addEventListener("keydown", escape);
-    return () => document.removeEventListener("keydown", escape);
+    document.addEventListener("keydown", escape, true);
+    return () => document.removeEventListener("keydown", escape, true);
   }, [open]);
   return <span ref={anchor} className="brief-tooltip-anchor"
     onPointerEnter={event => {
       hovering.current = true;
       if (disabled || event.pointerType === "touch" || suppressed.current) return;
-      clear(); timer.current = setTimeout(() => setOpen(true), 500);
+      clear(); timer.current = setTimeout(() => setOpen(true), delay);
     }} onPointerLeave={leave}
     onFocus={() => { clear(); focused.current = true; suppressed.current = false; if (!disabled) setOpen(true); }}
     onBlur={() => { focused.current = false; if (!hovering.current) { suppressed.current = false; close(); } }}
