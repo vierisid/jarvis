@@ -1,0 +1,25 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-HKWXjk/db
+329 |     }
+330 |     retry();
+331 |     // Let the scheduled retry settle without requesting another refresh.
+332 |     while (manager.registrationState(view.workflow!.flowId, view.workflow!.versionId) === 'pending') await new Promise(resolve => setTimeout(resolve, 0));
+333 |     getDb().run('UPDATE brief_opportunity_actions SET lease_until = 0'); a.kick(); await a.idle();
+334 |     expect(attempts).toBe(2); expect(a.get(view.proposalId).registration.state).toBe(recover ? 'registered' : 'blocked');
+                           ^
+error: expect(received).toBe(expected)
+
+Expected: 2
+Received: 3
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-10/src/brief/opportunity-activation.test.ts:334:22)
+[CronScheduler] All jobs cancelled
+(fail) F10 review R1: reconciliation preserves backoff and stops after exhaustion [2259.26ms]
+
+ 0 pass
+ 26 filtered out
+ 1 fail
+ 13 expect() calls
+Ran 1 test across 1 file. [2.42s]

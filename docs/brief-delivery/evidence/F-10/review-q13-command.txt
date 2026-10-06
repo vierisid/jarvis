@@ -1,0 +1,1 @@
+JARVIS_TEST_PREPARED_Q13=1 bun test src/brief/opportunity-activation.test.ts src/awareness/prepared-opportunities.test.ts src/awareness/prepared-quality-adapter.test.ts --timeout 15000

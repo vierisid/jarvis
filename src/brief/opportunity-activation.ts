@@ -11,6 +11,7 @@ import type { BriefProvider } from './providers';
 /** Structural F09 seam: this service never composes or edits a reviewed graph. */
 export interface PreparedActionSource extends BriefProvider {
   get(id: string): BriefPreparedOpportunity & { canApprove: boolean };
+  abortDismissed(id: string, revision: string): void;
 }
 export interface ActivationTriggers {
   refresh(flowId: string): Promise<void>;
@@ -21,6 +22,7 @@ type Registration = 'pending' | 'registered' | 'blocked' | 'not_required';
 interface ActionRow {
   id: string; proposal_id: string; revision: string; decision: Decision; registration: Registration;
   flow_id: string | null; version_id: string | null; version_digest: string | null;
+  observed_pending: number;
   lease_token: string | null; lease_until: number; created_at: number; updated_at: number;
 }
 interface ProposalRow {
@@ -58,9 +60,13 @@ export class OpportunityActivation {
       decision TEXT NOT NULL CHECK(decision IN ('approve','dismiss')),
       registration TEXT NOT NULL CHECK(registration IN ('pending','registered','blocked','not_required')),
       flow_id TEXT, version_id TEXT, version_digest TEXT,
+      observed_pending INTEGER NOT NULL DEFAULT 0,
       lease_token TEXT, lease_until INTEGER NOT NULL DEFAULT 0,
       created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL
     )`);
+    if (!db.query<{ name: string }, []>('PRAGMA table_info(brief_opportunity_actions)').all().some(column => column.name === 'observed_pending')) {
+      db.run('ALTER TABLE brief_opportunity_actions ADD COLUMN observed_pending INTEGER NOT NULL DEFAULT 0');
+    }
     db.run(`CREATE TABLE IF NOT EXISTS brief_opportunity_action_requests (
       request_key TEXT PRIMARY KEY, receipt_id TEXT NOT NULL REFERENCES brief_opportunity_actions(id)
     )`);
@@ -114,7 +120,7 @@ export class OpportunityActivation {
         if (existing.proposal_id !== proposalId || existing.revision !== revision || existing.decision !== decision) throw new OpportunityActionError('This request or proposal was already settled differently', 409);
         this.db.run('INSERT OR IGNORE INTO brief_opportunity_action_requests VALUES (?, ?)', [requestKey, existing.id]);
         // Explicit retries may reconcile registration, but never republish or re-enable.
-        if (existing.registration === 'blocked') this.db.run("UPDATE brief_opportunity_actions SET registration = 'pending', lease_until = 0 WHERE id = ? AND lease_token IS NULL", [existing.id]);
+        if (existing.registration === 'blocked') this.db.run("UPDATE brief_opportunity_actions SET registration = 'pending', observed_pending = 0, lease_until = 0 WHERE id = ? AND lease_token IS NULL", [existing.id]);
         return false;
       }
       const proposal = this.db.query<ProposalRow, [string]>('SELECT * FROM prepared_opportunities WHERE id = ?').get(proposalId);
@@ -148,6 +154,9 @@ export class OpportunityActivation {
       this.db.run('INSERT INTO brief_opportunity_action_requests VALUES (?, ?)', [requestKey, id]);
       return true;
     }).immediate();
+    // Cancellation is a post-commit notification, including on receipt replay.
+    // A failed receipt insert must leave the original preparation running.
+    if (decision === 'dismiss') this.source!.abortDismissed(proposalId, revision);
     this.kick(); return { created, receipt: this.get(proposalId) };
   }
   start(): void {
@@ -189,13 +198,18 @@ export class OpportunityActivation {
   private async reconcile(row: ActionRow, token: string): Promise<void> {
     const owns = () => !this.stopped && this.current() && this.row(row.proposal_id)?.lease_token === token;
     const finish = (state: Registration) => {
-      if (owns()) this.db.run(`UPDATE brief_opportunity_actions SET registration = ?, lease_token = NULL, lease_until = ?, updated_at = ?
-        WHERE id = ? AND lease_token = ?`, [state, state === 'pending' ? Date.now() + 5_000 : 0, Date.now(), row.id, token]);
+      if (owns()) this.db.run(`UPDATE brief_opportunity_actions SET registration = ?, observed_pending = CASE WHEN ? = 'pending' THEN 1 ELSE observed_pending END,
+        lease_token = NULL, lease_until = ?, updated_at = ?
+        WHERE id = ? AND lease_token = ?`, [state, state, state === 'pending' ? Date.now() + 5_000 : 0, Date.now(), row.id, token]);
     };
     try {
       if (!owns()) return;
       if (this.activation(row) !== 'enabled') { finish('blocked'); return; }
-      if (this.triggers!.registrationState(row.flow_id!, row.version_id!) !== 'registered') await this.triggers!.refresh(row.flow_id!);
+      // The manager owns in-flight work and retry backoff. Polling must not
+      // replace its timer or consume another retry while registration is pending.
+      if (!row.observed_pending && this.triggers!.registrationState(row.flow_id!, row.version_id!) === 'blocked') await this.triggers!.refresh(row.flow_id!);
+      // Once a pending retry exhausts, keep the receipt blocked until an explicit
+      // retry resets observed_pending. This also survives another worker taking over.
       if (!owns()) return;
       const state = this.activation(row) === 'enabled' ? this.triggers!.registrationState(row.flow_id!, row.version_id!) : 'changed';
       finish(state === 'changed' ? 'blocked' : state);

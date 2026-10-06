@@ -1,0 +1,29 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/opportunity-activation.test.ts:
+Database initialized at: /tmp/jarvis-f10-vjv0FR/db
+[CronScheduler] All jobs cancelled
+(pass) F10 review R1: reconciliation preserves backoff and stops after exhaustion [5389.51ms]
+Database initialized at: /tmp/jarvis-f10-oi4Ibb/db
+[WebhookManager] Registered webhook for workflow "ItcOqU4dVwhRzWvW2He8Q" at /webhooks/ItcOqU4dVwhRzWvW2He8Q
+[WebhookManager] Unregistered webhook for workflow "ItcOqU4dVwhRzWvW2He8Q"
+[CronScheduler] All jobs cancelled
+(pass) F10 review R1: reconciliation preserves backoff and observes recovery [3399.80ms]
+Database initialized at: /tmp/jarvis-f10-R0lu16/db
+(pass) F10 review R3: committed dismissal aborts a hung composer and starts queued preparation [2129.43ms]
+Database initialized at: /tmp/jarvis-f10-yYKOwc/db
+(pass) F10 review R3: rolled-back dismissal leaves active preparation running [1320.91ms]
+Database initialized at: /tmp/jarvis-f10-GcIvjg/db
+(pass) F10 review R1: existing receipt schema upgrades without losing decisions or request keys [1181.08ms]
+
+src/workflows/runner/triggers/manager.test.ts:
+Database initialized at: :memory:
+(pass) F10 review R2: pause cleans engine state after local registration failure [40.73ms]
+Database initialized at: :memory:
+(pass) F10 review R2: stop cleans engine state after local registration failure [45.25ms]
+
+ 7 pass
+ 56 filtered out
+ 0 fail
+ 80 expect() calls
+Ran 7 tests across 2 files. [14.00s]

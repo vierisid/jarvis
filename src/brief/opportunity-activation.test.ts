@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -60,13 +60,14 @@ function fakeTriggers() {
 function activation(p: PreparedOpportunities, triggers: ActivationTriggers, lease = 30_000) {
   const a = new OpportunityActivation(getWorkflowDb(), lease); a.configure(p, triggers); actions.push(a); return a;
 }
-async function fixture(key = 'one', quality = gate(), event = false, scoped = false) {
+async function fixture(key = 'one', quality = gate(), event: boolean | 'engine' = false, scoped = false) {
   const s = source(key), p = new PreparedOpportunities(getWorkflowDb()); preparations.push(p);
   const catalog = scoped ? new PieceCatalog(sampleCatalog().list().map(e => ({ ...e, name: '@jarvispieces/piece-' + e.name }))) : sampleCatalog();
   configureWorkflowReadiness({ pieces: catalog });
   const value = graph();
   if (scoped) value.trigger.nextAction.settings.pieceName = '@jarvispieces/piece-jarvis-notify';
-  if (event) Object.assign(value.trigger, { type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: {} } });
+  if (event) Object.assign(value.trigger, { type: 'PIECE_TRIGGER', settings: event === 'engine'
+    ? { pieceName: 'jarvis-trigger', triggerName: 'on_event', input: { eventType: 'test' } } : { pieceName: 'webhook', input: {} } });
   p.configure(() => ({ pieceRegistry: catalog, llm: { async chat() { return { text: JSON.stringify(value) }; } } }), quality);
   const initial = p.ensure(s.id); await p.idle(); const view = p.get(initial.proposalId); expect(view.state).toBe('ready');
   return { s, p, view };
@@ -302,3 +303,94 @@ test.skipIf(process.env.JARVIS_TEST_PREPARED_Q13 !== '1')('actual Q13 qualificat
     expect(p.get(view.proposalId).state).toBe('accepted'); noRuns();
   } finally { await quality?.close?.(); if (previous === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR; else process.env.JARVIS_WORKFLOW_DATA_DIR = previous; }
 }, 300000);
+
+
+for (const recover of [false, true]) test(`F10 review R1: reconciliation preserves backoff and ${recover ? 'observes recovery' : 'stops after exhaustion'}`, async () => {
+  const { p, view } = await fixture('backoff', gate(), 'engine');
+  let attempts = 0, retry!: () => void, scheduled = 0;
+  const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), log: () => {}, enableRetryDelaysMs: [61_337],
+    engineRuntime: { async acquire() { return { async executeTriggerHook(hook: string) {
+      if (hook === 'ON_ENABLE' && (++attempts === 1 || !recover)) throw Error('Temporary engine outage');
+      return { listeners: [{ name: 'WEBHOOK', identifier: 'fixture' }] };
+    }, async release() {} }; } } as any });
+  managers.push(manager);
+  let a = activation(p, manager); const schedule = globalThis.setTimeout;
+  const timers = spyOn(globalThis, 'setTimeout').mockImplementation(((callback: (...args: any[]) => void, delay: number, ...args: any[]) => {
+    if (delay === 61_337) { scheduled++; retry = () => callback(...args); }
+    return schedule(callback, delay, ...args);
+  }) as typeof setTimeout);
+  try {
+    a.submit(view.proposalId, view.revision, 'backoff', 'approve'); await a.idle();
+    expect(attempts).toBe(1); expect(scheduled).toBe(1);
+    for (let i = 0; i < 3; i++) {
+      getDb().run('UPDATE brief_opportunity_actions SET lease_until = 0'); a.kick(); await a.idle();
+      expect(a.get(view.proposalId).registration.state).toBe('pending');
+      expect(attempts).toBe(1); expect(scheduled).toBe(1);
+    }
+    a.stop(); a = activation(p, manager); // A replacement worker must preserve the observed retry.
+    retry();
+    // Let the scheduled retry settle without requesting another refresh.
+    while (manager.registrationState(view.workflow!.flowId, view.workflow!.versionId) === 'pending') await new Promise(resolve => setTimeout(resolve, 0));
+    getDb().run('UPDATE brief_opportunity_actions SET lease_until = 0'); a.kick(); await a.idle();
+    expect(attempts).toBe(2); expect(a.get(view.proposalId).registration.state).toBe(recover ? 'registered' : 'blocked');
+    expect(scheduled).toBe(1);
+    if (!recover) {
+      for (let i = 0; i < 3; i++) { getDb().run('UPDATE brief_opportunity_actions SET lease_until = 0'); a.kick(); await a.idle(); }
+      expect(attempts).toBe(2);
+      // An explicit same-key retry can intentionally start a new manager budget.
+      a.submit(view.proposalId, view.revision, 'backoff', 'approve'); await a.idle();
+      expect(attempts).toBe(3); expect(scheduled).toBe(2); expect(a.get(view.proposalId).registration.state).toBe('pending');
+    }
+    noRuns();
+  } finally { timers.mockRestore(); }
+});
+
+test('F10 review R3: committed dismissal aborts a hung composer and starts queued preparation', async () => {
+  const entered = deferred<void>(), reply = deferred<{ text: string }>(); let calls = 0, signal: AbortSignal | undefined;
+  const p = new PreparedOpportunities(getWorkflowDb()); preparations.push(p);
+  p.configure(() => ({ pieceRegistry: sampleCatalog(), llm: { async chat(input) {
+    if (++calls === 1) { signal = input.signal; entered.resolve(); return reply.promise; }
+    return { text: JSON.stringify(graph()) };
+  } } }), gate());
+  const first = p.ensure(source('dismiss-hung').id); await entered.promise;
+  const next = p.ensure(source('queued').id), a = activation(p, fakeTriggers());
+  try {
+    a.submit(first.proposalId, first.revision, 'dismiss-hung', 'dismiss');
+    expect(signal?.aborted).toBe(true);
+    await p.idle();
+    expect(p.get(next.proposalId).state).toBe('ready'); expect(calls).toBe(2);
+    // An ignored cancellation may resolve later, but cannot attach another workflow.
+    reply.resolve({ text: JSON.stringify(graph()) }); await new Promise(resolve => setTimeout(resolve, 0));
+    expect(p.get(first.proposalId)).toMatchObject({ state: 'dismissed', workflow: null });
+    expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1); noRuns();
+  } finally { reply.resolve({ text: JSON.stringify(graph()) }); }
+});
+
+test('F10 review R3: rolled-back dismissal leaves active preparation running', async () => {
+  const entered = deferred<void>(), reply = deferred<{ text: string }>(); let signal: AbortSignal | undefined;
+  const p = new PreparedOpportunities(getWorkflowDb()); preparations.push(p);
+  p.configure(() => ({ pieceRegistry: sampleCatalog(), llm: { async chat(input) { signal = input.signal; entered.resolve(); return reply.promise; } } }), gate());
+  const view = p.ensure(source('rollback-dismiss').id); await entered.promise;
+  const a = activation(p, fakeTriggers());
+  try {
+    getDb().exec("CREATE TRIGGER reject_dismiss BEFORE INSERT ON brief_opportunity_actions BEGIN SELECT RAISE(ABORT, 'receipt failure'); END");
+    expect(() => a.submit(view.proposalId, view.revision, 'dismiss', 'dismiss')).toThrow('receipt failure');
+    expect(signal?.aborted).toBe(false); expect(p.get(view.proposalId).state).toBe('preparing');
+    expect(getDb().query('SELECT id FROM brief_opportunity_actions').all()).toHaveLength(0);
+    reply.resolve({ text: JSON.stringify(graph()) }); await p.idle();
+    expect(p.get(view.proposalId).state).toBe('ready'); noRuns();
+  } finally { reply.resolve({ text: JSON.stringify(graph()) }); }
+});
+
+
+test('F10 review R1: existing receipt schema upgrades without losing decisions or request keys', async () => {
+  const { p, view } = await fixture('schema-upgrade'), triggers = fakeTriggers();
+  const first = activation(p, triggers);
+  const receipt = first.submit(view.proposalId, view.revision, 'before-upgrade', 'approve').receipt; await first.idle(); first.stop();
+  // Reconstruct the first F10 schema, then open it with the corrected service.
+  getDb().run('ALTER TABLE brief_opportunity_actions DROP COLUMN observed_pending');
+  const upgraded = activation(p, triggers);
+  expect(upgraded.submit(view.proposalId, view.revision, 'before-upgrade', 'approve')).toMatchObject({ created: false, receipt: { receiptId: receipt.receiptId } });
+  expect(getDb().query('SELECT observed_pending FROM brief_opportunity_actions').get()).toEqual({ observed_pending: 0 });
+  expect(getDb().query('SELECT id FROM flow').all()).toHaveLength(1); noRuns();
+});

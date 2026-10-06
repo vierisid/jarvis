@@ -644,21 +644,23 @@ export class TriggerManager {
       );
     }
 
-    if (!cronTearDown && !webhookTearDown) {
-      this.scheduleEnableRetry(flow.id, 'No trigger subscription could be registered');
-      return;
-    }
+    const noSubscription = !cronTearDown && !webhookTearDown;
+    // ON_ENABLE already owns engine state, even if every local subscription
+    // failed. Keep its teardown so pause/stop clears state and runs ON_DISABLE.
+    // A failed registration outranks the advisory zone warning in `list()`.
+    const failure = noSubscription ? 'No trigger subscription could be registered; the flow is not firing.'
+      : schedule?.cronExpression && !cronTearDown ? 'Cron registration failed; only webhook delivery is active.' : undefined;
     const sub: ActiveSub = {
-      ...(schedule?.cronExpression && !cronTearDown ? { warning: 'Cron registration failed; only webhook delivery is active.', incomplete: true as const } : {}),
       flowId: flow.id,
       versionId: version.id,
       kind: "engine",
       triggerDigest: triggerDigest(version.trigger),
-      ...(warning ? { warning } : {}),
+      ...(failure ? { warning: failure, incomplete: true as const } : warning ? { warning } : {}),
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
-    this.clearEnableRetry(flow.id);
+    if (noSubscription) this.scheduleEnableRetry(flow.id, 'No trigger subscription could be registered');
+    else this.clearEnableRetry(flow.id);
   }
 
   /**
