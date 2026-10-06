@@ -44,10 +44,10 @@ test("F-04 binding captures the selected conversation and exact cancellation ref
   const owner: ComposerOwner = { status: { mode: "scoped", connected: true, pending: 0, pendingSends: [] },
     state: { workspaceId: "ws", activeId: "a", order: ["a", "b"], conversations: {
       a: { draft: "A", error: null, turns: { "turn-a": { ...ref, state: "running" } } }, b: { draft: "B", error: null, turns: {} } } },
-    client: { store: { setDraft: (id, text) => operations.push(["draft", id, text]), dismissError: id => operations.push(["clear-error", id]) }, send: (id, text) => operations.push(["send", id, text]), cancel: ref => operations.push(["cancel", ref]) } };
+    client: { store: { setDraft: (id, text) => operations.push(["draft", id, text]), setError: (id, error) => operations.push(["clear-error", id, error]) }, send: (id, text) => operations.push(["send", id, text]), cancel: ref => operations.push(["cancel", ref]) } };
   const view = bindConversationComposer(owner, "live"); owner.state.activeId = "b";
   view.actions.setDraft("new A"); view.actions.send("A"); view.actions.cancel();
-  expect(operations).toEqual([["draft", "a", "new A"], ["send", "a", "A"], ["clear-error", "a"], ["cancel", ref]]);
+  expect(operations).toEqual([["draft", "a", "new A"], ["send", "a", "A"], ["clear-error", "a", null], ["cancel", ref]]);
   expect(view.maxBytes).toBe(65_536); expect(view.draft).toBe("A"); expect(view.turn).toMatchObject(ref);
   const next = bindConversationComposer(owner, "live"); expect(next.turn).toBeNull(); expect(() => next.actions.cancel()).toThrow();
 });
@@ -57,7 +57,7 @@ test("a pending acceptance is cancellable by its original IDs and other chats ca
   const refs: unknown[] = [];
   const owner: ComposerOwner = { status: { mode: "scoped", connected: true, pending: 0, pendingSends: [b, a] },
     state: { workspaceId: "ws", activeId: "a", order: ["a"], conversations: { a: { draft: "Draft", error: null, turns: {} } } },
-    client: { store: { setDraft() {}, dismissError() {} }, send() {}, cancel: ref => refs.push(ref) } };
+    client: { store: { setDraft() {}, setError() {} }, send() {}, cancel: ref => refs.push(ref) } };
   const view = bindConversationComposer(owner, "live"); view.actions.cancel(); expect(refs).toEqual([a]); expect(view.pendingAcceptance).toBe(true);
   owner.state.order = []; expect(composerAvailability("live", bindConversationComposer(owner, "live"))).toBe("empty");
   expect(() => bindConversationComposer(owner, "live").actions.send("No chat")).toThrow();

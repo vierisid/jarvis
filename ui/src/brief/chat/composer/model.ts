@@ -5,7 +5,7 @@ export interface ComposerOwner {
   state: { workspaceId: string | null; activeId: string | null; order: readonly string[]; conversations: Readonly<Record<string, {
     draft: string; error: string | null; turns: Readonly<Record<string, ComposerTurn & { state: string }>>;
   }>> };
-  client: { store: { setDraft(id: string, text: string): void; dismissError(id: string): void }; send(id: string, text: string): unknown; cancel(ref: ComposerTurn): unknown };
+  client: { store: { setDraft(id: string, text: string): void; setError(id: string, error: string | null): void }; send(id: string, text: string): unknown; cancel(ref: ComposerTurn): unknown };
 }
 export interface ComposerBinding {
   source: "live" | "fixture";
@@ -42,9 +42,9 @@ export function bindConversationComposer(owner: ComposerOwner, source: ComposerB
       cancel: () => {
         available();
         if (!turn || turn.conversationId !== id) throw Error("No selected turn");
-        // Clear a prior local error so an identical asynchronous retry failure
-        // is observable. This is the existing F-04 local error-dismissal action.
-        owner.client.store.dismissError(id);
+        // Clear only the request error so identical retry failures are observable.
+        // Dismissing this turn would also hide a later terminal failure after Stop.
+        owner.client.store.setError(id, null);
         // Captured identity, never a later conversation's current turn.
         return owner.client.cancel({ conversationId: turn.conversationId, turnId: turn.turnId, requestId: turn.requestId });
       },

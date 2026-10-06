@@ -1,0 +1,23 @@
+101 |   await click("Stop response");
+102 |   assert.deepEqual(frames("brief_chat_cancel").at(-1).payload, { conversationId: b, turnId: second.turnId, requestId: second.requestId });
+103 |   assert.equal(host.querySelector('[role="status"]')!.textContent, "Stopping response…");
+104 |   const terminalError = "The response failed before it could stop.";
+105 |   await change(() => emit(turns.finish(second, "failed", { code: "provider_failed", message: terminalError })));
+106 |   assert.equal(client.store.getSnapshot().conversations[b].error, terminalError);
+               ^
+AssertionError: Expected values to be strictly equal:
++ actual - expected
+
++ null
+- 'The response failed before it could stop.'
+
+ generatedMessage: true,
+     actual: null,
+   expected: "The response failed before it could stop.",
+   operator: "strictEqual",
+       diff: "simple",
+       code: "ERR_ASSERTION"
+
+      at /home/vierisid/.cache/codex/jarvis-d-13/docs/brief-delivery/evidence/D-13/f04-compatibility.tsx:106:10
+
+Bun v1.4.2 (Linux x64)
