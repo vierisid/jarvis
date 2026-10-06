@@ -1,0 +1,515 @@
+{
+  "base": "http://127.0.0.1:4392/?brief=preview&specimen=chat-tabs#/_brief_preview",
+  "browser": "154.0.8037.93",
+  "results": [
+    {
+      "theme": "light",
+      "rail": false,
+      "cycles": [
+        {
+          "id": "chat-1",
+          "elapsedFromEntry": 164.2000000178814,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.625,
+          "toWidth": 0,
+          "visibleWidth": 92.625,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-2",
+          "elapsedFromEntry": 138.59999999403954,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.0781,
+          "toWidth": 0,
+          "visibleWidth": 83.0625,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-3",
+          "elapsedFromEntry": 152.2000000178814,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7969,
+          "toWidth": 0,
+          "visibleWidth": 92.7969,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-4",
+          "elapsedFromEntry": 146.89999997615814,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.0469,
+          "toWidth": 0,
+          "visibleWidth": 83.0469,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-5",
+          "elapsedFromEntry": 151.5,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.1719,
+          "toWidth": 0,
+          "visibleWidth": 83.1719,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-6",
+          "elapsedFromEntry": 155,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.5938,
+          "toWidth": 0,
+          "visibleWidth": 92.5938,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-7",
+          "elapsedFromEntry": 147.2999999821186,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7188,
+          "toWidth": 0,
+          "visibleWidth": 92.7188,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-8",
+          "elapsedFromEntry": 147.90000000596046,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7188,
+          "toWidth": 0,
+          "visibleWidth": 92.7188,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-9",
+          "elapsedFromEntry": 157.59999999403954,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7344,
+          "toWidth": 0,
+          "visibleWidth": 92.7344,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-10",
+          "elapsedFromEntry": 160.5,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7188,
+          "toWidth": 0,
+          "visibleWidth": 92.7188,
+          "selected": "investor",
+          "removed": true
+        }
+      ]
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "cycles": [
+        {
+          "id": "chat-1",
+          "elapsedFromEntry": 150.59999999403954,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7188,
+          "toWidth": 0,
+          "visibleWidth": 92.7188,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-2",
+          "elapsedFromEntry": 151.59999999403954,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.0781,
+          "toWidth": 0,
+          "visibleWidth": 83.0625,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-3",
+          "elapsedFromEntry": 142.69999998807907,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.875,
+          "toWidth": 0,
+          "visibleWidth": 92.875,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-4",
+          "elapsedFromEntry": 140.09999999403954,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.1094,
+          "toWidth": 0,
+          "visibleWidth": 83.1094,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-5",
+          "elapsedFromEntry": 147.7000000178814,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.0625,
+          "toWidth": 0,
+          "visibleWidth": 83.0625,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-6",
+          "elapsedFromEntry": 156.30000001192093,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.6875,
+          "toWidth": 0,
+          "visibleWidth": 92.6875,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-7",
+          "elapsedFromEntry": 155.30000001192093,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7031,
+          "toWidth": 0,
+          "visibleWidth": 92.6875,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-8",
+          "elapsedFromEntry": 158.2999999821186,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.75,
+          "toWidth": 0,
+          "visibleWidth": 92.75,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-9",
+          "elapsedFromEntry": 151.5,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.0156,
+          "toWidth": 0,
+          "visibleWidth": 83,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-10",
+          "elapsedFromEntry": 153.80000001192093,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7344,
+          "toWidth": 0,
+          "visibleWidth": 92.7344,
+          "selected": "investor",
+          "removed": true
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "cycles": [
+        {
+          "id": "chat-1",
+          "elapsedFromEntry": 148.30000001192093,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7188,
+          "toWidth": 0,
+          "visibleWidth": 92.7188,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-2",
+          "elapsedFromEntry": 141.5,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7188,
+          "toWidth": 0,
+          "visibleWidth": 92.7188,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-3",
+          "elapsedFromEntry": 164.09999999403954,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.6875,
+          "toWidth": 0,
+          "visibleWidth": 92.6875,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-4",
+          "elapsedFromEntry": 149.40000000596046,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.0469,
+          "toWidth": 0,
+          "visibleWidth": 83.0469,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-5",
+          "elapsedFromEntry": 162.2000000178814,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.125,
+          "toWidth": 0,
+          "visibleWidth": 83.125,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-6",
+          "elapsedFromEntry": 150.5,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7344,
+          "toWidth": 0,
+          "visibleWidth": 92.7344,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-7",
+          "elapsedFromEntry": 154.30000001192093,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.6875,
+          "toWidth": 0,
+          "visibleWidth": 92.6875,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-8",
+          "elapsedFromEntry": 149.10000002384186,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7031,
+          "toWidth": 0,
+          "visibleWidth": 92.6875,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-9",
+          "elapsedFromEntry": 143,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7344,
+          "toWidth": 0,
+          "visibleWidth": 92.7344,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-10",
+          "elapsedFromEntry": 152.89999997615814,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.6875,
+          "toWidth": 0,
+          "visibleWidth": 92.6875,
+          "selected": "investor",
+          "removed": true
+        }
+      ]
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "cycles": [
+        {
+          "id": "chat-1",
+          "elapsedFromEntry": 147.2999999821186,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.0625,
+          "toWidth": 0,
+          "visibleWidth": 83.0625,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-2",
+          "elapsedFromEntry": 148.5,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.6875,
+          "toWidth": 0,
+          "visibleWidth": 92.6875,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-3",
+          "elapsedFromEntry": 147.40000000596046,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7812,
+          "toWidth": 0,
+          "visibleWidth": 92.7656,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-4",
+          "elapsedFromEntry": 154.2000000178814,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7344,
+          "toWidth": 0,
+          "visibleWidth": 92.7344,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-5",
+          "elapsedFromEntry": 143.60000002384186,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 83.0469,
+          "toWidth": 0,
+          "visibleWidth": 83.0469,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-6",
+          "elapsedFromEntry": 161.40000000596046,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 100.781,
+          "toWidth": 0,
+          "visibleWidth": 100.766,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-7",
+          "elapsedFromEntry": 141.90000000596046,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7812,
+          "toWidth": 0,
+          "visibleWidth": 92.7656,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-8",
+          "elapsedFromEntry": 152.19999998807907,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.9375,
+          "toWidth": 0,
+          "visibleWidth": 92.9375,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-9",
+          "elapsedFromEntry": 152.19999998807907,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7031,
+          "toWidth": 0,
+          "visibleWidth": 92.6875,
+          "selected": "investor",
+          "removed": true
+        },
+        {
+          "id": "chat-10",
+          "elapsedFromEntry": 144.59999999403954,
+          "inert": true,
+          "hidden": "true",
+          "duration": 180,
+          "fromWidth": 92.7344,
+          "toWidth": 0,
+          "visibleWidth": 92.7344,
+          "selected": "investor",
+          "removed": true
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "limits": [
+    "Specimen owner, not live F-04 transport.",
+    "Durations are design values, not frame-rate certification."
+  ]
+}

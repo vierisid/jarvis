@@ -1,0 +1,5 @@
+.brief-root .d12-example-panel { display:flex; flex:1; flex-direction:column; min-height:0; }
+.brief-root .d12-example-panel > p { font:400 14px/22px var(--brief-sans); color:var(--brief-secondary); }
+.brief-root .d12-example-panel .sample-conversation-thread { padding-top:30px; }
+.brief-root .d12-example-panel .sample-conversation-thread p { font:400 14px/22px var(--brief-sans); color:var(--brief-secondary); }
+.brief-root .d12-example-label { display:block; padding-block:12px 6px; flex:none; font:400 12px/16px var(--brief-sans); color:var(--brief-secondary); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }

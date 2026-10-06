@@ -1,0 +1,25 @@
+/* UI-17: clipped width changes only, fixed type and reserved close targets. */
+.brief-root .brief-chat-tabs-header { display:flex; align-items:center; gap:4px; padding-right:36px; margin-top:-8px; height:40px; flex:none; min-width:0; }
+.brief-root .brief-chat-tabs-viewport { display:flex; flex:1; min-width:0; overflow-x:auto; overflow-y:hidden; padding:2px; scrollbar-width:thin; scroll-behavior:auto; }
+.brief-root .brief-chat-tab-slot { flex:none; min-width:0; overflow:clip; padding-right:4px; box-sizing:content-box; }
+.brief-root .brief-chat-tab-slot:last-child { padding-right:0; }
+.brief-root .brief-chat-tab-slot[data-exiting="true"] { padding-right:0; }
+.brief-root .brief-chat-tab { position:relative; height:36px; min-width:0; color:var(--brief-secondary); border-radius:var(--brief-corner-control); }
+.brief-root .brief-chat-tab > [role="tab"] { display:block; width:100%; height:36px; padding:0 32px 0 10px; border:0; border-radius:inherit; background:transparent; color:inherit; text-align:left; font:400 13px/18px var(--brief-sans); cursor:pointer; }
+.brief-root .brief-chat-tab > [role="tab"] span { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.brief-root .brief-chat-tab:hover { background:var(--brief-soft); }
+.brief-root .brief-chat-tab[data-selected="true"] { background:var(--brief-selected); color:var(--brief-ink); }
+.brief-root .brief-chat-tab[data-selected="true"] > [role="tab"] { font-weight:600; }
+.brief-root .brief-chat-tab[data-selected="true"]::after { content:""; position:absolute; height:2px; left:10px; right:10px; bottom:0; background:currentColor; pointer-events:none; }
+.brief-root .brief-chat-tab-close { position:absolute; right:4px; top:6px; width:24px; height:24px; padding:0; display:grid; place-items:center; border:0; border-radius:var(--brief-corner-control); background:transparent; color:var(--brief-tertiary); opacity:0; cursor:pointer; transition:opacity 100ms ease-out; }
+.brief-root .brief-chat-tab:is(:hover,:focus-within) .brief-chat-tab-close { opacity:1; }
+.brief-root .brief-chat-tab-close:hover { background:var(--brief-card); color:var(--brief-ink); }
+.brief-root .brief-chat-tab :focus-visible { outline:2px solid var(--brief-focus); outline-offset:-2px; }
+.brief-root .brief-chat-tabs-header [aria-disabled="true"] { cursor:wait; }
+.brief-root .brief-chat-tabs-header > .brief-tooltip-anchor { flex:none; }
+.brief-root .brief-chat-tabs-header > .brief-tooltip-anchor > button { width:32px; height:32px; min-height:32px; }
+.brief-root .brief-chat-tabs-feedback { flex:none; min-height:20px; padding-top:4px; color:var(--brief-error-text); font:400 12px/16px var(--brief-sans); }
+.brief-root .brief-chat-tabs-fallback { min-height:52px; flex:none; padding-right:36px; color:var(--brief-secondary); font:400 13px/20px var(--brief-sans); }
+@media (hover:none) { .brief-root .brief-chat-tab-close { opacity:1; } }
+@media (prefers-reduced-motion:reduce) { .brief-root .brief-chat-tab-close { transition:none; } }
+.brief-root [data-reduced-motion="true"] .brief-chat-tab-close { transition:none; }

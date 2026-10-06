@@ -1,0 +1,17 @@
+{
+  "task": "D-12",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "nodes": { "todayOpen": "81:212", "tabWorkbench": "704:327787", "titleFocusSpecimens": "704:367654" },
+  "inspection": "Saved native UI-17 README, native title/focus render and roadmap; not a fresh Figma editor session.",
+  "native_source": "workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-17-chat-tabs-2026-10-02",
+  "geometry": { "labelPx": 13, "heightPx": 36, "minimumTabPx": 112, "gapPx": 4, "closeTargetPx": 24, "addTargetPx": 32, "panelCloseTargetPx": 44 },
+  "motion": { "tabGeometryMs": 180, "hoverMs": 100, "reducedMotionMs": 0 },
+  "clarifications": [
+    "The shell retains its panel X. The strip reserves its space, with no second close control.",
+    "The older four-chat Figma example creates New chat after final closure. Current F-02/F-04 policy takes precedence: activeId=null; + remains available without creating history.",
+    "Arrow/Home/End explore tabs without metadata writes; Enter/Space activates. Delete closes the focused tab. Touch always exposes the reserved X.",
+    "Only the view port and an isolated fixture are shipped here. F-04 owns close/reopen policy, content, persistence, streams and cancellation."
+  ]
+}
