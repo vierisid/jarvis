@@ -95,7 +95,24 @@ try {
   await change(() => client.close(a)); assert.equal(client.store.getSnapshot().activeId, b); assert.ok(host.querySelector('[aria-label="Stop response"]'));
   await change(async () => { await client.reopen(a); sync(a); }); assert.equal(input().value, "Retained on return");
   assert.equal(frames("brief_chat_cancel").length, 3);
-  console.log("PASS actual F-04 client/store + mounted D-13 composer: pending acceptance, same-ID reconnect replay, newer-draft retention, unchanged-draft clearing, two concurrent chats, exact turn cancellation, persistent stopping after synchronous dispatch, delayed failure/retry/terminal, rejected send/retry, close/reopen retention; no real transport or model.");
+  // Stop is a request, not a dismissal of a later failure of this same turn.
+  await change(() => client.select(b));
+  await change(() => client.store.setDraft(b, "Keep B's next question"));
+  await click("Stop response");
+  assert.deepEqual(frames("brief_chat_cancel").at(-1).payload, { conversationId: b, turnId: second.turnId, requestId: second.requestId });
+  assert.equal(host.querySelector('[role="status"]')!.textContent, "Stopping response…");
+  const terminalError = "The response failed before it could stop.";
+  await change(() => emit(turns.finish(second, "failed", { code: "provider_failed", message: terminalError })));
+  assert.equal(client.store.getSnapshot().conversations[b].error, terminalError);
+  assert.equal(host.querySelector('[role="status"]')!.textContent, terminalError);
+  assert.equal(input().value, "Keep B's next question");
+  assert.ok(host.querySelector('[aria-label="Send"]'));
+  await change(() => client.select(a)); assert.equal(input().value, "Retained on return");
+  await change(() => client.select(b));
+  assert.equal(host.querySelector('[role="status"]')!.textContent, terminalError);
+  assert.equal(input().value, "Keep B's next question");
+  assert.equal(frames("brief_chat_cancel").length, 4);
+  console.log("PASS actual F-04 client/store + mounted D-13 composer: pending acceptance, same-ID reconnect replay, newer-draft retention, unchanged-draft clearing, two concurrent chats, exact turn cancellation, persistent stopping after synchronous dispatch, delayed failure/retry/terminal, failed terminal after Stop stays visible across chat selection without losing either draft, rejected send/retry, close/reopen retention; no real transport or model.");
 } finally {
   await change(() => root.unmount()); client.stop(); closeDb(); host.remove(); GlobalRegistrator.unregister();
 }

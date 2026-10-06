@@ -59,19 +59,19 @@
       "tests": 234,
       "assertions": 3683,
       "files": 16,
-      "evidence": "evidence/D-13/review-affected-tests.log",
+      "evidence": "evidence/D-13/terminal-failure-affected.log",
       "result": "pass"
     },
     {
       "command": "bun x tsc --noEmit",
       "exit_code": 0,
-      "evidence": "evidence/D-13/review-typescript.log",
+      "evidence": "evidence/D-13/terminal-failure-typescript.log",
       "result": "pass"
     },
     {
       "command": "bun run build:ui",
       "exit_code": 0,
-      "evidence": "evidence/D-13/review-build.log",
+      "evidence": "evidence/D-13/terminal-failure-build.log",
       "result": "pass",
       "warnings": "Existing @theme/@tailwind warnings"
     },
@@ -120,7 +120,7 @@
   "compatibility": {
     "branch": "brief/f-04",
     "head": "72f3078a4857e28ae6738c336f55f2988bf6f31b",
-    "evidence": "evidence/D-13/review-f04-compatibility.log",
+    "evidence": "evidence/D-13/terminal-failure-green.log",
     "script": "evidence/D-13/f04-compatibility.tsx",
     "owner": "Actual F-04 client/store, real in-memory repositories and in-process transport",
     "mounted_ui": "D-13 ConversationComposer",
@@ -129,7 +129,9 @@
     "additional_checks": [
       "Stopping feedback outlives synchronous dispatch",
       "Delayed owner failure, identical retry failure and terminal",
-      "Exact cancellation IDs preserved on retry"
+      "Exact cancellation IDs preserved on retry",
+      "Failed terminal after Stop stays visible in the mounted composer across conversation selection",
+      "Both conversation drafts survive the terminal failure"
     ]
   },
   "limits": [
@@ -168,5 +170,18 @@
       "Draft ownership",
       "D-14 attachment work"
     ]
-  }
+  },
+  "followup_review_corrections": [
+    {
+      "reviewed_head": "205a4cbac9292778ae5d15e7055492272c10b815",
+      "id": "R1",
+      "fix": "Clear only the request error via store.setError(id, null) before cancellation; never dismiss the running turn and suppress its later failure.",
+      "before": "evidence/D-13/terminal-failure-red.log",
+      "after": "evidence/D-13/terminal-failure-green.log",
+      "script": "evidence/D-13/f04-compatibility.tsx",
+      "owner": "Actual F-04 client/store at 72f3078a4857e28ae6738c336f55f2988bf6f31b; in-memory repositories and mocked transport",
+      "backend_changed": false,
+      "browser_matrix": "Existing previous-pass evidence retained; no visual layout change or new browser-matrix claim."
+    }
+  ]
 }

@@ -40,7 +40,7 @@ export function ComposerSpecimen() {
     client: {
       store: {
         setDraft: (id: string, text: string) => setChats(previous => ({ ...previous, [id]: { ...previous[id]!, draft: text } })),
-        dismissError: (id: string) => setChats(previous => ({ ...previous, [id]: { ...previous[id]!, error: null } })),
+        setError: (id: string, error: string | null) => setChats(previous => ({ ...previous, [id]: { ...previous[id]!, error } })),
       },
       add: async () => {
         const id = `chat-${++serial.current}`;
