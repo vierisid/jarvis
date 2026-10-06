@@ -196,10 +196,31 @@ read loop runs inline to keep audio frames in receive order but still runs
 through `runRPCHandler`.
 
 Frames that are not `rpc_request`s are outside this contract, because there is no
-pending request to answer: `register_ack` and `register_rejected` are handled
-directly on the read loop and a panic in either is still fatal. Noted rather than
-fixed -- containing one would mean continuing with a half-processed registration,
-which is a different decision from "answer the caller".
+pending request to answer. `register_ack` and `register_rejected` are handled
+directly on the read loop, and a panic in either is contained under its own
+policy (#670), chosen by what the frame decides:
+
+- **`register_rejected` fails closed.** It is an authority verdict (this sidecar
+  must not operate), so the verdict is recorded before any handling that can
+  fail. A panic in the handling (logging the update command, telling the
+  updater) loses the update prompt -- for the rest of the process's life if the
+  panic came from the prompt callback, which runs under a `sync.Once` -- but the
+  connection still ends and the sidecar still waits out the blocked retry
+  interval instead of reconnecting into the same refusal.
+- **`register_ack` is contained and the connection carries on.** The brain sends
+  it after it has already accepted the registration, so a panic leaves the
+  registration known and only the self-update bookkeeping unknown: no update
+  offer from that ack, and a pending self-update is not marked proven, until
+  the next accepted registration. Reconnecting instead would cost every
+  in-flight RPC and, for a deterministic panic, flap forever (the backoff resets
+  on every successful dial). A version that panics on every ack still never
+  proves a fresh self-update and is rolled back after three starts, as before,
+  though that now takes three ordinary restarts rather than a crash loop.
+
+Both cases log the panic with its stack. The containment covers only the read
+loop: the goroutines the updater starts from an ack (`cleanupPrevious`, the
+registry `check`) have no recover of their own, so a panic in one of them still
+ends the process.
 
 | Code | Meaning | How the brain reads the effect |
 |---|---|---|

@@ -1315,8 +1315,10 @@ func (c *SidecarClient) sendRegistration(ctx context.Context) error {
 
 // handleRegisterRejected processes a brain `register_rejected` control frame:
 // the connecting sidecar is below the brain's hard MIN floor. We log a loud,
-// actionable message and flag the client so the reconnect loop stops (an
-// incompatible sidecar must not operate, and retrying would only be refused).
+// actionable message and tell the updater. The flag that stops the reconnect
+// loop (an incompatible sidecar must not operate, and retrying would only be
+// refused) is set by runRegisterRejected before this runs, so a panic here
+// cannot lose it.
 func (c *SidecarClient) handleRegisterRejected(data []byte) {
 	var msg struct {
 		Reason      string `json:"reason"`
@@ -1327,7 +1329,6 @@ func (c *SidecarClient) handleRegisterRejected(data []byte) {
 		Latest string `json:"latest"`
 	}
 	_ = json.Unmarshal(data, &msg)
-	c.incompatible = true
 	log.Printf("[sidecar] ====================================================================")
 	log.Printf("[sidecar] INCOMPATIBLE: this brain requires sidecar >= %s, but this is %s.", msg.Min, msg.YourVersion)
 	log.Printf("[sidecar] Update the sidecar and restart it: %s", c.updater.ManualCommand(msg.Latest))
@@ -1350,6 +1351,79 @@ func (c *SidecarClient) handleRegisterAck(data []byte) {
 		log.Printf("[sidecar] An update is available (this brain recommends sidecar >= %s; running %s). Still compatible.", msg.Recommended, sidecarVersion)
 	}
 	c.updater.OnAck(msg.Latest)
+}
+
+// runRegisterRejected handles a `register_rejected` on the read loop. A panic
+// in it FAILS CLOSED (#670): the brain's verdict stands whatever happened to
+// our handling of it.
+//
+// The frame is an authority decision -- this sidecar is too old and must not
+// operate -- so the verdict is recorded BEFORE any of the handling that can
+// fail (logging the update command, telling the updater), and a panic in that
+// handling is contained without touching it. The read loop then returns as it
+// always does, the connection ends, and Start takes the blocked path
+// (blockedRetryInterval) instead of a fast reconnect into the same refusal.
+// The cost is the update prompt this refusal would have shown, logged as
+// missing -- for the rest of the process's life if the panic came from the
+// prompt callback itself, which runs under a sync.Once that counts a panicking
+// call as done. The alternative, before #670, was losing the process.
+//
+// `handle` is the handler body (handleRegisterRejected from the read loop); it
+// is a parameter so a test can panic at its very first line.
+func (c *SidecarClient) runRegisterRejected(data []byte, handle func([]byte)) {
+	c.incompatible = true
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[sidecar] register_rejected handling panicked; the brain's refusal still stands and "+
+				"this sidecar will not reconnect for %s, but no update prompt was shown: %v\n%s",
+				blockedRetryInterval, r, debug.Stack())
+		}
+	}()
+	handle(data)
+}
+
+// runRegisterAck handles a `register_ack` on the read loop. A panic in it is
+// CONTAINED AND THE CONNECTION CARRIES ON, degraded in exactly one respect
+// (#670).
+//
+// Unlike register_rejected, this frame decides nothing about whether the
+// sidecar may operate: the brain sends it after it has already accepted the
+// registration, and every RPC handler was installed before the read loop
+// started. All the ack drives is the updater -- the update offer for this
+// connection, and clearing the marker that proves a fresh self-update healthy
+// (update_pending.go). So a panic leaves the registration fully known and only
+// the update bookkeeping unknown, and the two other choices are both worse:
+//
+//   - Closing the connection to reconnect does not buy integrity (nothing this
+//     frame gates is left half-open), costs every in-flight RPC, and when the
+//     panic is deterministic -- the same brain sends the same `latest` on every
+//     ack -- it becomes a flap loop, because connectAndServe resets the backoff
+//     on every successful dial.
+//   - Exiting (the behaviour before #670) loses the whole sidecar for the same
+//     update bookkeeping.
+//
+// The degraded state is: no update offer from this ack, and a pending
+// self-update not marked proven, until the next accepted registration. A
+// version that panics on every ack therefore still never proves itself, and
+// the start counter in update_pending.go rolls it back as before -- that path
+// does not depend on this process dying. It is slower, though: a supervisor
+// restart loop used to reach the start count in seconds, and now it takes three
+// ordinary restarts.
+//
+// That containment covers only what runs on the read loop. The goroutines the
+// updater starts from an ack (cleanupPrevious, check) have no recover of their
+// own, so a panic in one of them still ends the process.
+//
+// `handle` is the handler body (handleRegisterAck from the read loop).
+func (c *SidecarClient) runRegisterAck(data []byte, handle func([]byte)) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[sidecar] register_ack handling panicked; staying connected with RPCs unaffected, but "+
+				"self-update state is unknown until the next accepted registration (no update offer, and a "+
+				"pending update is not marked proven): %v\n%s", r, debug.Stack())
+		}
+	}()
+	handle(data)
 }
 
 func (c *SidecarClient) sendCapabilitiesUpdate(ctx context.Context) error {
@@ -1380,12 +1454,16 @@ func (c *SidecarClient) readLoop(ctx context.Context) error {
 		}
 		// Brain-originated control frames (compatibility handshake) arrive on the
 		// same socket. Handle them before the RPC fast-path.
+		//
+		// Neither frame has a pending request to answer, so #623's
+		// runRPCHandler does not apply; each has its own panic policy (#670),
+		// see runRegisterRejected and runRegisterAck.
 		switch req.Type {
 		case "register_rejected":
-			c.handleRegisterRejected(data)
+			c.runRegisterRejected(data, c.handleRegisterRejected)
 			return fmt.Errorf("registration rejected by brain")
 		case "register_ack":
-			c.handleRegisterAck(data)
+			c.runRegisterAck(data, c.handleRegisterAck)
 			continue
 		}
 		if req.Type != "rpc_request" {

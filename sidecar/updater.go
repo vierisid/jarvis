@@ -219,28 +219,39 @@ func (u *Updater) OnRejected(latest string) {
 }
 
 func (u *Updater) advertise(latest string, blocked bool) {
-	u.mu.Lock()
-	u.latest, u.blocked = latest, blocked
-	u.checkGen++
-	gen := u.checkGen
-	if u.firstGen == 0 {
-		u.firstGen = gen
-	}
-	if u.cancelRetry != nil {
-		u.cancelRetry()
-		u.cancelRetry = nil
-	}
-	// A release build is never moved onto a prerelease: only a sidecar that
-	// is itself running one follows the brain onto rc builds.
-	candidate := u.updatable() && update.StrictlyNewer(latest, u.running) &&
-		(!update.IsPrerelease(latest) || update.IsPrerelease(u.running))
-	if !candidate {
-		u.available = ""
-		if !u.applying.Load() {
-			u.state = UpdateState{}
+	// The locked region is a closure with a deferred unlock, not a Lock and a
+	// later Unlock, because this runs on the read loop under the recover in
+	// runRegisterAck / runRegisterRejected (#670). A panic between a bare
+	// Lock and Unlock would be contained with u.mu still held, and then the
+	// tray's next Offer() and the next ack's advertise -- on the read loop --
+	// would block forever: a registered sidecar that never answers, which is
+	// worse than the crash the recover replaced.
+	candidate, gen := func() (bool, int) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		u.latest, u.blocked = latest, blocked
+		u.checkGen++
+		gen := u.checkGen
+		if u.firstGen == 0 {
+			u.firstGen = gen
 		}
-	}
-	u.mu.Unlock()
+		if u.cancelRetry != nil {
+			cancel := u.cancelRetry
+			u.cancelRetry = nil
+			cancel()
+		}
+		// A release build is never moved onto a prerelease: only a sidecar
+		// that is itself running one follows the brain onto rc builds.
+		candidate := u.updatable() && update.StrictlyNewer(latest, u.running) &&
+			(!update.IsPrerelease(latest) || update.IsPrerelease(u.running))
+		if !candidate {
+			u.available = ""
+			if !u.applying.Load() {
+				u.state = UpdateState{}
+			}
+		}
+		return candidate, gen
+	}()
 
 	if !candidate {
 		u.changed()
