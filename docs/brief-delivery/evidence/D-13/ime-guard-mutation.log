@@ -1,0 +1,45 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/composer/ConversationComposer.test.tsx:
+(pass) F-04 binding captures the selected conversation and exact cancellation reference [21.59ms]
+(pass) a pending acceptance is cancellable by its original IDs and other chats cannot supply the turn [3.76ms]
+(pass) wrong sources, absent scope and non-scoped modes expose no writing or send action [36.77ms]
+(pass) suggestions prefill and focus, preserving existing writing and never sending [98.54ms]
+(pass) blank writing is inactive, Enter sends once, and Shift+Enter stays a newline [67.60ms]
+88 |   expect(input().value).toBe("A real question");
+89 | });
+90 |
+91 | test("IME composition, native composing and keyCode 229 cannot send prematurely", async () => {
+92 |   binding.draft = "你好"; await render();
+93 |   await composition("compositionstart"); await key(); await click(send()); await click(suggestion()); expect(calls).toEqual([]);
+                                                                                                                         ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   "send:你好",
++ ]
+
+- Expected  - 1
++ Received  + 3
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-13/ui/src/brief/chat/composer/ConversationComposer.test.tsx:93:117)
+(fail) IME composition, native composing and keyCode 229 cannot send prematurely [34.72ms]
+(pass) send preserves exact text and keeps the draft until the owner accepts it [32.16ms]
+(pass) async send is deduplicated and a newer draft is never cleared by its completion [37.12ms]
+(pass) failed sending preserves draft, reports locally and permits a deliberate retry [35.07ms]
+(pass) active turns show Stop and cannot be resubmitted through Enter [30.30ms]
+(pass) a pending stop has local feedback and a failed stop does not claim completion [20.71ms]
+(pass) offline and metadata-pending states block sends while keeping the existing draft [34.11ms]
+(pass) UTF-8 limit is validated without truncating multibyte writing [11.72ms]
+(pass) switching conversations or workspace cannot inherit a pending lock or late error [56.87ms]
+(pass) theme changes preserve the input element, focus, value and selection [11.90ms]
+(pass) composer has the fixed attachment seam without inventing an upload action [16.20ms]
+
+ 15 pass
+ 1 fail
+ 79 expect() calls
+Ran 16 tests across 1 file. [1133.00ms]
+
+Mutation exit: 1
+Original source restored in finally.

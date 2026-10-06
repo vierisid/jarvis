@@ -1,0 +1,1 @@
+PASS actual F-04 client/store + mounted D-13 composer: pending acceptance, same-ID reconnect replay, newer-draft retention, unchanged-draft clearing, two concurrent chats, exact turn cancellation, rejected send/retry, close/reopen retention; no real transport or model.

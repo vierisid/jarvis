@@ -1,0 +1,42 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/composer/ConversationComposer.test.tsx:
+(pass) F-04 binding captures the selected conversation and exact cancellation reference [21.02ms]
+(pass) a pending acceptance is cancellable by its original IDs and other chats cannot supply the turn [2.25ms]
+(pass) wrong sources, absent scope and non-scoped modes expose no writing or send action [25.33ms]
+(pass) suggestions prefill and focus, preserving existing writing and never sending [98.72ms]
+(pass) blank writing is inactive, Enter sends once, and Shift+Enter stays a newline [53.22ms]
+(pass) IME composition, native composing and keyCode 229 cannot send prematurely [76.12ms]
+(pass) send preserves exact text and keeps the draft until the owner accepts it [28.67ms]
+(pass) async send is deduplicated and a newer draft is never cleared by its completion [25.19ms]
+(pass) failed sending preserves draft, reports locally and permits a deliberate retry [26.91ms]
+(pass) active turns show Stop and cannot be resubmitted through Enter [29.27ms]
+(pass) a pending stop has local feedback and a failed stop does not claim completion [20.93ms]
+(pass) offline and metadata-pending states block sends while keeping the existing draft [38.04ms]
+(pass) UTF-8 limit is validated without truncating multibyte writing [11.69ms]
+(pass) switching conversations or workspace cannot inherit a pending lock or late error [39.56ms]
+(pass) theme changes preserve the input element, focus, value and selection [26.87ms]
+(pass) composer has the fixed attachment seam without inventing an upload action [13.31ms]
+
+ui/src/brief/components/controls/controls.test.tsx:
+(pass) pending actions retain focus, suppress repeat activation and prevent submit [17.49ms]
+(pass) native disabled and aria-disabled buttons cannot activate [4.70ms]
+(pass) alternate action labels reserve space but remain hidden from assistive technology [5.11ms]
+(pass) fields retain the input node and value through validation and success [18.84ms]
+(pass) native select and textarea remain labeled and retain supplied semantics [15.74ms]
+(pass) switch reports the opposite value once; disabled position and meaning stay intact [8.46ms]
+(pass) segment groups use independent native radio names and controlled selection [11.74ms]
+(pass) tab arrows skip disabled entries without activating; switching preserves panel state [12.10ms]
+(pass) menu uses a portal with inherited theme; keyboard skips disabled and restores trigger [25.48ms]
+(pass) menu opens at last item with ArrowUp; Escape dismisses without action [13.00ms]
+(pass) menu dismisses on outside pointer and focus without stealing focus [19.15ms]
+(pass) an open menu follows a local appearance change [10.77ms]
+(pass) tooltip is immediate on focus, has a description, and Escape retains focus [8.35ms]
+(pass) Escape dismisses the hint before its containing panel, then reaches the panel on a second press [7.88ms]
+(pass) unmount removes a menu and its portaled content [9.05ms]
+(pass) pointer departure does not dismiss a keyboard-focused tooltip [113.02ms]
+
+ 32 pass
+ 0 fail
+ 157 expect() calls
+Ran 32 tests across 2 files. [1363.00ms]

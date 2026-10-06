@@ -1,0 +1,27 @@
+/* UI-18: anchored 44px controls, 56px empty field, 104px maximum surface. */
+.brief-root .brief-composer { flex:none; min-width:0; width:100%; margin-top:auto; }
+.brief-root .brief-composer-status { min-height:20px; padding:0 2px 4px; font:400 12px/16px var(--brief-sans); color:var(--brief-secondary); overflow-wrap:anywhere; }
+.brief-root .brief-composer-suggestions { display:flex; gap:8px; margin-bottom:16px; padding:3px; margin-left:-3px; margin-right:-3px; overflow-x:auto; scrollbar-width:thin; }
+.brief-root .brief-composer-suggestions button { border:1px solid var(--brief-card-edge); border-radius:99px; background:var(--brief-soft); color:var(--brief-ink); padding:5px 13px; min-height:30px; font:400 13px/18px var(--brief-sans); cursor:pointer; text-align:left; }
+.brief-root .brief-composer-suggestions button:hover { background:var(--brief-selected); }
+.brief-root .brief-composer-suggestions button { flex-shrink:0; max-width:100%; }
+.brief-root .brief-composer-suggestions button:focus-visible { outline:2px solid var(--brief-focus); outline-offset:2px; }
+.brief-root .brief-composer-surface { position:relative; height:56px; min-height:56px; border:1px solid var(--brief-field-edge); border-radius:14px 0 14px 14px; background:var(--brief-card); box-sizing:border-box; }
+.brief-root .brief-composer-surface:focus-within { outline:2px solid var(--brief-focus); outline-offset:-2px; }
+.brief-root .brief-composer-surface[data-invalid="true"] { border-color:var(--brief-error-text); }
+.brief-root .brief-composer-surface textarea { position:absolute; left:47px; bottom:5px; width:calc(100% - 101px); height:44px; min-height:0; max-height:92px; box-sizing:border-box; padding:10px 1px; margin:0; border:0; outline:none; resize:none; overflow-y:auto; overflow-x:hidden; scrollbar-width:thin; background:transparent; color:var(--brief-ink); font:400 14px/24px var(--brief-sans); overflow-wrap:anywhere; }
+.brief-root .brief-composer-surface textarea::placeholder { color:var(--brief-secondary); opacity:1; }
+.brief-root .brief-composer-attachment { position:absolute; left:5px; bottom:5px; width:44px; height:44px; }
+.brief-root .brief-composer-attachment button { width:44px; height:44px; display:grid; place-items:center; padding:0; border:0; border-radius:50%; color:var(--brief-secondary); background:transparent; }
+.brief-root .brief-composer-send-target { position:absolute; right:5px; bottom:5px; width:44px; height:44px; }
+.brief-root .brief-composer-send { display:grid; place-items:center; width:44px; height:44px; border:0; border-radius:12px 0 12px 12px; padding:0; color:var(--brief-ink); background:transparent; cursor:pointer; }
+.brief-root .brief-composer-send:focus-visible { outline:2px solid var(--brief-focus); outline-offset:-2px; }
+.brief-root .brief-composer-send[aria-disabled="true"] { cursor:default; }
+.brief-root .brief-composer-send[aria-disabled="true"] > * { opacity:.35; }
+.brief-root .brief-composer-send-mark { position:relative; display:block; width:30px; height:30px; overflow:hidden; transform-origin:50% 50%; }
+.brief-root .brief-composer-send-mark[hidden] { display:none; }
+/* Crop the exact official lockup to its mark, as in the workspace opener. */
+.brief-root .brief-composer-send-mark .brief-brand { position:absolute; width:136.31px; height:38.04px; max-width:none; left:-4.02px; top:-4.02px; }
+.brief-root .brief-composer-send-mark .brief-brand img { width:136.31px; height:38.04px; max-width:none; }
+.brief-root .brief-composer [aria-disabled="true"] { cursor:default; }
+.brief-root .brief-composer-unavailable { flex:none; margin-top:auto; min-height:56px; display:flex; align-items:center; color:var(--brief-secondary); font:400 14px/20px var(--brief-sans); }

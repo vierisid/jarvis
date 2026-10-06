@@ -223,6 +223,19 @@ test("tooltip describes its child when it adds information", async () => {
   expect(button.getAttribute("aria-describedby")).toBe(tip.id);
 });
 
+test("Escape dismisses the hint before its containing panel, then reaches the panel on a second press", async () => {
+  let panelEscapes = 0;
+  await mount(<div onKeyDown={event => { if (event.key === "Escape") panelEscapes++; }}>
+    <C.BriefIconButton label="Send" icon={<span>Send</span>} />
+  </div>);
+  const button = host.querySelector("button")!;
+  await React.act(async () => button.focus());
+  await key(button, "Escape");
+  expect(document.querySelector('[role="tooltip"]')).toBeNull(); expect(panelEscapes).toBe(0);
+  expect(document.activeElement).toBe(button);
+  await key(button, "Escape"); expect(panelEscapes).toBe(1);
+});
+
 test("unmount removes a menu and its portaled content", async () => {
   await mount(<C.BriefMenu label="Account" items={menuItems(() => {})} />);
   await click(host.querySelector("button")!);
