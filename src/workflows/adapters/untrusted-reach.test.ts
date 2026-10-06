@@ -179,6 +179,11 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     reads are `trigger.sampleData` off the
  *                                     PIECE CATALOG -- a piece's own upstream
  *                                     output sample, never a run's capture.
+ *   actions/tools/job-contract.ts      BENIGN. Also imports only the
+ *                                     `FlowTriggerNode` TYPE. It walks a
+ *                                     composed candidate's graph, piece names
+ *                                     and literal inputs the composing model
+ *                                     wrote, and holds no run or version.
  *   awareness/suggestion-composer.ts   BENIGN. Calls `createDraftVersion`, so it
  *                                     holds a freshly created `FlowVersion`
  *                                     whose `sampleData` is empty by
@@ -214,6 +219,7 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  * is enough to land here, because that is how the sample_data leak travelled.
  */
 const REVIEWED_STEP_OUTPUT_READERS = [
+  'actions/tools/job-contract.ts',
   'actions/tools/manage-workflow.ts',
   'actions/tools/workflow-composer.ts',
   'awareness/suggestion-composer.ts',
