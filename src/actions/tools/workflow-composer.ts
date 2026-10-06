@@ -144,7 +144,7 @@ export interface ComposeOk {
   compositionRecordId?: string;
   flow: ComposedFlow;
   /** With a contract: what the check proved and what a person must still confirm. */
-  contract?: ContractReport;
+  contractReport?: ContractReport;
   /** The raw LLM reply, kept for debugging / logging. */
   rawResponse: string;
 }
@@ -515,7 +515,7 @@ async function composeOneShot(
       continue;
     }
 
-    const validation = acceptComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, contract);
+    const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
     rememberCandidate(deps, context, raw, parsed, validation.ok ? [] : validation.errors);
     if (validation.ok) {
       if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
@@ -644,7 +644,7 @@ async function composeWithTools(
           inlineErrors = [`response was not valid JSON: ${(e as Error).message}`];
         }
         if (!inlineErrors) {
-          const validation = acceptComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, contract);
+          const validation = acceptComposedFlow(contract, parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
           if (validation.ok) {
             rememberCandidate(deps, context, text, parsed, []);
             logAttempt(turn, "tool-loop-inline-json", null);
@@ -691,7 +691,7 @@ async function composeWithTools(
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
         lastRaw = safeStringify(flowArg);
-        const validation = acceptComposedFlow(flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck, contract);
+        const validation = acceptComposedFlow(contract, flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
         rememberCandidate(deps, context, lastRaw, flowArg, validation.ok ? [] : validation.errors);
         if (validation.ok) {
           if (submits > 1) logAttempt(submits, "tool-loop-success-after-retry", null);
@@ -1545,25 +1545,22 @@ interface ValidationFail { ok: false; errors: string[] }
  * Structural validation, then the job contract. Contract violations go back to
  * the model like any other validation error, so the bounded repair loop works
  * on them, and every candidate is checked against the same contract: a repair
- * cannot drop a requirement and pass.
+ * cannot drop a requirement and pass. Every validation argument is forwarded
+ * as given, so a check added to `validateComposedFlow` reaches all three
+ * acceptance points through this one call.
  */
 function acceptComposedFlow(
-  raw: unknown,
-  registry: PieceLookup,
-  fallbackName: string,
-  validRoleIds: Set<string> | null,
-  toolSpecs: Map<string, ComposerToolSpec> | null,
-  osCheck: OsCheckContext | null,
   contract: JobContract | undefined,
+  ...args: Parameters<typeof validateComposedFlow>
 ): ValidationOk | ValidationFail {
-  const validation = validateComposedFlow(raw, registry, fallbackName, validRoleIds, toolSpecs, osCheck);
+  const validation = validateComposedFlow(...args);
   if (!validation.ok || !contract) return validation;
   const { violations, report } = checkJobContract(validation.flow.trigger, contract);
   return violations.length ? { ok: false, errors: violations } : { ...validation, report };
 }
 
 function accepted(validation: ValidationOk, rawResponse: string): ComposeOk {
-  return { ok: true, flow: validation.flow, rawResponse, ...(validation.report ? { contract: validation.report } : {}) };
+  return { ok: true, flow: validation.flow, rawResponse, ...(validation.report ? { contractReport: validation.report } : {}) };
 }
 
 function validateComposedFlow(

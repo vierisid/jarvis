@@ -1106,7 +1106,9 @@ preserves the caller's wording rather than inferring structured constraints with
 another model. For accepted suggestions, the description includes the accepted
 expected outcome. The optional `contract` is the caller's explicit job contract:
 every candidate is checked against it and its violations feed the same repair
-loop (`docs/workflow-job-contract.md`). Neither check can prove fidelity to
+loop (`docs/workflow-job-contract.md`). `manage_workflow publish` and `enable`
+recheck the graph about to run against it and return the report, advisory like
+the OS warnings. Neither check can prove fidelity to
 arbitrary natural language; the regression tests exercise context transport with
 synthetic providers, not live-model success rates.
 
