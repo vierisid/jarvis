@@ -1,7 +1,7 @@
 bun test v1.4.2 (744846f84)
 
 src/brief/composition.test.ts:
-Database initialized at: /tmp/jarvis-f07-9DqlDW/test.db
+Database initialized at: /tmp/jarvis-f07-QiCFaz/test.db
  97 | });
  98 |
  99 | test('a trigger-only result is a useful blocker and cannot create an empty success', async () => {
@@ -16,9 +16,9 @@ error: expect(received).toMatchObject(expected)
 -     "code": "insufficient_information",
 -     "message": StringContaining "destination",
 +   "blocker": null,
-+   "compositionId": "jzLxV7zyp0iT42qJDX1SM",
-+   "createdAt": 1791290541991,
-+   "jobId": "PeniRNF14KG4d1WA46EZh",
++   "compositionId": "fE8zgjdeQV6qZ76UvejOT",
++   "createdAt": 1791291018925,
++   "jobId": "pMmlxOWnbk18aUiVIIDVo",
 +   "progress": {
 +     "checkedCandidates": 1,
     },
@@ -33,10 +33,10 @@ error: expect(received).toMatchObject(expected)
 + ,
 +   },
 +   "state": "draft_ready",
-+   "updatedAt": 1791290542015,
++   "updatedAt": 1791291018984,
 +   "workflow": {
-+     "flowId": "wDJSBydUYUUtLscQoLx24",
-+     "versionId": "64z8oQubTQX55wnqEhysH",
++     "flowId": "tAiya5rfpvk0lVbTnP9UH",
++     "versionId": "cd7ZV2vaevoqY0YLUeuSj",
 +   },
   }
 
@@ -44,10 +44,10 @@ error: expect(received).toMatchObject(expected)
 + Received  + 20
 
       at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:102:28)
-(fail) a trigger-only result is a useful blocker and cannot create an empty success [869.12ms]
+(fail) a trigger-only result is a useful blocker and cannot create an empty success [1143.11ms]
 
  0 pass
- 18 filtered out
+ 19 filtered out
  1 fail
  1 expect() calls
-Ran 1 test across 1 file. [967.00ms]
+Ran 1 test across 1 file. [1273.00ms]

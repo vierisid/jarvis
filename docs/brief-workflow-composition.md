@@ -31,7 +31,7 @@ A successful result creates a populated `DRAFT` on a `DISABLED` flow with no pub
 
 Cancellation persists its terminal outcome before aborting the active provider request. Late results cannot attach a draft. Graceful shutdown and startup recovery record unfinished work as `failed` with `interrupted`, retaining the prompt and any composition ID. Completed results survive restart with the same flow/version IDs. Recovery does not automatically call the model or resume an uncertain attempt. To intentionally try again after a terminal failure/blocker/cancellation, submit the saved or revised specification with a **new** request ID. Reusing the old key always retrieves its existing outcome.
 
-The worker is owned by one daemon for one vault. Constructing a replacement marks that project's unfinished jobs interrupted; this is not a distributed multi-worker lease service. Rows and prompts are retained without automatic expiry so old keys cannot create duplicate drafts. Future retention/deletion policy must preserve an idempotency tombstone if job details are removed.
+The worker is owned by one daemon for one vault. Constructing a replacement marks that project's unfinished jobs interrupted; this is not a distributed multi-worker lease service. If storage becomes unwritable during shutdown, the worker still aborts and fences late results; startup recovery settles its last durable checkpoint when writes are available again. Rows and prompts are retained without automatic expiry so old keys cannot create duplicate drafts. Future retention/deletion policy must preserve an idempotency tombstone if job details are removed.
 
 ## Quick verification
 

@@ -186,6 +186,20 @@ test('graceful shutdown persists interrupted outcomes before aborting provider w
   reply.resolve({ text: valid }); await Bun.sleep(5); expect(count('flow')).toBe(0); expect(p.readiness()).toBe('unavailable');
 });
 
+test('an interruption write failure cannot block shutdown or attach a late draft', async () => {
+  const reply = deferred<{ text: string }>(); let signal: AbortSignal | undefined;
+  const p = provider({ async chat(request) { signal = request.signal; return reply.promise; } });
+  const { job } = p.submit(input); await started(p, job.jobId);
+  getWorkflowDb().exec(`CREATE TRIGGER reject_interruption BEFORE UPDATE ON brief_workflow_composition_jobs WHEN NEW.state = 'failed'
+    BEGIN SELECT RAISE(ABORT, 'storage failure'); END`);
+  try {
+    expect(() => p.stop()).not.toThrow(); expect(signal!.aborted).toBe(true); await p.idle();
+    reply.resolve({ text: valid }); await Bun.sleep(5); expect(count('flow')).toBe(0);
+  } finally { getWorkflowDb().exec('DROP TRIGGER reject_interruption'); reply.resolve({ text: valid }); }
+  const recovered = provider();
+  expect(recovered.get(job.jobId)).toMatchObject({ state: 'failed', blocker: { code: 'interrupted' } });
+});
+
 test('failure to save result IDs rolls back both canonical draft rows', async () => {
   const p = provider();
   getWorkflowDb().exec(`CREATE TRIGGER reject_result BEFORE UPDATE ON brief_workflow_composition_jobs WHEN NEW.state = 'draft_ready'
