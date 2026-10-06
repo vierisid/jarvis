@@ -3,7 +3,7 @@
   "title": "Make the next recommendation worth acting on",
   "date": "2026-10-05",
   "branch": "brief/q-18",
-  "worktree": "/home/vierisid/.cache/codex/jarvis-q-18",
+  "worktree": "a checkout of brief/q-18",
   "baseline": "462d955d54014e15ea003b5908860917642e5b34",
   "baseline_ref": "brief/foundations (D-01 and F-01); Q-18 has no merge prerequisite",
   "head": {
@@ -16,7 +16,7 @@
     "capability_ready": "planner, scenarios and rubric only; recommendations stays unsupported until F-13 registers a provider that uses them",
     "release_enabled": false,
     "publication": "PR #742 open against brief/foundations; https://github.com/vierisid/jarvis/pull/742",
-    "founder_review": "pending: 23 scenarios and the rubric are proposed; the review packet is evidence/Q-18/review-packet.md"
+    "founder_review": "pending: 34 scenarios and the rubric are proposed; the review packet is evidence/Q-18/review-packet.md"
   },
   "design": {
     "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
@@ -30,34 +30,34 @@
   "merge_after": [],
   "enable_after": [],
   "behavior": [
-    "observeNextAction reads every goal (parents, dependencies, deadline, health, order, latest progress), open work and work settled in the last 7 days, open commitments that are not work items, and the readiness of each workflow version open work runs. It writes nothing.",
-    "planNextAction is a pure function of that snapshot. Candidates rank in a stated order: check a finished result, resolve a blocker, restore what accepted work needs, decide a proposal, continue accepted work, start an unblocked goal step, review a goal; within a kind by deadline, health, goal order and age.",
-    "Doing nothing new is always weighed; it wins when open items reach capacity (default 5) and the best option adds work, or when nothing achievable remains.",
-    "Guards: no step behind an unmet dependency or inactive goal or parent; no step duplicating an open commitment or work item (titles compared ignoring case and punctuation); no repeat of work checked done in the last 7 days; stale goals (14 days without progress or work, or escalation suggesting a stop) get a review prompt.",
-    "It asks instead of guessing when a goal above task level has no task, when the last attempt failed its check, or when two goals' new steps have nothing (deadline, health, order) between them.",
-    "Each result carries the goal and revision, the goal path, evidence references, a rationale against doing nothing and the runner-up, the work item to link or null, an expiry (12 hours or the goal deadline) and a basis digest of every input except the clock; considered lists every alternative and why it lost or was left out."
+    "observeNextAction reads every goal (parents, dependencies, deadline, health, order, score, latest progress, last activation including a resume) and each goal's latest settled result however old (a check, or the item closed in Tasks). It reads open work (accepted and not settled, or proposed today and not decided; at most 500, newest first, the rest counted), open commitments that are not work items, titles of commitments finished in the last 30 days, the readiness of each workflow version open work runs, and for a waiting run who resumes it (its own timer, an outside call to a webhook step, or you). It writes nothing.",
+    "planNextAction is a pure function of that snapshot. Candidates rank in a stated order: check a finished result, resolve a blocker, restore what accepted work needs, decide a proposal from today, continue accepted work, record whether a goal that looks done is done, start an unblocked goal step, review a goal; within a kind by the soonest deadline and worst health on the goal or any parent, then goal order from the top goal down, then age. The rationale names the field that decided.",
+    "Doing nothing new is always weighed; it wins when open items (open work plus plain commitments due by the end of today) reach capacity (default 5) and every option adds work, or when nothing achievable remains.",
+    "Guards: no work or step behind an inactive goal or parent or an unfinished dependency of the goal or any parent (a parent waiting on its own step does not hold it); dependencies that can never finish ask for a fix; timer and outside-webhook waits are not offered; no step duplicating an open commitment or work item (titles compared ignoring case and punctuation); a task whose latest settled work passed, a goal whose steps are all complete, a goal with score 1.0 or one whose exact title was finished as a commitment gets a prompt to record whether it is done, and its proposals are held back; stale goals (14 days without progress, activation, settled result or accepted work, or escalation suggesting a stop) get a review prompt and their proposals are held back; checking and settling failed or missing runs continue under a held goal.",
+    "It asks instead of guessing when a goal above task level has no next concrete step, when a task's last attempt failed, or when two goals' new steps have nothing (deadline, health, order) between them; a tie never replaces a question of the goal's own.",
+    "Each result carries the goal and its read revision, the goal path, evidence references, a rationale against doing nothing and the runner-up, the work item to link or null, an expiry (12 hours or the soonest deadline on the goal or a parent) and a basis digest of every input except the clock, which run progress does not change. considered lists up to 20 alternatives, exclusions first, and omitted counts what was cut. Dates in messages use the user's time zone, and quoted outside text (blocker reasons, check summaries) is clipped to 200 characters."
   ],
   "acceptance": [
     {
       "check": "Recommendations do not duplicate existing commitments or suggest blocked work as immediately executable",
       "status": "passed",
-      "evidence": "src/goals/next-action.test.ts (duplicate-commitment, duplicate-open-work, blocked-by-dependency, accepted-work-waits-on-dependency, paused-parent, unavailable-integration scenarios and the cross-scenario property test); evidence/Q-18/revert-checks.log"
+      "evidence": "src/goals/next-action.test.ts: duplicate-commitment, duplicate-open-work, blocked-by-dependency, inherited-dependency, accepted-work-waits-on-dependency, paused-parent, approval-under-paused-goal, impossible-dependency, timer-wait, unavailable-integration, proposal-for-done-goal, done-long-ago and closed-in-tasks scenarios, the cross-scenario property test and the live tests; evidence/Q-18/revert-checks.log"
     },
     {
       "check": "Reviewers can explain why the chosen action is preferable; low confidence produces a useful question or abstention",
       "status": "passed pending founder review",
-      "evidence": "Rationale against doing nothing and the runner-up, and considered alternatives with reasons (next-action.test.ts contract tests); questions for no concrete step, a failed last attempt and ties; abstention for full or empty days; evidence/Q-18/review-packet.md for the founder's review"
+      "evidence": "Rationale against doing nothing and the runner-up naming the deciding field, and considered alternatives with reasons (next-action.test.ts contract and rationale tests); questions for no concrete step, a failed last attempt and ties; abstention for full or empty days; evidence/Q-18/review-packet.md for the founder's review"
     }
   ],
   "verification": [
     {
       "command": "bun test --preload ./src/test-preload.ts",
-      "result": "7,767 pass, 88 skip, 9 fail of 7,864 tests across 424 files (local WSL2, 594a5a5c). The 9 also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. Q-18 changes none of those areas.",
+      "result": "7,799 pass, 86 skip, 10 fail of 7,895 tests across 424 files (local WSL2, 9a298152). Nine also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. The tenth, a workflow retry timing test in src/workflows/queue/queue.test.ts, passed in the run at 45cc2d32 and in 3 of 3 runs of its file at 9a298152; this run shared the machine with the revert checks.",
       "log": "evidence/Q-18/full-suite-summary.log"
     },
     {
       "command": "bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts",
-      "result": "33 pass, 0 fail",
+      "result": "64 pass, 0 fail",
       "log": "evidence/Q-18/next-action-tests.log"
     },
     {
@@ -71,20 +71,20 @@
       "log": "evidence/Q-18/guards.log"
     },
     {
-      "command": "remove each of 17 guarantees in turn and run its test",
-      "result": "17 of 17 removals fail their tests; source restored",
+      "command": "remove each of 51 guarantees in turn and run its test",
+      "result": "51 of 51 removals fail their tests; source restored. The log lists the exact text removed and its replacement for each.",
       "log": "evidence/Q-18/revert-checks.log"
     },
     {
       "command": "bun run scripts/next-action-review-packet.ts --out docs/brief-delivery/evidence/Q-18/review-packet.md",
-      "result": "23 of 23 scenarios meet their proposed expectations; packet ready for founder review",
+      "result": "34 of 34 scenarios meet their proposed expectations; packet ready for founder review",
       "log": "evidence/Q-18/review-packet.md"
     }
   ],
   "quick_verify": {
-    "cwd": "/home/vierisid/.cache/codex/jarvis-q-18",
+    "cwd": "repository root, on brief/q-18",
     "command": "bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts",
-    "expected": "33 pass",
+    "expected": "64 pass",
     "screenshot": "not applicable: no visible UI changes"
   },
   "migration": "None. No schema, data, route or daemon wiring change; nothing calls the planner until F-13.",
@@ -92,12 +92,46 @@
   "limitations": [
     "Signals are structured only: goals, work items, commitments, checked results and workflow readiness. Calendar, mail and facts are not read.",
     "New steps come from the user's own goal titles; a missing step is asked for, never invented.",
-    "Plain commitments count toward the workload and guard against duplicates but are not recommended; F-13 links work items.",
-    "Duplicates are matched on normalized titles; a reworded duplicate is not caught.",
+    "Plain commitments guard against duplicates and fill the day only when due by its end; they are not recommended. F-13 links work items.",
+    "Duplicates and finished commitments are matched on normalized titles; a reworded one is not caught.",
+    "Recurring work is not modeled: a task whose work passed looks done until the user accepts new work for it or closes it.",
+    "A wait the planner cannot attribute is treated as the user's, because hiding an approval would stall the work.",
     "The ranking is a stated preference order, not a measured optimum; the scenarios and rubric await founder review."
   ],
   "found": [
-    "The morning plan reads active and overdue goals and yesterday's review summary, but not dependencies, open work or checked results. It never deduplicates against existing commitments and writes its actions straight into work items. Q-18 does not change it; F-13 decides whether What's next? replaces it."
+    "The morning plan reads active and overdue goals and yesterday's review summary, but not dependencies, open work or checked results. It never deduplicates against existing commitments and writes its actions straight into work items. Q-18 does not change it; F-13 decides whether What's next? replaces it.",
+    "Deciding or rejecting a work item never changes its commitment's status, and the upgrade turned every historical morning-plan action into a pending proposal. Readers of open commitments must filter on the work decision, as the Today view and this planner do.",
+    "Tasks and the commitments tool change a work item's commitment status directly, outside the work-item API. Approval links resume through a webhook, like outside calls; only the waiting step's piece tells them apart."
   ],
-  "next": "F-13 builds its recommendations provider on this planner. The founder reviews the scenario packet. Keep the PR unmerged until reviewed."
+  "next": "F-13 builds its recommendations provider on this planner: it compares basis to recheck a stored recommendation, keeps a tie's answer as goal order with reorderGoals, and frames plan text as untrusted wherever it reaches a model. The founder reviews the scenario packet. Keep the PR unmerged until reviewed.",
+  "review": {
+    "first_push": "69b57d04",
+    "result": "An independent code review found 5 blocking and 16 smaller issues and asked 3 questions. All are fixed in 45cc2d32; 9a298152 adds the #573 reader review the fixes required and clips quoted outside text. Each guarantee has a test that fails when it is removed (51 of 51).",
+    "blocking": [
+      "1: rejected and undecided proposals stayed open forever, read oldest first under a 500-row cap, so they crowded out new work and filled the day",
+      "2: proposals skipped the dependency, done and stale guards and hid their goal's review",
+      "3: dependencies were not inherited from parents, so a task under a milestone waiting on another was offered as startable",
+      "4: work checked done was forgotten after 7 days, done work without a goal link was never seen, and the done review ranked below every new step",
+      "5: timer and outside-webhook waits were offered as blockers to answer"
+    ],
+    "minor": [
+      "status changes made in Tasks were ignored, and the missing-run advice could not be carried out (6)",
+      "an answer under a paused goal was still pushed (7)",
+      "parents' deadlines and in-between goal order were ignored (8)",
+      "the rationale blamed deadline, health or order when age or title decided (9)",
+      "a full day hid options that add no work (10)",
+      "dependencies that can never finish held a goal silently (11)",
+      "a goal activated or resumed recently was called stale (12)",
+      "goals past 1,000 were dropped (13)",
+      "the write check counted rows, and observer paths had no live tests (14)",
+      "the doc claimed every goal and every alternative, and the receipt marked the blocked-work check passed (15)",
+      "the receipts named a local tool path; fixed here and on Q-01, Q-02 and Q-13 (16)",
+      "nits: wording for restoring a capability, a tie replacing a question, no evidence for a full day of commitments, UTC dates, scenario wording (17 to 21)"
+    ],
+    "questions": [
+      "Q1: F-13 compares basis, not the goal revision, which is a read projection that health and escalation updates also change",
+      "Q2: run progress no longer changes the basis; a run starting, pausing or finishing does",
+      "Q3: F-13 can keep a tie's answer as goal order with the existing reorderGoals, which the planner reads"
+    ]
+  }
 }

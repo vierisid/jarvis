@@ -1,6 +1,6 @@
 # What's next? review packet
 
-Planner `next-action-v1`, rubric `next-action-review-v1` (proposed), 23 scenarios (proposed).
+Planner `next-action-v1`, rubric `next-action-review-v1` (proposed), 34 scenarios (proposed).
 
 For each scenario, read the situation and the planner's answer, then mark every criterion yes or no. Edit the proposed expectation where you disagree.
 
@@ -94,11 +94,11 @@ Why, as the planner gives it:
 - Accepted work cannot run until this is fixed.
 - Its workflow is not ready: send_followup: Connection is not active.
 - Serves: Follow up with leads.
-- Better than doing nothing new: it settles what further work is worth doing.
+- Better than doing nothing new: it lets accepted work run.
 - Ahead of the next option (Start "Update pricing page"): restoring what accepted work needs comes before starting a new step.
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: it settles what further work is worth doing.
+- ranked lower: Do nothing new. Better than doing nothing new: it lets accepted work run.
 - ranked lower: Start "Update pricing page". Ranked below: restoring what accepted work needs comes before starting a new step.
 
 **Proposed expectation:** recommend, restore_capability. Running it would fail. Reconnecting the account unblocks work already accepted, which comes before starting something new.
@@ -115,14 +115,14 @@ Notes:
 **Recommends:** Decide whether to do "Send this week's invoice reminders"
 
 Why, as the planner gives it:
-- A proposal is waiting for your decision.
+- A proposal from today is waiting for your decision.
 - Serves: Send invoice reminders.
 - Better than doing nothing new: it closes or moves open work.
-- Ahead of the next option (Decide whether to do "Draft the new pricing page"): sooner deadline, worse health or earlier in your goal order.
+- Ahead of the next option (Decide whether to do "Draft the new pricing page"): it has a sooner deadline.
 
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
-- ranked lower: Decide whether to do "Draft the new pricing page". Ranked below on deadline, goal health or your goal order.
+- ranked lower: Decide whether to do "Draft the new pricing page". Ranked below: the chosen option has a sooner deadline.
 
 **Proposed expectation:** recommend, decide_work. Proposals need a yes or no before they are work; the one serving the sooner deadline first.
 **Planner meets it:** yes
@@ -158,19 +158,20 @@ Notes:
 
 **Situation:** Reminder work was checked done two days ago, but the goal is still open. A pricing goal has a startable step.
 
-**Recommends:** Start "Update pricing page"
+**Recommends:** Record whether "Send invoice reminders" is done
 
 Why, as the planner gives it:
-- It is the next concrete step of an active goal, and nothing blocks it.
-- Serves: Update pricing page.
-- Better than doing nothing new: 0 of 5 open items leaves room.
-- Ahead of the next option (Record whether "Send invoice reminders" is done): starting a new step comes before reviewing a goal.
+- The goal looks done; recording that keeps your plan honest.
+- Its work "Send this week's invoice reminders" was checked done on 2026-10-03, and the goal is still open.
+- Serves: Send invoice reminders.
+- Better than doing nothing new: it settles a goal that looks done.
+- Ahead of the next option (Start "Update pricing page"): closing a goal that looks done comes before starting a new step.
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: 0 of 5 open items leaves room.
-- ranked lower: Record whether "Send invoice reminders" is done. Ranked below: starting a new step comes before reviewing a goal.
+- ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
+- ranked lower: Start "Update pricing page". Ranked below: closing a goal that looks done comes before starting a new step.
 
-**Proposed expectation:** recommend, start_step. Sending the reminders again would duplicate finished work. The useful new step is elsewhere; the open goal gets a review prompt instead.
+**Proposed expectation:** recommend, close_goal. Sending the reminders again would duplicate finished work. Recording whether the goal is done adds no work and comes before starting the pricing step.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -184,15 +185,15 @@ Notes:
 **Recommends:** Record whether "Send invoice reminders" is done
 
 Why, as the planner gives it:
-- The goal needs a decision before more work goes into it.
+- The goal looks done; recording that keeps your plan honest.
 - Its work "Send this week's invoice reminders" was checked done on 2026-10-03, and the goal is still open.
 - Serves: Send invoice reminders.
-- Better than doing nothing new: it settles what further work is worth doing.
+- Better than doing nothing new: it settles a goal that looks done.
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: it settles what further work is worth doing.
+- ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 
-**Proposed expectation:** recommend, review_goal. The goal looks done; recording that is the next action, not repeating the work.
+**Proposed expectation:** recommend, close_goal. The goal looks done; recording that is the next action, not repeating the work.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -206,15 +207,15 @@ Notes:
 **Recommends:** Record whether "Collect overdue invoices" is done
 
 Why, as the planner gives it:
-- The goal needs a decision before more work goes into it.
-- All 2 of its steps are complete.
+- The goal looks done; recording that keeps your plan honest.
+- All 2 of its steps are complete, and the goal is still open.
 - Serves: Collect overdue invoices.
-- Better than doing nothing new: it settles what further work is worth doing.
+- Better than doing nothing new: it settles a goal that looks done.
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: it settles what further work is worth doing.
+- ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 
-**Proposed expectation:** recommend, review_goal. The steps are done; whether the key result is met is a decision, not another task.
+**Proposed expectation:** recommend, close_goal. The steps are done; whether the key result is met is a decision, not another task.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -252,11 +253,11 @@ Notes:
 Why, as the planner gives it:
 - It is the next concrete step of an active goal, and nothing blocks it.
 - Serves: Update pricing page.
-- Better than doing nothing new: 0 of 5 open items leaves room.
+- Better than doing nothing new: the day has room (0 of 5 items open).
 - Ahead of the next option (Decide whether "Publish the monthly newsletter" is still worth pursuing): starting a new step comes before reviewing a goal.
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: 0 of 5 open items leaves room.
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - ranked lower: Decide whether "Publish the monthly newsletter" is still worth pursuing. Ranked below: starting a new step comes before reviewing a goal.
 
 **Proposed expectation:** recommend, start_step. Live work comes before reviewing a stale goal, and the stale goal never gets a fresh task by default.
@@ -275,10 +276,10 @@ Notes:
 Why, as the planner gives it:
 - It is the next concrete step of an active goal, and nothing blocks it.
 - Serves: Update pricing page.
-- Better than doing nothing new: 1 of 5 open items leaves room.
+- Better than doing nothing new: the day has room (0 of 5 items open).
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: 1 of 5 open items leaves room.
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - excluded: Call Ana about invoice 1042. Already committed as "call Ana about invoice 1042!".
 
 **Proposed expectation:** recommend, start_step. Recommending the call again would duplicate an existing commitment.
@@ -297,10 +298,10 @@ Notes:
 Why, as the planner gives it:
 - It is the next concrete step of an active goal, and nothing blocks it.
 - Serves: Approve the new prices.
-- Better than doing nothing new: 0 of 5 open items leaves room.
+- Better than doing nothing new: the day has room (0 of 5 items open).
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: 0 of 5 open items leaves room.
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - excluded: Send the new price list to customers. Not now: it waits on "Approve the new prices", which is active.
 
 **Proposed expectation:** recommend, start_step. Blocked work is not executable; the dependency is the useful next step.
@@ -319,10 +320,10 @@ Notes:
 Why, as the planner gives it:
 - It is the next concrete step of an active goal, and nothing blocks it.
 - Serves: Approve the new prices.
-- Better than doing nothing new: 1 of 5 open items leaves room.
+- Better than doing nothing new: the day has room (1 of 5 items open).
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: 1 of 5 open items leaves room.
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (1 of 5 items open).
 - excluded: Email the price list. Not now: it waits on "Approve the new prices", which is active.
 
 **Proposed expectation:** recommend, start_step. Accepted is not unblocked: the work waits on its goal's dependency, which is the useful step.
@@ -339,7 +340,7 @@ Notes:
 **Recommends:** Decide whether to do "draft the partner agreement"
 
 Why, as the planner gives it:
-- A proposal is waiting for your decision.
+- A proposal from today is waiting for your decision.
 - Better than doing nothing new: it closes or moves open work.
 
 Alternatives weighed:
@@ -355,9 +356,9 @@ Notes:
 
 ## 16. paused-parent
 
-**Situation:** The only task belongs to a paused objective.
+**Situation:** The only key result belongs to a paused objective.
 
-**Recommends nothing new:** Nothing is waiting on you: no active goal has an unblocked next step.
+**Recommends nothing new:** Nothing is waiting on you: 1 option is held back.
 
 Alternatives weighed:
 - excluded: Draft the partner agreement. Not now: its parent "Launch the partner program" is paused.
@@ -376,7 +377,7 @@ Notes:
 **Recommends nothing new:** 5 items are already open, at your limit of 5. Finish or check some before adding more.
 
 Alternatives weighed:
-- ranked lower: Start "Update pricing page". It would add work to a full queue.
+- ranked lower: Start "Update pricing page". It would add work to a full day (5 of 5 items open).
 
 **Proposed expectation:** none. Adding a sixth item to a full day is noise; the answer is to let current work finish.
 **Planner meets it:** yes
@@ -394,11 +395,10 @@ Notes:
 Why, as the planner gives it:
 - Its run finished, and only you can confirm the result; until then it counts for nothing.
 - Better than doing nothing new: it closes or moves open work.
-- Ahead of the next option (Start "Update pricing page"): checking finished work comes before starting a new step.
 
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
-- ranked lower: Start "Update pricing page". Ranked below: checking finished work comes before starting a new step.
+- ranked lower: Start "Update pricing page". It would add work to a full day (5 of 5 items open).
 
 **Proposed expectation:** recommend, check_result. Checking reduces the load instead of adding to it.
 **Planner meets it:** yes
@@ -465,12 +465,12 @@ Why, as the planner gives it:
 - It is the next concrete step of an active goal, and nothing blocks it.
 - Due 2026-10-08.
 - Serves: Write the onboarding email.
-- Better than doing nothing new: 0 of 5 open items leaves room.
-- Ahead of the next option (Start "Update pricing page"): sooner deadline, worse health or earlier in your goal order.
+- Better than doing nothing new: the day has room (0 of 5 items open).
+- Ahead of the next option (Start "Update pricing page"): it has a sooner deadline.
 
 Alternatives weighed:
-- ranked lower: Do nothing new. Better than doing nothing new: 0 of 5 open items leaves room.
-- ranked lower: Start "Update pricing page". Ranked below on deadline, goal health or your goal order.
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
+- ranked lower: Start "Update pricing page". Ranked below: the chosen option has a sooner deadline.
 
 **Proposed expectation:** recommend, start_step. The deadline is the evidence that separates them.
 **Planner meets it:** yes
@@ -483,11 +483,257 @@ Notes:
 
 **Situation:** Every goal is complete and the last item is still running.
 
-**Recommends nothing new:** Nothing is waiting on you: open work is running, and no active goal has an unblocked next step.
+**Recommends nothing new:** Nothing is waiting on you: 1 item is running or waiting on a timer or an outside call.
 
 Alternatives weighed:
 
 **Proposed expectation:** none. There is nothing to add; inventing work would be noise.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 24. old-proposals
+
+**Situation:** Proposals from earlier mornings were never decided and one was rejected. This morning a run finished.
+
+**Recommends:** Check the result of "Send this week's invoice reminders"
+
+Why, as the planner gives it:
+- Its run finished, and only you can confirm the result; until then it counts for nothing.
+- Serves: Send invoice reminders.
+- Better than doing nothing new: it closes or moves open work.
+- Ahead of the next option (Start "Update pricing page"): checking finished work comes before starting a new step.
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
+- ranked lower: Start "Update pricing page". Ranked below: checking finished work comes before starting a new step.
+
+**Proposed expectation:** recommend, check_result. Undecided proposals from earlier days are stale, as the Today view treats them; they neither crowd out new work nor fill the day.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 25. proposal-for-done-goal
+
+**Situation:** Reminder work was checked done two days ago. This morning's fallback plan proposed working on the same goal again.
+
+**Recommends:** Record whether "Send invoice reminders" is done
+
+Why, as the planner gives it:
+- The goal looks done; recording that keeps your plan honest.
+- Its work "Send this week's invoice reminders" was checked done on 2026-10-03, and the goal is still open.
+- Serves: Send invoice reminders.
+- Better than doing nothing new: it settles a goal that looks done.
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
+- excluded: Work on: Send invoice reminders. Its goal looks done: its work "Send this week's invoice reminders" was checked done on 2026-10-03. Record that before adding work to it.
+
+**Proposed expectation:** recommend, close_goal. Accepting the proposal would repeat finished work. Whether the goal is done is the real decision.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 26. inherited-dependency
+
+**Situation:** Emailing the price list, due in three days, sits under a milestone that waits on approving the new prices.
+
+**Recommends:** Start "Review the price sheet with Ana"
+
+Why, as the planner gives it:
+- It is the next concrete step of an active goal, and nothing blocks it.
+- Serves: Raise prices > Approve the new prices > Review the price sheet with Ana.
+- Better than doing nothing new: the day has room (0 of 5 items open).
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
+- excluded: Email the price list to customers. Not now: its parent "Send the new price list" waits on "Approve the new prices", which is active.
+
+**Proposed expectation:** recommend, start_step. A step inherits its parent's dependencies. The email cannot go out before the prices are approved, so the approval's step comes first despite the deadline.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 27. done-long-ago
+
+**Situation:** Reminder work was checked done ten days ago; the goal is still open and nothing else is active.
+
+**Recommends:** Record whether "Send invoice reminders" is done
+
+Why, as the planner gives it:
+- The goal looks done; recording that keeps your plan honest.
+- Its work "Send this week's invoice reminders" was checked done on 2026-09-25, and the goal is still open.
+- Serves: Send invoice reminders.
+- Better than doing nothing new: it settles a goal that looks done.
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
+
+**Proposed expectation:** recommend, close_goal. Finished work stays finished; a week later it must not come back as a new step.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 28. done-without-link
+
+**Situation:** A commitment with the goal's exact title was finished three days ago, without a link to the goal.
+
+**Recommends:** Record whether "Call Ana about invoice 1042" is done
+
+Why, as the planner gives it:
+- The goal looks done; recording that keeps your plan honest.
+- "Call Ana about invoice 1042" was finished on 2026-10-02, and the goal is still open.
+- Serves: Call Ana about invoice 1042.
+- Better than doing nothing new: it settles a goal that looks done.
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
+
+**Proposed expectation:** recommend, close_goal. The call already happened; the open goal needs recording, not another call.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 29. closed-in-tasks
+
+**Situation:** Accepted reminder work was marked done in Tasks yesterday, without a result check.
+
+**Recommends:** Record whether "Send invoice reminders" is done
+
+Why, as the planner gives it:
+- The goal looks done; recording that keeps your plan honest.
+- Its work "Send this week's invoice reminders" was marked done in Tasks on 2026-10-04, and the goal is still open.
+- Serves: Send invoice reminders.
+- Better than doing nothing new: it settles a goal that looks done.
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
+
+**Proposed expectation:** recommend, close_goal. Marking it done in Tasks settles it as surely as a check; asking to do it again would be wrong.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 30. timer-wait
+
+**Situation:** A follow-up workflow is in its three-day wait. A pricing goal has a startable step.
+
+**Recommends:** Start "Update pricing page"
+
+Why, as the planner gives it:
+- It is the next concrete step of an active goal, and nothing blocks it.
+- Serves: Update pricing page.
+- Better than doing nothing new: the day has room (1 of 5 items open).
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (1 of 5 items open).
+
+**Proposed expectation:** recommend, start_step. The wait ends by itself, so there is nothing to answer. It still counts toward the day.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 31. approval-under-paused-goal
+
+**Situation:** A run waits for approval to send, but its goal was paused yesterday.
+
+**Recommends:** Start "Update pricing page"
+
+Why, as the planner gives it:
+- It is the next concrete step of an active goal, and nothing blocks it.
+- Serves: Update pricing page.
+- Better than doing nothing new: the day has room (1 of 5 items open).
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (1 of 5 items open).
+- excluded: Send this week's invoice reminders. Not now: answering resumes it, and the goal is paused.
+
+**Proposed expectation:** recommend, start_step. Approving would send email for a goal you paused. It waits until you resume the goal.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 32. parent-deadline
+
+**Situation:** A task under a key result due tomorrow, and a standalone task due in five days.
+
+**Recommends:** Start "Export the September transactions"
+
+Why, as the planner gives it:
+- It is the next concrete step of an active goal, and nothing blocks it.
+- Due 2026-10-06, through "Close the Q3 books".
+- Serves: Close the Q3 books > Reconcile the bank statements > Export the September transactions.
+- Better than doing nothing new: the day has room (0 of 5 items open).
+- Ahead of the next option (Start "Update pricing page"): it has a sooner deadline.
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
+- ranked lower: Start "Update pricing page". Ranked below: the chosen option has a sooner deadline.
+
+**Proposed expectation:** recommend, start_step. A step inherits its parent's deadline; tomorrow's key result comes before a task due in five days.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 33. full-day-closes-goal
+
+**Situation:** Five items are running, the daily limit. A goal's work was checked done yesterday, and another goal has a startable step.
+
+**Recommends:** Record whether "Send invoice reminders" is done
+
+Why, as the planner gives it:
+- The goal looks done; recording that keeps your plan honest.
+- Its work "Send this week's invoice reminders" was checked done on 2026-10-04, and the goal is still open.
+- Serves: Send invoice reminders.
+- Better than doing nothing new: it settles a goal that looks done.
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
+- ranked lower: Start "Update pricing page". It would add work to a full day (5 of 5 items open).
+
+**Proposed expectation:** recommend, close_goal. Recording a finished goal adds no work, so a full day does not hide it; only the new step waits.
+**Planner meets it:** yes
+
+Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
+
+Notes:
+
+## 34. impossible-dependency
+
+**Situation:** The launch email waits on a beta goal that was killed.
+
+**Recommends:** Fix what "Send the launch email" waits on
+
+Why, as the planner gives it:
+- The goal needs a decision before more work goes into it.
+- It cannot go ahead: it waits on "Run the private beta", which is killed.
+- Serves: Send the launch email.
+- Better than doing nothing new: it settles what further work is worth doing.
+
+Alternatives weighed:
+- ranked lower: Do nothing new. Better than doing nothing new: it settles what further work is worth doing.
+
+**Proposed expectation:** recommend, review_goal. A dependency that can never finish holds the goal forever; fixing it is the useful step, not reporting that nothing is waiting.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]

@@ -8,5 +8,5 @@ $ bun run scripts/lint-webapp-templates.ts
 100 templates: 0 errors, 0 warnings
 $ bun run scripts/check-package-files.ts
 [check-package-files] note: npm: ran cleanly but produced no parseable file list
-[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2320 files).
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2350 files).
 exit=0
