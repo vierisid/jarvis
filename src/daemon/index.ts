@@ -1,3 +1,5 @@
+import { OpportunityActivation } from '../brief/opportunity-activation';
+import { registerOpportunityActivation } from '../brief/registrations/opportunity-activation';
 import { PreparedOpportunities } from '../awareness/prepared-opportunities';
 import { loadPreparedQualityGate } from '../awareness/prepared-quality-adapter';
 import { registerPreparedOpportunities } from '../brief/registrations/prepared-opportunities';
@@ -158,6 +160,7 @@ export interface DaemonConfig {
 
 let shutdownInProgress = false;
 let suggestionComposer: SuggestionComposer | null = null;
+let briefOpportunityActivation: OpportunityActivation | null = null;
 let briefPreparedOpportunities: PreparedOpportunities | null = null;
 let briefWorkflowComposition: BriefCompositionProvider | null = null;
 let registry: ServiceRegistry | null = null;
@@ -341,6 +344,8 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
     // (window-state.ts), and phase 3 still calls it on the way out.
     flushWindowState();
   }
+  briefOpportunityActivation?.stop();
+  briefOpportunityActivation = null;
   await briefPreparedOpportunities?.close();
   briefPreparedOpportunities = null;
   suggestionComposer?.stop();
@@ -4985,6 +4990,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefAttachments = new BriefAttachmentProvider(getDb(), sidecarManager);
     briefWorkflowComposition = new BriefCompositionProvider(getDb());
     briefPreparedOpportunities = new PreparedOpportunities(getDb());
+    briefOpportunityActivation = new OpportunityActivation(getDb());
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
@@ -4993,6 +4999,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (process.env.JARVIS_BRIEF_CHAT_PROGRESS === '1') briefEnabled.push('chatProgress');
     if (process.env.JARVIS_BRIEF_COMPOSITION_INGREDIENTS === '1') briefEnabled.push('compositionIngredients');
     if (process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') briefEnabled.push('preparedOpportunities');
+    if (process.env.JARVIS_BRIEF_OPPORTUNITY_ACTIVATION === '1') briefEnabled.push('opportunityActivation');
     if (process.env.JARVIS_BRIEF_WORKFLOW_COMPOSITION === '1') briefEnabled.push('workflowComposition');
     const briefCapabilities = createBriefCapabilities([
       ...registerConversations(briefConversations), ...registerChatTransport(briefChatTransport),
@@ -5001,6 +5008,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerChatProgress(briefChatTransport),
       ...registerWorkflowComposition(briefWorkflowComposition),
       ...registerPreparedOpportunities(briefPreparedOpportunities),
+      ...registerOpportunityActivation(briefOpportunityActivation),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
@@ -5009,6 +5017,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefAttachments,
       briefWorkflowComposition,
       briefPreparedOpportunities,
+      briefOpportunityActivation,
       briefCapabilities,
       daemonStartedAt: Date.now(),
       healthMonitor,
@@ -5596,6 +5605,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // status flips ENABLED via the v2 API gets reconciled by the route
     // hooks calling `triggerManager.refresh(flowId)`.
     await triggerManager.start();
+    if (process.env.JARVIS_BRIEF_OPPORTUNITY_ACTIVATION === '1' && process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
+      briefOpportunityActivation?.configure(briefPreparedOpportunities!, triggerManager);
+      briefOpportunityActivation?.start();
+    }
     logWithTimestamp(`Trigger manager started with ${triggerManager.list().length} active subscription(s)`);
 
     // 10.2. Republish observer events onto the workflow event bus so flows

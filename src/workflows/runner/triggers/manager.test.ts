@@ -1038,3 +1038,39 @@ describe('review: durable readiness refusals', () => {
   });
 
 });
+
+
+for (const listeners of [[], [{ name: 'WEBHOOK', identifier: 'fixture' }]]) test(`registration receipt refuses a failed engine cron with ${listeners.length} working listeners`, async () => {
+  const { flowId, versionId } = publishFlowWithTrigger('registration receipt', {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'jarvis-trigger', triggerName: 'on_event', input: { eventType: 'test' } },
+  });
+  const tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [],
+    engineRuntime: { async acquire() { return { async executeTriggerHook() { return { scheduleOptions: { cronExpression: 'invalid' }, listeners }; }, async release() {} }; } } as any,
+  });
+  try {
+    await tm.refresh(flowId); expect(tm.registrationState(flowId, versionId)).toBe('blocked');
+    expect(tm.list()).toHaveLength(listeners.length ? 1 : 0); expect(queueStats().queued).toBe(0);
+    if (listeners.length) expect(tm.list()[0]?.warning).toContain('Cron registration failed');
+  } finally { await tm.stop(); }
+});
+
+
+test('partial engine registration retries local cron without repeating remote hooks', async () => {
+  const { flowId, versionId } = publishFlowWithTrigger('registration repair', {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'jarvis-trigger', triggerName: 'on_event', input: { eventType: 'test' } },
+  });
+  const cron = new FakeCronScheduler(), hooks: string[] = []; let fail = true;
+  const tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent, enableRetryDelaysMs: [],
+    cronScheduler: { schedule(id: string, expression: string, cb: () => void) { if (fail) throw Error('Temporary local failure'); cron.schedule(id, expression, cb); },
+      cancel(id: string) { cron.cancel(id); }, cancelAll() { cron.cancelAll(); } } as any,
+    engineRuntime: { async acquire() { return { async executeTriggerHook(hook: string) {
+      hooks.push(hook); return { scheduleOptions: { cronExpression: '* * * * *' }, listeners: [{ name: 'WEBHOOK', identifier: 'fixture' }] };
+    }, async release() {} }; } } as any,
+  });
+  try {
+    await tm.refresh(flowId); expect(tm.registrationState(flowId, versionId)).toBe('blocked');
+    fail = false; await Promise.all([tm.refresh(flowId), tm.refresh(flowId)]);
+    expect(tm.registrationState(flowId, versionId)).toBe('registered'); expect(cron.has(`flow:${flowId}`)).toBe(true);
+    expect(hooks).toEqual(['ON_ENABLE']); expect(tm.list()).toEqual([{ flowId, kind: 'engine' }]); expect(queueStats().queued).toBe(0);
+  } finally { await tm.stop(); }
+});

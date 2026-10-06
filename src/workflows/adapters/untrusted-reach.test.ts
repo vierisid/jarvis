@@ -190,6 +190,9 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     or model requests; only the saved job specification
  *                                     reaches composition. A regression injects hostile
  *                                     sample fields and checks reads and retries.
+ *   brief/opportunity-activation.ts   BENIGN. Checks the pinned graph identity and activation
+ *                                     state; its receipt copies only IDs, a digest and statuses.
+ *                                     No sample data, inputs or provider errors reach the receipt.
  *   brief/contracts.ts                BENIGN. Imports only workflow status
  *                                     TYPES for wire references. It fetches no
  *                                     run/version and exports no captured step
@@ -233,6 +236,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'actions/tools/workflow-composer.ts',
   'awareness/suggestion-composer.ts',
   'awareness/prepared-opportunities.ts',
+  'brief/opportunity-activation.ts',
   'brief/adapters.ts',
   'brief/composition.ts',
   'brief/contracts.ts',
