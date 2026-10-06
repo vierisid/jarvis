@@ -1,0 +1,73 @@
+{
+  "date": "2026-10-06",
+  "build": "index-hseexw1s.js",
+  "checks": [
+    {
+      "case": "acceptance",
+      "confirmed": {
+        "badge": "Step accepted",
+        "id": "fixture-decision-follow-up",
+        "phase": "confirmed",
+        "receipt": "Step accepted · Not started",
+        "summary": "A useful next step\nis ready to accept.",
+        "theme": "light",
+        "tone": "neutral"
+      },
+      "after": {
+        "badge": "Needs your review",
+        "id": "fixture-decision-investor",
+        "phase": "idle",
+        "receipt": "",
+        "summary": "Your investor update\nis ready to review.",
+        "theme": "light",
+        "tone": "attention"
+      }
+    },
+    {
+      "case": "permission-dark-rail-chat",
+      "confirmed": {
+        "badge": "Permission granted",
+        "id": "fixture-decision-follow-up",
+        "phase": "confirmed",
+        "receipt": "Permission granted · Not started",
+        "summary": "The next operation\nneeds your permission.",
+        "theme": "dark",
+        "tone": "neutral"
+      },
+      "after": {
+        "badge": "Needs your review",
+        "id": "fixture-decision-investor",
+        "phase": "idle",
+        "receipt": "",
+        "summary": "Your investor update\nis ready to review.",
+        "theme": "dark",
+        "tone": "attention"
+      }
+    },
+    {
+      "case": "execution-still-distinct",
+      "confirmed": {
+        "badge": "Execution confirmed",
+        "id": "fixture-decision-follow-up",
+        "phase": "confirmed",
+        "receipt": "Execution confirmed",
+        "summary": "The follow-up is ready.\nOne detail needs your eyes.",
+        "theme": "dark",
+        "tone": "success"
+      },
+      "after": {
+        "badge": "Needs your review",
+        "id": "fixture-decision-investor",
+        "phase": "idle",
+        "receipt": "",
+        "summary": "Your investor update\nis ready to review.",
+        "theme": "dark",
+        "tone": "attention"
+      }
+    }
+  ],
+  "limitations": [
+    "Illustrative owner receipts only. No real work, permission or execution mutation.",
+    "Existing full matrix retained as original evidence; this correction checks Light acceptance and Dark rail/chat permission plus execution."
+  ]
+}
