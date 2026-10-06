@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test';
 import type { BriefChatEvent, BriefChatPayload, BriefConversation } from '../../../../src/brief/contracts';
 import type { ConversationMessage } from '../../../../src/vault/conversations';
-import { ConversationStore, type ChatSnapshot } from './store';
+import { ConversationStore, orderedActivities, type ChatSnapshot } from './store';
 import type { BriefAttachmentRef } from '../../../../src/brief/attachment-contracts';
 
 const conversation = (id: string, order = 0, workspaceId = 'workspace'): BriefConversation => ({ conversationId: id, workspaceId, title: id, revision: '1', tab: { open: true, order }, lastMessageAt: null });
@@ -15,6 +15,27 @@ function fixture(storage?: Pick<Storage, 'getItem' | 'setItem'>) {
   store.restoreTabs({ workspaceId: 'workspace', activeConversationId: 'a', revision: '1', tabs: [conversation('a'), conversation('b', 1)] });
   return store;
 }
+
+test('activity rows retain their first position and final phase across delayed starts and reconnect', () => {
+  const store = fixture();
+  const activity = (sequence: number, activityId: string, phase: 'started' | 'completed' | 'failed') => event(sequence, {
+    kind: 'activity', activity: { activityId, kind: 'tool', order: activityId === 'first' ? 1 : 2, phase, summary: 'Safe fixed label.', refs: [] },
+  });
+  store.applyEvent(activity(2, 'second', 'started'), 10);
+  expect(orderedActivities(store.getSnapshot().conversations.a!)[0]?.live).toBe(true);
+  store.applyEvent(activity(3, 'first', 'failed'), 10);
+  store.applyEvent(activity(1, 'first', 'started'), 10);
+  store.applyEvent(activity(4, 'first', 'completed'), 10);
+  const rows = orderedActivities(store.getSnapshot().conversations.a!);
+  expect(rows.map(row => [row.activityId, row.phase, row.firstSequence, row.live])).toEqual([
+    ['first', 'failed', 1, false], ['second', 'started', 2, true],
+  ]);
+  store.applySnapshot(snapshot(4, '', [activity(1, 'first', 'started'), activity(2, 'second', 'started'), activity(3, 'first', 'failed')]));
+  expect(orderedActivities(store.getSnapshot().conversations.a!).map(row => [row.activityId, row.phase, row.live])).toEqual([
+    ['first', 'failed', false], ['second', 'started', false],
+  ]);
+  expect(store.getSnapshot().conversations.b!.activity).toEqual({});
+});
 
 for (const source of ['event', 'snapshot-message', 'snapshot-turn', 'history'] as const) test(`canonical ${source} consumes attachments in a stale window and prevents resurrection`, () => {
   const saved = new Map<string, string>();

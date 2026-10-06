@@ -1,7 +1,7 @@
 import type { Database } from 'bun:sqlite';
 import type { ApprovalStatus } from '../authority/approval.ts';
 import type { LLMMessage } from '../llm/provider.ts';
-import type { BriefChatEvent, BriefChatPayload, BriefSendTurn, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
+import type { BriefActivity, BriefChatEvent, BriefChatPayload, BriefSendTurn, BriefTurnRef, BriefTurnState } from '../brief/contracts.ts';
 import { ConversationRepository, ConversationRequestError } from './conversation-lifecycle.ts';
 import { ChatAttachmentRepository, attachmentIds } from './chat-attachments';
 import type { BriefAttachmentRef } from '../brief/attachment-contracts';
@@ -115,11 +115,28 @@ export class ChatTurnRepository {
   }
 
   finish(ref: BriefTurnRef, state: 'completed' | 'failed' | 'cancelled', error?: { code: string; message: string }): BriefChatEvent | null {
+    return this.finishEvents(ref, state, error).at(-1) ?? null;
+  }
+
+  /** Settle unfinished F-06 observations and the answer atomically, including after restart. */
+  finishEvents(ref: BriefTurnRef, state: 'completed' | 'failed' | 'cancelled', error?: { code: string; message: string }): BriefChatEvent[] {
     return this.db.transaction(() => {
       const turn = this.get(ref);
-      if (isTerminalTurn(turn.state)) return null;
+      if (isTerminalTurn(turn.state)) return [];
+      const latest = new Map<string, BriefActivity>();
+      const rows = this.db.query<{ payload: string }, [string]>(`SELECT payload FROM brief_chat_events
+        WHERE turn_id = ? AND json_extract(payload, '$.kind') = 'activity' ORDER BY sequence`).all(turn.turnId);
+      for (const row of rows) {
+        const activity = (JSON.parse(row.payload) as Extract<BriefChatPayload, { kind: 'activity' }>).activity;
+        if (activity.kind && activity.order) latest.set(activity.activityId, activity);
+      }
+      const events: BriefChatEvent[] = [];
+      for (const activity of latest.values()) if (activity.phase === 'started') events.push(this.append(turn, {
+        kind: 'activity', activity: { ...activity, phase: 'failed', summary: state === 'cancelled' ? 'Activity stopped.' : 'Activity ended without a completion result.' },
+      }));
       this.db.run('UPDATE brief_chat_turns SET state = ?, finished_at = ? WHERE turn_id = ?', [state, Date.now(), turn.turnId]);
-      return this.append(turn, { kind: 'terminal', state, ...(error ? { error } : {}) });
+      events.push(this.append(turn, { kind: 'terminal', state, ...(error ? { error } : {}) }));
+      return events;
     })();
   }
 

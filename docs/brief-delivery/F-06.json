@@ -1,0 +1,112 @@
+{
+  "task": "F-06",
+  "title": "Expose safe, typed visible progress",
+  "date": "2026-10-06",
+  "branch": "brief/f-06",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-06",
+  "baseline": "f98cd312ca0b450bb5180320fc8c0491757cae67",
+  "baseline_ref": "origin/brief/f-05",
+  "main_checked": "abb14deb59f1ca3a84227be9a2035687b29dea34",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-06.json"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:212",
+    "visual_check": "not_applicable: F-06 owns producer and adapter; D-15 owns rendering"
+  },
+  "status": {
+    "merge": "not_merged",
+    "release_enabled": false,
+    "publication": "Stacked PR against brief/f-05; exact head and remote checks are recorded in its description."
+  },
+  "dependencies": {
+    "roadmap_merge_after": ["F-01"],
+    "roadmap_enable_after": ["F-03"],
+    "implementation_uses": ["F-01", "F-02", "F-03", "F-04"],
+    "stack_base": "F-05",
+    "reason": "Owner-approved unmerged stack supersedes origin/main start. The producer uses F-03 transport/replay and the browser adapter uses F-04 state. F-05 is the stack parent, not a requirement to enable attachments. D-15 owns rendering."
+  },
+  "activation": {
+    "capability": "chatProgress",
+    "flags": ["JARVIS_BRIEF_CONVERSATIONS=1", "JARVIS_BRIEF_CHAT_TRANSPORT=1", "JARVIS_BRIEF_CHAT_PROGRESS=1"],
+    "browser_flag": "JARVIS_BRIEF_CHAT_STATE=1",
+    "default": "off",
+    "readiness": "Actual live transport provider plus enabled conversation/chatTransport dependencies; gate captured at turn admission."
+  },
+  "implementation": [
+    "Optional asynchronous execution observations for real tool dispatch, sub-agent lifecycle and scoped task broadcasts; disabled contexts and concurrent turns remain isolated.",
+    "Bounded fixed-label projection with host UUIDs, immutable order and phases, optional canonical goal/fact/run references, and no arbitrary source prose or full tool arguments.",
+    "Durable existing conversation events; atomic unfinished-activity settlement and terminal answer on completion, cancellation or restart.",
+    "Browser capability discovery, stable ordered rows, terminal immutability and explicit non-live replay metadata for D-15. No production rendering changes."
+  ],
+  "acceptance": [
+    {
+      "check": "Sensitive arguments, fake errors and malicious source text cannot leak into labels",
+      "status": "passed",
+      "evidence": "Projection canaries, prototype-like names, actual registry and AgentService failure, authenticated WebSocket bridge, canonical record content exclusion."
+    },
+    {
+      "check": "Completed activities remain still and ordered across rehydration",
+      "status": "passed",
+      "evidence": "More-than-one-page replay yields identical final rows and terminal answer; delayed starts and duplicate terminals preserve first position; all restored rows have live=false. D-15 must consume this metadata."
+    },
+    {
+      "check": "No cross-conversation events or false success after cancellation/restart",
+      "status": "passed",
+      "evidence": "Interleaved actual tools, late completion after cancellation, disk database restart, idempotent recovery, tool failure distinct from successful explanatory answer."
+    },
+    {
+      "check": "Progress is opt-in and cannot alter execution effects",
+      "status": "passed",
+      "evidence": "Enabled/provider matrix, nested disabled and concurrent observer isolation, observer exceptions preserve exact tool return/throw and execution count."
+    }
+  ],
+  "verification": {
+    "focused": {
+      "command": "bun test src/brief/progress.test.ts src/brief/progress-transport.test.ts src/actions/progress-context.test.ts src/daemon/agent-service-progress.test.ts src/daemon/ws-service-conversation.test.ts src/agents/sub-agent-runner.test.ts ui/src/brief/chat/store.test.ts",
+      "passed": 57,
+      "failed": 0,
+      "assertions": 407,
+      "files": 7,
+      "log": "docs/brief-delivery/evidence/F-06/focused.log"
+    },
+    "affected": {
+      "command_file": "docs/brief-delivery/evidence/F-06/affected-command.txt",
+      "passed": 414,
+      "failed": 0,
+      "assertions": 3459,
+      "files": 41,
+      "log": "docs/brief-delivery/evidence/F-06/affected.log"
+    },
+    "mutations": {
+      "rejected": 5,
+      "total": 5,
+      "sources_restored": true,
+      "evidence": "docs/brief-delivery/evidence/F-06/mutations.json"
+    },
+    "typescript": "passed: bun x tsc --noEmit",
+    "ui_build": "passed: bun run build:ui; existing @theme/@tailwind warnings",
+    "browser_bundle": "passed: bun build ui/src/brief/chat/provider.tsx --target=browser; 16 modules, no server runtime imports",
+    "guards": "Normal pre-commit hook required; result recorded in PR description.",
+    "full_suite": "Remote CI result reported separately against exact pushed head; not inferred from affected tests."
+  },
+  "manual_checks": {
+    "main_and_open_prs": "Fetched main and open PRs before implementation; no competing F-06 progress implementation found. F-05 exact dependency head passed its full CI.",
+    "visual": "No rendering changes; no screenshot claimed. D-15 owns actual motion verification.",
+    "external_effects": "Isolated fixtures only. No real models, user records, screenshots, desktop effects, daemon activation or deployment."
+  },
+  "limitations": [
+    "Activity admission is bounded to 128 per turn. Overflow observations are omitted while admitted rows can still finish.",
+    "Progress is best-effort under storage/observer failure and does not replace the execution audit ledger.",
+    "Known returned failure conventions are recognized; a normal return is not a business-outcome guarantee.",
+    "Optional references require explicit trusted producer IDs; they are not inferred from arbitrary tool arguments or results.",
+    "Agent pause or exhaustion maps to failed because the contract has only started/completed/failed.",
+    "Source data already in model answer text is outside the fixed-label progress projector.",
+    "Production UI mounting, presentation, interaction and motion remain D-line work. F-07 is not implemented."
+  ],
+  "rollback": "Disable chatProgress and its future D-15 presentation, preserve historical additive events, and never replay accepted turns or delete user content.",
+  "quick_verification": "docs/brief-chat-progress.md",
+  "next_task": "F-07 not started"
+}

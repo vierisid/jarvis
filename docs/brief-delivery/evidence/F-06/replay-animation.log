@@ -1,0 +1,51 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/store.test.ts:
+29 |   const rows = orderedActivities(store.getSnapshot().conversations.a!);
+30 |   expect(rows.map(row => [row.activityId, row.phase, row.firstSequence, row.live])).toEqual([
+31 |     ['first', 'failed', 1, false], ['second', 'started', 2, true],
+32 |   ]);
+33 |   store.applySnapshot(snapshot(4, '', [activity(1, 'first', 'started'), activity(2, 'second', 'started'), activity(3, 'first', 'failed')]));
+34 |   expect(orderedActivities(store.getSnapshot().conversations.a!).map(row => [row.activityId, row.phase, row.live])).toEqual([
+                                                                                                                         ^
+error: expect(received).toEqual(expected)
+
+  [
+    [
+      "first",
+      "failed",
+      false,
+    ],
+    [
+      "second",
+      "started",
+-     false,
++     true,
+    ],
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/ui/src/brief/chat/store.test.ts:34:117)
+(fail) activity rows retain their first position and final phase across delayed starts and reconnect [2.43ms]
+(pass) canonical event consumes attachments in a stale window and prevents resurrection [0.80ms]
+(pass) canonical snapshot-message consumes attachments in a stale window and prevents resurrection [0.80ms]
+(pass) canonical snapshot-turn consumes attachments in a stale window and prevents resurrection [0.47ms]
+(pass) canonical history consumes attachments in a stale window and prevents resurrection [0.40ms]
+(pass) out-of-order and duplicate events reconstruct ordered text and never regress a terminal turn [0.28ms]
+(pass) canonical snapshots do not double replay text, regress newer text or reset consumed history [0.28ms]
+(pass) late history fills missing IDs without overwriting live output or selected conversation [0.16ms]
+(pass) activity and approval transitions are scoped, deduplicated and monotonic [0.25ms]
+(pass) draft, attachment references, scroll and unread survive reload, with workspace isolation [0.43ms]
+(pass) unread is per answer, remains while the panel is hidden, and clears only for the viewed chat [0.14ms]
+(pass) corrupt or quota-limited storage leaves chat usable and reports failed persistence [0.29ms]
+(pass) compacting a stream retains older locally received messages outside the snapshot tail [0.17ms]
+(pass) other windows cannot overwrite a saved draft or attachment by scrolling or receiving events [0.43ms]
+(pass) legacy drafts remain readable while new field writes preserve concurrent edits [0.30ms]
+(pass) replayed failure stays scoped and does not replace a later successful turn [0.21ms]
+
+ 15 pass
+ 1 fail
+ 64 expect() calls
+Ran 16 tests across 1 file. [28.00ms]

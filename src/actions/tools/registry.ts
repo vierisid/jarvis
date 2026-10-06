@@ -3,6 +3,7 @@ import type { ReviewedExecution } from './reviewed-call-scope.ts';
 import { checkpointExecution } from '../execution-scope.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
+import { observeToolExecution } from '../progress-context.ts';
 
 export type ToolParameter = {
   type: string;
@@ -226,7 +227,7 @@ export class ToolRegistry {
     checkpointExecution();
 
     try {
-      return await tool.execute(params);
+      return await observeToolExecution(name, () => tool.execute(params));
     } catch (error) {
       if (error instanceof ActionOutcomeError) throw error;
       // #630. The fence above is NOT the only place cancellation is raised, and

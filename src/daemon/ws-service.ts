@@ -68,6 +68,7 @@ import { roomActionTargetKind } from './room-action-targets.ts';
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
+import { reportExecutionActivity } from '../actions/progress-context.ts';
 
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
@@ -1119,7 +1120,8 @@ export class WebSocketService implements Service {
   }): void {
     const turn = currentBriefTurn();
     if (turn) {
-      turn.progress(event.type === 'task_started' ? 'started' : event.type === 'task_completed' ? 'completed' : 'failed');
+      const phase = event.type === 'task_started' ? 'started' : event.type === 'task_completed' ? 'completed' : 'failed';
+      if (!reportExecutionActivity({ kind: 'task', executionId: event.task_id, phase })) turn.progress(phase);
       return;
     }
     const message: WSMessage = {

@@ -1,0 +1,105 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/progress.test.ts:
+ 5 | test('one stable row advances once, ignores duplicate/late starts, and never interpolates source text', () => {
+ 6 |   const projector = new BriefProgressProjector();
+ 7 |   const event = { kind: 'tool', executionId: 'PRIVATE EXECUTION ID', phase: 'started', toolName: 'read_file',
+ 8 |     arguments: { token: 'PRIVATE ARGUMENT' }, summary: 'PRIVATE CHAIN OF THOUGHT', error: 'PRIVATE ERROR' } as const;
+ 9 |   const start = projector.project(event)!;
+10 |   expect(start).toMatchObject({ kind: 'tool', order: 1, phase: 'started', summary: 'Reading a file.', refs: [] });
+                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "activityId": "bae86ae5-f217-4081-84eb-8bfa3062a9cc",
+    "kind": "tool",
+    "order": 1,
+    "phase": "started",
+    "refs": [],
+-   "summary": "Reading a file.",
++   "summary": "PRIVATE EXECUTION ID",
+  }
+
+- Expected  - 1
++ Received  + 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress.test.ts:10:17)
+(fail) one stable row advances once, ignores duplicate/late starts, and never interpolates source text [3.55ms]
+18 | });
+19 |
+20 | test.each(['__proto__', 'constructor', '<img src=x onerror=SECRET>', 'Bearer SECRET', 'read_file\nSECRET'])('unknown tool name %s gets only fixed generic labels', toolName => {
+21 |   const projector = new BriefProgressProjector();
+22 |   const start = projector.project({ kind: 'tool', executionId: 'id', phase: 'started', toolName })!;
+23 |   expect(start.summary).toBe('Running a tool.');
+                             ^
+error: expect(received).toBe(expected)
+
+Expected: "Running a tool."
+Received: "id"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress.test.ts:23:25)
+(fail) unknown tool name __proto__ gets only fixed generic labels [0.15ms]
+18 | });
+19 |
+20 | test.each(['__proto__', 'constructor', '<img src=x onerror=SECRET>', 'Bearer SECRET', 'read_file\nSECRET'])('unknown tool name %s gets only fixed generic labels', toolName => {
+21 |   const projector = new BriefProgressProjector();
+22 |   const start = projector.project({ kind: 'tool', executionId: 'id', phase: 'started', toolName })!;
+23 |   expect(start.summary).toBe('Running a tool.');
+                             ^
+error: expect(received).toBe(expected)
+
+Expected: "Running a tool."
+Received: "id"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress.test.ts:23:25)
+(fail) unknown tool name constructor gets only fixed generic labels [0.07ms]
+18 | });
+19 |
+20 | test.each(['__proto__', 'constructor', '<img src=x onerror=SECRET>', 'Bearer SECRET', 'read_file\nSECRET'])('unknown tool name %s gets only fixed generic labels', toolName => {
+21 |   const projector = new BriefProgressProjector();
+22 |   const start = projector.project({ kind: 'tool', executionId: 'id', phase: 'started', toolName })!;
+23 |   expect(start.summary).toBe('Running a tool.');
+                             ^
+error: expect(received).toBe(expected)
+
+Expected: "Running a tool."
+Received: "id"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress.test.ts:23:25)
+(fail) unknown tool name <img src=x onerror=SECRET> gets only fixed generic labels [0.07ms]
+18 | });
+19 |
+20 | test.each(['__proto__', 'constructor', '<img src=x onerror=SECRET>', 'Bearer SECRET', 'read_file\nSECRET'])('unknown tool name %s gets only fixed generic labels', toolName => {
+21 |   const projector = new BriefProgressProjector();
+22 |   const start = projector.project({ kind: 'tool', executionId: 'id', phase: 'started', toolName })!;
+23 |   expect(start.summary).toBe('Running a tool.');
+                             ^
+error: expect(received).toBe(expected)
+
+Expected: "Running a tool."
+Received: "id"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress.test.ts:23:25)
+(fail) unknown tool name Bearer SECRET gets only fixed generic labels [0.06ms]
+18 | });
+19 |
+20 | test.each(['__proto__', 'constructor', '<img src=x onerror=SECRET>', 'Bearer SECRET', 'read_file\nSECRET'])('unknown tool name %s gets only fixed generic labels', toolName => {
+21 |   const projector = new BriefProgressProjector();
+22 |   const start = projector.project({ kind: 'tool', executionId: 'id', phase: 'started', toolName })!;
+23 |   expect(start.summary).toBe('Running a tool.');
+                             ^
+error: expect(received).toBe(expected)
+
+Expected: "Running a tool."
+Received: "id"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/brief/progress.test.ts:23:25)
+(fail) unknown tool name read_file
+SECRET gets only fixed generic labels [0.08ms]
+(pass) references require a canonical lookup and never copy supplied revisions or unknown kinds [0.26ms]
+(pass) activity count is bounded while admitted rows can still finish [0.71ms]
+
+ 2 pass
+ 6 fail
+ 142 expect() calls
+Ran 8 tests across 1 file. [23.00ms]
