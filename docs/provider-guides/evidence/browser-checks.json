@@ -1,0 +1,160 @@
+{
+  "results": [
+    "ollama: guide, clipboard, keyboard trap, Escape, focus return, draft preservation",
+    "omniroute: guide, clipboard, keyboard trap, Escape, focus return, draft preservation",
+    "litellm: guide, clipboard, keyboard trap, Escape, focus return, draft preservation",
+    "openai_compatible: guide, clipboard, keyboard trap, Escape, focus return, draft preservation"
+  ],
+  "matrix": [
+    {
+      "theme": "light",
+      "width": 1440,
+      "provider": "ollama",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "provider": "omniroute",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "provider": "litellm",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 1440,
+      "provider": "openai_compatible",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 820,
+      "provider": "ollama",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 820,
+      "provider": "omniroute",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 820,
+      "provider": "litellm",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 820,
+      "provider": "openai_compatible",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "provider": "ollama",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "provider": "omniroute",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "provider": "litellm",
+      "fits": true
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "provider": "openai_compatible",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "provider": "ollama",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "provider": "omniroute",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "provider": "litellm",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "provider": "openai_compatible",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 820,
+      "provider": "ollama",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 820,
+      "provider": "omniroute",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 820,
+      "provider": "litellm",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 820,
+      "provider": "openai_compatible",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "provider": "ollama",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "provider": "omniroute",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "provider": "litellm",
+      "fits": true
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "provider": "openai_compatible",
+      "fits": true
+    }
+  ],
+  "repeatedDismissal": "10 backdrop closes under reduced motion with focus and scroll restoration",
+  "mobile": "All four at 390 x 844, no dialog overflow",
+  "settings": "All four new and saved providers; keyless testing enabled",
+  "authentication": "LiteLLM and compatible onboarding tested with and without fixture key",
+  "api": "Isolated fixtures, no live provider/model calls",
+  "errors": []
+}
