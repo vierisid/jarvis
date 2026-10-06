@@ -89,6 +89,22 @@ test('an uncertain response can be recovered by requestId and changed specificat
   await p.idle(); expect(count('flow')).toBe(1); expect(p.list('unknown')).toEqual([]);
 });
 
+test('job receipts and later composition prompts never forward captured workflow output', async () => {
+  const canary = 'UNTRUSTED_CAPTURE_ONLY', prompts: string[] = [];
+  const p = provider({ async chat({ prompt }) { prompts.push(prompt); return { text: valid }; } });
+  const first = p.submit(input).job; await p.idle(); const ready = p.get(first.jobId);
+  const captures = { report: { output: canary } };
+  getWorkflowDb().run('UPDATE flow_version SET sample_data = ? WHERE id = ?', [JSON.stringify(captures), ready.workflow!.versionId]);
+  expect(getFlowVersion(ready.workflow!.versionId)!.sampleData).toEqual(captures);
+  expect(p.get(first.jobId).workflow).toEqual({ flowId: ready.workflow!.flowId, versionId: ready.workflow!.versionId });
+  expect(JSON.stringify(p.get(first.jobId))).not.toContain(canary);
+  expect(JSON.stringify(p.list())).not.toContain(canary);
+  expect(p.submit(input).job).toEqual(ready); await p.idle(); expect(prompts).toHaveLength(1);
+  const second = p.submit({ ...input, requestId: 'another-composition' }).job; await p.idle();
+  expect(p.get(second.jobId).state).toBe('draft_ready'); expect(prompts).toHaveLength(2);
+  for (const prompt of prompts) expect(prompt).not.toContain(canary);
+});
+
 test('repair retains the exact specification and exposes candidate count without candidate contents', async () => {
   let calls = 0; const p = provider({ async chat({ prompt }) {
     expect(prompt).toContain(JSON.stringify(input.prompt));
