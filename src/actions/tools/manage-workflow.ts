@@ -26,6 +26,7 @@ import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts"
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { ComposerLlmClient } from "./workflow-composer.ts";
 import { composePersistedFlow } from "./persisted-workflow-composer.ts";
+import type { JobContract } from "./job-contract.ts";
 
 /**
  * Minimal tool-registry shape the composer surfaces in its planner prompt.
@@ -279,6 +280,15 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           '(schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ...").',
         required: false,
       },
+      contract: {
+        type: "object",
+        description:
+          "compose only: what the user explicitly stated; the flow is checked against it. trigger {kind: " +
+          "manual|schedule|webhook|event|piece, cron, timezone, eventType, piece, trigger}; sources, outputs: " +
+          "[{notify: {channels}} | {tool, params} | {piece, action, target}]; recipients; forbidden {effects e.g. " +
+          "send_email, pieces, actions, tools, channels, agents}; review. Outputs list every message it may send.",
+        required: false,
+      },
       limit: {
         type: "number",
         description: "Cap for list_runs (default 25).",
@@ -368,7 +378,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           const name = requireString(params, "name");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
-            const composed = await actCompose(name, description, deps, project);
+            const composed = await actCompose(name, description, deps, project, params["contract"]);
             // ACCEPTED COST of one block per action: `note` is repo-authored
             // guidance to the model, and framing the whole return puts it under
             // a preamble that says not to follow instructions inside the block.
@@ -430,7 +440,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project),
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"]),
             "a composed workflow and the composer's text",
           );
         default:
@@ -1050,6 +1060,7 @@ async function actCompose(
   description: string,
   deps: ManageWorkflowDeps,
   project: string,
+  contract?: unknown,
 ): Promise<Record<string, unknown>> {
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
@@ -1093,9 +1104,9 @@ async function actCompose(
     const targets = deps.executionTargets();
     if (targets.length > 0) composeDeps.executionTargets = targets;
   }
-  // The journal goes in the same project as the flow, or the flow's
-  // `compositionRecordId` names a record its own project cannot read.
-  const result = await composePersistedFlow(composeDeps, { name, description }, project);
+  // Keep the flow and its composition journal in the caller's project.
+  // The composer validates the contract and checks every candidate against it.
+  const result = await composePersistedFlow(composeDeps, { name, description, ...(contract !== undefined ? { contract: contract as JobContract } : {}) }, project);
 
   if (!result.ok) {
     return {
@@ -1124,6 +1135,8 @@ async function actCompose(
     flow: summarizeFlow(getFlow(flow.id) ?? flow),
     versionId: version.id,
     compositionRecordId: result.compositionRecordId,
+    // What the contract check proved, and what the user must still confirm before publishing.
+    ...(result.contract ? { contract: result.contract } : {}),
   };
 }
 
