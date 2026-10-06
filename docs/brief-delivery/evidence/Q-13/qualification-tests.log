@@ -1,0 +1,30 @@
+$ bun test --preload ./src/test-preload.ts src/awareness/prepared-qualification.test.ts src/awareness/prepared-dry-run.test.ts src/workflows/adapters/untrusted-reach.test.ts
+bun test v1.4.2 (744846f84)
+
+src/awareness/prepared-dry-run.test.ts:
+[engine 0c9b2ae0 stderr] (node:480628) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 8fda127c stderr] (node:480660) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine db0c990a stderr] (node:480692) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 16992200 stderr] (node:480731) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+[engine 16992200 stderr] (Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 504d4cfa stderr] (node:480763) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 8b621997 stderr] (node:480795) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine fd1146c9 stderr] (node:480827) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+
+src/awareness/prepared-qualification.test.ts:
+
+ 41 pass
+ 0 fail
+ 247 expect() calls
+Ran 41 tests across 3 files. [17.96s]
+
+$ bun test --preload ./src/test-preload.ts src/workflows/runtime/bounded-tools.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/governed-pieces.test.ts src/workflows/runtime/workflow-skill-effect.test.ts
+ 207 pass
+ 0 fail
+Ran 207 tests across 5 files. [55.17s]

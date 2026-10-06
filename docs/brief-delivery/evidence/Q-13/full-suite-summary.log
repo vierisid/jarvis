@@ -1,0 +1,32 @@
+Full suite on brief/q-13 at 0dc04964 (local WSL2)
+$ bun test --preload ./src/test-preload.ts
+ 7769 pass
+ 85 skip
+ 7 fail
+ 55555 expect() calls
+Ran 7861 tests across 425 files. [850.21s]
+
+Failures:
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [97.09ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [5000.37ms]
+(fail) browser primitives (integration) > (unnamed) [618.72ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [552.21ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [559.34ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [522.99ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [551.45ms]
+
+Baseline: the same test files on brief/foundations 462d955d with Q-13 stashed
+$ bun test --preload ./src/test-preload.ts src/sites/git-config-lint.test.ts src/workflows/runner/engine-runtime/engine-reaper.test.ts src/actions/browser/browser-local-files.test.ts src/actions/browser/browser-primitives.test.ts src/actions/browser/fixtures/headless-chromium.test.ts src/actions/browser/page-writable-element-refs.test.ts src/actions/tools/browser-template-delivery.test.ts
+ 358 pass
+ 9 fail
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [50.22ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [314.68ms]
+(fail) browser primitives (integration) > (unnamed) [313.70ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [327.06ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [340.28ms]
+(fail) end to end, against a real process > reaps an engine whose owner really did die [56.04ms]
+(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [179.09ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [318.29ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [371.85ms]
+
+All 7 failures also fail on the baseline: git config lint and Chromium launch tests on this machine. Q-13 changes none of those areas. The two engine-reaper tests that failed in earlier local runs passed here.

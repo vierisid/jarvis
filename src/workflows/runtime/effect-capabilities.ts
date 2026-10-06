@@ -225,11 +225,16 @@ function gatedCapability(tool: ToolDefinition, params: Record<string, unknown>) 
   };
 }
 
-function boundedTarget(tool: string, params: Record<string, unknown>): Record<string, unknown> {
-  const capability: SidecarCapability = tool.includes('file') || tool === 'list_directory' ? 'filesystem'
+/** The capability a bounded tool needs on the machine it runs on; dispatch checks it. */
+export function boundedToolCapability(tool: string): SidecarCapability {
+  return tool.includes('file') || tool === 'list_directory' ? 'filesystem'
     : tool.includes('clipboard') ? 'clipboard' : tool === 'get_system_info' ? 'system_info'
     : tool === 'capture_screen' || tool === 'desktop_screenshot' ? 'screenshot'
     : tool.startsWith('browser_') ? 'browser' : 'desktop';
+}
+
+function boundedTarget(tool: string, params: Record<string, unknown>): Record<string, unknown> {
+  const capability = boundedToolCapability(tool);
   const scope = getMachineScope();
   const selector = scope ? scope.resolveTarget(params.target, capability)
     : typeof params.target === 'string' && params.target.trim() ? params.target : autoTargetForCapability(capability);
