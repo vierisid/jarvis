@@ -1,4 +1,4 @@
-import { claimCompositionLease, recoverCompositionLeases } from './composition-leases';
+import { claimOpportunityComposition, claimCompositionLease, recoverCompositionLeases } from './composition-leases';
 import { getDb } from '../vault/schema.ts';
 import { createFlow } from '../workflows/db/repos/flow.ts';
 import { createDraftVersion } from '../workflows/db/repos/flow-version.ts';
@@ -27,6 +27,7 @@ export function attachSuggestionDraft(job: CompositionRow, result: Extract<Compo
   return getDb().transaction(() => {
     const current = getDb().query<CompositionRow, [string]>('SELECT * FROM suggestion_composition_jobs WHERE id = ?').get(job.id);
     if (!current || current.state !== 'running' || current.lease_token !== job.lease_token || current.lease_until <= Date.now()) return false;
+    if (!claimOpportunityComposition(getDb(), job.suggestion_id, 'legacy', job.id)) return false;
     if (canonicalSuggestion(job.suggestion_id).dismissed) {
       failSuggestionComposition(job, 'Suggestion was dismissed during composition. No draft was created.');
       return false;
@@ -88,6 +89,7 @@ export class SuggestionComposer {
       this.active = active;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        if (!claimOpportunityComposition(getDb(), job.suggestion_id, 'legacy', job.id)) throw new Error('Another composition owns this opportunity.');
         if (canonicalSuggestion(job.suggestion_id).dismissed) throw new Error('Suggestion was dismissed. No draft was created.');
         const request = JSON.parse(job.request) as CompositionRequest;
         const result = await Promise.race([

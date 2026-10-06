@@ -122,5 +122,62 @@
   ],
   "rollback": "Unset the flag and restart; preserve additive tables, journals, history and disabled workflows. No down-migration, deletion or replay.",
   "guide": "docs/brief-prepared-opportunities.md",
-  "next_task": "F-10 not started"
+  "next_task": "F-10 not started",
+  "review_corrections": {
+    "reviewed_head": "e54c65625f4737087152a1306112f308c6054d5b",
+    "findings": [
+      {
+        "id": "R1",
+        "change": "Shared durable opportunity owner, enforced in both entry/retry paths, lease claims and attachments. Old mixed queues resolve by earliest eligible retained request; setup-only blockers own no work."
+      },
+      {
+        "id": "R2",
+        "change": "Application-authored public blockers, including read-time sanitization of pre-upgrade error text. Provider and parse diagnostics remain in the linked journal."
+      },
+      {
+        "id": "R3",
+        "change": "Bind composition journal inside journal creation transaction before inference; retain link on failure, timeout, dismissal, shutdown and rollback, and archive it on retry."
+      },
+      {
+        "id": "R4",
+        "change": "Distinct workflow_missing and workflow_version_missing recovery blockers, separate from unavailable Q13 qualification."
+      }
+    ],
+    "additional_ci_fix": "Reviewed-head CI passed 8090 tests, skipped 32 and failed the capability-reader inventory. Recorded the F09 daemon projection in the explicit reader allowlist and shared predicate documentation; it carries unavailable names to Q13 and adds no routing predicate.",
+    "red": {
+      "log": "docs/brief-delivery/evidence/F-09/review-red.log",
+      "failed_regressions": 15,
+      "passed": 22,
+      "skipped": 1
+    },
+    "affected": {
+      "log": "docs/brief-delivery/evidence/F-09/review-affected.log",
+      "passed": 317,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 2438,
+      "files": 25
+    },
+    "capability_audit": {
+      "red_log": "docs/brief-delivery/evidence/F-09/review-capability-red.log",
+      "log": "docs/brief-delivery/evidence/F-09/review-capability.log",
+      "passed": 19,
+      "failed": 0,
+      "assertions": 637
+    },
+    "q13_integration": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-09/review-q13-integration.log",
+      "passed": 42,
+      "failed": 0,
+      "assertions": 189,
+      "sources_restored": true
+    },
+    "typescript": {
+      "status": "passed",
+      "exit_code": 0,
+      "log": "docs/brief-delivery/evidence/F-09/review-typescript.log"
+    },
+    "publication": "Same PR #766, remains stacked on brief/f-08. Final commit SHA and CI status are recorded in its description."
+  }
 }

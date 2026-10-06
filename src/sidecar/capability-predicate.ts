@@ -104,7 +104,9 @@
  * NOT A COPY: the `unavailable_capabilities?.find(...)` next to copy 6 that
  * reads the entry's `.reason` for an operator-facing error. That asks which
  * reason, not whether; a boolean cannot answer it. Nor are the UI's
- * capability listings, which display rather than route.
+ * capability listings, which display rather than route. F09 in
+ * `src/daemon/index.ts` also carries the unavailable names into Q13 live
+ * qualification facts unchanged; that projection adds no routing predicate.
  */
 
 /**

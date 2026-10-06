@@ -1,0 +1,453 @@
+bun test v1.4.2 (744846f84)
+
+src/awareness/prepared-opportunities.test.ts:
+Database initialized at: /tmp/jarvis-f09-EtVoFI/test.db
+Database initialized at: /tmp/jarvis-f09-EtVoFI/test.db
+(pass) one source creates one exact locked disabled snapshot across processing and restart [2151.63ms]
+Database initialized at: /tmp/jarvis-f09-gdPHYN/test.db
+(pass) dismissal during compose cannot return a visible ready proposal [1778.49ms]
+Database initialized at: /tmp/jarvis-f09-BlsqKz/test.db
+(pass) dismissal during qualify cannot return a visible ready proposal [1246.91ms]
+Database initialized at: /tmp/jarvis-f09-IBuvR6/test.db
+(pass) legacy dismissal prevents draft attachment [1324.52ms]
+Database initialized at: /tmp/jarvis-f09-zbrQOv/test.db
+(pass) ready is withdrawn when goal changes [1027.18ms]
+Database initialized at: /tmp/jarvis-f09-EcfyL4/test.db
+(pass) ready is withdrawn when version changes [1123.92ms]
+Database initialized at: /tmp/jarvis-f09-g6sekz/test.db
+(pass) ready is withdrawn when binding changes [1166.67ms]
+Database initialized at: /tmp/jarvis-f09-N9gbJ9/test.db
+(pass) ready is withdrawn when quality-missing changes [1206.89ms]
+Database initialized at: /tmp/jarvis-f09-8iuHk9/test.db
+(pass) specific missing setup blocks unconfirmed jobs without model calls [782.46ms]
+Database initialized at: /tmp/jarvis-f09-UxtQ7e/test.db
+(pass) specific missing setup blocks unlinked jobs without model calls [896.95ms]
+Database initialized at: /tmp/jarvis-f09-UNYHox/test.db
+(pass) qualification for another snapshot is refused [949.76ms]
+Database initialized at: /tmp/jarvis-f09-rwSfzy/test.db
+(pass) background preparation has a durable daily budget across worker restart [1129.09ms]
+Database initialized at: /tmp/jarvis-f09-Js9nBF/test.db
+(pass) timeout and expired leases are blocked, never automatically recomposed [1027.06ms]
+Database initialized at: /tmp/jarvis-f09-ZnGNNi/test.db
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+(pass) retry archives the previous snapshot and refuses stale or terminal commands [979.19ms]
+Database initialized at: /tmp/jarvis-f09-KrwYh8/test.db
+(pass) sample outputs never reach public preparation data or subsequent model requests [1104.71ms]
+Database initialized at: /tmp/jarvis-f09-Cn65aV/test.db
+(pass) missing optional Q13 compiles and prevents inference and activation [969.46ms]
+Database initialized at: /tmp/jarvis-f09-BrXHSd/test.db
+(pass) API gates, strict writes, concurrency tokens and no-store responses [986.22ms]
+Database initialized at: /tmp/jarvis-f09-TZH80w/test.db
+(pass) a changed confirmed job cannot attach the old composition [908.57ms]
+Database initialized at: /tmp/jarvis-f09-FvtImr/test.db
+194 | 
+195 | test('attachment transaction failure leaves no orphan flow, and explicit retry succeeds', async () => {
+196 |   const s = source(), p = provider();
+197 |   getDb().exec("CREATE TRIGGER reject_prepared_version BEFORE INSERT ON flow_version BEGIN SELECT RAISE(ABORT, 'private failure'); END");
+198 |   const view = await prepared(p, s.id); expect(view.state).toBe('blocked');
+199 |   expect(view.compositionId).not.toBeNull(); expect(getWorkflowComposition(view.compositionId!)!.state).toBe('VALIDATED');
+                                       ^
+error: expect(received).not.toBeNull()
+
+Received: null
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:199:34)
+(fail) attachment transaction failure leaves no orphan flow, and explicit retry succeeds [1176.81ms]
+Database initialized at: /tmp/jarvis-f09-CIEM9l/test.db
+(pass) storage failures withdraw readiness, and recovery fences the abandoned inference [948.01ms]
+Database initialized at: /tmp/jarvis-f09-V3Y9Sl/test.db
+(pass) full queue rejects an explicit retry without losing its saved revision [1322.26ms]
+(skip) real Q13 dry-run qualifies the exact disabled version and blocks missing fixtures
+Database initialized at: /tmp/jarvis-f09-AxRGlX/test.db
+(pass) publishing through another surface cannot leave an approval-eligible proposal [854.55ms]
+Database initialized at: /tmp/jarvis-f09-dLP6NM/test.db
+276 |   const p = provider({ async chat() { calls++; entered.resolve(); await finish.promise; return { text: JSON.stringify(graph()) }; } });
+277 |   const view = p.ensure(s.id);
+278 |   try {
+279 |     if (stage !== 'queued') await entered.promise;
+280 |     if (stage === 'ready') { finish.resolve(); await p.idle(); }
+281 |     expect(() => acceptSuggestion(s.id, acceptance)).toThrow('prepared proposal');
+                                                           ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "prepared proposal"
+
+Received function did not throw
+Received value: {
+  opportunityId: "c20771d8-d535-4f66-a550-2dd0766eabeb",
+  type: "automation",
+  title: "Review invoices",
+  body: "Observed invoice review",
+  status: "accepted",
+  observations: [
+    {
+      captureId: "capture-one",
+      observedAt: 1,
+      app: "Mail",
+      cue: "unpaid invoices",
+    }
+  ],
+  goalLink: null,
+  feedback: [
+    {
+      id: "3570e326-cf1c-46d1-894e-4be86d9c6a20",
+      kind: "accept",
+      reason: "Prepare the invoice review",
+      created_at: 1791307061173,
+    }
+  ],
+  composition: {
+    id: "58c1a128-3447-461d-bd23-b9f1f335ec9d",
+    state: "queued",
+    attempts: 0,
+    error: null,
+    request: {
+      name: "Invoice review",
+      description: "Review unpaid invoices",
+      expectedOutcome: "A list for review",
+      goalLink: null,
+      observations: [
+        {
+          captureId: "capture-one",
+          observedAt: 1,
+          app: "Mail",
+          cue: "unpaid invoices",
+        }
+      ],
+    },
+    workflowId: null,
+    workflowVersionId: null,
+    draftAvailable: null,
+    createdAt: 1791307061173,
+    updatedAt: 1791307061173,
+  },
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:281:54)
+(fail) shared ownership rejects legacy acceptance when F09 is queued [1051.42ms]
+Database initialized at: /tmp/jarvis-f09-P58ltl/test.db
+276 |   const p = provider({ async chat() { calls++; entered.resolve(); await finish.promise; return { text: JSON.stringify(graph()) }; } });
+277 |   const view = p.ensure(s.id);
+278 |   try {
+279 |     if (stage !== 'queued') await entered.promise;
+280 |     if (stage === 'ready') { finish.resolve(); await p.idle(); }
+281 |     expect(() => acceptSuggestion(s.id, acceptance)).toThrow('prepared proposal');
+                                                           ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "prepared proposal"
+
+Received function did not throw
+Received value: {
+  opportunityId: "4a2ecbc6-41d6-4072-9dea-0a07e51cd69c",
+  type: "automation",
+  title: "Review invoices",
+  body: "Observed invoice review",
+  status: "accepted",
+  observations: [
+    {
+      captureId: "capture-one",
+      observedAt: 1,
+      app: "Mail",
+      cue: "unpaid invoices",
+    }
+  ],
+  goalLink: null,
+  feedback: [
+    {
+      id: "114b80a8-9c1f-435f-ba2e-95ace399f702",
+      kind: "accept",
+      reason: "Prepare the invoice review",
+      created_at: 1791307062225,
+    }
+  ],
+  composition: {
+    id: "3bfd802b-fa33-4792-9908-78a5a7c26456",
+    state: "queued",
+    attempts: 0,
+    error: null,
+    request: {
+      name: "Invoice review",
+      description: "Review unpaid invoices",
+      expectedOutcome: "A list for review",
+      goalLink: null,
+      observations: [
+        {
+          captureId: "capture-one",
+          observedAt: 1,
+          app: "Mail",
+          cue: "unpaid invoices",
+        }
+      ],
+    },
+    workflowId: null,
+    workflowVersionId: null,
+    draftAvailable: null,
+    createdAt: 1791307062225,
+    updatedAt: 1791307062225,
+  },
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:281:54)
+(fail) shared ownership rejects legacy acceptance when F09 is running [1034.47ms]
+Database initialized at: /tmp/jarvis-f09-yCLQqd/test.db
+276 |   const p = provider({ async chat() { calls++; entered.resolve(); await finish.promise; return { text: JSON.stringify(graph()) }; } });
+277 |   const view = p.ensure(s.id);
+278 |   try {
+279 |     if (stage !== 'queued') await entered.promise;
+280 |     if (stage === 'ready') { finish.resolve(); await p.idle(); }
+281 |     expect(() => acceptSuggestion(s.id, acceptance)).toThrow('prepared proposal');
+                                                           ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "prepared proposal"
+
+Received function did not throw
+Received value: {
+  opportunityId: "82cec8a4-d6c4-4b51-82a3-73501b82c1bb",
+  type: "automation",
+  title: "Review invoices",
+  body: "Observed invoice review",
+  status: "accepted",
+  observations: [
+    {
+      captureId: "capture-one",
+      observedAt: 1,
+      app: "Mail",
+      cue: "unpaid invoices",
+    }
+  ],
+  goalLink: null,
+  feedback: [
+    {
+      id: "b9810efe-e0ca-485f-9b70-e4b1a6bb6313",
+      kind: "accept",
+      reason: "Prepare the invoice review",
+      created_at: 1791307063551,
+    }
+  ],
+  composition: {
+    id: "8de805d4-4507-4f53-badf-51d8d30a63da",
+    state: "queued",
+    attempts: 0,
+    error: null,
+    request: {
+      name: "Invoice review",
+      description: "Review unpaid invoices",
+      expectedOutcome: "A list for review",
+      goalLink: null,
+      observations: [
+        {
+          captureId: "capture-one",
+          observedAt: 1,
+          app: "Mail",
+          cue: "unpaid invoices",
+        }
+      ],
+    },
+    workflowId: null,
+    workflowVersionId: null,
+    draftAvailable: null,
+    createdAt: 1791307063551,
+    updatedAt: 1791307063551,
+  },
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:281:54)
+(fail) shared ownership rejects legacy acceptance when F09 is ready [1300.20ms]
+Database initialized at: /tmp/jarvis-f09-eiuEgm/test.db
+(pass) legacy ownership survives a blocked F09 row and permits legacy retry [917.94ms]
+Database initialized at: /tmp/jarvis-f09-fKHgib/test.db
+309 |   getDb().run('UPDATE suggestion_composition_jobs SET created_at = 2 WHERE suggestion_id = ?', [s.id]);
+310 |   if (getDb().query("SELECT 1 FROM sqlite_master WHERE name = 'opportunity_composition_owners'").get()) getDb().run('DELETE FROM opportunity_composition_owners');
+311 |   const legacy = new SuggestionComposer(async () => { legacyCalls++; return { ok: true, flow: graph() as any, attempts: 1 }; });
+312 |   legacy.start(); p.kick();
+313 |   try { await Promise.all([legacy.idle(), p.idle()]); } finally { legacy.stop(); }
+314 |   expect(preparedCalls).toBe(winner === 'prepared' ? 1 : 0); expect(legacyCalls).toBe(winner === 'legacy' ? 1 : 0);
+                                                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:314:82)
+(fail) old mixed queues reserve the prepared owner before either inference [1207.60ms]
+Database initialized at: /tmp/jarvis-f09-DlTF8a/test.db
+309 |   getDb().run('UPDATE suggestion_composition_jobs SET created_at = 2 WHERE suggestion_id = ?', [s.id]);
+310 |   if (getDb().query("SELECT 1 FROM sqlite_master WHERE name = 'opportunity_composition_owners'").get()) getDb().run('DELETE FROM opportunity_composition_owners');
+311 |   const legacy = new SuggestionComposer(async () => { legacyCalls++; return { ok: true, flow: graph() as any, attempts: 1 }; });
+312 |   legacy.start(); p.kick();
+313 |   try { await Promise.all([legacy.idle(), p.idle()]); } finally { legacy.stop(); }
+314 |   expect(preparedCalls).toBe(winner === 'prepared' ? 1 : 0); expect(legacyCalls).toBe(winner === 'legacy' ? 1 : 0);
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:314:25)
+(fail) old mixed queues reserve the legacy owner before either inference [1367.45ms]
+Database initialized at: /tmp/jarvis-f09-A1sWoQ/test.db
+316 | });
+317 | 
+318 | for (const failure of ['provider', 'model'] as const) test(`private ${failure} diagnostics stay in the linked journal`, async () => {
+319 |   const p = provider({ async chat() { if (failure === 'provider') throw Error('PRIVATE PROVIDER DIAGNOSTIC'); return { text: '{PRIVATE MODEL RESPONSE' }; } });
+320 |   const view = await prepared(p, source().id);
+321 |   expect(JSON.stringify(view)).not.toContain('PRIVATE'); expect(view.state).toBe('blocked');
+                                         ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "PRIVATE"
+Received: "{\"proposalId\":\"b1768938-6184-4857-9f7a-0f775f7cd9e1\",\"opportunityId\":\"0a5d8846-e32c-4fdb-856d-363db5d30fdf\",\"revision\":\"a53eaf3b-538e-4706-8875-28fe47b80cd5\",\"title\":\"Review invoices\",\"specification\":{\"opportunityId\":\"0a5d8846-e32c-4fdb-856d-363db5d30fdf\",\"sourceRevision\":\"f528a209adc70462d3a0dc2dfa9e6bd8375baa7e32a1da60d6522976c6887556\",\"kind\":\"invoice_review\",\"name\":\"Review invoices\",\"description\":\"Review invoices\",\"expectedOutcome\":\"A checked list of unpaid invoices and draft follow-ups for approval.\",\"evidence\":[{\"kind\":\"observation\",\"id\":\"capture-one\",\"revision\":\"1\"}],\"goal\":{\"goalId\":\"4b7374f5-7cff-41b5-b9cc-64515b16606c\",\"revision\":\"1791307066971\",\"rationale\":\"These invoices support this goal\"},\"confirmed\":true,\"customConstraints\":false},\"evidence\":[{\"kind\":\"observation\",\"id\":\"capture-one\",\"revision\":\"1\"}],\"goal\":{\"goalId\":\"4b7374f5-7cff-41b5-b9cc-64515b16606c\",\"revision\":\"1791307066971\",\"rationale\":\"These invoices support this goal\"},\"compositionId\":null,\"workflow\":null,\"bindings\":[],\"previewBasis\":null,\"state\":\"blocked\",\"readiness\":{\"state\":\"blocked\",\"checkedAt\":null},\"blockers\":[{\"code\":\"preparation\",\"message\":\"LLM call failed: PRIVATE PROVIDER DIAGNOSTIC\"}],\"canApprove\":false}"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:321:36)
+(fail) private provider diagnostics stay in the linked journal [953.96ms]
+Database initialized at: /tmp/jarvis-f09-pXIkXv/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 2 exhausted (response was not valid JSON: JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+316 | });
+317 | 
+318 | for (const failure of ['provider', 'model'] as const) test(`private ${failure} diagnostics stay in the linked journal`, async () => {
+319 |   const p = provider({ async chat() { if (failure === 'provider') throw Error('PRIVATE PROVIDER DIAGNOSTIC'); return { text: '{PRIVATE MODEL RESPONSE' }; } });
+320 |   const view = await prepared(p, source().id);
+321 |   expect(JSON.stringify(view)).not.toContain('PRIVATE'); expect(view.state).toBe('blocked');
+                                         ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "PRIVATE"
+Received: "{\"proposalId\":\"edbbb423-58af-4cc6-b2d7-6aa80f59ed74\",\"opportunityId\":\"a20db06e-97d4-4187-b02f-aad99bafb590\",\"revision\":\"58c2e8df-5abe-451a-90e2-0c576b5513f6\",\"title\":\"Review invoices\",\"specification\":{\"opportunityId\":\"a20db06e-97d4-4187-b02f-aad99bafb590\",\"sourceRevision\":\"ea2c3e840e9dfd8ed00c65dd82ea78e1ff9347ca76b0dd54154a9ec43af23606\",\"kind\":\"invoice_review\",\"name\":\"Review invoices\",\"description\":\"Review invoices\",\"expectedOutcome\":\"A checked list of unpaid invoices and draft follow-ups for approval.\",\"evidence\":[{\"kind\":\"observation\",\"id\":\"capture-one\",\"revision\":\"1\"}],\"goal\":{\"goalId\":\"21e74feb-d748-4f05-9392-08ef0e746cd0\",\"revision\":\"1791307068005\",\"rationale\":\"These invoices support this goal\"},\"confirmed\":true,\"customConstraints\":false},\"evidence\":[{\"kind\":\"observation\",\"id\":\"capture-one\",\"revision\":\"1\"}],\"goal\":{\"goalId\":\"21e74feb-d748-4f05-9392-08ef0e746cd0\",\"revision\":\"1791307068005\",\"rationale\":\"These invoices support this goal\"},\"compositionId\":null,\"workflow\":null,\"bindings\":[],\"previewBasis\":null,\"state\":\"blocked\",\"readiness\":{\"state\":\"blocked\",\"checkedAt\":null},\"blockers\":[{\"code\":\"preparation\",\"message\":\"response was not valid JSON: JSON Parse error: Expected '}' (rawResponse: 23 chars, ends \\\"..{PRIVATE MODEL RESPONSE\\\")\"}],\"canApprove\":false}"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:321:36)
+(fail) private model diagnostics stay in the linked journal [1030.30ms]
+Database initialized at: /tmp/jarvis-f09-7hDHCB/test.db
+328 | });
+329 | 
+330 | test('pre-upgrade diagnostic text is sanitized when reading blocked proposals', async () => {
+331 |   const p = provider(), view = await prepared(p, source().id);
+332 |   getDb().run("UPDATE prepared_opportunities SET state = 'failed', assessment = NULL, error = 'PRIVATE OLD DIAGNOSTIC' WHERE id = ?", [view.proposalId]);
+333 |   expect(JSON.stringify(p.get(view.proposalId))).not.toContain('PRIVATE');
+                                                           ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "PRIVATE"
+Received: "{\"proposalId\":\"47c851b3-56a8-4a6f-8186-64cf61aa3c06\",\"opportunityId\":\"baa17b42-e28f-4cc0-87ea-ca8c8ad3d70e\",\"revision\":\"9f4f8b27-362a-4ba2-bae4-0b7cd92ff8e0\",\"title\":\"Review invoices\",\"specification\":{\"opportunityId\":\"baa17b42-e28f-4cc0-87ea-ca8c8ad3d70e\",\"sourceRevision\":\"7aa6ae177bd9f6e67d7d1acc9715b00d8e35b5aeb2a3e51ec42acb8c457f6412\",\"kind\":\"invoice_review\",\"name\":\"Review invoices\",\"description\":\"Review invoices\",\"expectedOutcome\":\"A checked list of unpaid invoices and draft follow-ups for approval.\",\"evidence\":[{\"kind\":\"observation\",\"id\":\"capture-one\",\"revision\":\"1\"}],\"goal\":{\"goalId\":\"ef7a2adf-2fc4-40ea-ba5b-f546395c9daf\",\"revision\":\"1791307069101\",\"rationale\":\"These invoices support this goal\"},\"confirmed\":true,\"customConstraints\":false},\"evidence\":[{\"kind\":\"observation\",\"id\":\"capture-one\",\"revision\":\"1\"}],\"goal\":{\"goalId\":\"ef7a2adf-2fc4-40ea-ba5b-f546395c9daf\",\"revision\":\"1791307069101\",\"rationale\":\"These invoices support this goal\"},\"compositionId\":\"fsjS5hqUMeZElUaemmiwh\",\"workflow\":{\"flowId\":\"WUB5ComMgTFIpa7pBAxr6\",\"versionId\":\"VyKD5NMnbHX2IeJlNrnas\",\"activation\":\"DISABLED\",\"versionState\":\"LOCKED\"},\"bindings\":[],\"previewBasis\":null,\"state\":\"blocked\",\"readiness\":{\"state\":\"blocked\",\"checkedAt\":null},\"blockers\":[{\"code\":\"preparation\",\"message\":\"PRIVATE OLD DIAGNOSTIC\"}],\"canApprove\":false}"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:333:54)
+(fail) pre-upgrade diagnostic text is sanitized when reading blocked proposals [1134.63ms]
+Database initialized at: /tmp/jarvis-f09-usWzC0/test.db
+337 |   const entered = deferred<void>(), finish = deferred<{ text: string }>();
+338 |   const p = provider({ async chat() { entered.resolve(); return finish.promise; } }, gate(), ending === 'timeout' ? 50 : 120000);
+339 |   const view = p.ensure(source().id); await entered.promise;
+340 |   try {
+341 |     const journalId = p.get(view.proposalId).compositionId;
+342 |     expect(journalId).not.toBeNull(); expect(getWorkflowComposition(journalId!)).not.toBeNull();
+                                ^
+error: expect(received).not.toBeNull()
+
+Received: null
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:342:27)
+(fail) journal is linked before inference and retained after dismiss [911.92ms]
+Database initialized at: /tmp/jarvis-f09-WWPTWt/test.db
+337 |   const entered = deferred<void>(), finish = deferred<{ text: string }>();
+338 |   const p = provider({ async chat() { entered.resolve(); return finish.promise; } }, gate(), ending === 'timeout' ? 50 : 120000);
+339 |   const view = p.ensure(source().id); await entered.promise;
+340 |   try {
+341 |     const journalId = p.get(view.proposalId).compositionId;
+342 |     expect(journalId).not.toBeNull(); expect(getWorkflowComposition(journalId!)).not.toBeNull();
+                                ^
+error: expect(received).not.toBeNull()
+
+Received: null
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:342:27)
+(fail) journal is linked before inference and retained after timeout [1568.14ms]
+Database initialized at: /tmp/jarvis-f09-ZHFGxO/test.db
+337 |   const entered = deferred<void>(), finish = deferred<{ text: string }>();
+338 |   const p = provider({ async chat() { entered.resolve(); return finish.promise; } }, gate(), ending === 'timeout' ? 50 : 120000);
+339 |   const view = p.ensure(source().id); await entered.promise;
+340 |   try {
+341 |     const journalId = p.get(view.proposalId).compositionId;
+342 |     expect(journalId).not.toBeNull(); expect(getWorkflowComposition(journalId!)).not.toBeNull();
+                                ^
+error: expect(received).not.toBeNull()
+
+Received: null
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:342:27)
+(fail) journal is linked before inference and retained after shutdown [1939.97ms]
+Database initialized at: /tmp/jarvis-f09-ZG61Hw/test.db
+349 | 
+350 | test('failure to bind the journal rolls back before inference', async () => {
+351 |   let calls = 0; const p = provider({ async chat() { calls++; return { text: JSON.stringify(graph()) }; } });
+352 |   getDb().exec("CREATE TRIGGER reject_journal_link BEFORE UPDATE OF composition_id ON prepared_opportunities WHEN NEW.composition_id IS NOT NULL BEGIN SELECT RAISE(ABORT, 'private link failure'); END");
+353 |   const view = await prepared(p, source().id);
+354 |   expect(view.state).toBe('blocked'); expect(calls).toBe(0);
+                                                          ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:354:53)
+(fail) failure to bind the journal rolls back before inference [1606.70ms]
+Database initialized at: /tmp/jarvis-f09-zwZlCF/test.db
+359 |   const p = provider(), view = await prepared(p, source().id);
+360 |   if (missing === 'workflow') deleteFlow(view.workflow!.flowId);
+361 |   else getDb().run('DELETE FROM flow_version WHERE id = ?', [view.workflow!.versionId]);
+362 |   const current = p.get(view.proposalId);
+363 |   expect(current).toMatchObject({ state: 'blocked', canApprove: false, workflow: null });
+364 |   expect(current.blockers[0]?.code).toBe(missing === 'workflow' ? 'workflow_missing' : 'workflow_version_missing');
+                                          ^
+error: expect(received).toBe(expected)
+
+Expected: "workflow_missing"
+Received: "qualification_unavailable"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:364:37)
+(fail) deleted workflow has a distinct recovery blocker [2128.49ms]
+Database initialized at: /tmp/jarvis-f09-O2hYdb/test.db
+359 |   const p = provider(), view = await prepared(p, source().id);
+360 |   if (missing === 'workflow') deleteFlow(view.workflow!.flowId);
+361 |   else getDb().run('DELETE FROM flow_version WHERE id = ?', [view.workflow!.versionId]);
+362 |   const current = p.get(view.proposalId);
+363 |   expect(current).toMatchObject({ state: 'blocked', canApprove: false, workflow: null });
+364 |   expect(current.blockers[0]?.code).toBe(missing === 'workflow' ? 'workflow_missing' : 'workflow_version_missing');
+                                          ^
+error: expect(received).toBe(expected)
+
+Expected: "workflow_version_missing"
+Received: "qualification_unavailable"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-09/src/awareness/prepared-opportunities.test.ts:364:37)
+(fail) deleted version has a distinct recovery blocker [1660.85ms]
+
+1 tests skipped:
+(skip) real Q13 dry-run qualifies the exact disabled version and blocks missing fixtures
+
+
+15 tests failed:
+(fail) attachment transaction failure leaves no orphan flow, and explicit retry succeeds [1176.81ms]
+(fail) shared ownership rejects legacy acceptance when F09 is queued [1051.42ms]
+(fail) shared ownership rejects legacy acceptance when F09 is running [1034.47ms]
+(fail) shared ownership rejects legacy acceptance when F09 is ready [1300.20ms]
+(fail) old mixed queues reserve the prepared owner before either inference [1207.60ms]
+(fail) old mixed queues reserve the legacy owner before either inference [1367.45ms]
+(fail) private provider diagnostics stay in the linked journal [953.96ms]
+(fail) private model diagnostics stay in the linked journal [1030.30ms]
+(fail) pre-upgrade diagnostic text is sanitized when reading blocked proposals [1134.63ms]
+(fail) journal is linked before inference and retained after dismiss [911.92ms]
+(fail) journal is linked before inference and retained after timeout [1568.14ms]
+(fail) journal is linked before inference and retained after shutdown [1939.97ms]
+(fail) failure to bind the journal rolls back before inference [1606.70ms]
+(fail) deleted workflow has a distinct recovery blocker [2128.49ms]
+(fail) deleted version has a distinct recovery blocker [1660.85ms]
+
+ 22 pass
+ 1 skip
+ 15 fail
+ 114 expect() calls
+Ran 38 tests across 1 file. [43.27s]
