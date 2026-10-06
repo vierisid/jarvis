@@ -214,6 +214,12 @@ export class WindowsAppController implements AppController {
     );
   }
 
+  async getWindowTreeContext(pid: number): Promise<{ elements: UIElement[]; context?: string }> {
+    const sc = await this.getSidecar();
+    if (sc) return sc.getWindowTreeContext(pid);
+    return { elements: await this.getWindowTree(pid) };
+  }
+
   async listWindows(): Promise<WindowInfo[]> {
     const sc = await this.getSidecar();
     if (sc) return sc.listWindows();

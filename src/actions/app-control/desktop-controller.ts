@@ -8,8 +8,8 @@
 
 import { createConnection, type Socket } from 'node:net';
 import { writeFileSync } from 'node:fs';
-import { ActionOutcomeError } from '../action-outcome.ts';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
+import { ElementCache, resolveElement, uiElementPrint } from './element-cache.ts';
 import { launchSidecar, stopSidecar, isSidecarRunning, type RunningSidecar } from './sidecar-launcher.ts';
 
 export type DesktopSnapshot = {
@@ -29,6 +29,18 @@ export type FlatElement = {
   properties: Record<string, unknown>;
 };
 
+type WalkedElement = { element: UIElement; flat: Omit<FlatElement, 'id'> };
+
+/**
+ * Which window a bridge walk read: its title and class, as the reply names
+ * them. Compared on every read-back (element-cache.ts), because the bridge
+ * walks the pid's largest named window rather than one it was given.
+ */
+function windowContext(result: any): string {
+  const window = result?.window ?? {};
+  return JSON.stringify([String(window.title ?? ''), String(window.className ?? '')]);
+}
+
 const DEFAULT_PORT = 9224;
 const MAX_SNAPSHOT_ELEMENTS = 60;
 
@@ -42,8 +54,9 @@ export class DesktopController implements AppController {
   private pending = new Map<number, { resolve: (v: unknown) => void; reject: (e: Error) => void }>();
   private buffer = '';
 
-  // Element cache from last snapshot (like BrowserController.elementCoords)
-  private elementCache = new Map<number, UIElement>();
+  // The last snapshot's elements, in walk order, behind generation-scoped ids
+  // that every action re-checks against a fresh walk (#704, element-cache.ts).
+  private elements = new ElementCache<UIElement>();
   private lastSnapshotWindow: { pid: number; title: string } | null = null;
 
   constructor(port: number = DEFAULT_PORT) {
@@ -74,7 +87,7 @@ export class DesktopController implements AppController {
       this.socket = null;
     }
     this._connected = false;
-    this.elementCache.clear();
+    this.elements.forget();
     this.pending.clear();
     this.buffer = '';
 
@@ -106,9 +119,13 @@ export class DesktopController implements AppController {
   }
 
   async getWindowTree(pid: number): Promise<UIElement[]> {
+    return (await this.getWindowTreeContext(pid)).elements;
+  }
+
+  async getWindowTreeContext(pid: number): Promise<{ elements: UIElement[]; context?: string }> {
     await this.ensureConnected();
     const result = await this.send('getWindowTree', { pid, depth: 5 }) as any;
-    return this.parseElements(result.elements || []);
+    return { elements: this.parseElements(result.elements || []), context: windowContext(result) };
   }
 
   async clickElement(element: UIElement): Promise<void> {
@@ -152,7 +169,18 @@ export class DesktopController implements AppController {
    */
   async snapshot(pid?: number, depth: number = 5): Promise<DesktopSnapshot> {
     await this.ensureConnected();
+    // Anything that fails retires every id the last snapshot handed out --
+    // finding the window, the walk, a reply that is not a tree -- so "only the
+    // latest snapshot's ids" holds for a snapshot that did not work too.
+    try {
+      return await this.snapshotInner(pid, depth);
+    } catch (err) {
+      this.elements.forget();
+      throw err;
+    }
+  }
 
+  private async snapshotInner(pid: number | undefined, depth: number): Promise<DesktopSnapshot> {
     // Get target window
     let targetPid = pid;
     if (!targetPid) {
@@ -161,13 +189,22 @@ export class DesktopController implements AppController {
       targetPid = active.pid;
     }
 
-    // Get UI tree
     const result = await this.send('getWindowTree', { pid: targetPid, depth }) as any;
 
-    // Flatten tree into sequential IDs
-    this.elementCache.clear();
+    // Flatten in walk order and mint this walk's ids (#704): the bridge's own
+    // ids restart at 1 on every walk, so they cannot say which walk they came
+    // from. Only the elements the snapshot shows are addressable: an id for
+    // element 75 of a list that showed 60 names something the model was never
+    // shown (#704 review). The read-back still walks the whole tree; the
+    // shown prefix keeps its indices.
+    const walked = this.flattenTree(result.elements || [], 0, []);
+    const ids = this.elements.fill({ elements: walked.map((w) => w.element), context: windowContext(result) },
+      targetPid!, depth, MAX_SNAPSHOT_ELEMENTS);
     const flatElements: FlatElement[] = [];
-    this.flattenTree(result.elements || [], 0, flatElements);
+    walked.forEach((w, i) => {
+      const id = ids[i];
+      if (id !== null && id !== undefined) flatElements.push({ ...w.flat, id });
+    });
 
     this.lastSnapshotWindow = {
       pid: targetPid!,
@@ -177,8 +214,14 @@ export class DesktopController implements AppController {
     return {
       window: result.window || { pid: targetPid, title: '', className: '' },
       elements: flatElements.slice(0, MAX_SNAPSHOT_ELEMENTS),
-      totalElements: flatElements.length,
+      totalElements: walked.length,
     };
+  }
+
+  /** One walk of `pid` at `depth`, flattened in the order snapshot() numbers it. */
+  private async walkElements(pid: number, depth: number): Promise<{ elements: UIElement[]; context?: string }> {
+    const result = await this.send('getWindowTree', { pid, depth }) as any;
+    return { elements: this.flattenTree(result.elements || [], 0, []).map((w) => w.element), context: windowContext(result) };
   }
 
   /**
@@ -187,13 +230,11 @@ export class DesktopController implements AppController {
   async clickById(elementId: number): Promise<string> {
     await this.ensureConnected();
 
-    const element = this.elementCache.get(elementId);
-    if (!element) {
-      throw new ActionOutcomeError({ status: 'blocked', code: 'DESKTOP_ELEMENT_NOT_FOUND', effect: 'not_started',
-        message: `Error: Element [${elementId}] not found. Run desktop_snapshot first.` });
-    }
-
-    await this.send('clickElement', { elementId });
+    // Re-walk and confirm before anything is sent (#704). The read-back is now
+    // the bridge's latest walk, so the click goes out under the id the bridge
+    // gave the element on it, not the one it had on the snapshot's walk.
+    const element = await resolveElement(this.elements, elementId, (pid, depth) => this.walkElements(pid, depth), uiElementPrint);
+    await this.send('clickElement', { elementId: parseInt(element.id, 10) });
 
     const label = element.name ? `"${element.name}"` : element.role;
     return `Clicked [${element.role}] ${label} (id: ${elementId})`;
@@ -275,7 +316,7 @@ export class DesktopController implements AppController {
     if (this._connected) {
       console.warn('[DesktopController] Connection stale, reconnecting...');
       this._connected = false;
-      this.elementCache.clear();
+      this.elements.forget();
       this.pending.clear();
       this.buffer = '';
     }
@@ -283,9 +324,25 @@ export class DesktopController implements AppController {
     await this.connect();
   }
 
+  /** How long a connect may take before it is abandoned. A field so a test can shorten it. */
+  protected connectTimeoutMs = 5000;
+
+  /** Opens the TCP connection. A method so a test can hand back a socket that never connects. */
+  protected createSocket(onConnect: () => void): Socket {
+    return createConnection({ host: this.host, port: this.port }, onConnect);
+  }
+
   private openSocket(): Promise<void> {
     return new Promise((resolve, reject) => {
-      const socket = createConnection({ host: this.host, port: this.port }, () => {
+      // Settled by whichever comes first. The timeout used to test
+      // `!this._connected && !this.socket`, and on a reconnect `this.socket`
+      // still held the dead socket, so a connect that never answered was never
+      // abandoned -- and every local element tool queues behind it (#704 review).
+      let settled = false;
+      const socket = this.createSocket(() => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
         this.socket = socket;
         resolve();
       });
@@ -298,9 +355,11 @@ export class DesktopController implements AppController {
       });
 
       socket.on('error', (err) => {
-        if (!this._connected) {
+        if (!settled) {
+          settled = true;
+          clearTimeout(timer);
           reject(err);
-        } else {
+        } else if (this._connected) {
           console.error('[DesktopController] Socket error:', err.message);
           this._connected = false;
         }
@@ -311,12 +370,12 @@ export class DesktopController implements AppController {
       });
 
       // Timeout for initial connection
-      setTimeout(() => {
-        if (!this._connected && !this.socket) {
-          socket.destroy();
-          reject(new Error(`Failed to connect to sidecar on ${this.host}:${this.port}`));
-        }
-      }, 5000);
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        socket.destroy();
+        reject(new Error(`Failed to connect to sidecar on ${this.host}:${this.port}`));
+      }, this.connectTimeoutMs);
     });
   }
 
@@ -386,11 +445,15 @@ export class DesktopController implements AppController {
     });
   }
 
-  private flattenTree(elements: any[], depth: number, result: FlatElement[]): void {
+  /**
+   * The tree in depth-first pre-order -- the bridge's own numbering order --
+   * as the element to act on (carrying the bridge's id) and what a snapshot
+   * reports about it (its id is assigned by the caller).
+   */
+  private flattenTree(elements: any[], depth: number, result: WalkedElement[]): WalkedElement[] {
     for (const el of elements) {
-      const id = el.id;
       const uiElement: UIElement = {
-        id: String(id),
+        id: String(el.id),
         role: el.role || '',
         name: el.name || '',
         value: el.value || null,
@@ -399,24 +462,22 @@ export class DesktopController implements AppController {
         properties: el.properties || {},
       };
 
-      this.elementCache.set(id, uiElement);
-
-      result.push({
-        id,
-        role: el.role || '',
-        name: el.name || '',
-        value: el.value || null,
+      result.push({ element: uiElement, flat: {
+        role: uiElement.role,
+        name: uiElement.name,
+        value: uiElement.value,
         depth,
         isEnabled: el.isEnabled !== false,
         bounds: uiElement.bounds,
         properties: uiElement.properties,
-      });
+      } });
 
       // Recurse into children
       if (el.children && el.children.length > 0) {
         this.flattenTree(el.children, depth + 1, result);
       }
     }
+    return result;
   }
 
   private toWindowInfo(raw: any): WindowInfo {

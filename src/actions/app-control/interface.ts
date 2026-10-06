@@ -30,6 +30,14 @@ export interface AppController {
 
   focusWindow(pid: number): Promise<void>;
 
+  /**
+   * getWindowTree plus which window it read, for a controller that can say
+   * (#704 review): an element id is re-checked against a fresh walk of the
+   * same pid, and a desktop bridge picks the pid's largest window, which can
+   * be a different one by then. Controllers that cannot say omit it.
+   */
+  getWindowTreeContext?(pid: number): Promise<{ elements: UIElement[]; context?: string }>;
+
   // Optional extended operations
   launchApp?(executable: string, args?: string): Promise<object>;
   closeWindow?(pid: number): Promise<void>;
