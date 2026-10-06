@@ -1,0 +1,60 @@
+{
+  "build": "index-gp5knc4g.js",
+  "browser": "Headless Windows Chrome via Playwright",
+  "results": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chatOpen": true,
+      "focusCycles": 10,
+      "draftRetained": true,
+      "recoveredRequestCalls": 1,
+      "queueCount": 3,
+      "progress": 6,
+      "settledRecoveryNoReplay": true,
+      "resetHasDistinctReceipt": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chatOpen": true,
+      "focusCycles": 10,
+      "draftRetained": true,
+      "recoveredRequestCalls": 1,
+      "queueCount": 3,
+      "progress": 6,
+      "settledRecoveryNoReplay": true,
+      "resetHasDistinctReceipt": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chatOpen": true,
+      "focusCycles": 10,
+      "draftRetained": true,
+      "recoveredRequestCalls": 1,
+      "queueCount": 3,
+      "progress": 6,
+      "settledRecoveryNoReplay": true,
+      "resetHasDistinctReceipt": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chatOpen": true,
+      "focusCycles": 10,
+      "draftRetained": true,
+      "recoveredRequestCalls": 1,
+      "queueCount": 3,
+      "progress": 6,
+      "settledRecoveryNoReplay": true,
+      "resetHasDistinctReceipt": true
+    }
+  ],
+  "errors": [],
+  "limitations": [
+    "Isolated fixture preview; no live provider",
+    "Background updates simulated via existing scenario controls without moving focus",
+    "Browser does not prove backend idempotency or account reconciliation"
+  ]
+}

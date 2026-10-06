@@ -1,0 +1,26 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/goal-card/goal-card.test.tsx:
+(pass) measurement and recommendation gates are independent and never mix fixtures into live [21.06ms]
+(pass) ten open/return cycles retain title, measured value, progress node and keyboard return [324.61ms]
+(pass) two immediate presses issue one request; receipt waits for a fresh matching queue; progress never changes [63.90ms]
+(pass) each receipt identity field must match; a changed title, wrong destination or duplicate queue is not confirmation [1.77ms]
+(pass) failed, conflicting, unknown and lost responses never announce success or enable a blind retry [182.94ms]
+(pass) blocked, expired, stale, changed-goal and historical accepted recommendations cannot dispatch [89.01ms]
+(pass) expiry while visible disables acceptance without waiting for a user navigation [121.16ms]
+(pass) old async completion cannot enter a changed goal or a lost capability [36.21ms]
+(pass) a remounted accepted projection does not replay destination motion or submit [27.41ms]
+(pass) a receipt for different work never confirms even when that other item exists in the queue [21.03ms]
+(pass) a changed recommendation revision ignores the old response and allows review of the new identity [32.75ms]
+(pass) a settled receipt highlights once; unchanged refresh and returning to the recommendation do not replay it [2303.06ms]
+(pass) loading, empty and unavailable recommendations keep a local return; unknown progress is never zero [66.57ms]
+(pass) temporary recommendation loss retains the pending attempt and its response without a second dispatch [97.58ms]
+(pass) interleaved recommendation requests retain separate results across an identity round trip [77.06ms]
+(pass) lost goal data does not replay a settled receipt or unlock a completed attempt on recovery [1325.54ms]
+(pass) background recommendation revisions and recovery preserve focus and text in another control [43.25ms]
+(pass) an automatic recommendation close restores focus when its removed control held it [28.05ms]
+
+ 18 pass
+ 0 fail
+ 155 expect() calls
+Ran 18 tests across 1 file. [5.35s]

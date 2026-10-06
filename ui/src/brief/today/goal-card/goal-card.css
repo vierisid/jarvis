@@ -1,0 +1,28 @@
+.brief-root .brief-goal-card { padding:18px; min-width:0; }
+.brief-root .brief-goal-card h2, .brief-root .brief-goal-card h3 { margin:0; overflow-wrap:anywhere; }
+.brief-root .brief-goal-period { margin:4px 0 0; }
+.brief-root .brief-goal-value { display:flex; flex-wrap:wrap; align-items:baseline; gap:6px 10px; margin:16px 0 10px; font-variant-numeric:tabular-nums; }
+.brief-root .brief-goal-value strong { font-size:34px; line-height:38px; }
+.brief-root .brief-goal-value > span { font-size:20px; color:var(--brief-secondary); }
+.brief-root .brief-goal-value small { font-size:12px; line-height:18px; overflow-wrap:anywhere; }
+.brief-root .brief-goal-value small:last-child { margin-left:auto; }
+.brief-root .brief-goal-body { margin-top:20px; }
+.brief-root .brief-goal-body > p { margin:10px 0 18px; overflow-wrap:anywhere; }
+.brief-root .brief-goal-driver { display:grid; grid-template-columns:minmax(0,1fr) 58px 58px; gap:8px; align-items:center; margin:16px 0; font:400 12px/18px var(--brief-sans); }
+.brief-root .brief-goal-driver > span { overflow-wrap:anywhere; }
+.brief-root .brief-goal-driver > span:last-child { text-align:right; font-variant-numeric:tabular-nums; }
+.brief-root .brief-goal-driver .brief-outcome-progress { height:4px; gap:2px; }
+.brief-root .brief-goal-next { width:100%; display:flex; justify-content:space-between; padding-inline:0; border-top:1px solid var(--brief-card-edge); border-radius:0; padding-top:12px; }
+.brief-root .brief-goal-next .brief-button__labels { flex:1; }
+.brief-root .brief-goal-next .brief-button__label { display:flex; align-items:center; justify-content:space-between; gap:8px; }
+.brief-root .brief-goal-next svg { flex:none; }
+.brief-root .brief-goal-actions { display:flex; flex-wrap:wrap; gap:8px; }
+.brief-root .brief-goal-accept { min-width:132px; }
+.brief-root .brief-goal-feedback { color:var(--brief-secondary); margin-top:10px; overflow-wrap:anywhere; }
+.brief-root .brief-goal-feedback:empty { margin-top:0; }
+.brief-root [data-compact="true"] > .brief-goal-card .brief-goal-drivers,
+.brief-root [data-compact="true"] > .brief-goal-card .brief-goal-period { display:none; }
+.brief-root [data-compact="true"] > .brief-goal-card .brief-goal-next { border:0; padding-top:0; }
+.brief-root [data-compact="true"] > .brief-goal-card .brief-goal-body { margin-top:14px; }
+.brief-root .brief-today-decision-meta:has(.brief-goal-queue-cue) { position:relative; }
+.brief-root .brief-goal-queue-cue { position:absolute; top:calc(100% + 4px); left:0; max-width:100%; pointer-events:none; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--brief-running-text); font:400 12px/18px var(--brief-sans); }
