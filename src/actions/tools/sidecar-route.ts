@@ -153,16 +153,25 @@ function describeMachine(sidecar: SidecarInfo): string {
  * matching, so there is nothing to gain by doing it twice, and the log line
  * then shows exactly what the caller asked for. A blank string counts as no
  * target at all and falls through to auto-selection.
+ *
+ * `quiet` drops the line and nothing else (#675). It is for a caller that
+ * resolves only to COMPARE routes -- `browserCallGuard`, at review and again
+ * at approval -- where the line would announce a dispatch that never
+ * happened. Resolution, the machine scope's fence included, is identical
+ * either way. Every call that actually dispatches leaves it unset, so the
+ * default is the loud one.
  */
 export function resolveToolTarget(
   explicit: unknown,
   capability: SidecarCapability,
   tool: string,
+  opts: { quiet?: boolean } = {},
 ): string | null {
   const named = typeof explicit === 'string' && explicit.trim() ? explicit : null;
   const scope = getMachineScope();
   const target = scope ? scope.resolveTarget(named, capability) : named ?? autoTargetForCapability(capability);
   scope?.assertDispatch(target, capability);
+  if (opts.quiet) return target;
   console.log(
     target
       ? `[${capability}] ${tool} -> sidecar stack (target=${target}, ${named ? 'explicit' : 'auto'})`

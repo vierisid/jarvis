@@ -7,6 +7,7 @@ import { routeToSidecarAction } from './sidecar-route.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
 import { captureScreenTool } from './builtin.ts';
+import { withMachineScope, type MachineScope } from '../machine-scope.ts';
 import { isToolResult, type ToolResult } from './registry.ts';
 
 const mac: SidecarInfo = {
@@ -607,6 +608,50 @@ describe("resolveToolTarget", () => {
     expect(lines[0]).toContain("browser_click -> sidecar stack");
     expect(lines[0]).toContain("auto");
     expect(lines[1]).toContain("desktop_screenshot -> local stack");
+  });
+
+  // #675: `quiet` is for callers that resolve only to compare routes. It must
+  // drop the line and change nothing else, and the default must stay loud --
+  // this function is on the path of every desktop_* and browser_* tool.
+  test("quiet resolves identically and drops only the line; the default still logs", () => {
+    setSidecarManagerRef(stubManager([pc]));
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    let loud: string | null = null;
+    let quiet: string | null = null;
+    let quietLocal: string | null = "unset";
+    try {
+      quiet = resolveToolTarget(undefined, "browser", "browser_click", { quiet: true });
+      quietLocal = resolveToolTarget(undefined, "screenshot", "desktop_screenshot", { quiet: true });
+      expect(lines).toEqual([]);
+      loud = resolveToolTarget(undefined, "browser", "browser_click", {});
+      resolveToolTarget(undefined, "browser", "browser_click", { quiet: false });
+    } finally {
+      console.log = original;
+    }
+    expect(quiet).toBe("sc-pc");
+    expect(loud).toBe("sc-pc");
+    expect(quietLocal).toBeNull();
+    expect(lines.length).toBe(2);
+    expect(lines.every((l) => l.includes("browser_click -> sidecar stack"))).toBe(true);
+  });
+
+  // Quiet must not skip the machine scope's fence: `browserCallGuard` relies on
+  // a refused dispatch THROWING out of its quiet resolution so it can fail the
+  // approval closed. An early return placed above `assertDispatch` would turn
+  // that refusal into a silently approvable route.
+  test("a quiet resolution still runs the machine scope's fence", () => {
+    setSidecarManagerRef(stubManager([pc]));
+    const refusing: MachineScope = {
+      resolveTarget: (explicit) => (typeof explicit === "string" ? explicit : null),
+      assertDispatch: () => { throw new Error("outside this run's machine"); },
+      binding: () => null,
+    };
+    expect(() => withMachineScope(refusing, () =>
+      resolveToolTarget("sc-pc", "browser", "browser_click", { quiet: true }))).toThrow("outside this run's machine");
   });
 });
 

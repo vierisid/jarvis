@@ -1021,9 +1021,14 @@ export function formatSnapshot(snap: PageSnapshot): string {
 /**
  * Resolve which browser stack serves this call and log the decision. Thin
  * wrapper over the shared resolver so each call site names only its tool.
+ * `quiet` is for `browserCallGuard`'s comparisons only (#675).
  */
-function resolveBrowserTarget(params: Record<string, unknown>, tool: string): string | null {
-  return resolveToolTarget(params.target, 'browser', tool);
+function resolveBrowserTarget(
+  params: Record<string, unknown>,
+  tool: string,
+  opts: { quiet?: boolean } = {},
+): string | null {
+  return resolveToolTarget(params.target, 'browser', tool, opts);
 }
 
 /**
@@ -1069,7 +1074,10 @@ function browserCallGuard(
   return (params) => {
     let reviewedRoute: string | null;
     try {
-      reviewedRoute = resolveBrowserTarget(params, tool);
+      // Quiet (#675): this resolution is a comparison, not a dispatch, and
+      // logging it printed a `-> sidecar stack` line for a call that had not
+      // run. The tool's own `execute` logs the one real dispatch.
+      reviewedRoute = resolveBrowserTarget(params, tool, { quiet: true });
     } catch {
       // Fails CLOSED, matching `createRequest`'s own catch ("a failed subject
       // capture must not create an executable approval"). The only thing that
@@ -1100,7 +1108,7 @@ function browserCallGuard(
       // of silently retargeting it.
       let nowRoute: string | null;
       try {
-        nowRoute = resolveBrowserTarget(params, tool);
+        nowRoute = resolveBrowserTarget(params, tool, { quiet: true });
       } catch {
         return false;
       }
