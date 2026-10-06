@@ -1,5 +1,4 @@
 import React, { useMemo, useRef, useState } from "react";
-import { Target } from "lucide-react";
 import { BriefButton } from "../../components/controls";
 import type { BriefRoute, BriefShellPort } from "../../contracts";
 import { useTheme } from "../../../v2/shell/useTheme";
@@ -12,6 +11,8 @@ import { GoalCard, GoalQueueCue } from "../goal-card/GoalCard";
 import { useGoalHandoff } from "../goal-card/useGoalHandoff";
 import { goalFixture, goalPaper } from "./goalFixtures";
 import type { GoalAcceptResult } from "../goal-card/model";
+import { OpportunityStack } from "../opportunity-stack/OpportunityStack";
+import { opportunityFixture, opportunityReceipt } from "./opportunityFixtures";
 
 import { RecentActivity } from "../activity/RecentActivity";
 import { outcomeFixture, activityFixture } from "./outcomeFixtures";
@@ -35,6 +36,19 @@ export function TodaySpecimen() {
   const [recommendationScenario, setRecommendationScenario] = useState("ready");
   const [acceptResult, setAcceptResult] = useState("confirmed");
   const [acceptCalls, setAcceptCalls] = useState(0);
+  const [opportunityScenario, setOpportunityScenario] = useState("ready");
+  const [opportunityResult, setOpportunityResult] = useState("confirmed");
+  const [opportunityCalls, setOpportunityCalls] = useState(0);
+  const [opportunityReset, setOpportunityReset] = useState(0);
+  const opportunities = opportunityFixture(opportunityScenario);
+  opportunities.refresh = () => setRefreshCount(n => n + 1);
+  if (opportunityScenario !== "no-owner") opportunities.onAction = async request => {
+    setOpportunityCalls(n => n + 1);
+    await new Promise(resolve => setTimeout(resolve, 450));
+    if (opportunityResult === "lost-response") throw new Error("Illustrative lost response");
+    if (opportunityResult !== "confirmed") return { ...request, state: opportunityResult as "conflict" | "failed" | "unknown" };
+    return opportunityReceipt(request);
+  };
   const receipts = useRef(new Map<string, GoalAcceptResult>());
   const previewGeneration = useRef(sample.generation);
   previewGeneration.current = sample.generation;
@@ -61,7 +75,7 @@ export function TodaySpecimen() {
   } } } };
   return <div className="brief-root brief-today-specimen" data-brief-theme={theme}>
     <div className="brief-today-review-toolbar" aria-label="Isolated review controls">
-      <span>D-10 · Isolated Today goals</span>
+      <span>D-11 · Isolated Today opportunities</span>
       <label>Decision <select aria-label="Decision scenario" value={scenario} onChange={event => setScenario(event.target.value)}>
         {["ready", "acceptance", "permission", "queued", "invitation", "unknown", "loading", "empty", "stale", "unavailable"].map(s => <option key={s}>{s}</option>)}</select></label>
       <button onClick={() => setTheme(theme === "light" ? "dark" : "light")}>Switch to {theme === "light" ? "dark" : "light"}</button>
@@ -81,20 +95,22 @@ export function TodaySpecimen() {
       <label>Recommendation <select aria-label="Recommendation scenario" value={recommendationScenario} onChange={e => setRecommendationScenario(e.target.value)}>{["ready","loading","empty","blocked","expired","changed-goal","accepted","stale","unavailable","unsupported","long"].map(v=><option key={v}>{v}</option>)}</select></label>
       <label>Add result <select aria-label="Recommendation result" value={acceptResult} onChange={e => setAcceptResult(e.target.value)}>{["confirmed","conflict","failed","unknown","lost-response"].map(v=><option key={v}>{v}</option>)}</select></label>
       <span aria-label="Acceptance calls">{acceptCalls}</span>
+      <label>Opportunities <select aria-label="Opportunity scenario" value={opportunityScenario} onChange={e => setOpportunityScenario(e.target.value)}>{["ready","preparing","blocked","missing-connection","no-owner","loading","empty","stale","unavailable","unsupported","long"].map(v => <option key={v}>{v}</option>)}</select></label>
+      <label>Opportunity result <select aria-label="Opportunity result" value={opportunityResult} onChange={e => setOpportunityResult(e.target.value)}>{["confirmed","conflict","failed","unknown","lost-response"].map(v => <option key={v}>{v}</option>)}</select></label>
+      <button onClick={() => { setOpportunityReset(n => n + 1); setOpportunityCalls(0); }}>Reset opportunities</button><span aria-label="Opportunity action calls">{opportunityCalls}</span>
       <small>Simulated receipts only. No email or workflow executes.</small>
-      <small>Illustrative outcome evidence only. Recommendations use a simulated owner. Opportunities and conversation remain layout fixtures.</small>
+      <small>Illustrative outcome evidence only. Recommendations and opportunities use simulated owners. Conversation remains a layout fixture.</small>
     </div>
     <div className="brief-today-review-viewport" style={{ width: width === "fluid" ? "100%" : Number(width) }}>
       <NavigationShell shell={shell} rooms={{ today: { id: "today", title: "Today" } }} binding={binding} reducedMotion={reduced}
         conversation={{ source: "fixture", content: <Conversation /> }}>
         {route.room === "today" ? <TodayLayout key={sample.generation} shell={shell} greeting="Good morning, Vieri." dateLabel="Thursday, 17 September" dateTime="2026-09-17" decision={sample.binding} reducedMotion={reduced}
-          slots={{ queueNotice: <GoalQueueCue handoff={handoff} />, goal: <GoalCard handoff={handoff} />, outcomes: <Outcomes mode={shell.mode} binding={outcomes} reducedMotion={reduced} />, activity: <RecentActivity mode={shell.mode} binding={activityFixture(outcomeScenario, actionable)} onOpen={shell.navigate} />, opportunities: <Opportunity /> }} />
+          slots={{ queueNotice: <GoalQueueCue handoff={handoff} />, goal: <GoalCard handoff={handoff} />, outcomes: <Outcomes mode={shell.mode} binding={outcomes} reducedMotion={reduced} />, activity: <RecentActivity mode={shell.mode} binding={activityFixture(outcomeScenario, actionable)} onOpen={shell.navigate} />, opportunities: <OpportunityStack key={opportunityReset} mode={shell.mode} binding={opportunities} reducedMotion={reduced} /> }} />
           : <><h1 className="brief-type-room-title">Isolated Today review</h1><BriefButton onClick={() => setRoute({ room: "today", selection: {} })}>Return to Today</BriefButton></>}
       </NavigationShell>
     </div>
   </div>;
 }
-function Opportunity() { return <article className="brief-today-sample-opportunity brief-surface"><h3 className="brief-type-hero-heading">Call prep,<br />ready to run.</h3><small>You did</small><p>Emails and notes searched before 4 sales calls.</p><small>Workflow does</small><p>Context and questions, ready before every call.</p><strong className="brief-positive"><Target size={16} />Win 10 design partners</strong><p>Know what each prospect needs to say yes.</p></article>; }
 function Conversation() {
   const [draft, setDraft] = useState("");
   return <><div className="sample-conversation-tabs">General</div><div className="sample-conversation-thread"><h2 className="brief-type-section-heading">What are we moving forward?</h2></div>
