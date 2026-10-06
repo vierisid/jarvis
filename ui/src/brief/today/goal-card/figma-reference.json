@@ -1,0 +1,15 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "frames": {"today": "81:3", "chatOpen": "81:212", "handoffSpecification": "673:262727"},
+  "sources": [
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-15-goal-to-stack-2026-10-02/README.md",
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-15-goal-to-stack-2026-10-02/renders/154-23263-light.png",
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-15-goal-to-stack-2026-10-02/renders/154-23479-dark.png"
+  ],
+  "identity": "Book Maya’s pilot call.",
+  "geometry": {"wideWidth": 306, "padding": 18, "segments": 10, "segmentHeight": 6, "segmentGap": 4, "mainCount": "34/38"},
+  "motion": {"bodyFadeMs": 180, "localAcknowledgementMs": 160, "destination": "Shared D-04 transfer; stationary hero and a named blue destination cue", "cueHoldMs": 1800, "reducedCueHoldMs": 1200, "mountAnimation": false},
+  "interpretation": "Reuses approved UI-15 anchors, concise recommendation and Add to Today/Back to goal actions. The shared companion owns responsive placement; long content scrolls instead of shrinking type. The destination cue is held longer than the native storyboard's 240ms so its title can be read. Reduced motion uses immediate placement. Figma data is illustrative; production measurements and acceptance remain provider-owned."
+}

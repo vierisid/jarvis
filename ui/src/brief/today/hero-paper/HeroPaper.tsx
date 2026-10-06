@@ -1,4 +1,4 @@
-import React, { useId, useLayoutEffect, useRef, useState } from "react";
+import React, { useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 import { BriefButton, BriefIconButton } from "../../components/controls";
 import { useBriefMotion } from "../../motion";
@@ -8,7 +8,7 @@ import { confirmation, type DecisionTransition } from "../decision-transition/co
 import "../decision-transition/decision-transition.css";
 import "./hero-paper.css";
 
-export function HeroPaper({ binding, reducedMotion = false }: { binding: DecisionBinding; reducedMotion?: boolean }) {
+export function HeroPaper({ binding, reducedMotion = false, queueNotice }: { binding: DecisionBinding; reducedMotion?: boolean; queueNotice?: ReactNode }) {
   const controller = useDecisionTransition(binding, reducedMotion);
   const stack = useRef<HTMLDivElement>(null);
   const focusReturn = useRef<Element | null>(null);
@@ -25,7 +25,7 @@ export function HeroPaper({ binding, reducedMotion = false }: { binding: Decisio
   if (held || state.status === "ready" || state.status === "stale") {
     // New source identity, not theme/layout, resets transient review intent.
     return <div ref={stack} tabIndex={-1} className="brief-decision-stack"><Decision key={`${item!.decision.decisionId}:${item!.decision.revision}`} item={item!} binding={binding} reducedMotion={controller.reduced}
-      transition={controller.transition} arriving={controller.arriving} request={action => {
+      queueNotice={queueNotice} transition={controller.transition} arriving={controller.arriving} request={action => {
         const active = document.activeElement;
         if (active && stack.current?.contains(active)) focusReturn.current = active;
         controller.act(item!, action);
@@ -39,7 +39,7 @@ export function HeroPaper({ binding, reducedMotion = false }: { binding: Decisio
   </section></div>;
 }
 
-function Decision({ item, binding, reducedMotion, transition, arriving, request }: { item: DecisionPaper; binding: DecisionBinding; reducedMotion: boolean;
+function Decision({ item, binding, reducedMotion, transition, arriving, request, queueNotice }: { item: DecisionPaper; binding: DecisionBinding; reducedMotion: boolean; queueNotice?: ReactNode;
   transition: DecisionTransition | null; arriving: boolean; request: (action: DecisionAction) => void }) {
   const id = useId();
   const [hover, setHover] = useState(false);
@@ -104,7 +104,7 @@ function Decision({ item, binding, reducedMotion, transition, arriving, request 
     data-transition={transition?.phase ?? (arriving ? "arriving" : "idle")} data-reduced={reducedMotion} aria-labelledby={`${id}-summary`}>
     <div className="brief-today-decision-summary">
       <div className="brief-today-decision-meta"><span className={`brief-status brief-status--${tone}`}>{transition ? transition.phase === "pending" ? "Confirming decision" : transition.phase === "blocked" ? "Check the outcome" : confirmation(transition.action, item.approveResult).label : decisionStatus(item)}</span>
-        {item.queueCount !== null && <span className="brief-type-utility brief-secondary">{item.queueCount} {item.queueCount === 1 ? "action" : "actions"}</span>}</div>
+        {item.queueCount !== null && <span className="brief-type-utility brief-secondary">{item.queueCount} {item.queueCount === 1 ? "action" : "actions"}</span>}{queueNotice}</div>
       <h2 id={`${id}-summary`} className="brief-type-hero-heading">{item.summary}</h2>
       <p className="brief-type-body brief-secondary">{item.description}</p>
       {binding.state.status === "stale" && <p className="brief-today-decision-notice" role="status">{binding.state.reason}</p>}

@@ -46,7 +46,8 @@ export function useDecisionPreview(scenario: string, long: boolean) {
       }, 650);
     },
   };
-  return { binding, result, setResult, generation, reset, remount: () => setGeneration(g => g + 1),
+  return { binding, queue, result, setResult, generation, reset, remount: () => setGeneration(g => g + 1),
+    enqueue: (paper: DecisionPaper) => setQueue(items => items.some(item => item.decision.workItemId === paper.decision.workItemId) ? items : [...items, paper]),
     append: () => setQueue(items => items.some(item => item.decision.decisionId === "fixture-decision-invitation") ? items
       : [...items, withReject(samplePaper("invitation", long))]) };
 }
