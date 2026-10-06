@@ -1,0 +1,123 @@
+{
+  "task": "F-12",
+  "title": "Unify Today and Needs you around real decisions",
+  "date": "2026-10-06",
+  "branch": "brief/f-12",
+  "base_branch": "brief/f-11",
+  "baseline": "5af1fce553b4e7f197f3a682c7e559cbce91cb06",
+  "head": "Commit containing this receipt; exact published SHA and mandatory commit checks recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-12",
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [],
+    "stack": "User-requested F stack on corrected F-11; keep PRs open and unmerged."
+  },
+  "baseline_review": {
+    "main": "538179e3a91edfaa435698cac94bc4ca41e6c873",
+    "open_prs_reviewed": [
+      "F-11 #772",
+      "F-10 #770",
+      "D-15 #773",
+      "D-08 #741",
+      "Q-18 #742",
+      "Q-04 #765",
+      "Q-13 #737",
+      "CI #774"
+    ],
+    "duplicate_implementation_found": false,
+    "parent_ci": "Corrected F-11 head passes test, Docker, Windows, AppleScript and label checks."
+  },
+  "source_review": {
+    "pinned_commit": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "anchors": [
+      "A08 src/goals/work-items.ts",
+      "A15 ui/src/v2/rooms/authority/useAuthorityData.ts"
+    ],
+    "comparison": "Pinned work/authority/effect sources match main and the F-11 base. Existing listWorkItems(today:true) filters creation by current day; legacy Authority reads pending/restart-unresolved separately. F12 adds a shared provider without changing those legacy contracts. D07/D08 remain presentation/transition modules on their separate stack.",
+    "figma": {
+      "file": "eNfKeirIKLZLlZEasrurZa",
+      "node": "81:3271",
+      "visual": "Provider and API implementation only; no UI layout change or screenshot claim."
+    }
+  },
+  "activation": {
+    "capability": "decisions",
+    "flag": "JARVIS_BRIEF_DECISIONS=1",
+    "default": "off",
+    "requires": "Shared vault/workflow schema, existing approval manager and deferred executor. Exact flag value 1 at daemon startup.",
+    "release_enabled": false,
+    "merged": false
+  },
+  "implementation": [
+    "Typed approval, commitment-work and effect references with stable canonical identities. Effect and run views resolve to the same approval; blocked work wrappers do not duplicate their effect decision.",
+    "No day filter; retain earlier unresolved work and failed/blocked/unknown receipts. Keep permission, intent acceptance, execution and verified work result distinct.",
+    "Persist numeric user placement in an additive table. Bounded keyset pages sort by placement, source time and ID; durable generation invalidates changed traversals with explicit 409 refresh.",
+    "Advertise supported actions and opaque source revisions. Reuse work/approval/recovery writers with atomic revision guards around writes only; existing dispatch claims commit before tool invocation.",
+    "Authenticated, no-store queue, run-scoped read, ID lookup, placement and resolution routes. Default-off registration and protected daemon environment inventory."
+  ],
+  "acceptance": [
+    {
+      "check": "Same decision identity/status across queue, run, effect detail and reload; duplicate actions cannot advance twice",
+      "status": "passed",
+      "evidence": "Service and authenticated HTTP tests, file-backed reopen, concurrent submissions, second-connection observation of claim before fake dispatch."
+    },
+    {
+      "check": "Earlier unresolved work remains visible; unknown/blocked effects cannot become false success",
+      "status": "passed",
+      "evidence": "Three-day-old work; unknown/blocked/failed effect tests against SUCCEEDED runs and legacy verified work; unknown beyond 50 reference cap."
+    },
+    {
+      "check": "Durable user placement and bounded stable traversal",
+      "status": "passed",
+      "evidence": "205 equal-time decisions paged across database restart, no duplicate IDs; insert/reorder/legacy-write/delete invalidation and run cursor scope checks."
+    }
+  ],
+  "verification": {
+    "focused": {
+      "command": "bun test src/brief/decisions.test.ts src/daemon/api-brief-decisions.test.ts",
+      "passed": 21,
+      "failed": 0,
+      "assertions": 161,
+      "included_in_affected": true,
+      "initial_finding": "Authenticated HTTP test exposed percent-encoded typed IDs retained by the daemon router. Added guarded path decoding; round trip now passes."
+    },
+    "affected": {
+      "status": "passed",
+      "command_file": "docs/brief-delivery/evidence/F-12/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-12/affected.log",
+      "passed": 357,
+      "failed": 0,
+      "assertions": 2791,
+      "files": 20
+    },
+    "mutations": {
+      "log": "docs/brief-delivery/evidence/F-12/mutations.json",
+      "expected_failures": 8,
+      "checks": [
+        "Remove canonical revision guard: one failure",
+        "Hide uncertain effects behind verified work: three failures",
+        "Ignore queue generation: four failures"
+      ],
+      "restored_suite": "357 affected tests pass after restoring all mutations"
+    },
+    "typescript": {
+      "command": "bun node_modules/typescript/bin/tsc --noEmit",
+      "log": "docs/brief-delivery/evidence/F-12/typescript.log",
+      "status": "passed"
+    },
+    "guards": "Normal mandatory EE, migration, template, package, related tests and TypeScript commit hooks; final outcome in PR description.",
+    "live_provider": "not_run; temporary databases, synthetic tools and Unix socket only; no live daemon flag, provider call or external message."
+  },
+  "limitations": [
+    "Backend API/provider only. The D-track rooms must bind to the common queue and use its supportedActions; no UI activation is included.",
+    "Pagination deliberately returns queue_changed after any relevant canonical source/placement write, so busy workflows can require a new traversal.",
+    "At most 100 decisions and 50 effect references per item; aggregate effect states include every related receipt. Source inspection continues through canonical detail APIs.",
+    "Execution, blocker recovery and verified result entry remain existing workflows; the queue does not introduce effect retries or an alternative result writer.",
+    "Full repository CI is tracked separately on the PR; local evidence covers the affected suites."
+  ],
+  "rollback": "Unset JARVIS_BRIEF_DECISIONS and restart. Preserve additive placement/clock metadata and all canonical approvals, work decisions and effect receipts.",
+  "guide": "docs/brief-decisions.md",
+  "next_task": "F-13 not started"
+}

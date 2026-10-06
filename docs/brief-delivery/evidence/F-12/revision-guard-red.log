@@ -1,0 +1,23 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decisions.test.ts:
+Database initialized at: /tmp/jarvis-f12-7xwUoC/fixture.db
+212 |   manager.getRequest = id => {
+213 |     const value = originalGet(id);
+214 |     if (id === a.id && ++reads === 2) getDb().run('UPDATE approval_requests SET reason = ? WHERE id = ?', ['Changed scope', id]);
+215 |     return value;
+216 |   };
+217 |   await expect(raced.resolve(item.decisionId, { revision: item.revision, action: 'approve_permission' })).rejects.toMatchObject({ status: 409 });
+                                                                                                                        ^
+error: expect(received).rejects.toMatchObject(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/brief/decisions.test.ts:217:115)
+(fail) permission revision is checked again at the actual writer, before any dispatch [565.53ms]
+
+ 0 pass
+ 16 filtered out
+ 1 fail
+Ran 1 test across 1 file. [623.00ms]

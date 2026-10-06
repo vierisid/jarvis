@@ -1,3 +1,5 @@
+import { DecisionQueue } from '../brief/decisions';
+import { registerDecisions } from '../brief/registrations/decisions';
 import { AwarenessDeliveryPolicy } from './awareness-delivery-policy';
 import { registerQuietAwareness } from '../brief/registrations/quiet-awareness';
 import { OpportunityActivation } from '../brief/opportunity-activation';
@@ -4977,6 +4979,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     ensureUiBuilt(repoRoot, logWithTimestamp);
 
     // 9b. Set up API routes + dashboard static files
+    const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService });
     const briefConversations = new BriefConversationProvider();
     const briefChatTransport = new BriefChatTransport({
       db: getDb(),
@@ -4997,6 +5000,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       eventBus: { publish: (type, payload) => sharedEventBus.publish(type, payload) },
     }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
     const briefEnabled: BriefCapabilityId[] = [];
+    if (process.env.JARVIS_BRIEF_DECISIONS === '1') briefEnabled.push('decisions');
     if (awarenessDelivery.quiet) briefEnabled.push('quietAwareness');
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
     if (process.env.JARVIS_BRIEF_CHAT_TRANSPORT === '1') briefEnabled.push('chatTransport');
@@ -5016,10 +5020,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerPreparedOpportunities(briefPreparedOpportunities),
       ...registerOpportunityActivation(briefOpportunityActivation),
       ...registerQuietAwareness(awarenessDelivery),
+      ...registerDecisions(briefDecisions),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
+      briefDecisions,
       briefConversations,
       briefAttachments,
       briefWorkflowComposition,

@@ -3,7 +3,7 @@
  */
 
 import type { ToolRegistry } from '../actions/tools/registry.ts';
-import { executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
+import { guardedApprovalWrite, executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
 import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank } from './tool-action-map.ts';
 import { rawUiGate } from './ui-intent';
 import type { AuditTrail } from './audit.ts';
@@ -98,7 +98,7 @@ export class DeferredExecutor {
    * (#608). It is deliberately not set for the `blocked` branches: those strings
    * are repo-authored, so there is nothing to disclaim.
    */
-  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string; failed?: boolean }> {
+  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor', assertCurrent?: () => void): Promise<{ claimed: boolean; result: string; failed?: boolean }> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
       return { claimed: false, result: `Error: Request ${requestId} not found or not in approved state` };
@@ -115,7 +115,7 @@ export class DeferredExecutor {
     // One executor per approval. A second caller, or a daemon restarted after
     // the claim, cannot dispatch the same approved action again; the receipt
     // or the reconciled state says what became of the first attempt.
-    if (!this.approvalManager.claimExecution(requestId, claimedBy)) {
+    if (!guardedApprovalWrite(assertCurrent, () => this.approvalManager.claimExecution(requestId, claimedBy))) {
       const current = this.approvalManager.getRequest(requestId);
       return { claimed: false, result: `Error: Request ${requestId} was already taken for execution (${current ? executionState(current) : 'missing'}); check its receipt before deciding on another run` };
     }

@@ -131,6 +131,11 @@ export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'contex
   }
 }
 
+/** Check a surface revision atomically with a canonical write, never with dispatch. */
+export function guardedApprovalWrite<T>(assertCurrent: (() => void) | undefined, write: () => T): T {
+  return assertCurrent ? getDb().transaction(() => { assertCurrent(); return write(); }).immediate() : write();
+}
+
 export class ApprovalManager {
   /** Identity of this process. A claim carrying another boot id never got its receipt from us. */
   readonly bootId: string;
