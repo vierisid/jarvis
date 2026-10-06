@@ -1,0 +1,64 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/attachment-fan/attachment-fan.test.tsx:
+(pass) three choices stay mounted across twenty reversals and retain composer value [299.20ms]
+(pass) keyboard reaches each choice; Escape closes only the fan and restores plus [25.11ms]
+(pass) unavailable Screenshot stays focusable with a reason but cannot capture [15.32ms]
+(pass) selection acknowledges once and returns focus to the origin [26.31ms]
+(pass) cancelled picker has no attachment receipt [20.64ms]
+(pass) pending entry is deduplicated and a failed request can be retried [31.17ms]
+60 | test("late picker result cannot report into another conversation",async()=>{
+61 |   let resolve!:(value:"attached")=>void, signal!:AbortSignal;
+62 |   binding.choose=async(_,s)=>{signal=s;return new Promise(yes=>resolve=yes);};
+63 |   await render(); await click(toggle()); await click(row("document"));
+64 |   binding={...binding,conversationId:"b"}; await render(); expect(signal.aborted).toBe(true);
+65 |   expect(feedback).toEqual(["Adding document…", ""]); const count=feedback.length;
+                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    "Adding document…",
+-   "",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-14/ui/src/brief/chat/attachment-fan/attachment-fan.test.tsx:65:20)
+(fail) late picker result cannot report into another conversation [23.38ms]
+(pass) source mismatch, missing identity and offline states never dispatch [23.15ms]
+(pass) theme changes preserve menu, selected focus and choice elements [20.25ms]
+(pass) outside focus closes the fan without stealing the new focus [13.10ms]
+(pass) unmount removes portal and cancels an outstanding selection [13.94ms]
+(pass) F-05 binding captures original chat through picker delay and delegates exact file [1.40ms]
+(pass) F-05 capture requires explicit device confirmation [0.71ms]
+(pass) F-05 does not upload after scope change, tab closure, disconnect or abort during picker [0.78ms]
+(pass) F-05 unsupported Screenshot and cancelled file picker have no external effect [0.54ms]
+(pass) F-05 superseded upload cannot report attached merely because its promise finished [0.54ms]
+(pass) keyboard can enter a fan already opened with the pointer [10.53ms]
+(pass) closing Pebble during selection clears pending feedback without a success receipt [17.16ms]
+139 |   binding.choose=()=>new Promise(yes=>resolve=yes);
+140 |   await render("preview","light",report("a"));await click(toggle());await click(row("document"));
+141 |   expect(status.a).toBe("Adding document…");
+142 |   binding={...binding,conversationId:"b",choose:async()=>"attached"};
+143 |   await render("preview","light",report("b"));
+144 |   expect(status).toEqual({a:"",b:"Existing B feedback"});
+                       ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "a": "",
++   "a": "Adding document…",
+    "b": "Existing B feedback",
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-14/ui/src/brief/chat/attachment-fan/attachment-fan.test.tsx:144:18)
+(fail) A to B to A clears only the cancelled request and keeps completed feedback [19.73ms]
+
+ 17 pass
+ 2 fail
+ 121 expect() calls
+Ran 19 tests across 1 file. [968.00ms]

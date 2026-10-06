@@ -39,28 +39,28 @@
   "checks": [
     {
       "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
-      "evidence": "evidence/D-14/affected.log",
-      "tests": 252,
-      "assertions": 3803,
+      "evidence": "evidence/D-14/review-affected.log",
+      "tests": 253,
+      "assertions": 3808,
       "files": 17,
       "result": "pass"
     },
     {
       "command": "bun x tsc --noEmit",
-      "evidence": "evidence/D-14/typescript.log",
+      "evidence": "evidence/D-14/review-typescript.log",
       "result": "pass"
     },
     {
       "command": "bun run build:ui",
-      "evidence": "evidence/D-14/build.log",
+      "evidence": "evidence/D-14/review-build.log",
       "result": "pass",
       "warnings": "Existing Tailwind at-rule warnings"
     }
   ],
   "focused": {
-    "tests": 18,
-    "assertions": 120,
-    "evidence": "evidence/D-14/focused.log"
+    "tests": 19,
+    "assertions": 125,
+    "evidence": "evidence/D-14/review-focused.log"
   },
   "mutation": {
     "evidence": "evidence/D-14/confirmation-mutation.log",
@@ -78,7 +78,8 @@
     "errors": 0,
     "keyboard_followup": "evidence/D-14/keyboard-browser.log",
     "edge_script": "evidence/D-14/browser-edge-check.cjs",
-    "edge_evidence": "evidence/D-14/browser-edge.log"
+    "edge_evidence": "evidence/D-14/browser-edge.log",
+    "scope": "Original implementation run; fixes separately verified by review_fixes.browser"
   },
   "compatibility": {
     "branch": "brief/f-05",
@@ -109,10 +110,51 @@
   "test_timeout_note": {
     "evidence": "evidence/D-14/affected-default-timeout.log",
     "attempt": "Default 5-second timeout interrupted the unchanged 80-cycle hero test",
-    "final": "All 252 tests pass with --timeout 15000; no existing test/source changed"
+    "final": "All 253 tests pass after review fixes with --timeout 15000; no pre-existing suite test/source changed"
   },
   "cancellation_regression": {
     "red": "evidence/D-14/cancellation-red.log",
     "result": "Immediate abort clears pending feedback; no receipt; unit and browser checks pass"
+  },
+  "review_fixes": {
+    "reviewed_head": "f78e705415e13f6c230e4cea013899c0807c6818",
+    "R1": {
+      "issue": "Pending feedback survives an A-to-B-to-A chat switch",
+      "fix": "Abort clears the captured scope before retiring callbacks; late results remain ignored",
+      "red": "evidence/D-14/review-r1-red.log",
+      "green": "evidence/D-14/review-focused.log"
+    },
+    "R2": {
+      "issue": "Compact Screenshot explanation is clipped at its left edge",
+      "fix": "Align explanation to the fan origin and constrain available viewport width",
+      "red": "evidence/D-14/review-r2-red.log",
+      "before": "evidence/D-14/review-before-compact-hint.png"
+    },
+    "browser": {
+      "script": "evidence/D-14/review-regressions.cjs",
+      "results": "evidence/D-14/review-browser-results.json",
+      "log": "evidence/D-14/review-browser.log",
+      "widths": [
+        390,
+        1440
+      ],
+      "themes": [
+        "light",
+        "dark"
+      ],
+      "interaction": [
+        "hover",
+        "keyboard focus"
+      ],
+      "checks": [
+        "A/B/A cancellation with draft retained",
+        "Explanation fully inside mask and viewport",
+        "Explanation left edge hit-testable",
+        "Escape return"
+      ],
+      "motion": "Reduced motion for settled geometry checks; original motion matrix not rerun",
+      "result": "pass",
+      "real_effects": false
+    }
   }
 }
