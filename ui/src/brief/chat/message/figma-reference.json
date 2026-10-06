@@ -1,0 +1,27 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "today": "81:212",
+  "specification": "738:418541",
+  "workbench": "738:379733",
+  "inspection": "Saved UI-20 native source, native audit and full-size Light/Dark response exports; no fresh editor inspection.",
+  "native_source": "workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-20-activity-replies-2026-10-02",
+  "geometry": {
+    "readingInset": 16,
+    "bubbleToActivity": 24,
+    "activityTarget": 36,
+    "detailsTop": 20,
+    "detailsToAnswer": 32,
+    "bodySize": 14,
+    "bodyLineHeight": 22,
+    "utilityMinimum": 12,
+    "currentMarker": 8
+  },
+  "adaptations": [
+    "F-06 fixed public summaries replace illustrative named evidence, never inventing goal/fact titles or claiming an effect succeeded.",
+    "Arbitrary content scrolls inside the retained column; older history and Latest messages are functional reading controls.",
+    "Completion renders immediately without a second entrance or a timer; only the current live activity marker moves.",
+    "External images remain text placeholders; links use safe explicit schemes."
+  ]
+}

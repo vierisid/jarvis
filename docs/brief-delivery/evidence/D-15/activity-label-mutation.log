@@ -1,0 +1,39 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/chat/message/ConversationMessages.test.tsx:
+(pass) quiet user and unboxed answer share one scoped thread; activity starts collapsed [66.86ms]
+(pass) twenty open/close cycles retain the same reply and local preference across tabs [173.02ms]
+(pass) workspace change drops view preferences even if chat IDs are reused [13.37ms]
+(pass) only current live activity moves; completed and replayed activities never move [8.74ms]
+(pass) disconnect stops the current marker without losing partial content [6.28ms]
+(pass) terminal failure keeps the partial answer and does not expose the raw error [5.32ms]
+(pass) cancellation is not completion; unfinished activity does not claim success [8.12ms]
+(pass) completion shows output immediately and condenses untouched working details [7.20ms]
+(pass) missing progress produces a generic working state, not invented activity [3.62ms]
+51 |  setTurn({state:"running"});binding.chat!.activity={};await render();expect(host.querySelector(".brief-activity-toggle")).toBeNull();expect(host.textContent).toContain("Preparing your response");
+52 | });
+53 | test("foreign conversations, requests, raw tool/system messages and unsafe labels stay out",async()=>{
+54 |  binding.chat!.messages=[...binding.chat!.messages,{id:"foreign",role:"assistant",conversation_id:"b",content:"FOREIGN",created_at:3},{id:"tool",role:"tool",conversation_id:"a",content:"SECRET_TOOL",created_at:4},{id:"system",role:"system",conversation_id:"a",content:"HIDDEN_REASONING",created_at:5}];
+55 |  binding.chat!.activity={one:activity("one","completed",{summary:"RAW_ARGS"}),foreign:activity("foreign","completed",{conversationId:"b",summary:"FOREIGN"}),wrong:activity("wrong","completed",{requestId:"different"})};
+56 |  await render();await click(toggle());for(const secret of ["FOREIGN","SECRET_TOOL","HIDDEN_REASONING","RAW_ARGS"])expect(host.textContent).not.toContain(secret);expect(host.querySelectorAll(".brief-activity-list li").length).toBe(1);expect(host.textContent).toContain("Activity finished.");
+                                                                                                                                                    ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "RAW_ARGS"
+Received: "Prepare my callHide activityMemoryFinishedRAW_ARGSA clear next step\nAgree the scope."
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-15/ui/src/brief/chat/message/ConversationMessages.test.tsx:56:144)
+(fail) foreign conversations, requests, raw tool/system messages and unsafe labels stay out [8.73ms]
+(pass) markdown supports tables/code and safe links without HTML or remote image effects [15.98ms]
+(pass) URLs reject executable, relative, credentials and malformed destinations [0.72ms]
+(pass) gates never substitute fixture history in live mode [1.40ms]
+(pass) owner binding captures the exact conversation for scroll and history [0.70ms]
+(pass) stable activity order and turn identity survive interleaved response arrival [0.71ms]
+(pass) history retry uses one existing owner without hiding retained messages [10.51ms]
+(pass) semantic scroll anchor survives growth above it and only bottom readers follow [5.80ms]
+(pass) a condensed activity falls back to its own summary rather than another response [1.41ms]
+
+ 17 pass
+ 1 fail
+ 115 expect() calls
+Ran 18 tests across 1 file. [694.00ms]
