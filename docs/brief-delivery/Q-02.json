@@ -3,7 +3,7 @@
   "title": "Expand workflow evaluations to the founder jobs",
   "date": "2026-10-05",
   "branch": "brief/q-02",
-  "worktree": "/home/vierisid/.cache/codex/jarvis-q-02",
+  "worktree": "a checkout of brief/q-02",
   "initial_baseline": "7c7e3e1e (brief/q-01, PR #725, on brief/foundations 462d955d)",
   "baseline": "7c7e3e1e7c9c4e1377ec9b924dd95e64524a01cc",
   "baseline_ref": "brief/q-01; stacked because Q-02 extends the same evaluator files",
@@ -88,7 +88,7 @@
     }
   ],
   "quick_verify": {
-    "cwd": "/home/vierisid/.cache/codex/jarvis-q-02",
+    "cwd": "repository root, on brief/q-02",
     "command": "bun run eval:workflows --mode smoke --split development --taskset founder --out /tmp/q02-founder",
     "expected": "exit 0; all 32 rows pass, including an approval pause, an offline block, a missing file and a Gmail draft graded on its graph",
     "screenshot": "not applicable: no visible UI changes"
