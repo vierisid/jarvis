@@ -1,0 +1,15 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "entry": "81:212",
+  "specification": "721:382923",
+  "workbench": "721:356175",
+  "composer_states": ["720:346833", "720:346854", "720:346874", "720:346896", "720:346918", "720:346940"],
+  "send_states": ["720:346797", "720:346803", "720:346809", "720:346815", "720:346821"],
+  "inspection": "Saved native UI-18 library/build/specification and final prototype images, not a fresh editor inspection",
+  "geometry": { "empty_height": 56, "maximum_height": 104, "reference_width": 403, "hit_area": 44, "mark": 30, "bottom_inset": 22 },
+  "motion_ms": { "growth": 180, "send_intent": 180, "send_exit": 160, "tooltip": 350 },
+  "runtime_extensions": ["Arbitrary text, IME, plain-text paste and bounded scrolling", "Suggestions preserve existing writing by appending when nonempty", "Actual provider retains and clears drafts on acceptance", "44px stop control delegates the exact selected turn", "Attachment slot stays unavailable until D-14/F-05 are provided"],
+  "excluded": ["Attachment fan", "Activity/reply redesign", "Live provider mounting", "Production activation"]
+}
