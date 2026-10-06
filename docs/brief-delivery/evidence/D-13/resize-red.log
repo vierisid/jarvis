@@ -1,0 +1,9 @@
+AssertionError [ERR_ASSERTION]: light/false/grow/0: textarea extends above its surface ({"surface":{"top":1045,"bottom":1101,"height":56},"text":{"top":1003,"bottom":1095,"height":92},"send":{"top":1051,"bottom":1095,"height":44},"plus":{"top":1051,"bottom":1095,"height":44}})
+    at \\wsl.localhost\Ubuntu\home\vierisid\.cache\codex\jarvis-d-13\docs\brief-delivery\evidence\D-13\resize-check.cjs:36:18 {
+  generatedMessage: false,
+  code: 'ERR_ASSERTION',
+  actual: false,
+  expected: true,
+  operator: '==',
+  diff: 'simple'
+}

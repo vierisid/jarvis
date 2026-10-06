@@ -69,8 +69,22 @@ try {
   await change(() => client.select(a)); await click("Stop response");
   assert.deepEqual(frames("brief_chat_cancel").at(-1).payload, { conversationId: a, turnId: first.turnId, requestId: first.requestId });
   assert.equal(client.store.getSnapshot().conversations[b].turns[second.turnId].state, "running");
+  // The real client returned void above. Feedback must outlive dispatch.
+  await Bun.sleep(50);
+  assert.equal(host.querySelector('[role="status"]')!.textContent, "Stopping response…");
+  assert.ok(host.querySelector('[aria-label="Retry stop"]'));
+  await change(() => receive("brief_chat_error", { ...first, code: "unavailable", message: "Stop unavailable" }, first.requestId));
+  assert.equal(host.querySelector('[role="status"]')!.textContent, "Stop unavailable");
+  await click("Stop response");
+  assert.equal(host.querySelector('[role="status"]')!.textContent, "Stopping response…");
+  await change(() => receive("brief_chat_error", { ...first, code: "unavailable", message: "Stop unavailable" }, first.requestId));
+  assert.equal(host.querySelector('[role="status"]')!.textContent, "Stop unavailable");
+  await click("Stop response");
+  assert.equal(host.querySelector('[role="status"]')!.textContent, "Stopping response…");
+  assert.deepEqual(frames("brief_chat_cancel").at(-1).payload, { conversationId: a, turnId: first.turnId, requestId: first.requestId });
   await change(() => emit(turns.finish(first, "cancelled"))); assert.equal(input().value, "Newer draft A");
-  assert.ok(host.querySelector('[aria-label="Send"]')); assert.equal(frames("brief_chat_cancel").length, 1);
+  assert.ok(host.querySelector('[aria-label="Send"]')); assert.equal(frames("brief_chat_cancel").length, 3);
+  assert.notEqual(host.querySelector('[role="status"]')!.textContent, "Stopping response…");
   await click("Send"); const rejected = lastSend();
   await change(() => receive("brief_chat_error", { ...rejected, code: "unavailable", message: "Unavailable" }));
   assert.equal(input().value, "Newer draft A"); assert.ok(host.querySelector('[aria-label="Send"]'));
@@ -80,8 +94,8 @@ try {
   await change(() => client.store.setDraft(a, "Retained on return"));
   await change(() => client.close(a)); assert.equal(client.store.getSnapshot().activeId, b); assert.ok(host.querySelector('[aria-label="Stop response"]'));
   await change(async () => { await client.reopen(a); sync(a); }); assert.equal(input().value, "Retained on return");
-  assert.equal(frames("brief_chat_cancel").length, 1);
-  console.log("PASS actual F-04 client/store + mounted D-13 composer: pending acceptance, same-ID reconnect replay, newer-draft retention, unchanged-draft clearing, two concurrent chats, exact turn cancellation, rejected send/retry, close/reopen retention; no real transport or model.");
+  assert.equal(frames("brief_chat_cancel").length, 3);
+  console.log("PASS actual F-04 client/store + mounted D-13 composer: pending acceptance, same-ID reconnect replay, newer-draft retention, unchanged-draft clearing, two concurrent chats, exact turn cancellation, persistent stopping after synchronous dispatch, delayed failure/retry/terminal, rejected send/retry, close/reopen retention; no real transport or model.");
 } finally {
   await change(() => root.unmount()); client.stop(); closeDb(); host.remove(); GlobalRegistrator.unregister();
 }
