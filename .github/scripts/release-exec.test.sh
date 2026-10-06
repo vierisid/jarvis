@@ -25,7 +25,7 @@
 #   3. the structure check run against mutated copies of the workflow, one hole
 #      per copy, each of which must be reported -- so a structure check that
 #      has been neutered fails here instead of passing everything.
-#   Plus one sink executed directly -- publish-brain's `npm version` -- with a
+#   Plus one sink executed directly -- pack-brain's `npm version` -- with a
 #   hostile value and no validator in front of it, to show the env-quoted form
 #   is safe on its own and not just because the gate stopped the input.
 #
@@ -159,6 +159,47 @@ const reaches = (j, seen = new Set()) => {
 };
 for (const name of Object.keys(jobs))
   if (name !== "validate-tag" && !reaches(name)) out.push(name + ": does not run downstream of validate-tag");
+// #682: every job that installs dependencies runs either before the sidecar
+// workflow starts (upstream of it) or after it has published (downstream).
+// Running alongside it, a lifecycle script could swap a sidecar artifact
+// between its upload and the download in publish-sidecar.
+const upstreamOf = (j, target, seen = new Set()) => {
+  if (j === target) return true;
+  if (seen.has(j)) return false;
+  seen.add(j);
+  return needsOf(j).some((n) => upstreamOf(n, target, seen));
+};
+for (const [name, job] of Object.entries(jobs)) {
+  const runs = (job.steps ?? []).map((st) => typeof st.run === "string" ? st.run : "").join("\n");
+  const depCode = /\b(?:bun\s+(?:install|i|add|run|test|x)|bunx|npx|npm\s+(?:ci|install|i|run|run-script|test|pack|exec|x))\b/;
+  if (!depCode.test(runs) || !jobs.sidecar) continue;
+  if (!upstreamOf("sidecar", name) && !upstreamOf(name, "sidecar"))
+    out.push(name + ": installs dependencies while the sidecar workflow may still be running (neither before nor after it)");
+}
+// ...and ordering covers only publish-sidecar. A job that consumes the
+// sidecar-* artifacts later (github-release attaches them) checks them
+// against the digests publish-sidecar recorded, which arrive as a job output.
+for (const [name, job] of Object.entries(jobs)) {
+  const steps = job.steps ?? [];
+  // A download reaches the sidecar artifacts when it names none (that is
+  // all of them) or its name or glob matches a sidecar artifact name.
+  const glob = (g) => new RegExp("^" + String(g).replace(/[.+^$(){}|\\]/g, "\\$&").replace(/\*/g, ".*").replace(/\?/g, ".") + "$");
+  const reaches = (st) => {
+    const w = st.with ?? {};
+    if (w.name === undefined && w.pattern === undefined) return true;
+    return ["sidecar-linux-x64", "sidecar-win32-x64", "sidecar-darwin-arm64"].some((n) => glob(w.pattern ?? w.name).test(n));
+  };
+  const dl = steps.findIndex((st) => String(st.uses ?? "").startsWith("actions/download-artifact@") && reaches(st));
+  if (dl < 0) continue;
+  // Same condition as the download (or none), so it cannot be switched off
+  // on its own.
+  const cond = steps[dl].if;
+  const v = steps.findIndex((st, i) => i > dl && typeof st.run === "string" && /\bsha256sum\b[^\n]*-c\b/.test(st.run) &&
+    /needs\.sidecar\.outputs\.sums/.test(JSON.stringify(st.env ?? {})) && (st.if === undefined || st.if === cond));
+  if (v < 0) out.push(name + ": uses the sidecar artifacts without checking them against needs.sidecar.outputs.sums");
+  else if (steps.slice(dl + 1, v).some((st) => st.run !== undefined || st.uses))
+    out.push(name + ": does something with the sidecar artifacts before checking their digests");
+}
 if (out.length) console.log(out.join("\n"));
 ' "$@"
 }
@@ -362,7 +403,7 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 	mutant 'a ${{ }} expression back inside a run:' \
 		'run: npm version "$VERSION"' 'run: npm version "${{ needs.validate-tag.outputs.version }}"'
 	mutant 'a consumer that does not list validate-tag in needs' \
-		'needs: [validate-tag, test, build-docker, sidecar]' 'needs: [test, build-docker, sidecar]'
+		'needs: [validate-tag, pack-brain, build-docker, sidecar]' 'needs: [pack-brain, build-docker, sidecar]'
 	mutant 'RELEASE_TAG back in the workflow env' \
 		'  DRY_RUN: ${{ inputs.dry_run || false }}' '  DRY_RUN: ${{ inputs.dry_run || false }}
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}'
@@ -409,6 +450,14 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 ' ''
 	mutant 'cancel-in-progress on the publish group (#645)' \
 		'  cancel-in-progress: false' '  cancel-in-progress: true'
+	mutant 'the brain build running alongside the sidecar workflow (#682)' \
+		'    needs: [validate-tag, test, build-docker, sidecar]' '    needs: [validate-tag, test, build-docker]'
+	mutant 'the GitHub Release attaching sidecar binaries without checking their digests (#682)' \
+		"printf '%s' \"\$SUMS\" | base64 -d | sha256sum --strict -c -" "true"
+	mutant 'the sidecar digest check switched off on its own (#682)' \
+		$'      - name: Verify sidecar binaries\n        if: needs.sidecar.outputs.released == \'true\'' $'      - name: Verify sidecar binaries\n        if: false'
+	mutant 'a download of every artifact attached without a digest check (#682)' \
+		$'          path: artifacts\n          pattern: sidecar-*\n\n      # Exactly the bytes' $'          path: artifacts\n\n      - run: ls artifacts\n\n      # Exactly the bytes'
 	mutant 'a job no longer downstream of the gate' \
 		'  test:
     needs: validate-tag' '  test:'
@@ -416,12 +465,13 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 
 echo
 echo "sink executed without the gate in front of it"
-# publish-brain's `npm version` is the line #644 named. Run its script with a
-# hostile VERSION in env and an npm stub that records its argv: the value must
-# arrive as one literal argument and run nothing.
-SINK="$(yq step publish-brain 'Set package version')" || SINK=""
+# The brain's `npm version` is the line #644 named (in publish-brain then,
+# in pack-brain since #682 split the build out of the OIDC job). Run its
+# script with a hostile VERSION in env and an npm stub that records its argv:
+# the value must arrive as one literal argument and run nothing.
+SINK="$(yq step pack-brain 'Set package version')" || SINK=""
 if [ -z "$SINK" ]; then
-	no "found publish-brain's 'Set package version' step"
+	no "found pack-brain's 'Set package version' step"
 else
 	mkdir -p "${WORK}/bin"
 	cat >"${WORK}/bin/npm" <<'EOF'

@@ -26,6 +26,25 @@ on:
       version:
         description: "the sidecar version (from sidecar/VERSION)"
         value: ${{ jobs.resolve.outputs.version }}
+      sums:
+        description: "base64 sha256sum manifest of the sidecar-* artifacts publish-sidecar published"
+        value: ${{ jobs.publish-sidecar.outputs.sums }}
+    # Every secret this workflow reads, declared so the caller can pass exactly
+    # these instead of `secrets: inherit` (#682). All optional: absent, the
+    # macOS bundle ships unsigned with a warning, as on a fork. A secret read
+    # here but not declared would be silently empty when called, so
+    # .github/scripts/workflow-hardening.test.sh checks the two lists match.
+    secrets:
+      APPLE_CERT_P12:
+        required: false
+      APPLE_CERT_PASSWORD:
+        required: false
+      ASC_KEY_ID:
+        required: false
+      ASC_ISSUER_ID:
+        required: false
+      ASC_API_KEY_P8:
+        required: false
   workflow_dispatch:
     inputs:
       dry_run:
@@ -34,8 +53,8 @@ on:
         default: true
 
 # Least privilege at the workflow level: the jobs that need OIDC declare it
-# themselves — publish-sidecar for npm Trusted Publishing, build-sidecar to
-# federate into Google Cloud KMS for Windows signing.
+# themselves -- publish-sidecar for npm Trusted Publishing, sign-sidecar-windows
+# to federate into Google Cloud KMS for Windows signing.
 permissions:
   contents: read
 
@@ -61,6 +80,8 @@ jobs:
       should_release: ${{ steps.v.outputs.should_release }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: v
         run: |
           set -euo pipefail
@@ -87,18 +108,18 @@ jobs:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ${{ matrix.runner }}
-    # OIDC, for google-github-actions/auth: Windows signing federates into
-    # Google Cloud KMS with no stored credential at all. Declared here rather
-    # than at the workflow level so no other job can mint a token.
+    # No id-token here (#682). Only Windows signing federates into Google
+    # Cloud, so the Windows leg is its own jobs (build-sidecar-windows, then
+    # sign-sidecar-windows, the only one of the two with id-token), and
+    # these four legs -- two of which run Swift and Apple tooling on macOS --
+    # cannot mint an OIDC token at all. GitHub has no per-leg permissions,
+    # which is why it is a job and not a matrix entry.
     permissions:
       contents: read
-      id-token: write
     env:
       # secrets can't be referenced in step `if:` conditions — surface their
       # presence as env flags so the signing steps can gate on them.
       HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
-      # Windows signing is keyless: there is no secret to sentinel on, so the
-      # gate is the keyring variable — nothing can be signed without it.
     strategy:
       fail-fast: false
       matrix:
@@ -113,12 +134,6 @@ jobs:
             npm_pkg: linux-arm64
             runner: ubuntu-24.04-arm
             setup: linux
-          - goos: windows
-            goarch: amd64
-            npm_pkg: win32-x64
-            runner: ubuntu-latest
-            setup: windows-cross
-            ext: .exe
           - goos: darwin
             goarch: arm64
             npm_pkg: darwin-arm64
@@ -131,6 +146,8 @@ jobs:
             setup: darwin
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
@@ -162,127 +179,21 @@ jobs:
             [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true
           done
 
-      # Windows cross-compile from Linux via mingw-w64 + the bundled EventToken.h
-      # shim (the one WebView2 SDK header mingw lacks). Same recipe as
-      # verify-windows.sh — no Windows runner needed.
-      - name: Install mingw-w64 (Windows cross)
-        if: matrix.setup == 'windows-cross'
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          # osslsigncode: post-sign verification inside sign-windows.sh
-          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 osslsigncode
-
+      # .github/scripts/build-sidecar.sh is shared with build-sidecar-windows,
+      # so the two jobs cannot drift in how they build or pin.
       - name: Build sidecar (${{ matrix.goos }}/${{ matrix.goarch }})
         working-directory: sidecar
         env:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
-          CGO_ENABLED: "1"
+          SETUP: ${{ matrix.setup }}
+          OUT: ${{ env.SIDECAR_BIN }}
           # The self-updater verifies the payloads it installs exactly as
           # Jarvis-Setup does (internal/update), so it carries the same pins:
-          # the Authenticode publisher on Windows, the Developer ID team on
-          # macOS. Empty means chain-only + a warning in sidecar.log.
-          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          # the Developer ID team on macOS. Empty means chain-only + a
+          # warning in sidecar.log.
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-        run: |
-          set -euo pipefail
-          LDFLAGS="-s -w -X main.sidecarVersion=$(cat VERSION)"
-          PIN=""
-          case "${{ matrix.setup }}" in
-            windows-cross)
-              export CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
-              export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
-              # GUI subsystem: no console window when the .exe is launched.
-              LDFLAGS="$LDFLAGS -H windowsgui"
-              PIN="${SIGNING_PUBLISHER_CN}"
-              # The go tool splits -ldflags on whitespace, so the CN (a company
-              # name, always with spaces) carries its own quotes to the linker.
-              LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherCN=${PIN}'"
-              ;;
-            darwin)
-              if [ "${{ matrix.goarch }}" = "amd64" ]; then TARGET=x86_64-apple-macos11; else TARGET=arm64-apple-macos11; fi
-              export CC="clang -target $TARGET" CXX="clang++ -target $TARGET"
-              PIN="${APPLE_TEAM_ID}"
-              LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedTeamID=${PIN}'"
-              ;;
-          esac
-          if [ "${{ matrix.setup }}" != "linux" ] && [ -z "${PIN}" ]; then
-            echo "::warning::no signing pin for ${{ matrix.goos }}; self-updates from this build will accept any validly signed payload."
-          fi
-          # -trimpath keeps -ldflags out of the embedded build info: without it
-          # the pin text is in the binary even when the -X target is wrong
-          # (a renamed variable), and the check below could never fail.
-          go build -trimpath -ldflags "$LDFLAGS" \
-            -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
-          if [ -n "${PIN}" ]; then
-            # Via a file, not a pipe: `grep -q` exiting early SIGPIPEs strings,
-            # which pipefail would report as a missing pin.
-            strings "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" > /tmp/sidecar-strings.txt
-            if ! grep -qF "${PIN}" /tmp/sidecar-strings.txt; then
-              echo "::error::signing pin '${PIN}' is not present in the sidecar binary; check the -X path and the -ldflags quoting"
-              exit 1
-            fi
-          fi
-
-      # Windows signing needs BOTH the KMS keyring variable AND the issued
-      # certificate chain in the repo. They arrive at DIFFERENT times: the
-      # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
-      # exists days before the certificate does. Gating on the variable alone
-      # would turn that window into hard release failures instead of unsigned
-      # builds — so check the chain file too.
-      - name: Windows signing readiness
-        id: winsign
-        if: matrix.setup == 'windows-cross'
-        run: |
-          set -euo pipefail
-          if [ -z "${{ vars.GCP_KMS_KEYRING }}" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned binary (SmartScreen will warn users)."
-          elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing — the certificate has not been issued/committed yet, so this binary ships UNSIGNED."
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-
-      # ─── Windows: Authenticode signature (Cloud KMS + Sectigo) ────────
-      # Keyless: OIDC → Workload Identity Federation → a short-lived access
-      # token for the Cloud HSM key. Nothing is stored in this repository, so
-      # there is no signing secret to leak or rotate.
-      - name: Authenticate to Google Cloud
-        id: gcp-auth
-        if: matrix.setup == 'windows-cross' && steps.winsign.outputs.ready == 'true'
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
-          token_format: "access_token"
-
-      # scripts/sign-windows.sh is the single signing code path, shared with
-      # installer-release.yml and runnable locally (see its header), so a local
-      # test exercises exactly what CI runs. Gated on GCP_KMS_KEYRING: absent
-      # (forks, pre-onboarding) the .exe ships unsigned, exactly as before.
-      - name: Sign Windows binary (Cloud KMS)
-        if: matrix.setup == 'windows-cross' && steps.winsign.outputs.ready == 'true'
-        working-directory: sidecar
-        env:
-          GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
-          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
-          GCP_KMS_KEY_ALIAS: ${{ vars.GCP_KMS_KEY_ALIAS }}
-          # Asserted post-sign: the binary must carry OUR publisher, the same
-          # identity the installer pins at runtime.
-          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
-          # Sectigo's roots are publicly trusted, so demand the FULL
-          # verification (osslsigncode exit 0). This is the script's default
-          # too; stated here so the release posture is visible at the workflow.
-          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
-        run: |
-          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
-            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset — the signature's publisher will not be asserted."
-          fi
-          scripts/sign-windows.sh "${{ env.SIDECAR_BIN }}.exe"
-
+        run: ../.github/scripts/build-sidecar.sh
 
       # ─── macOS: assemble Jarvis.app, sign, notarize ────────────────
       # Notifications (UNUserNotification) and stable TCC grants require a
@@ -401,7 +312,188 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sidecar-${{ matrix.npm_pkg }}
-          path: sidecar/${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}
+          path: sidecar/${{ env.SIDECAR_BIN }}
+
+  # --- Windows: cross-compile (no OIDC) ---
+  # Split out of the matrix so the matrix holds no id-token, and split from
+  # signing so the compiler, mingw and the Go module graph never run in a job
+  # that can mint one (#682): a compromised toolchain here could otherwise ask
+  # Workload Identity Federation for a token and have KMS sign anything. The
+  # binary crosses to sign-sidecar-windows with its digest as a job output.
+  build-sidecar-windows:
+    needs: resolve
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          # The Actions cache is writable by any run on main, and Go reuses
+          # cached modules and build output without re-verifying them (#681).
+          cache: false
+          # Track sidecar/go.mod as the single source of the Go version.
+          go-version-file: sidecar/go.mod
+          cache-dependency-path: sidecar/go.sum
+
+      # Windows cross-compile from Linux via mingw-w64 + the bundled EventToken.h
+      # shim (the one WebView2 SDK header mingw lacks). Same recipe as
+      # verify-windows.sh -- no Windows runner needed.
+      - name: Install mingw-w64 (Windows cross)
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+
+      - name: Build sidecar (windows/amd64)
+        working-directory: sidecar
+        env:
+          GOOS: windows
+          GOARCH: amd64
+          SETUP: windows-cross
+          OUT: ${{ env.SIDECAR_BIN }}.exe
+          # The self-updater verifies the payloads it installs exactly as
+          # Jarvis-Setup does (internal/update), so it carries the same pin:
+          # the Authenticode publisher. Empty means chain-only + a warning in
+          # sidecar.log.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+        run: ../.github/scripts/build-sidecar.sh
+
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        run: echo "sha256=$(sha256sum "${SIDECAR_BIN}.exe" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Not under the sidecar-* name: that is the signed binary, which only
+      # sign-sidecar-windows uploads.
+      - name: Upload unsigned binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-win32-x64
+          path: sidecar/${{ env.SIDECAR_BIN }}.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # --- Windows: Authenticode-sign via Cloud KMS ---
+  # The only job here besides publish-sidecar that holds id-token. It builds
+  # nothing: it verifies the binary build-sidecar-windows reported, signs it
+  # with scripts/sign-windows.sh (whose jsign download is checksum-pinned),
+  # and uploads the result as sidecar-win32-x64 -- signed, or unsigned when
+  # signing is not configured, exactly as before.
+  sign-sidecar-windows:
+    needs: [resolve, build-sidecar-windows]
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    # OIDC, for google-github-actions/auth: Windows signing federates into
+    # Google Cloud KMS with no stored credential at all. Declared here rather
+    # than at the workflow level so no other job can mint a token. Windows
+    # signing is keyless: there is no secret to sentinel on, so the gate is
+    # the keyring variable -- nothing can be signed without it.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      # For scripts/sign-windows.sh and the committed certificate chain.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-win32-x64
+          path: sidecar
+
+      # The digest travels as a job output, which only build-sidecar-windows
+      # can set; the artifact store is writable by every job in this run.
+      - name: Verify the binary
+        working-directory: sidecar
+        env:
+          SHA256: ${{ needs.build-sidecar-windows.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-sidecar-windows reported no digest"; exit 1; }
+          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -
+
+      # osslsigncode: post-sign verification inside sign-windows.sh
+      - name: Install osslsigncode
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osslsigncode
+
+      # Windows signing needs BOTH the KMS keyring variable AND the issued
+      # certificate chain in the repo. They arrive at DIFFERENT times: the
+      # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
+      # exists days before the certificate does. Gating on the variable alone
+      # would turn that window into hard release failures instead of unsigned
+      # builds — so check the chain file too.
+      - name: Windows signing readiness
+        id: winsign
+        run: |
+          set -euo pipefail
+          if [ -z "${{ vars.GCP_KMS_KEYRING }}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned binary (SmartScreen will warn users)."
+          elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing — the certificate has not been issued/committed yet, so this binary ships UNSIGNED."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ─── Windows: Authenticode signature (Cloud KMS + Sectigo) ────────
+      # Keyless: OIDC → Workload Identity Federation → a short-lived access
+      # token for the Cloud HSM key. Nothing is stored in this repository, so
+      # there is no signing secret to leak or rotate.
+      - name: Authenticate to Google Cloud
+        id: gcp-auth
+        if: steps.winsign.outputs.ready == 'true'
+        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
+        with:
+          workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
+          token_format: "access_token"
+          # Only access_token is used. The default (true) writes a
+          # gha-creds-*.json into the workspace that carries what is needed
+          # to mint further OIDC tokens; nothing here reads it (#682).
+          create_credentials_file: false
+
+      # scripts/sign-windows.sh is the single signing code path, shared with
+      # installer-release.yml and runnable locally (see its header), so a local
+      # test exercises exactly what CI runs. Gated on GCP_KMS_KEYRING: absent
+      # (forks, pre-onboarding) the .exe ships unsigned, exactly as before.
+      - name: Sign Windows binary (Cloud KMS)
+        if: steps.winsign.outputs.ready == 'true'
+        working-directory: sidecar
+        env:
+          GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
+          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
+          GCP_KMS_KEY_ALIAS: ${{ vars.GCP_KMS_KEY_ALIAS }}
+          # Asserted post-sign: the binary must carry OUR publisher, the same
+          # identity the installer pins at runtime.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          # Sectigo's roots are publicly trusted, so demand the FULL
+          # verification (osslsigncode exit 0). This is the script's default
+          # too; stated here so the release posture is visible at the workflow.
+          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
+        run: |
+          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
+            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset — the signature's publisher will not be asserted."
+          fi
+          scripts/sign-windows.sh "${{ env.SIDECAR_BIN }}.exe"
+
+      - name: Upload binary
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: sidecar-win32-x64
+          path: sidecar/${{ env.SIDECAR_BIN }}.exe
+          if-no-files-found: error
 
   # ─── Publish sidecar packages to npm ───────────────────────────
   publish-sidecar:
@@ -410,14 +502,18 @@ jobs:
     # It must be declared HERE rather than on the calling job, because GitHub
     # does not allow `environment:` on a job that uses a reusable workflow.
     environment: release
-    needs: [resolve, build-sidecar]
+    needs: [resolve, build-sidecar, sign-sidecar-windows]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
+    outputs:
+      sums: ${{ steps.sums.outputs.sums }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -436,6 +532,18 @@ jobs:
         with:
           path: artifacts
           pattern: sidecar-*
+
+      # The digests of exactly what this job publishes, handed to the brain's
+      # github-release job as a job output (#682). Artifacts are writable by
+      # every job in the run, and release-exec.yml's pack-brain runs
+      # dependency code after this job and before github-release downloads
+      # the same artifacts to attach them; job outputs only this job can set.
+      - name: Record artifact digests
+        id: sums
+        run: |
+          set -euo pipefail
+          sums="$(cd artifacts && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | base64 -w0)"
+          echo "sums=${sums}" >> "$GITHUB_OUTPUT"
 
       - name: Resolve version
         id: version

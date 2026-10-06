@@ -173,9 +173,11 @@ jobs:
   # a release of one ref under another ref's version. It is not a control
   # against anyone who can create tags or run workflows: nothing in this
   # repository restricts who creates a `v*` tag or what it points at (no tag
-  # ruleset, no protected release environment), and a writer can dispatch a
-  # modified copy of this file from their own branch, which runs with the same
-  # publish identity. Those are repository settings, tracked separately.
+  # ruleset), and a writer can dispatch a modified copy of this file from
+  # their own branch. What stands between that and an npm publish is the
+  # `release` environment's required reviewers on publish-brain and
+  # publish-sidecar (#679, #756), not this gate. Nothing equivalent gates
+  # publish-docker's push to GHCR: only the `needs:` order in this file.
   validate-tag:
     runs-on: ubuntu-latest
     permissions: {}
@@ -226,6 +228,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           # The Actions cache is writable by any run on main; see #681.
@@ -387,35 +391,52 @@ jobs:
       contents: read
       id-token: write
     uses: ./.github/workflows/sidecar-release.yml
-    # The Apple signing credentials (APPLE_*, ASC_*) must reach the reusable
-    # workflow — without inherit its macOS signing steps silently skip.
+    # Exactly the Apple signing credentials, not `secrets: inherit` (#682):
+    # inherit made every repository secret -- DISCORD_WEBHOOK_URL, NPM_TOKEN,
+    # and any added later -- referenceable from the called workflow, whose
+    # publish-sidecar job holds id-token. These five must reach it or its
+    # macOS signing steps silently skip; sidecar-release.yml declares the
+    # same five under workflow_call, and workflow-hardening.test.sh checks
+    # that the two lists match.
     # Windows signing needs no secret at all: it federates into Google Cloud
     # with the id-token granted above (repository *variables* are visible to
-    # called workflows without inherit).
-    secrets: inherit
+    # called workflows without passing anything).
+    secrets:
+      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
     with:
       dry_run: ${{ inputs.dry_run || false }}
 
-  # ─── Publish main brain package to npm ─────────────────────────
-  # After the sidecar: a published brain advertises the sidecar it ships with
-  # (SIDECAR_LATEST_VERSION) to every connecting sidecar, which offers to
-  # install it, so that sidecar has to be on npm first. The sidecar job is a
-  # no-op success when its version is already published.
-  publish-brain:
+  # --- Build the brain tarball (no OIDC) ---
+  # Split from publish-brain (#682). Everything that runs repository and
+  # dependency code -- `bun install` lifecycle scripts, prepublishOnly's UI and
+  # workflow builds, the tarball check -- runs here, in a job that cannot mint
+  # an OIDC token, and its one product is the tarball plus its digest.
+  # publish-brain then publishes that file and runs nothing else: npm runs no
+  # lifecycle scripts when publishing a tarball, only a directory.
+  #
+  # It runs dependency code, and every job in this run can write this run's
+  # artifacts, so it starts only once the sidecar workflow has published and
+  # build-docker is done: a lifecycle script left running here must not be
+  # able to swap the sidecar binaries between their upload and
+  # publish-sidecar's download. publish-brain waits for both anyway, so this
+  # costs no time. The timeout bounds how long anything it starts can linger.
+  pack-brain:
     needs: [validate-tag, test, build-docker, sidecar]
     runs-on: ubuntu-latest
-    # npm Trusted Publishing for @usejarvis/brain requires this environment, so
-    # the OIDC token this job mints must carry the claim or npm refuses the
-    # publish (#679). It is also the gate: the environment's required reviewers
-    # mean a stolen token or a compromised action cannot publish unattended --
-    # automation cannot click Approve. Removing this line does not loosen a
-    # check, it breaks publishing outright.
-    environment: release
+    timeout-minutes: 30
     permissions:
       contents: read
-      id-token: write
+    outputs:
+      tarball: ${{ steps.pack.outputs.tarball }}
+      sha256: ${{ steps.pack.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
@@ -426,19 +447,17 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: "22"
-          registry-url: "https://registry.npmjs.org"
 
-      # Exact version: see NPM_VERSION at the top. The check is there so a
-      # pin that silently did not take (a PATH shadowing the global install)
-      # fails here instead of publishing with the bundled npm 10.
-      - name: Ensure npm supports Trusted Publishing
+      # The same npm that publishes packs, so the tarball is the one npm
+      # itself would have built from the directory.
+      - name: Install the pinned npm
         run: |
           set -euo pipefail
           npm install -g "npm@${NPM_VERSION}"
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 
-      # Frozen here too: this job runs prepublishOnly and publishes the tarball,
+      # Frozen here too: this job runs prepublishOnly and builds the tarball,
       # so it must not resolve a version bun.lock never recorded.
       - run: bun install --frozen-lockfile
 
@@ -459,17 +478,98 @@ jobs:
       - name: Check published tarball contents
         run: bun run scripts/check-package-files.ts
 
+      # `npm pack` runs prepack/prepare/postpack but not prepublishOnly, which
+      # is why the step above runs it explicitly: the result is what a
+      # directory `npm publish` would have uploaded.
+      - name: Pack
+        id: pack
+        run: |
+          set -euo pipefail
+          dir="$RUNNER_TEMP/brain-pack"
+          mkdir -p "$dir"
+          name="$(npm pack --pack-destination "$dir" | tail -n1)"
+          [ -f "$dir/$name" ] || { echo "::error::npm pack did not produce $dir/$name"; exit 1; }
+          sum="$(sha256sum "$dir/$name" | cut -d' ' -f1)"
+          echo "tarball=$name" >> "$GITHUB_OUTPUT"
+          echo "sha256=$sum" >> "$GITHUB_OUTPUT"
+          echo "Packed $name (sha256 $sum)"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: brain-tarball
+          path: ${{ runner.temp }}/brain-pack/${{ steps.pack.outputs.tarball }}
+          if-no-files-found: error
+          retention-days: 7
+
+  # ─── Publish main brain package to npm ─────────────────────────
+  # After the sidecar: a published brain advertises the sidecar it ships with
+  # (SIDECAR_LATEST_VERSION) to every connecting sidecar, which offers to
+  # install it, so that sidecar has to be on npm first. The sidecar job is a
+  # no-op success when its version is already published.
+  #
+  # The only job here that can mint an OIDC token for npm, so it checks out
+  # nothing, installs no dependencies and runs no repository code (#682): it
+  # verifies pack-brain's tarball against the digest pack-brain reported and
+  # publishes it.
+  publish-brain:
+    needs: [validate-tag, pack-brain, build-docker, sidecar]
+    runs-on: ubuntu-latest
+    # npm Trusted Publishing for @usejarvis/brain requires this environment, so
+    # the OIDC token this job mints must carry the claim or npm refuses the
+    # publish (#679). It is also the gate: the environment's required reviewers
+    # mean a stolen token or a compromised action cannot publish unattended --
+    # automation cannot click Approve. Removing this line does not loosen a
+    # check, it breaks publishing outright.
+    environment: release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "22"
+          registry-url: "https://registry.npmjs.org"
+
+      # Exact version: see NPM_VERSION at the top. The check is there so a
+      # pin that silently did not take (a PATH shadowing the global install)
+      # fails here instead of publishing with the bundled npm 10.
+      - name: Ensure npm supports Trusted Publishing
+        run: |
+          set -euo pipefail
+          npm install -g "npm@${NPM_VERSION}"
+          got="$(npm --version)"
+          [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: brain-tarball
+          path: ${{ runner.temp }}/brain-pack
+
+      # The digest travels as a job output, which only pack-brain can set; the
+      # artifact store is writable by every job in this run. A mismatch means
+      # the file is not the one pack-brain built.
+      - name: Verify the tarball
+        env:
+          TARBALL: ${{ needs.pack-brain.outputs.tarball }}
+          SHA256: ${{ needs.pack-brain.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$TARBALL" =~ ^usejarvis-brain-[0-9A-Za-z.-]+\.tgz$ ]] || { echo "::error::unexpected tarball name"; exit 1; }
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::pack-brain reported no digest"; exit 1; }
+          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -
+
       - name: Publish to npm
         env:
           VERSION: ${{ needs.validate-tag.outputs.version }}
           PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+          TARBALL: ${{ needs.pack-brain.outputs.tarball }}
         run: |
           flags=()
           if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
           if [ "$PRERELEASE" = "true" ]; then flags+=(--tag next); fi
           pkg="@usejarvis/brain"
 
-          if ! npm publish --access public "${flags[@]}"; then
+          if ! npm publish "${RUNNER_TEMP}/brain-pack/${TARBALL}" --access public "${flags[@]}"; then
             if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
               echo "${pkg}@${VERSION} is already on npm; treating as success."
             else
@@ -492,9 +592,14 @@ jobs:
     permissions:
       contents: write
     steps:
+      # persist-credentials: false (#682). Nothing in this job runs git:
+      # action-gh-release creates the release through the API with its own
+      # token input. Left on, the contents: write token sat in .git/config
+      # for every later step to read.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       # The sidecar binaries are uploaded as artifacts by the reusable
       # sidecar-release workflow (same run); pull them in only when it actually
@@ -505,6 +610,20 @@ jobs:
         with:
           path: artifacts
           pattern: sidecar-*
+
+      # Exactly the bytes publish-sidecar published (#682): its digests come
+      # as a job output; the artifacts themselves could have been replaced by
+      # any job in this run since -- pack-brain runs dependency code in
+      # between.
+      - name: Verify sidecar binaries
+        if: needs.sidecar.outputs.released == 'true'
+        env:
+          SUMS: ${{ needs.sidecar.outputs.sums }}
+        run: |
+          set -euo pipefail
+          [ -n "$SUMS" ] || { echo "::error::the sidecar workflow reported no digests"; exit 1; }
+          cd artifacts
+          printf '%s' "$SUMS" | base64 -d | sha256sum --strict -c -
 
       - name: Package sidecar assets
         if: needs.sidecar.outputs.released == 'true'
@@ -579,6 +698,8 @@ jobs:
       packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       # Pinned images: see BINFMT_IMAGE and BUILDKIT_IMAGE at the top.
       # cache-image: false, because with it on the action `docker load`s the
@@ -596,7 +717,10 @@ jobs:
         with:
           driver-opts: image=${{ env.BUILDKIT_IMAGE }}
 
+      # Only when something will be pushed (#682): a dry run builds with
+      # push: false and has no use for a registry credential on disk.
       - name: Log in to GitHub Container Registry
+        if: env.DRY_RUN != 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
           registry: ghcr.io

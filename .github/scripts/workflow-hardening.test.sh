@@ -31,6 +31,12 @@
 #      restored from the Actions cache (writable by any run on main). Both
 #      npm publishers pin the same exact npm. Not checked: Dockerfile base
 #      images, and setup-node's node-version major (runner tool cache).
+#   6. Per-job authority (#682): no matrix job holds id-token (every leg would
+#      get it); no `secrets: inherit`, and a local reusable workflow is passed
+#      exactly the secrets it declares, which are exactly the ones it reads; a
+#      job that runs `npm publish` with id-token runs no Bun and no dependency
+#      install or build; on the release path no checkout leaves its token in
+#      the repository config; and no registry login happens on a dry run.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -268,6 +274,123 @@ if (rule === "mutable") {
     }
   }
 }
+if (rule === "narrow") {
+  // Per-job authority on the release path (#682).
+  const fs = require("node:fs");
+  const writes = (perm, k) => perm === "write-all" || (perm && typeof perm === "object" && perm[k] === "write");
+  const refs = (o) => new Set([...JSON.stringify(o).matchAll(/\bsecrets\.([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]).filter((k) => k !== "GITHUB_TOKEN"));
+  // The release path: any workflow with a job in the `release` environment
+  // (release-exec.yml and sidecar-release.yml). None of their jobs runs git
+  // with credentials, so none needs the token left in the repository config.
+  const release = Object.values(jobs).some((j) => (j.environment?.name ?? j.environment) === "release");
+  for (const [name, job] of Object.entries(jobs)) {
+    const perm = job.permissions ?? doc.permissions;
+    const oidc = writes(perm, "id-token");
+    // GitHub has no per-leg permissions: a matrix job holding id-token hands
+    // it to every leg, whichever one needs it.
+    if (oidc && job.strategy?.matrix && typeof job.uses !== "string")
+      out.push(name + ": a matrix job holding id-token: write (every leg can mint a token)");
+    if (job.secrets === "inherit")
+      out.push(name + ": secrets: inherit (pass the named secrets the called workflow declares)");
+    if (typeof job.uses === "string" && job.uses.startsWith("./") && job.secrets !== "inherit") {
+      let called = null;
+      try { called = Bun.YAML.parse(fs.readFileSync(process.env.REPO + "/" + job.uses.slice(2), "utf8")); } catch {}
+      if (!called) out.push(name + ": cannot read " + job.uses);
+      else {
+        const on = called.on ?? called[true] ?? {};
+        const declared = Object.keys(on.workflow_call?.secrets ?? {}).sort();
+        const used = [...refs(called.jobs ?? {})].sort();
+        // No `secrets:` at all passes nothing, which is the case that makes
+        // the macOS signing steps silently skip.
+        const given = job.secrets && typeof job.secrets === "object" ? job.secrets : {};
+        const passed = Object.keys(given).sort();
+        if (JSON.stringify(declared) !== JSON.stringify(used))
+          out.push(name + ": " + job.uses + " reads secrets " + JSON.stringify(used) + " but declares " + JSON.stringify(declared));
+        if (JSON.stringify(passed) !== JSON.stringify(declared))
+          out.push(name + ": passes " + JSON.stringify(passed) + " to " + job.uses + ", which declares " + JSON.stringify(declared));
+        for (const [k, v] of Object.entries(given))
+          if (String(v).replace(/\s+/g, "") !== "${{secrets." + k + "}}")
+            out.push(name + ": passes " + k + " as " + JSON.stringify(v) + ", not secrets." + k);
+      }
+    }
+    const steps = job.steps ?? [];
+    const runs = steps.map((st) => typeof st.run === "string" ? st.run : "").join("\n");
+    // A job that can mint an npm publish token publishes, and runs no
+    // dependency or repository build code: that happens in a job without it.
+    // Commands only: a word at the start of a line, after ; & | ( ! or $( or
+    // a backtick, after then/do/else, or behind sudo/env/exec/time/command.
+    // Also behind if/elif/while/until, VAR=value assignments, timeout N,
+    // xargs and nohup, and with a directory in front of the program.
+    const cmd = (w) => new RegExp("(?:^|[;&|(!`]\\s*|\\$\\(\\s*|\\b(?:then|do|else|if|elif|while|until)\\s+)" +
+      "(?:(?:sudo|env|exec|time|command|nice|nohup|xargs)\\s+(?:-\\S+\\s+)*|timeout\\s+(?:-\\S+\\s+)*\\S+\\s+|[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:\\S*/)?" + w);
+    // Comments: a # at line start or after whitespace, outside ${#...}.
+    const lines = runs.split("\n").map((l) => l.replace(/(^|\s)#(?!\{).*$/, "$1").trim());
+    // npm verbs that run package or repository code, and any global install
+    // that is not npm itself pinned to NPM_VERSION.
+    const npmRuns = cmd("npm\\s+(?:ci|install|i|add|isntall|in|it|install-test|install-ci-test|run|run-script|rum|urn|exec|x|pack|rebuild|rb|test|t|tst|start|restart|stop|update|up|upgrade|dedupe|link|ln|explore)\\b");
+    const globalOther = (line) => /\bnpm\s+(?:install|i|add)\b/.test(line) && /\s(?:-g|--global)\b/.test(line) &&
+      line.replace(/\s(?:-g|--global)\b/, "").replace(/^.*?\bnpm\s+(?:install|i|add)\s+/, "").trim() !== "\"npm@${NPM_VERSION}\"";
+    if (oidc && /\bnpm\s+publish\b/.test(runs)) {
+      if (steps.some((st) => String(st.uses ?? "").startsWith("oven-sh/setup-bun@")))
+        out.push(name + ": publishes with id-token and installs Bun");
+      for (const st of steps)
+        if (st.shell !== undefined && !/^(bash|sh)\b/.test(String(st.shell)))
+          out.push(name + ": step with shell: " + st.shell + " in a job that publishes with id-token");
+      for (const line of lines)
+        if (cmd("(?:bun|bunx|npx|yarn|pnpm|node|make|python3?|perl|ruby|deno|go)\\b").test(line) ||
+            (npmRuns.test(line) && !(/\s(?:-g|--global)\b/.test(line) && !globalOther(line))) || globalOther(line))
+          out.push(name + ": publishes with id-token and runs: " + line);
+    }
+    // publish-brain is the tarball-only shape (#682): no checkout, nothing
+    // but setup-node and download-artifact, npm itself as the only global
+    // install, a digest check, then a publish of a .tgz path. Allowlisted
+    // rather than denylisted, so a step added later has to be argued for.
+    // publish-sidecar is not this shape yet: it publishes from directories.
+    if (name === "publish-brain") {
+      const allowed = ["actions/setup-node@", "actions/download-artifact@"];
+      for (const st of steps) {
+        const u = String(st.uses ?? "");
+        if (u && !allowed.some((a) => u.startsWith(a))) out.push(name + ": uses " + u + " (only setup-node and download-artifact)");
+      }
+      for (const line of lines)
+        if (globalOther(line)) out.push(name + ": installs something other than npm@${NPM_VERSION} globally: " + line);
+      const at = (re) => steps.findIndex((st) => typeof st.run === "string" && re.test(st.run));
+      const verify = at(/\bsha256sum\s+-c\b/);
+      const publish = at(/\bnpm\s+publish\b/);
+      if (verify < 0 || verify > publish) out.push(name + ": no sha256sum -c of the tarball before npm publish");
+      for (const st of steps)
+        if (typeof st.run === "string" && /\bnpm\s+publish\b/.test(st.run) && !/\bnpm\s+publish\s+"[^"]*\.tgz"/.test(st.run.replace(/\$\{TARBALL\}/g, "x.tgz")))
+          out.push(name + ": npm publish is not given a .tgz path (a directory publish runs its lifecycle scripts)");
+    }
+    // On the release path a job that can mint a token builds nothing: the
+    // compiler, the module graph and dependency scripts run in a job without
+    // id-token, and the result crosses with its digest.
+    if (release && oidc) {
+      for (const line of lines)
+        if (cmd("go\\s+(?:build|install|generate|run|test|vet|mod|get)\\b").test(line) || /build-sidecar\.sh/.test(line) ||
+            cmd("(?:bun|bunx|npx|yarn|pnpm|make|swiftc|swift|xcodebuild|clang|gcc|cc|cargo|cmake)\\b").test(line) ||
+            (npmRuns.test(line) && !(/\s(?:-g|--global)\b/.test(line) && !globalOther(line))))
+          out.push(name + ": builds in a job holding id-token: " + line);
+      for (const st of steps)
+        if (String(st.uses ?? "").startsWith("./"))
+          out.push(name + ": runs local action " + st.uses + " in a job holding id-token");
+    }
+    // google-github-actions/auth writes a credentials file by default that
+    // can mint further tokens; on the release path only access_token is used.
+    if (release)
+      for (const st of steps)
+        if (String(st.uses ?? "").startsWith("google-github-actions/auth@") && st.with?.create_credentials_file !== false)
+          out.push(name + ": google-github-actions/auth leaves a credentials file in the workspace (create_credentials_file is not false)");
+    if (release)
+      for (const st of steps)
+        if (String(st.uses ?? "").startsWith("actions/checkout@") && st.with?.["persist-credentials"] !== false)
+          out.push(name + ": checkout leaves the token in .git/config (persist-credentials is not false)");
+    for (const st of steps)
+      if (String(st.uses ?? "").startsWith("docker/login-action@") && "dry_run" in ((doc.on ?? doc[true] ?? {}).workflow_dispatch?.inputs ?? {}) &&
+          !/env\.DRY_RUN\s*!=\s*.true./.test(String(st.if ?? "")))
+        out.push(name + ": logs in to a registry on a dry run");
+  }
+}
 if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
@@ -352,6 +475,12 @@ else
 fi
 
 echo
+echo "per-job authority on the release path"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f"): no id-token matrix, no inherited secrets, OIDC publish jobs run no build, no persisted credentials" narrow "$f"
+done
+
+echo
 echo "the catalog sync processes third-party data without write access"
 expect_clean "sync-pieces-catalog.yml: no job that installs dependencies or runs the generator holds a write scope; installs are frozen" \
 	untrusted "$WORKFLOWS/sync-pieces-catalog.yml"
@@ -424,6 +553,53 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		$'          no-cache: true\n' ''
 	expect_caught 'Go modules and build output restored from the Actions cache' mutable "$WORKFLOWS/sidecar-release.yml" \
 		$'          cache: false\n' ''
+}
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'secrets: inherit back on the sidecar call' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n' $'    secrets: inherit\n    x-was:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n'
+	expect_caught 'a declared signing secret the caller does not pass (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
+	expect_caught 'id-token back on the four-leg sidecar matrix' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'    permissions:\n      contents: read\n    env:\n      # secrets can' $'    permissions:\n      contents: read\n      id-token: write\n    env:\n      # secrets can'
+	expect_caught 'the brain build back in the job that holds id-token' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: bun run prepublishOnly\n      - name: Verify the tarball'
+	expect_caught 'a token left in .git/config by the release job' narrow "$WORKFLOWS/release-exec.yml" \
+		$'          fetch-depth: 0\n          persist-credentials: false\n' $'          fetch-depth: 0\n'
+	expect_caught 'no secrets passed to the sidecar call at all (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}\n      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}\n      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}\n      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
+	expect_caught 'a checkout back in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Verify the tarball'
+	expect_caught 'a directory npm publish (runs lifecycle scripts)' narrow "$WORKFLOWS/release-exec.yml" \
+		'npm publish "${RUNNER_TEMP}/brain-pack/${TARBALL}" --access public' 'npm publish --access public'
+	expect_caught 'the digest check removed before the publish' narrow "$WORKFLOWS/release-exec.yml" \
+		'| sha256sum -c -' '| cat'
+	expect_caught 'another global package installed in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: npm install -g evil@1.0.0\n      - name: Verify the tarball'
+	expect_caught 'a node script run in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: node scripts/x.js\n      - name: Verify the tarball'
+	expect_caught 'the Windows build back in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Install osslsigncode' $'      - run: ../.github/scripts/build-sidecar.sh\n      - name: Install osslsigncode'
+	expect_caught 'a global install with the flag after the package' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: npm install evil@1.0.0 -g\n      - name: Verify the tarball'
+	expect_caught 'npm test in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: npm test\n      - name: Verify the tarball'
+	expect_caught 'a command behind sudo in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: sudo node x.js\n      - name: Verify the tarball'
+	expect_caught 'a non-shell step in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - shell: node {0}\n        run: console.log(1)\n      - name: Verify the tarball'
+	expect_caught 'go test in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Install osslsigncode' $'      - run: go test ./...\n      - name: Install osslsigncode'
+	expect_caught 'a local action in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Install osslsigncode' $'      - uses: ./.github/actions/bun-setup\n      - name: Install osslsigncode'
+	expect_caught 'the Google credentials file left in the workspace' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          create_credentials_file: false\n' ''
+	expect_caught 'node behind an if, in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: if node x.js; then true; fi\n      - name: Verify the tarball'
+	expect_caught 'node behind an assignment and a path, in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: X=1 /usr/bin/node evil.js\n      - name: Verify the tarball'
+	expect_caught 'a registry login on a dry run' narrow "$WORKFLOWS/release-exec.yml" \
+		$'        if: env.DRY_RUN != \'true\'\n        uses: docker/login-action@' $'        uses: docker/login-action@'
 }
 expect_caught 'an unfrozen install in the catalog sync' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'run: bun install --frozen-lockfile' 'run: bun install'
