@@ -46,7 +46,9 @@ These fixtures use temporary on-disk databases, the actual authenticated HTTP se
 
 For a D-16 integration host with the flag deliberately enabled, POST a prompt such as `On manual trigger, draft a short report in the dashboard. Never send email or delete files.` with a stable request ID. Poll until terminal. Repeat the identical POST and confirm the same IDs; inspect the canonical draft's actions and disabled state. Submit an underspecified prompt and inspect the blocker. Cancel a pending composition and verify no draft appears when its provider later returns. This integration exercise calls the configured model; it was not used for fixture verification.
 
-Verification commands, counts, four rejected unsafe mutations and logs are recorded in `docs/brief-delivery/F-07.json` and `docs/brief-delivery/evidence/F-07/`. Exact pushed-head CI is recorded in the PR description.
+The workflow data-access audit lists this service as a creator that keeps only the new version ID. A capture-canary regression verifies that later workflow output cannot appear in job receipts, replay or subsequent composition prompts; returning an entire version is rejected. The existing model-boundary framing rules are unchanged.
+
+Verification commands, counts, five rejected unsafe mutations and logs are recorded in `docs/brief-delivery/F-07.json` and `docs/brief-delivery/evidence/F-07/`. Exact pushed-head CI is recorded in the PR description.
 
 ## Rollback
 

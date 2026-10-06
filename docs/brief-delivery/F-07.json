@@ -71,18 +71,18 @@
   "verification": {
     "focused": {
       "command": "bun test src/brief/composition.test.ts src/daemon/api-brief-composition.test.ts src/actions/tools/persisted-workflow-composer.test.ts",
-      "passed": 36,
+      "passed": 37,
       "failed": 0,
-      "assertions": 203,
+      "assertions": 213,
       "files": 3,
       "log": "docs/brief-delivery/evidence/F-07/focused.log"
     },
     "affected": {
       "command_file": "docs/brief-delivery/evidence/F-07/affected-command.txt",
-      "passed": 513,
+      "passed": 525,
       "failed": 0,
-      "assertions": 3749,
-      "files": 32,
+      "assertions": 3781,
+      "files": 33,
       "log": "docs/brief-delivery/evidence/F-07/affected.log"
     },
     "typescript": {
@@ -91,8 +91,8 @@
       "log": "docs/brief-delivery/evidence/F-07/typescript.log"
     },
     "mutations": {
-      "rejected": 4,
-      "total": 4,
+      "rejected": 5,
+      "total": 5,
       "sources_restored": true,
       "evidence": "docs/brief-delivery/evidence/F-07/mutations.json"
     },
@@ -109,6 +109,18 @@
       "failed_before_fix": 2,
       "log": "docs/brief-delivery/evidence/F-07/empty-scaffold-red.log",
       "green": "Final suites cover empty loops/routers as blockers and nested piece actions as populated drafts."
+    },
+    "data_plane_audit": {
+      "red_commit": "24eb2564602bd4e241c38a02997e620568d4e01d",
+      "ci_url": "https://github.com/vierisid/jarvis/actions/runs/37467865642",
+      "ci_counts": {
+        "passed": 8014,
+        "skipped": 31,
+        "failed": 1
+      },
+      "ci_excerpt": "docs/brief-delivery/evidence/F-07/ci-data-plane-audit-excerpt.log",
+      "local_red": "docs/brief-delivery/evidence/F-07/data-plane-audit-red.log",
+      "resolution": "Reviewed creator-only version access and registered it with the existing audit. A capture-canary runtime test and rejecting whole-version mutation verify that receipts, replay and later prompts do not forward captured step data. All audit assertions are retained."
     }
   },
   "manual_checks": {

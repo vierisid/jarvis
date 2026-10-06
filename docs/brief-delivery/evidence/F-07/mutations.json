@@ -25,6 +25,12 @@
       "test": "restart records queued",
       "exit_code": 1,
       "rejected": true
+    },
+    {
+      "mutation": "whole-version-projection",
+      "test": "job receipts and later composition",
+      "exit_code": 1,
+      "rejected": true
     }
   ]
 }
