@@ -734,7 +734,16 @@ export class EngineRuntime {
       ownerKillGraceMs: this.killGraceMs,
     };
     if (this.runtime !== undefined) spawnOptions.runtime = this.runtime;
-    const proc = spawnEngine(spawnOptions);
+    let proc: SpawnedEngine;
+    try {
+      proc = spawnEngine(spawnOptions);
+    } catch (err) {
+      // Nothing was started (a bundle that changed since it was verified is
+      // refused before spawn, #671), so the sandbox registered above would
+      // otherwise stay live with a minted token and no engine behind it.
+      this.api.registry.terminate(sandboxId);
+      throw err;
+    }
     const owned = { sandboxId, proc };
     this.spawned.add(owned);
     void proc.exited.then(() => this.spawned.delete(owned));

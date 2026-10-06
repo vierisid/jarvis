@@ -25,6 +25,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, utimesSync } from "node:fs";
 import { dirname } from "node:path";
 import { isSecretEnvName } from "../../../util/subprocess-env";
+import { assertBundleUnchanged } from "./bundle-integrity";
 import {
   ENGINE_BUNDLE_ENV,
   ENGINE_MARKER_ENV,
@@ -249,6 +250,10 @@ export function engineEnv(opts: SpawnEngineOptions): Record<string, string> {
 }
 
 export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
+  // A bundle that verified at resolution must still be those bytes (#671).
+  // Throws BEFORE anything is started, so a refusal leaves no process behind.
+  // Per spawn, not per acquire: a warm pooled engine already holds the code.
+  assertBundleUnchanged(opts.bundlePath);
   const env = engineEnv(opts);
   const runtime = opts.runtime ?? process.execPath;
   // --smol: the engine is a short-lived-to-parked sandbox that grows to
