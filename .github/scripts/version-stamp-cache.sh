@@ -15,9 +15,30 @@
 # How: copy the tracked tree to a temp context, build it with one throwaway
 # version, bump package.json's version in the copy exactly as a release commit
 # does, build again with that version as VERSION, and judge only the second
-# build. Building both from the same copy keeps the check independent of
-# whatever this builder already holds (in CI the image build before it may
-# have come from the remote gha cache without being materialised locally).
+# build.
+#
+# Both builds run on a builder this script creates and removes, and that is
+# load-bearing rather than tidiness. Copying the tree is NOT enough on its own,
+# which is what the first version of this header assumed: the comparison also
+# needs both builds to be served by the same cache. On the job's shared builder
+# the warm build is served from the remote gha cache -- entries imported by the
+# image build before it, and never materialised locally -- while the bump build
+# computes its layers here. BuildKit then cannot match the two, so
+# `COPY --from=manifest /app/package.json` misses even though the manifest
+# stage normalises the version and its output is byte-identical, and the miss
+# cascades through `bun install` and every stage after it.
+#
+# That is not hypothetical: it red-flagged four correct PR branches in a row
+# (#691, #713, #716, #728) while passing on every push to main, where the gha
+# cache happens to hold that branch's own layers. A guard that fails on a
+# correct branch and passes on a re-run trains everyone to re-run it, which is
+# the same as not having it (#688).
+#
+# The cost, stated plainly: the warm build is now genuinely cold, so this job
+# pays one full image build it used to get from the remote cache for free. That
+# is the price of the check meaning what it says. If it proves too slow, the
+# honest alternatives are to run it only on push to main, or to judge fewer
+# stages -- not to put it back on the shared builder.
 #
 # Allowed to re-run in the second build: the `manifest` stage (it reads the
 # bumped package.json), the version stamp, and the production steps from the
@@ -27,8 +48,8 @@
 #
 # Usage:   .github/scripts/version-stamp-cache.sh [REPO_DIR]
 # Needs:   docker buildx, git, jq (all on GitHub's ubuntu runners; the job
-#          that runs this sets up no bun). No output is exported; only cache entries
-#          are left behind.
+#          that runs this sets up no bun). No output is exported, and the
+#          builder it creates is removed on exit, so nothing is left behind.
 #
 # Exit 0 = only allowed steps re-ran. Exit 1 = another step re-ran (named), or
 # a step this relies on recognising was not found.
@@ -42,7 +63,21 @@ VERSION_ARG="0.0.0-stamp-check.${TAG}"
 WORK="$(mktemp -d)"
 LOG="${WORK}/build.log"
 CTX="${WORK}/context"
-trap 'rm -rf "$WORK"' EXIT
+# Named for this run so concurrent jobs cannot remove each other's builder.
+BUILDER="stamp-check-${TAG}-$$"
+cleanup() {
+  docker buildx rm --force "$BUILDER" >/dev/null 2>&1 || true
+  rm -rf "$WORK"
+}
+trap cleanup EXIT
+
+# Fresh cache for both builds. See the header: on the job's shared builder the
+# warm build is served from entries the gha cache imported and never
+# materialised, which makes the comparison meaningless.
+if ! docker buildx create --name "$BUILDER" --driver docker-container >/dev/null; then
+  echo "could not create a dedicated buildx builder (${BUILDER})" >&2
+  exit 1
+fi
 
 # The stamp is recognised by the message only it prints. If that text ever
 # changes, this fails closed ("no stamp step found") rather than passing.
@@ -55,7 +90,7 @@ mkdir -p "$CTX"
 git -C "$REPO" ls-files -z | (cd "$REPO" && tar --null -T - -cf -) | tar -xf - -C "$CTX"
 
 build() {
-  if ! docker buildx build --progress=plain --build-arg "VERSION=$1" "$CTX" >"$LOG" 2>&1; then
+  if ! docker buildx build --builder "$BUILDER" --progress=plain --build-arg "VERSION=$1" "$CTX" >"$LOG" 2>&1; then
     cat "$LOG" >&2
     echo "the image did not build with VERSION=$1" >&2
     exit 1
