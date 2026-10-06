@@ -1,23 +1,23 @@
-Full suite on brief/q-03 at 75323d2b (local WSL2)
+Full suite on brief/q-03 at b050b6f8 (local WSL2)
 $ bun test --preload ./src/test-preload.ts
- 7781 pass
+ 7792 pass
  86 skip
- 7 fail
- 55616 expect() calls
-Ran 7874 tests across 427 files. [881.34s]
+ 9 fail
+ 55689 expect() calls
+Ran 7887 tests across 427 files. [549.59s]
 
 Failures:
-(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [95.63ms]
-(fail) page-writable element refs (#592, integration) > (unnamed) [1021.47ms]
-(fail) browser primitives (integration) > (unnamed) [512.70ms]
-(fail) browser local-file lockdown (integration, #521) > (unnamed) [540.69ms]
-(fail) webapp template delivery via browser tools (integration) > (unnamed) [664.03ms]
-(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [827.07ms]
-(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [644.48ms]
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [57.81ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [2326.62ms]
+(fail) browser primitives (integration) > (unnamed) [307.58ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [222.35ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [240.72ms]
+(fail) end to end, against a real process > reaps an engine whose owner really did die [42.42ms]
+(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [162.94ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [205.77ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [322.79ms]
 
-All 7 also fail on the base with no Q work applied (below): git config lint and six Chromium launches on this machine. The two engine-reaper tests that fail there passed in this run. Q-03 changes none of those areas.
-
-An earlier run at this commit before its last amend failed one more test, the JARVIS_ env classification in src/util/model-exec-env.test.ts, because JARVIS_PLANNING_POLICY was new; 75323d2b classifies it as a daemon setting.
+All 9 also fail on the base with no Q work applied (below): git config lint, six Chromium launches and two engine-reaper tests on this machine. Q-03 changes none of those areas.
 
 Baseline: the same test files on brief/foundations 462d955d with no Q work applied (run 5 October for Q-13, same base commit)
 $ bun test --preload ./src/test-preload.ts src/sites/git-config-lint.test.ts src/workflows/runner/engine-runtime/engine-reaper.test.ts src/actions/browser/browser-local-files.test.ts src/actions/browser/browser-primitives.test.ts src/actions/browser/fixtures/headless-chromium.test.ts src/actions/browser/page-writable-element-refs.test.ts src/actions/tools/browser-template-delivery.test.ts
