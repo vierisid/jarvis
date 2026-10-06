@@ -1,0 +1,150 @@
+{
+  "task": "D-09",
+  "title": "Render outcomes and recent activity",
+  "date": "2026-10-06",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-09",
+  "stack_base": "brief/d-08",
+  "baseline": "2711a4dcecb7ff4489da014a688e901edbac5ce0",
+  "inspected_main": "abb14deb59f1ca3a84227be9a2035687b29dea34",
+  "head": {
+    "ref": "brief/d-09",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-09.json"
+  },
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/741"
+  ],
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-09",
+  "preview": "http://localhost:4389/?brief=preview&specimen=today#/_brief_preview",
+  "activation_dependencies": [
+    "F-16 qualified outcome aggregates",
+    "F-15 measured goal progress",
+    "D-07 Today slots and existing shell/navigation gates",
+    "D-33 release approval"
+  ],
+  "owns": [
+    "ui/src/brief/today/outcomes/**",
+    "ui/src/brief/today/activity/**",
+    "Isolated Today preview composition",
+    "docs/brief-delivery/D-09.*",
+    "docs/brief-delivery/evidence/D-09/**"
+  ],
+  "excludes": [
+    "Aggregation or time-saving calculations",
+    "Goal scoring or measurement semantics",
+    "Live owner registration",
+    "D-10 goal actions",
+    "Workflow execution",
+    "Backend storage or writers"
+  ],
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "nodes": [
+      "81:3",
+      "81:212",
+      "659:252946",
+      "659:261827"
+    ],
+    "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+    "reference": "ui/src/brief/today/outcomes/figma-reference.json"
+  },
+  "tests": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "result": "pass",
+      "tests": 146,
+      "assertions": 3007,
+      "files": 12,
+      "focused_tests": 17
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "build": "index-3eg61bg8.js",
+      "css": "index-sjfk8zc9.css",
+      "note": "Existing @theme/@tailwind warnings."
+    },
+    {
+      "command": "git diff --check",
+      "result": "pass"
+    }
+  ],
+  "mutations": [
+    {
+      "case": "Missing baseline accepted as time saved",
+      "result": "expected failing test; source restored",
+      "evidence": "evidence/D-09/baseline-mutation.log"
+    },
+    {
+      "case": "Glyph animates on mount",
+      "result": "expected failing test; source restored",
+      "evidence": "evidence/D-09/motion-mutation.log"
+    }
+  ],
+  "browser_checks": [
+    {
+      "case": "All eight settled theme/sidebar/chat combinations, 6 to 7 update",
+      "result": "pass",
+      "max_label_delta_px": 0,
+      "evidence": "evidence/D-09/final-shell-matrix.json"
+    },
+    {
+      "case": "9 to 10 target completion",
+      "result": "pass",
+      "max_label_delta_px": 0.02081298828125,
+      "evidence": "evidence/D-09/target-completion.json"
+    },
+    {
+      "case": "Ten update/reset cycles, unchanged refresh and local route return",
+      "result": "pass",
+      "evidence": [
+        "evidence/D-09/repeat-updates.json",
+        "evidence/D-09/return-and-refresh.json"
+      ]
+    },
+    {
+      "case": "Partial/unknown/zero/loading/empty/stale/unavailable/unsupported/long",
+      "result": "pass",
+      "evidence": "evidence/D-09/data-states.json"
+    },
+    {
+      "case": "Reduced motion, keyboard tooltip, 390px long text",
+      "result": "pass",
+      "evidence": [
+        "evidence/D-09/reduced-motion.json",
+        "evidence/D-09/narrow-long.json",
+        "evidence/D-09/bar-focus-dark.jpg"
+      ]
+    }
+  ],
+  "limitations": [
+    "No F-16 owner present; live measurement integration remains untested and gated.",
+    "UI display guards cannot establish the sufficiency or accuracy of underlying evidence.",
+    "Final shell matrix and Light screenshot include the count-width correction. Other behavior evidence and Dark screenshots precede that CSS/target-slot-only correction.",
+    "Raw shell matrix includes in-flight layout samples; only settled matrices support numeric stability claims.",
+    "Container width and Chromium verification do not certify screen readers, mobile keyboards, all browsers or runtime frame rate.",
+    "Activity navigation example targets a route stub; no live run-details room is claimed."
+  ],
+  "rollback": "Leave default Today registration/capabilities off; revert D-09 without data migration or effect replay.",
+  "next": "D-10, separate worktree and PR; not started.",
+  "review_correction": {
+    "finding": "R1",
+    "status": "fixed",
+    "evidence": [
+      "evidence/D-09/review-validation.json",
+      "evidence/D-09/review-browser.json",
+      "evidence/D-09/review-red.log",
+      "evidence/D-09/review-green.log",
+      "evidence/D-09/review-dark-compact.jpg"
+    ],
+    "note": "Ordinary complete numeric text replaces unsupported generic naming; animated glyphs stay hidden. Unknown-change placeholder uses the same fix. Earlier browser matrices retain their original build identity."
+  }
+}

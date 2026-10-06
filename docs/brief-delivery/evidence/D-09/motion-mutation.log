@@ -1,0 +1,24 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/outcomes/outcomes.test.tsx:
+84 |   const parts = host.querySelectorAll<HTMLElement>(".brief-outcome-segment i");
+85 |   expect(parts.length).toBe(10); expect(parts[7]!.style.transform).toBe("scaleX(0.5)"); expect(parts[8]!.style.transform).toBe("scaleX(0)");
+86 | });
+87 |
+88 | test("only the changed count glyphs and seventh segment update; labels and time nodes persist", async () => {
+89 |   await render(outcomeFixture()); expect(animations.length).toBe(0);
+                                                                 ^
+error: expect(received).toBe(expected)
+
+Expected: 0
+Received: 4
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-09/ui/src/brief/today/outcomes/outcomes.test.tsx:89:61)
+(fail) only the changed count glyphs and seventh segment update; labels and time nodes persist [41.99ms]
+
+ 0 pass
+ 13 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [213.00ms]

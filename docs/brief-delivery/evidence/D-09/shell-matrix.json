@@ -1,0 +1,4504 @@
+[
+  {
+    "theme": "light",
+    "rail": false,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 281.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 605.0104370117188,
+          "y": 474.9270935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 548.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 381.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 267.6458435058594
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 676.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 281.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 605.0104370117188,
+          "y": 474.9270935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 548.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 381.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 267.6458435058594
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 676.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "light",
+    "rail": false,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "2"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 941.4166870117188,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 868.875,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 366.9166870117187,
+          "x": 838.4166870117188,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 477.0833435058594,
+          "x": 300.66668701171875,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 477.0833435058594,
+          "x": 300.66668701171875,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 966,
+          "x": 270,
+          "y": 524.59375
+        }
+      },
+      "theme": "light",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 941.4166870117188,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 868.875,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 366.9166870117187,
+          "x": 838.4166870117188,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 477.0833435058594,
+          "x": 300.66668701171875,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 477.0833435058594,
+          "x": 300.66668701171875,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 966,
+          "x": 270,
+          "y": 524.59375
+        }
+      },
+      "theme": "light",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "light",
+    "rail": true,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [
+        {
+          "name": "brief-outcome-composition",
+          "scroll": 150,
+          "text": "90minsaved today · estimatedMonTueWedToday5h back this week+2partnersthis week6/10design partners signed",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-time",
+          "scroll": 150,
+          "text": "90minsaved today · estimatedMonTueWedToday5h back this week",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-time-value",
+          "scroll": 150,
+          "text": "90min",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-week",
+          "scroll": 109,
+          "text": "MonTueWedToday5h back this week",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-bars",
+          "scroll": 109,
+          "text": "MonTueWedToday",
+          "width": 82
+        },
+        {
+          "name": "brief-tooltip-anchor",
+          "scroll": 26,
+          "text": "Mon",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-bar-target",
+          "scroll": 26,
+          "text": "Mon",
+          "width": 7
+        },
+        {
+          "name": "brief-tooltip-anchor",
+          "scroll": 22,
+          "text": "Tue",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-bar-target",
+          "scroll": 22,
+          "text": "Tue",
+          "width": 7
+        },
+        {
+          "name": "brief-tooltip-anchor",
+          "scroll": 27,
+          "text": "Wed",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-bar-target",
+          "scroll": 27,
+          "text": "Wed",
+          "width": 7
+        },
+        {
+          "name": "brief-tooltip-anchor",
+          "scroll": 35,
+          "text": "Today",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-bar-target",
+          "scroll": 35,
+          "text": "Today",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-goal",
+          "scroll": 102,
+          "text": "+2partnersthis week6/10design partners signed",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-delta",
+          "scroll": 102,
+          "text": "+2partnersthis week",
+          "width": 82
+        }
+      ],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 267.875,
+          "w": 9,
+          "x": 385.6666870117187,
+          "y": 648.53125
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 292.66668701171875,
+          "y": 979.6979370117188
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 59.96875,
+          "w": 81.66667175292969,
+          "x": 292.66668701171875,
+          "y": 1038.9896240234375
+        },
+        ".brief-outcome-time > p": {
+          "h": 39.97916793823242,
+          "w": 81.66667175292969,
+          "x": 292.66668701171875,
+          "y": 346.1875
+        },
+        ".brief-outcome-time-value": {
+          "h": 72.60417175292969,
+          "w": 81.66667175292969,
+          "x": 292.66668701171875,
+          "y": 265.5833435058594
+        },
+        ".brief-recent-activity": {
+          "h": 371.1875,
+          "w": 127,
+          "x": 270,
+          "y": 1205.625
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 281.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 605.0104370117188,
+          "y": 474.9270935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 548.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 381.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 267.6458435058594
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 676.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "maxDrift": 633
+  },
+  {
+    "theme": "light",
+    "rail": true,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "2"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 868.6875,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 796.1458740234375,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 439.6458435058594,
+          "x": 765.6875,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 555.3333740234375,
+          "x": 140.6666717529297,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 564.3541870117188,
+          "x": 140.6666717529297,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 1126,
+          "x": 110,
+          "y": 524.59375
+        }
+      },
+      "theme": "light",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 868.6875,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 796.1458740234375,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 439.6458435058594,
+          "x": 765.6875,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 555.3333740234375,
+          "x": 140.6666717529297,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 564.3541870117188,
+          "x": 140.6666717529297,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 1126,
+          "x": 110,
+          "y": 524.59375
+        }
+      },
+      "theme": "light",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": false,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 225.6666717529297,
+          "y": 610.3541870117188
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 163.125,
+          "y": 676.4166870117188
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 241.6666717529297,
+          "x": 132.6666717529297,
+          "y": 735.7083740234375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 241.6666717529297,
+          "x": 132.6666717529297,
+          "y": 345.91668701171875
+        },
+        ".brief-outcome-time-value": {
+          "h": 72.60417175292969,
+          "w": 241.6666717529297,
+          "x": 132.6666717529297,
+          "y": 265.3125
+        },
+        ".brief-recent-activity": {
+          "h": 243.2604217529297,
+          "w": 287,
+          "x": 110,
+          "y": 862.3646240234375
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 256,
+          "y": 610.3333740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 193.45834350585935,
+          "y": 676.3958740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 211.33334350585935,
+          "x": 163,
+          "y": 735.6875
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 211.33334350585935,
+          "x": 163,
+          "y": 345.8958435058594
+        },
+        ".brief-outcome-time-value": {
+          "h": 72.60417175292969,
+          "w": 211.33334350585935,
+          "x": 163,
+          "y": 265.29168701171875
+        },
+        ".brief-recent-activity": {
+          "h": 243.2604217529297,
+          "w": 256.66668701171875,
+          "x": 140.33334350585938,
+          "y": 862.34375
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "maxDrift": 30.333343505859375
+  },
+  {
+    "theme": "dark",
+    "rail": false,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "2"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 941.4166870117188,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 868.875,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 366.9166870117187,
+          "x": 838.4166870117188,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 477.0833435058594,
+          "x": 300.66668701171875,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 477.0833435058594,
+          "x": 300.66668701171875,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 966,
+          "x": 270,
+          "y": 524.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 941.4166870117188,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 868.875,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 366.9166870117187,
+          "x": 838.4166870117188,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 477.0833435058594,
+          "x": 300.66668701171875,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 477.0833435058594,
+          "x": 300.66668701171875,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 966,
+          "x": 270,
+          "y": 524.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": true,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [
+        {
+          "name": "brief-outcome-composition",
+          "scroll": 150,
+          "text": "90minsaved today · estimatedMonTueWedToday5h back this week+2partnersthis week6/10design partners signed",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-time",
+          "scroll": 150,
+          "text": "90minsaved today · estimatedMonTueWedToday5h back this week",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-time-value",
+          "scroll": 150,
+          "text": "90min",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-week",
+          "scroll": 109,
+          "text": "MonTueWedToday5h back this week",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-bars",
+          "scroll": 109,
+          "text": "MonTueWedToday",
+          "width": 82
+        },
+        {
+          "name": "brief-tooltip-anchor",
+          "scroll": 26,
+          "text": "Mon",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-bar-target",
+          "scroll": 26,
+          "text": "Mon",
+          "width": 7
+        },
+        {
+          "name": "brief-tooltip-anchor",
+          "scroll": 22,
+          "text": "Tue",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-bar-target",
+          "scroll": 22,
+          "text": "Tue",
+          "width": 7
+        },
+        {
+          "name": "brief-tooltip-anchor",
+          "scroll": 27,
+          "text": "Wed",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-bar-target",
+          "scroll": 27,
+          "text": "Wed",
+          "width": 7
+        },
+        {
+          "name": "brief-tooltip-anchor",
+          "scroll": 35,
+          "text": "Today",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-bar-target",
+          "scroll": 35,
+          "text": "Today",
+          "width": 7
+        },
+        {
+          "name": "brief-outcome-goal",
+          "scroll": 102,
+          "text": "+2partnersthis week6/10design partners signed",
+          "width": 82
+        },
+        {
+          "name": "brief-outcome-delta",
+          "scroll": 102,
+          "text": "+2partnersthis week",
+          "width": 82
+        }
+      ],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 267.875,
+          "w": 9,
+          "x": 385.6666870117187,
+          "y": 648.53125
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 292.66668701171875,
+          "y": 979.6979370117188
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 59.96875,
+          "w": 81.66667175292969,
+          "x": 292.66668701171875,
+          "y": 1038.9896240234375
+        },
+        ".brief-outcome-time > p": {
+          "h": 39.97916793823242,
+          "w": 81.66667175292969,
+          "x": 292.66668701171875,
+          "y": 346.1875
+        },
+        ".brief-outcome-time-value": {
+          "h": 72.60417175292969,
+          "w": 81.66667175292969,
+          "x": 292.66668701171875,
+          "y": 265.5833435058594
+        },
+        ".brief-recent-activity": {
+          "h": 371.1875,
+          "w": 127,
+          "x": 270,
+          "y": 1205.625
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 281.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 605.0104370117188,
+          "y": 474.9270935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 548.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 381.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 267.6458435058594
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 676.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "maxDrift": 633
+  },
+  {
+    "theme": "dark",
+    "rail": true,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "2"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 868.6875,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 796.1458740234375,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 439.6458435058594,
+          "x": 765.6875,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 555.3333740234375,
+          "x": 140.6666717529297,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 564.3541870117188,
+          "x": 140.6666717529297,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 1126,
+          "x": 110,
+          "y": 524.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 868.6875,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 796.1458740234375,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 439.6458435058594,
+          "x": 765.6875,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 555.3333740234375,
+          "x": 140.6666717529297,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 564.3541870117188,
+          "x": 140.6666717529297,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 1126,
+          "x": 110,
+          "y": 524.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": true,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "2"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        },
+        {
+          "opacity": "0.45",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 610.6875,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 538.1458740234375,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 224.6354217529297,
+          "x": 507.6875,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 653,
+          "x": 110,
+          "y": 524.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 610.6875,
+          "y": 272.5833435058594
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 538.1458740234375,
+          "y": 344.6458435058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 224.6354217529297,
+          "x": 507.6875,
+          "y": 403.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 403.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 289.9895935058594
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 653,
+          "x": 110,
+          "y": 524.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": true,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 281.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 605.0104370117188,
+          "y": 474.9270935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 548.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 381.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 267.6458435058594
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 676.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 281.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 605.0104370117188,
+          "y": 474.9270935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 548.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 381.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 267.6458435058594
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 676.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "light",
+    "rail": true,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 281.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 605.0104370117188,
+          "y": 474.9270935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 548.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 381.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 267.6458435058594
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 676.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 281.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 605.0104370117188,
+          "y": 474.9270935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 548.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 381.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 267.6458435058594
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 676.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": false,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 720.875,
+          "y": 246.58334350585935
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 658.3333740234375,
+          "y": 440.8020935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 219.45834350585935,
+          "x": 627.875,
+          "y": 500.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 333.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 241.64584350585935
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 600,
+          "x": 270,
+          "y": 626.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 720.875,
+          "y": 246.58334350585935
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 658.3333740234375,
+          "y": 440.8020935058594
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 219.45834350585935,
+          "x": 627.875,
+          "y": 500.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 333.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 241.64584350585935
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 600,
+          "x": 270,
+          "y": 626.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "light",
+    "rail": false,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 720.875,
+          "y": 712.5833740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 676.6041870117188,
+          "y": 906.8021240234376
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 219.45834350585935,
+          "x": 627.875,
+          "y": 966.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 799.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 707.6458740234375
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 600,
+          "x": 270,
+          "y": 1092.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "3"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 720.875,
+          "y": 712.5833740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 676.6041870117188,
+          "y": 906.8021240234376
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 219.45834350585935,
+          "x": 627.875,
+          "y": 966.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 799.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 707.6458740234375
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 600,
+          "x": 270,
+          "y": 1092.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "light",
+    "rail": false,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 662.5104370117188,
+          "y": 1002.5833740234376
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 618.2396240234375,
+          "y": 1074.6458740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 170.8229217529297,
+          "x": 569.5104370117188,
+          "y": 1133.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 232.17709350585935,
+          "x": 292.66668701171875,
+          "y": 1122.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 232.17709350585935,
+          "x": 292.66668701171875,
+          "y": 1030.9896240234375
+        },
+        ".brief-recent-activity": {
+          "h": 223.2604217529297,
+          "w": 493,
+          "x": 270,
+          "y": 1252.59375
+        }
+      },
+      "theme": "light",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "3"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 662.5104370117188,
+          "y": 1002.5833740234376
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 618.2396240234375,
+          "y": 1074.6458740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 170.8229217529297,
+          "x": 569.5104370117188,
+          "y": 1133.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 232.17709350585935,
+          "x": 292.66668701171875,
+          "y": 1122.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 232.17709350585935,
+          "x": 292.66668701171875,
+          "y": 1030.9896240234375
+        },
+        ".brief-recent-activity": {
+          "h": 223.2604217529297,
+          "w": 493,
+          "x": 270,
+          "y": 1252.59375
+        }
+      },
+      "theme": "light",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "light",
+    "rail": true,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 610.6875,
+          "y": 714.5833740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 556.4166870117188,
+          "y": 786.6458740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 224.6354217529297,
+          "x": 507.6875,
+          "y": 845.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 845.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 731.9896240234375
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 653,
+          "x": 110,
+          "y": 966.59375
+        }
+      },
+      "theme": "light",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "3"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 610.6875,
+          "y": 714.5833740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 556.4166870117188,
+          "y": 786.6458740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 224.6354217529297,
+          "x": 507.6875,
+          "y": 845.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 845.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 731.9896240234375
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 653,
+          "x": 110,
+          "y": 966.59375
+        }
+      },
+      "theme": "light",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "light",
+    "rail": true,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 723.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 628.3854370117188,
+          "y": 916.9271240234376
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 990.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 823.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 709.6458740234375
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 1118.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "3"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 723.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 628.3854370117188,
+          "y": 916.9271240234376
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 990.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 823.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 709.6458740234375
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 1118.75
+        }
+      },
+      "theme": "light",
+      "week": "block"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": true,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 723.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 628.3854370117188,
+          "y": 916.9271240234376
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 990.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 823.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 709.6458740234375
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 1118.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "3"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 696.25,
+          "y": 723.375
+        },
+        ".brief-outcome-denominator": {
+          "h": 69.33333587646484,
+          "w": 81.58333587646484,
+          "x": 628.3854370117188,
+          "y": 916.9271240234376
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 273.28125,
+          "x": 566.0521240234375,
+          "y": 990.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 823.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 364.71875,
+          "x": 140.6666717529297,
+          "y": 709.6458740234375
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 760,
+          "x": 110,
+          "y": 1118.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": true,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 610.6875,
+          "y": 714.5833740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 556.4166870117188,
+          "y": 786.6458740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 224.6354217529297,
+          "x": 507.6875,
+          "y": 845.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 845.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 731.9896240234375
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 653,
+          "x": 110,
+          "y": 966.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "3"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 610.6875,
+          "y": 714.5833740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 556.4166870117188,
+          "y": 786.6458740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 224.6354217529297,
+          "x": 507.6875,
+          "y": 845.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 845.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 105.60417175292967,
+          "w": 306.35418701171875,
+          "x": 140.6666717529297,
+          "y": 731.9896240234375
+        },
+        ".brief-recent-activity": {
+          "h": 163.2916717529297,
+          "w": 653,
+          "x": 110,
+          "y": 966.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": false,
+    "chat": true,
+    "before": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 662.5104370117188,
+          "y": 1002.5833740234376
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 618.2396240234375,
+          "y": 1074.6458740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 170.8229217529297,
+          "x": 569.5104370117188,
+          "y": 1133.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 232.17709350585935,
+          "x": 292.66668701171875,
+          "y": 1122.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 232.17709350585935,
+          "x": 292.66668701171875,
+          "y": 1030.9896240234375
+        },
+        ".brief-recent-activity": {
+          "h": 223.2604217529297,
+          "w": 493,
+          "x": 270,
+          "y": 1252.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "true",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "3"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        },
+        {
+          "opacity": "1",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 662.5104370117188,
+          "y": 1002.5833740234376
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 618.2396240234375,
+          "y": 1074.6458740234375
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 170.8229217529297,
+          "x": 569.5104370117188,
+          "y": 1133.9375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 232.17709350585935,
+          "x": 292.66668701171875,
+          "y": 1122.59375
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 232.17709350585935,
+          "x": 292.66668701171875,
+          "y": 1030.9896240234375
+        },
+        ".brief-recent-activity": {
+          "h": 223.2604217529297,
+          "w": 493,
+          "x": 270,
+          "y": 1252.59375
+        }
+      },
+      "theme": "dark",
+      "week": "none"
+    },
+    "maxDrift": 0
+  },
+  {
+    "theme": "dark",
+    "rail": false,
+    "chat": false,
+    "before": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "2",
+        "6"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "1",
+          "text": "2"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        },
+        {
+          "opacity": "1",
+          "text": "6"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "6 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 720.875,
+          "y": 712.5833740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 676.6041870117188,
+          "y": 906.8021240234376
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 219.45834350585935,
+          "x": 627.875,
+          "y": 966.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 799.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 707.6458740234375
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 600,
+          "x": 270,
+          "y": 1092.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "after": {
+      "activityBelow": true,
+      "compact": "false",
+      "counts": [
+        "3",
+        "7"
+      ],
+      "glyphs": [
+        {
+          "opacity": "1",
+          "text": "9"
+        },
+        {
+          "opacity": "1",
+          "text": "0"
+        },
+        {
+          "opacity": "0.45",
+          "text": "3"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        },
+        {
+          "opacity": "0.45",
+          "text": "7"
+        }
+      ],
+      "overflows": [],
+      "progress": [
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 design partners signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        },
+        {
+          "class": "brief-progress brief-outcome-progress brief-progress--middle",
+          "label": "7 of 10 signed",
+          "segments": [
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(1)",
+            "scaleX(0)",
+            "scaleX(0)",
+            "scaleX(0)"
+          ]
+        }
+      ],
+      "rects": {
+        ".brief-outcome-delta > span": {
+          "h": 45.125,
+          "w": 50.29166793823242,
+          "x": 720.875,
+          "y": 712.5833740234375
+        },
+        ".brief-outcome-denominator": {
+          "h": 54,
+          "w": 63.79166793823242,
+          "x": 676.6041870117188,
+          "y": 906.8021240234376
+        },
+        ".brief-outcome-goal-progress > p": {
+          "h": 19.98958396911621,
+          "w": 219.45834350585935,
+          "x": 627.875,
+          "y": 966.09375
+        },
+        ".brief-outcome-time > p": {
+          "h": 19.98958396911621,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 799.25
+        },
+        ".brief-outcome-time-value": {
+          "h": 83.60417175292969,
+          "w": 290.54168701171875,
+          "x": 292.66668701171875,
+          "y": 707.6458740234375
+        },
+        ".brief-recent-activity": {
+          "h": 119.30208587646484,
+          "w": 600,
+          "x": 270,
+          "y": 1092.75
+        }
+      },
+      "theme": "dark",
+      "week": "block"
+    },
+    "maxDrift": 0
+  }
+]

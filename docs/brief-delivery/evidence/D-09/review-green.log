@@ -1,0 +1,26 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/outcomes/outcomes.test.tsx:
+(pass) animated numbers expose one complete formatted value through updates [29.21ms]
+(pass) an unknown weekly change exposes its meaning rather than an unnamed dash [31.30ms]
+(pass) live values require a live owner and both outcome and measurement gates [17.09ms]
+(pass) unknown, missing baseline, wrong units and missing provenance never become time claims [28.85ms]
+(pass) a real measured zero is distinct from an unknown value [12.65ms]
+(pass) loading, empty, stale, unsupported and unavailable keep distinct honest messages [8.48ms]
+(pass) unknown goal measurement does not infer six partners from a goal title [5.40ms]
+(pass) approved bands share exact boundaries and preserve fractional progress [7.82ms]
+(pass) only the changed count glyphs and seventh segment update; labels and time nodes persist [16.50ms]
+(pass) remount, new window and new goal never replay a count-up or arrival animation [16.95ms]
+(pass) reaching a two-digit target retains the denominator and its reserved numeric slot [8.33ms]
+(pass) reduced motion updates values immediately and cancels an interrupted glyph animation [9.59ms]
+(pass) bar values are available on keyboard focus with no numeric fallback [11.92ms]
+(pass) values above the chart scale are marked rather than silently misrepresented [5.52ms]
+(pass) evidence includes basis, timezone, qualification and source count without the removed heading [5.50ms]
+(pass) activity uses stable source identities, and only a bound destination is interactive [12.22ms]
+(pass) empty and unavailable activity never invent events or expose preview rows in live mode [1.80ms]
+
+ 17 pass
+ 0 fail
+ 136 expect() calls
+Ran 17 tests across 1 file. [434.00ms]
