@@ -1,0 +1,56 @@
+[
+  {
+    "scenario": "partial",
+    "outcomes": "Partial coverage\n\nTime saved\n\nNot enough evidence yet\n\n+2\npartners\nthis week\n6/10\n\ndesign partners signed\n\nData basis",
+    "activity": "Recent activity\nInbox brief saved\n08:31 · 14 messages\nMeeting notes organised\n09:02 · Ready for your call\nFollow-up awaiting you\n09:14 · Nothing sent",
+    "overflows": []
+  },
+  {
+    "scenario": "unknown-goal",
+    "outcomes": "90\nmin\n\nsaved today · estimated\n\n—\npartners\nthis week\nWin 10 design partners\n\nProgress not measured yet\n\nData basis",
+    "activity": "Recent activity\nInbox brief saved\n08:31 · 14 messages\nMeeting notes organised\n09:02 · Ready for your call\nFollow-up awaiting you\n09:14 · Nothing sent",
+    "overflows": []
+  },
+  {
+    "scenario": "zero",
+    "outcomes": "0\nmin\n\nsaved today · estimated\n\n0\npartners\nthis week\n0/10\n\ndesign partners signed\n\nData basis",
+    "activity": "Recent activity\nInbox brief saved\n08:31 · 14 messages\nMeeting notes organised\n09:02 · Ready for your call\nFollow-up awaiting you\n09:14 · Nothing sent",
+    "overflows": []
+  },
+  {
+    "scenario": "loading",
+    "outcomes": "Loading outcomes…",
+    "activity": "Recent activity\n\nLoading recent activity…",
+    "overflows": []
+  },
+  {
+    "scenario": "empty",
+    "outcomes": "No completed work with outcome evidence yet.",
+    "activity": "Recent activity\n\nNo recent activity yet.",
+    "overflows": []
+  },
+  {
+    "scenario": "stale",
+    "outcomes": "Previously reported · Latest refresh unavailable\n\n90\nmin\n\nsaved today · estimated\n\n+2\npartners\nthis week\n6/10\n\ndesign partners signed\n\nData basis",
+    "activity": "Recent activity\n\nPreviously reported · Latest refresh unavailable\n\nInbox brief saved\n08:31 · 14 messages\nMeeting notes organised\n09:02 · Ready for your call\nFollow-up awaiting you\n09:14 · Nothing sent",
+    "overflows": []
+  },
+  {
+    "scenario": "unavailable",
+    "outcomes": "Outcome evidence is not available yet.",
+    "activity": "Recent activity\n\nActivity is not available yet.",
+    "overflows": []
+  },
+  {
+    "scenario": "unsupported",
+    "outcomes": "Outcome evidence is not available yet.",
+    "activity": "Recent activity\n\nActivity is not available yet.",
+    "overflows": []
+  },
+  {
+    "scenario": "long",
+    "outcomes": "90\nmin\n\nsaved today · estimated\n\n+2\ndesign partners across the international pilot program\nthis week\n6/10\n\ndesign partners with a signed pilot agreement\n\nData basis",
+    "activity": "Recent activity\nInbox brief saved\n08:31 · 14 messages\nMeeting notes organised for the international design partnership discussion\n09:02 · Ready for your call\nFollow-up awaiting you\n09:14 · Nothing sent",
+    "overflows": []
+  }
+]

@@ -1,0 +1,17 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "frames": {"today": "81:3", "chatOpen": "81:212", "outcomeSpecification": "659:252946", "localUpdate": "659:261827"},
+  "sources": [
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-14-outcomes-2026-10-02/README.md",
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-14-outcomes-2026-10-02/expanded-light.png",
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-14-outcomes-2026-10-02/compact-dark.png",
+    "dashboard-brief-figma-2026-09-14-v6-1/ui-06-progress-2026-10-01/README.md"
+  ],
+  "geometry": {"segments": 10, "segmentHeight": 6, "gap": 4, "corner": "2px 0 2px 2px", "outcomeCorner": "16px 0 16px 16px"},
+  "bands": {"near": "0-19%", "early": "20-39%", "middle": "40-74%", "complete": "75-100%"},
+  "type": {"timeWide": 96, "timeUnitWide": 43, "changeWide": 66, "fractionWide": 55, "changeCompact": 50, "fractionCompact": 43, "activityTitle": "14/20", "activityMetadata": "12/16"},
+  "motion": {"localUpdateMs": 180, "entryAnimation": false, "reducedMotion": "Immediate placement; native OS preference or reduce-only preview setting"},
+  "interpretation": "Approved wide and compact compositions retained. Container-responsive sizes and stacking handle narrower actual space. Data basis disclosure supplies the roadmap-required qualification without restoring removed headline copy. Native tooltip behavior reuses the D-03 control family."
+}
