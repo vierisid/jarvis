@@ -182,6 +182,8 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_ENGINE_IDLE_TTL_MS', 'JARVIS_ENGINE_CACHE_MAX_AGE_DAYS',
   'JARVIS_ENGINE_CACHE_MAX_BUNDLES', 'JARVIS_ENGINE_SHUTDOWN_GRACE_MS',
   'JARVIS_ENGINE_ORPHAN_POLL_MS',
+  // The workflow composer's planning policy (Q-03), read by the daemon.
+  'JARVIS_PLANNING_POLICY',
   // Set on model-directed children by modelExecEnv(), and must survive into
   // what they start: see util/model-exec-marker.ts.
   MODEL_EXEC_MARKER_ENV, MODEL_EXEC_ENV_KEY_FLAG,

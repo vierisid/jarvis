@@ -16,7 +16,7 @@ import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
 import { loadConfig } from "../config/loader.ts";
 import { installLogFileSink, logFileIsProcessStdio } from "../util/log-file.ts";
-import { resolveEngineCacheRetention, resolveEngineIdleTtlMs } from "./config-merge.ts";
+import { resolveEngineCacheRetention, resolveEngineIdleTtlMs, resolvePlanningPolicy } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
@@ -86,6 +86,7 @@ import { WorkflowEventBus } from "../workflows/runtime/event-bus.ts";
 import { WorkflowEventBuffer } from "../workflows/runtime/event-buffer.ts";
 import { createComposerLlmClient } from "../actions/tools/composer-llm.ts";
 import { composePersistedFlow } from '../actions/tools/persisted-workflow-composer.ts';
+import { activePlanningPolicy, configurePlanningPolicy } from '../actions/tools/composition-provenance.ts';
 import { SuggestionComposer } from '../awareness/suggestion-composer.ts';
 import {
   bootstrapWorkflowEngine,
@@ -5040,6 +5041,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // miss-triggered fetch in cachedRealtimeVerdict covers that gap, which is
     // why that fetch exists rather than warming being the only defence.
     settingsReload.setWarmRealtime(warmRealtime);
+
+    // The composer's planning policy: JARVIS_PLANNING_POLICY, else the
+    // workflows.planningPolicy setting, read at each composition so a settings
+    // reload applies a change to the next one (Q-03).
+    configurePlanningPolicy(() => resolvePlanningPolicy(jarvisConfig.workflows?.planningPolicy));
+    activePlanningPolicy(); // logs the starting policy and its source
 
     // Bootstrap the workflow engine: build/locate the bundle, compile pieces,
     // start the loopback SandboxApi, construct the EngineRuntime, extract the

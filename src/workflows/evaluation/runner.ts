@@ -7,7 +7,7 @@ import { fingerprint, snapshotComposition, type PlanningPolicy } from '../../act
 import type { ComposerLlmClient } from '../../actions/tools/workflow-composer';
 import { estimatedCost, type HostedProfile } from './hosted';
 import { staticChecks, passed } from './checks';
-import { environmentFor } from './environment';
+import { composerEnvironment, environmentFor } from './environment';
 import type { EvaluationRow, EffectExecutor, QualityTask, TransportAttempt, TransportStop, CallTrace } from './types';
 
 /** Named task sets. W8 keeps its original files; later sets name their environment. */
@@ -116,11 +116,10 @@ export async function evaluateTask(task: QualityTask, opts: EvaluationOptions): 
     chatTools: (messages, tools, signal, checkDeadline) => trace('tools', { messages, tools },
       () => base.chatTools!(messages, tools, signal, checkDeadline)),
   };
-  // The composer sees exactly the environment the task set names: tools and machines included.
+  // The composer sees the run's environment as production would pass it: tools and machines, and in a
+  // production shape the specialist roles and pieces library too.
   const environment = opts.engine.environment ?? environmentFor('w8');
-  const deps = { llm, pieceRegistry: opts.engine.catalog, planningPolicy: opts.policy,
-    ...(environment.tools.length ? { tools: environment.tools } : {}),
-    ...(environment.targets.length ? { executionTargets: environment.targets } : {}),
+  const deps = { llm, pieceRegistry: opts.engine.catalog, planningPolicy: opts.policy, ...composerEnvironment(environment),
     onCandidate(candidate: EvaluationRow['candidates'][number]) {
       candidates.push(structuredClone(candidate));
       opts.onEvent?.({ type: 'candidate', id, candidate });

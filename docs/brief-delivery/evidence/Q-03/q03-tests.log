@@ -1,0 +1,35 @@
+$ bun test --preload ./src/test-preload.ts src/actions/tools/composition-provenance.test.ts src/workflows/evaluation/promotion.test.ts src/daemon/config-merge.test.ts
+bun test v1.4.2 (744846f84)
+
+src/daemon/config-merge.test.ts:
+
+src/actions/tools/composition-provenance.test.ts:
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+[compose] attempt 1 validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 success-after-retry
+[compose] attempt 1 tool-loop-validation-error (step "tell" references unknown piece "missing")
+[compose] attempt 2 tool-loop-success-after-retry
+
+ 63 pass
+ 0 fail
+ 222 expect() calls
+Ran 63 tests across 3 files. [1191.00ms]

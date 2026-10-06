@@ -348,6 +348,17 @@ export type WorkflowConfig = {
    */
   engineCacheMaxAgeDays?: number;
   /**
+   * Which planning policy the workflow composer runs in production:
+   * `baseline-v1` (the default) or the `deterministic-first-v1` candidate.
+   * Read at each composition, so after a settings reload a change applies to
+   * the next one. No screen or route edits it yet. Selecting
+   * the candidate before a promotion comparison supports it is an opt-in;
+   * selecting `baseline-v1` after a promotion is the rollback. Unknown values
+   * fall back to the default with a warning. USER-owned like the engine
+   * settings above; JARVIS_PLANNING_POLICY overrides it.
+   */
+  planningPolicy?: string;
+  /**
    * Where the workflow runtime finds READY-MADE artifacts instead of
    * building/installing its own. All optional; each path may contain a
    * `${version}` placeholder expanded from the `JARVIS_VERSION` env var
