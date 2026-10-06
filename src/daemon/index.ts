@@ -104,10 +104,9 @@ import {
   type BootstrapWorkflowEngineResult,
 } from "../workflows/runtime/engine-bootstrap.ts";
 import { CredentialResolver } from "../workflows/credentials/adapter.ts";
-import { metadataToCatalogEntry } from "../workflows/runtime/piece-catalog.ts";
+import { createPieceLibraryChangeHandler } from "../workflows/runtime/piece-library-catalog.ts";
 import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
-import { apId } from "../workflows/db/ids.ts";
 import { buildSandboxServiceBackends } from "../workflows/runtime/service-backends.ts";
 import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-flow-executor.ts";
 import { createLimiter } from "../util/concurrency.ts";
@@ -5247,39 +5246,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // without a daemon restart. Skipped if either the catalog or the engine
     // runtime is missing (engine bootstrap failed earlier -- the install
     // route still mutated disk; the next daemon start reconciles).
-    const onPieceLibraryChanged =
-      workflowPieceCatalog && workflowEngineRuntime
-        ? async (event: {
-            kind: "installed" | "uninstalled";
-            piece: { npmPackage: string; resolvedVersion: string };
-          }) => {
-            // Only ever reached on a SELF-MANAGED install: the Library
-            // mutations that fire this are refused when a host owns the
-            // catalog, and a host owning the catalog is exactly what having a
-            // shared tree means. So an uninstall here has no shared copy to
-            // fall back to — the piece is simply gone.
-            if (event.kind === "uninstalled") {
-              workflowPieceCatalog.remove(event.piece.npmPackage);
-              return;
-            }
-            // Unique runId per acquire so any future parallel installs
-            // (today serialized by the API's library mutex) don't collide on
-            // the engine's runId-keyed state.
-            const handle = await workflowEngineRuntime.acquire({
-              runId: `metadata-extract-runtime-install-${apId()}`,
-              projectId: DEFAULT_IDS.project,
-            });
-            try {
-              const meta = await handle.extractPieceMetadata({
-                pieceName: event.piece.npmPackage,
-                pieceVersion: event.piece.resolvedVersion,
-              });
-              workflowPieceCatalog.upsert(metadataToCatalogEntry(meta));
-            } finally {
-              await handle.release();
-            }
-          }
-        : undefined;
+    const onPieceLibraryChanged = workflowPieceCatalog && workflowEngineRuntime
+      ? createPieceLibraryChangeHandler(workflowPieceCatalog, workflowEngineRuntime)
+      : undefined;
 
     const apiRoutes = {
       ...createApiRoutes(apiContext),

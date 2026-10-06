@@ -1,0 +1,25 @@
+Production sources restored to reviewed HEAD 4d2449d3 for this check.
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+
+src/workflows/api/routes.test.ts:
+1653 |           { id: "yanked-piece" },
+1654 |         ),
+1655 |       );
+1656 |       // Must NOT return 404 just because the catalog forgot the piece --
+1657 |       // that would strand the user.
+1658 |       expect(status).toBe(200);
+                            ^
+error: expect(received).toBe(expected)
+
+Expected: 200
+Received: 404
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/workflows/api/routes.test.ts:1658:22)
+(fail) workflow API: pieces library > DELETE works for a piece installed but no longer in the catalog (security-yank scenario) [384.23ms]
+
+ 0 pass
+ 113 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [514.00ms]

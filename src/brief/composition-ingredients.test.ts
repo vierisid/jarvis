@@ -12,10 +12,13 @@ import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../
 import { CompositionIngredients } from '../workflows/db/repos/composition-ingredients';
 import { configureWorkflowReadiness, versionReadiness } from '../workflows/db/repos/flow-readiness';
 import { getFlow, updateFlowStatus, setPublishedVersion, updateFlowMetadata } from '../workflows/db/repos/flow';
-import { updateDraftVersion, type FlowTriggerNode } from '../workflows/db/repos/flow-version';
+import { getFlowVersion, updateDraftVersion, type FlowTriggerNode } from '../workflows/db/repos/flow-version';
 import { getWorkflowComposition } from '../workflows/db/repos/workflow-composition';
 import { PieceCatalog, type PieceCatalogEntry } from '../workflows/runtime/piece-catalog';
 import { actionContractVersion, parseCompositionIngredients, type CompositionIngredient } from '../workflows/runtime/composition-ingredients';
+import { createPieceLibraryChangeHandler } from '../workflows/runtime/piece-library-catalog';
+import type { EngineHandle } from '../workflows/runner/engine-runtime/engine-runtime';
+import { createWorkflowRoutes } from '../workflows/api/routes';
 import type { ComposerLlmClient } from '../actions/tools/workflow-composer';
 
 const pieceName = '@fixture/piece-account';
@@ -281,3 +284,98 @@ test('ingredient API is default-off, provider-bound and dependent on workflow co
   const response = await routes[getPath].GET(new Request(`http://localhost${getPath}`)); expect(response.status).toBe(200); expect(response.headers.get('Cache-Control')).toBe('no-store');
   expect(JSON.stringify(await response.json())).not.toContain(secret); expect(p.list()).toEqual([]);
 });
+
+// Exercise the same callback installed by the daemon, using real metadata projection.
+function liveLibrary() {
+  let released = 0, acquired = 0;
+  const handle = {
+    async extractPieceMetadata(input: { pieceName: string; pieceVersion: string }) {
+      expect(input.pieceName).toBe(pieceName);
+      return { name: pieceName, displayName: 'Account', description: 'Fixture',
+        auth: { type: 'SECRET_TEXT' }, actions: {
+          send: { name: 'send', displayName: 'Send', description: 'Send a message', requireAuth: true,
+            props: { text: { displayName: 'Text', type: 'SHORT_TEXT', required: true } } },
+        } };
+    },
+    async release() { released++; },
+  } as unknown as EngineHandle;
+  const changed = createPieceLibraryChangeHandler(catalog, { async acquire() { acquired++; return handle; } });
+  const install = (resolvedVersion = '1.2.3') => changed({ kind: 'installed', piece: { npmPackage: pieceName, resolvedVersion } });
+  return { install, changed, counts: () => ({ acquired, released }) };
+}
+
+test('live Library install exposes versioned selections without restarting', async () => {
+  catalog.remove(pieceName);
+  const library = liveLibrary(); await library.install();
+  const adapter = new CompositionIngredients(getWorkflowDb(), catalog);
+  const choices = adapter.list().ingredients.map(c => c.selection);
+  expect(choices).toHaveLength(2);
+  expect(choices.every(s => s.pieceVersion === '1.2.3')).toBe(true);
+  expect(adapter.resolve(choices).issues).toEqual([]);
+  const job = await submit(provider(), choices);
+  expect(job.state).toBe('draft_ready');
+  expect(versionReadiness(job.workflow!.flowId, job.workflow!.versionId).ready).toBe(true);
+  expect(library.counts()).toEqual({ acquired: 1, released: 1 });
+});
+
+test('live Library refresh keeps matching pins and rejects a real version change', async () => {
+  const library = liveLibrary(); await library.install();
+  const choices = new CompositionIngredients(getWorkflowDb(), catalog).list().ingredients.map(c => c.selection);
+  expect(choices).toHaveLength(2);
+  const job = await submit(provider(), choices);
+  expect(job.state).toBe('draft_ready');
+  const { flowId, versionId } = job.workflow!;
+  await library.install();
+  expect(versionReadiness(flowId, versionId).ready).toBe(true);
+  await library.install('2.0.0');
+  expect(catalog.get(pieceName)!.version).toBe('2.0.0');
+  expect(versionReadiness(flowId, versionId).issues.some(i => i.code === 'INGREDIENT')).toBe(true);
+  expect(new CompositionIngredients(getWorkflowDb(), catalog).list().ingredients.every(c => c.selection.pieceVersion === '2.0.0')).toBe(true);
+  await library.changed({ kind: 'uninstalled', piece: { npmPackage: pieceName, resolvedVersion: '2.0.0' } });
+  expect(catalog.get(pieceName)).toBeNull();
+  expect(new CompositionIngredients(getWorkflowDb(), catalog).list().ingredients).toEqual([]);
+  expect(library.counts()).toEqual({ acquired: 3, released: 3 });
+});
+
+function workflowRequest(method: string, params: Record<string, string>, body: unknown) {
+  return Object.assign(new Request('http://localhost/api/workflows', { method,
+    headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }), { params });
+}
+
+for (const location of ['chain', 'loop', 'router'] as const) {
+  test(`preview rejects a sample-input account substitution in a ${location}`, async () => {
+    connection('other-id', 'other-account');
+    const candidate = graph(), send = candidate.trigger.nextAction;
+    const trigger: FlowTriggerNode = location === 'chain' ? candidate.trigger : {
+      name: 'trigger', type: 'EMPTY', nextAction: location === 'loop'
+        ? { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{[1]}}' }, firstLoopAction: send }
+        : { name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [{ branchType: 'FALLBACK', branchName: 'Fallback' }] }, children: [send] },
+    };
+    const job = await submit(provider({ async chat() { return { text: JSON.stringify({ ...candidate, trigger }) }; } }));
+    expect(job.state).toBe('draft_ready');
+    const { flowId: id, versionId } = job.workflow!, routes = createWorkflowRoutes();
+    const params = { id, versionId, stepName: 'send' };
+    const patch = routes['/api/workflows/:id/versions/:versionId/sample-input/:stepName']!.PATCH!;
+    const run = routes['/api/workflows/:id/run']!.POST!;
+    const before = getFlowVersion(versionId)!.trigger;
+    const wrong = { text: 'Preview', auth: '{{connections.other-account}}' };
+    expect((await patch(workflowRequest('PATCH', params, { input: wrong }))).status).toBe(200);
+    // Ordinary runs ignore sample input and keep using the stored selection.
+    expect(versionReadiness(id, versionId).ready).toBe(true);
+    const refused = await run(workflowRequest('POST', { id }, { stepNameToTest: 'send' }));
+    expect(refused.status).toBe(422);
+    expect((await refused.json()).issues.some((i: { code: string }) => i.code === 'INGREDIENT')).toBe(true);
+    expect(getWorkflowDb().query('SELECT id FROM flow_run').all()).toHaveLength(0);
+    expect(getWorkflowDb().query('SELECT id FROM workflow_job').all()).toHaveLength(0);
+    expect(getFlowVersion(versionId)!.trigger).toEqual(before);
+    // Unrelated sample entries must not replace another step's inputs.
+    expect((await patch(workflowRequest('PATCH', { ...params, stepName: 'trigger' }, { input: wrong }))).status).toBe(200);
+    const valid = { text: 'Preview', auth: '{{connections.selected-account}}' };
+    expect((await patch(workflowRequest('PATCH', params, { input: valid }))).status).toBe(200);
+    const accepted = await run(workflowRequest('POST', { id }, { stepNameToTest: 'send' }));
+    expect(accepted.status).toBe(202);
+    const queued = getWorkflowDb().query<{ payload: string }, []>('SELECT payload FROM workflow_job').get()!;
+    expect(JSON.parse(queued.payload).sampleInputOverride).toEqual({ send: valid });
+    expect(getFlowVersion(versionId)!.trigger).toEqual(before);
+  });
+}

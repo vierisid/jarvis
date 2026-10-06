@@ -1,0 +1,23 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+
+src/brief/composition-ingredients.test.ts:
+(pass) live Library install exposes versioned selections without restarting [133.35ms]
+(pass) live Library refresh keeps matching pins and rejects a real version change [55.58ms]
+(pass) preview rejects a sample-input account substitution in a chain [63.19ms]
+(pass) preview rejects a sample-input account substitution in a loop [68.93ms]
+(pass) preview rejects a sample-input account substitution in a router [52.36ms]
+
+src/workflows/runner/engine-runtime/engine-flow-executor.test.ts:
+(pass) preview execution applies only the named input override without changing the version [42.74ms]
+
+ 6 pass
+ 58 filtered out
+ 0 fail
+ 65 expect() calls
+Ran 6 tests across 2 files. [1019.00ms]

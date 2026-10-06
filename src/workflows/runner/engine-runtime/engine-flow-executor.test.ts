@@ -482,3 +482,37 @@ describe("EngineFlowExecutor: engine acquire", () => {
     expect(attempts).toBe(3);
   }, 15_000);
 });
+
+
+test('preview execution applies only the named input override without changing the version', async () => {
+  const { runId, ctx } = setupRun();
+  const input = { text: 'Stored', auth: '{{connections.selected-account}}' };
+  const override = { text: 'Preview', auth: '{{connections.selected-account}}' };
+  const action = (name: string) => ({ name, type: 'PIECE', settings: { pieceName: '@fixture/piece-account', actionName: 'send', input } });
+  ctx.version.trigger = { name: 'trigger', type: 'EMPTY', nextAction: {
+    name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{[1]}}' }, firstLoopAction: {
+      name: 'router', type: 'ROUTER', children: [action('selected'), action('sibling')],
+    }, nextAction: action('after'),
+  } };
+  const stored = structuredClone(ctx.version.trigger);
+  ctx.job.payload.stepNameToTest = 'selected';
+  ctx.job.payload.sampleInputOverride = { selected: override };
+  let executed = false;
+  const runtime = { async acquire() { return {
+    async executeFlow(args: Parameters<EngineHandle['executeFlow']>[0]) {
+      executed = true;
+      expect(args.stepNameToTest).toBe('selected');
+      const loop = (args.flowVersion as FlowVersion).trigger.nextAction!;
+      const [selected, sibling] = loop.firstLoopAction!.children!;
+      expect(selected!.settings!.input).toEqual(override);
+      expect(sibling!.settings!.input).toEqual(input);
+      expect(loop.nextAction!.settings!.input).toEqual(input);
+      expect(ctx.version.trigger).toEqual(stored);
+      updateRun(runId, { status: 'SUCCEEDED', finishTime: Date.now() });
+    },
+    async release() {},
+  }; } } as unknown as EngineRuntime;
+  await new EngineFlowExecutor(runtime).execute(ctx);
+  expect(executed).toBe(true);
+  expect(ctx.version.trigger).toEqual(stored);
+});

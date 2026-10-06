@@ -17,7 +17,7 @@ Check `/api/brief/capabilities` before rendering selection controls. Both capabi
 
 `GET /api/brief/composition-ingredients?q=SEARCH&offset=0` uses existing panel authentication, CORS and `Cache-Control: no-store`. It returns `{ingredients: [{selection, displayName}], nextOffset}`. Pages contain at most 100 entries; use the returned offset, and restart pagination after a catalog change. `q` is optional and limited to 128 characters. The installed catalog supplies actions and package versions. Account-scoped connection metadata supplies active, compatible connection choices. Display names are presentation text; send the separate `selection` object to the composer unchanged.
 
-This is an adapter over the current catalog and connection tables. It neither scans a new marketplace nor extracts/rebuilds metadata on a selection request. Existing catalog construction now attaches the discovered package version on fresh extraction and old/shared cache hits without invalidating those caches or starting extra engines.
+This is an adapter over the current catalog and connection tables. It neither scans a new marketplace nor extracts/rebuilds metadata on a selection request. Existing catalog construction now attaches the discovered package version on fresh extraction and old/shared cache hits without invalidating those caches or starting extra engines. Live Library installs and updates retain the resolved installed package version too, so discovery works without restarting. Refreshing the same version preserves valid selections; a genuine version change still blocks an older pin.
 
 ## Typed request
 
@@ -54,7 +54,7 @@ Missing, revoked, incompatible, unavailable and stale selections block before in
 
 The adapter re-reads current catalog and connection metadata in the transaction that attaches the resulting draft. A removed, revoked, retargeted or replaced row prevents attachment. Package/action contract drift does the same.
 
-The resulting flow gets an immutable `workflow_composition_ingredients` record in that same transaction. Canonical readiness, enable, publish, live-draft edits and nested-workflow validation recheck it. Replacing a deleted connection with another row using the same external name cannot satisfy the original row-ID pin. Ordinary workflow metadata edits cannot erase the requirements. Disabling ingredient authoring or restarting the daemon does not disable these checks. To change pinned selections, compose a new explicit request. Keep readiness checks intact when integrating D-16 or later activation work.
+The resulting flow gets an immutable `workflow_composition_ingredients` record in that same transaction. Canonical readiness, enable, publish, live-draft edits and nested-workflow validation recheck it. Replacing a deleted connection with another row using the same external name cannot satisfy the original row-ID pin. Ordinary workflow metadata edits cannot erase the requirements. Disabling ingredient authoring or restarting the daemon does not disable these checks. To change pinned selections, compose a new explicit request. Keep readiness checks intact when integrating D-16 or later activation work. Test-step readiness applies the saved sample input to a cloned graph using the same transformation as execution. A sample input that substitutes a different account returns 422 before creating a run or queue job; valid input changes preserve the selected account and leave the stored graph unchanged.
 
 The job schema adds an `ingredients` column with default `[]`; old receipts and old writers remain valid. The flow-requirements table is additive and cascades only with deletion of its owning workflow. Existing F-07 storage recovery, cancellation, idempotency and atomic attachment behavior is preserved.
 
@@ -64,10 +64,10 @@ Run without a model account or a live daemon:
 
 ```bash
 cd /home/vierisid/.cache/codex/jarvis-f-08
-bun test src/brief/composition-ingredients.test.ts
+bun test src/brief/composition-ingredients.test.ts src/workflows/runner/engine-runtime/engine-flow-executor.test.ts
 ```
 
-The tests exercise equal connection/library IDs, secret exclusion, ownership/auth failures, missing/stale selections, all composer candidate paths, long multiple selections through repairs, blockers, restart and F-07 schema upgrade, immutable replay identity, default-off/provider gates, and revocation/replacement before attachment and before enable/publish. Five unsafe mutations must fail these tests. Full affected commands and raw logs are in `docs/brief-delivery/evidence/F-08/`; the receipt is `docs/brief-delivery/F-08.json`.
+The tests exercise equal connection/library IDs, secret exclusion, ownership/auth failures, missing/stale selections, all composer candidate paths, long multiple selections through repairs, blockers, restart and F-07 schema upgrade, immutable replay identity, default-off/provider gates, and revocation/replacement before attachment and before enable/publish. Five unsafe mutations must fail these tests. Review regressions additionally cover the daemon's live install/refresh callback, account overrides in chains/loops/router branches, and the engine's effective preview graph. The review correction receipt is `docs/brief-delivery/evidence/F-08/review-fixes.json`. Full affected commands and raw logs are in `docs/brief-delivery/evidence/F-08/`; the receipt is `docs/brief-delivery/F-08.json`.
 
 For an explicitly enabled integration host, fetch discovery through its authenticated panel, select compatible action/connection objects, POST them alongside a prompt and poll the job. Inspect its retained selections and populated disabled draft. Repeat the same request key and confirm the same receipt; change a pin with the same key and expect 409. Make a selected connection unavailable before enabling the draft and confirm an INGREDIENT readiness blocker. This optional exercise calls the configured model; fixture verification does not.
 

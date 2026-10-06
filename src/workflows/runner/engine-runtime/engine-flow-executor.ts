@@ -21,7 +21,7 @@ import type {
 } from "../handler";
 import { FlowExecutionError } from "../handler";
 import { ensureRunExecutionConfig, getFlowRun, type FlowRunStatus } from "../../db/repos/flow-run";
-import type { FlowTriggerNode } from "../../db/repos/flow-version";
+import { applyInputOverrides } from "../../db/flow-graph";
 import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineHandle, EngineRuntime } from "./engine-runtime";
 import { loadExecutionStateFromLog } from "./execution-state-loader";
@@ -359,33 +359,4 @@ function unwrapStepEnvelopes(
     }
   }
   return out;
-}
-
-/**
- * Return a clone of the trigger tree with `settings.input` replaced on
- * every step whose name appears in `overrides`. The original tree is
- * untouched so concurrent readers (catalog UI, list endpoint, etc.)
- * keep observing the version as stored.
- *
- * Walks `nextAction`, LOOP `firstLoopAction`, and ROUTER `children`
- * recursively. Steps without an override are deep-cloned by reference
- * to their settings -- safe because we never mutate the result.
- */
-function applyInputOverrides(
-  root: FlowTriggerNode,
-  overrides: Record<string, Record<string, unknown>>,
-): FlowTriggerNode {
-  const visit = (node: FlowTriggerNode): FlowTriggerNode => {
-    const next: FlowTriggerNode = { ...node };
-    if (node.name in overrides) {
-      next.settings = { ...(node.settings ?? {}), input: { ...overrides[node.name]! } };
-    }
-    if (node.nextAction) next.nextAction = visit(node.nextAction);
-    if (node.firstLoopAction) next.firstLoopAction = visit(node.firstLoopAction);
-    if (Array.isArray(node.children)) {
-      next.children = node.children.map((c) => (c ? visit(c) : c)) as typeof node.children;
-    }
-    return next;
-  };
-  return visit(root);
 }

@@ -74,3 +74,26 @@ export function findCodeStepNames(root: FlowTriggerNode | null | undefined): str
 export function hasCodeStep(root: FlowTriggerNode | null | undefined): boolean {
   return findCodeStepNames(root).length > 0;
 }
+
+/**
+ * Build the effective preview graph without changing the stored version.
+ * Readiness and execution must apply exactly the same per-step replacements.
+ * Walk each node once so malformed/cyclic graphs do not recurse.
+ */
+export function applyInputOverrides(
+  root: FlowTriggerNode,
+  overrides: Record<string, Record<string, unknown>>,
+): FlowTriggerNode {
+  const nodes = walkFlowNodes(root);
+  const copies = new Map(nodes.map(node => [node, { ...node }]));
+  for (const node of nodes) {
+    const next = copies.get(node)!;
+    if (Object.hasOwn(overrides, node.name)) {
+      next.settings = { ...(node.settings ?? {}), input: { ...overrides[node.name]! } };
+    }
+    if (node.nextAction) next.nextAction = copies.get(node.nextAction) ?? node.nextAction;
+    if (node.firstLoopAction) next.firstLoopAction = copies.get(node.firstLoopAction) ?? node.firstLoopAction;
+    if (Array.isArray(node.children)) next.children = node.children.map(child => child ? copies.get(child) ?? child : child);
+  }
+  return copies.get(root) ?? root;
+}

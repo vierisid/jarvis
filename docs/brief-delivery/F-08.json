@@ -123,5 +123,13 @@
   ],
   "rollback": "Disable ingredient authoring/presentation; preserve job selections, journals, pins and drafts. Keep current readiness enforcement. Leave F08 workflows disabled before a pre-F08 binary downgrade. No replay or user-record deletion.",
   "guide": "docs/brief-composition-ingredients.md",
-  "next_task": "F-09 not started"
+  "next_task": "F-09 not started",
+  "review_corrections": {
+    "receipt": "docs/brief-delivery/evidence/F-08/review-fixes.json",
+    "reviewed_head": "4d2449d30051790d76923f94f02fb641cebe0ec2",
+    "status": "Both findings corrected and locally verified; not pushed.",
+    "focused": "64 passed / 352 assertions",
+    "affected": "804 passed, 1 opt-in skip, 1 existing uninstall test failure reproduced on reviewed sources",
+    "typescript": "passed"
+  }
 }

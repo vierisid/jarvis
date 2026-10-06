@@ -1,0 +1,84 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+
+src/brief/composition-ingredients.test.ts:
+307 | test('live Library install exposes versioned selections without restarting', async () => {
+308 |   catalog.remove(pieceName);
+309 |   const library = liveLibrary(); await library.install();
+310 |   const adapter = new CompositionIngredients(getWorkflowDb(), catalog);
+311 |   const choices = adapter.list().ingredients.map(c => c.selection);
+312 |   expect(choices).toHaveLength(2);
+                        ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 2
+Received length: 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:312:19)
+(fail) live Library install exposes versioned selections without restarting [64.87ms]
+325 |   expect(job.state).toBe('draft_ready');
+326 |   const { flowId, versionId } = job.workflow!;
+327 |   await library.install();
+328 |   expect(versionReadiness(flowId, versionId).ready).toBe(true);
+329 |   await library.install('2.0.0');
+330 |   expect(catalog.get(pieceName)!.version).toBe('2.0.0');
+                                                ^
+error: expect(received).toBe(expected)
+
+Expected: "2.0.0"
+Received: undefined
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:330:43)
+(fail) live Library refresh keeps matching pins and rejects a real version change [66.12ms]
+360 |     const wrong = { text: 'Preview', auth: '{{connections.other-account}}' };
+361 |     expect((await patch(workflowRequest('PATCH', params, { input: wrong }))).status).toBe(200);
+362 |     // Ordinary runs ignore sample input and keep using the stored selection.
+363 |     expect(versionReadiness(id, versionId).ready).toBe(true);
+364 |     const refused = await run(workflowRequest('POST', { id }, { stepNameToTest: 'send' }));
+365 |     expect(refused.status).toBe(422);
+                                 ^
+error: expect(received).toBe(expected)
+
+Expected: 422
+Received: 202
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:365:28)
+(fail) preview rejects a sample-input account substitution in a chain [57.91ms]
+360 |     const wrong = { text: 'Preview', auth: '{{connections.other-account}}' };
+361 |     expect((await patch(workflowRequest('PATCH', params, { input: wrong }))).status).toBe(200);
+362 |     // Ordinary runs ignore sample input and keep using the stored selection.
+363 |     expect(versionReadiness(id, versionId).ready).toBe(true);
+364 |     const refused = await run(workflowRequest('POST', { id }, { stepNameToTest: 'send' }));
+365 |     expect(refused.status).toBe(422);
+                                 ^
+error: expect(received).toBe(expected)
+
+Expected: 422
+Received: 202
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:365:28)
+(fail) preview rejects a sample-input account substitution in a loop [48.38ms]
+360 |     const wrong = { text: 'Preview', auth: '{{connections.other-account}}' };
+361 |     expect((await patch(workflowRequest('PATCH', params, { input: wrong }))).status).toBe(200);
+362 |     // Ordinary runs ignore sample input and keep using the stored selection.
+363 |     expect(versionReadiness(id, versionId).ready).toBe(true);
+364 |     const refused = await run(workflowRequest('POST', { id }, { stepNameToTest: 'send' }));
+365 |     expect(refused.status).toBe(422);
+                                 ^
+error: expect(received).toBe(expected)
+
+Expected: 422
+Received: 202
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-08/src/brief/composition-ingredients.test.ts:365:28)
+(fail) preview rejects a sample-input account substitution in a router [43.01ms]
+
+ 0 pass
+ 40 filtered out
+ 5 fail
+ 20 expect() calls
+Ran 5 tests across 1 file. [448.00ms]

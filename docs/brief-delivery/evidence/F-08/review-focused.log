@@ -1,0 +1,161 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 2 success-after-retry
+Database initialized at: :memory:
+[compose] attempt 1 tool-loop-inline-validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 1 tool-loop-fallback (tool loop produced no flow on turn 1; using one-shot prompt)
+Database initialized at: :memory:
+[compose] attempt 1 tool-loop-validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 2 tool-loop-success-after-retry
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 2 exhausted (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-f08-KHPC6N/test.db
+Database initialized at: /tmp/jarvis-f08-KHPC6N/test.db
+Database initialized at: :memory:
+Database initialized at: :memory:
+[compose] attempt 1 tool-loop-blocked (The selected account cannot send to the requested destination.)
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient connection @fixture/piece-account has a conflicting piece version in the graph.; Selected ingredi...)
+[compose] attempt 2 exhausted (Selected ingredient connection @fixture/piece-account has a conflicting piece version in the graph.; Selected ingredi...)
+[compose] attempt 1 validation-error (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+[compose] attempt 2 exhausted (Selected ingredient connection @fixture/piece-account must be used as the matching piece auth binding, or report why ...)
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient connection connection-0-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...)
+[compose] attempt 2 success-after-retry
+Database initialized at: :memory:
+Database initialized at: :memory:
+[compose] attempt 1 validation-error (Selected ingredient library action @fixture/piece-account/send requires a selected, compatible connection as its auth...)
+[compose] attempt 2 exhausted (Selected ingredient library action @fixture/piece-account/send requires a selected, compatible connection as its auth...)
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+
+src/brief/composition-ingredients.test.ts:
+(pass) typed identities survive repairs in the prompt, receipt and journal without credentials or labels [76.15ms]
+(pass) tool inline candidates cannot omit a required selection [45.22ms]
+(pass) tool submit_flow candidates cannot omit a required selection [43.83ms]
+(pass) same piece with another account is a blocker, never a silent substitution [41.21ms]
+(pass) invalid selection blocks before provider calls: missing-id [38.43ms]
+(pass) invalid selection blocks before provider calls: foreign-project [37.27ms]
+(pass) invalid selection blocks before provider calls: foreign-owner [37.31ms]
+(pass) invalid selection blocks before provider calls: inactive [38.89ms]
+(pass) invalid selection blocks before provider calls: piece-mismatch [42.03ms]
+(pass) invalid selection blocks before provider calls: auth-mismatch [37.85ms]
+(pass) invalid selection blocks before provider calls: ambiguous [38.12ms]
+(pass) invalid selection blocks before provider calls: unsafe-binding [36.36ms]
+(pass) invalid selection blocks before provider calls: package-version [37.74ms]
+(pass) invalid selection blocks before provider calls: action-version [36.49ms]
+(pass) invalid selection blocks before provider calls: unknown-action [37.72ms]
+(pass) invalid selection blocks before provider calls: missing-auth [37.82ms]
+(pass) selection change during the model call prevents draft attachment: revoke [40.87ms]
+(pass) saved pins refuse readiness, enable and publish after revoke [42.40ms]
+(pass) selection change during the model call prevents draft attachment: remove [36.77ms]
+(pass) saved pins refuse readiness, enable and publish after remove [61.28ms]
+(pass) selection change during the model call prevents draft attachment: retarget [51.59ms]
+(pass) saved pins refuse readiness, enable and publish after retarget [39.17ms]
+(pass) selection change during the model call prevents draft attachment: replace [38.06ms]
+(pass) saved pins refuse readiness, enable and publish after replace [42.83ms]
+(pass) selection change during the model call prevents draft attachment: piece-version [46.83ms]
+(pass) saved pins refuse readiness, enable and publish after piece-version [55.52ms]
+(pass) selection change during the model call prevents draft attachment: action-version [47.48ms]
+(pass) saved pins refuse readiness, enable and publish after action-version [45.14ms]
+(pass) graph/metadata edits cannot drop saved requirements, including on a live draft [48.34ms]
+(pass) idempotency retains selections across provider restart and rejects a changed pin or requirement [50.54ms]
+(pass) saved selections and readiness pins survive closing and reopening the database [916.51ms]
+(pass) F07 schema upgrade preserves old rows and allows old inserts without the new column [37.03ms]
+(pass) explicit inability to use selected ingredients keeps its explanation and creates no draft [37.42ms]
+(pass) a conflicting graph pin and a decorative auth field cannot satisfy required selections [43.86ms]
+(pass) long multiple selections all survive repair without truncation [49.00ms]
+(pass) nested actions satisfy requirements; action-free fallback cannot [59.05ms]
+(pass) optional selections can be unused, but are still validated and never substitute auth [43.32ms]
+(pass) safe discovery uses typed choices, bounded pagination and no encrypted data [39.37ms]
+(pass) strict wire selections reject unknown fields, secrets, malformed versions and excess count [37.99ms]
+(pass) ingredient API is default-off, provider-bound and dependent on workflow composition [44.90ms]
+(pass) live Library install exposes versioned selections without restarting [44.48ms]
+(pass) live Library refresh keeps matching pins and rejects a real version change [45.16ms]
+(pass) preview rejects a sample-input account substitution in a chain [43.59ms]
+(pass) preview rejects a sample-input account substitution in a loop [45.46ms]
+(pass) preview rejects a sample-input account substitution in a router [41.00ms]
+
+src/workflows/runner/engine-runtime/engine-flow-executor.test.ts:
+(pass) EngineFlowExecutor > cancellation interrupts a pending RPC and destroys rather than releases the handle [38.47ms]
+(pass) EngineFlowExecutor > a handle acquired after cancellation is destroyed without dispatch [35.34ms]
+(pass) EngineFlowExecutor > waits for terminal status when uploadRunLog lands AFTER executeFlow resolves [85.20ms]
+(pass) EngineFlowExecutor > times out and throws when uploadRunLog never lands [135.45ms]
+(pass) EngineFlowExecutor > throws FlowExecutionError on FAILED terminal status [39.35ms]
+(pass) EngineFlowExecutor > throws FlowExecutionError on INTERNAL_ERROR terminal status [32.10ms]
+(pass) EngineFlowExecutor > throws FlowExecutionError on TIMEOUT terminal status [32.61ms]
+(pass) EngineFlowExecutor > throws FlowExecutionError on QUOTA_EXCEEDED terminal status [30.58ms]
+(pass) EngineFlowExecutor > throws FlowExecutionError on STOPPED terminal status [31.08ms]
+(pass) EngineFlowExecutor > throws FlowExecutionError on MEMORY_LIMIT_EXCEEDED terminal status [30.41ms]
+(pass) EngineFlowExecutor > throws FlowExecutionError on SCHEDULE_FAILURE terminal status [30.53ms]
+(pass) EngineFlowExecutor > PAUSED is treated as terminal (not a failure) -- the resume comes via a separate RUN_FLOW [31.90ms]
+(pass) EngineFlowExecutor > RESUME: passes resumePayload + unwrapped executionState.steps to engine [75.46ms]
+(pass) EngineFlowExecutor > includes failed step but no errorMessage suffix when engine didn't supply one [38.44ms]
+(pass) EngineFlowExecutor > RESUME prefers the engine's zstd log backup over flow_run.steps [44.76ms]
+(pass) EngineFlowExecutor > RESUME falls back to flow_run.steps when no backup file exists [94.36ms]
+[engine-executor] run 5aFIiqKxrWv0y8nxBrln7: engine acquire failed (attempt 1/3): EngineRuntime.acquire failed: engine abc did not connect within 30000ms
+[engine-executor] run 5aFIiqKxrWv0y8nxBrln7: engine acquire failed (attempt 2/3): EngineRuntime.acquire failed: engine abc did not connect within 30000ms
+(pass) EngineFlowExecutor: engine acquire > a transient acquire failure is retried and the run still executes [2055.46ms]
+[engine-executor] run pVwHitNTUVDhY5wDcWgBN: engine acquire failed (attempt 1/3): EngineRuntime.acquire failed: engine abc did not connect within 30000ms
+[engine-executor] run pVwHitNTUVDhY5wDcWgBN: engine acquire failed (attempt 2/3): EngineRuntime.acquire failed: engine abc did not connect within 30000ms
+(pass) EngineFlowExecutor: engine acquire > a persistently failing acquire surfaces the engine error [2042.11ms]
+(pass) preview execution applies only the named input override without changing the version [37.79ms]
+
+ 64 pass
+ 0 fail
+ 352 expect() calls
+Ran 64 tests across 2 files. [7.08s]
