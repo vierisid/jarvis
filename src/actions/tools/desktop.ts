@@ -15,6 +15,7 @@ import type { ToolDefinition, ToolResult } from './registry.ts';
 import { routeToSidecarAction as routeToSidecar, routeScreenshotToSidecar, resolveToolTarget } from './sidecar-route.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import type { SidecarCapability } from '../../sidecar/types.ts';
+import { screenshotCaption, screenshotForModel } from '../app-control/image-compact.ts';
 
 /**
  * Resolve the desktop-tool target. If the LLM passed an explicit
@@ -97,6 +98,27 @@ function isToolDisabled(): string | null {
 
 function getLocalController(): SnapshotCapableController {
   return localControllerFactory() as SnapshotCapableController;
+}
+
+/**
+ * A local capture as the model should receive it (#711): full resolution when
+ * it fits under `guardImageSize`'s cap, otherwise compacted with the routed
+ * fallback's values (app-control/image-compact.ts), and a failure -- never a
+ * placeholder -- when even that does not fit. `label` is the tool's own
+ * sentence; it gains the picture's size only when the picture was shrunk.
+ *
+ * `typedErrors` as in `routeScreenshotToSidecar`: the desktop tools throw a
+ * typed failure (not_started: a capture changes nothing on the machine), the
+ * legacy `capture_screen` returns the message.
+ */
+export function localScreenshotResult(base64: string, mediaType: string, label: string, typedErrors: boolean): ToolResult | string {
+  const shot = screenshotForModel(base64, mediaType);
+  if (!shot.ok) {
+    const message = `Error: the screenshot is too large to send, and ${shot.reason}, so there is nothing to look at.`;
+    if (typedErrors) throw new ActionOutcomeError({ status: 'error', code: 'LOCAL_IMAGE_TOO_LARGE', message, effect: 'not_started' });
+    return message;
+  }
+  return { content: [{ type: 'text', text: screenshotCaption(label, shot) }, shot.block] };
 }
 
 function formatBounds(bounds: WindowInfo['bounds']): string {
@@ -621,12 +643,7 @@ export const desktopScreenshotTool: ToolDefinition = {
         base64 = buffer.toString('base64');
       }
 
-      return {
-        content: [
-          { type: 'text' as const, text: 'Desktop screenshot captured.' },
-          { type: 'image' as const, source: { type: 'base64' as const, media_type: mimeType, data: base64 } },
-        ],
-      } satisfies ToolResult;
+      return localScreenshotResult(base64, mimeType, 'Desktop screenshot captured', true);
     });
   },
 };

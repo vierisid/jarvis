@@ -27,7 +27,7 @@ import {
 } from './sidecar-route.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
-import { DESKTOP_TOOLS } from './desktop.ts';
+import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
 
@@ -735,13 +735,9 @@ export const captureScreenTool: ToolDefinition = {
     try {
       // The same shape as the sidecar branch above; a stringified descriptor
       // reached the model as a truncated prefix of base64, like #658's.
-      const base64 = localCaptureScreen();
-      return {
-        content: [
-          { type: 'text', text: 'Screenshot captured.' },
-          { type: 'image', source: { type: 'base64', media_type: 'image/png', data: base64 } },
-        ],
-      } satisfies ToolResult;
+      // Compacted when the raw PNG is over the image cap (#711), as the
+      // routed branch is.
+      return localScreenshotResult(localCaptureScreen(), 'image/png', 'Screenshot captured', false);
     } catch (err) {
       return `Error capturing screen: ${err instanceof Error ? err.message : err}`;
     }

@@ -2,6 +2,8 @@ import { afterEach, beforeEach, test, expect, describe } from 'bun:test';
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { setNoLocalTools } from './local-tools-guard.ts';
 import { isUntrustedSourceTool } from '../../roles/untrusted.ts';
+import { guardImageSize } from '../../llm/provider.ts';
+import { encodePng, noiseRgbRows } from '../app-control/fixtures/png.ts';
 import {
   DESKTOP_TOOLS,
   __resetLocalDesktopStateForTests,
@@ -314,6 +316,32 @@ describe('DESKTOP_TOOLS', () => {
           },
         },
       ],
+    });
+  });
+
+  // #711: a raw PNG of a large or high-DPI display passes guardImageSize's
+  // 5 MB cap, and the orchestrator then swaps the picture for a placeholder.
+  // The local branch now compacts it with the routed fallback's values.
+  test('an over-cap local capture is compacted to fit instead of becoming a placeholder', async () => {
+    const png = encodePng(2000, 1000, 2, 8, noiseRgbRows(2000, 1000));
+    const raw = { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png', data: png.toString('base64') } };
+    // Measured, not assumed: this capture as it stands would not reach the model.
+    expect(guardImageSize(raw).type).toBe('text');
+    __setLocalDesktopControllerFactoryForTests(() => ({ ...createFakeController(), captureScreen: async () => png }));
+    const tool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_screenshot')!;
+    const result = await tool.execute({}) as { content: Array<{ type: string; text?: string; source?: { media_type: string; data: string } }> };
+    expect(result.content[0]).toEqual({ type: 'text', text: 'Desktop screenshot captured (1600x800, downscaled from 2000x1000 to fit).' });
+    const image = result.content[1]!;
+    expect(image.source!.media_type).toBe('image/jpeg');
+    expect(guardImageSize(image as never).type).toBe('image');
+  });
+
+  test('a local capture that cannot be made to fit is a typed failure, not a placeholder', async () => {
+    const huge = Buffer.alloc(4 * 1024 * 1024, 7); // not a PNG, and over the cap once encoded
+    __setLocalDesktopControllerFactoryForTests(() => ({ ...createFakeController(), captureScreen: async () => huge }));
+    const tool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_screenshot')!;
+    await expect(tool.execute({})).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'LOCAL_IMAGE_TOO_LARGE', effect: 'not_started' },
     });
   });
 

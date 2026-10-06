@@ -712,6 +712,36 @@ describe('a routed screenshot delivers an image (#658)', () => {
     }
   });
 
+  // #711: the same local branch with a capture over the cap. A raw PNG used
+  // to go out as-is and reach the model as `[Image too large...]`.
+  test.skipIf(process.platform !== 'linux')('capture_screen without a sidecar compacts an over-cap capture', async () => {
+    const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const { tmpdir } = await import('node:os');
+    const { encodePng, noiseRgbRows } = await import('../app-control/fixtures/png.ts');
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-fake-scrot-'));
+    try {
+      const png = join(dir, 'shot.png');
+      const bytes = encodePng(2000, 1000, 2, 8, noiseRgbRows(2000, 1000));
+      expect(bytes.toString('base64').length).toBeGreaterThan(5 * 1024 * 1024);
+      writeFileSync(png, bytes);
+      writeFileSync(join(dir, 'scrot'), `#!/bin/sh\nexec /bin/cp '${png}' "$1"\n`, { mode: 0o755 });
+      const builtin = new URL('./builtin.ts', import.meta.url).pathname;
+      const script = `const { captureScreenTool } = await import(${JSON.stringify(builtin)});\n`
+        + `process.stdout.write(JSON.stringify(await captureScreenTool.execute({})));`;
+      const child = Bun.spawnSync(['bun', '-e', script], {
+        env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+      });
+      expect({ exitCode: child.exitCode, stderr: child.stderr.toString() }).toMatchObject({ exitCode: 0 });
+      const out = JSON.parse(child.stdout.toString());
+      expect(out.content[0]).toEqual({ type: 'text', text: 'Screenshot captured (1600x800, downscaled from 2000x1000 to fit).' });
+      expect(out.content[1].source.media_type).toBe('image/jpeg');
+      expect(out.content[1].source.data.length).toBeLessThanOrEqual(5 * 1024 * 1024);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a spooled descriptor is read once, through its getter', async () => {
     let reads = 0;
     const spooled = { type: 'inline', mime_type: 'image/jpeg' } as Record<string, unknown>;

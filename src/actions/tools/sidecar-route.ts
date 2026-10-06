@@ -21,6 +21,7 @@ import { compareSemver, parseSemver } from '../../sidecar/compat.ts';
 import { getMachineScope } from '../machine-scope.ts';
 import type { ToolResult } from './registry.ts';
 import { guardImageSize, type ContentBlock } from '../../llm/provider.ts';
+import { SCREENSHOT_COMPACT } from '../app-control/image-compact.ts';
 
 let sidecarManager: SidecarManager | null = null;
 
@@ -620,7 +621,9 @@ const BASE64_RE = /^[A-Za-z0-9+/]+={0,2}$/;
  * and a coordinate overlay drawn over a general-purpose screenshot is noise
  * the model would read as screen content.
  */
-const COMPACT_CAPTURE = { compact: true, max_width: 1600, jpeg_quality: 80, grid: false } as const;
+const COMPACT_CAPTURE = {
+  compact: true, max_width: SCREENSHOT_COMPACT.maxWidth, jpeg_quality: SCREENSHOT_COMPACT.jpegQuality, grid: false,
+} as const;
 
 type SidecarImage = { mediaType: string; data: string; width: number; height: number; origWidth: number; origHeight: number };
 
