@@ -3,7 +3,7 @@ bun test v1.4.2 (744846f84)
 
 src/goals/next-action.test.ts:
 
- 64 pass
+ 65 pass
  0 fail
- 236 expect() calls
-Ran 64 tests across 1 file. [3.43s]
+ 237 expect() calls
+Ran 65 tests across 1 file. [4.62s]

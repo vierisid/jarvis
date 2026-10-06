@@ -23,6 +23,7 @@ const lines = [
   `# What's next? review packet`,
   '',
   `Planner \`${PLANNER}\`, rubric \`${rubric.id}\` (${rubric.status}), ${SCENARIO_SET.scenarios.length} scenarios (${SCENARIO_SET.status}).`,
+  ...(SCENARIO_SET.status === 'approved' ? ['', `Approved by ${SCENARIO_SET.approved.by} on ${SCENARIO_SET.approved.on}. Approved digest \`${SCENARIO_SET.approved.digest.slice(0, 12)}\`; a changed scenario or criterion needs approval again.`] : []),
   '',
   'For each scenario, read the situation and the planner\'s answer, then mark every criterion yes or no. Edit the proposed expectation where you disagree.',
   '',
@@ -38,7 +39,7 @@ SCENARIO_SET.scenarios.forEach((scenario, index) => {
   const misses = scenarioMisses(scenario, plan);
   lines.push(`## ${index + 1}. ${scenario.id}`, '', `**Situation:** ${scenario.situation}`, '', ...answer(plan), '',
     'Alternatives weighed:', ...plan.considered.filter(c => c.outcome !== 'chosen').map(c => `- ${c.outcome.replace('_', ' ')}: ${c.title}. ${c.why}`), '',
-    `**Proposed expectation:** ${scenario.expect.outcome}${scenario.expect.kind ? `, ${scenario.expect.kind}` : ''}. ${scenario.why}`,
+    `**${SCENARIO_SET.status === 'approved' ? 'Approved' : 'Proposed'} expectation:** ${scenario.expect.outcome}${scenario.expect.kind ? `, ${scenario.expect.kind}` : ''}. ${scenario.why}`,
     `**Planner meets it:** ${misses.length ? `no (${misses.join('; ')})` : 'yes'}`, '',
     `Review: ${rubric.criteria.map(c => `${c.id} [ ]`).join('  ')}`, '', 'Notes:', '');
 });

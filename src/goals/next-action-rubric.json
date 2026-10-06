@@ -1,7 +1,7 @@
 {
   "id": "next-action-review-v1",
-  "status": "proposed",
-  "statusNote": "Founder review pending. Vieri confirms or edits these criteria and each scenario's expectation before they gate F-13; until then the planner is evaluated against the proposed set.",
+  "status": "approved",
+  "statusNote": "Approved by Vieri on 6 October 2026, with all 34 scenarios in next-action-scenarios.json. The approval covers these criteria and the pass rule; a change to either needs his review again.",
   "unit": "One planner result for one scenario.",
   "criteria": [
     { "id": "useful", "question": "Does the action move an active goal forward, or close or unblock open work?" },

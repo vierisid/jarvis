@@ -16,7 +16,7 @@
     "capability_ready": "planner, scenarios and rubric only; recommendations stays unsupported until F-13 registers a provider that uses them",
     "release_enabled": false,
     "publication": "PR #742 open against brief/foundations; https://github.com/vierisid/jarvis/pull/742",
-    "founder_review": "pending: 34 scenarios and the rubric are proposed; the review packet is evidence/Q-18/review-packet.md"
+    "founder_review": "approved by Vieri on 2026-10-06: all 34 scenarios and the rubric. The approval is locked by a digest in src/goals/next-action-scenarios.json; a change fails its test until he reviews it."
   },
   "design": {
     "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
@@ -45,8 +45,8 @@
     },
     {
       "check": "Reviewers can explain why the chosen action is preferable; low confidence produces a useful question or abstention",
-      "status": "passed pending founder review",
-      "evidence": "Rationale against doing nothing and the runner-up naming the deciding field, and considered alternatives with reasons (next-action.test.ts contract and rationale tests); questions for no concrete step, a failed last attempt and ties; abstention for full or empty days; evidence/Q-18/review-packet.md for the founder's review"
+      "status": "passed",
+      "evidence": "Rationale against doing nothing and the runner-up naming the deciding field, and considered alternatives with reasons (next-action.test.ts contract and rationale tests); questions for no concrete step, a failed last attempt and ties; abstention for full or empty days; evidence/Q-18/review-packet.md for the founder's review; founder approval on 2026-10-06, locked by digest (next-action.test.ts)"
     }
   ],
   "verification": [
@@ -57,7 +57,7 @@
     },
     {
       "command": "bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts",
-      "result": "64 pass, 0 fail",
+      "result": "65 pass, 0 fail",
       "log": "evidence/Q-18/next-action-tests.log"
     },
     {
@@ -84,7 +84,7 @@
   "quick_verify": {
     "cwd": "repository root, on brief/q-18",
     "command": "bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts",
-    "expected": "64 pass",
+    "expected": "65 pass",
     "screenshot": "not applicable: no visible UI changes"
   },
   "migration": "None. No schema, data, route or daemon wiring change; nothing calls the planner until F-13.",
@@ -96,14 +96,14 @@
     "Duplicates and finished commitments are matched on normalized titles; a reworded one is not caught.",
     "Recurring work is not modeled: a task whose work passed looks done until the user accepts new work for it or closes it.",
     "A wait the planner cannot attribute is treated as the user's, because hiding an approval would stall the work.",
-    "The ranking is a stated preference order, not a measured optimum; the scenarios and rubric await founder review."
+    "The ranking is a stated preference order, not a measured optimum."
   ],
   "found": [
     "The morning plan reads active and overdue goals and yesterday's review summary, but not dependencies, open work or checked results. It never deduplicates against existing commitments and writes its actions straight into work items. Q-18 does not change it; F-13 decides whether What's next? replaces it.",
     "Deciding or rejecting a work item never changes its commitment's status, and the upgrade turned every historical morning-plan action into a pending proposal. Readers of open commitments must filter on the work decision, as the Today view and this planner do.",
     "Tasks and the commitments tool change a work item's commitment status directly, outside the work-item API. Approval links resume through a webhook, like outside calls; only the waiting step's piece tells them apart."
   ],
-  "next": "F-13 builds its recommendations provider on this planner: it compares basis to recheck a stored recommendation, keeps a tie's answer as goal order with reorderGoals, and frames plan text as untrusted wherever it reaches a model. The founder reviews the scenario packet. Keep the PR unmerged until reviewed.",
+  "next": "F-13 builds its recommendations provider on this planner: it compares basis to recheck a stored recommendation, keeps a tie's answer as goal order with reorderGoals, and frames plan text as untrusted wherever it reaches a model. Keep the PR unmerged until reviewed.",
   "review": {
     "first_push": "69b57d04",
     "result": "An independent code review found 5 blocking and 16 smaller issues and asked 3 questions. All are fixed in 45cc2d32; 9a298152 adds the #573 reader review the fixes required and clips quoted outside text. Each guarantee has a test that fails when it is removed (51 of 51).",
@@ -132,6 +132,7 @@
       "Q1: F-13 compares basis, not the goal revision, which is a read projection that health and escalation updates also change",
       "Q2: run progress no longer changes the basis; a run starting, pausing or finishing does",
       "Q3: F-13 can keep a tie's answer as goal order with the existing reorderGoals, which the planner reads"
-    ]
+    ],
+    "founder": "Vieri reviewed the 34 scenarios and the rubric on 2026-10-06 and approved them all, unchanged."
   }
 }
