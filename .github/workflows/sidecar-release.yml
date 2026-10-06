@@ -85,7 +85,20 @@ jobs:
       - id: v
         run: |
           set -euo pipefail
+          export LC_ALL=C
           VERSION="$(cat sidecar/VERSION)"
+          # Checked before it becomes an output (#684): every job below takes
+          # it through env:, but it still names npm packages and lands in a
+          # sed expression, so it must be a plain semver with nothing a shell
+          # or sed would read as syntax -- and a newline here would otherwise
+          # write extra lines into $GITHUB_OUTPUT.
+          # SemVer 2.0 pre-release identifiers: no empty one, no leading zero
+          # on a numeric one (`npm version` refuses both).
+          id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-${id}(\.${id})*)?$ ]]; then
+            printf '::error::sidecar/VERSION is not a plain semver: %q\n' "$VERSION"
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${DRY_RUN}" = "true" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
@@ -216,7 +229,7 @@ jobs:
         run: |
           set -euo pipefail
           packaging/macos/make-icns.sh
-          make app-macos BIN=./${{ env.SIDECAR_BIN }} APP_DIR=dist/Jarvis.app
+          make app-macos BIN="./${SIDECAR_BIN}" APP_DIR=dist/Jarvis.app
 
       # Gated on the Apple credentials: absent (forks, pre-onboarding) the
       # bundle ships unsigned, exactly as before. Signing is inside-out
@@ -435,9 +448,11 @@ jobs:
       # builds — so check the chain file too.
       - name: Windows signing readiness
         id: winsign
+        env:
+          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
         run: |
           set -euo pipefail
-          if [ -z "${{ vars.GCP_KMS_KEYRING }}" ]; then
+          if [ -z "${GCP_KMS_KEYRING}" ]; then
             echo "ready=false" >> "$GITHUB_OUTPUT"
             echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned binary (SmartScreen will warn users)."
           elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
@@ -486,7 +501,7 @@ jobs:
           if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
             echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset — the signature's publisher will not be asserted."
           fi
-          scripts/sign-windows.sh "${{ env.SIDECAR_BIN }}.exe"
+          scripts/sign-windows.sh "${SIDECAR_BIN}.exe"
 
       - name: Upload binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -545,14 +560,13 @@ jobs:
           sums="$(cd artifacts && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | base64 -w0)"
           echo "sums=${sums}" >> "$GITHUB_OUTPUT"
 
-      - name: Resolve version
-        id: version
-        run: echo "VERSION=${{ needs.resolve.outputs.version }}" >> "$GITHUB_OUTPUT"
-
+      # VERSION reaches every script below through env:, never as ${{ }} in
+      # the script text (#684), and was checked as a plain semver by resolve.
       - name: Prepare platform packages
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
         run: |
-          VERSION="${{ steps.version.outputs.VERSION }}"
-
+          set -euo pipefail
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
             pkg_dir="sidecar/npm/${platform}"
             mkdir -p "${pkg_dir}/bin"
@@ -587,17 +601,18 @@ jobs:
           done
 
       - name: Publish platform packages
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
         run: |
-          FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
-          if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          flags=()
+          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
+          if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi
 
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
             pkg="@usejarvis/sidecar-${platform}"
-            echo "Publishing ${pkg}@${VERSION}... ${FLAGS}"
+            echo "Publishing ${pkg}@${VERSION}... ${flags[*]}"
             cd "sidecar/npm/${platform}"
-            if ! npm publish --access public $FLAGS; then
+            if ! npm publish --access public "${flags[@]}"; then
               if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
                 echo "${pkg}@${VERSION} is already on npm; treating as success."
               else
@@ -608,15 +623,16 @@ jobs:
           done
 
       - name: Publish wrapper package
+        env:
+          VERSION: ${{ needs.resolve.outputs.version }}
         run: |
-          FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
-          if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
-          VERSION="${{ steps.version.outputs.VERSION }}"
+          flags=()
+          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
+          if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi
           pkg="@usejarvis/sidecar"
 
           cd sidecar/npm/jarvis-sidecar
-          if ! npm publish --access public $FLAGS; then
+          if ! npm publish --access public "${flags[@]}"; then
             if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
               echo "${pkg}@${VERSION} is already on npm; treating as success."
             else

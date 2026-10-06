@@ -68,9 +68,22 @@ const findStep = (job, pred) => (jobs[job]?.steps ?? []).find(pred);
 if (mode === "validator" || mode === "step") {
   const step = mode === "validator"
     ? findStep("validate-tag", (s) => s.id === "validate")
-    : findStep(process.argv[2], (s) => s.name === process.argv[3]);
+    : findStep(process.argv[2], (s) => s.name === process.argv[3] || s.id === process.argv[3]);
   if (!step || typeof step.run !== "string") process.exit(3);
   process.stdout.write(step.run);
+  process.exit(0);
+}
+if (mode === "run-expressions") {
+  // #684: the same rule as the structure check below, for any workflow:
+  // no `run:` (or github-script `script:`) contains a ${{ }} expression.
+  const found = [];
+  for (const [name, job] of Object.entries(jobs))
+    for (const [i, s] of (job.steps ?? []).entries()) {
+      const label = name + ": step " + (s.name ?? s.id ?? s.uses ?? String(i));
+      if (typeof s.run === "string" && s.run.includes("${{")) found.push(label + " has a ${{ }} expression inside run:");
+      if (typeof s.with?.script === "string" && s.with.script.includes("${{")) found.push(label + " has a ${{ }} expression inside a script: input");
+    }
+  if (found.length) console.log(found.join("\n"));
   process.exit(0);
 }
 // mode === "structure": one violation per line, nothing when clean.
@@ -464,6 +477,35 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 }
 
 echo
+echo "sidecar-release.yml: no \${{ }} inside run: (#684)"
+# The reusable sidecar workflow runs in the same release, and its publish job
+# holds id-token too. Its versions come from sidecar/VERSION rather than the
+# tag, so the gate above does not cover them; the structure rule does.
+SIDECAR_WORKFLOW="${SIDECAR_RELEASE_WORKFLOW:-${HERE}/../workflows/sidecar-release.yml}"
+found="$(YQ_FILE="$SIDECAR_WORKFLOW" yq run-expressions)" || {
+	no "sidecar-release.yml run-expression check ran" "the bun helper failed"
+	found=""
+}
+if [ -z "$found" ]; then
+	ok "sidecar-release.yml: every run: takes its values through env:"
+else
+	no "sidecar-release.yml: every run: takes its values through env:" "$found"
+fi
+copy="${WORK}/sidecar-mutant.yml"
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+FROM="$SIDECAR_WORKFLOW" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const anchor = "npm version \"${VERSION}\" --no-git-tag-version --allow-same-version";
+if (!s.includes(anchor)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(anchor, "npm version \"${{ needs.resolve.outputs.version }}\" --no-git-tag-version --allow-same-version"));
+' || no "the sidecar mutant could be applied (the workflow no longer has the text it mutates)"
+if [ -f "$copy" ] && [ -n "$(YQ_FILE="$copy" yq run-expressions)" ]; then
+	ok "reports: a \${{ }} expression back inside a sidecar-release.yml run:"
+else
+	no "reports: a \${{ }} expression back inside a sidecar-release.yml run:"
+fi
+
+echo
 echo "sink executed without the gate in front of it"
 # The brain's `npm version` is the line #644 named (in publish-brain then,
 # in pack-brain since #682 split the build out of the OIDC job). Run its
@@ -491,6 +533,63 @@ EOF
 $(cat "${WORK}/argv" 2>/dev/null)"
 	else
 		ok "the npm version step passes a hostile VERSION as one literal argument and runs nothing"
+	fi
+fi
+
+echo
+echo "sidecar version gate (sidecar-release.yml resolve step, executed verbatim)"
+# #684. The sidecar version comes from sidecar/VERSION, not the tag, so the
+# gate above never sees it. resolve now checks it before it becomes an output;
+# run that script against hostile file contents (dry run, so it never reaches
+# npm) and check what reaches $GITHUB_OUTPUT.
+RESOLVE="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step resolve v)" || RESOLVE=""
+if [ -z "$RESOLVE" ]; then
+	no "found sidecar-release.yml's resolve step"
+else
+	# sidecar_resolve <file contents>: sets RC and OUT.
+	# sidecar_resolve <file contents> [locale]
+	sidecar_resolve() {
+		rm -rf "${WORK}/sc" && mkdir -p "${WORK}/sc/sidecar"
+		printf '%s' "$1" >"${WORK}/sc/sidecar/VERSION"
+		: >"${WORK}/sc/out"
+		local -a envs=(PATH="$PATH" GITHUB_OUTPUT="${WORK}/sc/out" DRY_RUN=true)
+		[ -n "${2:-}" ] && envs+=(LC_ALL="$2" LANG="$2")
+		(cd "${WORK}/sc" && env -i "${envs[@]}" bash -c "$RESOLVE") >"${WORK}/sc/log" 2>&1
+		RC=$?
+		OUT="$(cat "${WORK}/sc/out")"
+	}
+	for v in 0.10.0 $'0.10.0\n' 1.2.3-rc.1 1.2.3-alpha-1.beta.11 10.20.30; do
+		sidecar_resolve "$v"
+		# The file normally ends in a newline, which $(cat) drops.
+		if [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=%s\nshould_release=true' "${v%$'\n'}")" ]; then
+			ok "sidecar resolve accepts $(printf '%q' "$v")"
+		else
+			no "sidecar resolve accepts $(printf '%q' "$v")" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/sc/log")"
+		fi
+	done
+	for v in '' '1.2' '01.2.3' '1.2.3+build' $'1.2.3\nshould_release=false' "1.2.3\$(touch ${WORK}/pwned)" \
+		"1.2.3\";touch ${WORK}/pwned;\"" '1.2.3|x' '1.2.3/x' '1.2.3-' "1.2.3-rc.1 " '1.2.3-01' '1.2.3-rc..1'; do
+		rm -f "${WORK}/pwned"
+		sidecar_resolve "$v"
+		if [ "$RC" -ne 0 ] && [ -z "$OUT" ] && [ ! -e "${WORK}/pwned" ] && grep -qF '::error::sidecar/VERSION is not a plain semver' "${WORK}/sc/log"; then
+			ok "sidecar resolve rejects $(printf '%q' "$v") without writing outputs"
+		else
+			no "sidecar resolve rejects $(printf '%q' "$v")" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/sc/log")"
+		fi
+	done
+	# Under a UTF-8 locale glibc's [A-Za-z] and [0-9] match more than ASCII;
+	# the step pins LC_ALL=C, as the tag gate does.
+	if [ -z "$UTF8_LOCALE" ]; then
+		echo "  skip - no en_US.UTF-8 locale on this machine, so the sidecar locale fixtures cannot run"
+	else
+		for v in $'1.2.3-\u00e9' $'\u0661.2.3' $'1.2.3-\uff41'; do
+			sidecar_resolve "$v" "$UTF8_LOCALE"
+			if [ "$RC" -ne 0 ] && [ -z "$OUT" ]; then
+				ok "sidecar resolve rejects $(printf '%q' "$v") under ${UTF8_LOCALE}"
+			else
+				no "sidecar resolve rejects $(printf '%q' "$v") under ${UTF8_LOCALE}" "exit ${RC}; output: ${OUT}"
+			fi
+		done
 	fi
 fi
 
