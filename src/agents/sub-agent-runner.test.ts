@@ -7,6 +7,7 @@ import { ActionOutcomeError } from '../actions/action-outcome';
 import type { LLMToolCall } from '../llm/provider';
 import { withExecutionScope } from '../actions/execution-scope';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../roles/untrusted';
+import { delegationOutcome, extractToolCallsTrace } from '../workflows/adapters/m7-agent-delegator';
 
 const approval = { effectId: 'effect', approvalId: 'approval', waitpointId: 'waitpoint' };
 const write = (id: string): LLMToolCall => ({ id, name: 'write_file', arguments: { path: '/tmp/synthetic', content: 'hello' } });
@@ -331,5 +332,93 @@ describe('#608: a declared outside-content failure is framed for a sub-agent', (
 
     const plainRun = await run('manage_goals');
     expect(Object.fromEntries(toolMessages(plainRun)).c1).toBe(raw);
+  });
+});
+
+describe('a tool that returns an image (#709)', () => {
+  const PIXELS = 'iVBORw0KGgo' + 'A'.repeat(40_000);
+  const shot = (id: string): LLMToolCall => ({ id, name: 'desktop_screenshot', arguments: {} });
+  function imageRegistry() {
+    const r = new ToolRegistry();
+    r.register({ name: 'desktop_screenshot', category: 'desktop', description: 'synthetic', parameters: {}, execute: async () => ({
+      content: [
+        { type: 'text' as const, text: 'Desktop screenshot captured.' },
+        { type: 'image' as const, source: { type: 'base64' as const, media_type: 'image/png', data: PIXELS } },
+      ],
+    }) });
+    r.register(registry().r.get('read_file')!);
+    return r;
+  }
+  /** Scripted turns like `llm`, recording what each provider call was sent. */
+  function recordingLlm(turns: LLMToolCall[][]) {
+    const sent: unknown[] = [];
+    let call = 0;
+    return { sent, manager: { chatTier: async (_tier: string, _purpose: string, messages: unknown[]) => {
+      sent.push(JSON.parse(JSON.stringify(messages)));
+      const turn = turns[call++];
+      return turn
+        ? { content: '', finish_reason: 'tool_use', tool_calls: turn, usage: { input_tokens: 1, output_tokens: 1 } }
+        : { content: 'done', finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
+    } } as any };
+  }
+  type Sent = Array<{ role: string; content: unknown; tool_call_id?: string }>;
+  const toolMsg = (messages: Sent, id: string) => messages.find((m) => m.role === 'tool' && m.tool_call_id === id);
+
+  test('the model is sent the picture as an image block, not a string of its base64', async () => {
+    const model = recordingLlm([[shot('c1')]]);
+    const result = await runSubAgent({ agent: agent(), task: 'look', context: '', llmManager: model.manager,
+      toolRegistry: imageRegistry(), maxIterations: 3 });
+    expect(result.terminationReason).toBe('completed');
+    const content = toolMsg(model.sent[1] as Sent, 'c1')!.content;
+    expect(Array.isArray(content)).toBe(true);
+    const blocks = content as Array<{ type: string; text?: string; source?: { data: string } }>;
+    expect(blocks.find((b) => b.type === 'image')?.source?.data).toBe(PIXELS);
+    expect(blocks.find((b) => b.type === 'text')?.text).toContain('Desktop screenshot captured.');
+  });
+
+  test('once the model has seen it, the image leaves the transcript, the checkpoints and the result', async () => {
+    const model = recordingLlm([[shot('c1')], [read('c2')]]);
+    const turns: SubAgentCheckpoint[] = [];
+    const result = await runSubAgent({ agent: agent(), task: 'look then read', context: '', llmManager: model.manager,
+      toolRegistry: imageRegistry(), authorityEngine: authority([]).engine, maxIterations: 4,
+      onTurn: (s) => turns.push(JSON.parse(JSON.stringify(s))) });
+    expect(result.terminationReason).toBe('completed');
+    // The call right after the screenshot carries the picture: that is the one that shows it.
+    expect(JSON.stringify(model.sent[1])).toContain(PIXELS);
+    // The one after that does not: the model answered, so it has been seen.
+    expect(JSON.stringify(model.sent[2])).not.toContain('iVBORw0KGgo');
+    expect(JSON.stringify(toolMsg(model.sent[2] as Sent, 'c1')!.content)).toContain('no longer available');
+    // Nothing durable or returned ever holds the base64.
+    expect(turns.length).toBeGreaterThan(0);
+    for (const t of turns) expect(JSON.stringify(t)).not.toContain('iVBORw0KGgo');
+    expect(JSON.stringify(result)).not.toContain('iVBORw0KGgo');
+    // A screenshot is outside content, so the run is tainted by it.
+    expect(result.taint).toContain('desktop_screenshot');
+  });
+
+  test('a returned transcript keeps string tool results, so a workflow sees the screenshot completed', async () => {
+    const model = recordingLlm([[shot('c1')]]);
+    const result = await runSubAgent({ agent: agent(), task: 'look', context: '', llmManager: model.manager,
+      toolRegistry: imageRegistry(), maxIterations: 3 });
+    const trace = extractToolCallsTrace(result.messages, 2000, new Set(result.failedToolCalls ?? []));
+    expect(trace).toEqual([expect.objectContaining({ name: 'desktop_screenshot', result: expect.stringContaining('Desktop screenshot captured.') })]);
+    expect(delegationOutcome({ status: 'succeeded', toolCalls: trace } as never, ['desktop_screenshot'])).toEqual({ status: 'succeeded' });
+  });
+
+  test('a pause mid-batch writes down no base64 and does not claim the model saw the picture', async () => {
+    const a = authority(['write_data']);
+    const model = recordingLlm([[shot('c1'), write('c2')]]);
+    const r = imageRegistry();
+    r.register(registry().r.get('write_file')!);
+    const result = await runSubAgent({ agent: agent(), task: 'look then save', context: '', llmManager: model.manager,
+      toolRegistry: r, authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3,
+      governedTools: async () => ({ kind: 'paused', approval }) });
+    expect(result.terminationReason).toBe('paused');
+    expect(JSON.stringify(result)).not.toContain('iVBORw0KGgo');
+    const shotResult = result.messages.find((m) => m.role === 'tool' && m.tool_call_id === 'c1')!.content as string;
+    expect(typeof shotResult).toBe('string');
+    expect(shotResult).toContain('Desktop screenshot captured.');
+    expect(shotResult).toContain('could not be kept across a pause');
+    expect(shotResult).not.toContain('earlier step');
   });
 });

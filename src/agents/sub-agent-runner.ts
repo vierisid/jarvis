@@ -18,8 +18,9 @@
 
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
-import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
-import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
+import type { ContentBlock, LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
+import { guardImageSize } from '../llm/provider.ts';
+import { ToolRegistry, isToolResult, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { TierMap } from '../llm/tiers.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
@@ -38,7 +39,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { freezeToolArguments, getActionForTool, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { combineDecisions } from '../authority/engine.ts';
-import { markUntrustedToolResult, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
+import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 
@@ -326,9 +327,51 @@ class SubAgentCanceled extends Error {
   constructor(readonly raised: unknown) { super(raised instanceof Error ? raised.message : String(raised)); this.name = 'SubAgentCanceled'; }
 }
 
+/**
+ * `blocks` is set for a multi-modal result (#709) and is what the model is sent;
+ * `text` is then its log line. Everything else is text only.
+ */
 type ToolDispatch =
-  | { text: string; failed?: boolean }
+  | { text: string; failed?: boolean; blocks?: ContentBlock[] }
   | { paused: Omit<SubAgentPause, 'remaining' | 'iteration'> };
+
+/**
+ * What an image block becomes once the model has answered the turn that showed
+ * it (#709). Same rule as the primary agent's history (`releaseImagePayloads` in
+ * agents/agent.ts): a screenshot is up to 5 MB of base64 and is needed for
+ * exactly one provider call.
+ */
+const RELEASED_IMAGE_TEXT = '[image from an earlier step - no longer available; take a new screenshot if you need to see the screen again]';
+
+/**
+ * What an image the model has NOT been shown yet becomes in a checkpoint or a
+ * returned result. Those are durable rows (`onTurn`, the delegation repo), so
+ * they never carry base64; and a run that pauses mid-batch -- a screenshot, then
+ * a governed click -- resumes from them, so the model must not be told it saw a
+ * picture it never received.
+ */
+const UNSHOWN_IMAGE_TEXT = '[a screenshot was taken here but could not be kept across a pause; take a new one if you need to see the screen]';
+
+/** Every image still in `messages` has been shown: release it, keeping the block shape. */
+function releaseShownImages(messages: LLMMessage[]): LLMMessage[] {
+  return messages.map((m) => (typeof m.content === 'string' || !m.content.some((b) => b.type === 'image')
+    ? m
+    : { ...m, content: m.content.map((b): ContentBlock => (b.type === 'image' ? { type: 'text', text: RELEASED_IMAGE_TEXT } : b)) }));
+}
+
+/**
+ * The transcript as it is written down or handed back: text only, in the
+ * string shape every consumer of a checkpoint or `SubAgentResult.messages`
+ * reads (`extractToolCallsTrace` in workflows/adapters/m7-agent-delegator.ts
+ * indexes only string tool results, so a block array there read as a call
+ * whose response never landed). Any image still present is one the model has
+ * not seen, because `releaseShownImages` runs after every provider call.
+ */
+function durableMessages(messages: LLMMessage[]): LLMMessage[] {
+  return messages.map((m) => (typeof m.content === 'string'
+    ? m
+    : { ...m, content: m.content.map((b) => (b.type === 'text' ? b.text : UNSHOWN_IMAGE_TEXT)).join('\n') }));
+}
 
 const denialText = (name: string, reason: string) =>
   `[APPROVAL DENIED] ${name}: ${reason} Do not retry the action; report that it was not performed.`;
@@ -496,6 +539,14 @@ async function executeTool(
     const category = registry.get(toolCall.name)?.category;
     if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
     audit?.('allowed', true);
+    // A picture (#709), sized and framed the way the orchestrator's direct
+    // path does it. `boundedResult` would JSON-stringify the ToolResult and
+    // cap it, so the model got a 6000-character prefix of base64 instead of
+    // an image.
+    if (isToolResult(raw)) {
+      const blocks = markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
+      return { text: blocks.map((b) => (b.type === 'text' ? b.text : `[${b.type}]`)).join('\n'), blocks };
+    }
     const bounded = boundedResult(raw);
     return { text: markUntrustedToolResult(toolCall.name, category, bounded.text) + bounded.trailer };
   } catch (err) {
@@ -637,13 +688,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   let reachedFinal = false;
 
   const state = (iteration: number): SubAgentCheckpoint => ({
-    messages, toolsUsed: [...toolsUsed], tokensUsed: { ...totalUsage }, sequence, iteration,
+    messages: durableMessages(messages), toolsUsed: [...toolsUsed], tokensUsed: { ...totalUsage }, sequence, iteration,
     taint: [...taint], failedToolCalls: [...failedToolCalls],
   });
   const finish = (partial: Pick<SubAgentResult, 'success' | 'response' | 'terminationReason'> & Partial<SubAgentResult>): SubAgentResult => ({
     toolsUsed: [...new Set(toolsUsed)],
     tokensUsed: totalUsage,
-    messages,
+    messages: durableMessages(messages),
     sequence,
     failedToolCalls: [...failedToolCalls],
     taint: [...taint],
@@ -661,8 +712,8 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     }
   };
 
-  const record = (tc: LLMToolCall, dispatched: { text: string; failed?: boolean }) => {
-    messages.push({ role: 'tool', content: dispatched.text, tool_call_id: tc.id });
+  const record = (tc: LLMToolCall, dispatched: { text: string; failed?: boolean; blocks?: ContentBlock[] }) => {
+    messages.push({ role: 'tool', content: dispatched.blocks ?? dispatched.text, tool_call_id: tc.id });
     if (dispatched.failed) failedToolCalls.push(tc.id);
     console.log(`[SubAgent:${agentName}] Tool ${tc.name} -> ${dispatched.text.slice(0, 100)}...`);
   };
@@ -826,6 +877,10 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       fence();
       const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
       fence();
+      // The model has now been shown every image in the transcript (#709).
+      // Replaced, not mutated in place: the request just made held these.
+      const released = releaseShownImages(messages);
+      for (let i = 0; i < released.length; i++) messages[i] = released[i]!;
 
       totalUsage.input += llmResponse.usage.input_tokens;
       totalUsage.output += llmResponse.usage.output_tokens;

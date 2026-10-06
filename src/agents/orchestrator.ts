@@ -1686,20 +1686,30 @@ export class AgentOrchestrator {
          * chat-channel relay and the execute route's HTTP body. A frame carries
          * a per-message nonce; those three must never be handed one.
          */
-        const runApproved = async (): Promise<string> => {
+        const runApproved = async (): Promise<string | ContentBlock[]> => {
           const receipt = await this.deferredExecutor!.executeApprovedWithReceipt(request.id, 'inline-gate');
           if (receipt.failed && tool?.failureIsOutsideContent === true) {
             this.noteTaint(toolCall.name, tool?.category);
             return markUntrustedToolFailure(toolCall.name, tool?.category, receipt.result, MAX_TOOL_RESULT_CHARS, true);
           }
+          // A picture (#709): the blocks, sized and framed exactly as the
+          // ungated path below hands them over, rather than the receipt's text
+          // form, which names the image and does not carry it. An approved
+          // screenshot is often the very thing the person approved acting on.
+          if (receipt.content) {
+            this.noteTaint(toolCall.name, tool?.category);
+            return markUntrustedToolBlocks(toolCall.name, tool?.category, receipt.content.map(guardImageSize));
+          }
           return frame(receipt.result);
         };
 
-        // Every return below is a single string, and that is no longer a
-        // limitation worth noting for documents: `DeferredExecution` collapses
-        // the tool's return with `toolReturnText` before writing its receipt,
-        // which would drop any out-of-band metadata a tool tried to hand over
-        // here. #584 briefly made that a gap -- an approved `create_document`
+        // Every return below is a single string except one: an approved call
+        // that returned a picture comes back as blocks (#709), which the
+        // executor hands over separately from its receipt text. Otherwise that
+        // is no longer a limitation worth noting for documents:
+        // `DeferredExecution` collapses the tool's return with
+        // `toolReturnText` before writing its receipt, which would drop any
+        // out-of-band metadata a tool tried to hand over here. #584 briefly made that a gap -- an approved `create_document`
         // would have lost its download card while an ungated one kept it -- and
         // then removed the card entirely, so there is nothing left to lose. If
         // a tool ever does need to hand structured metadata to the chat loop,

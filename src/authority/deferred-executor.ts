@@ -2,7 +2,8 @@
  * Deferred Executor — Runs approved tool calls that were waiting for approval.
  */
 
-import type { ToolRegistry } from '../actions/tools/registry.ts';
+import { isToolResult, type ToolRegistry } from '../actions/tools/registry.ts';
+import type { ContentBlock } from '../llm/provider.ts';
 import { executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
 import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank } from './tool-action-map.ts';
 import { rawUiGate } from './ui-intent';
@@ -49,6 +50,30 @@ export type ExecutionResultCallback = (requestId: string, request: ApprovalReque
  * rather than a second constant that can drift from it.
  */
 export const RECEIPT_MAX_CHARS = 2000;
+
+/**
+ * The text form of a multi-modal result (#709): its text blocks as written,
+ * and each image as a marker naming its type and size -- never its base64.
+ *
+ * Every consumer of the executor's one string except the inline gate has no
+ * model to show a picture to: the receipt column, the dashboard notification,
+ * the chat-channel relay, the execute route's HTTP body. `toolReturnText`
+ * flattened a ToolResult to JSON, so each of them got a prefix of a base64 blob
+ * (2000 characters in the row, 200 in the notification) and the inline gate got
+ * the whole of it as text, which the model receives as a truncated string
+ * rather than an image. The blocks themselves go back to the inline gate
+ * separately, as `content`.
+ */
+function multiModalReceiptText(content: ContentBlock[]): string {
+  // Read defensively: `isToolResult` checks only that `content` is an array,
+  // and this runs after the tool did, where a throw would record a committed
+  // effect as a failed one.
+  return content.map((block) => (block.type === 'text'
+    ? String(block.text)
+    : block.type === 'image'
+      ? `[image: ${block.source?.media_type ?? 'unknown type'}, ${block.source?.data?.length ?? 0} base64 characters, not stored]`
+      : `[${String((block as { type?: unknown }).type)}]`)).join('\n');
+}
 
 export class DeferredExecutor {
   private toolRegistry: ToolRegistry | null = null;
@@ -97,8 +122,13 @@ export class DeferredExecutor {
    * model in front of it can frame that text as data without re-reading the row
    * (#608). It is deliberately not set for the `blocked` branches: those strings
    * are repo-authored, so there is nothing to disclaim.
+   *
+   * `content` is set only when the tool returned a multi-modal result (#709):
+   * the blocks as the tool returned them, for the one caller with a model in
+   * front of it (the orchestrator's inline gate). `result` is then the text
+   * form every other consumer stores or shows.
    */
-  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string; failed?: boolean }> {
+  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string; failed?: boolean; content?: ContentBlock[] }> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
       return { claimed: false, result: `Error: Request ${requestId} not found or not in approved state` };
@@ -198,7 +228,12 @@ export class DeferredExecutor {
       // playbook on an approved browser call; what it cannot do is put attacker
       // text OUTSIDE a block, because only trusted code that received a trailer
       // as a trailer ever places one there (roles/untrusted.ts).
-      const result = toolReturnText(raw);
+      //
+      // A multi-modal result (a screenshot) is the exception: its text form
+      // names the image instead of carrying it, and the blocks travel back to
+      // the inline gate untouched (#709).
+      const content = isToolResult(raw) ? raw.content : undefined;
+      const result = content ? multiModalReceiptText(content) : toolReturnText(raw);
 
       const executionTimeMs = Date.now() - startTime;
 
@@ -255,7 +290,7 @@ export class DeferredExecutor {
       // Notify
       this.onResult?.(requestId, request, result);
 
-      return { claimed: true, result };
+      return content ? { claimed: true, result, content } : { claimed: true, result };
     } catch (err) {
       // RAW, and framed nowhere in this method (#608). This one string has six
       // consumers and only two of them are a model: the row below, the
