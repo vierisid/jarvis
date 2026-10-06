@@ -33,12 +33,13 @@
     "Q-02"
   ],
   "behavior": [
-    "Production compositions (chat and opportunity) run the policy named by JARVIS_PLANNING_POLICY, else the user-owned workflows.planningPolicy setting, else baseline-v1. It is read at each composition; one composition's attempts and repairs keep the policy they started with. An unknown name falls back to baseline-v1 with one warning per value.",
+    "Production compositions (chat and opportunity) run the policy named by JARVIS_PLANNING_POLICY, else the user-owned workflows.planningPolicy setting, else baseline-v1. It is read at each composition; one composition's attempts and repairs keep the policy they started with, and a direct composer call without a policy also follows it. An unknown name falls back to baseline-v1 with one warning per value until a valid read; the daemon logs the policy and its source at start and when either changes.",
     "Opting in, promoting and rolling back are configuration changes: the candidate deterministic-first-v1 is opt-in; promotion is a change of DEFAULT_PLANNING_POLICY backed by a promote report; setting baseline-v1 always selects the prior policy.",
     "Each composition's journal row records the prompt version and the policy that actually ran, and the flow links to it through compositionRecordId.",
-    "A test pins every system and user prompt and tool definition the composer sends, on both paths and through a repair, to COMPOSER_PROMPT_VERSION, and each policy's instruction text to its id, so rollback restores the measured prompt.",
+    "A test pins every system prompt, user prompt, tool result and tool definition the composer sends, on both paths and through a repair, to COMPOSER_PROMPT_VERSION in four environment shapes production uses (bare; tools, roles, library and mixed machines; the same without a library; tool names only), and each policy's instruction text to its id, so rollback restores the measured prompt.",
     "Measures split unnecessary AI (composed AI steps over each task's maxAiSteps, plus AI calls and delegations no scenario asked for) from unsafe effects (notifications, tool calls and external steps beyond the scenario).",
-    "eval:workflows --mode compare judges deterministic-first-v1 against baseline-v1 on matched hosted runs (same profile, task set, repeats and natural condition) under a promotion rule frozen before the runs: unnecessary AI must fall, corrections (first-candidate correctness and, when reviewed, median edits and correction time) must improve, unsafe effects and missed abstentions must not rise, and task success may drop by at most the rule's allowance. Verdict promote, keep_baseline or not_established; refused, not_run and completed exit 1, 2 and 0. The report is sanitized like the baseline."
+    "founder-v2 and founder-v2-hosted are founder-v1 with the shipped specialist roles and, self-hosted, the pieces library, as the daemon passes them; --environment runs a task set in an environment containing its own, recorded in the manifest. --policy both runs each task under both policies back to back.",
+    "Hosted runs pin the promotion rule they start under. eval:workflows --mode compare judges deterministic-first-v1 against baseline-v1 only on runs that pinned the frozen rule it is given, started after its freeze, ran in a production-shaped environment, scheduled both policies on the same natural-condition tasks and repeats, and measured one prompt version. Per profile: every item ran; the release rubric's sample; less unnecessary AI on graphs both composed (one extra step counts once); at least as many jobs composed and no more false abstentions; corrections improved, none worse; no added unsafe effect or missed abstention; success within the allowed drop, inclusive. Verdicts promote, keep_baseline or not_established; the report promotes only when every profile does, every run completed, and the measured prompt version is the current one. Exit codes 0, 1, and 2 for not_run or incomplete. Reports name runs by directory and share aggregates, fingerprints and run metadata only."
   ],
   "acceptance": [
     {
@@ -49,18 +50,18 @@
     {
       "check": "Rollback selects the prior policy; every composition records which policy actually ran",
       "status": "passed",
-      "evidence": "src/actions/tools/composition-provenance.test.ts (live switch through the production composer: journal records and prompts sent; reset restores the default; the daemon installs the selector; prompt and instruction pins) and src/daemon/config-merge.test.ts; evidence/Q-03/revert-checks.log"
+      "evidence": "src/actions/tools/composition-provenance.test.ts (live switch through the production composer: journal records and prompts sent; reset restores the default; direct composer calls follow the selector; the daemon installs the selector; prompt and instruction pins in four environment shapes) and src/daemon/config-merge.test.ts; evidence/Q-03/revert-checks.log"
     }
   ],
   "verification": [
     {
       "command": "bun test --preload ./src/test-preload.ts",
-      "result": "7,781 pass, 86 skip, 7 fail of 7,874 tests across 427 files (local WSL2, 75323d2b). All 7 also fail on brief/foundations 462d955d with no Q work applied: git config lint and six Chromium launches on this machine. Q-03 changes none of those areas.",
+      "result": "7,792 pass, 86 skip, 9 fail of 7,887 tests across 427 files (local WSL2, b050b6f8). All 9 also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. Q-03 changes none of those areas.",
       "log": "evidence/Q-03/full-suite-summary.log"
     },
     {
       "command": "bun test --preload ./src/test-preload.ts src/actions/tools/composition-provenance.test.ts src/workflows/evaluation/promotion.test.ts src/daemon/config-merge.test.ts",
-      "result": "50 pass, 0 fail across 3 files",
+      "result": "63 pass, 0 fail across 3 files",
       "log": "evidence/Q-03/q03-tests.log"
     },
     {
@@ -74,13 +75,13 @@
       "log": "evidence/Q-03/guards.log"
     },
     {
-      "command": "remove each of 25 guarantees in turn and run its test",
-      "result": "25 of 25 removals fail their tests; source restored. The log lists the exact text removed and its replacement for each.",
+      "command": "remove each of 55 guarantees in turn and run its test",
+      "result": "55 of 55 removals fail their tests; source restored. The log lists the file, the exact text removed and its replacement for each.",
       "log": "evidence/Q-03/revert-checks.log"
     },
     {
-      "command": "bun run eval:workflows --mode plan --out DIR",
-      "result": "exit 0; both policies scheduled on the same 12 held-out tasks; no provider requests",
+      "command": "bun run eval:workflows --mode plan --taskset founder --environment founder-v2 --out DIR",
+      "result": "exit 0; the manifest pins the promotion rule and the founder-v2 environment, and each task is scheduled under both policies back to back; no provider requests",
       "log": "evidence/Q-03/cli-plan.log"
     },
     {
@@ -92,21 +93,48 @@
   "quick_verify": {
     "cwd": "repository root, on brief/q-03",
     "command": "bun test --preload ./src/test-preload.ts src/actions/tools/composition-provenance.test.ts src/workflows/evaluation/promotion.test.ts",
-    "expected": "16 pass",
+    "expected": "27 pass",
     "screenshot": "not applicable: no visible UI changes"
   },
   "migration": "None. One optional user setting (workflows.planningPolicy) and its env override; no schema or data change. Unset keeps baseline-v1.",
   "rollback": "Set JARVIS_PLANNING_POLICY=baseline-v1 (next daemon start) or workflows.planningPolicy to baseline-v1 (next composition after a settings reload). To remove the feature, revert the Q-03 commits; production then always runs the default.",
   "limitations": [
-    "The comparison has not run: it needs a frozen promotion rule and release rubric, an evidenced hosted profile and authorized spend. The candidate stays opt-in.",
+    "The comparison has not run: it needs a committed frozen promotion rule and release rubric, an evidenced hosted profile and authorized spend. The candidate stays opt-in.",
     "No screen or route edits workflows settings yet; JARVIS_PLANNING_POLICY is the practical switch.",
     "Unnecessary AI counts AI steps over each task's allowance and unrequested AI calls in simulated scenarios; it does not judge whether an allowed AI step was needed.",
+    "Self-hosted and hosted installs show the composer different prompts (with and without the pieces library); each production shape is a separate comparison.",
     "Correction counts and times are reviewer-reported, not instrumented.",
-    "A promote verdict is evidence for changing the default, not the change; that remains a reviewed pull request."
+    "A promote verdict is evidence for changing the default, not the change; it holds for the prompt version it measured, and the change remains a reviewed pull request."
   ],
   "found": [
     "No route, screen or CLI writes the workflows settings section; its user-owned keys (engine TTL, cache retention, now the planning policy) are reachable only through env overrides or the settings store.",
-    "The composer's prompt version was a hand-maintained constant with nothing tying it to the text; the pin test now fails when the wording changes without a new version."
+    "The composer's prompt version was a hand-maintained constant with nothing tying it to the text; the pin test now fails when the wording changes without a new version.",
+    "The hosted evaluation composed without the specialist roles and pieces library production passes, so no comparison measured the production prompt; founder-v2 and founder-v2-hosted now do."
   ],
-  "next": "Freeze planning-promotion-v1 and workflow-release-v1 with Vieri and Lapo, evidence a hosted profile and authorize spend, run the founder held-out set with both policies, review it blind, then compare. If the report says promote, change DEFAULT_PLANNING_POLICY in a reviewed pull request that carries it."
+  "next": "Freeze planning-promotion-v1 and workflow-release-v1 with Vieri and Lapo and commit the frozen rule; evidence a hosted profile and authorize spend; run the founder held-out set with both policies in founder-v2 or founder-v2-hosted, review it blind, then compare. If the report says promote, change DEFAULT_PLANNING_POLICY in a reviewed pull request that carries it.",
+  "review": {
+    "first_push": "a8a0105c",
+    "result": "An independent code review found 3 blocking and 10 smaller issues, two of them pre-existing, plus suggestions. All are fixed in b050b6f8; each guarantee has a test that fails when it is removed (55 of 55).",
+    "blocking": [
+      "C1: the unnecessary-AI check counted only what each policy composed and ran, so a candidate abstaining on a task scored as using less AI; one extra step also counted once per scenario",
+      "C2: 'frozen before the runs' rested on the rule file's own date; runs did not pin the rule, so a threshold edited after the results could change the verdict, and a run without a start time passed",
+      "T1: the prompt pin composed with no tools, roles, library or machines, so the prompt text production sends was not pinned"
+    ],
+    "minor": [
+      "an incomplete run reported keep_baseline, and --policy both ran the baseline half first (C3)",
+      "the not_worse option allowed promotion without the correction improvement the card requires (C4)",
+      "the report did not say which prompt version or runs it measured (C5)",
+      "float subtraction failed a drop exactly at the allowance (C6)",
+      "the tool-loop repair was not captured, and tool-loop system prompts were stripped of their rules (T2, T3)",
+      "four comparison clauses had no test: missed abstentions, the allowance, several profiles, the automatic measure (T4)",
+      "the doc's exit codes omitted incomplete (D1)",
+      "pre-existing: the evaluation composed without roles or library (P1); refusals printed local paths (P2)"
+    ],
+    "suggestions_taken": [
+      "interleave the two policies task by task",
+      "a direct composer call follows the selector",
+      "warn once per rejected value until a valid read, and log the policy and its source when they change",
+      "say in the pin test that the catalog's event types are part of what the composer is shown"
+    ]
+  }
 }

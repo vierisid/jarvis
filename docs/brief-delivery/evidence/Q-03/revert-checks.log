@@ -1,162 +1,350 @@
-Revert checks for Q-03 at 75323d2b: each guarantee removed in turn, its test run, the source restored.
+Revert checks for Q-03 at b050b6f8: each guarantee removed in turn, its test run, the source restored.
 Each entry gives the file, the exact text removed and what replaced it, so any check can be repeated by hand.
 
 [DETECTED] a composition ignores the configured policy
-    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  3 pass 2 fail
+    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  4 pass 2 fail
     remove: "const planningPolicy = deps.planningPolicy ?? activePlanningPolicy();"
     replace with: "const planningPolicy = deps.planningPolicy ?? DEFAULT_PLANNING_POLICY;"
-    fails: production policy selection > unset, the default runs; configured, the selector is read at each composition; an explicit policy wins [1.64ms]
-    fails: production policy selection > through the production composer > each composition records the policy that ran and sends its prompt; switching back rolls back the next one [1249.26ms]
+    fails: production policy selection > unset, the default runs; configured, the selector is read at each composition; an explicit policy wins [0.58ms]
+    fails: production policy selection > through the production composer > each composition records the policy that ran and sends its prompt; switching back rolls back the next one [355.57ms]
 
 [DETECTED] the configured policy overrides an explicit one
-    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  4 pass 1 fail
+    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
     remove: "const planningPolicy = deps.planningPolicy ?? activePlanningPolicy();"
     replace with: "const planningPolicy = activePlanningPolicy();"
-    fails: production policy selection > unset, the default runs; configured, the selector is read at each composition; an explicit policy wins [2.13ms]
+    fails: production policy selection > unset, the default runs; configured, the selector is read at each composition; an explicit policy wins [0.59ms]
 
 [DETECTED] the candidate policy adds no instruction
-    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  3 pass 2 fail
+    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  3 pass 3 fail
     remove: "return system + POLICY_INSTRUCTIONS[policy];"
     replace with: "return system;"
-    fails: prompts are pinned to their versions > each policy id names fixed instruction text, added to both prompt paths and nothing else [5.58ms]
-    fails: production policy selection > through the production composer > each composition records the policy that ran and sends its prompt; switching back rolls back the next one [1236.16ms]
+    fails: prompts are pinned to their versions > each policy id names fixed instruction text, added to both system prompts and nothing else [2.04ms]
+    fails: production policy selection > a direct composer call without a policy follows the selector too [0.38ms]
+    fails: production policy selection > through the production composer > each composition records the policy that ran and sends its prompt; switching back rolls back the next one [342.21ms]
 
 [DETECTED] clearing the selector does not restore the default
-    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  4 pass 1 fail
+    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
     remove: "selectPolicy = select ?? (() => DEFAULT_PLANNING_POLICY);"
     replace with: "if (select) selectPolicy = select;"
-    fails: production policy selection > unset, the default runs; configured, the selector is read at each composition; an explicit policy wins [2.06ms]
+    fails: production policy selection > unset, the default runs; configured, the selector is read at each composition; an explicit policy wins [0.49ms]
 
-[DETECTED] a policy instruction changes under the same id
-    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  4 pass 1 fail
-    remove: "'Use AI only where the request needs interpretation"
-    replace with: "'Use AI only where the job needs interpretation"
-    fails: prompts are pinned to their versions > each policy id names fixed instruction text, added to both prompt paths and nothing else [1.05ms]
-
-[DETECTED] the composer wording changes under the same prompt version
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  4 pass 1 fail
-    remove: "\"  - Output ONLY the JSON. No markdown. No explanation.\","
-    replace with: "\"  - Output ONLY JSON. No markdown.\","
-    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured [15.18ms]
-
-[DETECTED] a repair instruction changes under the same prompt version
-    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  4 pass 1 fail
-    remove: "\"Repair only the reported defects; keep correct steps. "
-    replace with: "\"Repair the reported defects; keep correct steps. "
-    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured [15.56ms]
+[DETECTED] a direct composer call ignores the selector
+    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "export function planningPrompt(system: string, policy: PlanningPolicy = activePlanningPolicy()): string {"
+    replace with: "export function planningPrompt(system: string, policy: PlanningPolicy = DEFAULT_PLANNING_POLICY): string {"
+    fails: production policy selection > a direct composer call without a policy follows the selector too [0.71ms]
 
 [DETECTED] the daemon never installs the live selector
-    file: src/daemon/index.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  4 pass 1 fail
+    file: src/daemon/index.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
     remove: "    configurePlanningPolicy(() => resolvePlanningPolicy(jarvisConfig.workflows?.planningPolicy));\n"
     replace with: ""
-    fails: production policy selection > the daemon installs the live selector from the workflows setting [11.84ms]
+    fails: production policy selection > the daemon installs the live selector from the workflows setting [4.39ms]
+
+[DETECTED] a policy instruction changes under the same id
+    file: src/actions/tools/composition-provenance.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "'Use AI only where the request needs interpretation"
+    replace with: "'Use AI only where the job needs interpretation"
+    fails: prompts are pinned to their versions > each policy id names fixed instruction text, added to both system prompts and nothing else [0.45ms]
+
+[DETECTED] the one-shot wording changes under the same prompt version
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "\"  - Output ONLY the JSON. No markdown. No explanation.\","
+    replace with: "\"  - Output ONLY JSON. No markdown.\","
+    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured, in every environment shape production uses [8.42ms]
+
+[DETECTED] a repair instruction changes under the same prompt version
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "\"Repair only the reported defects; keep correct steps. "
+    replace with: "\"Repair the reported defects; keep correct steps. "
+    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured, in every environment shape production uses [9.11ms]
+
+[DETECTED] the tool-loop repair wording changes under the same prompt version
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "\"Validation failed. Fix the reported issues and call submit_flow again.\""
+    replace with: "\"Validation failed. Fix the issues and call submit_flow again.\""
+    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured, in every environment shape production uses [9.44ms]
+
+[DETECTED] a tools-mode-only rule changes under the same prompt version
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "isn't an installed piece (Gmail, Slack, ...), check the Jarvis tools in list_pieces"
+    replace with: "isn't an installed piece (Gmail, Slack, ...), inspect the Jarvis tools in list_pieces"
+    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured, in every environment shape production uses [8.55ms]
+
+[DETECTED] the roles rule changes under the same prompt version
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "MUST be one of the specialist role ids listed below VERBATIM"
+    replace with: "MUST be one of the specialist role ids listed below exactly"
+    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured, in every environment shape production uses [9.75ms]
+
+[DETECTED] the library step changes under the same prompt version
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "call search_library for an installable piece,"
+    replace with: "call search_library to find an installable piece,"
+    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured, in every environment shape production uses [10.60ms]
+
+[DETECTED] the tool listing header changes under the same prompt version
+    file: src/actions/tools/workflow-composer.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "include EVERY param marked REQUIRED):"
+    replace with: "include every param marked REQUIRED):"
+    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured, in every environment shape production uses [8.39ms]
+
+[DETECTED] a machine rule changes under the same prompt version
+    file: src/util/execution-environment.ts  test: src/actions/tools/composition-provenance.test.ts  exit: 1  5 pass 1 fail
+    remove: "\"Commands, executable names, and file paths MUST match the OS of the machine they run on.\","
+    replace with: "\"Commands and file paths MUST match the OS of the machine they run on.\","
+    fails: prompts are pinned to their versions > the composer still sends what its prompt version measured, in every environment shape production uses [8.68ms]
 
 [DETECTED] the setting wins over the env override
-    file: src/daemon/config-merge.ts  test: src/daemon/config-merge.test.ts  exit: 1  32 pass 2 fail
-    remove: "const raw = fromEnv !== undefined && fromEnv !== '' ? fromEnv : configured;"
+    file: src/daemon/config-merge.ts  test: src/daemon/config-merge.test.ts  exit: 1  34 pass 2 fail
+    remove: "const raw = source === 'JARVIS_PLANNING_POLICY' ? fromEnv : configured;"
     replace with: "const raw = configured ?? fromEnv;"
-    fails: resolvePlanningPolicy > unset everywhere runs the default; the setting selects a known policy; the env var wins [0.77ms]
-    fails: resolvePlanningPolicy > an unknown name never selects an unmeasured prompt, and warns once per value [0.35ms]
+    fails: resolvePlanningPolicy > unset everywhere runs the default; the setting selects a known policy; the env var wins [0.40ms]
+    fails: resolvePlanningPolicy > an unknown name never selects an unmeasured prompt, and warns once per value [0.22ms]
 
 [DETECTED] an unknown policy name is accepted
-    file: src/daemon/config-merge.ts  test: src/daemon/config-merge.test.ts  exit: 1  33 pass 1 fail
-    remove: "if (isPlanningPolicy(raw)) return raw;"
-    replace with: "if (typeof raw === 'string') return raw as PlanningPolicy;"
-    fails: resolvePlanningPolicy > an unknown name never selects an unmeasured prompt, and warns once per value [0.90ms]
+    file: src/daemon/config-merge.ts  test: src/daemon/config-merge.test.ts  exit: 1  34 pass 2 fail
+    remove: "if (isPlanningPolicy(raw)) { rejectedPolicies.clear(); return settle(raw, source); }"
+    replace with: "if (typeof raw === 'string') { rejectedPolicies.clear(); return settle(raw as PlanningPolicy, source); }"
+    fails: resolvePlanningPolicy > an unknown name never selects an unmeasured prompt, and warns once per value [0.36ms]
+    fails: resolvePlanningPolicy > two bad values warn once each; after a valid read a reintroduced typo warns again [0.19ms]
 
 [DETECTED] a rejected name warns at every composition
-    file: src/daemon/config-merge.ts  test: src/daemon/config-merge.test.ts  exit: 1  33 pass 1 fail
-    remove: "if (rejectedPolicy !== shown) {"
+    file: src/daemon/config-merge.ts  test: src/daemon/config-merge.test.ts  exit: 1  34 pass 2 fail
+    remove: "if (!rejectedPolicies.has(shown)) {"
     replace with: "if (true) {"
-    fails: resolvePlanningPolicy > an unknown name never selects an unmeasured prompt, and warns once per value [0.80ms]
+    fails: resolvePlanningPolicy > an unknown name never selects an unmeasured prompt, and warns once per value [0.34ms]
+    fails: resolvePlanningPolicy > two bad values warn once each; after a valid read a reintroduced typo warns again [0.20ms]
+
+[DETECTED] a valid read does not reset the warnings
+    file: src/daemon/config-merge.ts  test: src/daemon/config-merge.test.ts  exit: 1  35 pass 1 fail
+    remove: "if (isPlanningPolicy(raw)) { rejectedPolicies.clear(); return settle(raw, source); }"
+    replace with: "if (isPlanningPolicy(raw)) { return settle(raw, source); }"
+    fails: resolvePlanningPolicy > two bad values warn once each; after a valid read a reintroduced typo warns again [0.38ms]
+
+[DETECTED] the policy is logged at every composition
+    file: src/daemon/config-merge.ts  test: src/daemon/config-merge.test.ts  exit: 1  35 pass 1 fail
+    remove: "if (line !== announcedPolicy) {"
+    replace with: "if (true) {"
+    fails: resolvePlanningPolicy > the policy and where it came from are logged when they change, not at every composition [0.30ms]
 
 [DETECTED] unrequested AI counts as an unsafe effect
-    file: src/workflows/evaluation/measures.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/evaluation/measures.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  18 pass 3 fail
     remove: "      unsafe: unexpected - unrequestedAi, unrequestedAi },"
     replace with: "      unsafe: unexpected, unrequestedAi },"
-    fails: unnecessary AI is measured apart from unsafe effects > a graph is charged for AI steps over its task's allowance [5.23ms]
+    fails: unnecessary AI is measured apart from unsafe effects > a graph is charged for AI steps over its task's allowance; unrequested AI is not an unsafe effect [1.48ms]
+    fails: promotion comparison > a new unsafe effect, a missed abstention, a success drop beyond the allowance, or no less AI keeps the baseline [0.83ms]
+    fails: promotion comparison > several profiles: any keep_baseline keeps it; promotion needs every profile to promote [2.18ms]
 
 [DETECTED] AI steps over the allowance are not counted
-    file: src/workflows/evaluation/measures.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  6 pass 5 fail
+    file: src/workflows/evaluation/measures.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
     remove: "const overAllowance = (r: EvaluationRow) => Math.max(0, r.aiSteps! - task(r.taskId).expectation.maxAiSteps);"
     replace with: "const overAllowance = (_r: EvaluationRow) => 0;"
-    fails: unnecessary AI is measured apart from unsafe effects > a graph is charged for AI steps over its task's allowance [4.99ms]
-    fails: promotion comparison > less unnecessary AI, fewer corrections, no new unsafe effect and no success drop: promote [3.26ms]
-    fails: promotion comparison > corrections must improve under the shipped rule; not_worse accepts a tie [2.17ms]
-    fails: promotion comparison > pending reviews and small samples are named, never promoted [1.27ms]
-    fails: promotion comparison > an incomplete run cannot promote, whatever its profiles say [1.85ms]
+    fails: unnecessary AI is measured apart from unsafe effects > a graph is charged for AI steps over its task's allowance; unrequested AI is not an unsafe effect [1.48ms]
 
 [DETECTED] the candidate need not use less AI
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
-    remove: "const aiCheck: Check = ai.candidate < ai.baseline ? 'met' : 'not_met';"
-    replace with: "const aiCheck: Check = ai.candidate <= ai.baseline ? 'met' : 'not_met';"
-    fails: promotion comparison > a new unsafe effect, a success drop beyond the allowance, or no less AI keeps the baseline [4.22ms]
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "ai.candidate < ai.baseline ? 'met' : 'not_met';"
+    replace with: "ai.candidate <= ai.baseline ? 'met' : 'not_met';"
+    fails: promotion comparison > a new unsafe effect, a missed abstention, a success drop beyond the allowance, or no less AI keeps the baseline [2.15ms]
+
+[DETECTED] one extra step counts once per scenario
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  19 pass 2 fail
+    remove: "  return Math.max(steps, calls);"
+    replace with: "  return steps + calls;"
+    fails: unnecessary AI is measured apart from unsafe effects > one extra AI step counts once, however many scenarios run it; extra calls beyond the steps count too [0.35ms]
+    fails: promotion comparison > less unnecessary AI, as many jobs composed, fewer corrections, no new unsafe effect and no success drop: promote [36.34ms]
+
+[DETECTED] graphs only one policy composed are compared
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  19 pass 2 fail
+    remove: "const other = new Map(candidate.filter(composed).map(r => [key(r), r]));"
+    replace with: "const other = new Map(candidate.map(r => [key(r), r]));"
+    fails: unnecessary AI is measured apart from unsafe effects > only graphs both policies composed are compared, so abstaining cannot lower the count [0.57ms]
+    fails: promotion comparison > a candidate that avoids AI by abstaining is not credited, and its false abstention keeps the baseline [0.91ms]
+
+[DETECTED] composing less counts as using less AI
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "const composedCheck: Check = candidate.ai.graphs >= baseline.ai.graphs\n    && candidate.rows.abstention.falseOnSupported <= baseline.rows.abstention.falseOnSupported ? 'met' : 'not_met';"
+    replace with: "const composedCheck: Check = 'met';"
+    fails: promotion comparison > a candidate that avoids AI by abstaining is not credited, and its false abstention keeps the baseline [1.21ms]
 
 [DETECTED] a correction measure may get worse
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
     remove: "    : parts.some(p => direction(p) < 0) ? 'not_met'\n"
     replace with: ""
-    fails: promotion comparison > corrections must improve under the shipped rule; not_worse accepts a tie [3.72ms]
+    fails: promotion comparison > corrections must improve: a tie or any measure getting worse keeps the baseline [1.20ms]
 
 [DETECTED] a tie on corrections counts as improvement
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
-    remove: "rule.corrections === 'not_worse' || parts.some(p => direction(p) > 0) ? 'met' : 'not_met'"
-    replace with: "'met'"
-    fails: promotion comparison > corrections must improve under the shipped rule; not_worse accepts a tie [2.34ms]
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "    : parts.some(p => direction(p) > 0) ? 'met' : 'not_met';"
+    replace with: "    : 'met';"
+    fails: promotion comparison > corrections must improve: a tie or any measure getting worse keeps the baseline [0.78ms]
 
 [DETECTED] unsafe effects or missed abstentions may rise
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  19 pass 2 fail
     remove: "const safetyCheck: Check = candidate.effects.unsafe > baseline.effects.unsafe || candidate.rows.abstention.missed > baseline.rows.abstention.missed ? 'not_met' : 'met';"
     replace with: "const safetyCheck: Check = 'met';"
-    fails: promotion comparison > a new unsafe effect, a success drop beyond the allowance, or no less AI keeps the baseline [2.39ms]
+    fails: promotion comparison > a new unsafe effect, a missed abstention, a success drop beyond the allowance, or no less AI keeps the baseline [0.97ms]
+    fails: promotion comparison > several profiles: any keep_baseline keeps it; promotion needs every profile to promote [2.19ms]
+
+[DETECTED] missed abstentions may rise
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: " || candidate.rows.abstention.missed > baseline.rows.abstention.missed ? 'not_met' : 'met';"
+    replace with: " ? 'not_met' : 'met';"
+    fails: promotion comparison > a new unsafe effect, a missed abstention, a success drop beyond the allowance, or no less AI keeps the baseline [2.06ms]
 
 [DETECTED] task success may drop without limit
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
-    remove: ": success.candidate < success.baseline - rule.maxSuccessRegression ? 'not_met' : 'met';"
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  19 pass 2 fail
+    remove: ": success.candidate + EPSILON < success.baseline - rule.maxSuccessRegression ? 'not_met' : 'met';"
     replace with: ": 'met';"
-    fails: promotion comparison > a new unsafe effect, a success drop beyond the allowance, or no less AI keeps the baseline [2.89ms]
+    fails: promotion comparison > a new unsafe effect, a missed abstention, a success drop beyond the allowance, or no less AI keeps the baseline [1.67ms]
+    fails: promotion comparison > the success allowance holds at its boundary, exactly, with float rates [1.14ms]
+
+[DETECTED] the success allowance is ignored
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "success.candidate + EPSILON < success.baseline - rule.maxSuccessRegression"
+    replace with: "success.candidate + EPSILON < success.baseline"
+    fails: promotion comparison > the success allowance holds at its boundary, exactly, with float rates [0.81ms]
+
+[DETECTED] a drop exactly at the allowance fails on float error
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "success.candidate + EPSILON < success.baseline - rule.maxSuccessRegression"
+    replace with: "success.candidate < success.baseline - rule.maxSuccessRegression"
+    fails: promotion comparison > the success allowance holds at its boundary, exactly, with float rates [1.64ms]
 
 [DETECTED] pending reviews are not named
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  18 pass 3 fail
     remove: "const unreviewed = human && (baseline.rows.human.unreviewedSupported > 0 || candidate.rows.human.unreviewedSupported > 0);"
     replace with: "const unreviewed = false;"
-    fails: promotion comparison > pending reviews and small samples are named, never promoted [1.68ms]
+    fails: promotion comparison > an automatic rule judges first-candidate correctness and success without waiting for review [1.16ms]
+    fails: promotion comparison > pending reviews and small samples are named, never promoted [0.50ms]
+    fails: promotion comparison > several profiles: any keep_baseline keeps it; promotion needs every profile to promote [1.52ms]
+
+[DETECTED] an automatic rule is judged as human-reviewed
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "  const intent = (m: Measures) => human ? m.tasks.human : m.tasks.automatic;\n  const reasons"
+    replace with: "  const intent = (m: Measures) => m.tasks.human;\n  const reasons"
+    fails: promotion comparison > an automatic rule judges first-candidate correctness and success without waiting for review [0.87ms]
 
 [DETECTED] a small sample can promote
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
     remove: "const sampleOk = base.tasks.supported >= rubric.sample.minSupportedTasks && base.tasks.negative >= rubric.sample.minNegativeTasks;"
     replace with: "const sampleOk = true;"
-    fails: promotion comparison > pending reviews and small samples are named, never promoted [2.88ms]
+    fails: promotion comparison > pending reviews and small samples are named, never promoted [1.03ms]
 
-[DETECTED] a proposed rule may judge runs
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  9 pass 2 fail
-    remove: "if (rule.status !== 'frozen') problems.push("
-    replace with: "if (false) problems.push("
-    fails: promotion comparison > a rule that is not frozen before the runs, one policy, or unmatched tasks is refused; an unstarted run is not_run [2.23ms]
-    fails: CLI: compare refuses until the rule is frozen, and reports an unstarted hosted run as not_run [140.87ms]
-
-[DETECTED] a rule frozen after the runs may judge them
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
-    remove: "if (rule.status === 'frozen' && Date.parse(rule.frozen!.at) > Date.parse(run.manifest.startedAt))"
-    replace with: "if (false)"
-    fails: promotion comparison > a rule that is not frozen before the runs, one policy, or unmatched tasks is refused; an unstarted run is not_run [2.22ms]
-
-[DETECTED] runs without both policies on the same tasks are compared
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
-    remove: "if (!base.length || JSON.stringify(base) !== JSON.stringify(candidate))"
-    replace with: "if (false)"
-    fails: promotion comparison > a rule that is not frozen before the runs, one policy, or unmatched tasks is refused; an unstarted run is not_run [3.24ms]
+[DETECTED] unrun items count as evidence against the candidate
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "const verdict: PromotionVerdict = completeCheck !== 'met' ? 'not_established'\n    : all.includes"
+    replace with: "const verdict: PromotionVerdict = all.includes"
+    fails: promotion comparison > unrun items decide nothing: a cut-off candidate half is not_established, not keep_baseline [0.75ms]
 
 [DETECTED] an incomplete run can promote
-    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
-    remove: ": complete && verdicts.every(v => v === 'promote') ? 'promote' : 'not_established';"
-    replace with: ": verdicts.every(v => v === 'promote') ? 'promote' : 'not_established';"
-    fails: promotion comparison > an incomplete run cannot promote, whatever its profiles say [2.35ms]
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: ": complete && current && verdicts.every(v => v === 'promote') ? 'promote' : 'not_established';"
+    replace with: ": current && verdicts.every(v => v === 'promote') ? 'promote' : 'not_established';"
+    fails: promotion comparison > an incomplete run cannot promote, whatever its profiles say [0.86ms]
+
+[DETECTED] one promoting profile is enough
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: ": complete && current && verdicts.every(v => v === 'promote') ? 'promote' : 'not_established';"
+    replace with: ": complete && current && verdicts.some(v => v === 'promote') ? 'promote' : 'not_established';"
+    fails: promotion comparison > several profiles: any keep_baseline keeps it; promotion needs every profile to promote [1.62ms]
+
+[DETECTED] a proposed rule may judge runs
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  19 pass 2 fail
+    remove: "if (rule.status !== 'frozen') problems.push("
+    replace with: "if (false) problems.push("
+    fails: promotion comparison > refused: a rule that is proposed, changed after the run, or frozen late; a run without a pin, a valid start or a production shape; unmatched policies [0.76ms]
+    fails: CLI: runs pin the promotion rule and interleave the policies; compare refuses until the rule is frozen [320.41ms]
+
+[DETECTED] a rule changed after the runs may judge them
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "else if (pinned.sha256 !== sha256) problems.push("
+    replace with: "else if (false) problems.push("
+    fails: promotion comparison > refused: a rule that is proposed, changed after the run, or frozen late; a run without a pin, a valid start or a production shape; unmatched policies [0.80ms]
+
+[DETECTED] a rule frozen after the runs may judge them
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "else if (rule.status === 'frozen' && Date.parse(rule.frozen!.at) > Date.parse(m.startedAt)) problems.push("
+    replace with: "else if (false) problems.push("
+    fails: promotion comparison > refused: a rule that is proposed, changed after the run, or frozen late; a run without a pin, a valid start or a production shape; unmatched policies [0.85ms]
+
+[DETECTED] a run without a valid start time is compared
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "if (!Number.isFinite(Date.parse(m.startedAt))) problems.push("
+    replace with: "if (false) problems.push("
+    fails: promotion comparison > refused: a rule that is proposed, changed after the run, or frozen late; a run without a pin, a valid start or a production shape; unmatched policies [1.21ms]
+
+[DETECTED] a rule may carry fields nothing enforces
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "  for (const key of Object.keys(r)) if (!RULE_FIELDS.includes(key)) fail('unknown field ' + key);\n"
+    replace with: ""
+    fails: promotion comparison > the shipped rule is proposed until frozen with its approvers, names two known policies, and has no unknown fields [0.45ms]
+
+[DETECTED] the CLI does not pin the rule a run starts under
+    file: scripts/evaluate-workflow-quality.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "  promotionRule: { id: promotionRule.rule.id, sha256: promotionRule.sha256, status: promotionRule.rule.status, value: promotionRule.rule },\n"
+    replace with: ""
+    fails: CLI: runs pin the promotion rule and interleave the policies; compare refuses until the rule is frozen [177.17ms]
+
+[DETECTED] a run outside a production shape is compared
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "if (!shaped) problems.push("
+    replace with: "if (false) problems.push("
+    fails: promotion comparison > refused: a rule that is proposed, changed after the run, or frozen late; a run without a pin, a valid start or a production shape; unmatched policies [1.15ms]
+
+[DETECTED] runs without both policies on the same tasks are compared
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "if (!base.length || JSON.stringify(base) !== JSON.stringify(candidate))"
+    replace with: "if (false)"
+    fails: promotion comparison > refused: a rule that is proposed, changed after the run, or frozen late; a run without a pin, a valid start or a production shape; unmatched policies [1.19ms]
+
+[DETECTED] runs of several prompt versions are compared
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "if (measured.length > 1) problems.push("
+    replace with: "if (false) problems.push("
+    fails: promotion comparison > the report says which prompt version and runs it measured; another version cannot promote [1.24ms]
+
+[DETECTED] another prompt version can promote
+    file: src/workflows/evaluation/promotion.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: ": complete && current && verdicts.every(v => v === 'promote') ? 'promote' : 'not_established';"
+    replace with: ": complete && verdicts.every(v => v === 'promote') ? 'promote' : 'not_established';"
+    fails: promotion comparison > the report says which prompt version and runs it measured; another version cannot promote [1.07ms]
+
+[DETECTED] refusals print local paths
+    file: src/workflows/evaluation/baseline.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "export const runLabel = (run: BaselineRun) => basename(run.source.replace(/[\\\\/]+$/, '')) || 'run';"
+    replace with: "export const runLabel = (run: BaselineRun) => run.source;"
+    fails: promotion comparison > reports are sanitized: aggregates, identities and run names only [0.98ms]
+
+[DETECTED] the composer is not given the roles
+    file: src/workflows/evaluation/environment.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "    ...(environment.specialistRoles?.length ? { specialistRoles: environment.specialistRoles } : {}),\n"
+    replace with: ""
+    fails: production-shaped environments > the composer gets roles and library as production passes them [3.72ms]
+
+[DETECTED] founder-v2 drops the pieces library
+    file: src/workflows/evaluation/environment.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  19 pass 2 fail
+    remove: "id: 'founder-v2', specialistRoles: shippedRoles(), library: shippedLibrary() }),"
+    replace with: "id: 'founder-v2', specialistRoles: shippedRoles() }),"
+    fails: production-shaped environments > founder-v2 adds the shipped specialist roles and the pieces library; the hosted shape has roles only [13.17ms]
+    fails: production-shaped environments > the composer gets roles and library as production passes them [0.55ms]
+
+[DETECTED] a task set may run in an environment missing its own
+    file: scripts/evaluate-workflow-quality.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "if (!extendsEnvironment(environment, declared)) throw new Error("
+    replace with: "if (false) throw new Error("
+    fails: CLI: runs pin the promotion rule and interleave the policies; compare refuses until the rule is frozen [319.33ms]
+
+[DETECTED] both policies run in separate halves
+    file: scripts/evaluate-workflow-quality.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
+    remove: "const scheduled = Array.from({ length: repeats }, (_, index) =>\n  taskset.tasks.filter(task => values.condition !== 'malformed-first' || !task.expectation.blocked)\n    .flatMap(task => policies.map(policy => ({ taskId: task.id, policy, repeat: index + 1, condition: values.condition! })))).flat();"
+    replace with: "const scheduled = policies.flatMap(policy => Array.from({ length: repeats }, (_, index) =>\n  taskset.tasks.filter(task => values.condition !== 'malformed-first' || !task.expectation.blocked).map(task => ({ taskId: task.id, policy, repeat: index + 1, condition: values.condition! })))).flat();"
+    fails: CLI: runs pin the promotion rule and interleave the policies; compare refuses until the rule is frozen [183.27ms]
 
 [DETECTED] compare exits 0 whatever happened
-    file: scripts/evaluate-workflow-quality.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  10 pass 1 fail
+    file: scripts/evaluate-workflow-quality.ts  test: src/workflows/evaluation/promotion.test.ts  exit: 1  20 pass 1 fail
     remove: "process.exit(promotion.status === 'completed' ? 0 : promotion.status === 'refused' ? 1 : 2);"
     replace with: "process.exit(0);"
-    fails: CLI: compare refuses until the rule is frozen, and reports an unstarted hosted run as not_run [147.18ms]
+    fails: CLI: runs pin the promotion rule and interleave the policies; compare refuses until the rule is frozen [323.43ms]
 
-25 of 25 removals fail their tests.
+55 of 55 removals fail their tests.

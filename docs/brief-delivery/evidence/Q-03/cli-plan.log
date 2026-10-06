@@ -1,4 +1,7 @@
-$ bun run eval:workflows --mode plan --out /tmp/q03-run/plan
+$ bun run eval:workflows --mode plan --taskset founder --environment founder-v2 --out /tmp/q03-run/plan
 Evaluation not run Manifest: /tmp/q03-run/plan
 exit=0
-scheduled per policy: {'baseline-v1': 12, 'deterministic-first-v1': 12} | same tasks, repeats and condition: True
+environment: founder-v2 | task set written for: founder-v1
+promotion rule pinned: planning-promotion-v1 proposed a845e897ec14
+scheduled per policy: {'baseline-v1': 66, 'deterministic-first-v1': 66} | same tasks, repeats and condition: True
+first four items: [('ho-prep-cedar', 'baseline-v1'), ('ho-prep-cedar', 'deterministic-first-v1'), ('ho-prep-birch', 'baseline-v1'), ('ho-prep-birch', 'deterministic-first-v1')]
