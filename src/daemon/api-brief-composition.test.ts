@@ -32,7 +32,7 @@ test('real panel auth protects composition submission, recovery and cancellation
     headers: { ...(auth ? { Cookie: `panel_session=${session.id}` } : {}), 'Content-Type': 'application/json' } });
   try {
     setCorsOrigin('http://localhost:3000'); server.start();
-    for (const [path, method] of [['/api/brief/composition-ingredients', 'GET'], [base, 'GET'], [base, 'POST'], [`${base}/missing`, 'GET'], [`${base}/missing/cancel`, 'POST']]) {
+    for (const [path, method] of [['/api/brief/prepared-opportunities', 'GET'], ['/api/brief/prepared-opportunities', 'POST'], ['/api/brief/prepared-opportunities/missing', 'GET'], ['/api/brief/prepared-opportunities/missing/dismiss', 'POST'], ['/api/brief/prepared-opportunities/missing/retry', 'POST'], ['/api/brief/composition-ingredients', 'GET'], [base, 'GET'], [base, 'POST'], [`${base}/missing`, 'GET'], [`${base}/missing/cancel`, 'POST']]) {
       expect((await request(path!, method!, method === 'POST' ? input : undefined, false)).status).toBe(401);
     }
     expect(provider.list()).toEqual([]); expect(calls).toBe(0);

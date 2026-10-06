@@ -1,0 +1,68 @@
+Q13 source 0d455494f34b4045a0b95498a81e9bd389c6ffeb; temporary three-file integration overlay, restored afterward.
+bun test v1.4.2 (744846f84)
+
+src/awareness/prepared-opportunities.test.ts:
+Database initialized at: /tmp/jarvis-f09-iEGT5o/test.db
+Database initialized at: /tmp/jarvis-f09-iEGT5o/test.db
+(pass) one source creates one exact locked disabled snapshot across processing and restart [648.87ms]
+Database initialized at: /tmp/jarvis-f09-pJoHWP/test.db
+(pass) dismissal during compose cannot return a visible ready proposal [466.24ms]
+Database initialized at: /tmp/jarvis-f09-mEb4WJ/test.db
+(pass) dismissal during qualify cannot return a visible ready proposal [416.95ms]
+Database initialized at: /tmp/jarvis-f09-SSjGTR/test.db
+(pass) legacy dismissal prevents draft attachment [391.30ms]
+Database initialized at: /tmp/jarvis-f09-U73vqI/test.db
+(pass) ready is withdrawn when goal changes [388.54ms]
+Database initialized at: /tmp/jarvis-f09-hnlU9K/test.db
+(pass) ready is withdrawn when version changes [373.58ms]
+Database initialized at: /tmp/jarvis-f09-zF2eXz/test.db
+(pass) ready is withdrawn when binding changes [364.84ms]
+Database initialized at: /tmp/jarvis-f09-3ENt73/test.db
+(pass) ready is withdrawn when quality-missing changes [377.68ms]
+Database initialized at: /tmp/jarvis-f09-USxYLB/test.db
+(pass) specific missing setup blocks unconfirmed jobs without model calls [422.70ms]
+Database initialized at: /tmp/jarvis-f09-s1UFN5/test.db
+(pass) specific missing setup blocks unlinked jobs without model calls [352.52ms]
+Database initialized at: /tmp/jarvis-f09-Zhc5XU/test.db
+(pass) qualification for another snapshot is refused [398.61ms]
+Database initialized at: /tmp/jarvis-f09-zY3aqP/test.db
+(pass) background preparation has a durable daily budget across worker restart [449.91ms]
+Database initialized at: /tmp/jarvis-f09-S37BEs/test.db
+(pass) timeout and expired leases are blocked, never automatically recomposed [406.75ms]
+Database initialized at: /tmp/jarvis-f09-Byg4tr/test.db
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+[compose] attempt 1 validation-error (missing or invalid 'trigger' object)
+[compose] attempt 2 exhausted (missing or invalid 'trigger' object)
+(pass) retry archives the previous snapshot and refuses stale or terminal commands [406.45ms]
+Database initialized at: /tmp/jarvis-f09-WtkZdQ/test.db
+(pass) sample outputs never reach public preparation data or subsequent model requests [407.01ms]
+Database initialized at: /tmp/jarvis-f09-rn8voQ/test.db
+(pass) missing optional Q13 compiles and prevents inference and activation [352.24ms]
+Database initialized at: /tmp/jarvis-f09-of2zqU/test.db
+(pass) API gates, strict writes, concurrency tokens and no-store responses [382.25ms]
+Database initialized at: /tmp/jarvis-f09-0m1X6A/test.db
+(pass) a changed confirmed job cannot attach the old composition [369.69ms]
+Database initialized at: /tmp/jarvis-f09-ICjSdD/test.db
+(pass) attachment transaction failure leaves no orphan flow, and explicit retry succeeds [407.31ms]
+Database initialized at: /tmp/jarvis-f09-ZHR4IT/test.db
+(pass) storage failures withdraw readiness, and recovery fences the abandoned inference [418.25ms]
+Database initialized at: /tmp/jarvis-f09-AizU12/test.db
+(pass) full queue rejects an explicit retry without losing its saved revision [656.15ms]
+Database initialized at: /tmp/jarvis-f09-EJ9zTK/test.db
+[engine ae8983a0 stderr] (node:819096) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 70eda077 stderr] (node:819157) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) real Q13 dry-run qualifies the exact disabled version and blocks missing fixtures [4683.02ms]
+Database initialized at: /tmp/jarvis-f09-3gPh0y/test.db
+(pass) publishing through another surface cannot leave an approval-eligible proposal [444.09ms]
+
+src/awareness/prepared-quality-adapter.test.ts:
+(pass) the adapter pins current bindings, labels simulation honestly and closes its runner [0.48ms]
+(pass) unsupported simulation stays illustrative and custom job edits require review [0.18ms]
+
+ 25 pass
+ 0 fail
+ 116 expect() calls
+Ran 25 tests across 2 files. [13.08s]

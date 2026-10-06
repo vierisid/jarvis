@@ -1,0 +1,1 @@
+bun test src/awareness/prepared-opportunities.test.ts src/awareness/prepared-quality-adapter.test.ts src/awareness/suggestion-feedback.test.ts src/awareness/opportunities.test.ts src/brief src/daemon/api-brief-composition.test.ts src/daemon/api-brief.test.ts src/workflows/adapters/untrusted-reach.test.ts src/util/model-exec-env.test.ts
