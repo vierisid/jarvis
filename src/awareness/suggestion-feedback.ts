@@ -1,3 +1,4 @@
+import { claimOpportunityComposition } from './composition-leases';
 import { getDb, generateId } from '../vault/schema.ts';
 import { suggestionContext } from '../vault/suggestion-schema.ts';
 import { getGoal } from '../vault/goals.ts';
@@ -116,7 +117,10 @@ export function acceptSuggestion(id: string, input: unknown) {
   return getDb().transaction(() => {
     const row = canonicalSuggestion(id);
     if (row.type !== 'automation') throw new SuggestionFeedbackError('Only automation suggestions can create workflow drafts');
-    const existing = getCompositionRow(row.id);
+    const existing = getCompositionRow(row.id), jobId = existing?.id ?? generateId();
+    if (!claimOpportunityComposition(getDb(), row.id, 'legacy', jobId)) {
+      throw new SuggestionFeedbackError('This opportunity has a prepared proposal; inspect that proposal instead', 409);
+    }
     if (existing) {
       const original = getDb().query<{ payload: string; reason: string }, [string]>(
         'SELECT payload, reason FROM suggestion_feedback WHERE id = ?').get(existing.feedback_id)!;
@@ -136,7 +140,7 @@ export function acceptSuggestion(id: string, input: unknown) {
     const now = Date.now();
     getDb().run(`INSERT INTO suggestion_composition_jobs
       (id, suggestion_id, feedback_id, request, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)`,
-      [generateId(), row.id, feedbackId, JSON.stringify(request), now, now]);
+      [jobId, row.id, feedbackId, JSON.stringify(request), now, now]);
     setFlag(row.id, 'acted_on');
     return getSuggestionLearning(row.id);
   }).immediate();
@@ -151,6 +155,9 @@ export function retrySuggestionComposition(id: string, input: unknown) {
     const row = canonicalSuggestion(id);
     const job = getCompositionRow(row.id);
     if (!job) throw new SuggestionFeedbackError('No composition request exists', 409);
+    if (!claimOpportunityComposition(getDb(), row.id, 'legacy', job.id)) {
+      throw new SuggestionFeedbackError('This opportunity has a prepared proposal; inspect that proposal instead', 409);
+    }
     const prior = getDb().query('SELECT id FROM suggestion_feedback WHERE suggestion_id = ? AND request_id = ?').get(row.id, requestId);
     if (prior) {
       feedback(row.id, requestId, 'retry', reason, '{}');

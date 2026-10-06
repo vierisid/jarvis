@@ -1,4 +1,5 @@
-import { getDb, generateId } from '../vault/schema.ts';
+import { claimOpportunityComposition, claimCompositionLease, recoverCompositionLeases } from './composition-leases';
+import { getDb } from '../vault/schema.ts';
 import { createFlow } from '../workflows/db/repos/flow.ts';
 import { createDraftVersion } from '../workflows/db/repos/flow-version.ts';
 import type { ComposeResult, ComposeRequest } from '../actions/tools/workflow-composer.ts';
@@ -8,23 +9,11 @@ const COMPOSITION_TIMEOUT_MS = 5 * 60_000;
 export type ComposeSuggestion = (request: ComposeRequest) => Promise<ComposeResult>;
 
 export function recoverExpiredCompositions(now = Date.now()): void {
-  getDb().run(`UPDATE suggestion_composition_jobs SET state = 'failed', lease_token = NULL, lease_until = 0,
-    error = 'Composition was interrupted or timed out. Review the saved request and retry.', updated_at = ?
-    WHERE state = 'running' AND lease_until <= ?`, [now, now]);
+  recoverCompositionLeases(getDb(), 'suggestion_composition_jobs', now);
 }
 
 export function claimSuggestionComposition(timeoutMs = COMPOSITION_TIMEOUT_MS): CompositionRow | null {
-  return getDb().transaction(() => {
-    const now = Date.now();
-    recoverExpiredCompositions(now);
-    const row = getDb().query<CompositionRow, []>(`SELECT * FROM suggestion_composition_jobs
-      WHERE state = 'queued' ORDER BY created_at, id LIMIT 1`).get();
-    if (!row) return null;
-    const token = generateId();
-    getDb().run(`UPDATE suggestion_composition_jobs SET state = 'running', attempts = attempts + 1,
-      lease_token = ?, lease_until = ?, updated_at = ? WHERE id = ?`, [token, now + timeoutMs, now, row.id]);
-    return { ...row, state: 'running' as const, attempts: row.attempts + 1, lease_token: token, lease_until: now + timeoutMs };
-  }).immediate();
+  return claimCompositionLease<CompositionRow>(getDb(), 'suggestion_composition_jobs', timeoutMs);
 }
 
 export function failSuggestionComposition(job: CompositionRow, message: string): void {
@@ -38,6 +27,7 @@ export function attachSuggestionDraft(job: CompositionRow, result: Extract<Compo
   return getDb().transaction(() => {
     const current = getDb().query<CompositionRow, [string]>('SELECT * FROM suggestion_composition_jobs WHERE id = ?').get(job.id);
     if (!current || current.state !== 'running' || current.lease_token !== job.lease_token || current.lease_until <= Date.now()) return false;
+    if (!claimOpportunityComposition(getDb(), job.suggestion_id, 'legacy', job.id)) return false;
     if (canonicalSuggestion(job.suggestion_id).dismissed) {
       failSuggestionComposition(job, 'Suggestion was dismissed during composition. No draft was created.');
       return false;
@@ -99,6 +89,7 @@ export class SuggestionComposer {
       this.active = active;
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
+        if (!claimOpportunityComposition(getDb(), job.suggestion_id, 'legacy', job.id)) throw new Error('Another composition owns this opportunity.');
         if (canonicalSuggestion(job.suggestion_id).dismissed) throw new Error('Suggestion was dismissed. No draft was created.');
         const request = JSON.parse(job.request) as CompositionRequest;
         const result = await Promise.race([
