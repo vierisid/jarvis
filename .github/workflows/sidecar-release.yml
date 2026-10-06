@@ -397,6 +397,11 @@ jobs:
 
   # ─── Publish sidecar packages to npm ───────────────────────────
   publish-sidecar:
+    # Same requirement as publish-brain in release-exec.yml (#679): npm Trusted
+    # Publishing is bound to this environment, so the OIDC claim must carry it.
+    # It must be declared HERE rather than on the calling job, because GitHub
+    # does not allow `environment:` on a job that uses a reusable workflow.
+    environment: release
     needs: [resolve, build-sidecar]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest

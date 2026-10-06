@@ -371,6 +371,13 @@ jobs:
   publish-brain:
     needs: [validate-tag, test, build-docker, sidecar]
     runs-on: ubuntu-latest
+    # npm Trusted Publishing for @usejarvis/brain requires this environment, so
+    # the OIDC token this job mints must carry the claim or npm refuses the
+    # publish (#679). It is also the gate: the environment's required reviewers
+    # mean a stolen token or a compromised action cannot publish unattended --
+    # automation cannot click Approve. Removing this line does not loosen a
+    # check, it breaks publishing outright.
+    environment: release
     permissions:
       contents: read
       id-token: write
