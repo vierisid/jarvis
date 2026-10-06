@@ -339,6 +339,10 @@ describe('checking a graph against the contract', () => {
     expect(pinned.violations).toEqual([]);
     expect(pinned.report.verified).toEqual(['produces sendgrid send_email', 'nothing beyond the requested outputs is sent or addressed']);
     expect(pinned.report.review).toEqual([`confirm step "${sendgrid.name}" reaches only ana@example.com: it uses @activepieces/piece-sendgrid send_email, which Jarvis does not govern`]);
+    // Naming the action without its values does not.
+    const unpinned = check(manual(sendgrid), { outputs: [{ piece: 'sendgrid', action: 'send_email' }] });
+    expect(unpinned.report.verified).toEqual(['produces sendgrid send_email']);
+    expect(unpinned.report.review).toEqual([`confirm step "${sendgrid.name}" sends nothing the job did not ask for: it uses @activepieces/piece-sendgrid send_email, which Jarvis does not govern`]);
   });
 });
 
