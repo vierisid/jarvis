@@ -1,0 +1,352 @@
+{
+  "build": "index-8421gb73.js",
+  "cases": [
+    {
+      "scenario": "loading",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Refresh before adding this step.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "Finding the next useful step…Back to goalBack to goalRefresh before adding this step."
+    },
+    {
+      "scenario": "empty",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Refresh before adding this step.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "No new step to add right now.Back to goalBack to goalRefresh before adding this step."
+    },
+    {
+      "scenario": "blocked",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Her reply needs a fresh review.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "Book Maya’s pilot call.She replied yesterday. Turn her interest into a pilot call.Add to TodayAdding…Added to TodayAdd to TodayBack to goalBack to goalHer reply needs a fresh review.",
+      "disabled": "true"
+    },
+    {
+      "scenario": "expired",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "This recommendation expired. Refresh for a current next step.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "Book Maya’s pilot call.She replied yesterday. Turn her interest into a pilot call.Add to TodayAdding…Added to TodayAdd to TodayBack to goalBack to goalThis recommendation expired. Refresh for a current next step.",
+      "disabled": "true"
+    },
+    {
+      "scenario": "changed-goal",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Your goal changed. Refresh this recommendation.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "Book Maya’s pilot call.She replied yesterday. Turn her interest into a pilot call.Add to TodayAdding…Added to TodayAdd to TodayBack to goalBack to goalYour goal changed. Refresh this recommendation.",
+      "disabled": "true"
+    },
+    {
+      "scenario": "accepted",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Added to Today",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "Book Maya’s pilot call.She replied yesterday. Turn her interest into a pilot call.Add to TodayAdding…Added to TodayAdded to TodayBack to goalBack to goalAdded to Today",
+      "disabled": "true"
+    },
+    {
+      "scenario": "stale",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Refresh before adding this step.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "Book Maya’s pilot call.She replied yesterday. Turn her interest into a pilot call.Add to TodayAdding…Added to TodayAdd to TodayBack to goalBack to goalRefresh before adding this step.",
+      "disabled": "true"
+    },
+    {
+      "scenario": "unavailable",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Refresh before adding this step.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "Recommendations are not available yet.Back to goalBack to goalRefresh before adding this step."
+    },
+    {
+      "scenario": "unsupported",
+      "state": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Refresh before adding this step.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "body": "Recommendations are not available yet.Back to goalBack to goalRefresh before adding this step."
+    }
+  ]
+}

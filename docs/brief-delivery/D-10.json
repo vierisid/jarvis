@@ -1,0 +1,111 @@
+{
+  "task": "D-10",
+  "title": "Build the goal card and recommendation handoff",
+  "date": "2026-10-06",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "repository": "https://github.com/vierisid/jarvis",
+  "branch": "brief/d-10",
+  "stack_base": "brief/d-09",
+  "baseline": "7858a7a7d33b154f44c33591c8601266854f0a7e",
+  "inspected_main": "abb14deb59f1ca3a84227be9a2035687b29dea34",
+  "head": {
+    "ref": "brief/d-10",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-10.json"
+  },
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/749"
+  ],
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-10",
+  "preview": "http://localhost:4390/?brief=preview&specimen=today&review=d10-8421gb73#/_brief_preview",
+  "activation_dependencies": [
+    "F-13 durable recommendations and idempotent acceptance",
+    "F-15 measured goal progress",
+    "Existing Today/decision/shell gates",
+    "D-33 release approval"
+  ],
+  "review_status": "Independent PR review pending",
+  "owns": [
+    "ui/src/brief/today/goal-card/**",
+    "Isolated Today preview",
+    "Optional queueNotice through TodayLayout/HeroPaper",
+    "docs/brief-delivery/D-10.*",
+    "docs/brief-delivery/evidence/D-10/**"
+  ],
+  "excludes": [
+    "Recommendation generation/ranking",
+    "Persistent acceptance or queue writes",
+    "Goal scoring or measurement",
+    "Live owner/route registration",
+    "Backend or workflow execution",
+    "D-11 opportunity behavior"
+  ],
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "nodes": [
+      "81:3",
+      "81:212",
+      "673:262727"
+    ],
+    "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+    "reference": "ui/src/brief/today/goal-card/figma-reference.json"
+  },
+  "checks": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "exit_code": 0,
+      "tests": 159,
+      "assertions": 3142,
+      "files": 13,
+      "evidence": "tests.log",
+      "result": "pass"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "exit_code": 0,
+      "result": "pass"
+    },
+    {
+      "command": "bun run build:ui",
+      "exit_code": 0,
+      "evidence": "build.log",
+      "warnings": "Existing @theme/@tailwind warnings",
+      "result": "pass"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0,
+      "result": "pass"
+    }
+  ],
+  "focused_tests": 13,
+  "mutation": {
+    "result": "rejected then restored",
+    "evidence": "evidence/D-10/receipt-mutation.log"
+  },
+  "browser_evidence": [
+    "evidence/D-10/shell-matrix.json",
+    "evidence/D-10/repeat-return.json",
+    "evidence/D-10/queue-journey.json",
+    "evidence/D-10/failure-states.json",
+    "evidence/D-10/read-states.json",
+    "evidence/D-10/narrow-long.json",
+    "evidence/D-10/reduced-motion.json",
+    "evidence/D-10/accepted-reflow.json"
+  ],
+  "limitations": [
+    "DOM geometry/text and screenshots, not a screen-reader certification",
+    "Authored container widths, not mobile-keyboard testing",
+    "No backend owner or real execution",
+    "Shell comparisons sampled at settled endpoints; automation attempts during movement are not timing guarantees",
+    "F-13/F-15 provider integration and durable restart/concurrency remain gated and untested.",
+    "The queue cue holds longer than the native storyboard for readability; it does not animate goal achievement.",
+    "The 390px capture is a scrolled action-region view; full long content does not fit in one viewport.",
+    "Inherited D-09 full CI has one Chromium startup failure; see validation.json. D-10 CI must be checked at its own head."
+  ],
+  "rollback": "Keep default registration/capabilities off or revert D-10; no migration, persisted data or business effect to undo.",
+  "next": "D-11, Today opportunity stack; separate worktree/PR, not started."
+}

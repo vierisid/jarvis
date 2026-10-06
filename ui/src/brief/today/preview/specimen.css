@@ -5,22 +5,6 @@
 .brief-root .brief-today-review-toolbar small { flex-basis:100%; font-size:12px; }
 .brief-root .brief-today-review-viewport { flex:1; min-height:540px; }
 .brief-root .brief-today-review-viewport > .brief-navigation { height:100%; }
-.brief-root .brief-today-sample-goal { padding:18px; }
-.brief-root .brief-today-sample-goal h2 { margin:0; }
-.brief-root .brief-today-sample-goal p { margin:4px 0 0; }
-.brief-root .sample-goal-value { display:flex; align-items:baseline; gap:12px; margin:16px 0 10px; font-variant-numeric:tabular-nums; }
-.brief-root .sample-goal-value strong { font-size:34px; line-height:38px; }
-.brief-root .sample-goal-value > span { font-size:20px; color:var(--brief-secondary); }
-.brief-root .sample-goal-value small { font-size:12px; }
-.brief-root .sample-goal-value small:last-child { margin-left:auto; }
-.brief-root .sample-driver { display:grid; grid-template-columns:1fr 64px 65px; gap:12px; align-items:center; font-size:12px; margin:18px 0; }
-.brief-root .sample-driver > span:last-child { text-align:right; color:var(--brief-secondary); font-family:var(--brief-mono); }
-.brief-root .sample-driver i { height:4px; background:var(--brief-progress-remaining); }
-.brief-root .sample-driver b { display:block; height:4px; background:var(--brief-progress-complete); }
-.brief-root .sample-driver:nth-child(2) b { background:var(--brief-progress-middle); }
-.brief-root .sample-goal-next { display:flex; justify-content:space-between; padding-top:16px; margin-top:20px; border-top:1px solid var(--brief-card-edge); font:700 14px/20px var(--brief-sans); }
-.brief-root [data-compact="true"] > .brief-today-sample-goal .sample-goal-drivers { display:none; }
-.brief-root [data-compact="true"] > .brief-today-sample-goal .sample-goal-next { border:0; margin-top:12px; padding-top:0; }
 .brief-root .brief-today-sample-opportunity { padding:22px; }
 .brief-root .brief-today-sample-opportunity h3 { margin:0 0 24px; }
 .brief-root .brief-today-sample-opportunity small { font-size:12px; color:var(--brief-secondary); }

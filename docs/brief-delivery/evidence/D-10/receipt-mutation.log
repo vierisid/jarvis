@@ -1,0 +1,35 @@
+wsl: Processing /etc/fstab with mount -a failed.
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/today/goal-card/goal-card.test.tsx:
+(pass) measurement and recommendation gates are independent and never mix fixtures into live [8.71ms]
+(pass) ten open/return cycles retain title, measured value, progress node and keyboard return [179.73ms]
+(pass) two immediate presses issue one request; receipt waits for a fresh matching queue; progress never changes [42.61ms]
+66 |   await click(".brief-goal-accept");await render(true,true);expect(calls).toBe(1);expect(feedback()).toBe("Added to Today");
+67 |   binding={...binding,queue:{status:"ready",data:[]}};await render();expect(feedback()).toBe("Added to Today");
+68 | });
+69 |
+70 | test("each receipt identity field must match; a changed title, wrong destination or duplicate queue is not confirmation",()=>{
+71 |   for(const key of ["requestId","recommendationId","revision","goalId","goalRevision"] as const) expect(matchingReceipt(request,{...receipt(),[key]:"wrong"})).toBe(false);
+                                                                                                                                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-10/ui/src/brief/today/goal-card/goal-card.test.tsx:71:160)
+(fail) each receipt identity field must match; a changed title, wrong destination or duplicate queue is not confirmation [1.41ms]
+(pass) failed, conflicting, unknown and lost responses never announce success or enable a blind retry [88.22ms]
+(pass) blocked, expired, stale, changed-goal and historical accepted recommendations cannot dispatch [50.98ms]
+(pass) expiry while visible disables acceptance without waiting for a user navigation [109.00ms]
+(pass) old async completion cannot enter a changed goal or a lost capability [9.82ms]
+(pass) a remounted accepted projection does not replay destination motion or submit [23.54ms]
+(pass) a receipt for different work never confirms even when that other item exists in the queue [7.74ms]
+(pass) a changed recommendation revision ignores the old response and allows review of the new identity [20.08ms]
+(pass) a settled receipt highlights once; unchanged refresh and returning to the recommendation do not replay it [2278.07ms]
+(pass) loading, empty and unavailable recommendations keep a local return; unknown progress is never zero [25.58ms]
+
+ 12 pass
+ 1 fail
+ 125 expect() calls
+Ran 13 tests across 1 file. [3.10s]

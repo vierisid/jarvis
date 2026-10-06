@@ -1,0 +1,267 @@
+{
+  "build": "index-8421gb73.js",
+  "before": {
+    "acceptCalls": "0",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 373.3125
+    },
+    "count": "2 actions",
+    "cue": null,
+    "cueText": "↳ Added: ",
+    "driversVisible": false,
+    "feedback": "",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-follow-up",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 267.3333435058594
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 323.3125
+    },
+    "view": "recommendation"
+  },
+  "pending": {
+    "acceptCalls": "1",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 373.3125
+    },
+    "count": "2 actions",
+    "cue": null,
+    "cueText": "↳ Added: ",
+    "driversVisible": false,
+    "feedback": "Adding to Today…",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-follow-up",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 267.3333435058594
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 323.3125
+    },
+    "view": "recommendation"
+  },
+  "accepted": {
+    "acceptCalls": "1",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 373.3125
+    },
+    "count": "3 actions",
+    "cue": null,
+    "cueText": "↳ Added: ",
+    "driversVisible": false,
+    "feedback": "Added to Today",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-follow-up",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 267.3333435058594
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 323.3125
+    },
+    "view": "recommendation"
+  },
+  "cueAfterReset": {
+    "acceptCalls": "2",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 373.3125
+    },
+    "count": "3 actions",
+    "cue": "fixture-work-maya",
+    "cueText": "↳ Added: Book Maya’s pilot call.",
+    "driversVisible": false,
+    "feedback": "Added to Today",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-follow-up",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 267.3333435058594
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 323.3125
+    },
+    "view": "recommendation"
+  },
+  "afterAlex": {
+    "acceptCalls": "2",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -136.02084350585938
+    },
+    "count": "2 actions",
+    "cue": null,
+    "cueText": "↳ Added: ",
+    "driversVisible": false,
+    "feedback": "Added to Today",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-investor",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -242
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -186.02084350585935
+    },
+    "view": "recommendation"
+  },
+  "mayaFront": {
+    "acceptCalls": "2",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -78.02083587646484
+    },
+    "count": "1 action",
+    "cue": null,
+    "cueText": "↳ Added: ",
+    "driversVisible": false,
+    "feedback": "Added to Today",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-invitation",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -184
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -128.02084350585938
+    },
+    "view": "recommendation"
+  },
+  "afterMaya": {
+    "acceptCalls": "2",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -98.02083587646484
+    },
+    "driversVisible": false,
+    "feedback": "Added to Today",
+    "goalId": "fixture-design-partners",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -204
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": -148.02084350585938
+    },
+    "view": "recommendation"
+  },
+  "ownerMeasuredUpdate": {
+    "acceptCalls": "2",
+    "bar": "7 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 258.6458435058594
+    },
+    "driversVisible": false,
+    "feedback": "Added to Today",
+    "goalId": "fixture-design-partners",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 152.6666717529297
+    },
+    "value": "7",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 208.64584350585935
+    },
+    "view": "recommendation"
+  }
+}

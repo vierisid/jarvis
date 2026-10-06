@@ -1,0 +1,74 @@
+{
+  "date": "2026-10-06",
+  "build": "index-8421gb73.js",
+  "css": "index-ceh5pzvf.css",
+  "checks": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "exit_code": 0,
+      "tests": 159,
+      "assertions": 3142,
+      "files": 13,
+      "evidence": "tests.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "exit_code": 0
+    },
+    {
+      "command": "bun run build:ui",
+      "exit_code": 0,
+      "evidence": "build.log",
+      "warnings": "Existing @theme/@tailwind warnings"
+    },
+    {
+      "command": "git diff --check",
+      "exit_code": 0
+    }
+  ],
+  "focused": {
+    "tests": 13,
+    "assertions": 135
+  },
+  "mutation": {
+    "correlation_bypass": "rejected; 12 pass, 1 fail; original source restored before full suite",
+    "evidence": "receipt-mutation.log"
+  },
+  "browser": {
+    "engine": "Codex in-app Chromium",
+    "build": "index-8421gb73.js",
+    "shell_states": 8,
+    "anchor_delta_px": 0,
+    "return_cycles": 10,
+    "failures_checked": [
+      "conflict",
+      "failed",
+      "unknown",
+      "lost-response"
+    ],
+    "read_states": 9,
+    "container_widths": [
+      "Fit window at 1280 browser width",
+      "390px"
+    ],
+    "limitations": [
+      "DOM geometry/text and screenshots, not a screen-reader certification",
+      "Authored container widths, not mobile-keyboard testing",
+      "No backend owner or real execution",
+      "Shell comparisons sampled at settled endpoints; automation attempts during movement are not timing guarantees"
+    ]
+  },
+  "inherited_ci": {
+    "pr": 749,
+    "head": "7858a7a7d33b154f44c33591c8601266854f0a7e",
+    "run": "https://github.com/vierisid/jarvis/actions/runs/37463829508",
+    "tests": {
+      "pass": 7945,
+      "skip": 31,
+      "fail": 1
+    },
+    "failure": "Existing browser-template-delivery.test.ts beforeAll: Chromium CDP did not come up",
+    "docker": "pass",
+    "note": "Not fixed or claimed passing by D-10"
+  }
+}

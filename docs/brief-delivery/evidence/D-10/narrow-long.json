@@ -1,0 +1,71 @@
+{
+  "build": "index-8421gb73.js",
+  "before": {
+    "acceptCalls": "6",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 244.6666717529297,
+      "x": 108.66667175292967,
+      "y": 79.3125
+    },
+    "count": "2 actions",
+    "cue": null,
+    "cueText": "↳ Added: ",
+    "driversVisible": false,
+    "feedback": "",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-follow-up",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win design partners across the international pilot program",
+    "titleBox": {
+      "height": 39.97916793823242,
+      "width": 244.6666717529297,
+      "x": 108.66667175292967,
+      "y": -26.666667938232425
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 244.6666717529297,
+      "x": 108.66667175292967,
+      "y": 29.3125
+    },
+    "view": "recommendation"
+  },
+  "accepted": {
+    "acceptCalls": "7",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 244.6666717529297,
+      "x": 108.66667175292967,
+      "y": 79.3125
+    },
+    "count": "3 actions",
+    "cue": null,
+    "cueText": "↳ Added: Book the next pilot discussion with Maya and the international design partnership team.",
+    "driversVisible": false,
+    "feedback": "Added to Today",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-follow-up",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win design partners across the international pilot program",
+    "titleBox": {
+      "height": 39.97916793823242,
+      "width": 244.6666717529297,
+      "x": 108.66667175292967,
+      "y": -26.666667938232425
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 244.6666717529297,
+      "x": 108.66667175292967,
+      "y": 29.3125
+    },
+    "view": "recommendation"
+  }
+}

@@ -1,0 +1,289 @@
+{
+  "build": "index-8421gb73.js",
+  "cases": [
+    {
+      "result": "conflict",
+      "before": {
+        "acceptCalls": "2",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "after": {
+        "acceptCalls": "3",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "This recommendation changed. Refresh before adding it.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      }
+    },
+    {
+      "result": "failed",
+      "before": {
+        "acceptCalls": "3",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "after": {
+        "acceptCalls": "4",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "The step was not added. Refresh to check the current recommendation.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      }
+    },
+    {
+      "result": "unknown",
+      "before": {
+        "acceptCalls": "4",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "after": {
+        "acceptCalls": "5",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Addition is not confirmed. Refresh before trying again.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      }
+    },
+    {
+      "result": "lost-response",
+      "before": {
+        "acceptCalls": "5",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      },
+      "after": {
+        "acceptCalls": "6",
+        "bar": "6 of 10 signed",
+        "barBox": {
+          "height": 6,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 258.6458435058594
+        },
+        "count": "2 actions",
+        "cue": null,
+        "cueText": "↳ Added: ",
+        "driversVisible": false,
+        "feedback": "Addition is not confirmed. Refresh before trying again.",
+        "goalId": "fixture-design-partners",
+        "hero": "fixture-decision-follow-up",
+        "overflow": false,
+        "theme": "light",
+        "title": "Win 10 design partners",
+        "titleBox": {
+          "height": 19.98958396911621,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 152.6666717529297
+        },
+        "value": "6",
+        "valueBox": {
+          "height": 40,
+          "width": 268.66668701171875,
+          "x": 954.6666870117188,
+          "y": 208.64584350585935
+        },
+        "view": "recommendation"
+      }
+    }
+  ]
+}

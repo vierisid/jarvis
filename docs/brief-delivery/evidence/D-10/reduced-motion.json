@@ -1,0 +1,42 @@
+{
+  "build": "index-8421gb73.js",
+  "state": {
+    "acceptCalls": "8",
+    "bar": "6 of 10 signed",
+    "barBox": {
+      "height": 6,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 373.3125
+    },
+    "count": "3 actions",
+    "cue": "fixture-work-maya",
+    "cueText": "↳ Added: Book Maya’s pilot call.",
+    "driversVisible": false,
+    "feedback": "Added to Today",
+    "goalId": "fixture-design-partners",
+    "hero": "fixture-decision-follow-up",
+    "overflow": false,
+    "theme": "light",
+    "title": "Win 10 design partners",
+    "titleBox": {
+      "height": 19.98958396911621,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 267.3333435058594
+    },
+    "value": "6",
+    "valueBox": {
+      "height": 40,
+      "width": 268.66668701171875,
+      "x": 954.6666870117188,
+      "y": 323.3125
+    },
+    "view": "recommendation"
+  },
+  "style": {
+    "opacity": "1",
+    "reduced": "true",
+    "transform": "matrix(1, 0, 0, 1, 0, 0)"
+  }
+}
