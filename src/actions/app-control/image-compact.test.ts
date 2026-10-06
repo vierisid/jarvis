@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { decodePng, downscaleToWidth, encodeJpeg, MAX_DECODE_PIXELS, scaledQuantTable, screenshotCaption, screenshotForModel, SCREENSHOT_COMPACT, tooBigToSend } from './image-compact.ts';
-import { encodePng, noiseRgbRows } from './fixtures/png.ts';
+import { decodePng, downscaleToWidth, encodeJpeg, MAX_DECODE_BYTES, MAX_DECODE_PIXELS, MAX_IMAGE_SIDE, scaledQuantTable, screenshotCaption, screenshotForModel, SCREENSHOT_COMPACT, tooBigToSend } from './image-compact.ts';
+import { corruptCrc, encodePng, noiseRgbRows, zeroBomb } from './fixtures/png.ts';
 
 describe('decodePng', () => {
   test('reads every colour type the capture tools write, to RGBA', () => {
@@ -78,8 +78,7 @@ describe('decodePng', () => {
 
   test('refuses what it does not read rather than guessing', () => {
     expect(() => decodePng(Buffer.from('GIF89a'))).toThrow('not a PNG');
-    const interlaced = encodePng(1, 1, 2, 8, [Uint8Array.from([1, 2, 3])]);
-    interlaced[8 + 8 + 12] = 1; // IHDR interlace byte
+    const interlaced = encodePng(1, 1, 2, 8, [Uint8Array.from([1, 2, 3])], { interlace: 1 });
     expect(() => decodePng(interlaced)).toThrow('interlaced');
     const ok = encodePng(1, 1, 2, 8, [Uint8Array.from([1, 2, 3])]);
     expect(() => decodePng(ok.subarray(0, ok.length - 20))).toThrow('truncated');
@@ -89,15 +88,65 @@ describe('decodePng', () => {
     expect(() => decodePng(encodePng(1, 1, 2, 8, [Uint8Array.from([1, 2, 3])], { filter: 9 }))).toThrow('unknown PNG filter 9');
   });
 
+  // A zlib stream of 256 MiB of zeros in ~260 KB: inflating it would allocate
+  // the lot. Each refusal below must happen before that, and the message
+  // proves it -- had the inflate run, it would have ended in a different error
+  // (the stream is far shorter than these headers declare).
+  const BOMB = 256 * 1024 * 1024;
+
   test('a header claiming more pixels than any screen is refused before anything is inflated', () => {
     // 12000x12000 is what took 14.5 s and 2.3 GB when only the header bounded it.
-    const lying = encodePng(1, 1, 2, 8, [Uint8Array.from([1, 2, 3])]);
-    lying.writeUInt32BE(12000, 16);
-    lying.writeUInt32BE(12000, 20);
     expect(12000 * 12000).toBeGreaterThan(MAX_DECODE_PIXELS);
+    const lying = encodePng(12000, 12000, 2, 8, [], { idat: zeroBomb(BOMB) });
     const started = performance.now();
     expect(() => decodePng(lying)).toThrow('larger than any screen');
-    expect(performance.now() - started).toBeLessThan(100);
+    // Inflating the bomb alone measured 182 ms here.
+    expect(performance.now() - started).toBeLessThan(50);
+    // 8-bit grey is one byte a pixel: 9000x9000 is 81 MB of rows, inside the
+    // byte cap, but 81 MP, so the pixel cap (the RGBA buffer would be 324 MB)
+    // is the one that refuses it.
+    expect(9000 * 9000).toBeGreaterThan(MAX_DECODE_PIXELS);
+    expect(9000 * 9000).toBeLessThanOrEqual(MAX_DECODE_BYTES);
+    expect(() => decodePng(encodePng(9000, 9000, 0, 8, [], { idat: zeroBomb(BOMB) }))).toThrow('larger than any screen');
+  });
+
+  test('a 16-bit header within the pixel cap but over the byte cap is refused before anything is inflated (IMG-001)', () => {
+    // 8000x8000 is exactly the pixel cap, but at 8 bytes a pixel its rows are
+    // 512 MB: the 3.9 s / 1.25 GB case the pixel cap let through.
+    expect(8000 * 8000).toBeLessThanOrEqual(MAX_DECODE_PIXELS);
+    expect(8000 * 8 * 8000).toBeGreaterThan(MAX_DECODE_BYTES);
+    const deep = encodePng(8000, 8000, 6, 16, [], { idat: zeroBomb(BOMB) });
+    const started = performance.now();
+    expect(() => decodePng(deep)).toThrow('larger than any screen');
+    expect(performance.now() - started).toBeLessThan(50);
+    // The same geometry at 8 bits is within both caps: the cap is on bytes, not a ban on size.
+    expect(8000 * 4 * 8000).toBeLessThanOrEqual(MAX_DECODE_BYTES);
+  });
+
+  test('image data that inflates past what the header declares is refused, not allocated (zip bomb)', () => {
+    // 100x100 RGB declares 30 100 bytes of rows; the stream holds 256 MiB.
+    const bomb = encodePng(100, 100, 2, 8, [], { idat: zeroBomb(BOMB) });
+    expect(() => decodePng(bomb)).toThrow('PNG image data is longer than its header says');
+  });
+
+  test('a chunk whose CRC does not match is refused, not read (IMG-002)', () => {
+    const ok = encodePng(2, 1, 3, 8, [Uint8Array.from([1, 0])], { palette: [1, 2, 3, 4, 5, 6], trns: [128] });
+    expect(() => decodePng(ok)).not.toThrow();
+    for (const type of ['IHDR', 'PLTE', 'tRNS', 'IDAT']) {
+      expect(() => decodePng(corruptCrc(ok, type))).toThrow(`PNG chunk ${type} is corrupt (CRC mismatch)`);
+    }
+  });
+
+  test('a palette index past the palette, or a malformed palette, is refused rather than drawn black (IMG-003)', () => {
+    // Two entries, pixel index 200.
+    expect(() => decodePng(encodePng(1, 1, 3, 8, [Uint8Array.from([200])], { palette: [1, 2, 3, 4, 5, 6] })))
+      .toThrow('palette index 200 is past the 2-entry palette');
+    // A 4-byte PLTE is not whole entries.
+    expect(() => decodePng(encodePng(1, 1, 3, 8, [Uint8Array.from([1])], { palette: [1, 2, 3, 4] })))
+      .toThrow('PLTE');
+    // More than 256 entries.
+    expect(() => decodePng(encodePng(1, 1, 3, 8, [Uint8Array.from([0])], { palette: Array.from({ length: 257 * 3 }, () => 0) })))
+      .toThrow('PLTE');
   });
 });
 
@@ -133,6 +182,14 @@ function goldenImage() {
 }
 
 describe('encodeJpeg', () => {
+  test('refuses an image whose buffer does not match its size, a non-integer size, or a non-finite quality', () => {
+    const px = (w: number, h: number) => new Uint8Array(w * h * 4);
+    expect(() => encodeJpeg({ width: 4, height: 4, rgba: px(4, 3) }, 80)).toThrow('RGBA buffer');
+    expect(() => encodeJpeg({ width: 2.5, height: 4, rgba: px(2, 4) }, 80)).toThrow('cannot encode');
+    for (const q of [NaN, Infinity]) expect(() => encodeJpeg({ width: 2, height: 2, rgba: px(2, 2) }, q)).toThrow('quality');
+    expect(() => scaledQuantTable([16], NaN)).toThrow('quality');
+  });
+
   test('is byte-for-byte the output libjpeg was checked against', () => {
     // These bytes were decoded by libjpeg's djpeg to a 37x23 image whose PSNR
     // against the source equals cjpeg's own at the same settings (15.05 dB at
@@ -215,6 +272,21 @@ describe('screenshotForModel (#711)', () => {
     // over the 5 MiB cap. (1600x3600 measured just under it.)
     const png = encodePng(1600, 4000, 2, 8, noiseRgbRows(1600, 4000, 3));
     expect(screenshotForModel(png.toString('base64'), 'image/png')).toEqual({ ok: false, reason: 'it is too large to send even after compacting it' });
+  });
+
+  test('a capture longer than a provider takes on one side is compacted to fit, even under the byte cap', () => {
+    // 400x9000 grey is a few KB as PNG, so the 5 MB cap never fires; but no
+    // side may exceed MAX_IMAGE_SIDE, or the provider rejects the request
+    // after the tool has reported success.
+    const rows = Array.from({ length: 9000 }, (_, y) => new Uint8Array(400 * 3).fill(y & 255));
+    const png = encodePng(400, 9000, 2, 8, rows);
+    expect(png.toString('base64').length).toBeLessThan(5 * 1024 * 1024);
+    const shot = screenshotForModel(png.toString('base64'), 'image/png');
+    expect(shot.ok).toBe(true);
+    if (!shot.ok) return;
+    expect(shot.compacted).toBe(true);
+    expect(Math.max(shot.width!, shot.height!)).toBeLessThanOrEqual(MAX_IMAGE_SIDE);
+    expect(shot.height).toBe(MAX_IMAGE_SIDE);
   });
 
   test('what cannot be compacted is said, not sent', () => {

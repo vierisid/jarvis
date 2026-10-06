@@ -27,7 +27,7 @@
  * tables with the IJG formula.
  */
 
-import { inflateSync } from 'node:zlib';
+import { crc32, inflateSync } from 'node:zlib';
 import { guardImageSize, type ContentBlock } from '../../llm/provider.ts';
 
 /** The compact capture's parameters, shared with the routed fallback. */
@@ -41,18 +41,39 @@ const PNG_SIGNATURE = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 const PNG_CHANNELS: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
 
 /**
- * The most pixels a capture may declare before it is refused undecoded.
+ * What a capture may declare before it is refused undecoded: at most
+ * MAX_DECODE_PIXELS pixels, and at most MAX_DECODE_BYTES bytes of raw rows.
  *
- * The size check is the header's own claim, so without a bound a 560 KB IDAT
- * declaring 12000x12000 decoded for 14.5 s and 2.3 GB (#711 review). Measured
- * here, decode + downscale + encode run at 8-12 ms per megapixel (5120x2880 in
- * 180 ms, 11520x2160 in 270 ms, 18048x3384 in 490 ms), so the bound keeps one
- * compaction under about a second, and its memory at the inflated rows plus
- * one RGBA buffer (the unfilter below is in place). It sits above the largest
- * real desktop a root-window capture spans -- three 6K displays side by side,
- * 18048x3384, are 61 MP -- so no actual screen is refused by it.
+ * Both bounds are on the header's own claim, checked before anything is
+ * inflated. Without one, a 560 KB IDAT declaring 12000x12000 decoded for 14.5 s
+ * and 2.3 GB (#711 review). The pixel bound alone was not enough (IMG-001):
+ * bytes per pixel vary 8x across the colour types read here, and a 4.6 MB PNG
+ * declaring 1600x40000 RGBA at 16 bits -- 64 MP, inside the pixel bound --
+ * decoded for 3.6 s and +1.25 GB here. Two bounds because two buffers: the
+ * inflated rows are width*height*bytes-per-pixel, and the RGBA output is
+ * width*height*4 whatever the source depth.
+ *
+ * 64 MP sits above the largest real desktop a root-window capture spans --
+ * three 6K displays side by side, 18048x3384, are 61 MP -- and 256 MB is that
+ * many pixels of 8-bit RGBA, so no actual screen is refused.
+ *
+ * WHAT THE BOUNDS ADMIT, measured here on the most expensive input inside them
+ * (seeded noise, Paeth on every row): 8000x8000 8-bit RGBA decodes in 1.9 s
+ * with +756 MB peak RSS, and 8000x4000 16-bit RGBA in 1.9 s with +633 MB.
+ * That is the worst case of the decode, which is synchronous on the daemon's
+ * thread. A real screen capture is far cheaper -- 5120x2880 decoded, shrunk
+ * and encoded in 180 ms -- because screen content filters and inflates easily;
+ * the bound is what keeps a hostile or broken file from costing more.
  */
 export const MAX_DECODE_PIXELS = 64_000_000;
+export const MAX_DECODE_BYTES = 256_000_000;
+
+/**
+ * The longest side an image block may have. Anthropic's API rejects an image
+ * over 8000 px on a side, and the request then fails after this tool has
+ * reported success; a compacted capture is shrunk to fit inside it.
+ */
+export const MAX_IMAGE_SIDE = 8000;
 
 /**
  * Decode a non-interlaced PNG to 8-bit RGBA.
@@ -78,6 +99,11 @@ export function decodePng(png: Uint8Array): DecodedImage {
     const end = start + len;
     if (end + 4 > png.length) throw new Error(`truncated PNG chunk ${type}`);
     const data = png.subarray(start, end);
+    // Every chunk's CRC, over its type and data. zlib's own checksum catches a
+    // corrupt IDAT stream, but nothing else covers IHDR, PLTE or tRNS -- the
+    // chunks that decide geometry and colour, where one flipped bit silently
+    // reinterprets the whole image (IMG-002).
+    if ((crc32(png.subarray(off + 4, end)) >>> 0) !== view.getUint32(end)) throw new Error(`PNG chunk ${type} is corrupt (CRC mismatch)`);
     if (type === 'IHDR') {
       if (len < 13) throw new Error('truncated PNG header');
       width = view.getUint32(start);
@@ -86,6 +112,8 @@ export function decodePng(png: Uint8Array): DecodedImage {
       colorType = data[9]!;
       interlace = data[12]!;
     } else if (type === 'PLTE') {
+      // Whole RGB entries, at most 256 (the spec's own limits) (IMG-003).
+      if (data.length === 0 || data.length % 3 !== 0 || data.length > 768) throw new Error(`PNG PLTE of ${data.length} bytes is not 1 to 256 RGB entries`);
       palette = data;
     } else if (type === 'tRNS') {
       paletteAlpha = data;
@@ -105,10 +133,22 @@ export function decodePng(png: Uint8Array): DecodedImage {
   if (colorType === 3 && !palette) throw new Error('palette PNG has no palette');
 
   const rowBytes = Math.ceil((width * channels * depth) / 8);
+  if (rowBytes * height > MAX_DECODE_BYTES) throw new Error(`a ${width}x${height} image is larger than any screen this decodes`);
   const stride = rowBytes + 1;
   const expected = stride * height;
   const compressed = idat.length === 1 ? idat[0]! : Buffer.concat(idat);
-  const raw = inflateSync(compressed, { maxOutputLength: expected });
+  // Bounded by what the header declares (a little slack for an encoder's
+  // trailing bytes), so a stream cannot expand past what it claims to be. A
+  // stream that tries is refused with this message, not zlib's own text.
+  let raw: Buffer;
+  try {
+    raw = inflateSync(compressed, { maxOutputLength: expected + 64 });
+  } catch (err) {
+    const tooLong = err instanceof RangeError || (err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE';
+    throw new Error(tooLong ? 'PNG image data is longer than its header says' : 'PNG image data is not a valid zlib stream');
+  }
+  // Up to 64 trailing bytes past the rows are tolerated and ignored, as
+  // libpng does with a warning; any more never left inflateSync.
   if (raw.length < expected) throw new Error('PNG image data is shorter than its header says');
 
   // Undo the per-row filters in place: each row's bytes follow its filter
@@ -155,9 +195,11 @@ export function decodePng(png: Uint8Array): DecodedImage {
       const o = (y * width + x) * 4;
       if (colorType === 3) {
         const idx = sample(row, x);
-        rgba[o] = palette![idx * 3] ?? 0;
-        rgba[o + 1] = palette![idx * 3 + 1] ?? 0;
-        rgba[o + 2] = palette![idx * 3 + 2] ?? 0;
+        // An index past the palette is an error in the spec, not black (IMG-003).
+        if (idx * 3 >= palette!.length) throw new Error(`palette index ${idx} is past the ${palette!.length / 3}-entry palette`);
+        rgba[o] = palette![idx * 3]!;
+        rgba[o + 1] = palette![idx * 3 + 1]!;
+        rgba[o + 2] = palette![idx * 3 + 2]!;
         rgba[o + 3] = paletteAlpha && idx < paletteAlpha.length ? paletteAlpha[idx]! : 255;
       } else if (colorType === 0 || colorType === 4) {
         const g = Math.round(sample(row, x * channels) * scale);
@@ -180,11 +222,17 @@ export function decodePng(png: Uint8Array): DecodedImage {
  * pixel covers. Alpha is composited over black, which is what Go's JPEG encoder
  * does with the sidecar's RGBA canvas. Never upscales.
  */
-export function downscaleToWidth(img: DecodedImage, maxWidth: number): DecodedImage {
+export function downscaleToWidth(img: DecodedImage, maxWidth: number, maxHeight = Infinity): DecodedImage {
   const { width: sw, height: sh, rgba } = img;
-  if (sw <= maxWidth) return img;
-  const dw = maxWidth;
-  const dh = Math.max(1, Math.floor((sh * maxWidth) / sw));
+  if (sw <= maxWidth && sh <= maxHeight) return img;
+  // Width first, the way the sidecar computes it; then, for an image still
+  // taller than maxHeight, the height decides.
+  let dw = Math.min(sw, maxWidth);
+  let dh = Math.max(1, Math.floor((sh * dw) / sw));
+  if (dh > maxHeight) {
+    dh = maxHeight;
+    dw = Math.max(1, Math.floor((sw * maxHeight) / sh));
+  }
   const out = new Uint8Array(dw * dh * 4);
   const x0 = new Int32Array(dw + 1);
   for (let dx = 0; dx <= dw; dx++) x0[dx] = Math.floor((dx * sw) / dw);
@@ -287,6 +335,7 @@ function buildHuffman(spec: { bits: number[]; vals: number[] }): HuffTable {
 
 /** IJG quality scaling, as Go's image/jpeg and libjpeg apply it. */
 export function scaledQuantTable(base: number[], quality: number): number[] {
+  if (!Number.isFinite(quality)) throw new Error(`JPEG quality ${quality} is not a number`);
   const q = Math.min(100, Math.max(1, Math.round(quality)));
   const s = q < 50 ? Math.floor(5000 / q) : 200 - 2 * q;
   return base.map((v) => Math.min(255, Math.max(1, Math.floor((v * s + 50) / 100))));
@@ -332,12 +381,12 @@ const COS = (() => {
 })();
 const C0 = Math.SQRT1_2;
 
-/** Scratch for fdctQuantize: one row pass, reused for every block. */
-const DCT_TMP = new Float64Array(64);
-
-/** Forward DCT of one level-shifted 8x8 block, quantised into natural order. */
-function fdctQuantize(block: Float64Array, quant: number[], out: Int32Array): void {
-  const tmp = DCT_TMP;
+/**
+ * Forward DCT of one level-shifted 8x8 block, quantised into natural order.
+ * `tmp` is the row pass's scratch, owned by the caller (one per encode), so no
+ * state is shared between encodes whatever runs between them.
+ */
+function fdctQuantize(block: Float64Array, quant: number[], out: Int32Array, tmp: Float64Array): void {
   for (let y = 0; y < 8; y++) {
     for (let u = 0; u < 8; u++) {
       let s = 0;
@@ -366,6 +415,9 @@ function magnitudeCategory(v: number): number {
 function encodeBlock(w: BitWriter, coeffs: Int32Array, prevDc: number, dc: HuffTable, ac: HuffTable): number {
   const diff = coeffs[0]! - prevDc;
   const cat = magnitudeCategory(diff);
+  // A category outside the table would be written as raw, unprefixed bits:
+  // a corrupt stream rather than an error. Unreachable for 8-bit samples.
+  if (!dc.size[cat]) throw new Error(`DC difference ${diff} is outside the baseline JPEG range`);
   w.bits(dc.code[cat]!, dc.size[cat]!);
   if (cat) w.bits(diff < 0 ? diff - 1 : diff, cat);
   let run = 0;
@@ -375,6 +427,7 @@ function encodeBlock(w: BitWriter, coeffs: Int32Array, prevDc: number, dc: HuffT
     while (run > 15) { w.bits(ac.code[0xf0]!, ac.size[0xf0]!); run -= 16; }
     const c = magnitudeCategory(v);
     const sym = (run << 4) | c;
+    if (!ac.size[sym]) throw new Error(`AC coefficient ${v} is outside the baseline JPEG range`);
     w.bits(ac.code[sym]!, ac.size[sym]!);
     w.bits(v < 0 ? v - 1 : v, c);
     run = 0;
@@ -391,7 +444,10 @@ function encodeBlock(w: BitWriter, coeffs: Int32Array, prevDc: number, dc: HuffT
  */
 export function encodeJpeg(img: DecodedImage, quality: number): Uint8Array {
   const { width, height, rgba } = img;
-  if (width < 1 || height < 1 || width > 65535 || height > 65535) throw new Error(`cannot encode a ${width}x${height} JPEG`);
+  if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 || width > 65535 || height > 65535) {
+    throw new Error(`cannot encode a ${width}x${height} JPEG`);
+  }
+  if (rgba.length !== width * height * 4) throw new Error(`the RGBA buffer holds ${rgba.length} bytes, not ${width}x${height}x4`);
   const lq = scaledQuantTable(LUMA_Q, quality);
   const cq = scaledQuantTable(CHROMA_Q, quality);
   const tables = [DC_LUMA, AC_LUMA, DC_CHROMA, AC_CHROMA];
@@ -417,6 +473,7 @@ export function encodeJpeg(img: DecodedImage, quality: number): Uint8Array {
 
   const yBlk = new Float64Array(64), cbBlk = new Float64Array(64), crBlk = new Float64Array(64);
   const coeffs = new Int32Array(64);
+  const dctTmp = new Float64Array(64);
   // Y for one 16x16 macroblock, and the 2x2-averaged chroma.
   const yMb = new Float64Array(256);
   let dcY = 0, dcCb = 0, dcCr = 0;
@@ -441,19 +498,30 @@ export function encodeJpeg(img: DecodedImage, quality: number): Uint8Array {
       for (let by = 0; by < 2; by++) {
         for (let bx = 0; bx < 2; bx++) {
           for (let j = 0; j < 8; j++) for (let i = 0; i < 8; i++) yBlk[j * 8 + i] = yMb[(by * 8 + j) * 16 + bx * 8 + i]!;
-          fdctQuantize(yBlk, lq, coeffs);
+          fdctQuantize(yBlk, lq, coeffs, dctTmp);
           dcY = encodeBlock(w, coeffs, dcY, dcL, acL);
         }
       }
-      fdctQuantize(cbBlk, cq, coeffs);
+      fdctQuantize(cbBlk, cq, coeffs, dctTmp);
       dcCb = encodeBlock(w, coeffs, dcCb, dcC, acC);
-      fdctQuantize(crBlk, cq, coeffs);
+      fdctQuantize(crBlk, cq, coeffs, dctTmp);
       dcCr = encodeBlock(w, coeffs, dcCr, dcC, acC);
     }
   }
   w.flushBits();
   w.bytes([0xff, 0xd9]);
   return w.result();
+}
+
+/**
+ * Whether a PNG's header declares a side longer than MAX_IMAGE_SIDE. Reads
+ * only the IHDR (decoded from the first 32 base64 characters); anything that
+ * is not a readable PNG header is left to the decoder to refuse.
+ */
+function sideTooLong(base64: string): boolean {
+  const head = Buffer.from(base64.slice(0, 32), 'base64');
+  if (head.length < 24 || PNG_SIGNATURE.some((b, i) => head[i] !== b)) return false;
+  return Math.max(head.readUInt32BE(16), head.readUInt32BE(20)) > MAX_IMAGE_SIDE;
 }
 
 export type ScreenshotForModel =
@@ -476,7 +544,7 @@ export function tooBigToSend(block: ContentBlock): boolean {
  */
 export function screenshotForModel(base64: string, mediaType: string): ScreenshotForModel {
   const block: ContentBlock = { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } };
-  if (!tooBigToSend(block)) return { ok: true, block, compacted: false };
+  if (!tooBigToSend(block) && !(mediaType === 'image/png' && sideTooLong(base64))) return { ok: true, block, compacted: false };
   if (mediaType !== 'image/png') return { ok: false, reason: `the capture is ${mediaType}, which cannot be compacted here` };
   const bytes = Buffer.from(base64, 'base64');
   let jpeg: Uint8Array;
@@ -484,7 +552,7 @@ export function screenshotForModel(base64: string, mediaType: string): Screensho
   let small: DecodedImage;
   try {
     decoded = decodePng(bytes);
-    small = downscaleToWidth(decoded, SCREENSHOT_COMPACT.maxWidth);
+    small = downscaleToWidth(decoded, SCREENSHOT_COMPACT.maxWidth, MAX_IMAGE_SIDE);
     jpeg = encodeJpeg(small, SCREENSHOT_COMPACT.jpegQuality);
   } catch (err) {
     return { ok: false, reason: `it could not be compacted (${err instanceof Error ? err.message : String(err)})` };
