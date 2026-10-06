@@ -1,0 +1,24 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/composition.test.ts:
+Database initialized at: /tmp/jarvis-f07-PvNJtN/test.db
+191 |   const p = provider({ async chat(request) { signal = request.signal; return reply.promise; } });
+192 |   const { job } = p.submit(input); await started(p, job.jobId);
+193 |   getWorkflowDb().exec(`CREATE TRIGGER reject_interruption BEFORE UPDATE ON brief_workflow_composition_jobs WHEN NEW.state = 'failed'
+194 |     BEGIN SELECT RAISE(ABORT, 'storage failure'); END`);
+195 |   try {
+196 |     expect(() => p.stop()).not.toThrow(); expect(signal!.aborted).toBe(true); await p.idle();
+                                     ^
+error: expect(received).not.toThrow()
+
+Error name: "SQLiteError"
+Error message: "storage failure"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:196:32)
+(fail) an interruption write failure cannot block shutdown or attach a late draft [754.29ms]
+
+ 0 pass
+ 19 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [848.00ms]

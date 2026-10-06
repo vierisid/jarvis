@@ -94,7 +94,7 @@ export class BriefCompositionProvider {
   }
   stop(): void {
     this.stopped = true;
-    if (this.currentDatabase()) this.interruptPending();
+    this.tryInterruptPending();
     this.active?.abort.abort();
   }
   async idle(): Promise<void> { while (this.pending) await this.pending; }
@@ -102,6 +102,10 @@ export class BriefCompositionProvider {
   private interruptPending(): void {
     this.db.run(`UPDATE brief_workflow_composition_jobs SET state = 'failed', blocker = ?, updated_at = ?
       WHERE project_id = ? AND state IN ('queued','running')`, [JSON.stringify({ code: 'interrupted', message: 'Composition was interrupted. Your request is saved; submit a new requestId to retry explicitly.', details: [] }), Date.now(), this.projectId]);
+  }
+  private tryInterruptPending(): void {
+    try { if (this.currentDatabase()) this.interruptPending(); }
+    catch { /* Unwritable storage retains its last checkpoint for startup recovery; still abort work. */ }
   }
   private finish(id: string, state: BriefCompositionJob['state'], blocker: NonNullable<BriefCompositionJob['blocker']>): void {
     this.db.run(`UPDATE brief_workflow_composition_jobs SET state = ?, blocker = ?, updated_at = ?
@@ -113,7 +117,7 @@ export class BriefCompositionProvider {
     this.requested = false;
     this.pending = Promise.resolve().then(() => this.drain()).catch(() => {
       // Leave a durable interrupted outcome rather than leaking database/provider diagnostics.
-      if (this.currentDatabase()) this.interruptPending();
+      this.tryInterruptPending();
     }).finally(() => {
       this.pending = null;
       // A submission can arrive between drain returning and this microtask.

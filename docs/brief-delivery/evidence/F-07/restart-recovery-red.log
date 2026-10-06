@@ -1,8 +1,8 @@
 bun test v1.4.2 (744846f84)
 
 src/brief/composition.test.ts:
-Database initialized at: /tmp/jarvis-f07-6hpXLs/test.db
-Database initialized at: /tmp/jarvis-f07-6hpXLs/test.db
+Database initialized at: /tmp/jarvis-f07-Pv8vk3/test.db
+Database initialized at: /tmp/jarvis-f07-Pv8vk3/test.db
 168 |   const first = p.submit(input).job; await started(p, first.jobId);
 169 |   const queued = p.submit({ ...input, requestId: 'pending' }).job;
 170 |   const compositionId = p.get(first.jobId).compositionId;
@@ -16,9 +16,9 @@ error: expect(received).toMatchObject(expected)
 -   "blocker": {
 -     "code": "interrupted",
 +   "blocker": null,
-+   "compositionId": "vsCvL3vRO8IqYLrsNV9Fa",
-+   "createdAt": 1791290543409,
-+   "jobId": "YgHHktjBaS0OUrPcdydnA",
++   "compositionId": "39bGGbQYStHBwSCWyMoat",
++   "createdAt": 1791291020808,
++   "jobId": "hjHZ59AmUdbs7Y2MMSyYn",
 +   "progress": {
 +     "checkedCandidates": 0,
     },
@@ -32,7 +32,7 @@ error: expect(received).toMatchObject(expected)
     },
 -   "state": "failed",
 +   "state": "running",
-+   "updatedAt": 1791290543420,
++   "updatedAt": 1791291020820,
 +   "workflow": null,
   }
 
@@ -40,10 +40,10 @@ error: expect(received).toMatchObject(expected)
 + Received  + 11
 
       at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:173:75)
-(fail) restart records queued and running work as interrupted and never resumes it implicitly [693.13ms]
+(fail) restart records queued and running work as interrupted and never resumes it implicitly [640.09ms]
 
  0 pass
- 18 filtered out
+ 19 filtered out
  1 fail
  2 expect() calls
-Ran 1 test across 1 file. [740.00ms]
+Ran 1 test across 1 file. [703.00ms]

@@ -1,7 +1,7 @@
 bun test v1.4.2 (744846f84)
 
 src/brief/composition.test.ts:
-Database initialized at: /tmp/jarvis-f07-EtTwKn/test.db
+Database initialized at: /tmp/jarvis-f07-lAGw1I/test.db
 75 |       }
 76 |       if (this.readiness() !== 'ready') throw new CompositionRequestError('Workflow composer is unavailable', 503);
 77 |       const count = this.db.query<{ n: number }, [string]>("SELECT COUNT(*) AS n FROM brief_workflow_composition_jobs WHERE project_id = ? AND state IN ('queued','running')").get(this.projectId)!.n;
@@ -19,10 +19,10 @@ SQLiteError: UNIQUE constraint failed: brief_workflow_composition_jobs.project_i
       at transaction (bun:sqlite:400:27)
       at submit (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.ts:83:8)
       at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:61:35)
-(fail) durable receipt precedes the model; retries across every phase attach one disabled populated draft [1105.21ms]
+(fail) durable receipt precedes the model; retries across every phase attach one disabled populated draft [818.84ms]
 
  0 pass
- 18 filtered out
+ 19 filtered out
  1 fail
  6 expect() calls
-Ran 1 test across 1 file. [1257.00ms]
+Ran 1 test across 1 file. [888.00ms]
