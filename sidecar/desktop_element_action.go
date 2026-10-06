@@ -80,17 +80,21 @@ func clickElement(id int, action string, policy readBackPolicy) (*RPCResult, err
 	}
 	// The rect the element has NOW, confirmed to be the element the snapshot
 	// listed, or a refusal before anything is clicked.
-	rect, err := resolveDesktopElement(id, policy.budget, policy.slowHint)
+	rect, pid, err := resolveDesktopElement(id, policy.budget, policy.slowHint)
 	if err != nil {
 		return nil, err
 	}
 
 	x := toInt(rect["x"]) + toInt(rect["w"])/2
 	y := toInt(rect["y"]) + toInt(rect["h"])/2
-	if err := dispatchPointer(action, x, y); err != nil {
+	if err := dispatchPointer(id, action, x, y, pid); err != nil {
 		return nil, err
 	}
-	return &RPCResult{Result: map[string]any{"success": true, "action": action, "x": x, "y": y}}, nil
+	// Whether this platform checked that the element's own window was the one
+	// under its centre before clicking (#705). macOS does not, and says so
+	// rather than leaving the success to read as verified.
+	return &RPCResult{Result: map[string]any{"success": true, "action": action, "x": x, "y": y,
+		"window_under_pointer_checked": desktopPointerTargetChecked}}, nil
 }
 
 // handleClickElementWith is handle_click_element for one platform's policy.

@@ -75,6 +75,12 @@ func desktopElementStale(id int, why string) error {
 			"Run desktop_snapshot again and use an id from that result", id, why)}
 }
 
+// desktopTargetObscuredCode marks a click refused because the window under the
+// element's centre is not the element's own (#705). The pointer has moved; no
+// button went down and no key was pressed, so it may be reported as not
+// started (NOT_STARTED_RPC_CODES in src/actions/tools/sidecar-route.ts).
+const desktopTargetObscuredCode = "DESKTOP_TARGET_OBSCURED"
+
 // desktopElementSuperseded is the refusal for a snapshot that refilled the
 // cache while an action was confirming one of its ids: the id the model sent
 // was minted by the snapshot before, and the cache now answers for the new one.

@@ -31,11 +31,11 @@ func uiaPerformAction(state *uiaState, elementID int, action, value string) (map
 
 	switch action {
 	case "click":
-		err = actionClick(elem)
+		err = actionClick(state, elementID, elem)
 	case "double_click":
-		err = actionDoubleClick(elem)
+		err = actionDoubleClick(state, elementID, elem)
 	case "right_click":
-		err = actionRightClick(elem)
+		err = actionRightClick(state, elementID, elem)
 	case "invoke":
 		err = patternInvoke(elem)
 	case "toggle":
@@ -98,11 +98,15 @@ func uiaElementPrint(elem *ole.IDispatch) desktopElementPrint {
 // path only when Invoke isn't supported by the widget — keeps the
 // user's actual cursor where they left it for everything that supports
 // the structured COM path (most native Windows controls do).
-func actionClick(elem *ole.IDispatch) error {
-	if err := patternInvoke(elem); err == nil {
-		return nil
+//
+// Invoke acts on the element itself, so what is drawn over it does not
+// matter. The mouse fallback does: it is checked first (pointerReachesElement).
+func actionClick(state *uiaState, id int, elem *ole.IDispatch) error {
+	supported, invokeErr := invokeIfSupported(elem)
+	if useMouse, err := mouseFallbackAfterInvoke(supported, invokeErr); !useMouse {
+		return err
 	}
-	x, y, err := elementCenter(elem)
+	x, y, err := pointerReachesElement(state, id, elem)
 	if err != nil {
 		return err
 	}
@@ -111,8 +115,8 @@ func actionClick(elem *ole.IDispatch) error {
 }
 
 // actionDoubleClick moves the mouse to the element center and double-clicks.
-func actionDoubleClick(elem *ole.IDispatch) error {
-	x, y, err := elementCenter(elem)
+func actionDoubleClick(state *uiaState, id int, elem *ole.IDispatch) error {
+	x, y, err := pointerReachesElement(state, id, elem)
 	if err != nil {
 		return err
 	}
@@ -121,13 +125,48 @@ func actionDoubleClick(elem *ole.IDispatch) error {
 }
 
 // actionRightClick moves the mouse to the element center and right-clicks.
-func actionRightClick(elem *ole.IDispatch) error {
-	x, y, err := elementCenter(elem)
+func actionRightClick(state *uiaState, id int, elem *ole.IDispatch) error {
+	x, y, err := pointerReachesElement(state, id, elem)
 	if err != nil {
 		return err
 	}
 	win32RightClick(x, y)
 	return nil
+}
+
+// pointerReachesElement returns the element's centre, or a refusal when a
+// mouse click there would not reach the element's own window (#705). The
+// element passed the read-back, but its bounds ignore stacking: another
+// window can cover it, and a click at its centre then goes to that window.
+//
+// Read before the pointer moves: WindowFromPoint hit-tests a point, it does
+// not need the cursor there, so a refusal leaves the pointer where it was.
+// It is the hit test Windows performs to deliver the click, so a window that
+// is transparent to the mouse (an overlay that lets clicks through) is
+// skipped exactly as the click would skip it, and does not cause a refusal.
+//
+// Cost: WindowFromPoint is an in-process user32 call; the
+// element's hosting window is a short climb of cross-process UIA property
+// reads. Measured by TestUIAPointerCheckCost on the machine that runs it.
+func pointerReachesElement(state *uiaState, id int, elem *ole.IDispatch) (int, int, error) {
+	x, y, err := elementCenter(elem)
+	if err != nil {
+		return 0, 0, err
+	}
+	walker, err := uiaRawViewWalker(state.automation)
+	if err != nil {
+		return 0, 0, &codedError{code: desktopTargetObscuredCode, err: fmt.Errorf(
+			"could not confirm element [%d]'s window is the one under its centre (%v), so nothing was clicked", id, err)}
+	}
+	defer walker.Release()
+	target, _, known := uiaHostingWindow(walker, elem)
+	hit := win32RootWindow(win32WindowFromPoint(x, y))
+	if why := pointerWindowMismatch(target, known, hit); why != "" {
+		return 0, 0, &codedError{code: desktopTargetObscuredCode, err: fmt.Errorf(
+			"element [%d] %s at its centre (%d, %d), so nothing was clicked. "+
+				"Bring its window to the front with desktop_focus_window, then take a new desktop_snapshot", id, why, x, y)}
+	}
+	return x, y, nil
 }
 
 // elementCenter returns the center coordinates of an element's bounding rectangle.

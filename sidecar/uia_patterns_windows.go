@@ -66,6 +66,23 @@ func patternInvoke(elem *ole.IDispatch) error {
 	return nil
 }
 
+// invokeIfSupported calls Invoke when the element supports it. supported is
+// false only when the pattern could not be obtained, which is the one case in
+// which nothing was attempted; a failed Invoke call (supported, err != nil)
+// may already have run the control's action (#705 review).
+func invokeIfSupported(elem *ole.IDispatch) (supported bool, err error) {
+	pattern, perr := uiaElementGetPattern(elem, UIA_InvokePatternId)
+	if perr != nil {
+		return false, perr
+	}
+	defer pattern.Release()
+	hr, _, _ := syscall.SyscallN(vtblOffset(pattern, 3), uintptr(unsafe.Pointer(pattern)))
+	if hr != 0 {
+		return true, uiaOpError("Invoke", hr)
+	}
+	return true, nil
+}
+
 // patternGetValue calls IUIAutomationValuePattern::get_CurrentValue.
 func patternGetValue(elem *ole.IDispatch) (string, error) {
 	pattern, err := uiaElementGetPattern(elem, UIA_ValuePatternId)

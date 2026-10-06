@@ -54,8 +54,14 @@ let sidecarManager: SidecarManager | null = null;
  * it could not re-read. Each is returned before the first click, keystroke or
  * pattern call, which `desktop_element_stale_linux_test.go` pins by checking
  * that no pointer or keyboard command ran.
+ *
+ * `DESKTOP_TARGET_OBSCURED` (#705) is a click refused because the window under
+ * the element's centre is not the element's own: covered, minimised, on another
+ * workspace. Returned before any button goes down; on Linux the pointer has
+ * moved to look (`desktop_pointer_target_linux_test.go` pins that nothing was
+ * clicked), on Windows it has not (uia_element_guard_windows_test.go).
  */
-const NOT_STARTED_RPC_CODES = new Set(['DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT']);
+const NOT_STARTED_RPC_CODES = new Set(['DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT', 'DESKTOP_TARGET_OBSCURED']);
 
 /**
  * Inject the sidecar manager at startup. Called once from the daemon.

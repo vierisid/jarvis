@@ -110,8 +110,9 @@ func TestMacOSClickConfirmsJXAElementsAndDispatchesTheConfirmedCentre(t *testing
 	if m := res.Result.(map[string]any); m["x"] != 140 || m["y"] != 215 {
 		t.Errorf("clicked at (%v, %v), want (140, 215)", m["x"], m["y"])
 	}
-	if acted := s.pointerCalls(); len(acted) != 1 {
-		t.Errorf("pointer calls %q, want one", acted)
+	// Linux's dispatch here: the pointer check, then the click.
+	if acted := s.pointerCalls(); len(acted) != 2 || acted[1] != "mousemove --sync 140 215 click 1" {
+		t.Errorf("pointer calls %q, want the check and one click", acted)
 	}
 	if len(*budgets) != 1 || (*budgets)[0] != 20*time.Second {
 		t.Errorf("click read-back budgets %v, want exactly one of 20s", *budgets)

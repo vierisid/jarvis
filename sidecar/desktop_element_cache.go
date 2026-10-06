@@ -141,37 +141,38 @@ func printOf(el map[string]any) desktopElementPrint {
 
 // resolveDesktopElement is the guard every action on a cached element id runs
 // before it dispatches anything. It returns the rect to act at, which is the
-// one the read-back just confirmed, or an error -- and every error is returned
-// before a click, so all of them may be reported as not started.
+// one the read-back just confirmed, and the pid whose window it belongs to, or
+// an error -- and every error is returned before a click, so all of them may
+// be reported as not started.
 //
 // slowHint is appended when the read-back itself fails, for a caller whose
 // budget is tighter than a snapshot's: "take a fresh snapshot" cannot help a
 // window that is merely slower to walk than that budget, and a model told only
 // that would loop.
-func resolveDesktopElement(id int, walkBudget time.Duration, slowHint string) (map[string]any, error) {
+func resolveDesktopElement(id int, walkBudget time.Duration, slowHint string) (map[string]any, int, error) {
 	cached, index, pid, depth, gen, ok := elementCache.lookup(id)
 	if !ok {
-		return nil, desktopElementNotCached(id)
+		return nil, 0, desktopElementNotCached(id)
 	}
 	live, err := walkDesktopElements(pid, depth, walkBudget)
 	if err != nil {
-		return nil, &codedError{code: desktopStaleElementCode, err: fmt.Errorf(
+		return nil, 0, &codedError{code: desktopStaleElementCode, err: fmt.Errorf(
 			"could not re-read the window to confirm element [%d] is still the one the snapshot listed, so nothing was done "+
 				"(%v). Run desktop_snapshot again%s", id, err, slowHint)}
 	}
 	if index >= len(live) {
-		return nil, desktopElementStale(id, "has disappeared")
+		return nil, 0, desktopElementStale(id, "has disappeared")
 	}
 	liveEl, _ := live[index].(map[string]any)
 	if liveEl == nil {
-		return nil, desktopElementStale(id, "has disappeared")
+		return nil, 0, desktopElementStale(id, "has disappeared")
 	}
 	liveRect, hasRect := liveEl["rect"].(map[string]any)
 	if !hasRect {
-		return nil, desktopElementStale(id, "has disappeared")
+		return nil, 0, desktopElementStale(id, "has disappeared")
 	}
 	if why := desktopElementChange(printOf(cached), printOf(liveEl), true); why != "" {
-		return nil, desktopElementStale(id, why)
+		return nil, 0, desktopElementStale(id, why)
 	}
 	// A fill that landed DURING the read-back has made this id one from an
 	// earlier snapshot, which lookup would now refuse; refused here too, so the
@@ -179,9 +180,9 @@ func resolveDesktopElement(id int, walkBudget time.Duration, slowHint string) (m
 	// after this line cannot re-target the click: the rect returned is the one
 	// just confirmed, not a fresh read of the cache.
 	if elementCache.generation() != gen {
-		return nil, desktopElementSuperseded(id)
+		return nil, 0, desktopElementSuperseded(id)
 	}
-	return liveRect, nil
+	return liveRect, pid, nil
 }
 
 // findInWalk filters one walk's elements -- the reply of the handleGetWindowTree

@@ -25,6 +25,10 @@ type fakeDesktopSurface struct {
 	treeFile string
 	callLog  string
 	failWalk string
+	// pointerPid holds the pid xdotool reports for the window under the
+	// pointer (#705): the snapshot's 4242 unless a test covers the element, and
+	// "none" for a window with no _NET_WM_PID.
+	pointerPid string
 }
 
 // fakeDesktop installs the fakes and returns the surface they report. `python3`
@@ -35,10 +39,11 @@ func fakeDesktop(t *testing.T) *fakeDesktopSurface {
 	t.Helper()
 	dir := t.TempDir()
 	s := &fakeDesktopSurface{
-		t:        t,
-		treeFile: filepath.Join(dir, "tree.json"),
-		callLog:  filepath.Join(dir, "xdotool.log"),
-		failWalk: filepath.Join(dir, "fail-walk"),
+		t:          t,
+		treeFile:   filepath.Join(dir, "tree.json"),
+		callLog:    filepath.Join(dir, "xdotool.log"),
+		failWalk:   filepath.Join(dir, "fail-walk"),
+		pointerPid: filepath.Join(dir, "pointer-pid"),
 	}
 	python := "#!/bin/sh\n" +
 		"if [ -e '" + s.failWalk + "' ]; then echo 'Atspi: bus gone' >&2; exit 1; fi\n" +
@@ -46,7 +51,15 @@ func fakeDesktop(t *testing.T) *fakeDesktopSurface {
 	xdotool := "#!/bin/sh\n" +
 		"for a in \"$@\"; do printf '%s\\037' \"$a\"; done >> '" + s.callLog + "'\n" +
 		"printf '\\n' >> '" + s.callLog + "'\n" +
-		"if [ \"$1\" = search ]; then echo 'Fake Window'; fi\n"
+		"if [ \"$1\" = search ]; then echo 'Fake Window'; fi\n" +
+		// getmouselocation --shell, then getwindowpid on the window it found.
+		"case \" $* \" in *' getmouselocation '*)\n" +
+		"  p=$(/bin/cat '" + s.pointerPid + "' 2>/dev/null || echo 4242)\n" +
+		"  if [ \"$p\" = nodisplay ]; then echo \"Error: Can't open display\" >&2; exit 1; fi\n" +
+		"  printf 'X=1\\nY=2\\nSCREEN=0\\nWINDOW=77\\n'\n" +
+		"  if [ \"$p\" = none ]; then echo 'window 77 has no pid' >&2; exit 1; fi\n" +
+		"  echo \"$p\";;\n" +
+		"esac\n"
 	for name, body := range map[string]string{"python3": python, "xdotool": xdotool} {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o755); err != nil {
 			t.Fatal(err)
@@ -81,6 +94,14 @@ func (s *fakeDesktopSurface) show(elems ...fakeElement) {
 	}
 }
 
+// coverWith makes the window under the pointer belong to pid ("none": no pid).
+func (s *fakeDesktopSurface) coverWith(pid string) {
+	s.t.Helper()
+	if err := os.WriteFile(s.pointerPid, []byte(pid), 0o644); err != nil {
+		s.t.Fatal(err)
+	}
+}
+
 func (s *fakeDesktopSurface) breakWalk() {
 	s.t.Helper()
 	if err := os.WriteFile(s.failWalk, nil, 0o644); err != nil {
@@ -101,7 +122,7 @@ func (s *fakeDesktopSurface) pointerCalls() []string {
 	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
 		argv := strings.Split(strings.TrimSuffix(line, "\x1f"), "\x1f")
 		switch argv[0] {
-		case "mousemove", "click", "type", "key":
+		case "mousemove", "click", "type", "key", "getmouselocation":
 			acted = append(acted, strings.Join(argv, " "))
 		}
 	}
@@ -205,6 +226,9 @@ func TestClickElementStillClicksAnUnchangedElement(t *testing.T) {
 	s.show(cancelButton, deleteButton)
 	ids := s.snapshot()
 
+	// Each action moves the pointer and checks the window under it (#705),
+	// then clicks: two xdotool runs.
+	const locate = "getmouselocation --shell mousemove --sync 260 415 getmouselocation --shell getwindowpid"
 	for action, want := range map[string]string{
 		"click":        "mousemove --sync 260 415 click 1",
 		"double_click": "mousemove --sync 260 415 click --repeat 2 1",
@@ -215,8 +239,8 @@ func TestClickElementStillClicksAnUnchangedElement(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s on an unchanged element: %v", action, err)
 		}
-		if got := s.pointerCalls(); len(got) != 1 || got[0] != want {
-			t.Errorf("%s ran %q, want [%q]", action, got, want)
+		if got := s.pointerCalls(); len(got) != 2 || got[0] != locate || got[1] != want {
+			t.Errorf("%s ran %q, want [%q %q]", action, got, locate, want)
 		}
 		if r := res.Result.(map[string]any); r["x"] != 260 || r["y"] != 415 {
 			t.Errorf("%s reported %v,%v, want 260,415", action, r["x"], r["y"])
@@ -235,8 +259,8 @@ func TestClickElementIgnoresChangesToOtherElements(t *testing.T) {
 	if _, err := handleClickElement(map[string]any{"element_id": ids[0]}); err != nil {
 		t.Fatalf("an unrelated element changed and the click was refused: %v", err)
 	}
-	if got := s.pointerCalls(); len(got) != 1 {
-		t.Errorf("xdotool ran %q, want one click", got)
+	if got := s.pointerCalls(); len(got) != 2 || got[1] != "mousemove --sync 140 415 click 1" {
+		t.Errorf("xdotool ran %q, want the pointer check and one click", got)
 	}
 }
 
@@ -286,7 +310,7 @@ func TestTypeTextStillTypesIntoAnUnchangedElement(t *testing.T) {
 		t.Fatalf("type into an unchanged element: %v", err)
 	}
 	got := s.pointerCalls()
-	want := []string{"mousemove --sync 250 112 click 1", "type --delay 12 -- Ada"}
+	want := []string{"getmouselocation --shell mousemove --sync 250 112 getmouselocation --shell getwindowpid", "mousemove --sync 250 112 click 1", "type --delay 12 -- Ada"}
 	if strings.Join(got, "|") != strings.Join(want, "|") {
 		t.Errorf("xdotool ran %q, want %q", got, want)
 	}
@@ -311,7 +335,7 @@ func TestClickElementChecksAnIdMintedByFindElement(t *testing.T) {
 	if _, err := handleClickElement(map[string]any{"element_id": found[0]}); err != nil {
 		t.Fatalf("click a find_element result: %v", err)
 	}
-	if got := s.pointerCalls(); len(got) != 1 || got[0] != "mousemove --sync 260 415 click 1" {
+	if got := s.pointerCalls(); len(got) != 2 || got[0] != "getmouselocation --shell mousemove --sync 260 415 getmouselocation --shell getwindowpid" || got[1] != "mousemove --sync 260 415 click 1" {
 		t.Errorf("xdotool ran %q, want a click on Delete account", got)
 	}
 
@@ -407,7 +431,7 @@ func TestReadBackFailureCarriesTheCallersHint(t *testing.T) {
 	s.show(cancelButton)
 	ids := s.snapshot()
 	s.breakWalk()
-	_, err := resolveDesktopElement(int(ids[0]), atSPIWalkTimeout, ". HINT")
+	_, _, err := resolveDesktopElement(int(ids[0]), atSPIWalkTimeout, ". HINT")
 	if err == nil || !strings.HasSuffix(err.Error(), "Run desktop_snapshot again. HINT") {
 		t.Errorf("got %v, want the hint after the snapshot advice", err)
 	}

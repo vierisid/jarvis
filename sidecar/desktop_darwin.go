@@ -156,6 +156,10 @@ func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 // desktopPlatformName names this platform in an unsupported-action refusal.
 const desktopPlatformName = "macOS"
 
+// desktopPointerTargetChecked: dispatchPointer does not check the window under
+// the pointer (see dispatchPointer), and a click's reply says so.
+const desktopPointerTargetChecked = false
+
 // walkDarwinTree runs the JXA accessibility walk for one process. Ids are
 // indices in this walk's depth-first order, so the snapshot and the read-back
 // in resolveDesktopElement must both come through here with the same depth.
@@ -224,7 +228,17 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 // dispatchPointer performs action at (x, y), for clickElement
 // (desktop_element_action.go), which has already confirmed the element and
 // the action.
-func dispatchPointer(action string, x, y int) error {
+//
+// Unlike Linux and Windows it does NOT first check that the window under the
+// point is the element's (#705). The check here would be an AX hit test or a
+// CGWindowList walk, and macOS draws windows that are listed and on top but
+// click-through -- this sidecar's own pebble overlay among them -- so whether
+// a given window takes the click is exactly what has to be measured on a real
+// Mac before a refusal is trusted. CI has no macOS test runner, and a refusal
+// path that has never executed is the failure #712 describes; a check that
+// fails closed on every click would be worse than the gap. Filed separately.
+func dispatchPointer(id int, action string, x, y, pid int) error {
+	_, _ = id, pid
 	var err error
 	switch action {
 	case "double_click":

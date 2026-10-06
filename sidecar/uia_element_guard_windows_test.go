@@ -42,6 +42,8 @@ var (
 	tProcSetWindowTextW    = testUser32.NewProc("SetWindowTextW")
 	tProcSetWindowLongPtrW = testUser32.NewProc("SetWindowLongPtrW")
 	tProcGetModuleHandleW  = testKernel32.NewProc("GetModuleHandleW")
+	tProcSetLayeredAttrs   = testUser32.NewProc("SetLayeredWindowAttributes")
+	tProcGetCursorPos      = testUser32.NewProc("GetCursorPos")
 )
 
 type testWndClassEx struct {
@@ -86,8 +88,10 @@ func openTestDialog(t *testing.T) *testDialog {
 		inst, cls := registerTestWindowClass()
 		title, _ := syscall.UTF16PtrFromString("Jarvis read-back test")
 		const wsOverlapped, wsVisible, wsChild, wsBorder = 0x00CF0000, 0x10000000, 0x40000000, 0x00800000
-		const exToolWindow, exNoActivate = 0x00000080, 0x08000000
-		d.top, _, _ = tProcCreateWindowExW.Call(exToolWindow|exNoActivate, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(title)),
+		const exToolWindow, exNoActivate, exTopmost = 0x00000080, 0x08000000, 0x00000008
+		// Topmost, so whether it is covered is up to the test, not to
+		// whatever the person running it has open.
+		d.top, _, _ = tProcCreateWindowExW.Call(exToolWindow|exNoActivate|exTopmost, uintptr(unsafe.Pointer(cls)), uintptr(unsafe.Pointer(title)),
 			wsOverlapped|wsVisible, 40, 40, 320, 160, 0, 0, inst, 0)
 		if d.top == 0 {
 			ready <- errors.New("CreateWindowExW failed for the test window")
@@ -257,4 +261,93 @@ func TestUIAReadBackRefusesAnIDFromAnEarlierSnapshot(t *testing.T) {
 	if _, err := act(second); err != nil {
 		t.Fatalf("the current snapshot's id was refused: %v", err)
 	}
+}
+
+// coverDialog puts a topmost popup over the whole test window, on the
+// window's own thread. A click-through one is layered and WS_EX_TRANSPARENT:
+// drawn on top, but skipped by the mouse.
+func (d *testDialog) coverDialog(t *testing.T, clickThrough bool) {
+	t.Helper()
+	d.on(func() {
+		_, cls := registerTestWindowClass()
+		const wsPopup, wsVisible = 0x80000000, 0x10000000
+		ex := uintptr(0x00000008 | 0x08000000 | 0x00000080) // topmost, no-activate, tool window
+		if clickThrough {
+			ex |= 0x00080000 | 0x00000020 // layered, transparent
+		}
+		h, _, _ := tProcCreateWindowExW.Call(ex, uintptr(unsafe.Pointer(cls)), 0, wsPopup|wsVisible, 20, 20, 380, 220, 0, 0, testInstance, 0)
+		if h == 0 {
+			return
+		}
+		if clickThrough {
+			tProcSetLayeredAttrs.Call(h, 0, 96, 2 /* LWA_ALPHA */)
+		}
+	})
+	time.Sleep(150 * time.Millisecond) // let it be shown and hit-testable
+}
+
+func cursorPos() [2]int32 {
+	var pt [2]int32
+	tProcGetCursorPos.Call(uintptr(unsafe.Pointer(&pt)))
+	return pt
+}
+
+func actOn(id int, action string) error {
+	_, err := comThread.call(func(s *uiaState) (any, error) { return uiaPerformAction(s, id, action, "") })
+	return err
+}
+
+// #705: the mouse fallback (double_click here; a button's plain click goes
+// through Invoke and never touches the mouse) checks the window under the
+// element's centre before it moves the pointer.
+func TestUIAPointerCheckRefusesACoveredElementWithoutMovingThePointer(t *testing.T) {
+	d := openTestDialog(t)
+	sendID := idOf(t, snapshotIDs(t), "101")
+	d.coverDialog(t, false)
+	before := cursorPos()
+	err := actOn(sendID, "double_click")
+	var coded *codedError
+	if !errors.As(err, &coded) || coded.code != desktopTargetObscuredCode || !strings.Contains(err.Error(), "covered by another window") {
+		t.Fatalf("got %v, want a %s refusal", err, desktopTargetObscuredCode)
+	}
+	if after := cursorPos(); after != before {
+		t.Errorf("refused, but the pointer moved from %v to %v", before, after)
+	}
+}
+
+// A window drawn on top that the mouse passes through takes no click, so it
+// must not cause a refusal: that would refuse every click wherever a GPU
+// overlay, a screen recorder or this sidecar's own pebble is drawn. This one
+// does click -- the test window's own button.
+func TestUIAPointerCheckIgnoresAClickThroughOverlay(t *testing.T) {
+	d := openTestDialog(t)
+	sendID := idOf(t, snapshotIDs(t), "101")
+	d.coverDialog(t, true)
+	if err := actOn(sendID, "double_click"); err != nil {
+		t.Fatalf("a click-through overlay refused the click: %v", err)
+	}
+}
+
+// What the check costs per click, on the machine running the test.
+func TestUIAPointerCheckCost(t *testing.T) {
+	openTestDialog(t)
+	sendID := idOf(t, snapshotIDs(t), "101")
+	const n = 50
+	out, err := comThread.call(func(s *uiaState) (any, error) {
+		elem, err := guardCachedElement(s.cache, sendID, uiaElementPrint)
+		if err != nil {
+			return nil, err
+		}
+		start := time.Now()
+		for i := 0; i < n; i++ {
+			if _, _, err := pointerReachesElement(s, sendID, elem); err != nil {
+				return nil, err
+			}
+		}
+		return time.Since(start) / n, nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Logf("pointer check: %v per click (mean of %d)", out, n)
 }

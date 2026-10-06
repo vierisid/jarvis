@@ -314,6 +314,10 @@ const atSPIWalkTimeout = 10 * time.Second
 // desktopPlatformName names this platform in an unsupported-action refusal.
 const desktopPlatformName = "Linux"
 
+// desktopPointerTargetChecked: dispatchPointer checks the window under the
+// pointer before it clicks (#705).
+const desktopPointerTargetChecked = true
+
 // linuxReadBack is the read-back every Linux element action gets: the walk's
 // own budget for a click and ahead of a keystroke alike.
 var linuxReadBack = readBackPolicy{budget: atSPIWalkTimeout}
@@ -357,22 +361,135 @@ func handleClickElement(params map[string]any) (*RPCResult, error) {
 
 // dispatchPointer moves the pointer to (x, y) and performs action there, for
 // clickElement (desktop_element_action.go), which has already confirmed the
-// element and the action.
-func dispatchPointer(action string, x, y int) error {
-	move := []string{"mousemove", "--sync", strconv.Itoa(x), strconv.Itoa(y)}
-	var click []string
+// element and the action -- but only once the window under the pointer is
+// shown to belong to pid, the process whose window the element was read from
+// (#705).
+//
+// AT-SPI extents ignore stacking: an element that passed the read-back can be
+// covered by another window, or be on another workspace, and a click at its
+// centre goes to whatever is on top. So the pointer is moved first and xdotool
+// asked, in the same invocation, which window is under it and whose it is:
+// `getmouselocation` puts that window on xdotool's window stack and
+// `getwindowpid` reads its _NET_WM_PID. Only a match is clicked. A window
+// whose owner cannot be read is refused too: there is nothing to match.
+//
+// The cost is one more xdotool process per click (the locate and the click
+// cannot share one, because the decision sits between them): about 2 ms, the
+// median of an X client's round trip measured on the machine this was written
+// on, against an AT-SPI read-back whose python3 start alone is about 9 ms. The
+// locate gets locateBudget and the click the rest of pointerDispatchTimeout,
+// so the action budget is unchanged.
+//
+// The click re-places the pointer itself (`mousemove --sync X Y click`), so a
+// pointer moved in the few milliseconds between the two runs -- by the person,
+// say -- is put back before the button goes down. A window that appears over
+// the point in that gap is not caught; closing that needs the check and the
+// click in one X connection under a server grab.
+//
+// The check is per process, not per window: AT-SPI walks every window of the
+// app, so another window of the SAME program covering the element passes it.
+//
+// _NET_WM_PID is what this sidecar already trusts to find a pid's window
+// (focus_window, the window title in get_window_tree, the launch probe), so an
+// app that misreports it -- a sandbox whose pid namespace differs, say --
+// fails here as it already fails there.
+func dispatchPointer(id int, action string, x, y, pid int) error {
+	deadline := time.Now().Add(pointerDispatchTimeout)
+	X, Y := strconv.Itoa(x), strconv.Itoa(y)
+	// Where the pointer was, then the move, then what is under it now.
+	located := runProbe(locateBudget, "xdotool", "getmouselocation", "--shell",
+		"mousemove", "--sync", X, Y, "getmouselocation", "--shell", "getwindowpid")
+	if located.timedOut || (located.exitCode == -1 && located.err != nil) {
+		return fmt.Errorf("%s failed: could not move the pointer: %v", action, located.err)
+	}
+	if window, _, _ := windowUnderPointer(located.stdout); window == "" {
+		// xdotool ran and found no window at all: no X display, a Wayland-only
+		// session, an X error. Not a covered element, so not a code that tells
+		// the model to refocus and retry; and the pointer may have moved.
+		return fmt.Errorf("%s failed: xdotool could not report the window under the pointer (%s)",
+			action, firstLine(strings.TrimSpace(located.stderr)))
+	}
+	if why := pointerTargetMismatch(located.stdout, pid); why != "" {
+		// Put the pointer back where it was, so a refusal leaves it neither
+		// over the covering window (which focus-follows-mouse would hand the
+		// focus to) nor hovering anything.
+		if ox, oy, ok := pointerOrigin(located.stdout); ok {
+			_, _ = runWithTimeout(time.Until(deadline), "xdotool", "mousemove", strconv.Itoa(ox), strconv.Itoa(oy))
+		}
+		return &codedError{code: desktopTargetObscuredCode, err: fmt.Errorf(
+			"element [%d] %s at its centre (%d, %d), so nothing was clicked. "+
+				"Bring its window to the front with desktop_focus_window, then take a new desktop_snapshot", id, why, x, y)}
+	}
+	click := []string{"mousemove", "--sync", X, Y}
 	switch action {
 	case "double_click":
-		click = []string{"click", "--repeat", "2", "1"}
+		click = append(click, "click", "--repeat", "2", "1")
 	case "right_click":
-		click = []string{"click", "3"}
+		click = append(click, "click", "3")
 	default: // click, focus
-		click = []string{"click", "1"}
+		click = append(click, "click", "1")
 	}
-	if _, err := runWithTimeout(pointerDispatchTimeout, "xdotool", append(move, click...)...); err != nil {
+	if _, err := runWithTimeout(time.Until(deadline), "xdotool", click...); err != nil {
 		return fmt.Errorf("%s failed: %w", action, err)
 	}
 	return nil
+}
+
+// locateBudget bounds the move-and-locate run, leaving the click at least
+// pointerDispatchTimeout - locateBudget (3s) for a process that takes
+// milliseconds: a click is never started with a sliver of budget and killed
+// half done, a double-click's second click or a button left down.
+const locateBudget = 2 * time.Second
+
+// pointerOrigin is the first X=/Y= pair the locate run printed: where the
+// pointer was before it moved.
+func pointerOrigin(out string) (x, y int, ok bool) {
+	gotX, gotY := false, false
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if v, found := strings.CutPrefix(line, "X="); found && !gotX {
+			x, gotX = toInt(v), true
+		} else if v, found := strings.CutPrefix(line, "Y="); found && !gotY {
+			y, gotY = toInt(v), true
+		}
+	}
+	return x, y, gotX && gotY
+}
+
+// pointerTargetMismatch reads what the locate run printed and says why the
+// window under the pointer is not pid's, or "". The window is the LAST
+// WINDOW= line: the first getmouselocation reported where the pointer was.
+func pointerTargetMismatch(out string, pid int) string {
+	window, owner, ok := windowUnderPointer(out)
+	switch {
+	case !ok && window == "":
+		return "could not be located under the pointer"
+	case !ok:
+		return fmt.Sprintf("is under a window (%s) whose owning program cannot be read", window)
+	case owner != pid:
+		return fmt.Sprintf("is covered by a window of another program (pid %d, not %d)", owner, pid)
+	}
+	return ""
+}
+
+// windowUnderPointer parses `xdotool getmouselocation --shell getwindowpid`:
+// the shell lines X=, Y=, SCREEN=, WINDOW=, then the pid on a line of its own,
+// which is missing when getwindowpid failed. ok is true only with both.
+func windowUnderPointer(out string) (window string, pid int, ok bool) {
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		line = strings.TrimSpace(line)
+		if v, found := strings.CutPrefix(line, "WINDOW="); found {
+			window = v
+			continue
+		}
+		if strings.Contains(line, "=") || line == "" {
+			continue
+		}
+		if n, err := strconv.Atoi(line); err == nil && n > 0 {
+			pid = n
+		}
+	}
+	return window, pid, window != "" && pid > 0
 }
 
 // ── type_text ────────────────────────────────────────────────────────

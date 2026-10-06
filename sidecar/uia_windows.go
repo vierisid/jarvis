@@ -1480,10 +1480,11 @@ func win32GetWindowPid(hwnd uintptr) uint32 {
 	return pid
 }
 
-// gaRoot is GA_ROOT: walk up to the top-level window, stopping before the
-// desktop. Unlike GetParent it crosses the owner/child boundary the same way
-// the window manager does, so a child HWND inside a hosted control (a
+// gaRoot is GA_ROOT: walk up the PARENT chain to the top-level window,
+// stopping before the desktop, so a child HWND inside a hosted control (a
 // WebView2 surface, say) resolves to the window the person actually sees.
+// It does not follow owners (that is GA_ROOTOWNER): an owned popup is its own
+// top-level window.
 const gaRoot = 2
 
 // win32RootWindow returns the top-level window that hosts hwnd, or hwnd

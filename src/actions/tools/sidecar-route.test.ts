@@ -100,6 +100,18 @@ describe('typed desktop outcomes', () => {
     });
   });
 
+  test('a click refused because another window covers the element is not started (#705)', async () => {
+    // sidecar/desktop_linux.go and uia_actions_windows.go check the window under
+    // the element's centre before any button goes down.
+    setSidecarManagerRef(stubManager([mac], async () => {
+      throw new SidecarRPCError('DESKTOP_TARGET_OBSCURED',
+        'element [3] is covered by a window of another program (pid 9999, not 4242) at its centre (40, 50), so nothing was clicked.');
+    }));
+    await expect(routeToSidecarAction(mac.id, 'click_element', { element_id: 3 }, 'desktop')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'DESKTOP_TARGET_OBSCURED', effect: 'not_started' },
+    });
+  });
+
   /**
    * #623, the brain half. The sidecar now answers a panicking handler with
    * `HANDLER_PANIC` instead of dropping the socket, and the question this pins
