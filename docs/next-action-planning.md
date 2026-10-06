@@ -141,8 +141,8 @@ that decided against the runner-up.
 include already-done work (recent, old, unlinked and closed in Tasks), stale
 goals and stale proposals, an unavailable integration, a duplicate commitment,
 blocked and inherited dependencies, a timer wait, an approval under a paused
-goal, a parent's deadline, and full days. Each has a proposed expectation and
-the reason for it. `src/goals/next-action-rubric.json` holds the review
+goal, a parent's deadline, and full days. Each has an expectation and the
+reason for it. `src/goals/next-action-rubric.json` holds the review
 criteria:
 
 - useful;
@@ -152,7 +152,9 @@ criteria:
 - honest when unsure;
 - respecting workload.
 
-Both are `proposed` until the founder reviews them. Print the review packet with:
+Vieri approved both on 6 October 2026. A test locks the approval with a digest
+of the scenarios and the rubric's criteria and pass rule: a change fails until
+he reviews it and the digest is updated. Print the review packet with:
 
 ```bash
 bun run scripts/next-action-review-packet.ts --out review-packet.md
@@ -179,4 +181,4 @@ bun run scripts/next-action-review-packet.ts --out review-packet.md
 bun test --preload ./src/test-preload.ts src/goals/next-action.test.ts
 ```
 
-Expected: 64 pass.
+Expected: 65 pass.

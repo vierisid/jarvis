@@ -1,5 +1,7 @@
 /** The founder-review scenarios for the next-action planner, as planner snapshots. */
 import scenarios from './next-action-scenarios.json' with { type: 'json' };
+import rubric from './next-action-rubric.json' with { type: 'json' };
+import { digest } from '../workflows/runtime/effect-context.ts';
 import { DEFAULT_CAPACITY, DONE_WINDOW, type NextActionKind, type NextActionPlan, type PlanResult, type PlanSnapshot, type PlanWork } from './next-action.ts';
 import type { GoalHealth, GoalLevel, GoalStatus } from './types.ts';
 import type { CommitmentStatus } from '../vault/commitments.ts';
@@ -17,7 +19,14 @@ export type NextActionScenario = {
   expect: Expectation; never?: { kind: NextActionKind; workItemId?: string; goalId?: string }[];
 };
 
-export const SCENARIO_SET = scenarios as { version: number; status: string; statusNote: string; now: string; scenarios: NextActionScenario[] };
+export const SCENARIO_SET = scenarios as {
+  version: number; status: string; statusNote: string; now: string; scenarios: NextActionScenario[];
+  /** Who approved the set and rubric, when, and the digest of what they approved. */
+  approved: { by: string; on: string; digest: string };
+};
+export const RUBRIC = rubric;
+/** What the founder approved: every scenario, and the rubric's criteria and pass rule. A change needs approval again. */
+export const approvalDigest = () => digest({ scenarios: SCENARIO_SET.scenarios, criteria: RUBRIC.criteria, pass: RUBRIC.pass });
 export const SCENARIO_NOW = Date.parse(SCENARIO_SET.now);
 const DAY = 86_400_000;
 const at = (days: number) => SCENARIO_NOW + Math.round(days * DAY);

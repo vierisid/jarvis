@@ -14,7 +14,7 @@ import { createWaitpoint, type WaitpointType } from '../workflows/db/repos/waitp
 import { getGoalApplication } from './application-service.ts';
 import { checkWorkResult, createWorkItem, decideWorkItem } from './work-items.ts';
 import { nextAction, observeNextAction, PLAN_TTL, planNextAction, PLANNER, type NextActionPlan } from './next-action.ts';
-import { SCENARIO_NOW, SCENARIO_SET, scenarioMisses, scenarioSnapshot, type NextActionScenario } from './next-action-scenarios.ts';
+import { approvalDigest, RUBRIC, SCENARIO_NOW, SCENARIO_SET, scenarioMisses, scenarioSnapshot, type NextActionScenario } from './next-action-scenarios.ts';
 
 const DAY = 86_400_000;
 const scenario = (id: string): NextActionScenario => SCENARIO_SET.scenarios.find(s => s.id === id)!;
@@ -36,7 +36,12 @@ describe('founder-review scenarios', () => {
     const ids = SCENARIO_SET.scenarios.map(s => s.id);
     for (const id of ['already-done', 'done-long-ago', 'stale-goal', 'unavailable-integration', 'duplicate-commitment', 'blocked-by-dependency',
       'inherited-dependency', 'full-queue', 'no-concrete-step', 'last-attempt-failed', 'tie-between-goals', 'old-proposals', 'timer-wait']) expect(ids).toContain(id);
-    expect(SCENARIO_SET.status).toBe('proposed');
+  });
+
+  test('the set and rubric are what the founder approved, unchanged since', () => {
+    expect([SCENARIO_SET.status, RUBRIC.status]).toEqual(['approved', 'approved']);
+    // Changing a scenario, criterion or the pass rule needs the founder's review again; record the new digest only after it.
+    expect(approvalDigest()).toBe(SCENARIO_SET.approved.digest);
   });
 });
 

@@ -1,6 +1,8 @@
 # What's next? review packet
 
-Planner `next-action-v1`, rubric `next-action-review-v1` (proposed), 34 scenarios (proposed).
+Planner `next-action-v1`, rubric `next-action-review-v1` (approved), 34 scenarios (approved).
+
+Approved by Vieri on 2026-10-06. Approved digest `4869e2f52b2d`; a changed scenario or criterion needs approval again.
 
 For each scenario, read the situation and the planner's answer, then mark every criterion yes or no. Edit the proposed expectation where you disagree.
 
@@ -31,7 +33,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
 - ranked lower: Do "Draft the new pricing page". Ranked below: checking finished work comes before continuing accepted work.
 
-**Proposed expectation:** recommend, check_result. A finished run is not progress until you confirm it. Checking is quick and closes the loop before more work starts.
+**Approved expectation:** recommend, check_result. A finished run is not progress until you confirm it. Checking is quick and closes the loop before more work starts.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -55,7 +57,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
 - ranked lower: Do "Draft the new pricing page". Ranked below: unblocking accepted work comes before continuing accepted work.
 
-**Proposed expectation:** recommend, resolve_blocker. Accepted work is stuck on an answer only the founder can give.
+**Approved expectation:** recommend, resolve_blocker. Accepted work is stuck on an answer only the founder can give.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -77,7 +79,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
 
-**Proposed expectation:** recommend, resolve_blocker. A failure nobody has looked at hides whether anything was sent; settle it before planning more.
+**Approved expectation:** recommend, resolve_blocker. A failure nobody has looked at hides whether anything was sent; settle it before planning more.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -101,7 +103,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it lets accepted work run.
 - ranked lower: Start "Update pricing page". Ranked below: restoring what accepted work needs comes before starting a new step.
 
-**Proposed expectation:** recommend, restore_capability. Running it would fail. Reconnecting the account unblocks work already accepted, which comes before starting something new.
+**Approved expectation:** recommend, restore_capability. Running it would fail. Reconnecting the account unblocks work already accepted, which comes before starting something new.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -124,7 +126,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
 - ranked lower: Decide whether to do "Draft the new pricing page". Ranked below: the chosen option has a sooner deadline.
 
-**Proposed expectation:** recommend, decide_work. Proposals need a yes or no before they are work; the one serving the sooner deadline first.
+**Approved expectation:** recommend, decide_work. Proposals need a yes or no before they are work; the one serving the sooner deadline first.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -147,7 +149,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
 - ranked lower: Start "Update pricing page". Ranked below: continuing accepted work comes before starting a new step.
 
-**Proposed expectation:** recommend, continue_work. Finish what was already accepted before adding new work.
+**Approved expectation:** recommend, continue_work. Finish what was already accepted before adding new work.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -171,7 +173,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 - ranked lower: Start "Update pricing page". Ranked below: closing a goal that looks done comes before starting a new step.
 
-**Proposed expectation:** recommend, close_goal. Sending the reminders again would duplicate finished work. Recording whether the goal is done adds no work and comes before starting the pricing step.
+**Approved expectation:** recommend, close_goal. Sending the reminders again would duplicate finished work. Recording whether the goal is done adds no work and comes before starting the pricing step.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -193,7 +195,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 
-**Proposed expectation:** recommend, close_goal. The goal looks done; recording that is the next action, not repeating the work.
+**Approved expectation:** recommend, close_goal. The goal looks done; recording that is the next action, not repeating the work.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -215,7 +217,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 
-**Proposed expectation:** recommend, close_goal. The steps are done; whether the key result is met is a decision, not another task.
+**Approved expectation:** recommend, close_goal. The steps are done; whether the key result is met is a decision, not another task.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -237,7 +239,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles what further work is worth doing.
 
-**Proposed expectation:** recommend, review_goal. Six idle weeks suggest the goal no longer matters as stated; ask before adding work to it.
+**Approved expectation:** recommend, review_goal. Six idle weeks suggest the goal no longer matters as stated; ask before adding work to it.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -260,7 +262,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - ranked lower: Decide whether "Publish the monthly newsletter" is still worth pursuing. Ranked below: starting a new step comes before reviewing a goal.
 
-**Proposed expectation:** recommend, start_step. Live work comes before reviewing a stale goal, and the stale goal never gets a fresh task by default.
+**Approved expectation:** recommend, start_step. Live work comes before reviewing a stale goal, and the stale goal never gets a fresh task by default.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -282,7 +284,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - excluded: Call Ana about invoice 1042. Already committed as "call Ana about invoice 1042!".
 
-**Proposed expectation:** recommend, start_step. Recommending the call again would duplicate an existing commitment.
+**Approved expectation:** recommend, start_step. Recommending the call again would duplicate an existing commitment.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -304,7 +306,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - excluded: Send the new price list to customers. Not now: it waits on "Approve the new prices", which is active.
 
-**Proposed expectation:** recommend, start_step. Blocked work is not executable; the dependency is the useful next step.
+**Approved expectation:** recommend, start_step. Blocked work is not executable; the dependency is the useful next step.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -326,7 +328,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (1 of 5 items open).
 - excluded: Email the price list. Not now: it waits on "Approve the new prices", which is active.
 
-**Proposed expectation:** recommend, start_step. Accepted is not unblocked: the work waits on its goal's dependency, which is the useful step.
+**Approved expectation:** recommend, start_step. Accepted is not unblocked: the work waits on its goal's dependency, which is the useful step.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -347,7 +349,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
 - excluded: Draft the partner agreement. Already committed as "draft the partner agreement".
 
-**Proposed expectation:** recommend, decide_work. The existing proposal is the step; deciding it beats creating a second copy.
+**Approved expectation:** recommend, decide_work. The existing proposal is the step; deciding it beats creating a second copy.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -363,7 +365,7 @@ Notes:
 Alternatives weighed:
 - excluded: Draft the partner agreement. Not now: its parent "Launch the partner program" is paused.
 
-**Proposed expectation:** none. Paused means not now. With nothing else live, the honest answer is that nothing is waiting.
+**Approved expectation:** none. Paused means not now. With nothing else live, the honest answer is that nothing is waiting.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -379,7 +381,7 @@ Notes:
 Alternatives weighed:
 - ranked lower: Start "Update pricing page". It would add work to a full day (5 of 5 items open).
 
-**Proposed expectation:** none. Adding a sixth item to a full day is noise; the answer is to let current work finish.
+**Approved expectation:** none. Adding a sixth item to a full day is noise; the answer is to let current work finish.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -400,7 +402,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
 - ranked lower: Start "Update pricing page". It would add work to a full day (5 of 5 items open).
 
-**Proposed expectation:** recommend, check_result. Checking reduces the load instead of adding to it.
+**Approved expectation:** recommend, check_result. Checking reduces the load instead of adding to it.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -416,7 +418,7 @@ Notes:
 Alternatives weighed:
 - ranked lower: Do nothing new. An answer unblocks a useful next step.
 
-**Proposed expectation:** ask. Any concrete step would be invented; asking for the first step is more useful.
+**Approved expectation:** ask. Any concrete step would be invented; asking for the first step is more useful.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -432,7 +434,7 @@ Notes:
 Alternatives weighed:
 - ranked lower: Do nothing new. An answer unblocks a useful next step.
 
-**Proposed expectation:** ask. Repeating a failed attempt blindly wastes effort; the founder decides whether to retry or change the approach.
+**Approved expectation:** ask. Repeating a failed attempt blindly wastes effort; the founder decides whether to retry or change the approach.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -448,7 +450,7 @@ Notes:
 Alternatives weighed:
 - ranked lower: Do nothing new. An answer unblocks a useful next step.
 
-**Proposed expectation:** ask. Nothing in the data separates them; picking one would be a coin flip presented as advice.
+**Approved expectation:** ask. Nothing in the data separates them; picking one would be a coin flip presented as advice.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -472,7 +474,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - ranked lower: Start "Update pricing page". Ranked below: the chosen option has a sooner deadline.
 
-**Proposed expectation:** recommend, start_step. The deadline is the evidence that separates them.
+**Approved expectation:** recommend, start_step. The deadline is the evidence that separates them.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -487,7 +489,7 @@ Notes:
 
 Alternatives weighed:
 
-**Proposed expectation:** none. There is nothing to add; inventing work would be noise.
+**Approved expectation:** none. There is nothing to add; inventing work would be noise.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -510,7 +512,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it closes or moves open work.
 - ranked lower: Start "Update pricing page". Ranked below: checking finished work comes before starting a new step.
 
-**Proposed expectation:** recommend, check_result. Undecided proposals from earlier days are stale, as the Today view treats them; they neither crowd out new work nor fill the day.
+**Approved expectation:** recommend, check_result. Undecided proposals from earlier days are stale, as the Today view treats them; they neither crowd out new work nor fill the day.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -533,7 +535,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 - excluded: Work on: Send invoice reminders. Its goal looks done: its work "Send this week's invoice reminders" was checked done on 2026-10-03. Record that before adding work to it.
 
-**Proposed expectation:** recommend, close_goal. Accepting the proposal would repeat finished work. Whether the goal is done is the real decision.
+**Approved expectation:** recommend, close_goal. Accepting the proposal would repeat finished work. Whether the goal is done is the real decision.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -555,7 +557,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - excluded: Email the price list to customers. Not now: its parent "Send the new price list" waits on "Approve the new prices", which is active.
 
-**Proposed expectation:** recommend, start_step. A step inherits its parent's dependencies. The email cannot go out before the prices are approved, so the approval's step comes first despite the deadline.
+**Approved expectation:** recommend, start_step. A step inherits its parent's dependencies. The email cannot go out before the prices are approved, so the approval's step comes first despite the deadline.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -577,7 +579,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 
-**Proposed expectation:** recommend, close_goal. Finished work stays finished; a week later it must not come back as a new step.
+**Approved expectation:** recommend, close_goal. Finished work stays finished; a week later it must not come back as a new step.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -599,7 +601,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 
-**Proposed expectation:** recommend, close_goal. The call already happened; the open goal needs recording, not another call.
+**Approved expectation:** recommend, close_goal. The call already happened; the open goal needs recording, not another call.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -621,7 +623,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 
-**Proposed expectation:** recommend, close_goal. Marking it done in Tasks settles it as surely as a check; asking to do it again would be wrong.
+**Approved expectation:** recommend, close_goal. Marking it done in Tasks settles it as surely as a check; asking to do it again would be wrong.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -642,7 +644,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (1 of 5 items open).
 
-**Proposed expectation:** recommend, start_step. The wait ends by itself, so there is nothing to answer. It still counts toward the day.
+**Approved expectation:** recommend, start_step. The wait ends by itself, so there is nothing to answer. It still counts toward the day.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -664,7 +666,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (1 of 5 items open).
 - excluded: Send this week's invoice reminders. Not now: answering resumes it, and the goal is paused.
 
-**Proposed expectation:** recommend, start_step. Approving would send email for a goal you paused. It waits until you resume the goal.
+**Approved expectation:** recommend, start_step. Approving would send email for a goal you paused. It waits until you resume the goal.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -688,7 +690,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: the day has room (0 of 5 items open).
 - ranked lower: Start "Update pricing page". Ranked below: the chosen option has a sooner deadline.
 
-**Proposed expectation:** recommend, start_step. A step inherits its parent's deadline; tomorrow's key result comes before a task due in five days.
+**Approved expectation:** recommend, start_step. A step inherits its parent's deadline; tomorrow's key result comes before a task due in five days.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -711,7 +713,7 @@ Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles a goal that looks done.
 - ranked lower: Start "Update pricing page". It would add work to a full day (5 of 5 items open).
 
-**Proposed expectation:** recommend, close_goal. Recording a finished goal adds no work, so a full day does not hide it; only the new step waits.
+**Approved expectation:** recommend, close_goal. Recording a finished goal adds no work, so a full day does not hide it; only the new step waits.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]
@@ -733,7 +735,7 @@ Why, as the planner gives it:
 Alternatives weighed:
 - ranked lower: Do nothing new. Better than doing nothing new: it settles what further work is worth doing.
 
-**Proposed expectation:** recommend, review_goal. A dependency that can never finish holds the goal forever; fixing it is the useful step, not reporting that nothing is waiting.
+**Approved expectation:** recommend, review_goal. A dependency that can never finish holds the goal forever; fixing it is the useful step, not reporting that nothing is waiting.
 **Planner meets it:** yes
 
 Review: useful [ ]  achievable [ ]  not_duplicate [ ]  explained [ ]  honest [ ]  workload [ ]

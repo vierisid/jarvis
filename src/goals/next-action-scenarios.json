@@ -1,7 +1,8 @@
 {
   "version": 2,
-  "status": "proposed",
-  "statusNote": "Founder review pending: each expectation and its reason are a proposal until Vieri confirms or edits them with the rubric in next-action-rubric.json.",
+  "status": "approved",
+  "statusNote": "Approved by Vieri on 6 October 2026: every expectation and its reason, reviewed with the rubric in next-action-rubric.json. A changed or added scenario needs his review again; the digest below is what he approved.",
+  "approved": { "by": "Vieri", "on": "2026-10-06", "digest": "4869e2f52b2d72f465ddb04e141bd90f2b1aec795572cf4d1867ba1649fe5fda" },
   "now": "2026-10-05T09:00:00.000Z",
   "conventions": {
     "times": "Day offsets from now; negative is the past. Now is 09:00 UTC, and the day is the UTC day.",
