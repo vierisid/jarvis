@@ -1,0 +1,455 @@
+{
+  "base": "http://127.0.0.1:4392/?brief=preview&specimen=chat-tabs#/_brief_preview",
+  "browser": "154.0.8037.93",
+  "results": [
+    {
+      "theme": "light",
+      "rail": false,
+      "addCloseCycles": 10,
+      "hoverCycles": 10,
+      "panelReopenCycles": 10,
+      "contentDraftScrollRetained": true,
+      "failureRetry": true,
+      "overflow": {
+        "plus": {
+          "x": 1323,
+          "y": 413.984375,
+          "width": 32,
+          "height": 32,
+          "right": 1355
+        },
+        "x": {
+          "x": 1359,
+          "y": 405.984375,
+          "width": 44,
+          "height": 44,
+          "right": 1403
+        },
+        "strip": {
+          "x": 990,
+          "y": 409.984375,
+          "width": 329,
+          "height": 40,
+          "right": 1319
+        },
+        "tabs": [
+          {
+            "x": 395,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 511
+          },
+          {
+            "x": 511,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 627
+          },
+          {
+            "x": 627,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 743
+          },
+          {
+            "x": 743,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 859
+          },
+          {
+            "x": 859,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 975
+          },
+          {
+            "x": 975,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 1091
+          },
+          {
+            "x": 1091,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 1207
+          },
+          {
+            "x": 1207,
+            "y": 411.984375,
+            "width": 112,
+            "height": 36,
+            "right": 1319
+          }
+        ],
+        "overflow": true
+      },
+      "reducedMotion": true,
+      "modeGates": 4,
+      "finalCloseAndRestart": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "addCloseCycles": 10,
+      "hoverCycles": 10,
+      "panelReopenCycles": 10,
+      "contentDraftScrollRetained": true,
+      "failureRetry": true,
+      "overflow": {
+        "plus": {
+          "x": 1323,
+          "y": 413.984375,
+          "width": 32,
+          "height": 32,
+          "right": 1355
+        },
+        "x": {
+          "x": 1359,
+          "y": 405.984375,
+          "width": 44,
+          "height": 44,
+          "right": 1403
+        },
+        "strip": {
+          "x": 990,
+          "y": 409.984375,
+          "width": 329,
+          "height": 40,
+          "right": 1319
+        },
+        "tabs": [
+          {
+            "x": 395,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 511
+          },
+          {
+            "x": 511,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 627
+          },
+          {
+            "x": 627,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 743
+          },
+          {
+            "x": 743,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 859
+          },
+          {
+            "x": 859,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 975
+          },
+          {
+            "x": 975,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 1091
+          },
+          {
+            "x": 1091,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 1207
+          },
+          {
+            "x": 1207,
+            "y": 411.984375,
+            "width": 112,
+            "height": 36,
+            "right": 1319
+          }
+        ],
+        "overflow": true
+      },
+      "reducedMotion": true,
+      "modeGates": 4,
+      "finalCloseAndRestart": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "addCloseCycles": 10,
+      "hoverCycles": 10,
+      "panelReopenCycles": 10,
+      "contentDraftScrollRetained": true,
+      "failureRetry": true,
+      "overflow": {
+        "plus": {
+          "x": 1323,
+          "y": 413.984375,
+          "width": 32,
+          "height": 32,
+          "right": 1355
+        },
+        "x": {
+          "x": 1359,
+          "y": 405.984375,
+          "width": 44,
+          "height": 44,
+          "right": 1403
+        },
+        "strip": {
+          "x": 990,
+          "y": 409.984375,
+          "width": 329,
+          "height": 40,
+          "right": 1319
+        },
+        "tabs": [
+          {
+            "x": 395,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 511
+          },
+          {
+            "x": 511,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 627
+          },
+          {
+            "x": 627,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 743
+          },
+          {
+            "x": 743,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 859
+          },
+          {
+            "x": 859,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 975
+          },
+          {
+            "x": 975,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 1091
+          },
+          {
+            "x": 1091,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 1207
+          },
+          {
+            "x": 1207,
+            "y": 411.984375,
+            "width": 112,
+            "height": 36,
+            "right": 1319
+          }
+        ],
+        "overflow": true
+      },
+      "reducedMotion": true,
+      "modeGates": 4,
+      "finalCloseAndRestart": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "addCloseCycles": 10,
+      "hoverCycles": 10,
+      "panelReopenCycles": 10,
+      "contentDraftScrollRetained": true,
+      "failureRetry": true,
+      "overflow": {
+        "plus": {
+          "x": 1323,
+          "y": 413.984375,
+          "width": 32,
+          "height": 32,
+          "right": 1355
+        },
+        "x": {
+          "x": 1359,
+          "y": 405.984375,
+          "width": 44,
+          "height": 44,
+          "right": 1403
+        },
+        "strip": {
+          "x": 990,
+          "y": 409.984375,
+          "width": 329,
+          "height": 40,
+          "right": 1319
+        },
+        "tabs": [
+          {
+            "x": 395,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 511
+          },
+          {
+            "x": 511,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 627
+          },
+          {
+            "x": 627,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 743
+          },
+          {
+            "x": 743,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 859
+          },
+          {
+            "x": 859,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 975
+          },
+          {
+            "x": 975,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 1091
+          },
+          {
+            "x": 1091,
+            "y": 411.984375,
+            "width": 116,
+            "height": 36,
+            "right": 1207
+          },
+          {
+            "x": 1207,
+            "y": 411.984375,
+            "width": 112,
+            "height": 36,
+            "right": 1319
+          }
+        ],
+        "overflow": true
+      },
+      "reducedMotion": true,
+      "modeGates": 4,
+      "finalCloseAndRestart": true
+    }
+  ],
+  "narrow": {
+    "plus": {
+      "x": 281,
+      "y": 537.984375,
+      "width": 32,
+      "height": 32,
+      "right": 313
+    },
+    "x": {
+      "x": 317,
+      "y": 529.984375,
+      "width": 44,
+      "height": 44,
+      "right": 361
+    },
+    "strip": {
+      "x": 113,
+      "y": 533.984375,
+      "width": 164,
+      "height": 40,
+      "right": 277
+    },
+    "tabs": [
+      {
+        "x": -415,
+        "y": 535.984375,
+        "width": 116,
+        "height": 36,
+        "right": -299
+      },
+      {
+        "x": -299,
+        "y": 535.984375,
+        "width": 116,
+        "height": 36,
+        "right": -183
+      },
+      {
+        "x": -183,
+        "y": 535.984375,
+        "width": 116,
+        "height": 36,
+        "right": -67
+      },
+      {
+        "x": -67,
+        "y": 535.984375,
+        "width": 116,
+        "height": 36,
+        "right": 49
+      },
+      {
+        "x": 49,
+        "y": 535.984375,
+        "width": 116,
+        "height": 36,
+        "right": 165
+      },
+      {
+        "x": 165,
+        "y": 535.984375,
+        "width": 112,
+        "height": 36,
+        "right": 277
+      }
+    ],
+    "overflow": true
+  },
+  "errors": [],
+  "limits": [
+    "Fixture owner only. F-04 live transport is not mounted.",
+    "Not screen reader certification or a measured frame-rate claim."
+  ]
+}
