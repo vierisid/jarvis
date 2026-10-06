@@ -10,6 +10,7 @@ import { runSubAgent, type SubAgentResult, type ProgressCallback, type RunSubAge
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
+import { withExecutionProgress } from '../actions/progress-context.ts';
 
 export type AsyncTaskStatus = 'running' | 'completed' | 'failed';
 
@@ -134,39 +135,44 @@ export class AgentTaskManager {
     };
 
     this.tasks.set(taskId, asyncTask);
-    this.emit('launch', asyncTask);
+    // Detached work has its own task lifecycle. Only the handoff belongs to the
+    // calling turn; keeping its observer would mark a still-running agent failed
+    // when that answer ends. All authority/cancellation scopes remain inherited.
+    withExecutionProgress(undefined, () => {
+      this.emit('launch', asyncTask);
 
-    // Fire runSubAgent without awaiting — runs in background
-    this.runSubAgentFn({
-      agent,
-      task,
-      context,
-      llmManager,
-      toolRegistry,
-      onProgress,
-      toolFilterProviders,
-      ...(authority ?? {}),
-    }).then((result) => {
-      asyncTask.status = 'completed';
-      asyncTask.completedAt = Date.now();
-      asyncTask.result = result;
-      console.log(`[TaskManager] Task ${taskId} completed (${asyncTask.agentName})`);
-      this.emit('complete', asyncTask);
-      onComplete?.(asyncTask);
-    }).catch((err) => {
-      asyncTask.status = 'failed';
-      asyncTask.completedAt = Date.now();
-      asyncTask.result = {
-        success: false,
-        response: `Task failed: ${err instanceof Error ? err.message : String(err)}`,
-        toolsUsed: [],
-        tokensUsed: { input: 0, output: 0 },
-        terminationReason: 'error',
-        messages: [],
-      };
-      console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
-      this.emit('fail', asyncTask);
-      onComplete?.(asyncTask);
+      // Fire runSubAgent without awaiting — runs in background
+      this.runSubAgentFn({
+        agent,
+        task,
+        context,
+        llmManager,
+        toolRegistry,
+        onProgress,
+        toolFilterProviders,
+        ...(authority ?? {}),
+      }).then((result) => {
+        asyncTask.status = 'completed';
+        asyncTask.completedAt = Date.now();
+        asyncTask.result = result;
+        console.log(`[TaskManager] Task ${taskId} completed (${asyncTask.agentName})`);
+        this.emit('complete', asyncTask);
+        onComplete?.(asyncTask);
+      }).catch((err) => {
+        asyncTask.status = 'failed';
+        asyncTask.completedAt = Date.now();
+        asyncTask.result = {
+          success: false,
+          response: `Task failed: ${err instanceof Error ? err.message : String(err)}`,
+          toolsUsed: [],
+          tokensUsed: { input: 0, output: 0 },
+          terminationReason: 'error',
+          messages: [],
+        };
+        console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
+        this.emit('fail', asyncTask);
+        onComplete?.(asyncTask);
+      });
     });
 
     return taskId;

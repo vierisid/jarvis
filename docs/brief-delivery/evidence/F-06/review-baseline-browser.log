@@ -1,0 +1,27 @@
+Reviewed production sources restored for this baseline check.
+bun test v1.4.2 (744846f84)
+
+src/actions/browser/browser-local-files.test.ts:
+[BrowserController] Connected to Chrome
+[BrowserGuard] Blocked file:///tmp/jarvis-local-files-URYBp5/secret.txt: the browser does not load local files
+180 |       const settled = await until(async () => {
+181 |         const tree = await cdp.send('Page.getFrameTree');
+182 |         const url = String(tree.frameTree?.frame?.url ?? '');
+183 |         return url && url !== 'about:blank' ? url : '';
+184 |       });
+185 |       expect(settled).toStartWith('chrome-error://');
+                            ^
+error: expect(received).toStartWith(expected)
+
+Expected to start with: "chrome-error://"
+Received: ":"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-06/src/actions/browser/browser-local-files.test.ts:185:23)
+(fail) browser local-file lockdown (integration, #521) > a tab opened through the DevTools endpoint cannot load a local file either [40.44ms]
+[BrowserController] Disconnected
+
+ 0 pass
+ 14 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [1.61s]

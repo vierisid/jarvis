@@ -20,6 +20,9 @@ import { ChatTurnRepository } from '../vault/chat-turns';
 import { createGoal } from '../vault/goals';
 import { createFact } from '../vault/facts';
 import { createEntity } from '../vault/entities';
+import { AgentTaskManager } from '../agents/task-manager';
+import type { AgentInstance } from '../agents/agent';
+import type { LLMManager } from '../llm/manager';
 
 afterEach(() => closeDb());
 const done = (): LLMStreamEvent => ({ type: 'done', response: { content: 'Answer', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } });
@@ -39,6 +42,44 @@ function fixture(script: (input: ScopedChatInput) => AsyncIterable<LLMStreamEven
   const events = (socket: ServerWebSocket<unknown>) => frames.get(socket)!.flatMap(frame => frame.type === 'brief_chat_event' ? [frame.payload as BriefChatEvent] : []);
   return { transport, conversations, frames, caps, client, input, send, events };
 }
+
+test('a real detached agent outlives the answer without a false failed row or progress in the next turn', async () => {
+  const manager = new AgentTaskManager(), registry = new ToolRegistry();
+  let release!: () => void, taskId = '', modelCalls = 0, toolCalls = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const agent = { id: 'background', agent: { role: { id: 'fixture', name: 'Fixture', responsibilities: [] }, authority: { max_authority_level: 10 } },
+    setTask() {}, activate() {}, idle() {}, addMessage() {}, getMessages: () => [] } as unknown as AgentInstance;
+  const llmManager = { chatTier: async () => {
+    await gate;
+    return modelCalls++ === 0
+      ? { content: '', finish_reason: 'tool_use', tool_calls: [{ id: 'read', name: 'read_file', arguments: {} }], usage: { input_tokens: 1, output_tokens: 1 } }
+      : { content: 'PRIVATE background result', finish_reason: 'end_turn', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 } };
+  } } as unknown as LLMManager;
+  registry.register({ name: 'read_file', description: 'Fixture', category: 'file-ops', parameters: {}, execute: async () => { toolCalls++; return 'PRIVATE content'; } });
+  registry.register({ name: 'manage_agents', description: 'Fixture handoff', category: 'agents', parameters: {}, execute: async () => {
+    taskId = manager.launch({ agent, task: 'PRIVATE task', context: '', llmManager, toolRegistry: registry });
+    return { task_id: taskId, status: 'running' };
+  } });
+  const f = fixture(async function* (input) {
+    if (input.text === 'A') await registry.execute('manage_agents', {});
+    else { release(); await until(() => manager.getTask(taskId)?.status === 'completed'); }
+    yield done();
+  });
+  const socket = f.client(), first = f.input('A');
+  try {
+    await f.send(socket, first); await f.transport.idle();
+    expect(manager.getTask(taskId)?.status).toBe('running');
+    expect(f.transport.repository.get(first).state).toBe('completed');
+    expect(activities(f.events(socket)).map(row => [row.kind, row.phase])).toEqual([['tool', 'started'], ['tool', 'completed']]);
+    const saved = f.transport.repository.snapshot(first.conversationId, 0);
+    const second = { ...first, turnId: 'next-turn', requestId: 'next-request', text: 'B' };
+    await f.send(socket, second); await f.transport.idle();
+    expect(manager.getTask(taskId)?.result?.response).toBe('PRIVATE background result');
+    expect(manager.getTask(taskId)?.result?.success).toBe(true); expect(toolCalls).toBe(1);
+    expect(activities(f.events(socket))).toEqual(activities(saved.events));
+    expect(JSON.stringify(f.frames.get(socket))).not.toContain('PRIVATE');
+  } finally { release(); await until(() => manager.runningCount() === 0); f.transport.stop(); await f.transport.idle(); }
+});
 
 for (const [enabled, registered] of [[true, true], [false, true], [true, false]] as const) test(`typed progress is opt-in and requires its live provider (enabled=${enabled}, registered=${registered})`, async () => {
   const registry = new ToolRegistry();
