@@ -247,6 +247,69 @@ test('failure to save result IDs rolls back both canonical draft rows', async ()
   expect(count('flow')).toBe(0); expect(count('flow_version')).toBe(0);
 });
 
+test.each(['timeout', 'provider failure'])('runtime storage recovery settles abandoned work after %s without replaying it', async failure => {
+  const reply = deferred<{ text: string }>(); let calls = 0;
+  const p = provider({ async chat() {
+    if (++calls > 1) return { text: valid };
+    const result = await reply.promise;
+    if (failure === 'provider failure') throw new Error('Model unavailable');
+    return result;
+  } }, failure === 'timeout' ? 30 : 1000);
+  const first = p.submit(input).job; await started(p, first.jobId);
+  const queuedInput = { ...input, requestId: 'queued' }, queued = p.submit(queuedInput).job;
+  const cancelled = p.submit({ ...input, requestId: 'cancelled' }).job;
+  p.cancel(cancelled.jobId);
+  const compositionId = p.get(first.jobId).compositionId;
+  const db = getWorkflowDb();
+  db.exec(`CREATE TRIGGER reject_runtime_job_writes BEFORE UPDATE ON brief_workflow_composition_jobs
+    BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END`);
+  if (failure === 'provider failure') reply.resolve({ text: valid });
+  await p.idle();
+  expect(p.get(first.jobId).state).toBe('running');
+  expect(p.readiness()).toBe('unavailable');
+  expect(() => p.submit({ ...input, requestId: 'during-outage' })).toThrow('unavailable');
+  expect(p.list('during-outage')).toEqual([]);
+  // A failed reconciliation must retain the unavailable state and retry later.
+  await Bun.sleep(1100);
+  expect(p.readiness()).toBe('unavailable'); expect(calls).toBe(1);
+  db.exec('DROP TRIGGER reject_runtime_job_writes');
+  for (let i = 0; i < 400 && p.readiness() !== 'ready'; i++) await Bun.sleep(10);
+  expect(p.readiness()).toBe('ready');
+  for (const job of [first, queued]) expect(p.get(job.jobId)).toMatchObject({
+    state: 'failed', workflow: null, specification: job.specification, blocker: { code: 'interrupted' },
+  });
+  expect(p.get(first.jobId).compositionId).toBe(compositionId);
+  expect(p.get(cancelled.jobId).state).toBe('cancelled');
+  expect(p.submit(input).job.jobId).toBe(first.jobId);
+  expect(p.submit(queuedInput).job.jobId).toBe(queued.jobId);
+  await p.idle(); expect(calls).toBe(1);
+  reply.resolve({ text: valid }); await Bun.sleep(5);
+  expect(count('flow')).toBe(0); expect(count('workflow_composition')).toBe(1);
+  const retry = p.submit({ ...input, requestId: 'explicit-retry' }).job; await p.idle();
+  expect(p.get(retry.jobId).state).toBe('draft_ready'); expect(calls).toBe(2); expect(count('flow')).toBe(1);
+}, 15_000);
+
+test.each(['stop', 'replace database'])('runtime storage recovery relinquishes ownership on %s', async action => {
+  const reply = deferred<{ text: string }>(); let calls = 0;
+  const p = provider({ async chat() { calls++; return reply.promise; } }, 30);
+  const { job } = p.submit(input); await started(p, job.jobId);
+  const db = getWorkflowDb();
+  db.exec(`CREATE TRIGGER reject_runtime_job_writes BEFORE UPDATE ON brief_workflow_composition_jobs
+    BEGIN SELECT RAISE(ABORT, 'storage unavailable'); END`);
+  await p.idle(); expect(p.readiness()).toBe('unavailable');
+  if (action === 'stop') p.stop();
+  db.exec('DROP TRIGGER reject_runtime_job_writes');
+  if (action === 'replace database') { closeWorkflowDb(); initWorkflowDb(path); }
+  // The old timer must neither settle work after stop nor touch a reopened vault.
+  await Bun.sleep(1100);
+  expect(getWorkflowDb().query<{ state: string }, [string]>('SELECT state FROM brief_workflow_composition_jobs WHERE id = ?').get(job.jobId)!.state).toBe('running');
+  expect(p.readiness()).toBe('unavailable');
+  const replacement = provider();
+  expect(replacement.get(job.jobId)).toMatchObject({ state: 'failed', blocker: { code: 'interrupted' } });
+  reply.resolve({ text: valid }); await Bun.sleep(5);
+  expect(calls).toBe(1); expect(count('flow')).toBe(0);
+}, 10_000);
+
 test('failure to bind journal identity rolls back before any model call', async () => {
   let calls = 0; const p = provider({ async chat() { calls++; return { text: valid }; } });
   getWorkflowDb().exec(`CREATE TRIGGER reject_journal BEFORE UPDATE ON brief_workflow_composition_jobs WHEN NEW.composition_id IS NOT NULL

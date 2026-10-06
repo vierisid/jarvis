@@ -1,0 +1,41 @@
+{
+  "reviewed_head": "0617881208289fd59d520f3aef0731f2512c76b3",
+  "finding": "Runtime persistence failure could abandon running jobs while reporting the composer ready.",
+  "resolution": "Retain an unavailable recovery state until project-scoped interrupted outcomes are durable; reconcile after 1 second with exponential delay capped at 30 seconds. Never replay model work. Stop timers on shutdown and refuse a replacement database. Check the recovery state inside submit so requests that awaited their body cannot return stale replay receipts.",
+  "source_sha256": "19526fff9cc2d3f5368c5618e1c2bbb550fa73e988e0839a00f430e08cbeb98e",
+  "regressions": {
+    "command": "bun test src/brief/composition.test.ts src/daemon/api-brief-composition.test.ts --test-name-pattern \"runtime storage recovery\"",
+    "failed_on_reviewed_head": 5,
+    "red_log": "runtime-storage-red.log",
+    "inflight_replay_failed_before_guard": 1,
+    "inflight_red_log": "runtime-storage-inflight-red.log",
+    "passed_in_final_affected_suite": 5,
+    "covers": [
+      "Timeout and provider failure while job writes are rejected",
+      "Unavailable capability and HTTP 503, including a replay whose body finishes during the outage",
+      "Repeated reconciliation failure then recovery without daemon restart",
+      "Original prompt, job and journal identity, cancelled receipts and idempotent replay preserved",
+      "No automatic model replay or late draft; a new explicit request ID works after recovery",
+      "Shutdown cancels recovery; old timers cannot touch a reopened database"
+    ]
+  },
+  "verification": {
+    "affected": {
+      "command_file": "affected-command.txt",
+      "passed": 530,
+      "failed": 0,
+      "assertions": 3850,
+      "files": 33,
+      "log": "review-affected.log"
+    },
+    "typescript": {
+      "command": "bun x tsc --noEmit",
+      "exit_code": 0,
+      "log": "review-typescript.log"
+    },
+    "hooks": "Normal commit hooks required; final outcome recorded in the canonical project state."
+  },
+  "publication": "Local correction only; not pushed. Existing PR #750 and CI still describe reviewed head 06178812.",
+  "visual": "No visible UI change; D-16 owns presentation.",
+  "rollback": "Disable the capability and stop the worker through normal shutdown; retain jobs, journals and drafts."
+}

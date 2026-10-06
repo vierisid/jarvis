@@ -121,6 +121,15 @@
       "ci_excerpt": "docs/brief-delivery/evidence/F-07/ci-data-plane-audit-excerpt.log",
       "local_red": "docs/brief-delivery/evidence/F-07/data-plane-audit-red.log",
       "resolution": "Reviewed creator-only version access and registered it with the existing audit. A capture-canary runtime test and rejecting whole-version mutation verify that receipts, replay and later prompts do not forward captured step data. All audit assertions are retained."
+    },
+    "review_fix": {
+      "reviewed_head": "0617881208289fd59d520f3aef0731f2512c76b3",
+      "finding_fixed": "Runtime storage recovery and in-flight replay gating",
+      "evidence": "docs/brief-delivery/evidence/F-07/review-fixes.json",
+      "final_affected_passed": 530,
+      "final_affected_assertions": 3850,
+      "typescript": "passed",
+      "publication": "Local correction, not pushed; original delivery counts above describe the reviewed head."
     }
   },
   "manual_checks": {

@@ -33,6 +33,9 @@ export class BriefCompositionProvider {
   private pending: Promise<void> | null = null;
   private requested = false;
   private active: { id: string; abort: AbortController } | null = null;
+  private recoveryNeeded = false;
+  private recoveryTimer: ReturnType<typeof setTimeout> | null = null;
+  private recoveryDelayMs = 1000;
 
   constructor(private readonly db: Database, private readonly projectId: string = DEFAULT_IDS.project, private readonly timeoutMs = 190_000) {
     ensureCompositionJobSchema(db);
@@ -43,7 +46,7 @@ export class BriefCompositionProvider {
 
   configure(dependencies: () => ComposeDeps): void { this.dependencies = dependencies; }
   readiness(): 'ready' | 'unavailable' {
-    return !this.stopped && this.dependencies && this.currentDatabase() ? 'ready' : 'unavailable';
+    return !this.stopped && !this.recoveryNeeded && this.dependencies && this.currentDatabase() ? 'ready' : 'unavailable';
   }
   private currentDatabase(): boolean {
     try { return this.db === getWorkflowDb() && !!this.db.query('SELECT 1').get(); } catch { return false; }
@@ -68,6 +71,8 @@ export class BriefCompositionProvider {
     if (Buffer.byteLength(input.prompt, 'utf8') > limits.promptBytes) throw new CompositionRequestError('Prompt exceeds its size limit', 413);
     if (input.name !== undefined && (typeof input.name !== 'string' || !input.name.trim() || input.name.length > limits.nameChars)) throw new CompositionRequestError('Invalid workflow name');
     const name = input.name ?? 'New workflow';
+    // A POST may have passed the route gate before awaiting a slow body.
+    if (this.recoveryNeeded) throw new CompositionRequestError('Workflow composer is unavailable', 503);
     const result = this.db.transaction(() => {
       const old = this.db.query<JobRow, [string, string]>('SELECT * FROM brief_workflow_composition_jobs WHERE project_id = ? AND request_id = ?').get(this.projectId, input.requestId);
       if (old) {
@@ -95,18 +100,40 @@ export class BriefCompositionProvider {
   }
   stop(): void {
     this.stopped = true;
+    if (this.recoveryTimer) clearTimeout(this.recoveryTimer);
+    this.recoveryTimer = null;
     this.tryInterruptPending();
     this.active?.abort.abort();
   }
+  /** Wait for active composition to exit; storage reconciliation is reflected in readiness. */
   async idle(): Promise<void> { while (this.pending) await this.pending; }
 
   private interruptPending(): void {
     this.db.run(`UPDATE brief_workflow_composition_jobs SET state = 'failed', blocker = ?, updated_at = ?
       WHERE project_id = ? AND state IN ('queued','running')`, [JSON.stringify({ code: 'interrupted', message: 'Composition was interrupted. Your request is saved; submit a new requestId to retry explicitly.', details: [] }), Date.now(), this.projectId]);
   }
-  private tryInterruptPending(): void {
-    try { if (this.currentDatabase()) this.interruptPending(); }
-    catch { /* Unwritable storage retains its last checkpoint for startup recovery; still abort work. */ }
+  private tryInterruptPending(): boolean {
+    try {
+      if (!this.currentDatabase()) return false;
+      this.interruptPending();
+      return true;
+    } catch { return false; }
+  }
+  private recoverPending(): void {
+    // The failed worker has already aborted. Never replay its model request,
+    // or reconcile through a different database after this owner is replaced.
+    if (this.stopped || !this.currentDatabase()) return;
+    if (this.tryInterruptPending()) {
+      this.recoveryNeeded = false;
+      this.recoveryDelayMs = 1000;
+      return;
+    }
+    this.recoveryTimer = setTimeout(() => {
+      this.recoveryTimer = null;
+      this.recoverPending();
+    }, this.recoveryDelayMs);
+    this.recoveryDelayMs = Math.min(this.recoveryDelayMs * 2, 30_000);
+    this.recoveryTimer.unref();
   }
   private finish(id: string, state: BriefCompositionJob['state'], blocker: NonNullable<BriefCompositionJob['blocker']>): void {
     this.db.run(`UPDATE brief_workflow_composition_jobs SET state = ?, blocker = ?, updated_at = ?
@@ -117,8 +144,10 @@ export class BriefCompositionProvider {
     if (this.pending || this.readiness() !== 'ready') return;
     this.requested = false;
     this.pending = Promise.resolve().then(() => this.drain()).catch(() => {
-      // Leave a durable interrupted outcome rather than leaking database/provider diagnostics.
-      this.tryInterruptPending();
+      // Reads can still work while writes fail. Stay unavailable until the
+      // abandoned jobs have a durable terminal outcome, including after repair.
+      this.recoveryNeeded = true;
+      this.recoverPending();
     }).finally(() => {
       this.pending = null;
       // A submission can arrive between drain returning and this microtask.

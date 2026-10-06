@@ -1,0 +1,24 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+
+src/daemon/api-brief-composition.test.ts:
+116 |     const unavailable = await read();
+117 |     expect(unavailable.status).toBe(503); expect(unavailable.headers.get('Cache-Control')).toBe('no-store');
+118 |     expect(await unavailable.text()).not.toContain('PRIVATE');
+119 |     expect((await submit()).status).toBe(503);
+120 |     // This replay passed the route gate before storage failed, then awaited its body.
+121 |     finishBody(); expect((await delayedReplay).status).toBe(503);
+                                                             ^
+error: expect(received).toBe(expected)
+
+Expected: 503
+Received: 200
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/daemon/api-brief-composition.test.ts:121:56)
+(fail) runtime storage recovery makes receipts unavailable until abandoned jobs are settled [105.94ms]
+
+ 0 pass
+ 3 filtered out
+ 1 fail
+ 7 expect() calls
+Ran 1 test across 1 file. [306.00ms]

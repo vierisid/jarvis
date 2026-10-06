@@ -33,6 +33,8 @@ Cancellation persists its terminal outcome before aborting the active provider r
 
 The worker is owned by one daemon for one vault. Constructing a replacement marks that project's unfinished jobs interrupted; this is not a distributed multi-worker lease service. If storage becomes unwritable during shutdown, the worker still aborts and fences late results; startup recovery settles its last durable checkpoint when writes are available again. Rows and prompts are retained without automatic expiry so old keys cannot create duplicate drafts. Future retention/deletion policy must preserve an idempotency tombstone if job details are removed.
 
+If a runtime storage error prevents both the terminal job update and interruption recovery, the service stays unavailable. Capability discovery reports unavailable and composition routes return 503, so stale `running` rows are not presented as live work. Reconciliation retries after 1 second, doubling the delay up to 30 seconds while writes fail. Once it can persist `failed/interrupted` outcomes for that project's abandoned jobs, the service becomes ready again. This recovery makes no model calls, retains original prompts and IDs, and leaves terminal receipts unchanged. Reusing an old request key returns the recovered outcome; only a new explicit key starts another composition. Shutdown cancels the recovery timer, and an old worker never reconciles a replacement database.
+
 ## Quick verification
 
 From WSL, run:
@@ -48,7 +50,7 @@ For a D-16 integration host with the flag deliberately enabled, POST a prompt su
 
 The workflow data-access audit lists this service as a creator that keeps only the new version ID. A capture-canary regression verifies that later workflow output cannot appear in job receipts, replay or subsequent composition prompts; returning an entire version is rejected. The existing model-boundary framing rules are unchanged.
 
-Verification commands, counts, five rejected unsafe mutations and logs are recorded in `docs/brief-delivery/F-07.json` and `docs/brief-delivery/evidence/F-07/`. Exact pushed-head CI is recorded in the PR description.
+Verification commands, counts, five rejected unsafe mutations and logs are recorded in `docs/brief-delivery/F-07.json` and `docs/brief-delivery/evidence/F-07/`. Exact pushed-head CI is recorded in the PR description. The runtime storage-recovery correction and its final regression evidence are in `docs/brief-delivery/evidence/F-07/review-fixes.json`.
 
 ## Rollback
 

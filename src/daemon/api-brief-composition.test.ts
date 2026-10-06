@@ -89,3 +89,45 @@ test('request streams enforce actual byte limits, UTF-8/JSON validation and stri
     closeWorkflowDb(); expect((await routes[base].GET(new Request(`http://localhost${base}`))).status).toBe(503);
   } finally { p.stop(); closeWorkflowDb(); }
 });
+
+test('runtime storage recovery makes receipts unavailable until abandoned jobs are settled', async () => {
+  initWorkflowDb(':memory:'); const p = new BriefCompositionProvider(getWorkflowDb(), undefined, 50);
+  let calls = 0, release!: (value: { text: string }) => void;
+  p.configure(() => ({ pieceRegistry: sampleCatalog(), llm: { async chat() {
+    calls++; return new Promise(resolve => { release = resolve; });
+  } } }));
+  const caps = new BriefCapabilities(registerWorkflowComposition(p), ['workflowComposition']);
+  const routes = createCompositionRoutes(caps, (data, status = 200) => Response.json(data, { status }), p);
+  const submit = () => routes[base].POST(new Request(`http://localhost${base}`, { method: 'POST', body: JSON.stringify(input) }));
+  try {
+    const accepted = await submit(); expect(accepted.status).toBe(202);
+    const { job } = await accepted.json();
+    let finishBody!: () => void;
+    const delayedReplay = routes[base].POST(new Request(`http://localhost${base}`, {
+      method: 'POST', duplex: 'half', body: new ReadableStream({ start(controller) {
+        finishBody = () => { controller.enqueue(new TextEncoder().encode(JSON.stringify(input))); controller.close(); };
+      } }),
+    } as RequestInit));
+    getWorkflowDb().exec(`CREATE TRIGGER reject_runtime_job_writes BEFORE UPDATE ON brief_workflow_composition_jobs
+      BEGIN SELECT RAISE(ABORT, 'PRIVATE storage diagnostic'); END`);
+    await p.idle();
+    expect(caps.snapshot().capabilities.workflowComposition).toMatchObject({ ready: false, enabled: false });
+    const read = () => routes[base].GET(new Request(`http://localhost${base}?requestId=${input.requestId}`));
+    const unavailable = await read();
+    expect(unavailable.status).toBe(503); expect(unavailable.headers.get('Cache-Control')).toBe('no-store');
+    expect(await unavailable.text()).not.toContain('PRIVATE');
+    expect((await submit()).status).toBe(503);
+    // This replay passed the route gate before storage failed, then awaited its body.
+    finishBody(); expect((await delayedReplay).status).toBe(503);
+    expect((await routes[`${base}/:id`].GET(Object.assign(new Request(`http://localhost${base}/${job.jobId}`), { params: { id: job.jobId } }))).status).toBe(503);
+    expect((await routes[`${base}/:id/cancel`].POST(Object.assign(new Request(`http://localhost${base}/${job.jobId}/cancel`, { method: 'POST' }), { params: { id: job.jobId } }))).status).toBe(503);
+    getWorkflowDb().exec('DROP TRIGGER reject_runtime_job_writes');
+    for (let i = 0; i < 300 && p.readiness() !== 'ready'; i++) await Bun.sleep(10);
+    expect(caps.snapshot().capabilities.workflowComposition.enabled).toBe(true);
+    expect(await (await read()).json()).toMatchObject({ jobs: [{ jobId: job.jobId, state: 'failed', blocker: { code: 'interrupted' } }] });
+    const replay = await submit(); expect(replay.status).toBe(200);
+    expect(await replay.json()).toMatchObject({ created: false, job: { jobId: job.jobId, state: 'failed' } });
+    release({ text: '{}' }); await p.idle(); await Bun.sleep(5);
+    expect(calls).toBe(1); expect(getWorkflowDb().query('SELECT * FROM flow').all()).toHaveLength(0);
+  } finally { p.stop(); await p.idle(); closeWorkflowDb(); }
+});
