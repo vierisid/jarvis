@@ -1,14 +1,14 @@
 bun test v1.4.2 (744846f84)
 
 src/brief/composition.test.ts:
-Database initialized at: /tmp/jarvis-f07-Pv8vk3/test.db
-Database initialized at: /tmp/jarvis-f07-Pv8vk3/test.db
-168 |   const first = p.submit(input).job; await started(p, first.jobId);
-169 |   const queued = p.submit({ ...input, requestId: 'pending' }).job;
-170 |   const compositionId = p.get(first.jobId).compositionId;
-171 |   closeWorkflowDb(); initWorkflowDb(path); configureWorkflowReadiness({ pieces: sampleCatalog() });
-172 |   let calls = 0; const recovered = provider({ async chat() { calls++; return { text: valid }; } });
-173 |   for (const id of [first.jobId, queued.jobId]) expect(recovered.get(id)).toMatchObject({ state: 'failed', blocker: { code: 'interrupted' }, specification: { prompt: input.prompt } });
+Database initialized at: /tmp/jarvis-f07-zmlVWh/test.db
+Database initialized at: /tmp/jarvis-f07-zmlVWh/test.db
+190 |   const first = p.submit(input).job; await started(p, first.jobId);
+191 |   const queued = p.submit({ ...input, requestId: 'pending' }).job;
+192 |   const compositionId = p.get(first.jobId).compositionId;
+193 |   closeWorkflowDb(); initWorkflowDb(path); configureWorkflowReadiness({ pieces: sampleCatalog() });
+194 |   let calls = 0; const recovered = provider({ async chat() { calls++; return { text: valid }; } });
+195 |   for (const id of [first.jobId, queued.jobId]) expect(recovered.get(id)).toMatchObject({ state: 'failed', blocker: { code: 'interrupted' }, specification: { prompt: input.prompt } });
                                                                                 ^
 error: expect(received).toMatchObject(expected)
 
@@ -16,9 +16,9 @@ error: expect(received).toMatchObject(expected)
 -   "blocker": {
 -     "code": "interrupted",
 +   "blocker": null,
-+   "compositionId": "39bGGbQYStHBwSCWyMoat",
-+   "createdAt": 1791291020808,
-+   "jobId": "hjHZ59AmUdbs7Y2MMSyYn",
++   "compositionId": "M72UkNEmpAL6xRXMTuS0b",
++   "createdAt": 1791291466659,
++   "jobId": "E9VmQbhPbA6HSWGdZ0B4t",
 +   "progress": {
 +     "checkedCandidates": 0,
     },
@@ -32,18 +32,18 @@ error: expect(received).toMatchObject(expected)
     },
 -   "state": "failed",
 +   "state": "running",
-+   "updatedAt": 1791291020820,
++   "updatedAt": 1791291466665,
 +   "workflow": null,
   }
 
 - Expected  - 3
 + Received  + 11
 
-      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:173:75)
-(fail) restart records queued and running work as interrupted and never resumes it implicitly [640.09ms]
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:195:75)
+(fail) restart records queued and running work as interrupted and never resumes it implicitly [475.91ms]
 
  0 pass
- 19 filtered out
+ 23 filtered out
  1 fail
  2 expect() calls
-Ran 1 test across 1 file. [703.00ms]
+Ran 1 test across 1 file. [505.00ms]

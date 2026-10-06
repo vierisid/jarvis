@@ -1,0 +1,95 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/composition.test.ts:
+Database initialized at: /tmp/jarvis-f07-rlYsLg/test.db
+118 | test.each(scaffolds)('a $type scaffold without any piece action is a blocker', async scaffold => {
+119 |   const candidate = { ...graph, trigger: { ...graph.trigger, nextAction: scaffold } };
+120 |   const p = provider({ async chat() { return { text: JSON.stringify(candidate) }; } });
+121 |   const { job } = p.submit(input); await p.idle(); const result = p.get(job.jobId);
+122 |   expect(getWorkflowComposition(result.compositionId!)!.state).toBe('VALIDATED');
+123 |   expect(result).toMatchObject({ state: 'blocked', workflow: null, blocker: { code: 'insufficient_information' } });
+                       ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "blocker": {
+-     "code": "insufficient_information",
++   "blocker": null,
++   "compositionId": "RyDM3txbuOzsZxsAysFK1",
++   "createdAt": 1791291420596,
++   "jobId": "pVCkF11I6ekZP3cSB7eUB",
++   "progress": {
++     "checkedCandidates": 1,
+    },
+-   "state": "blocked",
+-   "workflow": null,
++   "requestId": "stable-request",
++   "specification": {
++     "name": "Private report",
++     "prompt":
++ "  On manual trigger, draft a report in the dashboard. Never send email or delete files.
++ "
++ ,
++   },
++   "state": "draft_ready",
++   "updatedAt": 1791291420634,
++   "workflow": {
++     "flowId": "HQRQMwNmV1TJb8C8sxBKM",
++     "versionId": "1mb56jvVYLER8uDoXMk9I",
++   },
+  }
+
+- Expected  - 4
++ Received  + 20
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:123:18)
+(fail) a LOOP_ON_ITEMS scaffold without any piece action is a blocker [586.79ms]
+Database initialized at: /tmp/jarvis-f07-6wRJYz/test.db
+118 | test.each(scaffolds)('a $type scaffold without any piece action is a blocker', async scaffold => {
+119 |   const candidate = { ...graph, trigger: { ...graph.trigger, nextAction: scaffold } };
+120 |   const p = provider({ async chat() { return { text: JSON.stringify(candidate) }; } });
+121 |   const { job } = p.submit(input); await p.idle(); const result = p.get(job.jobId);
+122 |   expect(getWorkflowComposition(result.compositionId!)!.state).toBe('VALIDATED');
+123 |   expect(result).toMatchObject({ state: 'blocked', workflow: null, blocker: { code: 'insufficient_information' } });
+                       ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "blocker": {
+-     "code": "insufficient_information",
++   "blocker": null,
++   "compositionId": "d8QSqXIArSUi9rJvpRXjC",
++   "createdAt": 1791291421061,
++   "jobId": "byGHDSoMm03tqHUYpImrW",
++   "progress": {
++     "checkedCandidates": 1,
+    },
+-   "state": "blocked",
+-   "workflow": null,
++   "requestId": "stable-request",
++   "specification": {
++     "name": "Private report",
++     "prompt":
++ "  On manual trigger, draft a report in the dashboard. Never send email or delete files.
++ "
++ ,
++   },
++   "state": "draft_ready",
++   "updatedAt": 1791291421085,
++   "workflow": {
++     "flowId": "RaxGByrpYCeZ62TPJ9H2H",
++     "versionId": "QVdwJuGuPSmS8lXCASgE2",
++   },
+  }
+
+- Expected  - 4
++ Received  + 20
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-07/src/brief/composition.test.ts:123:18)
+(fail) a ROUTER scaffold without any piece action is a blocker [444.22ms]
+
+ 0 pass
+ 22 filtered out
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [1088.00ms]

@@ -9,7 +9,7 @@ import type { BriefComposeRequest } from './composition-contracts';
 import { ensureCompositionJobSchema } from './composition-schema';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../workflows/db/index';
 import { getFlow, updateFlowStatus } from '../workflows/db/repos/flow';
-import { getFlowVersion } from '../workflows/db/repos/flow-version';
+import { getFlowVersion, type FlowTriggerNode } from '../workflows/db/repos/flow-version';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { getWorkflowComposition } from '../workflows/db/repos/workflow-composition';
 import { sampleCatalog } from '../workflows/runtime/test-fixtures';
@@ -20,6 +20,10 @@ const graph = { displayName: 'Private report', trigger: { name: 'trigger', type:
   name: 'report', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: 'Draft the report without sending email or deleting files.' } },
 } } };
 const valid = JSON.stringify(graph);
+const scaffolds: FlowTriggerNode[] = [
+  { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' } },
+  { name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [{ branchName: 'Fallback', branchType: 'FALLBACK' }] }, children: [null] },
+];
 let directory: string, path: string;
 let providers: BriefCompositionProvider[];
 beforeEach(() => {
@@ -109,6 +113,24 @@ test('a populated graph with an unknown piece cannot bypass composer validation'
   const { job } = p.submit(input); await p.idle();
   expect(p.get(job.jobId)).toMatchObject({ state: 'failed', workflow: null, progress: { checkedCandidates: 2 } });
   expect(count('flow')).toBe(0); expect(getWorkflowComposition(p.get(job.jobId).compositionId!)!.state).toBe('FAILED');
+});
+
+test.each(scaffolds)('a $type scaffold without any piece action is a blocker', async scaffold => {
+  const candidate = { ...graph, trigger: { ...graph.trigger, nextAction: scaffold } };
+  const p = provider({ async chat() { return { text: JSON.stringify(candidate) }; } });
+  const { job } = p.submit(input); await p.idle(); const result = p.get(job.jobId);
+  expect(getWorkflowComposition(result.compositionId!)!.state).toBe('VALIDATED');
+  expect(result).toMatchObject({ state: 'blocked', workflow: null, blocker: { code: 'insufficient_information' } });
+  expect(count('flow')).toBe(0);
+});
+
+test.each(scaffolds)('a $type containing a nested piece action remains a populated draft', async scaffold => {
+  const populated = scaffold.type === 'LOOP_ON_ITEMS' ? { ...scaffold, firstLoopAction: graph.trigger.nextAction } : { ...scaffold, children: [graph.trigger.nextAction] };
+  const candidate = { ...graph, trigger: { ...graph.trigger, nextAction: populated } };
+  const p = provider({ async chat() { return { text: JSON.stringify(candidate) }; } });
+  const { job } = p.submit(input); await p.idle(); const result = p.get(job.jobId);
+  expect(result.state).toBe('draft_ready');
+  expect(getFlowVersion(result.workflow!.versionId)!.trigger).toEqual(candidate.trigger);
 });
 
 test('report_blocked preserves actionable reasons without attaching or running a draft', async () => {
