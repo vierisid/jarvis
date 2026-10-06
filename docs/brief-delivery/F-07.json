@@ -1,0 +1,61 @@
+{
+  "task": "F-07",
+  "title": "Create workflows directly from the prompt",
+  "date": "2026-10-06",
+  "branch": "brief/f-07",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-07",
+  "baseline": "23979f3bebab09a68c140aad3cb1843865fef150",
+  "baseline_ref": "origin/brief/f-06",
+  "main_checked": "abb14deb59f1ca3a84227be9a2035687b29dea34",
+  "head": { "ref": "commit containing this receipt", "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-07.json" },
+  "figma": { "file": "eNfKeirIKLZLlZEasrurZa", "node": "81:1313", "visual_check": "not_applicable: service/API only; D-16 owns presentation" },
+  "status": { "merge": "not_merged", "release_enabled": false, "publication": "Stacked PR against brief/f-06; exact remote head and CI results are recorded in the PR description." },
+  "dependencies": {
+    "roadmap_merge_after": ["F-01"],
+    "roadmap_enable_after": [],
+    "stack_base": "F-06",
+    "reason": "Owner-approved unmerged stack supersedes origin/main start. F-06 is the branch parent, not a runtime activation dependency. No F-08 work."
+  },
+  "activation": {
+    "capability": "workflowComposition",
+    "flag": "JARVIS_BRIEF_WORKFLOW_COMPOSITION=1",
+    "default": "off",
+    "readiness": "The registered service must own the current open database and have the existing high-tier composer configured. No conversation or attachment capability dependency."
+  },
+  "implementation": [
+    "Bounded authenticated job API with project-scoped stable request IDs, exact original specification, durable progress and cancellation.",
+    "Reuse composePersistedFlow, baseline provenance/catalog snapshot, existing high-tier client and validated canonical draft attachment. Journal creation and job binding commit together before provider calls.",
+    "Atomic flow/version/result attachment creates only a populated disabled draft and never enables, publishes or executes it. Trigger-only results become useful blockers.",
+    "Timeout, shutdown and restart retain the prompt and known IDs; late results are fenced. Exact replay returns the existing outcome; only an explicit new request ID retries terminal work."
+  ],
+  "acceptance": [
+    { "check": "Repeated request returns one job/result", "status": "passed", "evidence": "Queued/running/completed/restarted replays use one model call, journal, flow and version; changed specification conflicts; requestId query recovers a lost response." },
+    { "check": "Original specification and interrupted/final identity survive restart", "status": "passed", "evidence": "On-disk close/reopen preserves exact whitespace and constraints, completed IDs and interrupted composition IDs. Recovery performs no model calls. Old workers cannot attach late drafts." },
+    { "check": "Populated disabled draft or useful blocker, never empty success", "status": "passed", "evidence": "Actual composer validates a populated graph; trigger-only and report_blocked paths create no flow; unknown pieces fail validation; no runs created; canonical activation readiness still rejects unavailable pieces." },
+    { "check": "Cancellation, timeout and failed persistence do not multiply drafts", "status": "passed", "evidence": "Queued/running cancellation, ignoring-abort providers, watchdog timeout, journal-link failure before provider work and result-write rollback all retain truthful terminal receipts." },
+    { "check": "Authentication, capability/provider identity, bounds and isolation", "status": "passed", "evidence": "Actual panel-authenticated HTTP server, default-off/unconfigured/mismatched-provider matrix, CORS/no-store, UTF-8/body/prompt/key/queue limits and project-scoped read/cancel/recovery." }
+  ],
+  "verification": {
+    "focused": { "command": "bun test src/brief/composition.test.ts src/daemon/api-brief-composition.test.ts src/actions/tools/persisted-workflow-composer.test.ts", "passed": 31, "failed": 0, "assertions": 188, "files": 3, "log": "docs/brief-delivery/evidence/F-07/focused.log" },
+    "affected": { "command_file": "docs/brief-delivery/evidence/F-07/affected-command.txt", "passed": 508, "failed": 0, "assertions": 3734, "files": 32, "log": "docs/brief-delivery/evidence/F-07/affected.log" },
+    "typescript": { "command": "bun x tsc --noEmit", "exit_code": 0, "log": "docs/brief-delivery/evidence/F-07/typescript.log" },
+    "mutations": { "rejected": 4, "total": 4, "sources_restored": true, "evidence": "docs/brief-delivery/evidence/F-07/mutations.json" },
+    "guards": "Normal pre-commit guards and related tests are required; their results are recorded in the PR description.",
+    "full_suite": "Exact pushed-head CI is recorded in the PR description, not inferred from affected tests."
+  },
+  "manual_checks": {
+    "main_and_prs": "Fetched main/open PRs before implementation; no competing F-07 service. Parent F-06 review fixes are pushed on PR #745 at the baseline above and have green exact-head full CI. Pinned A10/A11 source contracts checked against this stack.",
+    "visual": "No visible UI changes or screenshot claimed. D-16 consumes this service; the old WorkflowsRoom creation handler is unchanged.",
+    "external_effects": "Temporary databases, real local HTTP auth and fake model fixtures only. No paid inference, real daemon activation, user-data edits or deployment."
+  },
+  "limitations": [
+    "One worker per daemon/vault, not a distributed lease service. Startup recovery fails unfinished work conservatively instead of resuming an uncertain provider request.",
+    "Terminal retries require a new explicit request ID; the old key always retrieves its saved outcome. Rows/prompts are retained without automatic expiry to preserve idempotency.",
+    "Composition validates structure and available operations, not semantic fidelity to every natural-language constraint. Draft activation still uses existing readiness and execution gates.",
+    "The result contains creation IDs only; consumers must read current workflow state from the canonical API after later edits or deletion.",
+    "UI integration, live-model assessment and selected connection/library ingredients are outside this card. Explicit blocker details are bounded model text and must be rendered as plain text."
+  ],
+  "rollback": "Disable the workflowComposition flag and future D-16 presentation; normal shutdown records interrupted work. Retain original prompts, additive job rows, canonical journals and drafts. Never replay accepted jobs or remove user data.",
+  "quick_verification": "docs/brief-workflow-composition.md",
+  "next_task": "F-08 not started"
+}
