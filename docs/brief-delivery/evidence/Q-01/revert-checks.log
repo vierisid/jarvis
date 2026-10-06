@@ -1,0 +1,19 @@
+Q-01 revert checks, 5 October 2026 (each mutation applied to the Q-01 sources, its test run, then the source restored byte for byte)
+Each line removes or weakens one guard, runs the named test, and requires it to fail.
+
+CAUGHT  pin                    -> a pinned alias refuses
+CAUGHT  token budget           -> token budget stops
+CAUGHT  unaccounted usage      -> token budget stops
+CAUGHT  intended model check   -> admin evidence refuses
+CAUGHT  revision scope         -> admin evidence resolves
+CAUGHT  unrun denominator      -> unrun, refused and timed-out
+CAUGHT  disposition success    -> unrun, refused and timed-out
+CAUGHT  refused disposition    -> unrun, refused and timed-out
+CAUGHT  sanitized profile      -> a baseline is sanitized
+CAUGHT  hosted-only baseline   -> synthetic, development
+CAUGHT  small-sample failure   -> verdicts name pending review
+CAUGHT  pending review         -> verdicts name pending review
+CAUGHT  authorization expiry   -> spend authorization is explicit
+CAUGHT  authorization required -> CLI: a held-out hosted run
+CAUGHT  rubric freeze gate     -> CLI: a held-out hosted run
+ALL GUARDS PINNED (15 of 15); every file restored afterwards.
