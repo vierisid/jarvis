@@ -1,0 +1,44 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-goal-measurements.test.ts:
+[WorkItems] Request failed:  8 |   constructor(readonly path: string, message: string) {
+ 9 |     super(`${path}: ${message}`);
+10 |     this.name = 'GoalValidationError';
+11 |   }
+12 | }
+13 | export function invalid(path: string, message: string): never { throw new GoalValidationError(path, message); }
+                                                                           ^
+GoalValidationError: score: Use a new measurement to update measured goal progress
+ path: "score",
+
+      at invalid (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/validation.ts:13:71)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/application-service.ts:93:31)
+      at transaction (bun:sqlite:400:27)
+      at transaction (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/application-service.ts:37:51)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/work-items.ts:246:43)
+      at transaction (bun:sqlite:400:27)
+      at transaction (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/application-service.ts:37:51)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/work-item-routes.ts:20:31)
+      at async call (/home/vierisid/.cache/codex/jarvis-f-15/src/daemon/api-brief-goal-measurements.test.ts:39:34)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/daemon/api-brief-goal-measurements.test.ts:110:26)
+
+106 |   expect((await call(table, write, 'POST', command())).status).toBe(200);
+107 |   const work = createWorkItem({ title: 'Review signed contracts', goalId: id });
+108 |   decideWorkItem(work.id, { outcome: 'accepted', reason: 'Owner confirmed' });
+109 |   const result = { verdict: 'passed', summary: 'Contracts reviewed', evidence: [{ ref: 'contracts:v1', description: 'Owner review' }] };
+110 |   const rejected = await call(table, '/api/work-items/:id/result', 'POST', { ...result, goalScore: 1 }, '', work.id);
+111 |   expect(rejected.status).toBe(409); expect(rejected.body.error).toContain('measurement');
+                                ^
+error: expect(received).toBe(expected)
+
+Expected: 409
+Received: 500
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/daemon/api-brief-goal-measurements.test.ts:111:27)
+(fail) work result checks refuse a conflicting score clearly and can complete without changing measured progress [26.11ms]
+
+ 0 pass
+ 4 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [117.00ms]

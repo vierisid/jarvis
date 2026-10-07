@@ -2,6 +2,7 @@
  * Goal Vault — CRUD operations for M16 Autonomous Goal Pursuit
  */
 
+import { readGoalMeasurement } from '../goals/measurements';
 import type { SQLQueryBindings } from 'bun:sqlite';
 import { getDb, generateId } from './schema.ts';
 import { getGoalReviewRecord } from '../goals/review-evidence.ts';
@@ -32,6 +33,7 @@ type CheckInRow = Omit<GoalCheckIn, 'goals_reviewed' | 'actions_planned' | 'acti
 function parseGoal(row: GoalRow): Goal {
   return {
     ...row,
+    measurement: readGoalMeasurement(getDb(), row.id),
     tags: row.tags ? JSON.parse(row.tags) : [],
     dependencies: row.dependencies ? JSON.parse(row.dependencies) : [],
   };
@@ -253,6 +255,7 @@ export function updateGoalScore(id: string, score: number, reason: string, sourc
   const existing = getGoal(id);
   if (!existing) return null;
 
+  if (existing.measurement) invalid('score', 'Use a new measurement to update measured goal progress');
   const clampedScore = Math.max(0, Math.min(1, score));
   const now = Date.now();
 

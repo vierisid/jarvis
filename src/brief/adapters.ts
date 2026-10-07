@@ -24,7 +24,7 @@ export async function readBriefProvider<Query, Data>(
   catch { return { state: 'unavailable', reason: 'provider_unavailable' }; }
 }
 
-/** Legacy records have scores, not verified counts. F-15 will supply measurements. */
+/** Legacy-only projection. Measurement-aware readers use projectMeasuredGoal. */
 export function projectLegacyGoal(goal: Goal): BriefGoal {
   return {
     goalId: goal.id, revision: String(goal.updated_at), status: goal.status,

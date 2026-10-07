@@ -1,0 +1,43 @@
+bun test v1.4.2 (744846f84)
+
+src/goals/measurements.test.ts:
+76 | test('earlier and equal measurement times cannot supersede a later report or erase its value', () => {
+77 |   const first = command(); save(first);
+78 |   for (const measuredAt of [first.measurement.measuredAt!, first.measurement.measuredAt! - 1, null]) {
+79 |     const next = command({ requestId: 'old', revision: 1 });
+80 |     next.measurement = { ...next.measurement, measuredAt, value: measuredAt === null ? null : 9, evidence: measuredAt === null ? null : { id: 'ledger', revision: 'new' } };
+81 |     expect(() => save(next)).toThrow(GoalMeasurementConflict);
+                                  ^
+error: expect(received).toThrow(expected)
+
+Expected constructor: GoalMeasurementConflict
+
+Received function did not throw
+Received value: {
+  goalId: "98448c90-fcde-4066-a5e5-996b634d1b8b",
+  requestId: "old",
+  measurement: {
+    unit: "signed partners",
+    baseline: 0,
+    target: 10,
+    value: 9,
+    measuredAt: 1791367577122,
+    evidence: {
+      id: "ledger",
+      revision: "new",
+    },
+    revision: 2,
+    qualification: "user_reported",
+  },
+  score: 0.9,
+  progressId: "636b9ccc-cdf6-4943-bf52-f284a4954f95",
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:81:30)
+(fail) earlier and equal measurement times cannot supersede a later report or erase its value [402.23ms]
+
+ 0 pass
+ 19 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [433.00ms]
