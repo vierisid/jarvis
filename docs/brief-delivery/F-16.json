@@ -102,5 +102,38 @@
   ],
   "rollback": "Unset JARVIS_BRIEF_OUTCOMES on the new runtime; retain additive time receipts and canonical work/goal data. Disabling F15 also disables outcomes.",
   "guide": "docs/brief-outcomes.md",
-  "next_task": "F-17 not started"
+  "next_task": "F-17 not started",
+  "reviewCorrections": {
+    "reviewed_head": "9fa79ddc75080e0c447e372f9ef303a6b9efcf31",
+    "findings": {
+      "R1": "Qualify every durable workflow-launch receipt against its exact child run, parent, flow and pinned version. Missing child/grandchild evidence excludes the family, including after canonical workflow deletion and database reopen; retained time receipts cannot restore eligibility.",
+      "R2": "Authenticated GET /api/brief/outcomes/:workItemId/time without requestId returns the latest full time record and revision, or null. Querying requestId still recovers the immutable historical receipt. Clients can refresh after a stale-revision conflict and submit a correction."
+    },
+    "regressions": {
+      "passed": 10,
+      "assertions": 69,
+      "red": "docs/brief-delivery/evidence/F-16/review-red.log",
+      "green": "docs/brief-delivery/evidence/F-16/review-green.log",
+      "proof": "All ten checks fail with the original reviewed implementation. Exact corrected file bytes restored before the final focused and affected runs. Uses real workflow launch backend and canonical deletion with isolated fixtures; no live provider/model call."
+    },
+    "focused": {
+      "passed": 63,
+      "assertions": 501,
+      "log": "docs/brief-delivery/evidence/F-16/review-focused.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-16/review-typescript.log"
+    },
+    "guards": "Normal commit hooks required; exact results recorded in PR description.",
+    "activation": "Default off; no UI activation, deployment, merge or F17 work.",
+    "affected": {
+      "passed": 674,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 4407,
+      "files": 45,
+      "log": "docs/brief-delivery/evidence/F-16/review-affected.log"
+    }
+  }
 }

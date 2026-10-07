@@ -229,7 +229,9 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     and checks all three source kinds, mutations
  *                                     and reopened reads exclude those payloads.
  *   brief/outcomes.ts                 PERSON-FACING. Reads run/effect evidence only
- *                                     to qualify checked work. The authenticated
+ *                                     to qualify checked work, including exact child
+ *                                     IDs in durable workflow-launch receipts.
+ *                                     The authenticated
  *                                     projection emits IDs, counts, observation
  *                                     references and coverage, never step output,
  *                                     effect arguments/results or a model prompt.

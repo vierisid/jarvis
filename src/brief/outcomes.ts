@@ -58,6 +58,7 @@ export class Outcomes {
       SELECT id FROM flow_run WHERE id=? UNION SELECT r.id FROM flow_run r JOIN family f ON r.parent_run_id=f.id
     ) SELECT r.* FROM flow_run r JOIN family f ON r.id=f.id LIMIT 1001`).all(root.id);
     if (runs.length > 1000) return 'run_coverage_incomplete';
+    const family = new Map(runs.map(run => [run.id, run]));
     let effectCount = 0;
     for (const run of runs) {
       const execution = parse<{ sampleData?: unknown; sampleInputOverride?: unknown; stepNameToTest?: unknown }>(run.execution_config);
@@ -69,9 +70,19 @@ export class Outcomes {
       const effects = this.db.query<{ id: string; status: string; record: string }, [string]>('SELECT id,status,record FROM workflow_effect WHERE run_id=? LIMIT 10001').all(run.id);
       effectCount += effects.length; if (effectCount > 10000) return 'run_coverage_incomplete';
       for (const effect of effects) {
-        const receipt = parse<{ id: string; runId: string; status: string; finishedAt: number }>(effect.record);
+        const receipt = parse<{ id: string; runId: string; status: string; finishedAt: number; route?: string; toolName?: string;
+          result?: { runId?: unknown }; target?: { flowId?: unknown; versionId?: unknown } }>(effect.record);
         if (effect.status !== 'succeeded' || !receipt || receipt.id !== effect.id || receipt.runId !== run.id || receipt.status !== 'succeeded'
           || !Number.isSafeInteger(receipt.finishedAt) || receipt.finishedAt > c.checkedAt) return 'uncertain_effect';
+        // Launch success proves only that the child was queued. Its durable
+        // receipt survives child-workflow deletion, unlike parent_run_id rows.
+        // Require the exact child and pinned version, at every family depth.
+        if (receipt.route === 'workflow' || receipt.toolName === 'workflow_start') {
+          const child = typeof receipt.result?.runId === 'string' ? family.get(receipt.result.runId) : undefined;
+          if (receipt.route !== 'workflow' || receipt.toolName !== 'workflow_start' || !child
+            || child.parent_run_id !== run.id || child.flow_id !== receipt.target?.flowId
+            || child.flow_version_id !== receipt.target?.versionId) return 'run_coverage_incomplete';
+        }
       }
     }
     return null;
@@ -182,6 +193,11 @@ export class Outcomes {
       this.db.run('INSERT INTO outcome_time_record VALUES (?,?,?,?,?,?)', [workId, snapshot.revision, command.requestId, serialized, JSON.stringify(snapshot), snapshot.recordedAt]);
       return snapshot;
     }).immediate();
+  }
+  /** Latest editable evidence; historical request receipts never substitute for this read. */
+  currentTime(workId: string): OutcomeTimeRecord | null {
+    outcomeId(workId, 'workItemId'); this.available();
+    return readOutcomeTime(this.db, workId);
   }
   timeReceipt(workId: string, requestId: string): OutcomeTimeRecord | null {
     outcomeId(workId, 'workItemId'); outcomeId(requestId, 'requestId'); this.available();

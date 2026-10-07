@@ -36,7 +36,11 @@ export function createOutcomeRoutes(capabilities: BriefCapabilities, json: (body
       return provider!.summary({ timezone: q.get('timezone')!, ...(q.has('at') ? { at: Number(q.get('at')) } : {}) });
     }) },
     '/api/brief/outcomes/:id/time': {
-      GET: wrap(req => { const q = query(req, ['requestId']); return { receipt: provider!.timeReceipt(id(req), q.get('requestId')!) }; }),
+      GET: wrap(req => {
+        const q = query(req, ['requestId'], []), workId = id(req);
+        return q.has('requestId') ? { receipt: provider!.timeReceipt(workId, q.get('requestId')!) }
+          : { record: provider!.currentTime(workId) };
+      }),
       POST: wrap(async req => {
         query(req, []); if (!req.body) throw new GoalValidationError('request', 'requires a body');
         const reader = req.body.getReader(), chunks: Uint8Array[] = []; let size = 0;
