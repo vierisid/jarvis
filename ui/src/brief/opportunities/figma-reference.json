@@ -1,0 +1,44 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "node": "81:2931",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-2931",
+  "saved_native_source": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-26-opportunities-2026-10-04",
+  "inspected_exports": [
+    {
+      "file": "81-2931-light.png",
+      "sha256": "0c856ad9631d570471a245f8494897dc906607c84a0035815a7613b7488a2784"
+    },
+    {
+      "file": "81-2931-dark.png",
+      "sha256": "c48a89410051bcb5ff2b2afb480fd13bf8ac288eebf75ff5c687ba4cb92181b2"
+    },
+    {
+      "file": "81-3106-dark.png",
+      "sha256": "045336229c7c7ed689b875b784c6c08e14b0ffd0d6af5d664759b3b4b055b305"
+    },
+    {
+      "file": "build-opportunities.js",
+      "sha256": "2ddffade3275000452d4ae5770f34f2e6c11afb39f563ca46af0a0ac10da550a"
+    },
+    {
+      "file": "README.md",
+      "sha256": "ff93ef56fbeae7a3b80c7f08807da503bcc7f0d871b4f9d093bf7493a3c909f3"
+    }
+  ],
+  "preserved": [
+    "Persistent selection edge, quiet hover, stable brief header",
+    "Finished output paper, concise observation, goal contribution, secondary mini steps",
+    "Wide list/detail and chat-open selection strip/detail",
+    "Approved surfaces, asymmetric corners, fonts and shell reflow",
+    "Local acknowledgement then 160ms exit and 180ms settle; reduced-motion placement"
+  ],
+  "bounded_runtime_adaptations": [
+    "Explicit provenance label instead of unqualified Output preview. Missing preview never gets fixture output.",
+    "Local pending/refused/blocked recovery feedback beneath fixed action targets; refresh is a quiet room utility.",
+    "Fluid, scrolling long content and narrow-width stacking replace fixed-height Figma text boxes.",
+    "Unknown receipt retains its proposal and does not advance. Registration pending is not Enabled.",
+    "Record count is derived from the same available collection in this isolated preview. No shared Today queue synchronization is claimed."
+  ]
+}

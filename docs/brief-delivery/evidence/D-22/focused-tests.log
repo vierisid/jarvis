@@ -1,0 +1,54 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/opportunities/controller.test.ts:
+(pass) a definitive refusal can be retried only after a fresh read, unlike uncertainty [11.02ms]
+(pass) selection survives reorder and refresh, uses IDs rather than indexes [2.48ms]
+(pass) a new revision replaces list and brief together; missing selection chooses a real remaining row [3.56ms]
+(pass) approval acknowledges the same item before settling the next and advances once [23.49ms]
+(pass) dismissal has a distinct receipt and leaves no saved/dismissed destination [42.43ms]
+(pass) duplicate intent is locked synchronously, including opposite actions [42.65ms]
+(pass) pending registration is approval saved, not enabled; refresh retains it for recovery [43.03ms]
+(pass) blocked registration and later paused workflow are never a successful enable [21.02ms]
+(pass) pending registration and later paused workflow are never a successful enable [21.04ms]
+(pass) lost response keeps the original identity locked; recovery is read-only [29.10ms]
+(pass) null recovery leaves unknown locked and does not resend [4.54ms]
+(pass) older and mismatched recovery receipts cannot replace an acknowledged result [20.64ms]
+(pass) a decision response cannot steal a newer user selection [39.98ms]
+(pass) out-of-order refresh and retired owners ignore late responses [1.91ms]
+(pass) stale remains a distinct read state with no actions [1.40ms]
+(pass) unavailable remains a distinct read state with no actions [1.22ms]
+(pass) unsupported remains a distinct read state with no actions [1.21ms]
+(pass) loading remains a distinct read state with no actions [1.21ms]
+(pass) empty remains a distinct read state with no actions [1.23ms]
+(pass) read failure preserves visible data as stale, and access revocation prevents dispatch [1.45ms]
+(pass) read-only capability permits browsing but no decisions [1.31ms]
+(pass) revoking access during refresh cannot strand the restored room in refreshing [2.59ms]
+(pass) legacy draft-ready, blocked binding and canApprove=false never become ready [0.09ms]
+(pass) receipt guard rejects mismatched proposalId [0.05ms]
+(pass) receipt guard rejects mismatched revision
+(pass) receipt guard rejects mismatched decision
+(pass) receipt guard rejects mismatched workflow
+(pass) receipt guard rejects mismatched receiptId
+
+ui/src/brief/opportunities/OpportunitiesRoom.test.tsx:
+(pass) wrong source, wrong scope and missing live capability fail closed without reads [67.46ms]
+(pass) list and detail retain exact selected identity through shell changes and refresh [121.05ms]
+(pass) a routed proposal selects its real identity once available [25.64ms]
+(pass) finished output stays qualified and legacy chrome remains absent [26.51ms]
+(pass) approval resolves locally, does not navigate, and advances focus to the next choice [1004.91ms]
+(pass) late acknowledgement does not steal focus from the composer [1034.58ms]
+(pass) registration pending keeps the proposal visible and distinguishes saved from enabled [48.18ms]
+(pass) registration blocked keeps the proposal visible and distinguishes saved from enabled [46.94ms]
+(pass) unknown acknowledgement shows recovery and cannot duplicate the approval [101.23ms]
+(pass) preparing cannot visually or behaviorally promote a proposal to ready [25.29ms]
+(pass) blocked cannot visually or behaviorally promote a proposal to ready [28.94ms]
+(pass) stale cannot visually or behaviorally promote a proposal to ready [24.63ms]
+(pass) missing preview has an explicit unavailable state, no invented output [23.35ms]
+(pass) definitive refusal explains refresh without pretending the result is pending [71.80ms]
+(pass) room unmount/remount preserves pending decisions and selection in the owner [74.78ms]
+(pass) activation capability changes immediately update rendered controls [71.69ms]
+
+ 44 pass
+ 0 fail
+ 135 expect() calls
+Ran 44 tests across 2 files. [3.38s]
