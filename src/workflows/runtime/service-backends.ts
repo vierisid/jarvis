@@ -396,13 +396,13 @@ export function buildSandboxServiceBackends(
       dispatch: async (registry, call) => {
         // Every refusal below goes through here, so each one is audited under
         // the RUN as well (#672). A call this route parks or dispatches gets a
-        // `workflow:<runId>` row from the boundary; one it refuses got only the
-        // sub-agent gate's row, under the spawned child's id and the role's
-        // name, which names neither the run nor the step -- so the run's own
-        // audit showed the delegation allowed and then nothing. `toolsInvoke`
-        // and `pieceAuthorize` audit their refusals the same way.
+        // `workflow:<runId>` row from the boundary; one it refused got only the
+        // sub-agent gate's row, which before #730 was under the spawned
+        // child's id and named neither the run nor the step -- so the run's
+        // own audit showed the delegation allowed and then nothing.
+        // `toolsInvoke` and `pieceAuthorize` audit their refusals the same way.
         //
-        // On a first pass `sub-agent-runner.ts` also writes the child's row.
+        // On a first pass `sub-agent-runner.ts` also writes the gate's row.
         // On a RESUME it does not: it hands the parked call straight back here
         // without re-running its gate or writing a row, so for a refusal on
         // resume this row is the only one -- before #672 there was none. The
@@ -412,19 +412,19 @@ export function buildSandboxServiceBackends(
         // two calls), when the tool's gate changed while the call was parked.
         //
         // The category is the worse of the parked call's (the runner's gate at
-        // park time, which is what the child row says) and the gate recomputed
+        // park time, which is what the gate's row says) and the gate recomputed
         // now, which is what the last refusal decides on. On a first pass the
         // two are the same; on resume the parked one alone could record a
         // write that was refused as a command.
         //
-        // What this does NOT cover, so the rule is "every call that reaches
-        // this route has a row under the run" and not "every sub-agent decision
-        // does": anything the runner decides itself never reaches here -- any
-        // denial by its gate (level, profile, taint, override, context rule),
-        // an off-list refusal, any call it allows outright -- and keeps only
-        // the child's row; and an emergency suspension or an unknown tool name
-        // returns before the runner audits at all, so has no row anywhere.
-        // Closing those needs the runner to know the run, which it does not.
+        // What the runner decides itself never reaches here -- any denial by
+        // its gate (level, profile, taint, override, context rule), an
+        // off-list refusal, any call it allows outright, an emergency
+        // suspension. Those rows are under the run too since #730, not here:
+        // `m7-agent-delegator.ts` hands the runner `runScopedAuditTrail`,
+        // which writes them as `workflow:<runId>` with the step and the child
+        // in the name. An unknown tool name still writes no row anywhere, on
+        // purpose: it is not a governance decision and has no category.
         const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
         const refusedCategory = severityRank(gate.actionCategory) > severityRank(call.actionCategory)
           ? gate.actionCategory : call.actionCategory;

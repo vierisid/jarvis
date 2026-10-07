@@ -442,8 +442,23 @@ async function executeTool(
     // browsing specialist that read a page cannot then write or run clean.
     const profile = mergeProfiles(authorityCtx.profile ?? null, taintProfile(taintGating ?? null, taint));
 
-    // Emergency check
+    // Emergency check. Audited (#730): a suspension is the system refusing
+    // this call, and it used to leave no row at all, so a halted delegation's
+    // attempts were invisible in the audit trail. Only for a tool that
+    // exists -- an unknown name is not a governance decision, as below, and
+    // has no category to record.
     if (emergencyController && !emergencyController.canExecute()) {
+      const suspended = registry.get(toolCall.name);
+      if (suspended) {
+        auditTrail?.log({
+          agent_id: agent.id,
+          agent_name: agent.agent.role.name,
+          tool_name: toolCall.name,
+          action_category: resolveToolGate(suspended, toolCall.name, toolCall.arguments).actionCategory,
+          authority_decision: 'denied',
+          executed: false,
+        });
+      }
       return { text: `[SYSTEM ${emergencyController.getState().toUpperCase()}] Tool execution suspended.`, failed: true };
     }
 

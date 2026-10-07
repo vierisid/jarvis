@@ -354,6 +354,43 @@ describe("M7AgentDelegator with a continuation", () => {
     expect(stored()).toBe(before);
   });
 
+  /**
+   * #730. With a continuation the runner gets an audit trail that writes
+   * under the run; without one (no workflow behind the call) it gets the
+   * daemon's trail itself, unchanged.
+   */
+  test("the runner audits under the run with a continuation, and under the child without one", async () => {
+    const rows: Array<Record<string, unknown>> = [];
+    const base = { log: (row: Record<string, unknown>) => { rows.push(row); return row; } } as never;
+    const auditing: RunSubAgentFn = async opts => {
+      opts.auditTrail!.log({ agent_id: opts.agent.id, agent_name: opts.agent.agent.role.name, tool_name: "write_file",
+        action_category: "write_data", authority_decision: "denied", executed: false });
+      return { success: true, response: "done", toolsUsed: [], tokensUsed: { input: 0, output: 0 }, terminationReason: "completed", messages: [] };
+    };
+    const withTrail = new M7AgentDelegator({
+      orchestrator: makeOrchestratorStub({ primary: { id: "primary", canSpawn: true } }).orchestrator as never,
+      llmManager: {} as never, specialists: new Map([["workflow-default", makeRole("workflow-default")]]), runSubAgentFn: auditing,
+      auditTrail: base });
+    await withTrail.delegate({ goal: "find X" }, continuation().c);
+    // A step name that is not one line, or longer than the label cap, is
+    // bounded the way the route's own refusal row bounds it.
+    await withTrail.delegate({ goal: "find X" }, { ...continuation().c,
+      identity: { ...identity, stepName: "step\u000bname" + "x".repeat(200) } });
+    await withTrail.delegate({ goal: "find X" });
+    // A role name that is not one line is bounded too.
+    const longRole = new M7AgentDelegator({
+      orchestrator: makeOrchestratorStub({ primary: { id: "primary", canSpawn: true } }).orchestrator as never,
+      llmManager: {} as never, runSubAgentFn: auditing, auditTrail: base,
+      specialists: new Map([["workflow-default", makeRole("workflow-default", { name: "Role\nForged / line" + "y".repeat(200) })]]) });
+    await longRole.delegate({ goal: "find X" }, continuation().c);
+    expect(rows.map(r => [r.agent_id, r.agent_name])).toEqual([
+      ["workflow:run", "Workflow run / delegate / workflow-default (sub-agent child-1)"],
+      ["workflow:run", `Workflow run / step name${"x".repeat(111)}... / workflow-default (sub-agent child-2)`],
+      ["child-3", "workflow-default"],
+      ["workflow:run", `Workflow run / delegate / Role Forged / line${"y".repeat(102)}... (sub-agent child-1)`],
+    ]);
+  });
+
   test("a cancellation the runner reports answers canceled and writes nothing back", async () => {
     const before = checkpoint({ status: "running", iteration: 1, sequence: 1 });
     const { c, stored } = continuation(before);

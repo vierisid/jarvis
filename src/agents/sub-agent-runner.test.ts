@@ -106,6 +106,29 @@ describe('governed tool calls in a sub-agent', () => {
     expect(suspended.failedToolCalls).toEqual(['c1']);
   });
 
+  /**
+   * #730. A suspension is the system refusing the call, and it was the one
+   * refusal in `executeTool` that wrote no audit row, so a halted
+   * sub-agent's attempts were invisible. An unknown name still writes none:
+   * it is not a governance decision and has no category to record.
+   */
+  test('an emergency suspension is audited as a denial, for a tool that exists', async () => {
+    const a = authority();
+    const emergency = new EmergencyController();
+    emergency.pause();
+    const ghost: LLMToolCall = { id: 'c2', name: 'no_such_tool', arguments: {} };
+    const { r, runs } = registry();
+    const suspended = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: llm([[write('c1'), ghost]]).manager,
+      toolRegistry: r, authorityEngine: a.engine, auditTrail: a.audit, emergencyController: emergency, maxIterations: 3 });
+    expect(runs).toEqual([]);
+    expect(toolMessages(suspended).map(([, text]) => text)).toEqual([
+      '[SYSTEM PAUSED] Tool execution suspended.',
+      '[SYSTEM PAUSED] Tool execution suspended.',
+    ]);
+    expect(a.rows).toEqual([{ agent_id: 'child', agent_name: 'Fixture', tool_name: 'write_file', action_category: 'write_data',
+      authority_decision: 'denied', executed: false }]);
+  });
+
   test('a pause stops the run before any effect and keeps the calls its turn did not reach', async () => {
     const { r, runs } = registry();
     const a = authority();
