@@ -1,20 +1,20 @@
-Full suite on brief/q-05 at 04d5a0c1 (local WSL2; load average about 0.7 at start)
+Full suite on brief/q-05 at 76abaabc, the review fixes (local WSL2; load average about 1.4 at start)
 $ bun test --preload ./src/test-preload.ts
- 7765 pass
+ 7778 pass
  86 skip
  9 fail
-Ran 7860 tests across 426 files. [516.88s]
+Ran 7873 tests across 426 files. [616.45s]
 
 Failures:
-(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [36.01ms]
-(fail) page-writable element refs (#592, integration) > (unnamed) [217.76ms]
-(fail) browser primitives (integration) > (unnamed) [205.44ms]
-(fail) browser local-file lockdown (integration, #521) > (unnamed) [235.34ms]
-(fail) webapp template delivery via browser tools (integration) > (unnamed) [241.86ms]
-(fail) end to end, against a real process > reaps an engine whose owner really did die [31.52ms]
-(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [145.44ms]
-(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [205.53ms]
-(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [220.43ms]
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [71.62ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [306.24ms]
+(fail) browser primitives (integration) > (unnamed) [305.70ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [333.40ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [451.67ms]
+(fail) end to end, against a real process > reaps an engine whose owner really did die [44.59ms]
+(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [156.05ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [412.79ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [425.46ms]
 
 All 9 also fail on the base with no Q work applied (below): git config lint, six Chromium launches and two engine-reaper tests on this machine. No other test fails.
 CI on the final head runs the full suite.

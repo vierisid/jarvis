@@ -1,5 +1,5 @@
-$ bun test --preload ./src/test-preload.ts src/workflows/db/repos/binding-pins.test.ts src/workflows/runtime/workflow-binding-pins.test.ts src/workflows/runtime/fact-bindings.test.ts src/workflows/sandbox-api/native-connections.test.ts src/workflows/credentials/google-source.test.ts src/workflows/runner/triggers/manager.test.ts src/sidecar/capability-predicate.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/governed-pieces.test.ts
- 274 pass
+$ bun test --preload ./src/test-preload.ts src/workflows/db/repos/binding-pins.test.ts src/workflows/runtime/workflow-binding-pins.test.ts src/workflows/runtime/fact-bindings.test.ts src/workflows/sandbox-api/native-connections.test.ts src/workflows/credentials/google-source.test.ts src/workflows/runner/triggers/manager.test.ts src/sidecar/capability-predicate.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/governed-pieces.test.ts src/actions/tools/manage-workflow.test.ts src/workflows/db/repos/run-execution-config.test.ts
+ 336 pass
  0 fail
- 2389 expect() calls
-Ran 274 tests across 10 files. [44.49s]
+ 3455 expect() calls
+Ran 336 tests across 12 files. [51.21s]
