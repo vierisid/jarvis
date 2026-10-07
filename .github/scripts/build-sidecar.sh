@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Build the sidecar for one target. Called by sidecar-release.yml from the
-# sidecar/ directory, once per target, by both the four-leg matrix job and
-# the Windows job that is split out so only it holds id-token (#682). One
-# script, so the two jobs cannot drift apart in how they build or pin.
+# sidecar/ directory, once per target: by each of the four build-sidecar-<leg>
+# jobs (#781), and by build-sidecar-windows, which is split from its signer so
+# only the signer holds id-token (#682). One script, so the jobs cannot drift
+# apart in how they build or pin.
 #
 # Inputs (environment, never interpolated into this text):
 #   GOOS, GOARCH          target

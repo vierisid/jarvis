@@ -67,7 +67,10 @@ env:
   # NPM_VERSION in release-exec.yml, which says where the value comes from.
   NPM_VERSION: "12.1.0"
   SIDECAR_BIN: jarvis
-  DRY_RUN: ${{ inputs.dry_run || false }}
+  # Spelled exactly as in release-exec.yml, which passes the input (#685);
+  # publish-sidecar's environment name repeats it because `env` is not
+  # available there. release-exec.test.sh checks that the two agree.
+  DRY_RUN: ${{ inputs.dry_run == true }}
 
 jobs:
   # ─── Resolve version + idempotency gate ────────────────────────
@@ -117,24 +120,36 @@ jobs:
   # The sidecar is a cgo program (webview_go, GTK/Cocoa overlays), so it CANNOT
   # be cross-compiled with CGO_ENABLED=0 from a single runner. Each arch builds
   # with CGO_ENABLED=1 on a runner/toolchain that can see its native UI SDK.
-  build-sidecar:
+  # Four jobs, not one four-leg matrix (#781). The legs of a matrix share
+  # ONE outputs block, merged from whatever each leg writes, so any leg could
+  # set another leg's digest name and finish last -- a compromised Linux leg
+  # (apt maintainer scripts as root, the cgo toolchain, the module graph)
+  # could then swap the macOS bundle AND vouch for the swap. A job's outputs
+  # can be set only by that job, so each leg is its own job with its own
+  # `sha256`, and publish-sidecar checks each artifact against the job that
+  # built it. The steps are written once below and reused by YAML alias in
+  # the other three, so the four cannot drift; each job keeps a one-entry
+  # matrix only because those steps (and runs-on) read `matrix.*`.
+  #
+  # No id-token in any of them (#682). Only Windows signing federates into
+  # Google Cloud, so the Windows leg is its own jobs (build-sidecar-windows,
+  # then sign-sidecar-windows, the only one of the two with id-token), and
+  # these four -- two of which run Swift and Apple tooling on macOS -- cannot
+  # mint an OIDC token at all.
+  build-sidecar-linux-x64:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ${{ matrix.runner }}
-    # No id-token here (#682). Only Windows signing federates into Google
-    # Cloud, so the Windows leg is its own jobs (build-sidecar-windows, then
-    # sign-sidecar-windows, the only one of the two with id-token), and
-    # these four legs -- two of which run Swift and Apple tooling on macOS --
-    # cannot mint an OIDC token at all. GitHub has no per-leg permissions,
-    # which is why it is a job and not a matrix entry.
     permissions:
       contents: read
-    env:
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    env: &build-sidecar-leg-env
       # secrets can't be referenced in step `if:` conditions — surface their
       # presence as env flags so the signing steps can gate on them.
       HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+    # One leg. The matrix is only what the shared steps read.
     strategy:
-      fail-fast: false
       matrix:
         include:
           - goos: linux
@@ -142,22 +157,7 @@ jobs:
             npm_pkg: linux-x64
             runner: ubuntu-latest
             setup: linux
-          - goos: linux
-            goarch: arm64
-            npm_pkg: linux-arm64
-            runner: ubuntu-24.04-arm
-            setup: linux
-          - goos: darwin
-            goarch: arm64
-            npm_pkg: darwin-arm64
-            runner: macos-latest
-            setup: darwin
-          - goos: darwin
-            goarch: amd64
-            npm_pkg: darwin-x64
-            runner: macos-latest
-            setup: darwin
-    steps:
+    steps: &build-sidecar-leg-steps
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -313,12 +313,30 @@ jobs:
         # codesign seal.
         run: COPYFILE_DISABLE=1 tar --no-mac-metadata -C dist -czf jarvis-app.tar.gz Jarvis.app
 
+      # The digest of exactly the file the upload below takes, as the output of
+      # this job alone; the artifact store is writable by every job in the run.
+      # macOS has shasum but not always sha256sum; the hex is the same.
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        env:
+          FILE: ${{ matrix.setup == 'darwin' && 'jarvis-app.tar.gz' || env.SIDECAR_BIN }}
+          LEG: ${{ matrix.npm_pkg }}
+        run: |
+          set -euo pipefail
+          if command -v sha256sum >/dev/null; then sum="$(sha256sum "$FILE")"; else sum="$(shasum -a 256 "$FILE")"; fi
+          sum="${sum%% *}"
+          [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::could not hash $FILE"; exit 1; }
+          echo "sha256=${sum}" >> "$GITHUB_OUTPUT"
+          echo "${LEG}: ${FILE} sha256 ${sum}"
+
       - name: Upload bundle (darwin)
         if: matrix.setup == 'darwin'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: sidecar-${{ matrix.npm_pkg }}
           path: sidecar/jarvis-app.tar.gz
+          if-no-files-found: error
 
       - name: Upload binary
         if: matrix.setup != 'darwin'
@@ -326,6 +344,67 @@ jobs:
         with:
           name: sidecar-${{ matrix.npm_pkg }}
           path: sidecar/${{ env.SIDECAR_BIN }}
+          if-no-files-found: error
+
+  build-sidecar-linux-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    env: *build-sidecar-leg-env
+    # One leg. The matrix is only what the shared steps read.
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: arm64
+            npm_pkg: linux-arm64
+            runner: ubuntu-24.04-arm
+            setup: linux
+    steps: *build-sidecar-leg-steps
+
+  build-sidecar-darwin-arm64:
+    needs: resolve
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    env: *build-sidecar-leg-env
+    # One leg. The matrix is only what the shared steps read.
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+            npm_pkg: darwin-arm64
+            runner: macos-latest
+            setup: darwin
+    steps: *build-sidecar-leg-steps
+
+  build-sidecar-darwin-x64:
+    needs: resolve
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    env: *build-sidecar-leg-env
+    # One leg. The matrix is only what the shared steps read.
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: amd64
+            npm_pkg: darwin-x64
+            runner: macos-latest
+            setup: darwin
+    steps: *build-sidecar-leg-steps
 
   # --- Windows: cross-compile (no OIDC) ---
   # Split out of the matrix so the matrix holds no id-token, and split from
@@ -411,6 +490,12 @@ jobs:
     permissions:
       contents: read
       id-token: write
+    # The SIGNED binary's digest (#781). Signing changes the bytes, so the
+    # digest build-sidecar-windows reported no longer describes what this job
+    # uploads, and without this the signed artifact reached publish-sidecar
+    # with nothing to check it against.
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
       # For scripts/sign-windows.sh and the committed certificate chain.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -503,6 +588,11 @@ jobs:
           fi
           scripts/sign-windows.sh "${SIDECAR_BIN}.exe"
 
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        run: echo "sha256=$(sha256sum "${SIDECAR_BIN}.exe" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
       - name: Upload binary
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -521,8 +611,8 @@ jobs:
     # the live state of `release`. `env` is not an allowed context in an
     # environment name, so this reads the input directly.
     environment:
-      name: ${{ inputs.dry_run && 'release-dry-run' || 'release' }}
-    needs: [resolve, build-sidecar, sign-sidecar-windows]
+      name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
+    needs: [resolve, build-sidecar-linux-x64, build-sidecar-linux-arm64, build-sidecar-darwin-arm64, build-sidecar-darwin-x64, sign-sidecar-windows]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -552,6 +642,49 @@ jobs:
         with:
           path: artifacts
           pattern: sidecar-*
+
+      # Before anything reads them (#781): each artifact must be the file its
+      # build job hashed, by a digest that arrives as that job output (which
+      # only that job can set), not through the artifact store (which every
+      # job in this run can write). The download must also hold exactly the
+      # five expected files: `pattern: sidecar-*` would bring in any other
+      # artifact so named, and Prepare copies a whole directory into each
+      # package. release-exec.test.sh runs this script against tampered,
+      # extra, missing and undigested fixtures.
+      - name: Verify sidecar artifacts
+        env:
+          SHA_LINUX_X64: ${{ needs.build-sidecar-linux-x64.outputs.sha256 }}
+          SHA_LINUX_ARM64: ${{ needs.build-sidecar-linux-arm64.outputs.sha256 }}
+          SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}
+          SHA_DARWIN_X64: ${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}
+          SHA_WIN32_X64: ${{ needs.sign-sidecar-windows.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          manifest=""
+          expect() {
+            [[ "$1" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no digest was reported for $2"; exit 1; }
+            manifest+="$1  $2"$'\n'
+          }
+          expect "$SHA_LINUX_X64" "sidecar-linux-x64/${SIDECAR_BIN}"
+          expect "$SHA_LINUX_ARM64" "sidecar-linux-arm64/${SIDECAR_BIN}"
+          expect "$SHA_DARWIN_ARM64" "sidecar-darwin-arm64/jarvis-app.tar.gz"
+          expect "$SHA_DARWIN_X64" "sidecar-darwin-x64/jarvis-app.tar.gz"
+          expect "$SHA_WIN32_X64" "sidecar-win32-x64/${SIDECAR_BIN}.exe"
+          cd artifacts
+          # Regular files only: a link would be hashed through to its target.
+          if [ -n "$(find . -mindepth 1 -not -type d -not -type f -print -quit)" ]; then
+            echo "::error::the downloaded sidecar artifacts contain something other than files and directories"
+            exit 1
+          fi
+          want="$(printf '%s' "$manifest" | cut -d' ' -f3- | sort)"
+          got="$(find . -mindepth 1 -not -type d | sed 's|^\./||' | sort)"
+          if [ "$got" != "$want" ]; then
+            echo "::error::the downloaded sidecar artifacts are not exactly the five that were built"
+            diff <(printf '%s\n' "$want") <(printf '%s\n' "$got") || true
+            exit 1
+          fi
+          printf '%s' "$manifest" | sha256sum --strict -c -
 
       # The digests of exactly what this job publishes, handed to the brain's
       # github-release job as a job output (#682). Artifacts are writable by
