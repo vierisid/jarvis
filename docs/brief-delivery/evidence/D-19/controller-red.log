@@ -1,0 +1,37 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/runs/controller.test.ts:
+(pass) all seven states and historical versions retain immutable identities [4.37ms]
+(pass) late A cannot replace B, even when the provider ignores cancellation [2.76ms]
+(pass) changing selection removes the previous result immediately, including on read failure [2.34ms]
+(pass) same-run refresh failure is stale, never a fresh success or another run [1.08ms]
+(pass) reject run identity substitution in selected detail [0.49ms]
+(pass) reject flow identity substitution in selected detail [0.30ms]
+(pass) reject scope identity substitution in selected detail [0.27ms]
+(pass) reject version identity substitution in selected detail [0.26ms]
+(pass) partial receipts and waitpoints remain inspectable without replay actions [2.80ms]
+(pass) manual run is single-flight, pinned and selects the returned ID [1.98ms]
+(pass) an unconfirmed command stays locked through subsequent reads and subscriptions [0.50ms]
+(pass) definitely not submitted releases the command but a mismatched receipt does not [0.15ms]
+(pass) owner retirement rejects late detail and command results [0.16ms]
+63 | });
+64 | test("a head-page request started before Run cannot overwrite its new receipt",async()=>{
+65 |  const f=makeRunsFixture(),pending=deferred<BriefReadState<RunPage>>();let r:any;
+66 |  const s=new WorkflowRunsController(RUN_SCOPE,{...f.port,list:()=>pending.promise,start:async request=>{r={...detail(f),runId:"new-run",label:"New run"};return{status:"accepted",requestId:request.requestId,run:r};}});
+67 |  const load=s.load();await s.start();pending.resolve(ready({items:[detail(f)],total:12,nextCursor:null}));await load;
+68 |  const h=s.getSnapshot().history;if(h.status!=="ready")throw Error();expect(h.data.items.some(run=>run.runId==="new-run")).toBe(true);expect(s.getSnapshot().selectedId).toBe("new-run");s.retire();
+                                                                                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-19/ui/src/brief/workflows/runs/controller.test.ts:68:124)
+(fail) a head-page request started before Run cannot overwrite its new receipt [0.67ms]
+(pass) history paging deduplicates IDs and preserves selection [0.66ms]
+(pass) invalid projections cannot smuggle identities or unusable statuses [0.23ms]
+
+ 15 pass
+ 1 fail
+ 43 expect() calls
+Ran 16 tests across 1 file. [76.00ms]
