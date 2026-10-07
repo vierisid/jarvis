@@ -1,0 +1,35 @@
+Full suite on brief/q-06 at baa88303 (local WSL2; load average about 0.7 at start). The final code commit 3ab2954b differs only by one more case in src/lib/cron-occurrence.test.ts.
+$ bun test --preload ./src/test-preload.ts
+ 7772 pass
+ 86 skip
+ 9 fail
+Ran 7867 tests across 426 files. [562.80s]
+
+Failures:
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [67.77ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [3050.18ms]
+(fail) browser primitives (integration) > (unnamed) [306.43ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [332.24ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [354.79ms]
+(fail) end to end, against a real process > reaps an engine whose owner really did die [29.79ms]
+(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [139.05ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [310.15ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [218.74ms]
+
+All 9 also fail on the base with no Q work applied (below): git config lint, six Chromium launches and two engine-reaper tests on this machine. No other test fails.
+CI on the final head runs the full suite.
+
+Baseline: the same test files on brief/foundations 462d955d with no Q work applied
+$ bun test --preload ./src/test-preload.ts src/sites/git-config-lint.test.ts src/workflows/runner/engine-runtime/engine-reaper.test.ts src/actions/browser/browser-local-files.test.ts src/actions/browser/browser-primitives.test.ts src/actions/browser/fixtures/headless-chromium.test.ts src/actions/browser/page-writable-element-refs.test.ts src/actions/tools/browser-template-delivery.test.ts
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [38.81ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [205.88ms]
+(fail) browser primitives (integration) > (unnamed) [210.47ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [219.62ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [223.55ms]
+(fail) end to end, against a real process > reaps an engine whose owner really did die [28.04ms]
+(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [135.22ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [205.33ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [230.84ms]
+ 358 pass
+ 9 fail
+Ran 368 tests across 7 files. [8.21s]

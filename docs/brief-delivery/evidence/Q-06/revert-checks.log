@@ -1,0 +1,295 @@
+Revert checks for Q-06 at 3ab2954b: each guarantee removed in turn, its test run, the source restored.
+Each entry gives the file, the exact text removed and what replaced it, so any check can be repeated by hand.
+
+[DETECTED] a schedule occurrence carries no identity across restarts
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  16 pass 4 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "        dedupeKey: occurrence?.key, scheduledFor: at, lateMs: occurrence?.lateMs,"
+    replace with: "        dedupeKey: undefined, scheduledFor: at, lateMs: occurrence?.lateMs,"
+    fails: schedules, in Jarvis's configured time zone > the autumn hour that happens twice fires its 01:30 once, also across a restart [35.11ms]
+    fails: schedules, in Jarvis's configured time zone > a time skipped by the spring-forward jump fires once, right after it [15.50ms]
+    fails: schedules, in Jarvis's configured time zone > a restart inside the firing minute does not run it twice [15.58ms]
+    fails: schedules, in Jarvis's configured time zone > a sleep or stall skips what it slept through, and a slightly late tick still fires, marked delayed [15.51ms]
+
+[DETECTED] the repeated autumn hour fires twice
+    test: src/lib/cron-occurrence.test.ts  exit: 1  3 pass 1 fail
+    file: src/lib/cron-scheduler.ts
+    remove: "        if (fired.has(occurrence.key)) continue;\n"
+    replace with: ""
+    fails: CronScheduler occurrences > the autumn hour that happens twice fires its minutes once [6.01ms]
+
+[DETECTED] a minute skipped by spring-forward never fires
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/lib/cron-scheduler.ts
+    remove: "          const shifted = skippedOccurrence(parsed, minute * 60_000);"
+    replace with: "          const shifted = null as ReturnType<typeof skippedOccurrence>;"
+    fails: schedules, in Jarvis's configured time zone > a time skipped by the spring-forward jump fires once, right after it [14.94ms]
+
+[DETECTED] a long-late occurrence runs late
+    test: src/lib/cron-occurrence.test.ts  exit: 1  2 pass 2 fail
+    file: src/lib/cron-scheduler.ts
+    remove: "(lateMs > CRON_GRACE_MS ? missed : due)"
+    replace with: "(false ? missed : due)"
+    fails: CronScheduler occurrences > a clock stepped back does not fire a minute again, nor run one it had missed [8.18ms]
+    fails: CronScheduler occurrences > past the grace window an occurrence is reported missed, never run late [0.76ms]
+
+[DETECTED] a clock stepped back fires a minute again
+    test: src/lib/cron-occurrence.test.ts  exit: 1  3 pass 1 fail
+    file: src/lib/cron-scheduler.ts
+    remove: "      if (current <= evaluatedThrough) return;"
+    replace with: "      if (current === evaluatedThrough) return;"
+    fails: CronScheduler occurrences > a clock stepped back does not fire a minute again, nor run one it had missed [2.44ms]
+
+[DETECTED] times owed while Jarvis was off are not recorded
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "      this.catchUpMissed(flowId, versionId, expression);"
+    replace with: "      void 0;"
+    fails: schedules, in Jarvis's configured time zone > times owed while Jarvis was off are recorded as missed and never run late [14.47ms]
+
+[DETECTED] a missed time is recorded again on every restart
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "source: \"schedule\", dedupeKey: occurrence.key,"
+    replace with: "source: \"schedule\", dedupeKey: undefined,"
+    fails: schedules, in Jarvis's configured time zone > a sleep or stall skips what it slept through, and a slightly late tick still fires, marked delayed [15.04ms]
+
+[DETECTED] a time is stacked behind a run that has not started
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "      const skipped = this.overlapping(flowId, \"trigger:cron\");"
+    replace with: "      const skipped = null;"
+    fails: schedules, in Jarvis's configured time zone > a time whose previous run has not started yet is skipped, not stacked behind it [15.04ms]
+
+[DETECTED] a broken schedule leaves a failed run per minute
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "    if (carriesInput || this.liveRefusals.get(flowId) !== signature) {"
+    replace with: "    if (true) {"
+    fails: schedules, in Jarvis's configured time zone > a broken every-minute schedule is one failed run and one counted blocked row, not one per minute [18.28ms]
+
+[DETECTED] a broken schedule leaves a blocked row per minute
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/db/repos/trigger-fire.ts
+    remove: "    if (latestFire?.outcome === \"blocked\" && latestFire.detail?.signature === input.signature) {"
+    replace with: "    if (false) {"
+    fails: schedules, in Jarvis's configured time zone > a broken every-minute schedule is one failed run and one counted blocked row, not one per minute [17.44ms]
+
+[DETECTED] a workflow turned off can still start a run
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  17 pass 3 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "    const off = this.notAdmitted(flowId, versionId);\n    if (off) {"
+    replace with: "    const off = null as string | null;\n    if (off) {"
+    fails: schedules, in Jarvis's configured time zone > a workflow turned off cannot start a run, even before its subscription is torn down [14.02ms]
+    fails: webhooks > a workflow turned off answers 404 and starts nothing [14.09ms]
+    fails: events > a workflow deleted while its source is being polled does not take the daemon down [40.18ms]
+
+[DETECTED] a schedule naming another zone gives no warning
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "  return stated === actual ? undefined"
+    replace with: "  return true ? undefined"
+    fails: schedules, in Jarvis's configured time zone > a schedule that names another zone still fires in Jarvis's zone, and says so [14.76ms]
+
+[DETECTED] an edited live draft keeps its old schedule
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "        && (!existing.triggerDigest || existing.triggerDigest === triggerDigest(desiredTrigger))) return;"
+    replace with: ") return;"
+    fails: schedules, in Jarvis's configured time zone > an edited live draft replaces its schedule [14.21ms]
+
+[DETECTED] provider delivery ids are ignored
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  18 pass 2 fail
+    file: src/workflows/runner/triggers/webhook.ts
+    remove: "const DELIVERY_ID_HEADERS = ['idempotency-key', 'x-github-delivery', 'webhook-id', 'svix-id', 'x-shopify-webhook-id'];"
+    replace with: "const DELIVERY_ID_HEADERS: string[] = [];"
+    fails: webhooks > a provider retrying the same delivery gets one run and its id back [15.55ms]
+    fails: webhooks > a delivery refused by readiness is kept for a person, and its retries do not pile up failed runs [14.41ms]
+
+[DETECTED] Stripe event ids are ignored
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/webhook.ts
+    remove: "  if (data.object === 'event' && typeof data.id === 'string' && data.id.startsWith('evt_')) {"
+    replace with: "  if (false) {"
+    fails: webhooks > an event id in the body names the delivery too (Stripe, Slack) [14.30ms]
+
+[DETECTED] identical signed requests are separate deliveries
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/webhook.ts
+    remove: "  if (signature) return { key: `signature:${signature.toLowerCase()}`, windowMs: SIGNED_REPEAT_WINDOW_MS, label: 'signature' };"
+    replace with: ""
+    fails: webhooks > an identical signed request is one delivery for ten minutes; identical unsigned pings are not deduplicated [15.95ms]
+
+[DETECTED] a signature stays a repeat forever
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "        ...(delivery.windowMs ? { duplicateSince: Date.now() - delivery.windowMs } : {}),"
+    replace with: ""
+    fails: webhooks > an identical signed request is one delivery for ten minutes; identical unsigned pings are not deduplicated [15.47ms]
+
+[DETECTED] a workflow that is off answers 200
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/webhook.ts
+    remove: "        ? json(404, { error: 'Workflow is not active', ...(result.fireId ? { fireId: result.fireId } : {}) })"
+    replace with: "        ? json(200, { ok: true, workflowId })"
+    fails: webhooks > a workflow turned off answers 404 and starts nothing [12.56ms]
+
+[DETECTED] a refused delivery is retried into another failed run
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: opts.dedupeKey, scheduledFor: opts.scheduledFor,"
+    replace with: "      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: undefined, scheduledFor: opts.scheduledFor,"
+    fails: webhooks > a delivery refused by readiness is kept for a person, and its retries do not pile up failed runs [13.90ms]
+
+[DETECTED] a re-announced email runs again
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runtime/event-types.ts
+    remove: "  if (eventType === \"observer.email_received\") return `email:${id}`;"
+    replace with: "  if (eventType === \"observer.email_received\") return undefined;"
+    fails: events > an email announced again after a restart runs its workflow once [15.95ms]
+
+[DETECTED] a rescheduled commitment is the same event
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runtime/event-types.ts
+    remove: "    return `${eventType}:${id}:${String(payload.when_due ?? \"\")}`;"
+    replace with: "    return `${eventType}:${id}`;"
+    fails: events > a commitment re-announced as overdue runs once; rescheduled, it is a new event [12.33ms]
+
+[DETECTED] the bus does not key events
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  18 pass 2 fail
+    file: src/workflows/runtime/event-bus.ts
+    remove: "    const key = rawPayload._eventKey === undefined ? eventDeliveryKey(eventType, rawPayload) : undefined;"
+    replace with: "    const key = undefined as string | undefined;"
+    fails: events > an email announced again after a restart runs its workflow once [14.00ms]
+    fails: events > a commitment re-announced as overdue runs once; rescheduled, it is a new event [15.79ms]
+
+[DETECTED] event ids restart at zero each boot
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/runtime/event-buffer.ts
+    remove: "    this.nextId = opts.firstId ?? 0;"
+    replace with: "    this.nextId = 0;"
+    fails: events > event ids start from a boot-unique base, so a cursor saved before a restart hides nothing [10.45ms]
+
+[DETECTED] a resume job does not name its waitpoint
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/runtime/continuation.ts
+    remove: "payload: { runId, executionType: \"RESUME\", waitpointId: waitpoint.id, resumePayload: input.resumePayload },"
+    replace with: "payload: { runId, executionType: \"RESUME\", resumePayload: input.resumePayload },"
+    fails: one continuation per pause > a due timer continues its run once, naming its waitpoint, and its lateness is recorded [21.31ms]
+
+[DETECTED] a second continuation is queued behind the first
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/runtime/continuation.ts
+    remove: "  if (activeContinuation(runId)) return \"busy\";"
+    replace with: ""
+    fails: one continuation per pause > while one continuation is queued, another is not queued behind it [15.26ms]
+
+[DETECTED] a finished step's timer wakes the next pause
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/runtime/continuation.ts
+    remove: "  return waitpoint.type !== \"WEBHOOK\" && stepIsPaused(run.steps, waitpoint.stepName) === false;"
+    replace with: "  return false;"
+    fails: one continuation per pause > a timer whose step already finished is retired, not used to wake the run's next pause [13.43ms]
+
+[DETECTED] the handler resumes from any waitpoint
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/runner/handler.ts
+    remove: "    const refusal = resuming ? continuationRefusal(run, typed.payload.waitpointId) : null;"
+    replace with: "    const refusal = null as string | null;"
+    fails: one continuation per pause > the handler continues a run only from the waitpoint that continuation consumed [17.00ms]
+
+[DETECTED] a resume URL is stored in the ledger
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/runtime/continuation.ts
+    remove: "  const dedupeKey = `waitpoint:${fireDigest(waitpoint.id)}`;"
+    replace with: "  const dedupeKey = `waitpoint:${waitpoint.id}`;"
+    fails: one continuation per pause > a due timer continues its run once, naming its waitpoint, and its lateness is recorded [26.65ms]
+
+[DETECTED] consuming a waitpoint and queueing its resume are separate
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/db/repos/trigger-fire.ts
+    remove: "  return db().transaction((): ClaimResult => {"
+    replace with: "  return ((): ClaimResult => {"
+    file: src/workflows/db/repos/trigger-fire.ts
+    remove: "    return { outcome: \"started\", fire: getFire(id)!, runId: started.runId };\n  }).immediate();"
+    replace with: "    return { outcome: \"started\", fire: getFire(id)!, runId: started.runId };\n  })();"
+    fails: one continuation per pause > the resume route consumes the waitpoint and queues the continuation together, or neither [14.23ms]
+
+[DETECTED] turning a workflow off stops nothing
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/api/routes.ts
+    remove: "          if (body.status !== undefined && updateFlowStatus(id, body.status).turnedOff) stopRunsOfTurnedOffFlow(id);"
+    replace with: "          if (body.status !== undefined) updateFlowStatus(id, body.status);"
+    fails: a workflow turned off never wakes its runs > turning it off stops its waiting and queued runs, each saying why [15.33ms]
+
+[DETECTED] a due timer wakes a turned-off workflow's run
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/timer-scheduler.ts
+    remove: "        if (turnedOffReason(run.id)) {"
+    replace with: "        if (false) {"
+    fails: a workflow turned off never wakes its runs > after a crash between turning off and stopping, the next continuation stops the run instead [13.53ms]
+
+[DETECTED] a resume URL wakes a turned-off workflow's run
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/api/routes.ts
+    remove: "          if (turnedOffReason(wp.flowRunId)) {"
+    replace with: "          if (false) {"
+    fails: a workflow turned off never wakes its runs > after a crash between turning off and stopping, the next continuation stops the run instead [14.26ms]
+
+[DETECTED] the handler starts a turned-off workflow's queued run
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/runner/handler.ts
+    remove: "    if ((run.status === \"QUEUED\" || run.status === \"PAUSED\") && turnedOffReason(runId)) {"
+    replace with: "    if (false) {"
+    fails: a workflow turned off never wakes its runs > after a crash between turning off and stopping, the next continuation stops the run instead [16.46ms]
+
+[DETECTED] an approval wakes a turned-off workflow's run
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/runtime/effect-approval-scheduler.ts
+    remove: "    if (turnedOffReason(run.id)) { stopTurnedOffRun(run.flowId, run.id); continue; }"
+    replace with: ""
+    fails: a workflow turned off never wakes its runs > an approval granted after the workflow was turned off does not continue the run [13.73ms]
+
+[DETECTED] a run started after turning off is stopped too
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/db/repos/flow-turn-off.ts
+    remove: " && row.created <= row.disabled_at ?"
+    replace with: " ?"
+    fails: a workflow turned off never wakes its runs > a run started by hand after the workflow was turned off is not stopped [16.95ms]
+
+[DETECTED] setting an off workflow off again stamps it
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/db/repos/flow.ts
+    remove: "disabled_at = CASE WHEN ? = 'DISABLED' AND status = 'ENABLED' THEN ? ELSE disabled_at END"
+    replace with: "disabled_at = CASE WHEN ? = 'DISABLED' THEN ? ELSE disabled_at END"
+    fails: a workflow turned off never wakes its runs > a test run of a workflow that was never on continues normally, even when it is set off again [13.51ms]
+
+[DETECTED] an edited draft is resumed on its changed steps
+    test: src/workflows/runtime/continuation.test.ts  exit: 1  11 pass 1 fail
+    file: src/workflows/runner/handler.ts
+    remove: "      if (began && began !== digest) {"
+    replace with: "      if (false) {"
+    fails: a run continues on the graph it began on > a draft edited while its run was paused is not continued on the changed steps [15.18ms]
+
+[DETECTED] deleting a workflow leaves its runs running
+    test: src/workflows/runtime/cancellation.test.ts  exit: 1  18 pass 1 fail
+    file: src/workflows/api/routes.ts
+    remove: "          stopRunsOfDeletedFlow(id);\n"
+    replace with: ""
+    fails: deleting a workflow mid-run stops it without a spurious failure or retry [14.24ms]
+
+[DETECTED] a late start is not shown as delayed
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/db/repos/trigger-fire.ts
+    remove: "  const late = (fire.lateMs ?? 0) > DELAYED_AFTER_MS;"
+    replace with: "  const late = false;"
+    fails: schedules, in Jarvis's configured time zone > a sleep or stall skips what it slept through, and a slightly late tick still fires, marked delayed [14.78ms]
+
+[DETECTED] the ledger is never pruned
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  19 pass 1 fail
+    file: src/workflows/db/repos/trigger-fire.ts
+    remove: "WHERE observed_at < ?`, [now - FIRE_RETENTION_MS]"
+    replace with: "WHERE observed_at < ?`, [0]"
+    fails: the delivery ledger > rows older than the retention are pruned [25.68ms]
+
+40 of 40 removals fail their tests; source restored after each.
