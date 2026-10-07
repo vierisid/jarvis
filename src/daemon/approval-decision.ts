@@ -114,9 +114,10 @@ export async function notificationApprovalDecision(
   const p = (payload ?? {}) as { id?: unknown; kind?: unknown; action?: unknown };
   if (p.kind !== 'approval' || typeof p.id !== 'string' || !p.id) return null;
   if (p.action !== 'approve' && p.action !== 'deny') return null;
+  // Fails closed: a request that cannot be read cannot be judged approvable.
   const request = deps.approvalManager.getRequest(p.id);
-  if (request && !approvalToast(request).approvable) {
-    console.warn(`[Approval] ignored a notification ${p.action} for ${p.id}: its toast was review-only`);
+  if (!request || !approvalToast(request).approvable) {
+    console.warn(`[Approval] ignored a notification ${p.action} for ${p.id}: ${request ? 'its toast was review-only' : 'no such request'}`);
     return null;
   }
   return applyApprovalDecision(p.action, p.id, 'notification', deps);

@@ -6,6 +6,7 @@ import {
   approvalToast,
   TOAST_APPROVABLE_MAX_COLUMNS,
   toastColumns,
+  toastLines,
   boundedApprovalLabel,
   type ApprovalBroadcaster,
   type ChannelSender,
@@ -556,5 +557,53 @@ describe('#789: the toast leads with what will happen', () => {
     const t = gate(`Run: ls${c(10)}'@${c(10)}calc`);
     expect(t.body).toBe("Run: ls '@ calc");
     expect(t.body).not.toMatch(/[\n\r\u2028\u2029]/u);
+  });
+});
+
+/**
+ * #791 review (WEB-001). The first width model counted every character outside
+ * a few East Asian and emoji ranges as one column and ignored word wrap, so a
+ * request_approval intent padded with glyphs that render many cells wide -- or
+ * with long words -- kept Approve while the OS cut its tail.
+ */
+describe('#791 review: the toast budget fails closed on widths it cannot know', () => {
+  const toast = (body: string) => approvalToast(makeRequest({ tool_name: 'request_approval', action_category: 'send_email', reason: body }));
+  const cp = (n: number) => String.fromCodePoint(n);
+
+  test.each([
+    ['an Arabic ligature that renders a dozen cells wide (U+FDFD)', cp(0xfdfd)],
+    ['cuneiform (U+12000)', cp(0x12000)],
+    ['a Javanese sign (U+A9C5)', cp(0xa9c5)],
+  ])('%s makes even a short toast review-only', (_label, ch) => {
+    expect(toastColumns(ch)).toBeNull();
+    const t = toast(`Read notes ${ch.repeat(3)} then wipe backups`);
+    expect(t.approvable).toBe(false);
+    expect(t.kind).toBe('approval_review');
+  });
+
+  test('a rocket and a check mark count as two columns each', () => {
+    expect(toastColumns(cp(0x1f680))).toBe(2);
+    expect(toastColumns(cp(0x2705))).toBe(2);
+  });
+
+  test('long words wrap: 65 columns of 21-character words need three lines, so no Approve', () => {
+    const body = `${'x'.repeat(21)} ${'y'.repeat(21)} ${'z'.repeat(21)}`;
+    expect(toastColumns(`${body} · external`)).toBeLessThanOrEqual(TOAST_APPROVABLE_MAX_COLUMNS);
+    expect(toastLines(`${body} · external`)).toBe(3);
+    expect(toast(body).approvable).toBe(false);
+  });
+
+  test('ordinary sentences in Latin, Greek, Cyrillic, Hebrew and CJK are still measured and approvable', () => {
+    for (const body of ['Send the weekly update to the team', '\u03a3\u03c4\u03b5\u03af\u03bb\u03b5 \u03c4\u03b7\u03bd \u03b1\u03bd\u03b1\u03c6\u03bf\u03c1\u03ac', '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0447\u0451\u0442', '\u05e9\u05dc\u05d7 \u05d0\u05ea \u05d4\u05d3\u05d5\u05d7', '\u53d1\u9001\u5468\u62a5\u7ed9\u56e2\u961f']) {
+      expect(toast(body).approvable).toBe(true);
+    }
+  });
+
+  test('measuring stops once the budget is passed, so a huge body is cheap', () => {
+    // 10 million characters: walking all of it takes far longer than the bound.
+    const huge = 'word '.repeat(2_000_000);
+    const t0 = performance.now();
+    expect(toastLines(huge)).toBe(3);
+    expect(performance.now() - t0).toBeLessThan(50);
   });
 });

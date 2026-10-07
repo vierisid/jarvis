@@ -203,6 +203,8 @@ describe('notificationApprovalDecision', () => {
     expect(await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'review' }, deps)).toBeNull();
     expect(await notificationApprovalDecision({ id: req.id, kind: 'done', action: 'approve' }, deps)).toBeNull();
     expect(await notificationApprovalDecision(undefined, deps)).toBeNull();
+    // An id the daemon cannot read is not approvable either (#791 review).
+    expect(await notificationApprovalDecision({ id: 'no-such-request', kind: 'approval', action: 'approve' }, deps)).toBeNull();
     expect(mgr.getRequest(req.id)!.status).toBe('pending');
     expect(executions).toBe(0);
   });

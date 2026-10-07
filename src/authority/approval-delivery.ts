@@ -106,8 +106,14 @@ export function approvalLabelAlteration(text: string): string | null {
  * Windows 11 or macOS banners either. It is a deliberately conservative
  * choice: two lines of about forty Latin characters, which is the smallest
  * layout we design for (a macOS banner shows its body in about two lines;
- * Windows shows more). A wide character (CJK, most emoji) counts as two
- * columns (`toastColumns`).
+ * Windows shows more). Text is measured the way it will wrap (`toastLines`):
+ * two lines of `TOAST_APPROVABLE_MAX_COLUMNS / 2` columns, filled word by word,
+ * a word longer than a line taking as many lines as it needs. A character
+ * counts as one column only in scripts whose glyphs are about one Latin cell
+ * wide, as two in East Asian wide text and emoji, and any other character --
+ * a ligature like U+FDFD that renders a dozen cells wide, cuneiform, a symbol
+ * block we have not sized -- makes the toast review-only: an unknown width
+ * fails closed.
  *
  * It is the one dial for how often a toast can be approved directly: above
  * it the toast is review-only and approving needs the dashboard. To tighten
@@ -118,22 +124,72 @@ export function approvalLabelAlteration(text: string): string | null {
  */
 export const TOAST_APPROVABLE_MAX_COLUMNS = 80;
 
-/** East Asian Wide/Fullwidth ranges and the emoji blocks: two columns each. */
-const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
+/** How many lines the budget is: the narrowest layout shows the body in about two. */
+const TOAST_APPROVABLE_LINES = 2;
+const TOAST_LINE_COLUMNS = TOAST_APPROVABLE_MAX_COLUMNS / TOAST_APPROVABLE_LINES;
 
-/** Display columns, counting a wide character as two. */
-export function toastColumns(text: string): number {
+/** Scripts whose glyphs are about one Latin cell wide: Latin, IPA, Greek, Cyrillic, Armenian, Hebrew, Arabic, punctuation, currency. */
+const ONE_COLUMN = /^[ -~\u00a0-\u02ff\u0370-\u058f\u0590-\u06ff\u1e00-\u1fff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf\u2100-\u214f\u2190-\u21ff]$/u;
+/** East Asian Wide/Fullwidth text and the emoji and pictograph blocks: two columns. */
+const TWO_COLUMNS = /^[\u1100-\u115f\u2600-\u27bf\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]$/u;
+/** Combining marks and variation selectors draw on the character before them. */
+const ZERO_COLUMNS = /^[\p{M}]$/u;
+
+/** One character's width in columns, or null when it is not known. */
+function charColumns(ch: string): number | null {
+  if (ZERO_COLUMNS.test(ch)) return 0;
+  if (ONE_COLUMN.test(ch)) return 1;
+  if (TWO_COLUMNS.test(ch)) return 2;
+  return null;
+}
+
+/** Display columns of `text`, or null when any character's width is not known. */
+export function toastColumns(text: string): number | null {
   let columns = 0;
-  for (const ch of text) columns += WIDE.test(ch) ? 2 : 1;
+  for (const ch of text) {
+    const width = charColumns(ch);
+    if (width === null) return null;
+    columns += width;
+  }
   return columns;
 }
 
-/** The longest prefix of `text` that fits `max` columns. */
+/**
+ * How many toast lines `text` fills when wrapped word by word at
+ * `TOAST_LINE_COLUMNS`, stopping as soon as it passes the approvable budget
+ * (the body can be a whole command). Infinity when a character's width is not
+ * known.
+ */
+export function toastLines(text: string): number {
+  let lines = 1;
+  let column = 0;
+  // Word by word with indexOf rather than split, so the work stops with the
+  // budget instead of first walking the whole body.
+  for (let start = 0; start <= text.length;) {
+    const space = text.indexOf(' ', start);
+    const end = space < 0 ? text.length : space;
+    const word = text.slice(start, end);
+    start = end + 1;
+    const width = toastColumns(word);
+    if (width === null) return Number.POSITIVE_INFINITY;
+    if (column > 0 && column + 1 + width <= TOAST_LINE_COLUMNS) {
+      column += 1 + width;
+    } else {
+      if (column > 0) lines++;
+      lines += Math.max(0, Math.ceil(width / TOAST_LINE_COLUMNS) - 1);
+      column = width > TOAST_LINE_COLUMNS ? width % TOAST_LINE_COLUMNS || TOAST_LINE_COLUMNS : width;
+    }
+    if (lines > TOAST_APPROVABLE_LINES) return lines;
+  }
+  return lines;
+}
+
+/** The longest prefix of `text` that fits `max` columns, an unknown width counted wide. */
 function fitColumns(text: string, max: number): string {
   let columns = 0;
   let out = '';
   for (const ch of text) {
-    columns += WIDE.test(ch) ? 2 : 1;
+    columns += charColumns(ch) ?? 4;
     if (columns > max) break;
     out += ch;
   }
@@ -160,8 +216,8 @@ export type ApprovalToast = {
  * impact, the tool and then why approval was needed. The sidecar renders
  * `body · meta` as one text under the title, and the OS cuts it to a few lines
  * (#791). So the part the person decides on -- the body, then the impact that
- * leads the meta -- must fit `TOAST_APPROVABLE_MAX_COLUMNS`
- * for the toast to carry Approve and Deny. What follows the impact may be cut
+ * leads the meta -- must fit `TOAST_APPROVABLE_MAX_COLUMNS` as it wraps
+ * (`toastLines`) for the toast to carry Approve and Deny. What follows the impact may be cut
  * by the OS, and is never what the decision is about.
  *
  * Above the budget the toast is review-only: no Approve, no Deny, an "Open
@@ -175,9 +231,7 @@ export type ApprovalToast = {
  * approve/deny only for kind `approval` (`notificationApprovalDecision`).
  *
  * Every text is reduced like a channel-card label: one line, no format
- * characters. The body must stay one line for a second reason: the Windows
- * sidecar embeds it in a PowerShell here-string, where a line starting `'@`
- * would end the string.
+ * characters, so a line break cannot forge a line of the toast's layout.
  */
 export function approvalToast(request: ApprovalRequest): ApprovalToast {
   const label = (text: string) => boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
@@ -192,7 +246,7 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   const impact = impactFromCategory(request.action_category);
   const toolLabel = label(request.tool_name);
   const destructive = impact === 'destructive';
-  const approvable = toastColumns(`${body} · ${impact}`) <= TOAST_APPROVABLE_MAX_COLUMNS;
+  const approvable = toastLines(`${body} · ${impact}`) <= TOAST_APPROVABLE_LINES;
   if (approvable) {
     // The reason goes last, after the impact and the tool: it says why
     // approval was needed, and it is the part an OS cut may take.
@@ -204,7 +258,7 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
     };
   }
   // Leave room for the `...` and the ` · <impact>` that follows the body.
-  const room = TOAST_APPROVABLE_MAX_COLUMNS - toastColumns(`... · ${impact}`);
+  const room = TOAST_APPROVABLE_MAX_COLUMNS - `... · ${impact}`.length;
   return {
     id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
     body: `${fitColumns(body, room).trimEnd()}...`,
