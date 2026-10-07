@@ -1,0 +1,45 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/decisions/controller.test.ts:
+(pass) selection follows identity through reorder and refresh [6.51ms]
+(pass) approval is acknowledged before next selection, and never claims execution [26.16ms]
+(pass) keep draft remains in the queue and requires reopening, not silent reapproval [47.40ms]
+(pass) rejection has a truthful local receipt and resolves only the chosen item [24.47ms]
+(pass) edit/save carries the complete typed document and uses the new approval revision [27.60ms]
+(pass) stale refresh preserves unsaved content and prevents save or approval [24.93ms]
+(pass) cancel edit writes nothing and restores original document [23.06ms]
+(pass) invalid edits cannot be submitted [2.19ms]
+(pass) stale never offers a mutation [2.01ms]
+(pass) read-only never offers a mutation [1.59ms]
+(pass) unavailable never offers a mutation [1.48ms]
+(pass) empty never offers a mutation [1.61ms]
+(pass) rendered revision must match even when a fresher controller view exists [3.41ms]
+(pass) lost responses stay pinned through empty/reordered reads; recovery never resends [28.85ms]
+(pass) unknown save keeps its draft frozen until receipt and fresh view reconcile [26.51ms]
+(pass) definitive refusal needs explicit refresh, unlike an unknown transport result [4.93ms]
+(pass) all receipt correlations are required; execution is not a document receipt [0.37ms]
+(pass) mismatched receipt cannot advance or unlock a decision [24.58ms]
+(pass) late reads cannot replace a newer refresh [1.10ms]
+(pass) scope revocation and retirement prevent mutation and stale repaint [1.81ms]
+(pass) concurrent press cannot create a second in-flight decision [32.23ms]
+(pass) retained rejected blocker is not fabricated away [22.17ms]
+(pass) calendar changes preserve readonly options and validate timezones [25.38ms]
+
+ui/src/brief/decisions/DecisionsRoom.test.tsx:
+(pass) clean heading, same Today identity, only unresolved text highlighted [122.62ms]
+(pass) selection survives every theme/sidebar/chat combination and routes by approval ID [349.06ms]
+(pass) direct Today review alias opens the matching document [34.42ms]
+(pass) editing keeps the document/actions mounted and blocks selection/approval [99.78ms]
+(pass) unsupported edits stay disabled with a visible reason [34.58ms]
+(pass) uncertainty retains the selected document until read-only recovery [89.27ms]
+(pass) calendar preview includes readonly options, not raw tool arguments [62.90ms]
+(pass) missing live capability, fixture/live mismatch and wrong scope fail closed [55.79ms]
+(pass) ten decisions are real buttons, not truncated previews [63.57ms]
+(pass) empty is not confused with unavailable [63.02ms]
+(pass) keep draft advancement updates the return route instead of reopening the deferred item [156.14ms]
+(pass) room return restores document and selector reading positions from its retained owner [67.18ms]
+
+ 35 pass
+ 0 fail
+ 149 expect() calls
+Ran 35 tests across 2 files. [2.05s]

@@ -1,0 +1,97 @@
+{
+  "layouts": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "selection": true,
+      "editGeometry": true,
+      "saveAndApprove": true,
+      "reject": true,
+      "tenDecisions": true
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "selection": true,
+      "editGeometry": true,
+      "saveAndApprove": true,
+      "reject": true,
+      "tenDecisions": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "selection": true,
+      "editGeometry": true,
+      "saveAndApprove": true,
+      "reject": true,
+      "tenDecisions": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "selection": true,
+      "editGeometry": true,
+      "saveAndApprove": true,
+      "reject": true,
+      "tenDecisions": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "selection": true,
+      "editGeometry": true,
+      "saveAndApprove": true,
+      "reject": true,
+      "tenDecisions": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "selection": true,
+      "editGeometry": true,
+      "saveAndApprove": true,
+      "reject": true,
+      "tenDecisions": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "selection": true,
+      "editGeometry": true,
+      "saveAndApprove": true,
+      "reject": true,
+      "tenDecisions": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "selection": true,
+      "editGeometry": true,
+      "saveAndApprove": true,
+      "reject": true,
+      "tenDecisions": true
+    }
+  ],
+  "rapidPebbleCycles": 10,
+  "hoverCycles": 10,
+  "readOnlyRecovery": true,
+  "keptDraftReopen": true,
+  "multipleRecipients": true,
+  "workflowDestinationReturn": true,
+  "calendarEdit": true,
+  "longContent": true,
+  "narrow": true,
+  "keyboard": true,
+  "reducedMotion": true,
+  "errors": [],
+  "mutations": []
+}

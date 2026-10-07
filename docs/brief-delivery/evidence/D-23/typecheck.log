@@ -1,0 +1,3 @@
+bun x tsc --noEmit
+Exit: 0
+No diagnostics.
