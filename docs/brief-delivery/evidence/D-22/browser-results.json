@@ -1,0 +1,90 @@
+{
+  "layouts": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "selection": true,
+      "stableHeader": true,
+      "ackTarget": true,
+      "approveThenDismiss": true
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "selection": true,
+      "stableHeader": true,
+      "ackTarget": true,
+      "approveThenDismiss": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "selection": true,
+      "stableHeader": true,
+      "ackTarget": true,
+      "approveThenDismiss": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "selection": true,
+      "stableHeader": true,
+      "ackTarget": true,
+      "approveThenDismiss": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "selection": true,
+      "stableHeader": true,
+      "ackTarget": true,
+      "approveThenDismiss": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "selection": true,
+      "stableHeader": true,
+      "ackTarget": true,
+      "approveThenDismiss": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "selection": true,
+      "stableHeader": true,
+      "ackTarget": true,
+      "approveThenDismiss": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "selection": true,
+      "stableHeader": true,
+      "ackTarget": true,
+      "approveThenDismiss": true
+    }
+  ],
+  "rapidPebbleCycles": 10,
+  "hoverCycles": 10,
+  "interruptedReflowSelection": true,
+  "sampledLocalMotion": true,
+  "staleAndPreparingBlocked": true,
+  "truthfulPendingRegistration": true,
+  "readOnlyRecovery": true,
+  "explicitRefusal": true,
+  "longContent": true,
+  "narrow": true,
+  "keyboardSelectionAndAction": true,
+  "reducedMotion": true,
+  "errors": [],
+  "mutations": []
+}

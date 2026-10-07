@@ -1,0 +1,180 @@
+{
+  "task": "D-22",
+  "title": "Build Opportunities and the Finished brief",
+  "status": "implemented_verified_not_activated",
+  "date": "2026-10-07",
+  "branch": "brief/d-22",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-22",
+  "base": "brief/d-21",
+  "baseline": "3131564517fe5dd4a9bd136abe688b45b0bf4337",
+  "head": "The commit containing this receipt; resolve with git log -1 --format=%H -- docs/brief-delivery/D-22.json",
+  "inspected_main": "485bb9b3b70f4d3874798810efc6f06355f86ef6",
+  "final_fetched_main": "16c5eec08d5d3e4250b100b584005561fcfded61",
+  "unmerged_dependencies": {
+    "F-09": "8614e886d3118fe08e06b1d4a5020f33419d6505",
+    "F-10": "ad6cb75ff4b8b8d80d5fd2791533639c94887bb2"
+  },
+  "source_of_truth": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "node": "81:2931",
+    "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+    "evidence": "ui/src/brief/opportunities/figma-reference.json"
+  },
+  "activation": {
+    "production_registry_changed": false,
+    "required_capabilities": [
+      "preparedOpportunities",
+      "opportunityActivation"
+    ],
+    "source_scope_guards": true,
+    "real_effects_invoked": false,
+    "host_gates": [
+      "Complete authorized F-09 paginated read adapter",
+      "Revision-aligned optional output/workflow projection; raw F-09 output absent",
+      "F-10 action and read-only receipt recovery adapter",
+      "Host durable pending-decision hydration/reconciliation before enabling",
+      "Shared Today/Opportunities receipt owner at cutover"
+    ]
+  },
+  "verification": [
+    {
+      "command": "bun test ui/src/brief/opportunities",
+      "result": "pass",
+      "tests": 44,
+      "assertions": 135,
+      "evidence": "evidence/D-22/focused-tests.log"
+    },
+    {
+      "command": "bun test ui/src/brief",
+      "result": "pass",
+      "tests": 469,
+      "skipped": 2,
+      "assertions": 4643,
+      "files": 32,
+      "evidence": "evidence/D-22/brief-regression.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-22/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-22/build.log",
+      "warnings": "Existing @theme/@tailwind at-rule warnings"
+    },
+    {
+      "command": "prettier --check ui/src/brief/opportunities; git diff --check",
+      "result": "pass",
+      "evidence": "evidence/D-22/format-check.log"
+    }
+  ],
+  "browser": {
+    "script": "evidence/D-22/browser-check.cjs",
+    "evidence": "evidence/D-22/browser-results.json",
+    "result": "pass",
+    "observed": {
+      "layouts": [
+        {
+          "theme": "light",
+          "rail": false,
+          "chat": false,
+          "selection": true,
+          "stableHeader": true,
+          "ackTarget": true,
+          "approveThenDismiss": true
+        },
+        {
+          "theme": "light",
+          "rail": false,
+          "chat": true,
+          "selection": true,
+          "stableHeader": true,
+          "ackTarget": true,
+          "approveThenDismiss": true
+        },
+        {
+          "theme": "light",
+          "rail": true,
+          "chat": false,
+          "selection": true,
+          "stableHeader": true,
+          "ackTarget": true,
+          "approveThenDismiss": true
+        },
+        {
+          "theme": "light",
+          "rail": true,
+          "chat": true,
+          "selection": true,
+          "stableHeader": true,
+          "ackTarget": true,
+          "approveThenDismiss": true
+        },
+        {
+          "theme": "dark",
+          "rail": false,
+          "chat": false,
+          "selection": true,
+          "stableHeader": true,
+          "ackTarget": true,
+          "approveThenDismiss": true
+        },
+        {
+          "theme": "dark",
+          "rail": false,
+          "chat": true,
+          "selection": true,
+          "stableHeader": true,
+          "ackTarget": true,
+          "approveThenDismiss": true
+        },
+        {
+          "theme": "dark",
+          "rail": true,
+          "chat": false,
+          "selection": true,
+          "stableHeader": true,
+          "ackTarget": true,
+          "approveThenDismiss": true
+        },
+        {
+          "theme": "dark",
+          "rail": true,
+          "chat": true,
+          "selection": true,
+          "stableHeader": true,
+          "ackTarget": true,
+          "approveThenDismiss": true
+        }
+      ],
+      "rapidPebbleCycles": 10,
+      "hoverCycles": 10,
+      "interruptedReflowSelection": true,
+      "sampledLocalMotion": true,
+      "staleAndPreparingBlocked": true,
+      "truthfulPendingRegistration": true,
+      "readOnlyRecovery": true,
+      "explicitRefusal": true,
+      "longContent": true,
+      "narrow": true,
+      "keyboardSelectionAndAction": true,
+      "reducedMotion": true,
+      "errors": [],
+      "mutations": []
+    }
+  },
+  "limitations": [
+    "No backend/live activation or provider effect executed. Separate F branches remain unmerged.",
+    "Controller survives mounted navigation, not browser restart. Host durable pending receipt hydration is a release gate.",
+    "F-09 lacks raw output previews. Missing output remains explicit, never a fixture fallback.",
+    "Today and Opportunities fixtures do not share a domain store; integration must supply one.",
+    "Chrome evidence is not screen-reader, all-browser or production responsiveness certification.",
+    "Existing suite has two explicitly skipped tests."
+  ],
+  "rollback": "Disable optional opportunitiesRegistration and specimen route; preserve host receipts; legacy/default routes unchanged.",
+  "quick_verify": "http://127.0.0.1:4402/?brief=preview&specimen=opportunities#/_brief_preview",
+  "next": "D-23, not started"
+}
