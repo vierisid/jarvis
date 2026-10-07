@@ -1,0 +1,97 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: /tmp/jarvis-next-action-biAsUl/test.db
+Database initialized at: /tmp/jarvis-next-action-gqJRDI/test.db
+Database initialized at: /tmp/jarvis-next-action-3WIYsF/test.db
+Database initialized at: /tmp/jarvis-next-action-vgKIms/test.db
+Database initialized at: /tmp/jarvis-next-action-mychu1/test.db
+Database initialized at: /tmp/jarvis-next-action-pu1brZ/test.db
+Database initialized at: /tmp/jarvis-next-action-8qFg29/test.db
+Database initialized at: /tmp/jarvis-f13-q18-xRh4r6/fixture.db
+Database initialized at: /tmp/jarvis-f13-q18-h4kMRW/fixture.db
+Database initialized at: /tmp/jarvis-f13-q18-4x7TyE/fixture.db
+Database initialized at: /tmp/jarvis-f13-q18-4x7TyE/fixture.db
+Database initialized at: /tmp/jarvis-f13-q18-9k78BI/fixture.db
+Database initialized at: /tmp/jarvis-f13-q18-9k78BI/fixture.db
+
+src/goals/next-action.test.ts:
+(pass) founder-review scenarios > check-finished-run: This week's invoice reminders ran and finished. Pricing work is also waiting. [9.40ms]
+(pass) founder-review scenarios > answer-waitpoint: The reminder run is paused, waiting for approval to send. [0.35ms]
+(pass) founder-review scenarios > failed-run: The reminder run failed and nobody has looked at it. [0.18ms]
+(pass) founder-review scenarios > unavailable-integration: Accepted follow-up work runs a workflow whose Gmail account is disconnected. Another goal has a startable step. [0.40ms]
+(pass) founder-review scenarios > decide-proposals: This morning's plan proposed two items, one for a goal due in two days. [0.33ms]
+(pass) founder-review scenarios > continue-before-starting: Accepted reminder work is ready. Another goal has no work yet. [0.19ms]
+(pass) founder-review scenarios > already-done: Reminder work was checked done two days ago, but the goal is still open. A pricing goal has a startable step. [0.31ms]
+(pass) founder-review scenarios > already-done-only: Reminder work was checked done two days ago, the goal is still open, and nothing else is active. [0.17ms]
+(pass) founder-review scenarios > all-steps-complete: Every task under the invoice key result is complete, but the key result is still open. [0.18ms]
+(pass) founder-review scenarios > stale-goal: A newsletter goal has had no progress or work for six weeks. [0.16ms]
+(pass) founder-review scenarios > stale-and-fresh: The newsletter goal is stale; a pricing goal created this week has a startable step. [0.26ms]
+(pass) founder-review scenarios > duplicate-commitment: The founder already committed to calling Ana about invoice 1042. [0.29ms]
+(pass) founder-review scenarios > blocked-by-dependency: Sending the new price list depends on approving the new prices, which is not done. [0.22ms]
+(pass) founder-review scenarios > accepted-work-waits-on-dependency: Accepted work on the price-list goal is ready, but that goal waits on approving the new prices. [0.23ms]
+(pass) founder-review scenarios > duplicate-open-work: A proposal to draft the partner agreement exists without a goal link; the matching goal has no work of its own. [0.19ms]
+(pass) founder-review scenarios > paused-parent: The only key result belongs to a paused objective. [0.14ms]
+(pass) founder-review scenarios > full-queue: Five items are running, the daily limit, and a new step is available. [0.27ms]
+(pass) founder-review scenarios > full-queue-still-checks: The day is full, but one item finished and needs checking. [0.23ms]
+(pass) founder-review scenarios > no-concrete-step: The objective has no tasks under it yet. [0.19ms]
+(pass) founder-review scenarios > last-attempt-failed: The last reminder attempt failed its check: three reminders bounced. [0.21ms]
+(pass) founder-review scenarios > tie-between-goals: Two goals with no deadlines, the same health and no order between them each have a startable step. [0.30ms]
+(pass) founder-review scenarios > deadline-breaks-tie: Two startable goals; one is due in three days. [0.21ms]
+(pass) founder-review scenarios > nothing-left: Every goal is complete and the last item is still running. [0.14ms]
+(pass) founder-review scenarios > old-proposals: Proposals from earlier mornings were never decided and one was rejected. This morning a run finished. [0.22ms]
+(pass) founder-review scenarios > proposal-for-done-goal: Reminder work was checked done two days ago. This morning's fallback plan proposed working on the same goal again. [0.34ms]
+(pass) founder-review scenarios > inherited-dependency: Emailing the price list, due in three days, sits under a milestone that waits on approving the new prices. [0.40ms]
+(pass) founder-review scenarios > done-long-ago: Reminder work was checked done ten days ago; the goal is still open and nothing else is active. [0.26ms]
+(pass) founder-review scenarios > done-without-link: A commitment with the goal's exact title was finished three days ago, without a link to the goal. [0.25ms]
+(pass) founder-review scenarios > closed-in-tasks: Accepted reminder work was marked done in Tasks yesterday, without a result check. [0.28ms]
+(pass) founder-review scenarios > timer-wait: A follow-up workflow is in its three-day wait. A pricing goal has a startable step. [0.30ms]
+(pass) founder-review scenarios > approval-under-paused-goal: A run waits for approval to send, but its goal was paused yesterday. [0.22ms]
+(pass) founder-review scenarios > parent-deadline: A task under a key result due tomorrow, and a standalone task due in five days. [0.33ms]
+(pass) founder-review scenarios > full-day-closes-goal: Five items are running, the daily limit. A goal's work was checked done yesterday, and another goal has a startable step. [0.37ms]
+(pass) founder-review scenarios > impossible-dependency: The launch email waits on a beta goal that was killed. [0.24ms]
+(pass) founder-review scenarios > the set covers the cases the card names, and the pass conditions [0.21ms]
+(pass) founder-review scenarios > the set and rubric are what the founder approved, unchanged since [0.64ms]
+(pass) next-action planner > a recommendation names its goal and revision, its evidence, why it beats doing nothing and the runner-up, and when it expires [0.46ms]
+(pass) next-action planner > a deadline inside the window, the goal's or a parent's, brings the expiry forward [0.59ms]
+(pass) next-action planner > the basis ignores the clock and changes with any input [0.91ms]
+(pass) next-action planner > excluded options say why they were left out [1.61ms]
+(pass) next-action planner > a proposal is offered only when its goal could take it [0.48ms]
+(pass) next-action planner > a proposal from before today is not open work and does not fill the day [0.25ms]
+(pass) next-action planner > questions say what the answer unblocks [0.84ms]
+(pass) next-action planner > a question of its own is not replaced by a tie [0.24ms]
+(pass) next-action planner > steps you already ordered, at any level, are not asked about [0.26ms]
+(pass) next-action planner > the rationale names what separated two options of one kind [0.88ms]
+(pass) next-action planner > an option that adds no work says why it beats doing nothing [0.46ms]
+(pass) next-action planner > a full day still offers what adds no work, and says what it held back [0.42ms]
+(pass) next-action planner > plain commitments fill the day only when due by its end, and back an abstention as evidence [0.53ms]
+(pass) next-action planner > dates are written in the user's time zone [0.67ms]
+(pass) next-action planner > a goal activated recently is not stale, however old it is [0.31ms]
+(pass) next-action planner > a dependency that can never finish asks for a fix [0.73ms]
+(pass) next-action planner > a wait that ends by itself or on an outside call is not offered, but counts toward the day [0.47ms]
+(pass) next-action planner > under a held goal, settling what happened goes on and moving forward waits [0.26ms]
+(pass) next-action planner > text from outside the plan, such as a failed step's error, is quoted short [0.40ms]
+(pass) next-action planner > the plan lists at most 20 alternatives, reasons first, and counts what it left out [0.68ms]
+(pass) next-action planner > across every scenario: nothing blocked is offered as doable, nothing repeats or duplicates work, and a full day gets no new work [14.50ms]
+(pass) next-action planner > doing nothing new is always weighed [3.75ms]
+(pass) live observation > reads goals, open work, commitments and workflow readiness, and writes nothing [557.82ms]
+(pass) live observation > old, rejected and settled work is not read, and open work is bounded newest first [424.83ms]
+(pass) live observation > a goal's latest result is read however old, from a check or from Tasks [522.57ms]
+(pass) live observation > a waiting run says who resumes it, and planning over runs writes nothing [556.23ms]
+(pass) live observation > a run moving through its steps leaves the basis alone; finishing changes it [545.71ms]
+(pass) live observation > a resume counts as activation, so a long-idle goal resumed today is not stale [410.14ms]
+(pass) live observation > every goal is read, past a thousand [656.78ms]
+
+src/brief/recommendations-q18.test.ts:
+(skip) without Q-18, the loader supplies no substitute planner
+(pass) actual Q-18 recommends a concrete goal, accepts once, then links the existing work [562.69ms]
+(pass) actual Q-18 questions, abstention and changed goal state remain non-actions [501.72ms]
+(pass) actual Q-18 links surviving work after goal deletion before generation [552.27ms]
+(pass) actual Q-18 links surviving work after goal deletion after generation [506.55ms]
+
+1 tests skipped:
+(skip) without Q-18, the loader supplies no substitute planner
+
+ 69 pass
+ 1 skip
+ 0 fail
+ 282 expect() calls
+Ran 70 tests across 2 files. [5.90s]

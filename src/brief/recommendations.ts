@@ -114,7 +114,10 @@ export class Recommendations {
       const created = workId === null;
       if (workId) {
         const work = getWorkItem(workId);
-        if (work.goalId !== (action.goal?.goalId ?? null)) throw new RecommendationError('Work no longer belongs to this goal', 409, 'not_available');
+        // Deleting a goal retains the work's historical goalId. Q-18 projects
+        // that missing goal as null; compare the same live context without rewriting history.
+        const liveGoalId = work.goalId && getGoal(work.goalId) ? work.goalId : null;
+        if (liveGoalId !== (action.goal?.goalId ?? null)) throw new RecommendationError('Work no longer belongs to this goal', 409, 'not_available');
       } else {
         const work = createWorkItem({ title: action.title, goalId: action.goal?.goalId ?? null, mode: 'manual' });
         decideWorkItem(work.id, { outcome: 'accepted', reason: 'Accepted this next-step recommendation' });

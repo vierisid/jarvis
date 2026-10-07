@@ -1,0 +1,63 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: /tmp/jarvis-f13-q18-5lPodc/fixture.db
+Database initialized at: /tmp/jarvis-f13-q18-IUgN4P/fixture.db
+Database initialized at: /tmp/jarvis-f13-KKRG3S/fixture.db
+Database initialized at: /tmp/jarvis-f13-jA3LLv/fixture.db
+Database initialized at: /tmp/jarvis-f13-ol74Q2/fixture.db
+
+src/brief/recommendations-q18.test.ts:
+112 |       if (action.goal && !getGoal(action.goal.goalId)) throw new RecommendationError('Goal no longer exists', 409, 'not_available');
+113 |       let workId = action.workItemId;
+114 |       const created = workId === null;
+115 |       if (workId) {
+116 |         const work = getWorkItem(workId);
+117 |         if (work.goalId !== (action.goal?.goalId ?? null)) throw new RecommendationError('Work no longer belongs to this goal', 409, 'not_available');
+                                                                       ^
+error: Work no longer belongs to this goal
+ status: 409,
+   code: "not_available"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.ts:117:66)
+      at transaction (bun:sqlite:400:27)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations-q18.test.ts:84:30)
+(fail) actual Q-18 links surviving work after goal deletion before generation [619.41ms]
+112 |       if (action.goal && !getGoal(action.goal.goalId)) throw new RecommendationError('Goal no longer exists', 409, 'not_available');
+113 |       let workId = action.workItemId;
+114 |       const created = workId === null;
+115 |       if (workId) {
+116 |         const work = getWorkItem(workId);
+117 |         if (work.goalId !== (action.goal?.goalId ?? null)) throw new RecommendationError('Work no longer belongs to this goal', 409, 'not_available');
+                                                                       ^
+error: Work no longer belongs to this goal
+ status: 409,
+   code: "not_available"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.ts:117:66)
+      at transaction (bun:sqlite:400:27)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations-q18.test.ts:84:30)
+(fail) actual Q-18 links surviving work after goal deletion after generation [432.79ms]
+
+src/brief/recommendations.test.ts:
+112 |       if (action.goal && !getGoal(action.goal.goalId)) throw new RecommendationError('Goal no longer exists', 409, 'not_available');
+113 |       let workId = action.workItemId;
+114 |       const created = workId === null;
+115 |       if (workId) {
+116 |         const work = getWorkItem(workId);
+117 |         if (work.goalId !== (action.goal?.goalId ?? null)) throw new RecommendationError('Work no longer belongs to this goal', 409, 'not_available');
+                                                                       ^
+error: Work no longer belongs to this goal
+ status: 409,
+   code: "not_available"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.ts:117:66)
+      at transaction (bun:sqlite:400:27)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:129:28)
+(fail) work whose goal was deleted still links once and preserves its historical goal ID after restart [421.28ms]
+(pass) a missing planner goal cannot link work that belongs to a live goal [535.59ms]
+(pass) a different planner goal cannot link work that belongs to a live goal [508.58ms]
+
+ 2 pass
+ 19 filtered out
+ 3 fail
+ 16 expect() calls
+Ran 5 tests across 2 files. [2.56s]

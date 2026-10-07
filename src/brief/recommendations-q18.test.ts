@@ -6,7 +6,7 @@ import { initWorkflowDb } from '../workflows/db';
 import { closeDb, getDb } from '../vault/schema';
 import { getGoalApplication } from '../goals/application-service';
 import { getGoal } from '../vault/goals';
-import { createWorkItem } from '../goals/work-items';
+import { createWorkItem, decideWorkItem, getWorkItem } from '../goals/work-items';
 import { ApprovalManager } from '../authority/approval';
 import { AuditTrail } from '../authority/audit';
 import { DeferredExecutor } from '../authority/deferred-executor';
@@ -58,3 +58,40 @@ test.skipIf(!present)('actual Q-18 questions, abstention and changed goal state 
   expect(() => provider.accept(rec.recommendationId, 'stale', rec.revision)).toThrow();
   expect((getDb().query('SELECT count(*) AS n FROM commitment_work').get() as { n: number }).n).toBe(0);
 });
+
+for (const timing of ['before generation', 'after generation'] as const) {
+  test.skipIf(!present)(`actual Q-18 links surviving work after goal deletion ${timing}`, async () => {
+    const { provider, queue } = await fixture();
+    const goal = getGoalApplication().createGoal('Review the agreed proposal', 'task', { status: 'active' });
+    const front = createWorkItem({ title: 'Keep the current front' });
+    const first = queue.get(`work:${front.id}`);
+    const frontBefore = queue.place(first.decisionId, first.revision, -10);
+    const work = createWorkItem({ title: 'Review the agreed proposal', goalId: goal.id });
+    decideWorkItem(work.id, { outcome: 'accepted', reason: 'Proceed' });
+    const workBefore = getWorkItem(work.id), queuedBefore = queue.get(`work:${work.id}`);
+    // Q-18 chooses accepted work ahead of new goals, but today's proposals rank first.
+    getDb().run('UPDATE commitments SET created_at = ? WHERE id = ?', [Date.now() - 3 * 86_400_000, front.id]);
+    const retainedFront = queue.get(frontBefore.decisionId);
+    const stale = timing === 'after generation' ? provider.generate('before-deletion') : null;
+    if (stale) expect(stale.plan).toMatchObject({ outcome: 'recommend', action: { goal: { goalId: goal.id }, workItemId: work.id } });
+    getGoalApplication().deleteGoal(goal.id);
+    if (stale) {
+      expect(provider.get(stale.recommendationId).state).toBe('blocked');
+      expect(() => provider.accept(stale.recommendationId, 'stale-deleted-goal', stale.revision)).toThrow('changed');
+    }
+    const rec = provider.generate('surviving-work');
+    expect(rec).toMatchObject({ state: 'available', plan: { outcome: 'recommend', action: { goal: null, workItemId: work.id } } });
+    const receipt = provider.accept(rec.recommendationId, 'surviving-work', rec.revision);
+    expect(receipt).toMatchObject({ created: false, destination: { decisionId: queuedBefore.decisionId, workItemId: work.id, title: work.title } });
+    expect(provider.accept(rec.recommendationId, 'surviving-work', rec.revision)).toEqual(receipt);
+    expect((await queue.read()).data.items).toEqual([retainedFront, queuedBefore]);
+    expect(getWorkItem(work.id)).toEqual(workBefore); expect(getGoal(goal.id)).toBeNull();
+    expect((getDb().query('SELECT count(*) AS n FROM commitment_work').get() as { n: number }).n).toBe(2);
+    expect((getDb().query('SELECT count(*) AS n FROM goal_progress').get() as { n: number }).n).toBe(0);
+    closeDb(); initWorkflowDb(join(directory, 'fixture.db'));
+    const reopened = await fixture();
+    expect(reopened.provider.get(rec.recommendationId)).toMatchObject({ state: 'accepted', acceptance: receipt });
+    expect(reopened.provider.accept(rec.recommendationId, 'surviving-work', rec.revision)).toEqual(receipt);
+    expect((await reopened.queue.read()).data.items).toEqual([retainedFront, queuedBefore]);
+  });
+}

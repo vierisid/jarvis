@@ -113,6 +113,44 @@ test('existing work is linked without duplicating, renaming, accepting its pendi
   expect((await queue.read()).data.items).toEqual([before]); expect(count('commitment_work')).toBe(1);
 });
 
+test('work whose goal was deleted still links once and preserves its historical goal ID after restart', async () => {
+  const original = plan(now);
+  if (original.outcome !== 'recommend') throw Error();
+  const work = createWorkItem({ title: 'Surviving work', goalId });
+  decideWorkItem(work.id, { outcome: 'accepted', reason: 'Proceed' });
+  const before = getWorkItem(work.id), queued = queue.get(`work:${work.id}`);
+  getGoalApplication().deleteGoal(goalId);
+  planner = { readiness: () => 'ready', plan: at => ({ ...original, generatedAt: at, expiresAt: at + 3_600_000,
+    basis: digest([getGoal(goalId), getWorkItem(work.id)]),
+    action: { ...original.action, kind: 'continue_work', goal: null, workItemId: work.id, load: 'reduces' } }) };
+  wire();
+  const rec = provider.generate('deleted-goal'), events = count('goal_events');
+  expect(rec.state).toBe('available');
+  const receipt = provider.accept(rec.recommendationId, 'link-survivor', rec.revision);
+  expect(receipt).toMatchObject({ created: false, destination: { decisionId: queued.decisionId, workItemId: work.id, title: work.title } });
+  expect(getWorkItem(work.id)).toEqual(before); expect((await queue.read()).data.items).toEqual([queued]);
+  expect(getGoal(goalId)).toBeNull(); expect(count('commitment_work')).toBe(1); expect(count('goal_progress')).toBe(0);
+  expect(count('goal_events')).toBe(events); expect(count('flow_run')).toBe(0); expect(count('approval_requests')).toBe(0);
+  closeDb(); initWorkflowDb(file); wire();
+  expect(provider.get(rec.recommendationId)).toMatchObject({ state: 'accepted', acceptance: receipt });
+  expect(provider.accept(rec.recommendationId, 'link-survivor', rec.revision)).toEqual(receipt);
+  expect(getWorkItem(work.id)).toEqual(before); expect(queue.get(queued.decisionId)).toEqual(queued);
+});
+
+test.each(['missing', 'different'] as const)('a %s planner goal cannot link work that belongs to a live goal', context => {
+  const work = createWorkItem({ title: 'Work with a live goal', goalId });
+  const other = getGoalApplication().createGoal('Another goal', 'task', { status: 'active' });
+  planner = { readiness: () => 'ready', plan: at => {
+    const p = plan(at); if (p.outcome !== 'recommend') throw Error();
+    return { ...p, action: { ...p.action, workItemId: work.id,
+      goal: context === 'missing' ? null : { goalId: other.id, revision: String(other.updated_at), path: [other.title] } } };
+  } }; wire();
+  const rec = provider.generate(`mismatched-${context}`);
+  expect(() => provider.accept(rec.recommendationId, `mismatched-${context}`, rec.revision)).toThrow('Work no longer belongs to this goal');
+  expect(getWorkItem(work.id)).toEqual(work); expect(count('commitment_work')).toBe(1);
+  expect(provider.get(rec.recommendationId).acceptance).toBeNull();
+});
+
 test('blocked work links its approval identity rather than creating an invisible work wrapper', async () => {
   const flow = createFlow(), version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Fixture', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'PAUSED' });
