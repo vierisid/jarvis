@@ -1,0 +1,47 @@
+bun test v1.4.2 (744846f84)
+
+src/workflows/adapters/untrusted-reach.test.ts:
+(pass) #573 premise 1: the reachable tool set is closed and known > the reachable set is exactly the reviewed table [1.14ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing is both reachable and refused as opaque [0.07ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the opaque refusals still include the navigate and shell family [0.11ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > each reachable tool is the untrusted source the table says, by real category [30.38ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the untrusted-source subset is the eight tools the decision is about [0.14ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > no source file outside the workflow runtime spells a workflowEffect declaration [1.51ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > a bounded tool name cannot be re-registered with different semantics [0.63ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing removes a tool from a registry in production [9.76ms]
+373 |     ]) {
+374 |       for (const rel of filesContaining(needle)) {
+375 |         if (!rel.startsWith('workflows/')) readers.add(rel);
+376 |       }
+377 |     }
+378 |     expect([...readers].sort()).toEqual([...REVIEWED_STEP_OUTPUT_READERS].sort());
+                                      ^
+error: expect(received).toEqual(expected)
+
+  [
+    "actions/tools/manage-workflow.ts",
+    "actions/tools/workflow-composer.ts",
+    "awareness/prepared-opportunities.ts",
+    "awareness/suggestion-composer.ts",
+    "brief/adapters.ts",
+    "brief/composition.ts",
+    "brief/contracts.ts",
++   "brief/decisions.ts",
+    "brief/opportunity-activation.ts",
+    "daemon/api-routes.ts",
+    "goals/work-items.ts",
+    "goals/workflow-bridge.ts",
+  ]
+
+- Expected  - 0
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/workflows/adapters/untrusted-reach.test.ts:378:33)
+(fail) #573 premise 2: the routes out of the workflow data plane are enumerated > only the reviewed files outside src/workflows hold a run or a version object [15.82ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > an untrusted-source tool's result reaches the step unframed and byte-exact [4.84ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > a browser result reaches the step unframed too, matched by category [0.25ms]
+
+ 10 pass
+ 1 fail
+ 22 expect() calls
+Ran 11 tests across 1 file. [497.00ms]

@@ -42,6 +42,8 @@ Every mutation carries the exact server `revision`. The revision is rechecked at
 
 Blocked, failed and unknown receipts remain inspectable attention items. Unknown effects never advertise replay, and closing an approval never manufactures a success receipt. A legacy `executed` approval without a qualified receipt is shown as `unknown`. Verified result checks continue through the existing work-result workflow, separate from this queue's intent/permission actions.
 
+Rejecting a workflow permission resolves the approval as `denied`, but does not resolve the linked workflow blocker. The existing scheduler resumes the workflow to record a `blocked` effect without dispatching it. That receipt intentionally remains in the queue with `approval.status: "denied"`, attention `state: "blocked"` and only `inspect`, including after restart. Follow its run reference for investigation; this queue has no workflow-receipt dismissal or replay action. A rejected permission without an unresolved workflow effect leaves the queue and remains available by ID.
+
 ## Ordering and pagination
 
 Order is `(persisted position, source creation time, stable decision ID)`. Cursors are opaque, scoped to the run filter and tied to a durable queue generation. SQLite selects at most `limit + 1` identities per page; it does not load the full work/history list into application memory. Projections read their current source records in the same database snapshot.
@@ -54,7 +56,7 @@ From the F-12 worktree in WSL:
 
 ```sh
 bun install --frozen-lockfile
-bun test src/brief/decisions.test.ts src/daemon/api-brief-decisions.test.ts
+bun test src/brief/decisions.test.ts src/daemon/api-brief-decisions.test.ts src/workflows/adapters/untrusted-reach.test.ts
 ```
 
 The tests use temporary databases, synthetic tools and a Unix socket. They do not call real providers or send real messages. They exercise:
@@ -65,6 +67,8 @@ The tests use temporary databases, synthetic tools and a Unix socket. They do no
 4. 205 equal-time decisions over three bounded pages, plus explicit refresh after concurrent source/placement changes.
 5. Real authenticated HTTP reads/writes, encoded IDs, disabled/missing providers, stale revisions and malformed bodies.
 6. A second database connection observing the durable claim before the fake tool starts.
+7. Hostile workflow steps, failure messages, samples, inputs and effect results stay outside decision responses for all three source kinds.
+8. Workflow rejection through the real authority boundary and scheduler, no dispatch, one blocked receipt, restart and unsupported replay/close attempts.
 
 For a live integration check, enable the flag only on a disposable daemon, authenticate through its usual dashboard session, read the same queue from both rooms, accept a synthetic work item and reload it by ID. Expect `ready`, never `verified`. Re-submit its previous revision and expect 409. With a synthetic approval linked to a run effect, global/run/effect lookup must return the same `approval:` identity. After an unknown effect receipt, expect `unknown` and inspect-only actions even if that run says `SUCCEEDED`.
 
