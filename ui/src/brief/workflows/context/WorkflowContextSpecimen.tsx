@@ -11,7 +11,11 @@ import { WorkflowCanvasRoom } from "../canvas/WorkflowCanvasRoom";
 import { makeCanvasFixture } from "../canvas/fixtures";
 import { WorkflowRunsRoom } from "../runs/WorkflowRunsRoom";
 import { WorkflowContextRoom } from "./WorkflowContextRoom";
-import { makeContextFixture, type ContextExample } from "./fixtures";
+import {
+  makeContextFixture,
+  type ContextExample,
+  type ContextRunOutcome,
+} from "./fixtures";
 import type { ContextSource } from "./model";
 import { BriefButton } from "../../components/controls";
 import { makeRunsFixture, RUN_SCOPE, RUN_CAPABILITY } from "../runs/fixtures";
@@ -23,6 +27,7 @@ export function WorkflowContextSpecimen() {
     [draft, setDraft] = useState("");
   const [revision, setRevision] = useState(0),
     [mode, setMode] = useState("normal");
+  const [runOutcome, setRunOutcome] = useState<ContextRunOutcome>("accepted");
   const [route, setRoute] = useState<BriefRoute>({
     room: "workflow-context",
     selection: {
@@ -120,11 +125,28 @@ export function WorkflowContextSpecimen() {
             <option value="empty">No recorded context</option>
           </select>
         </label>
+        <label>
+          Run response{" "}
+          <select
+            aria-label="Illustrative run response"
+            value={runOutcome}
+            onChange={(e) => {
+              const value = e.target.value as ContextRunOutcome;
+              setRunOutcome(value);
+              context.setRunOutcome(value);
+            }}
+          >
+            <option value="accepted">Accepted</option>
+            <option value="not_submitted">Not submitted</option>
+            <option value="uncertain">Uncertain</option>
+          </select>
+        </label>
         <button
           onClick={() => {
             fixture.controller.retire();
             setRevision((v) => v + 1);
             setMode("normal");
+            setRunOutcome("accepted");
             setRoute({
               room: "workflow-context",
               selection: {

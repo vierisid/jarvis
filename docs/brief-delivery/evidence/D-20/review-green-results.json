@@ -1,0 +1,1735 @@
+{
+  "stage": "green",
+  "checks": [
+    {
+      "id": "R3",
+      "layout": "1440-light-expanded-closed",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 232,
+          "y": 286,
+          "width": 1208,
+          "height": 90
+        },
+        "after": {
+          "x": 232,
+          "y": 286,
+          "width": 1208,
+          "height": 90
+        },
+        "beforeScrollY": 376,
+        "afterScrollY": 376
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "1440-light-expanded-closed",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-light-expanded-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 232,
+          "y": 376,
+          "width": 1208,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "1440-light-expanded-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 232,
+          "y": 376,
+          "width": 1208,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 264,
+          "y": 231,
+          "width": 1144,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 232,
+          "y": 286,
+          "width": 1208,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "1440-light-expanded-closed",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-light-expanded-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 232,
+          "y": 376,
+          "width": 1208,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "1440-light-expanded-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 232,
+          "y": 376,
+          "width": 1208,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 264,
+          "y": 231,
+          "width": 1144,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 232,
+          "y": 286,
+          "width": 1208,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "1440-light-expanded-closed",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "1440-light-expanded-closed",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "1440-light-expanded-closed",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "1440-light-expanded-chat",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 232,
+          "y": 286,
+          "width": 735,
+          "height": 90
+        },
+        "after": {
+          "x": 232,
+          "y": 286,
+          "width": 735,
+          "height": 90
+        },
+        "beforeScrollY": 376,
+        "afterScrollY": 376
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "1440-light-expanded-chat",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-light-expanded-chat",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 232,
+          "y": 376,
+          "width": 735,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "1440-light-expanded-chat",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 232,
+          "y": 376,
+          "width": 735,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 264,
+          "y": 231,
+          "width": 671,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 232,
+          "y": 286,
+          "width": 735,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "1440-light-expanded-chat",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-light-expanded-chat",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 232,
+          "y": 376,
+          "width": 735,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "1440-light-expanded-chat",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 232,
+          "y": 376,
+          "width": 735,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 264,
+          "y": 231,
+          "width": 671,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 232,
+          "y": 286,
+          "width": 735,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "1440-light-expanded-chat",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "1440-light-expanded-chat",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "1440-light-expanded-chat",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "1440-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 72,
+          "y": 286,
+          "width": 1368,
+          "height": 90
+        },
+        "after": {
+          "x": 72,
+          "y": 286,
+          "width": 1368,
+          "height": 90
+        },
+        "beforeScrollY": 376,
+        "afterScrollY": 376
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "1440-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 376,
+          "width": 1368,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "1440-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 376,
+          "width": 1368,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 104,
+          "y": 231,
+          "width": 1304,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 286,
+          "width": 1368,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "1440-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 376,
+          "width": 1368,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "1440-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 376,
+          "width": 1368,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 104,
+          "y": 231,
+          "width": 1304,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 286,
+          "width": 1368,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "1440-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "1440-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "1440-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "1440-light-rail-chat",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 72,
+          "y": 286,
+          "width": 895,
+          "height": 90
+        },
+        "after": {
+          "x": 72,
+          "y": 286,
+          "width": 895,
+          "height": 90
+        },
+        "beforeScrollY": 376,
+        "afterScrollY": 376
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "1440-light-rail-chat",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-light-rail-chat",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 376,
+          "width": 895,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "1440-light-rail-chat",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 376,
+          "width": 895,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 104,
+          "y": 231,
+          "width": 831,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 286,
+          "width": 895,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "1440-light-rail-chat",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-light-rail-chat",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 376,
+          "width": 895,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "1440-light-rail-chat",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 376,
+          "width": 895,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 104,
+          "y": 231,
+          "width": 831,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 286,
+          "width": 895,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "1440-light-rail-chat",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "1440-light-rail-chat",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "1440-light-rail-chat",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "390-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 72,
+          "y": 408.390625,
+          "width": 318,
+          "height": 122
+        },
+        "after": {
+          "x": 72,
+          "y": 408.390625,
+          "width": 318,
+          "height": 122
+        },
+        "beforeScrollY": 530.390625,
+        "afterScrollY": 530.390625
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "390-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 228,
+          "y": 301.390625,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 228,
+          "y": 301.390625,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 228,
+          "y": 305.390625,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "390-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 530.390625,
+          "width": 318,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "390-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 530.390625,
+          "width": 318,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 90,
+          "y": 353.390625,
+          "width": 282,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 408.390625,
+          "width": 318,
+          "height": 122
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "390-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "390-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 530.390625,
+          "width": 318,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "390-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 530.390625,
+          "width": 318,
+          "height": 45.59375
+        },
+        "nav": {
+          "x": 90,
+          "y": 353.390625,
+          "width": 282,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 408.390625,
+          "width": 318,
+          "height": 122
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "390-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "390-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "390-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "490-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 72,
+          "y": 350.390625,
+          "width": 418,
+          "height": 122
+        },
+        "after": {
+          "x": 72,
+          "y": 350.390625,
+          "width": 418,
+          "height": 122
+        },
+        "beforeScrollY": 472.390625,
+        "afterScrollY": 472.390625
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "490-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 328,
+          "y": 243.390625,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 328,
+          "y": 243.390625,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 328,
+          "y": 247.390625,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "490-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 472.390625,
+          "width": 418,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "490-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 472.390625,
+          "width": 418,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 90,
+          "y": 295.390625,
+          "width": 382,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 350.390625,
+          "width": 418,
+          "height": 122
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "490-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "490-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 472.390625,
+          "width": 418,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "490-light-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 472.390625,
+          "width": 418,
+          "height": 45.59375
+        },
+        "nav": {
+          "x": 90,
+          "y": 295.390625,
+          "width": 382,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 350.390625,
+          "width": 418,
+          "height": 122
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "490-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "490-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "490-light-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 232,
+          "y": 286,
+          "width": 1208,
+          "height": 90
+        },
+        "after": {
+          "x": 232,
+          "y": 286,
+          "width": 1208,
+          "height": 90
+        },
+        "beforeScrollY": 376,
+        "afterScrollY": 376
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 232,
+          "y": 376,
+          "width": 1208,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 232,
+          "y": 376,
+          "width": 1208,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 264,
+          "y": 231,
+          "width": 1144,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 232,
+          "y": 286,
+          "width": 1208,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 232,
+          "y": 376,
+          "width": 1208,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 232,
+          "y": 376,
+          "width": 1208,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 264,
+          "y": 231,
+          "width": 1144,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 232,
+          "y": 286,
+          "width": 1208,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "1440-dark-expanded-closed",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 232,
+          "y": 286,
+          "width": 735,
+          "height": 90
+        },
+        "after": {
+          "x": 232,
+          "y": 286,
+          "width": 735,
+          "height": 90
+        },
+        "beforeScrollY": 376,
+        "afterScrollY": 376
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 232,
+          "y": 376,
+          "width": 735,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 232,
+          "y": 376,
+          "width": 735,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 264,
+          "y": 231,
+          "width": 671,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 232,
+          "y": 286,
+          "width": 735,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 232,
+          "y": 376,
+          "width": 735,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 232,
+          "y": 376,
+          "width": 735,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 264,
+          "y": 231,
+          "width": 671,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 232,
+          "y": 286,
+          "width": 735,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "1440-dark-expanded-chat",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "1440-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 72,
+          "y": 286,
+          "width": 1368,
+          "height": 90
+        },
+        "after": {
+          "x": 72,
+          "y": 286,
+          "width": 1368,
+          "height": 90
+        },
+        "beforeScrollY": 376,
+        "afterScrollY": 376
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "1440-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 1264,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 376,
+          "width": 1368,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "1440-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 376,
+          "width": 1368,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 104,
+          "y": 231,
+          "width": 1304,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 286,
+          "width": 1368,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "1440-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 376,
+          "width": 1368,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "1440-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 376,
+          "width": 1368,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 104,
+          "y": 231,
+          "width": 1304,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 286,
+          "width": 1368,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "1440-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "1440-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "1440-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "1440-dark-rail-chat",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 72,
+          "y": 286,
+          "width": 895,
+          "height": 90
+        },
+        "after": {
+          "x": 72,
+          "y": 286,
+          "width": 895,
+          "height": 90
+        },
+        "beforeScrollY": 376,
+        "afterScrollY": 376
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "1440-dark-rail-chat",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 791,
+          "y": 177,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-dark-rail-chat",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 376,
+          "width": 895,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "1440-dark-rail-chat",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 376,
+          "width": 895,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 104,
+          "y": 231,
+          "width": 831,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 286,
+          "width": 895,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "1440-dark-rail-chat",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "1440-dark-rail-chat",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 376,
+          "width": 895,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "1440-dark-rail-chat",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 376,
+          "width": 895,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 104,
+          "y": 231,
+          "width": 831,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 286,
+          "width": 895,
+          "height": 90
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "1440-dark-rail-chat",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "1440-dark-rail-chat",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "1440-dark-rail-chat",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "390-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 72,
+          "y": 408.390625,
+          "width": 318,
+          "height": 122
+        },
+        "after": {
+          "x": 72,
+          "y": 408.390625,
+          "width": 318,
+          "height": 122
+        },
+        "beforeScrollY": 530.390625,
+        "afterScrollY": 530.390625
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "390-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 228,
+          "y": 301.390625,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 228,
+          "y": 301.390625,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 228,
+          "y": 305.390625,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "390-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 530.390625,
+          "width": 318,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "390-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 530.390625,
+          "width": 318,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 90,
+          "y": 353.390625,
+          "width": 282,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 408.390625,
+          "width": 318,
+          "height": 122
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "390-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "390-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 530.390625,
+          "width": 318,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "390-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 530.390625,
+          "width": 318,
+          "height": 45.59375
+        },
+        "nav": {
+          "x": 90,
+          "y": 353.390625,
+          "width": 282,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 408.390625,
+          "width": 318,
+          "height": 122
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "390-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "390-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "390-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R3",
+      "layout": "490-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "before": {
+          "x": 72,
+          "y": 350.390625,
+          "width": 418,
+          "height": 122
+        },
+        "after": {
+          "x": 72,
+          "y": 350.390625,
+          "width": 418,
+          "height": 122
+        },
+        "beforeScrollY": 472.390625,
+        "afterScrollY": 472.390625
+      }
+    },
+    {
+      "id": "R2",
+      "layout": "490-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "context": {
+          "x": 328,
+          "y": 243.390625,
+          "width": 144,
+          "height": 40
+        },
+        "runs": {
+          "x": 328,
+          "y": 243.390625,
+          "width": 144,
+          "height": 40
+        },
+        "canvas": {
+          "x": 328,
+          "y": 247.390625,
+          "width": 144,
+          "height": 40
+        }
+      }
+    },
+    {
+      "id": "R1-pending",
+      "layout": "490-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 472.390625,
+          "width": 418,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-not_submitted",
+      "layout": "490-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 472.390625,
+          "width": 418,
+          "height": 28.796875
+        },
+        "nav": {
+          "x": 90,
+          "y": 295.390625,
+          "width": 382,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 350.390625,
+          "width": 418,
+          "height": 122
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-not_submitted",
+      "layout": "490-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "R1-pending",
+      "layout": "490-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "pending": {
+          "x": 72,
+          "y": 472.390625,
+          "width": 418,
+          "height": 28.796875
+        }
+      }
+    },
+    {
+      "id": "R1-uncertain",
+      "layout": "490-dark-rail-closed",
+      "pass": true,
+      "detail": {
+        "feedback": {
+          "x": 72,
+          "y": 472.390625,
+          "width": 418,
+          "height": 45.59375
+        },
+        "nav": {
+          "x": 90,
+          "y": 295.390625,
+          "width": 382,
+          "height": 55
+        },
+        "toolbar": {
+          "x": 72,
+          "y": 350.390625,
+          "width": 418,
+          "height": 122
+        },
+        "tabsUsable": true
+      }
+    },
+    {
+      "id": "command-lock-uncertain",
+      "layout": "490-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "containment",
+      "layout": "490-dark-rail-closed",
+      "pass": true
+    },
+    {
+      "id": "uncertain-return",
+      "layout": "490-dark-rail-closed",
+      "pass": true
+    }
+  ],
+  "errors": [],
+  "mutations": []
+}

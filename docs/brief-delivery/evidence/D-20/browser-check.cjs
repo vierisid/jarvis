@@ -3,7 +3,8 @@ const assert = require('node:assert/strict'), fs = require('node:fs'), path = re
 const url = process.env.BRIEF_PREVIEW_URL || 'http://127.0.0.1:4400/?brief=preview&specimen=workflow-context#/_brief_preview';
 const btn = (p, name) => p.getByRole('button', {name, exact:true});
 const wait = p => p.waitForTimeout(380);
-const shot = (p,name) => p.screenshot({path:path.join(__dirname,name+'.png')});
+const evidencePath = name => path.join(__dirname, (process.env.BRIEF_EVIDENCE_PREFIX || '') + name);
+const shot = (p,name) => p.screenshot({path:evidencePath(name+'.png')});
 const context = p => p.locator('[data-context-basis]');
 const bounds = async p => {
   const r = await p.locator('.brief-workspace-content').evaluate(e => ({w:e.clientWidth,s:e.scrollWidth}));
@@ -51,7 +52,7 @@ const bounds = async p => {
     await p.getByLabel('Workflow context example').selectOption('normal');await wait(p);await btn(p,'Run workflow').click();await p.locator('[data-run-id="meeting-run-013"]').waitFor();await btn(p,'Context & rules').click();await p.locator('[data-selected-run="meeting-run-013"]').waitFor();assert.ok((await p.locator(".brief-context-feedback").innerText()).includes("No context was recorded"));
     await btn(p,'Close conversation').click();await wait(p);await p.emulateMedia({reducedMotion:'reduce'});await p.setViewportSize({width:390,height:844});await wait(p);await bounds(p);await p.getByRole('radio',{name:'Configured',exact:true}).focus();await p.keyboard.press('Space');await p.locator('[data-context-basis="configured"]').waitFor();await shot(p,'narrow-reduced-motion');
     assert.deepEqual(errors,[]);assert.deepEqual(mutations,[]);
-    fs.writeFileSync(path.join(__dirname,'browser-results.json'),JSON.stringify({layouts,sourceIdentity:true,sourceFocusReturn:true,historicalVersion:true,headerAligned:true,canvasInspector:true,basisCycles:10,selectionAndScrollReturn:true,partial:true,missing:true,narrow:true,reducedMotion:true,sharedRunReceipt:true,errors,mutations},null,2)+'\n');
+    fs.writeFileSync(evidencePath('browser-results.json'),JSON.stringify({layouts,sourceIdentity:true,sourceFocusReturn:true,historicalVersion:true,headerAligned:true,canvasInspector:true,basisCycles:10,selectionAndScrollReturn:true,partial:true,missing:true,narrow:true,reducedMotion:true,sharedRunReceipt:true,errors,mutations},null,2)+'\n');
     console.log('PASS: eight layouts, configured/recorded identity, source focus return, historical version, stable Canvas header/inspector, ten basis cycles, scroll restoration, unavailable/partial/missing, shared Run receipt and narrow/reduced motion.');
-  }catch(e){if(p&&!p.isClosed()){await shot(p,'failure');fs.writeFileSync(path.join(__dirname,'failure.txt'),String(e)+'\n'+await p.locator('body').innerText());}throw e;}finally{await browser.close();}
+  }catch(e){if(p&&!p.isClosed()){await shot(p,'failure');fs.writeFileSync(evidencePath('failure.txt'),String(e)+'\n'+await p.locator('body').innerText());}throw e;}finally{await browser.close();}
 })().catch(e=>{console.error(e);process.exit(1);});

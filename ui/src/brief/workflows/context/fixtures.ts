@@ -24,7 +24,17 @@ const entry = (
   kind: NonNullable<ContextEntry["source"]>["kind"],
   availability: ContextEntry["availability"] = "available",
 ): ContextEntry => ({ id, label, value, availability, source: { kind, id } });
+export type ContextRunOutcome = "accepted" | "not_submitted" | "uncertain";
 export function makeContextFixture(runs = makeRunsFixture()) {
+  let runOutcome: ContextRunOutcome = "accepted";
+  const start = runs.port.start!;
+  runs.port.start = async (request) => {
+    const outcome = runOutcome;
+    if (outcome === "accepted") return start(request);
+    // Fixture-only acknowledgement examples. No run is created or dispatched.
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    return { status: outcome, requestId: request.requestId };
+  };
   let mode: ContextExample = "normal",
     reads = 0;
   const port: WorkflowContextPort = {
@@ -176,6 +186,9 @@ export function makeContextFixture(runs = makeRunsFixture()) {
     runs,
     setMode(value: ContextExample) {
       mode = value;
+    },
+    setRunOutcome(value: ContextRunOutcome) {
+      runOutcome = value;
     },
     stats: () => ({ reads }),
   };
