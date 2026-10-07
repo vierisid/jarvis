@@ -20,6 +20,8 @@ import { SidecarRPCError } from '../../sidecar/rpc.ts';
 import { compareSemver, parseSemver } from '../../sidecar/compat.ts';
 import { getMachineScope } from '../machine-scope.ts';
 import type { ToolResult } from './registry.ts';
+import { currentReviewedExecution, type ReviewedExecution } from './reviewed-call-scope.ts';
+import { currentTemplateDeliveryScope } from './template-delivery-scope.ts';
 import { guardImageSize, type ContentBlock } from '../../llm/provider.ts';
 import { SCREENSHOT_COMPACT } from '../app-control/image-compact.ts';
 
@@ -60,8 +62,17 @@ let sidecarManager: SidecarManager | null = null;
  * workspace. Returned before any button goes down; on Linux the pointer has
  * moved to look (`desktop_pointer_target_linux_test.go` pins that nothing was
  * clicked), on Windows it has not (uia_element_guard_windows_test.go).
+ *
+ * `BROWSER_SNAPSHOT_SUPERSEDED` (#676) is a reviewed browser click, type or
+ * hover refused because the element map is no longer on the generation the
+ * call was reviewed against, or because the generation it carried was
+ * unreadable. `refuseStaleElement` (sidecar/browser_snapshot.go) returns it
+ * before its first CDP command; `browser_elem_gen_test.go` pins that nothing
+ * reached the browser.
  */
-const NOT_STARTED_RPC_CODES = new Set(['DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT', 'DESKTOP_TARGET_OBSCURED']);
+const NOT_STARTED_RPC_CODES = new Set([
+  'DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT', 'DESKTOP_TARGET_OBSCURED', 'BROWSER_SNAPSHOT_SUPERSEDED',
+]);
 
 /**
  * Inject the sidecar manager at startup. Called once from the daemon.
@@ -213,7 +224,7 @@ export function findSidecar(nameOrId: string, sidecars: SidecarInfo[]): SidecarI
  * have to tell them apart by parsing the very text it was trying not to parse.
  */
 type SidecarDispatch =
-  | { readonly kind: 'reply'; readonly result: unknown }
+  | { readonly kind: 'reply'; readonly result: unknown; readonly sidecarId: string }
   | {
       readonly kind: 'message';
       readonly text: string;
@@ -442,6 +453,9 @@ async function dispatchToSidecar(
   params: Record<string, unknown>,
   requiredCapability: SidecarCapability,
   typedErrors: boolean,
+  preflight?: (sidecar: SidecarInfo) =>
+    | { readonly kind: 'refuse'; readonly code: string; readonly message: string }
+    | { readonly kind: 'send'; readonly extra: Record<string, unknown> },
 ): Promise<SidecarDispatch> {
   // Ahead of the typed/legacy split: a workflow binding failure must stay an
   // exception even for tools that have not adopted typed outcomes.
@@ -494,8 +508,14 @@ async function dispatchToSidecar(
     return fail('blocked', 'CAPABILITY_DISABLED', `Error: Sidecar "${sidecar.name}" does not advertise the "${requiredCapability}" capability. Available capabilities: ${sidecar.capabilities.join(', ') || 'none'}. ${remedy}`);
   }
 
+  // A caller's own refusal about THIS sidecar, after the generic ones and
+  // before anything is sent: nothing has been dispatched, so `not_started`.
+  const pre = preflight?.(sidecar);
+  if (pre?.kind === 'refuse') return fail('blocked', pre.code, pre.message);
+  const sent = pre?.kind === 'send' ? { ...params, ...pre.extra } : params;
+
   try {
-    const result = await sidecarManager.dispatchRPC(sidecar.id, method, params);
+    const result = await sidecarManager.dispatchRPC(sidecar.id, method, sent);
 
     if (result === 'detached') {
       // The RPC outlived the initial timeout. Detached completions are only
@@ -528,7 +548,7 @@ async function dispatchToSidecar(
       }
     }
 
-    return { kind: 'reply', result };
+    return { kind: 'reply', result, sidecarId: sidecar.id };
   } catch (err) {
     if (err instanceof ActionOutcomeError) {
       if (typedErrors) throw err;
@@ -759,6 +779,83 @@ const MAX_LOADER_ID_LENGTH = 128;
 export type SidecarPageRead = { readonly text: string; readonly pageUrl: string | null };
 
 /**
+ * Longest `elem_gen` accepted off the wire (#676). The sidecar mints at most 37
+ * bytes and refuses anything over 64 on the way back in, so a longer one is not
+ * a generation that sidecar can match -- recording it would only guarantee a
+ * refusal later, with a less useful message than "no generation".
+ */
+const MAX_ELEM_GEN_LENGTH = 64;
+
+/**
+ * The newest `elem_gen` each READER saw from each sidecar's browser, keyed by
+ * canonical sidecar id and the reader's tool-set scope (#676).
+ *
+ * PER READER, not per sidecar. Keyed by sidecar alone, a snapshot taken by a
+ * sub-agent or a workflow step between the chat model's own snapshot and its
+ * card overwrote the value, so the card bound the OTHER reader's map -- the
+ * one whose ids the model never read -- and the sidecar's comparison then
+ * passed on exactly the refill it exists to refuse. The reader is the
+ * site-playbook delivery scope, which is already how this process tells the
+ * chat's tool calls from a sub-agent's (named) and a workflow's (suppressed);
+ * cards are only raised from the chat's, so another reader's refill now makes
+ * the chat's recorded generation disagree with the sidecar's map and the
+ * approved click is refused. The residual is that scope's own: everything
+ * the main orchestrator runs -- every chat channel, the voice route (which may
+ * snapshot, though it raises no card), and any other turn on the main
+ * registry -- shares the default scope (template-delivery-scope.ts), so a
+ * snapshot from one of them between another's read and its card still binds
+ * the later read.
+ *
+ * Read ONLY at review time, by `browserCallGuard`, which copies it into the
+ * approval; never at execution, where it would name whatever snapshot came
+ * last rather than the one the person reviewed (see reviewed-call-scope.ts).
+ *
+ * A reply WITHOUT one deletes the entry: that read refilled the sidecar's map
+ * under a generation this process does not know, so the previous value no
+ * longer names the map. A dispatch that never reached a page leaves it alone.
+ * That is fail-closed either way: a snapshot that fails on the sidecar after
+ * arming its world DROPS the map and bumps the generation
+ * (`forgetSnapshotElements` in `takePageSnapshot`'s deferred cleanup), so the
+ * kept value no longer matches and the next reviewed click is refused.
+ *
+ * Process-local, like every approval binding: a restart clears both.
+ */
+const remoteSnapshotGenerations = new Map<string, string>();
+
+/** The map key for `sidecarId` as read by the scope this call runs in. */
+//
+// INSIDE AN APPROVED EXECUTION the reader is the one that raised the card, not
+// the scope the executor runs in. Every `browser_navigate` takes a card, and
+// the executor runs it with template delivery suppressed for a reason that has
+// nothing to do with whose read it is -- keyed by that scope, an approved
+// navigate's generation landed under "suppressed", and the chat's next card,
+// for an id from the very page the navigate returned, was refused.
+function readerKey(sidecarId: string): string {
+  return `${sidecarId}\u0000${currentReviewedExecution()?.reader ?? currentSnapshotReader()}`;
+}
+
+/**
+ * Who is reading a remote snapshot right now, outside an approved execution:
+ * the tool-set scope this call runs in (see `remoteSnapshotGenerations`).
+ * Captured by `browserCallGuard` at review time, so an approved call records
+ * under the reader that raised its card.
+ */
+export function currentSnapshotReader(): string {
+  const scope = currentTemplateDeliveryScope();
+  return !scope ? 'default' : scope.kind === 'named' ? `named:${scope.id}` : 'suppressed';
+}
+
+/** The newest `elem_gen` this reader saw from this sidecar's browser, or null. */
+export function remoteSnapshotGeneration(sidecarId: string): string | null {
+  return remoteSnapshotGenerations.get(readerKey(sidecarId)) ?? null;
+}
+
+/** Test seam: forget every recorded generation. */
+export function resetRemoteSnapshotGenerations(): void {
+  remoteSnapshotGenerations.clear();
+}
+
+/**
  * Read the structural page identity out of a browser reply (#583).
  *
  * TYPE-CHECKED, not cast. The value arrives from `JSON.parse` on another
@@ -780,20 +877,25 @@ export type SidecarPageRead = { readonly text: string; readonly pageUrl: string 
  * An older sidecar replies with a bare string: that is the whole reply, and there
  * is no identity to read. Same for any shape that is not the documented one.
  */
-function readSidecarPageReply(result: unknown): SidecarPageRead {
-  if (typeof result === 'string') return { text: result, pageUrl: null };
+function readSidecarPageReply(result: unknown): SidecarPageRead & { readonly elemGen: string | null } {
+  if (typeof result === 'string') return { text: result, pageUrl: null, elemGen: null };
   if (result === null || typeof result !== 'object' || Array.isArray(result)) {
-    return { text: JSON.stringify(result, null, 2), pageUrl: null };
+    return { text: JSON.stringify(result, null, 2), pageUrl: null, elemGen: null };
   }
   const reply = result as Record<string, unknown>;
   // No usable text half means no page, so there is no identity worth reading
   // either -- and the fallback keeps the pre-#583 rendering of an odd reply.
-  if (typeof reply.text !== 'string') return { text: JSON.stringify(result, null, 2), pageUrl: null };
+  if (typeof reply.text !== 'string') return { text: JSON.stringify(result, null, 2), pageUrl: null, elemGen: null };
   const hasLoader = typeof reply.loader_id === 'string'
     && reply.loader_id.length > 0
     && reply.loader_id.length <= MAX_LOADER_ID_LENGTH;
   const pageUrl = hasLoader && typeof reply.page_url === 'string' ? reply.page_url : null;
-  return { text: reply.text, pageUrl };
+  // Own property, type-checked, bounded: the same reading rule as the pair
+  // above. It is carried back to the sidecar verbatim and compared there, so
+  // nothing here interprets it.
+  const elemGen = Object.hasOwn(reply, 'elem_gen') && typeof reply.elem_gen === 'string'
+    && reply.elem_gen.length > 0 && reply.elem_gen.length <= MAX_ELEM_GEN_LENGTH ? reply.elem_gen : null;
+  return { text: reply.text, pageUrl, elemGen };
 }
 
 /**
@@ -819,8 +921,82 @@ export async function routeBrowserReadToSidecar(
 ): Promise<SidecarPageRead & { readonly why: 'confirmed' | 'no_reply' | 'no_page_identity' }> {
   const out = await dispatchToSidecar(target, method, { ...params, page_identity: true }, 'browser', false);
   if (out.kind === 'message') return { text: out.text, pageUrl: null, why: 'no_reply' };
-  const read = readSidecarPageReply(out.result);
+  const { elemGen, ...read } = readSidecarPageReply(out.result);
+  if (elemGen) remoteSnapshotGenerations.set(readerKey(out.sidecarId), elemGen);
+  else remoteSnapshotGenerations.delete(readerKey(out.sidecarId));
   return { ...read, why: read.pageUrl ? 'confirmed' : 'no_page_identity' };
+}
+
+/**
+ * The register feature a sidecar advertises when it compares a reviewed
+ * element action's `elem_gen` (#676; `featureBrowserElemGen`, sidecar/client.go).
+ */
+export const SIDECAR_FEATURE_BROWSER_ELEM_GEN = 'browser_elem_gen';
+
+/**
+ * Route a browser element action -- click, type, hover -- and, when it was
+ * REVIEWED, bind it to the snapshot it was reviewed against (#676).
+ *
+ * Unreviewed (`reviewed` undefined: the realtime voice path, or no card at
+ * all) it is `routeToSidecar`, byte for byte.
+ *
+ * Reviewed, it sends the generation the approval captured as `elem_gen`, and
+ * the SIDECAR compares it under its own lock -- the comparison is never made
+ * here, because only the side that owns the counter can make it at the instant
+ * that matters. What this function does is refuse to send a reviewed call
+ * anywhere that comparison would not happen:
+ *
+ *   - a sidecar that does not advertise `browser_elem_gen`. An older one reads
+ *     the params it knows and ignores the rest, so `elem_gen` would be dropped
+ *     on the floor and the click would run unbound -- a fail-open dressed as a
+ *     guard. REFUSED, as the owner decided: this is a user-visible regression
+ *     on every machine running an older sidecar, on a path that works today,
+ *     until that sidecar is updated. The message says it is a version problem.
+ *   - a review that bound no generation: the guard found no snapshot reply
+ *     carrying one for that sidecar, so there is nothing to compare against.
+ *   - a sidecar other than the one reviewed. The guard already compares the
+ *     route; this is the same question asked of the canonical id.
+ *   - a reviewed execution whose guard bound no remote snapshot at all. The
+ *     approval executor enters the scope for every UI call, so this is a guard
+ *     that forgot to bind, and it fails closed rather than running unbound.
+ */
+export async function routeElementActionToSidecar(
+  target: string,
+  method: 'browser_click' | 'browser_type' | 'browser_hover',
+  params: Record<string, unknown>,
+  reviewed: ReviewedExecution | undefined,
+): Promise<string> {
+  if (!reviewed) return routeToSidecar(target, method, params, 'browser');
+  const snapshot = reviewed.remoteBrowserSnapshot;
+  const out = await dispatchToSidecar(target, method, params, 'browser', false, (sidecar) => {
+    if (!snapshot || snapshot.sidecarId !== sidecar.id) {
+      return { kind: 'refuse', code: 'BROWSER_REVIEW_UNBOUND', message: `Error [${describeMachine(sidecar)}]: this ${method} was approved without a record of which browser snapshot on this machine it was reviewed against, so nothing was done. Take a fresh browser_snapshot and request the action again.` };
+    }
+    if (!sidecar.features?.includes(SIDECAR_FEATURE_BROWSER_ELEM_GEN)) {
+      return { kind: 'refuse', code: 'SIDECAR_TOO_OLD_FOR_REVIEWED_ACTION', message: sidecarTooOldForReviewMessage(sidecar, method) };
+    }
+    if (!snapshot.elemGen) {
+      return { kind: 'refuse', code: 'BROWSER_SNAPSHOT_UNVERIFIED', message: `Error [${describeMachine(sidecar)}]: no browser_snapshot from this machine said which snapshot its element ids came from when this ${method} was reviewed, so which page it was reviewed against cannot be verified and nothing was done. Take a fresh browser_snapshot and request the action again.` };
+    }
+    return { kind: 'send', extra: { elem_gen: snapshot.elemGen } };
+  });
+  if (out.kind === 'message') return out.text;
+  return typeof out.result === 'string' ? out.result : JSON.stringify(out.result, null, 2);
+}
+
+/**
+ * The refusal for a reviewed element action on a sidecar that cannot compare
+ * generations (#676). Written for the person as much as the model: the click
+ * did not fail because the browser is broken, and the fix is an update.
+ */
+function sidecarTooOldForReviewMessage(sidecar: SidecarInfo, method: string): string {
+  const standing = sidecarStanding(sidecar);
+  const remedy = standing.age === 'current'
+    ? `Its version is the newest this brain knows of, so this is probably an older sidecar build still running on that machine: ask the user to make sure it runs the newest sidecar build.`
+    : `Updating the sidecar on that machine fixes this: ask the user to update it.`;
+  return `Error [${describeMachine(sidecar)}]: this sidecar is too old to verify which page this ${method} was reviewed against${standing.note}, so the approved action was NOT done. `
+    + `An approved browser click, type or hover is only sent to a sidecar that can check it still acts on the snapshot the user reviewed. `
+    + `This is a sidecar version problem, not a broken browser or a refused approval. ${remedy} Do NOT retry until it is updated.`;
 }
 
 /**

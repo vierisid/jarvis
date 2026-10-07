@@ -95,10 +95,19 @@ type cdpClient struct {
 	//                 into a destroyed document. Checked only for subframe ids
 	//                 on purpose: an unrelated ad iframe reloading must not
 	//                 refuse a click on a main-document element.
+	//   elemEpoch     a random value minted the first time this client hands
+	//                 out a generation, so the generation a REPLY carries
+	//                 (`elem_gen`, elemGenTokenLocked) names this client's map
+	//                 and no other (#676). elemGen alone restarts at zero on a
+	//                 relaunched browser and on a restarted sidecar, so a
+	//                 generation the brain reviewed against one map would
+	//                 compare equal to the same number minted by the next --
+	//                 a check that reads as one and is not.
 	elemMu         sync.Mutex
 	elemCoords     map[int][2]float64
 	elemIdentity   pageIdentity
 	elemGen        uint64
+	elemEpoch      string
 	elemFrames     map[int]bool
 	elemFrameStamp string
 
@@ -912,13 +921,13 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		// Let JS settle (matches the daemon's post-load delay)
 		time.Sleep(800 * time.Millisecond)
 
-		formatted, id, err := takeFormattedSnapshot(cdp)
+		formatted, id, gen, err := takeFormattedSnapshot(cdp)
 		if err != nil {
 			return nil, err
 		}
 		// The identity of the page we LANDED on, which is not `target`: this is
 		// the whole reason a redirect cannot mis-select a site playbook (#583).
-		return browserPageResult(formatted, id, params), nil
+		return browserPageResult(formatted, id, gen, params), nil
 	}
 }
 
@@ -929,11 +938,11 @@ func makeBrowserSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
-		formatted, id, err := takeFormattedSnapshot(cdp)
+		formatted, id, gen, err := takeFormattedSnapshot(cdp)
 		if err != nil {
 			return nil, err
 		}
-		return browserPageResult(formatted, id, params), nil
+		return browserPageResult(formatted, id, gen, params), nil
 	}
 }
 
@@ -948,6 +957,12 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 			button = "left"
 		}
 		double, _ := params["double"].(bool)
+		// The snapshot this call was reviewed against, if it was (#676). Read
+		// before the browser is touched: a malformed one refuses outright.
+		reviewed, err := reviewedElemGen(params)
+		if err != nil {
+			return nil, err
+		}
 
 		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
@@ -958,7 +973,7 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 		// The coordinates are only this click's honest input while the document
 		// they were measured in is still the one on screen (#592) and the page
 		// has not scrolled under them (#603) -- hence `usesCoordinates`.
-		el, _, refusal, err := refuseStaleElement(cdp, id, true)
+		el, _, refusal, err := refuseStaleElement(cdp, id, true, reviewed)
 		if err != nil {
 			return nil, err
 		}
@@ -995,6 +1010,12 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		submit, _ := params["submit"].(bool)
 		appendMode, _ := params["append"].(bool)
+		// The snapshot this call was reviewed against, if it was (#676). Read
+		// before the browser is touched: a malformed one refuses outright.
+		reviewed, err := reviewedElemGen(params)
+		if err != nil {
+			return nil, err
+		}
 
 		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
@@ -1005,7 +1026,7 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		// NOT a coordinate user: the typing reaches the element through the ref
 		// the snapshot stashed, so a scroll since then does not make this call
 		// wrong -- and typing itself scrolls the caret into view (#603).
-		el, contextID, refusal, err := refuseStaleElement(cdp, id, false)
+		el, contextID, refusal, err := refuseStaleElement(cdp, id, false, reviewed)
 		if err != nil {
 			return nil, err
 		}

@@ -14,6 +14,7 @@ import type { ActionCategory } from '../roles/authority.ts';
 import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
 import { boundedReceiptText, toolReturnText } from '../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scope.ts';
+import { runAsReviewed } from '../actions/tools/reviewed-call-scope.ts';
 
 // Defined next to substituteAboveLevel, which writes it; re-exported here,
 // where the approval learner reads it.
@@ -166,7 +167,11 @@ export class DeferredExecutor {
     try {
       const args = JSON.parse(request.tool_arguments);
       const uiCall = rawUiGate(request.tool_name, args);
-      const registry = uiCall ? this.approvalManager.getUiExecutionRegistry(request) : this.toolRegistry;
+      // A UI call runs on the registry AND inside the scope its guard bound at
+      // review (#676): a reviewed remote click carries the snapshot generation
+      // the person approved, which only the guard captured.
+      const uiExecution = uiCall ? this.approvalManager.getUiExecution(request) : null;
+      const registry = uiCall ? uiExecution?.registry ?? null : this.toolRegistry;
       const gate = resolveToolGate(registry?.get(request.tool_name), request.tool_name, args);
       if (gate.confirm === 'always' && !approvalNeedsClick(request)) {
         const blocked = `Approved action ${request.tool_name} was NOT executed: this approval predates the required UI review. Request a fresh dashboard review.`;
@@ -220,7 +225,8 @@ export class DeferredExecutor {
       // trailer outside the block). What is given up is a copy the model was
       // told to distrust; what is gained is that an authoritative copy is still
       // available at all, which is what burning the slot used to cost.
-      const raw = await withoutTemplateDelivery(() => registry.execute(request.tool_name, args));
+      const raw = await runAsReviewed(uiExecution?.reviewed,
+        () => withoutTemplateDelivery(() => registry.execute(request.tool_name, args)));
       // Collapsed to one string: this path records a DB receipt and returns a
       // single value, so it cannot carry a trusted trailer separately. The
       // trailer therefore goes back in band and is framed as data along with the
