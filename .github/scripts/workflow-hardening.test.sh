@@ -78,6 +78,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | untrusted | mutable
+#          | narrow | pushcache
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -505,6 +506,34 @@ if (rule === "narrow") {
         out.push(name + ": logs in to a registry on a dry run");
   }
 }
+if (rule === "pushcache") {
+  // #782: a job that pushes an image to a registry builds it cold. The GHA
+  // cache is writable by any run on main and by every job in the same run, so
+  // a job that both restores from it and pushes can ship layers nobody built
+  // in that job. "Pushes": a build-push or bake step whose push is not false,
+  // a registry login, or a `docker push` / `buildx ... --push` command. Every
+  // image build in such a job is held to it, dry-run twins included, so a
+  // rehearsal builds what the release does.
+  for (const [name, job] of Object.entries(jobs)) {
+    const steps = flatSteps(job.steps).map((x) => x.st);
+    const u = (st) => String(st.uses ?? "").toLowerCase();
+    const isBuild = (st) => /^docker\/(build-push-action|bake-action)@/.test(u(st));
+    const runs = steps.map((st) => typeof st.run === "string" ? st.run : "").join("\n");
+    const pushes = steps.some((st) => isBuild(st) && String(st.with?.push ?? "false") !== "false") ||
+      steps.some((st) => /^docker\/login-action@/.test(u(st))) ||
+      /\bdocker\s+(?:image\s+)?push\b|\bbuildx\s+(?:build|bake)\b[^\n]*--push\b/.test(runs);
+    if (!pushes) continue;
+    for (const [i, st] of steps.entries()) {
+      const label = name + ": step " + (st.name ?? st.id ?? st.uses ?? String(i));
+      if (isBuild(st) && st.with?.["cache-from"] !== undefined)
+        out.push(label + " restores cache-from " + JSON.stringify(st.with["cache-from"]) + " in a job that pushes to a registry");
+      if (isBuild(st) && /cache-from/.test(JSON.stringify(st.with?.set ?? "")))
+        out.push(label + " sets cache-from through bake in a job that pushes to a registry");
+      if (typeof st.run === "string" && /--cache-from\b/.test(st.run))
+        out.push(label + " runs a build with --cache-from in a job that pushes to a registry");
+    }
+  }
+}
 if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
@@ -761,6 +790,37 @@ echo "per-job authority on the release path"
 for f in "$WORKFLOWS"/*.yml; do
 	expect_clean "$(basename "$f"): no id-token matrix, no inherited secrets, OIDC publish jobs run no build, no persisted credentials, artifacts taken by digest" narrow "$f"
 done
+
+echo
+echo "no job that pushes an image restores it from a cache (#782)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f"): every image a pushing job builds is built cold" pushcache "$f"
+done
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'the gha cache back on the build that pushes (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'          push: true\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n' \
+		$'          push: true\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n          cache-from: type=gha\n' \
+		'restores cache-from "type=gha" in a job that pushes'
+	expect_caught 'the gha cache back on the dry-run twin in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'          push: false\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n' \
+		$'          push: false\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n          cache-from: type=registry,ref=ghcr.io/x/y:cache\n' \
+		'in a job that pushes'
+	expect_caught 'a buildx command line restoring a cache in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		'      - name: Build Docker image (dry run)' $'      - run: docker buildx build --cache-from type=gha --push .\n      - name: Build Docker image (dry run)' \
+		'runs a build with --cache-from'
+	expect_caught 'the push step spelled in another case, with its cache back (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          push: true\n' \
+		$'        uses: Docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          cache-from: type=gha\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          push: true\n' \
+		'restores cache-from'
+}
+# build-docker keeps its cache on purpose: it pushes nothing. If the rule
+# flagged it, the rule would be wrong, not the workflow.
+if [ -z "$(check pushcache "$WORKFLOWS/release-exec.yml" | grep 'build-docker')" ]; then
+	ok "the validate-only build-docker job, which pushes nothing, may keep its cache"
+else
+	no "the validate-only build-docker job, which pushes nothing, may keep its cache"
+fi
 
 echo
 echo "the catalog sync processes third-party data without write access"

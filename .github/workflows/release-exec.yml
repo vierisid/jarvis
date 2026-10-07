@@ -346,12 +346,14 @@ jobs:
       # forces the single-platform docker exporter, which is why this cannot
       # just be added to the multi-arch step above.
       #
-      # cache-from WITHOUT cache-to, and that is load-bearing. The step above
-      # and publish-docker both export `type=gha,mode=max` with no `scope:`, so
-      # all three builds share one cache scope. Adding a third export that
-      # covers only amd64 risks leaving that scope covering only amd64, and
-      # publish-docker's multi-arch build would then rebuild the arm64 leg --
-      # i.e. produce published layers this gate never ran. (Not the engine
+      # cache-from WITHOUT cache-to. The step above exports
+      # `type=gha,mode=max` with no `scope:`, shared with docker-build.yml's
+      # PR builds, and an extra export covering only amd64 risks leaving that
+      # scope covering only amd64. Before #782 that mattered more:
+      # publish-docker read the same scope, so its multi-arch build could then
+      # rebuild the arm64 leg -- published layers this gate never ran. It now
+      # builds cold, so the remaining cost of a thin scope is only a slower
+      # validation here. (Not the engine
       # bundle: the `workflows` stage is pinned to BUILDPLATFORM and both legs
       # COPY from it, so it is in the amd64 graph and an arm64 rebuild reuses
       # it. The exposure is the arm64 `deps`/`build` stages, which are not
@@ -803,8 +805,20 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}
 
-      # Layers are already populated in the GHA cache by the build-docker
-      # validation job, so this build is effectively cache-hit + registry push.
+      # Built cold, with no cache-from or cache-to (#782). This is the only
+      # build whose output ships, and the GHA cache it used to read is
+      # writable by any workflow run on main and by every job in this run, so
+      # the pushed layers could be assembled from cache entries nobody built
+      # here. build-docker keeps the cache: it builds the same two-platform
+      # image only to validate and smoke-test it, and nothing reads its
+      # output. Measured cost: publish-docker 1m55s cold against 52s warm,
+      # about +63s per release (runs 37613557506 cold, 37610958257 warm; the
+      # cold log has no cache import and no CACHED step). The dry-run build
+      # below is cold too, so a rehearsal times and builds what a release does.
+      #
+      # The trade: the image docker-smoke.sh starts in build-docker is now a
+      # separate, cache-assisted build of the same source, no longer the bytes
+      # this job pushes (it never was byte-proven; see build-docker).
       - name: Build and push Docker image
         if: env.DRY_RUN != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
@@ -816,8 +830,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ needs.validate-tag.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Build Docker image (dry run)
         if: env.DRY_RUN == 'true'
@@ -830,8 +842,6 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ needs.validate-tag.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
 
       - name: Dry-run summary
         if: env.DRY_RUN == 'true'
