@@ -39,6 +39,7 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
+  if (specimen === "ingredient-picker") return <WorkflowCreationSpecimen ingredients />;
   if (specimen === "workflow-create") return <WorkflowCreationSpecimen />;
   if (specimen === "messages") return <MessageSpecimen />;
   if (specimen === "attachments") return <AttachmentSpecimen />;

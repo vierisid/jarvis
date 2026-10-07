@@ -1,0 +1,21 @@
+{
+  "task": "D-17",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "node": "81:1313",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "reference_step": "UI-22",
+  "source": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-22-picker-2026-10-03",
+  "inspected": [
+    "README.md",
+    "prototype/final-light-wide-picker.png",
+    "renders/final-424-6472-Dark.png"
+  ],
+  "deviations": [
+    "Real catalog has service/package groupings, not the illustrative Data/Communication taxonomy: the Library filter is All services.",
+    "Connected-account names and library actions come from F-08 public discovery. No invented action pins or credential-bearing connection metadata.",
+    "Done supplies an explicit touch/keyboard dismissal alongside outside click and Escape.",
+    "Long chips wrap; very large selections scroll within a 112px ingredient region. The creation group may grow naturally beyond its reserved height. Plus/send retain their footprint and bottom inset; absolute page-coordinate invariance is not claimed.",
+    "Missing-account and unavailable row samples are explicit fixtures. Live discovery grants only active compatible connections; an empty connection collection directs users to Connected workspace without falsely labeling library availability as account connectivity."
+  ]
+}

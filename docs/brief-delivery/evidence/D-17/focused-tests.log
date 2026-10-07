@@ -1,0 +1,93 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/create/controller.test.ts:
+(pass) one rapid submission persists the exact prompt and key before POST [8.01ms]
+(pass) lost POST recovers its receipt without generating a second draft [0.30ms]
+(pass) unknown request replay keeps the original key and wording after edits and remount [0.39ms]
+(pass) terminal failed retains prompt and permits an explicit new request [0.21ms]
+(pass) terminal blocked retains prompt and permits an explicit new request [0.21ms]
+(pass) terminal cancelled retains prompt and permits an explicit new request [0.47ms]
+(pass) persist failure makes zero requests and keeps the prompt [0.25ms]
+(pass) receipt save failure cannot acknowledge navigation [0.60ms]
+(pass) saved result opens once and retains exact IDs and selected position [0.44ms]
+(pass) retiring a scope fences late results and further effects [0.28ms]
+(pass) scope storage keys cannot collide or expose another prompt [0.20ms]
+(pass) malformed storage blocks new composition instead of discarding an unknown key [0.18ms]
+(pass) foreign request or changed job receipts never navigate [0.30ms]
+(pass) UTF-8 bound rejects oversized prompts; raw markup remains text [0.25ms]
+(pass) capability-disabled and mismatched servers perform zero requests [0.54ms]
+(pass) F07 HTTP adapter uses only composition routes and matches exact receipts [0.53ms]
+(pass) canonical recents select latest per flow, carry stable IDs and distinguish every failure [0.43ms]
+(pass) retired recovery never submits or stores a late missing lookup [0.27ms]
+(pass) retired recovery never submits or stores a late found lookup [0.06ms]
+(pass) retired recovery never submits or stores a late rejected lookup [0.05ms]
+(pass) failed read restoration cannot overwrite the recovery record through editing or scrolling [0.44ms]
+(pass) failed parse restoration cannot overwrite the recovery record through editing or scrolling [0.09ms]
+(pass) failed validation restoration cannot overwrite the recovery record through editing or scrolling [0.10ms]
+(pass) a later write failure can preserve a known request when storage becomes writable [0.33ms]
+
+ui/src/brief/workflows/create/WorkflowCreationRoom.test.tsx:
+(pass) suggestion only fills the shared composer and does not submit [114.51ms]
+(pass) burst sends once, then opens the returned flow AND version exactly once [51.69ms]
+(pass) failed data can never show a success summary, and the whole row carries exact selection [13.09ms]
+(pass) list return boundary does not clear prompt or selected row [43.78ms]
+(pass) disabled capability preserves the editable prompt but never submits [15.67ms]
+(pass) fixture data and controller never appear in live rooms [1.48ms]
+(pass) failed receipts retain wording and render blockers as plain text [35.28ms]
+(pass) loading, empty and unavailable recents remain distinct [25.67ms]
+(pass) no date, subtitle or global creation CTA returns [29.18ms]
+(pass) loading history cannot erase a retained stream position before rows return [48.64ms]
+(pass) ingredient scope mismatch cannot expose another account's catalog [7.26ms]
+(pass) selected ingredients without F08 cannot submit; explicit removal restores plain creation [42.68ms]
+
+ui/src/brief/workflows/create/f07-compatibility.test.ts:
+(skip) actual F07 service/routes create one populated disabled draft after a lost POST
+
+ui/src/brief/workflows/ingredient-picker/ingredients.test.ts:
+(pass) canonical pins copy only the public union, reject extras, duplicates and stale hash formats [0.42ms]
+(pass) unknown receipts cannot drop, reorder or repin selected ingredients [0.46ms]
+(pass) pinned ingredients persist before POST, retry exact uncertain request and survive remount [0.57ms]
+(pass) clear only a matching prompt AND selection; retain edits during a pending success [0.32ms]
+(pass) legacy saved state without ingredients remains readable, malformed pins cannot replace stored state [0.13ms]
+(pass) F08 gates admission but existing receipts remain recoverable when the picker is disabled [0.24ms]
+(pass) real discovery pins grant selection; package metadata never does; credential fields never copied [0.93ms]
+(pass) disabled discovery performs no network request [0.32ms]
+(pass) duplicate pages and partial failures never masquerade as a complete catalog [0.30ms]
+(pass) retired catalog reads abort without committing partial choices; 100-entry discovery page is valid [1.00ms]
+
+ui/src/brief/workflows/ingredient-picker/IngredientPicker.test.tsx:
+(pass) select both types, preserve search/category on reopen, remove chip without losing prompt focus [78.09ms]
+(pass) missing account and uninstalled entries explain availability without granting selection [14.93ms]
+(pass) off capability closes the picker and does not permit reopening; selections remain [35.46ms]
+An update to IngredientPicker inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+(pass) rapid reversal keeps one portal and closes on outside interaction [89.78ms]
+
+ui/src/brief/workflows/ingredient-picker/f08-compatibility.test.ts:
+(skip) actual F08 discovery and pinned request recover one populated draft, no credentials or execution
+
+ui/src/brief/workflows/recent-rows/read.test.ts:
+(pass) current API reads canonical IDs/status, excludes never-run drafts, never forwards captured output [1.07ms]
+(pass) unavailable run reads are not an empty collection [0.19ms]
+(pass) partial reads preserve known rows and disclose incompleteness [0.17ms]
+(pass) cross-flow or malformed runs cannot be displayed [0.13ms]
+(pass) inventory is paginated and capped; workers never run more than four reads [71.18ms]
+(pass) empty inventory has no run requests and stays distinct [1.67ms]
+
+2 tests skipped:
+(skip) actual F07 service/routes create one populated disabled draft after a lost POST
+(skip) actual F08 discovery and pinned request recover one populated draft, no credentials or execution
+
+ 56 pass
+ 2 skip
+ 0 fail
+ 221 expect() calls
+Ran 58 tests across 7 files. [1118.00ms]

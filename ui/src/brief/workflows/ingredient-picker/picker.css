@@ -1,0 +1,43 @@
+.brief-root .brief-ingredient-trigger { cursor:pointer; }
+.brief-root .brief-ingredient-trigger:hover, .brief-root .brief-ingredient-trigger[aria-expanded="true"] { background:var(--brief-ink); color:var(--brief-card); }
+.brief-root .brief-ingredient-trigger[aria-disabled="true"] { cursor:default; opacity:.45; background:transparent; color:var(--brief-secondary); }
+.brief-root .brief-ingredient-trigger svg { transition:transform 180ms ease; }
+.brief-root .brief-ingredient-trigger:focus-visible, .brief-root .brief-ingredient-chip button:focus-visible { outline:2px solid var(--brief-focus); outline-offset:-2px; }
+.brief-root .brief-ingredient-floating { width:min(400px, calc(100vw - 16px)); }
+.brief-root .brief-ingredient-picker { background:var(--brief-menu); border:1px solid var(--brief-menu-edge); border-radius:10px 0 10px 10px; box-shadow:3px 5px 0 var(--brief-menu-shadow); padding:16px; color:var(--brief-ink); opacity:0; transform:translateY(-6px); transition:opacity 180ms ease,transform 180ms cubic-bezier(.2,.8,.2,1); }
+.brief-root .brief-ingredient-picker[data-open="true"] { opacity:1; transform:translateY(0); }
+@starting-style { .brief-root .brief-ingredient-picker[data-open="true"] { opacity:0; transform:translateY(-6px); } }
+.brief-root .brief-ingredient-picker[data-reduced="true"] { transition:none; }
+.brief-root .brief-ingredient-tabs { display:flex; gap:24px; border-bottom:1px solid var(--brief-card-edge); margin-bottom:14px; }
+.brief-root .brief-ingredient-tabs button { border:0; border-bottom:2px solid transparent; background:transparent; color:var(--brief-secondary); font:500 14px/20px var(--brief-sans); padding:2px 0 10px; cursor:pointer; }
+.brief-root .brief-ingredient-tabs button:hover { color:var(--brief-ink); }
+.brief-root .brief-ingredient-tabs button[aria-selected="true"] { color:var(--brief-ink); border-color:var(--brief-ink); }
+.brief-root .brief-ingredient-picker button:focus-visible, .brief-root .brief-ingredient-picker select:focus-visible { outline:2px solid var(--brief-focus); outline-offset:2px; }
+.brief-root .brief-ingredient-search { position:relative; display:flex; align-items:center; height:40px; border:1px solid var(--brief-field-edge); border-radius:9px 0 9px 9px; background:var(--brief-card); }
+.brief-root .brief-ingredient-search svg { margin-left:12px; flex:none; color:var(--brief-secondary); }
+.brief-root .brief-ingredient-search input { width:100%; min-width:0; font:400 14px/20px var(--brief-sans); border:0; outline:0; padding:9px; background:transparent; color:var(--brief-ink); }
+.brief-root .brief-ingredient-search:focus-within { outline:2px solid var(--brief-focus); outline-offset:-2px; }
+.brief-root .brief-ingredient-category { height:40px; display:flex; gap:8px; align-items:center; color:var(--brief-secondary); font:400 12px/18px var(--brief-sans); }
+.brief-root .brief-ingredient-category select { flex:1; min-width:0; height:30px; border:0; color:var(--brief-ink); background:var(--brief-menu); font:400 13px/18px var(--brief-sans); padding:4px; }
+.brief-root .brief-ingredient-results { height:208px; max-height:calc(100dvh - 260px); min-height:90px; overflow-y:auto; scrollbar-width:thin; padding:2px; }
+.brief-root .brief-ingredient-row { width:100%; min-height:56px; display:flex; align-items:center; gap:12px; padding:9px 10px; border:1px solid transparent; border-radius:9px 0 9px 9px; background:transparent; color:var(--brief-ink); text-align:left; cursor:pointer; }
+.brief-root .brief-ingredient-row > svg { flex:none; color:var(--brief-secondary); }
+.brief-root .brief-ingredient-row > span { flex:1; min-width:0; }
+.brief-root .brief-ingredient-row strong { display:block; font:500 14px/20px var(--brief-sans); overflow-wrap:anywhere; }
+.brief-root .brief-ingredient-row small { display:block; font:400 12px/18px var(--brief-sans); color:var(--brief-secondary); }
+.brief-root .brief-ingredient-row:hover { background:var(--brief-soft); }
+.brief-root .brief-ingredient-row[aria-checked="true"] { background:var(--brief-selected); border-color:var(--brief-card-edge); }
+.brief-root .brief-ingredient-row[aria-disabled="true"] { cursor:default; }
+.brief-root .brief-ingredient-row[aria-disabled="true"] strong { color:var(--brief-secondary); }
+.brief-root .brief-ingredient-empty { margin:0; padding:22px 10px; font:400 14px/22px var(--brief-sans); color:var(--brief-secondary); }
+.brief-root .brief-ingredient-footer { display:flex; justify-content:space-between; align-items:center; gap:8px; padding-top:12px; font:400 12px/18px var(--brief-sans); color:var(--brief-secondary); }
+.brief-root .brief-ingredient-footer button, .brief-root .brief-ingredient-empty button { min-height:32px; padding:5px 10px; border:1px solid var(--brief-card-edge); border-radius:9px 0 9px 9px; background:var(--brief-card); color:var(--brief-ink); font:500 13px/20px var(--brief-sans); cursor:pointer; }
+.brief-root .brief-ingredient-empty button { display:block; margin-top:12px; }
+.brief-root .brief-ingredient-chips { display:flex; flex-wrap:wrap; gap:6px; padding:2px; }
+.brief-root .brief-ingredient-chip { max-width:100%; min-width:0; display:flex; align-items:center; gap:6px; padding-left:8px; border:1px solid var(--brief-card-edge); border-radius:9px 0 9px 9px; color:var(--brief-ink); background:var(--brief-soft); font:400 13px/18px var(--brief-sans); }
+.brief-root .brief-ingredient-chip[data-kind="library-action"] { color:var(--brief-running-text); background:var(--brief-running-surface); }
+.brief-root .brief-ingredient-chip > svg { flex:none; }
+.brief-root .brief-ingredient-chip > span { min-width:0; overflow-wrap:anywhere; padding:5px 0; }
+.brief-root .brief-ingredient-chip button { flex:none; display:grid; place-items:center; width:32px; height:32px; border:0; border-radius:8px 0 8px 8px; background:transparent; color:inherit; cursor:pointer; }
+.brief-root .brief-ingredient-chip button:hover { background:var(--brief-selected); }
+@media (prefers-reduced-motion:reduce) { .brief-root .brief-ingredient-trigger svg { transition:none; } }

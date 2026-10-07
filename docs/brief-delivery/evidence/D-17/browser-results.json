@@ -1,0 +1,98 @@
+{
+  "results": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "chips": 4,
+      "anchoredControls": true,
+      "queryAndServiceRetained": true,
+      "focus": true,
+      "reversals": 10,
+      "exactReceipt": true
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "chips": 4,
+      "anchoredControls": true,
+      "queryAndServiceRetained": true,
+      "focus": true,
+      "reversals": 10,
+      "exactReceipt": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "chips": 4,
+      "anchoredControls": true,
+      "queryAndServiceRetained": true,
+      "focus": true,
+      "reversals": 10,
+      "exactReceipt": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "chips": 4,
+      "anchoredControls": true,
+      "queryAndServiceRetained": true,
+      "focus": true,
+      "reversals": 10,
+      "exactReceipt": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "chips": 4,
+      "anchoredControls": true,
+      "queryAndServiceRetained": true,
+      "focus": true,
+      "reversals": 10,
+      "exactReceipt": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "chips": 4,
+      "anchoredControls": true,
+      "queryAndServiceRetained": true,
+      "focus": true,
+      "reversals": 10,
+      "exactReceipt": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "chips": 4,
+      "anchoredControls": true,
+      "queryAndServiceRetained": true,
+      "focus": true,
+      "reversals": 10,
+      "exactReceipt": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "chips": 4,
+      "anchoredControls": true,
+      "queryAndServiceRetained": true,
+      "focus": true,
+      "reversals": 10,
+      "exactReceipt": true
+    }
+  ],
+  "narrow": true,
+  "reducedMotion": true,
+  "loadingUnavailable": true,
+  "lostResponse": true,
+  "errors": [],
+  "mutations": []
+}
