@@ -8,11 +8,13 @@
  * workflow piece picker without re-authenticating per piece.
  *
  * The piece sees an `OAUTH2`-shaped value:
- *   { access_token, refresh_token, scope?, token_type, expiry_date? }
+ *   { access_token, refresh_token: "", token_type, expiry_date? }
  *
- * Pieces typically only read `access_token`. We surface the full set so any
- * piece that introspects more (refresh dance, scope checks) sees consistent
- * values.
+ * The refresh token never leaves the daemon, as the engine's credential route
+ * states. The engine asks for the connection at every step and gets an access
+ * token refreshed here, so a piece has nothing to refresh, and a long-lived
+ * grant to the whole Google account never reaches sandboxed piece code. Inside
+ * the daemon it still identifies the grant (`identity`, Q-05).
  */
 
 import type { GoogleAuth } from "../../integrations/google-auth";
@@ -74,7 +76,7 @@ export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
       type: "OAUTH2",
       value: {
         access_token: accessToken,
-        refresh_token: tokens?.refresh_token ?? "",
+        refresh_token: "",
         token_type: tokens?.token_type ?? "Bearer",
         ...(tokens?.expiry_date ? { expiry_date: tokens.expiry_date } : {}),
       },
