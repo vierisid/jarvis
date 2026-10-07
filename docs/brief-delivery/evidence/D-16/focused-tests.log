@@ -1,0 +1,52 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/create/controller.test.ts:
+(pass) one rapid submission persists the exact prompt and key before POST [1.67ms]
+(pass) lost POST recovers its receipt without generating a second draft [0.21ms]
+(pass) unknown request replay keeps the original key and wording after edits and remount [0.41ms]
+(pass) terminal failed retains prompt and permits an explicit new request [0.22ms]
+(pass) terminal blocked retains prompt and permits an explicit new request [0.09ms]
+(pass) terminal cancelled retains prompt and permits an explicit new request [0.10ms]
+(pass) persist failure makes zero requests and keeps the prompt [0.14ms]
+(pass) receipt save failure cannot acknowledge navigation [0.21ms]
+(pass) saved result opens once and retains exact IDs and selected position [0.27ms]
+(pass) retiring a scope fences late results and further effects [0.15ms]
+(pass) scope storage keys cannot collide or expose another prompt [0.10ms]
+(pass) malformed storage blocks new composition instead of discarding an unknown key [0.11ms]
+(pass) foreign request or changed job receipts never navigate [0.29ms]
+(pass) UTF-8 bound rejects oversized prompts; raw markup remains text [0.18ms]
+(pass) capability-disabled and mismatched servers perform zero requests [0.49ms]
+(pass) F07 HTTP adapter uses only composition routes and matches exact receipts [0.44ms]
+(pass) canonical recents select latest per flow, carry stable IDs and distinguish every failure [0.39ms]
+
+ui/src/brief/workflows/create/WorkflowCreationRoom.test.tsx:
+(pass) suggestion only fills the shared composer and does not submit [66.27ms]
+(pass) burst sends once, then opens the returned flow AND version exactly once [33.08ms]
+(pass) failed data can never show a success summary, and the whole row carries exact selection [11.48ms]
+(pass) list return boundary does not clear prompt or selected row [23.35ms]
+(pass) disabled capability preserves the editable prompt but never submits [9.56ms]
+(pass) fixture data and controller never appear in live rooms [1.27ms]
+(pass) failed receipts retain wording and render blockers as plain text [17.17ms]
+(pass) loading, empty and unavailable recents remain distinct [12.90ms]
+(pass) no date, subtitle or global creation CTA returns [6.93ms]
+(pass) loading history cannot erase a retained stream position before rows return [48.03ms]
+
+ui/src/brief/workflows/create/f07-compatibility.test.ts:
+(skip) actual F07 service/routes create one populated disabled draft after a lost POST
+
+ui/src/brief/workflows/recent-rows/read.test.ts:
+(pass) current API reads canonical IDs/status, excludes never-run drafts, never forwards captured output [0.86ms]
+(pass) unavailable run reads are not an empty collection [0.18ms]
+(pass) partial reads preserve known rows and disclose incompleteness [0.17ms]
+(pass) cross-flow or malformed runs cannot be displayed [0.10ms]
+(pass) inventory is paginated and capped; workers never run more than four reads [68.97ms]
+(pass) empty inventory has no run requests and stays distinct [0.23ms]
+
+1 tests skipped:
+(skip) actual F07 service/routes create one populated disabled draft after a lost POST
+
+ 33 pass
+ 1 skip
+ 0 fail
+ 106 expect() calls
+Ran 34 tests across 4 files. [490.00ms]
