@@ -1,0 +1,134 @@
+{
+  "task": "F-13",
+  "title": "Make What's next? a durable recommendation",
+  "date": "2026-10-07",
+  "branch": "brief/f-13",
+  "base_branch": "brief/f-12",
+  "baseline": "f8a323060ca496c6e0d42b754d80a841faa1f3e5",
+  "main_reviewed": "538179e3a91edfaa435698cac94bc4ca41e6c873",
+  "head": "Commit containing this receipt; exact published head and mandatory hook results recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-13",
+  "dependencies": {
+    "compile": [
+      "F-01",
+      "F-12"
+    ],
+    "enable": [
+      "F-12",
+      "Q-18"
+    ],
+    "stack": "User-requested F stack, keep PRs open and unmerged; Q-18 optional module seam."
+  },
+  "baseline_review": {
+    "pinned": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": [
+      "A08 src/goals/work-items.ts",
+      "A09 src/goals/application-service.ts"
+    ],
+    "comparison": "Pinned source blobs match current main and F12. Main has no durable recommendation provider. Q18 provides the planner, D10 the optional presentation binding; neither is duplicated.",
+    "open_prs": [
+      775,
+      742,
+      752,
+      765,
+      774
+    ],
+    "parent_ci": "Corrected F12 Tests, Docker and active platform checks all pass."
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:3",
+    "visual": "Backend provider/API; D-track presentation binding remains separate."
+  },
+  "activation": {
+    "capability": "recommendations",
+    "flags": [
+      "JARVIS_BRIEF_RECOMMENDATIONS=1",
+      "JARVIS_BRIEF_DECISIONS=1"
+    ],
+    "default": "off",
+    "quality_module": "Q18 next-action-v1, fixed optional source path; absent or incompatible means unavailable",
+    "merged": false,
+    "release_enabled": false
+  },
+  "implementation": [
+    "Bounded, allowlisted Q18 plan snapshots with durable request and recommendation identities, goal context, evidence, rationale, action and expiry.",
+    "Read-only return/reopen; explicit refresh, dismissal, ask/none, expiry and changed-context states. Fresh basis and choice checked within the acceptance write lock.",
+    "Atomic canonical work create/link, persisted queue placement and idempotent acceptance receipt. Existing front, linked work titles/intent and goal progress are preserved.",
+    "Authenticated no-store generation/read/dismiss/accept routes; default-off registration and protected settings environment entry."
+  ],
+  "verification": {
+    "affected": {
+      "passed": 405,
+      "skipped": 4,
+      "failed": 0,
+      "assertions": 3200,
+      "files": 25,
+      "command_file": "docs/brief-delivery/evidence/F-13/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-13/review-affected.log"
+    },
+    "actual_q18": {
+      "commit": "dd658e0535dd0e365559a065987c5bf4031c8732",
+      "passed": 69,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 282,
+      "log": "docs/brief-delivery/evidence/F-13/review-q18-integration.log",
+      "method": "Temporary overlay of five Q18 source/test/scenario files, removed in finally; no Q18 source committed."
+    },
+    "regressions": {
+      "failed_before_fix": 2,
+      "log": "docs/brief-delivery/evidence/F-13/regressions-red.log",
+      "fixes": [
+        "Latest uses insertion order even when wall clock reverses.",
+        "Changed planner choice invalidates a plan even when basis is unchanged."
+      ]
+    },
+    "mutations": {
+      "variants": 4,
+      "expected_failures": 7,
+      "log": "docs/brief-delivery/evidence/F-13/mutations.json",
+      "restored_suite": "402 affected tests pass"
+    },
+    "typescript": {
+      "status": "passed",
+      "command": "bun node_modules/typescript/bin/tsc --noEmit",
+      "log": "docs/brief-delivery/evidence/F-13/review-typescript.log"
+    },
+    "guards": "Normal mandatory EE, migration, template, package, related tests and TypeScript commit hooks; exact outcome in PR description.",
+    "live_provider": "not_run; Q18 planning is deterministic; no external model, message, workflow execution or production activation.",
+    "initial_focused": {
+      "passed": 20,
+      "skipped": 2,
+      "failed": 0,
+      "assertions": 145,
+      "log": "docs/brief-delivery/evidence/F-13/focused.log"
+    }
+  },
+  "limitations": [
+    "Q18 remains on its own branch; the independent F stack correctly reports unavailable until integrated.",
+    "D10 must adapt ask/none/null-goal cases and distinguish explanatory action title from an existing canonical destination title; live UI binding is not included.",
+    "At the numeric placement bound acceptance fails atomically, requiring user reordering.",
+    "Stored results are at most 64 KB. Snapshot read volume and ranking semantics remain Q18-owned.",
+    "Full repository CI reports separately on the PR."
+  ],
+  "rollback": "Unset recommendation flag and restart; retain additive metadata, canonical work and receipt history.",
+  "guide": "docs/brief-recommendations.md",
+  "next_task": "F-14 not started",
+  "review_correction": {
+    "finding": "R1: work whose goal was deleted was advertised as available but acceptance rejected its surviving historical goal ID.",
+    "change": "Compare the current existing goal, matching Q18 null-goal projection, inside the acceptance transaction. Preserve the work, historical goal ID, canonical queue identity, placement and receipt. Keep freshness and live-goal mismatch validation.",
+    "regressions": "One standalone deletion/restart test and two actual-Q18 tests for deletion before/after generation failed before the fix and now pass. Two live-goal mismatch checks still reject invalid associations.",
+    "red_log": "docs/brief-delivery/evidence/F-13/review-R1-red.log",
+    "mutation": "Removing live-goal association validation causes two expected failures; production guard restored before the affected suite.",
+    "mutation_log": "docs/brief-delivery/evidence/F-13/review-mutation-live-goal-red.log",
+    "commands": [
+      "bun test src/brief/recommendations.test.ts src/brief/recommendations-q18.test.ts --test-name-pattern \"goal was deleted|goal deletion|planner goal\" (red with pinned Q18 overlay)",
+      "bun test src/brief/recommendations-q18.test.ts src/goals/next-action.test.ts (green with pinned Q18 overlay)",
+      "bun test src/brief/recommendations.test.ts --test-name-pattern \"planner goal\" (unsafe mutation, then restored)",
+      "Affected command unchanged: docs/brief-delivery/evidence/F-13/affected-command.txt"
+    ],
+    "initial_head_ci": "7bc35087 Tests, Docker and all active platform checks passed.",
+    "correction_ci": "Reports separately on the same open PR after push."
+  }
+}

@@ -1,0 +1,22 @@
+[
+  {
+    "mutation": "freshness",
+    "exit": 1,
+    "expected_failure": true
+  },
+  {
+    "mutation": "idempotency",
+    "exit": 1,
+    "expected_failure": true
+  },
+  {
+    "mutation": "placement",
+    "exit": 1,
+    "expected_failure": true
+  },
+  {
+    "mutation": "atomicity",
+    "exit": 1,
+    "expected_failure": true
+  }
+]
