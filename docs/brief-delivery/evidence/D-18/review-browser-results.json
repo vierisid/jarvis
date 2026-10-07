@@ -1,0 +1,9 @@
+{
+  "results": [
+    "Input: compact sample remains saved after node change",
+    "Output: compact sample remains saved after node change",
+    "Detached descendant: drag, promote, drag, save and chat reflow preserve new position"
+  ],
+  "errors": [],
+  "mutations": []
+}
