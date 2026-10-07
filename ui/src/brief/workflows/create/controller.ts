@@ -16,6 +16,7 @@ export class WorkflowCreationController {
   private value: CreationSnapshot;
   private listeners = new Set<() => void>();
   private retired = false;
+  private storageRestored = false;
   constructor(readonly port: CompositionPort, private storage: CreationStorage, options: {
     source: "live" | "fixture"; scopeId: string; requestId?: () => string;
   }) {
@@ -33,7 +34,8 @@ export class WorkflowCreationController {
         if (saved.job !== null) { if (!saved.request) throw Error("Missing request"); readJob(saved.job, saved.request); }
         this.value = { ...saved, busy: false, error: null, storageFailed: false };
       }
-    } catch { this.value.storageFailed = true; this.value.error = "Saved creation state is unavailable. Restore session storage before creating a workflow."; }
+      this.storageRestored = true;
+    } catch { this.value.storageFailed = true; this.value.error = "Saved creation state is unavailable. New edits stay in this page only. Restore session storage and reload."; }
   }
   private requestId: () => string;
   getSnapshot = () => this.value;
@@ -41,7 +43,9 @@ export class WorkflowCreationController {
   private update(patch: Partial<CreationSnapshot>, persist = true): boolean {
     if (this.retired) return false;
     const next = { ...this.value, ...patch };
-    if (persist) {
+    // An unreadable record may own an uncertain POST. Local edits and scroll
+    // must not replace it with empty defaults, even if writing still works.
+    if (persist && this.storageRestored) {
       try { const { busy: _busy, error: _error, storageFailed: _storage, ...saved } = next; this.storage.write(JSON.stringify(saved)); }
       catch { next.storageFailed = true; next.error = "Your prompt could not be saved. Restore session storage and retry."; }
     }
@@ -68,7 +72,11 @@ export class WorkflowCreationController {
       if (job) return this.port.read(job.jobId);
       // POST may have succeeded before its response was lost. If not found,
       // retry the SAME admitted specification/key, never the newly edited text.
-      return await this.port.recover(request) ?? await this.port.submit(request);
+      const recovered = await this.port.recover(request);
+      // Scope ownership may end during the lookup. Fence the next effect,
+      // not only the eventual receipt, before retrying the original request.
+      if (this.retired) throw Error("Composition scope retired");
+      return recovered ?? await this.port.submit(request);
     }, request);
   };
   private async operation(read: () => Promise<CompositionJob>, request: CompositionRequest) {

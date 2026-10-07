@@ -82,3 +82,110 @@ test("canonical recents select latest per flow, carry stable IDs and distinguish
   expect(rows.length).toBe(11);expect(rows.some(r=>r.runId==="old")).toBe(false);for(const row of rows.filter(r=>r.status!=="SUCCEEDED"))expect(row.result).not.toBe("Run completed");
   expect(runPresentation("NEW_STATE").label).toBe("Unknown");expect(projectRecentWorkflows([],runs)).toEqual([]);
 });
+
+test.each(["missing", "found", "rejected"] as const)("retired recovery never submits or stores a late %s lookup", async outcome => {
+  const storage = memory();
+  let resolve!: (job: CompositionJob | null) => void;
+  let reject!: (error: Error) => void;
+  const lookup = new Promise<CompositionJob | null>((yes, no) => { resolve = yes; reject = no; });
+  const submitted: CompositionRequest[] = [];
+  const { controller } = setup({
+    submit: async request => {
+      submitted.push(request);
+      if (submitted.length === 1) throw Error("Lost response");
+      return fixtureJob(request);
+    },
+    recover: () => lookup,
+  }, storage);
+  controller.setDraft("Keep this original prompt");
+  await controller.submit(controller.getSnapshot().draft);
+  const recovering = controller.recover();
+  let notifications = 0;
+  controller.subscribe(() => { notifications++; });
+  const before = controller.getSnapshot(), saved = storage.read();
+  controller.dispose();
+  if (outcome === "rejected") reject(Error("Late network failure"));
+  else resolve(outcome === "found" ? fixtureJob(submitted[0]!, ready) : null);
+  await recovering;
+  await controller.recover();
+  expect(submitted).toHaveLength(1);
+  expect(controller.getSnapshot()).toBe(before);
+  expect(storage.read()).toBe(saved);
+  expect(notifications).toBe(0);
+});
+
+test.each(["read", "parse", "validation"] as const)("failed %s restoration cannot overwrite the recovery record through editing or scrolling", async failure => {
+  const backing = memory();
+  const original = setup({ submit: async () => { throw Error("Lost response"); } }, backing).controller;
+  original.setDraft("Original pending prompt");
+  await original.submit(original.getSnapshot().draft);
+  const recoverable = backing.read()!;
+  original.dispose();
+  let raw = failure === "parse" ? recoverable.slice(0, -1)
+    : failure === "validation" ? JSON.stringify({ ...JSON.parse(recoverable), scrollTop: -1 }) : recoverable;
+  let readFails = failure === "read", writes = 0, posts = 0, lookups = 0;
+  const storage: CreationStorage = {
+    read: () => { if (readFails) throw Error("Storage temporarily unreadable"); return raw; },
+    write: value => { writes++; raw = value; },
+  };
+  const port: Partial<CompositionPort> = {
+    submit: async request => { posts++; return fixtureJob(request); },
+    recover: async request => {
+      lookups++;
+      expect(request).toEqual(JSON.parse(recoverable).request);
+      return fixtureJob(request, ready);
+    },
+  };
+  const before = raw;
+  const controller = setup(port, storage).controller;
+  controller.setDraft("Unpersisted new edit");
+  controller.savePosition(528, "another-run");
+  await controller.submit("Must not start another request");
+  await controller.recover();
+  expect(writes).toBe(0);
+  expect(raw).toBe(before);
+  expect(controller.getSnapshot()).toMatchObject({ draft: "Unpersisted new edit", storageFailed: true });
+  controller.dispose();
+  const stillUnavailable = setup(port, storage).controller;
+  await stillUnavailable.submit("Reload cannot bypass recovery");
+  expect(stillUnavailable.getSnapshot().storageFailed).toBe(true);
+  expect(posts).toBe(0);
+  expect(lookups).toBe(0);
+  stillUnavailable.dispose();
+  // Once the original bytes can be restored/read, a fresh owner recovers that
+  // same pending request, not the edits made while restoration was unavailable.
+  raw = recoverable; readFails = false;
+  const restored = setup(port, storage).controller;
+  expect(restored.getSnapshot().draft).toBe("Original pending prompt");
+  await restored.submit("Cannot replace the original request");
+  await restored.recover();
+  expect(lookups).toBe(1);
+  expect(posts).toBe(0);
+  expect(restored.getSnapshot().job?.workflow).toEqual(ready.workflow);
+  restored.dispose();
+});
+
+test("a later write failure can preserve a known request when storage becomes writable", async () => {
+  let raw: string | null = null, failWrites = false;
+  const storage: CreationStorage = {
+    read: () => raw,
+    write: value => { if (failWrites) throw Error("Quota"); raw = value; },
+  };
+  const { controller } = setup({ submit: async () => { throw Error("Lost response"); } }, storage);
+  controller.setDraft("Original prompt");
+  await controller.submit("Original prompt");
+  const request = controller.getSnapshot().request;
+  failWrites = true;
+  controller.setDraft("New edit");
+  expect(controller.getSnapshot().storageFailed).toBe(true);
+  failWrites = false;
+  controller.savePosition(528, "selected-run");
+  expect(JSON.parse(raw!)).toMatchObject({ request, draft: "New edit", scrollTop: 528 });
+  controller.dispose();
+  const { controller: restored, requests } = setup({ recover: async r => fixtureJob(r, ready) }, storage);
+  await restored.submit("Must recover first");
+  await restored.recover();
+  expect(requests).toHaveLength(0);
+  expect(restored.getSnapshot()).toMatchObject({ draft: "New edit", request, job: { workflow: ready.workflow } });
+  restored.dispose();
+});

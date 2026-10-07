@@ -1,0 +1,32 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/create/controller.test.ts:
+(pass) one rapid submission persists the exact prompt and key before POST [2.13ms]
+(pass) lost POST recovers its receipt without generating a second draft [0.31ms]
+(pass) unknown request replay keeps the original key and wording after edits and remount [0.34ms]
+(pass) terminal failed retains prompt and permits an explicit new request [0.24ms]
+(pass) terminal blocked retains prompt and permits an explicit new request [0.08ms]
+(pass) terminal cancelled retains prompt and permits an explicit new request [0.07ms]
+(pass) persist failure makes zero requests and keeps the prompt [0.13ms]
+(pass) receipt save failure cannot acknowledge navigation [0.21ms]
+(pass) saved result opens once and retains exact IDs and selected position [0.30ms]
+(pass) retiring a scope fences late results and further effects [0.14ms]
+(pass) scope storage keys cannot collide or expose another prompt [0.09ms]
+(pass) malformed storage blocks new composition instead of discarding an unknown key [0.14ms]
+(pass) foreign request or changed job receipts never navigate [0.21ms]
+(pass) UTF-8 bound rejects oversized prompts; raw markup remains text [0.18ms]
+(pass) capability-disabled and mismatched servers perform zero requests [0.37ms]
+(pass) F07 HTTP adapter uses only composition routes and matches exact receipts [0.62ms]
+(pass) canonical recents select latest per flow, carry stable IDs and distinguish every failure [0.58ms]
+(pass) retired recovery never submits or stores a late missing lookup [1.15ms]
+(pass) retired recovery never submits or stores a late found lookup [0.06ms]
+(pass) retired recovery never submits or stores a late rejected lookup [0.05ms]
+(pass) failed read restoration cannot overwrite the recovery record through editing or scrolling [0.62ms]
+(pass) failed parse restoration cannot overwrite the recovery record through editing or scrolling [0.12ms]
+(pass) failed validation restoration cannot overwrite the recovery record through editing or scrolling [0.10ms]
+(pass) a later write failure can preserve a known request when storage becomes writable [0.40ms]
+
+ 24 pass
+ 0 fail
+ 109 expect() calls
+Ran 24 tests across 1 file. [30.00ms]

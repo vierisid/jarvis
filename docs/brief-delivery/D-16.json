@@ -108,6 +108,62 @@
     "Native Figma exports inspected; browser runtime is tested independently"
   ],
   "rollback": "Remove injected creation registration/binding and return to legacy route. Retire scope owner; preserve original prompts, uncertain request keys and server drafts. Do not replay under new keys or delete records.",
-  "ci": "Not run before publication; exact pushed-head status recorded in PR after push",
-  "next": "D-17; not started"
+  "ci": "Reviewed head 9ec85481 Tests/Docker and active platform checks passed. Correction-head CI is reported on PR #776 after push, not inferred from earlier checks.",
+  "next": "D-17; not started",
+  "review_corrections": {
+    "date": "2026-10-07",
+    "reviewed_head": "9ec85481813ab2ba890cca0bcefc4adc27e35abd",
+    "findings": {
+      "R1": "Retirement checked between recovery lookup and any replay POST; late results do not change retired state.",
+      "R2": "Failed initial read/validation blocks storage writes; restore original record before resuming. Later write failures retain known request identity."
+    },
+    "checks": [
+      {
+        "command": "bun test --preload ./src/test-preload.ts ui/src/brief/workflows/create/controller.test.ts",
+        "phase": "before correction",
+        "passed": 20,
+        "failed": 4,
+        "result": "expected failure",
+        "evidence": "evidence/D-16/review-regression-red.log"
+      },
+      {
+        "command": "bun test --preload ./src/test-preload.ts ui/src/brief/workflows/create/controller.test.ts",
+        "phase": "after correction",
+        "passed": 24,
+        "failed": 0,
+        "assertions": 109,
+        "result": "pass",
+        "evidence": "evidence/D-16/review-regression-green.log"
+      },
+      {
+        "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows",
+        "passed": 40,
+        "failed": 0,
+        "skipped": 1,
+        "assertions": 155,
+        "result": "pass",
+        "evidence": "evidence/D-16/review-focused-tests.log"
+      },
+      {
+        "command": "JARVIS_F07_ROOT=/home/vierisid/.cache/codex/jarvis-f-07 bun test --preload ./src/test-preload.ts ui/src/brief/workflows/create/f07-compatibility.test.ts",
+        "passed": 1,
+        "failed": 0,
+        "assertions": 10,
+        "result": "pass",
+        "evidence": "evidence/D-16/review-f07-compatibility.log"
+      },
+      {
+        "command": "bun x tsc --noEmit",
+        "result": "pass",
+        "evidence": "evidence/D-16/review-typescript.log"
+      },
+      {
+        "command": "bun run build:ui",
+        "result": "pass",
+        "evidence": "evidence/D-16/review-build.log",
+        "warnings": "Existing Tailwind at-rule warnings"
+      }
+    ],
+    "limits": "Controller-only correction. No fresh browser matrix, real model, hosted account switch or live effect. Production remains disabled; D-17 not started."
+  }
 }
