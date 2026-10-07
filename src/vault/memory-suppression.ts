@@ -19,9 +19,9 @@ export function assertionKey(db: Database, fact: Assertion): string {
 }
 export function automaticSourceKey(db: Database, source: Source): string | null {
   if (!source.source || !AUTOMATIC_FACT_SOURCES.has(source.source)) return null;
-  // Conversation source_ref is a digest of the original input pair. Profile refs
-  // identify a field, so its exact source answer is also the revision. Legacy goal
-  // facts have no ref: their assertion includes the completion-episode entity ID.
+  // Conversation refs identify a turn/input pair. Profile refs include a durable
+  // edit identity; retaining the answer component preserves legacy suppression.
+  // Legacy goal assertions include the completion-episode entity ID.
   if (source.source_ref?.startsWith('legacy:') || (!source.source_ref && source.source !== 'goal_completion')) return legacySourceKey(db, source.source);
   return hash(db, ['source-v1', source.source, source.source_ref ?? null,
     source.source === 'user_profile' ? source.quote ?? null : null]);
@@ -35,6 +35,13 @@ export function assertAutomaticFactAllowed(db: Database, fact: Assertion, source
   const assertion = assertionKey(db, fact);
   if (db.query('SELECT 1 FROM memory_forget_suppressions WHERE assertion_key = ? AND source_key = ?')
     .get(assertion, key)) throw new FactSuppressedError();
+  // A current, explicitly edited profile field is new input. Forget also records
+  // its exact ref for migrated facts, so unchanged saves still hit the check above.
+  // Check the persisted identity, not a caller-provided claim of a new revision.
+  if (source.source === 'user_profile' && source.source_ref) {
+    const edit = /^profile:(answer|derived):([^:]+):revision:(.+)$/.exec(source.source_ref);
+    if (edit && db.query('SELECT 1 FROM memory_profile_revisions WHERE field = ? AND revision = ?').get(edit[2]!, edit[3]!)) return;
+  }
   // Older sources did not identify the turn. Preserve their suppression on replay;
   // only a canonical user turn accepted AFTER Forget may supply that assertion anew.
   const legacyKeys = [legacySourceKey(db, source.source!)];
@@ -46,9 +53,13 @@ export function assertAutomaticFactAllowed(db: Database, fact: Assertion, source
       || source.replay.explicitInputAt <= old.forgotten_at)) throw new FactSuppressedError();
   }
 }
+export function profileSourceRef(db: Database, kind: string, field: string): string {
+  const edit = db.query<{ revision: string }, [string]>('SELECT revision FROM memory_profile_revisions WHERE field = ?').get(field);
+  return `profile:${kind}:${field}${edit ? `:revision:${edit.revision}` : ''}`;
+}
 export function profileSourceForgotten(db: Database, field: string, answer: string): boolean {
   return ['answer', 'derived'].some(kind => db.query('SELECT 1 FROM memory_forget_suppressions WHERE source_key = ? LIMIT 1')
-    .get(automaticSourceKey(db, { source: 'user_profile', source_ref: `profile:${kind}:${field}`, quote: answer })));
+    .get(automaticSourceKey(db, { source: 'user_profile', source_ref: profileSourceRef(db, kind, field), quote: answer })));
 }
 export function assertNoForgottenMemory(db: Database, ids: readonly string[]): void {
   for (const id of ids) if (db.query('SELECT 1 FROM memory_forget_receipts WHERE fact_id = ?').get(id)) {

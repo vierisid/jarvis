@@ -52,6 +52,59 @@
   ],
   "verification": {
     "focused": {
+      "passed": 35,
+      "failed": 0,
+      "assertions": 194,
+      "files": 3,
+      "command": "bun test src/brief/memory-forget.test.ts src/daemon/api-brief-memory-forget.test.ts src/daemon/agent-service-forget.test.ts",
+      "log": "docs/brief-delivery/evidence/F-19/review-focused.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "command": "bun x tsc --noEmit",
+      "log": "docs/brief-delivery/evidence/F-19/review-typescript.log"
+    },
+    "guards": "Normal commit hooks required before push; exact results recorded in PR description.",
+    "evidence_policy": "Committed logs contain test verdicts only; raw local fixture output is not published.",
+    "affected": {
+      "passed": 1425,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 10725,
+      "files": 75,
+      "command_file": "docs/brief-delivery/evidence/F-19/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-19/review-affected.log"
+    }
+  },
+  "limitations": [
+    "Only the chosen assertion and its evidence are deleted. Original messages/summaries/documents, settings/interview sources, entity identity/relationships, independently stored facts and backups remain.",
+    "Suppression matches normalized assertions and known source revisions, not arbitrary semantic paraphrases. Legacy sources without a revision use conservative automatic-writer suppression; new manual input or a later canonical Brief turn can override by creating new information.",
+    "A matching profile source field is withheld as a whole. This may withhold other text in that field until the answer changes; unrelated facts are not erased.",
+    "Already-sent provider context, existing realtime sessions, tool-return copies, backups and SQLite free pages cannot be scrubbed by this operation. No global model unlearning or secure file erasure.",
+    "No Undo, suppression expiry or silent capacity eviction. No UI, deployment, production activation or F20 implementation. Full repository CI reports separately."
+  ],
+  "rollback": "Unset JARVIS_BRIEF_MEMORY_FORGET and restart to disable new requests. Keep durable tombstones and ingestion/handoff checks. A pre-F19 writer can ignore suppression and must not be substituted after using Forget without preserving these checks.",
+  "guide": "docs/brief-memory-forget.md",
+  "next_task": "F-20 not started",
+  "review_fixes": {
+    "reviewed_head": "d6acd09adc2145824cb1232c4eb4adedeb76492d",
+    "R1": "Persist a random per-field profile edit identity only when the normalized answer changes. Changed-back answers, clear/re-entry, derived aliases and canonical profile corrections restore new input. Unrelated saves, legacy settings and prepared old contexts remain suppressed.",
+    "R2": "Persist the text-pair replay alias alongside scoped extraction evidence and suppress both on Forget. Enrich existing evidence on re-ingestion without duplication, preserve aliases through restart and advance shared alias ownership on repeated Forget.",
+    "regressions": {
+      "new_cases": 8,
+      "before_fix": {
+        "passed": 20,
+        "failed": 8,
+        "assertions": 98,
+        "log": "docs/brief-delivery/evidence/F-19/review-red.log"
+      },
+      "after_fix": "All eight cases pass in the focused and affected suites recorded below."
+    },
+    "schema": "One nullable replay_source_ref evidence column and a field-to-random-revision table. Additive, no source answer text in revision metadata."
+  },
+  "prior_implementation_verification": {
+    "head": "d6acd09adc2145824cb1232c4eb4adedeb76492d",
+    "focused": {
       "passed": 27,
       "failed": 0,
       "assertions": 160,
@@ -91,15 +144,5 @@
     "manual": "Isolated persistent SQLite restart, canonical turn replay, real extractor/AgentService/provider dispatch with scripted local models, and authenticated Unix-socket HTTP. No real user deletion, inference or deployment.",
     "evidence_policy": "Committed logs contain test verdicts only; raw local output is not published because fixtures can print credentials or prompt data.",
     "guards": "Normal commit hooks required before push; exact results recorded in PR description."
-  },
-  "limitations": [
-    "Only the chosen assertion and its evidence are deleted. Original messages/summaries/documents, settings/interview sources, entity identity/relationships, independently stored facts and backups remain.",
-    "Suppression matches normalized assertions and known source revisions, not arbitrary semantic paraphrases. Legacy sources without a revision use conservative automatic-writer suppression; new manual input or a later canonical Brief turn can override by creating new information.",
-    "A matching profile source field is withheld as a whole. This may withhold other text in that field until the answer changes; unrelated facts are not erased.",
-    "Already-sent provider context, existing realtime sessions, tool-return copies, backups and SQLite free pages cannot be scrubbed by this operation. No global model unlearning or secure file erasure.",
-    "No Undo, suppression expiry or silent capacity eviction. No UI, deployment, production activation or F20 implementation. Full repository CI reports separately."
-  ],
-  "rollback": "Unset JARVIS_BRIEF_MEMORY_FORGET and restart to disable new requests. Keep durable tombstones and ingestion/handoff checks. A pre-F19 writer can ignore suppression and must not be substituted after using Forget without preserving these checks.",
-  "guide": "docs/brief-memory-forget.md",
-  "next_task": "F-20 not started"
+  }
 }

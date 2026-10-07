@@ -9,6 +9,7 @@ import { appliesAt, isSingleValued, predicateKey, valueKey, samePeriod, type Fac
 export interface FactEvidence {
   id: string; fact_id: string; source: string | null; source_ref: string | null;
   quote: string | null; basis: FactBasis; confidence: number; recorded_at: number;
+  replay_source_ref?: string | null;
 }
 export type Fact = FactRow & { evidence: FactEvidence[]; basis: FactBasis; binding_eligible: boolean };
 export type FactOptions = {
@@ -41,9 +42,14 @@ function addEvidence(id: string, options: FactOptions, now: number): void {
   const basis = options.confirmed ? 'confirmed' : options.basis ?? (options.source === 'llm_extraction' ? 'inferred' : 'unspecified');
   const fields = [options.source ?? null, options.sourceRef ?? null, options.quote ?? null, basis, options.confidence ?? 1];
   const key = createHash('sha256').update(JSON.stringify(fields)).digest('hex');
-  getDb().run(`INSERT OR IGNORE INTO fact_evidence
-    (id, fact_id, source, source_ref, quote, basis, confidence, recorded_at, evidence_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  [generateId(), id, ...fields, now, key]);
+  // Keep the old dedup key so re-ingestion can enrich pre-upgrade evidence.
+  // The alias is a digest, and is deleted with the rest of the fact's evidence.
+  getDb().run(`INSERT INTO fact_evidence
+    (id, fact_id, source, source_ref, quote, basis, confidence, recorded_at, evidence_key, replay_source_ref)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(fact_id, evidence_key) DO UPDATE SET
+      replay_source_ref = COALESCE(fact_evidence.replay_source_ref, excluded.replay_source_ref)`,
+  [generateId(), id, ...fields, now, key, options.replay?.sourceRef ?? null]);
 }
 /**
  * Provenance is unforgeable because `confirmed` is read from `verified_at`

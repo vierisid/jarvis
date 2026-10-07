@@ -73,7 +73,9 @@ export class MemoryForget {
       if (source.revision !== input.expectedRevision) throw new MemoryForgetError('revision_conflict', 409);
       const { fact } = source;
       if (fact.evidence.length > MEMORY_FORGET_LIMITS.perFact) throw new MemoryForgetError('capacity_exceeded', 503);
-      const keys = new Set(fact.evidence.map(e => automaticSourceKey(this.db, e)).filter((k): k is string => k !== null));
+      const keys = new Set(fact.evidence.flatMap(e => [automaticSourceKey(this.db, e),
+        e.replay_source_ref ? automaticSourceKey(this.db, { ...e, source_ref: e.replay_source_ref }) : null,
+      ]).filter((k): k is string => k !== null));
       // Old rows without provenance still cannot silently reappear from a legacy automatic writer.
       if (!fact.evidence.length) {
         const fallback = automaticSourceKey(this.db, { source: fact.source }); if (fallback) keys.add(fallback);
@@ -89,7 +91,10 @@ export class MemoryForget {
       this.db.run('INSERT INTO memory_forget_receipts VALUES (?, ?, ?, ?, ?)',
         [id, input.requestId, input.expectedRevision, stored.forgotten_at, keys.size]);
       const assertion = assertionKey(this.db, fact);
-      for (const key of keys) this.db.run('INSERT OR IGNORE INTO memory_forget_suppressions VALUES (?, ?, ?)', [assertion, key, id]);
+      // A shared replay alias must point to the latest Forget, so a turn accepted
+      // between two deletions cannot bypass the newer suppression boundary.
+      for (const key of keys) this.db.run(`INSERT INTO memory_forget_suppressions VALUES (?, ?, ?)
+        ON CONFLICT(assertion_key, source_key) DO UPDATE SET fact_id = excluded.fact_id`, [assertion, key, id]);
       this.db.run('DELETE FROM fact_evidence WHERE fact_id = ?', [id]);
       this.db.run('DELETE FROM facts WHERE id = ?', [id]);
       reconcileFacts(this.db, fact.subject_id, fact.predicate_key, fact.scope);

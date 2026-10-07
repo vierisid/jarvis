@@ -18,5 +18,10 @@ export function ensureMemoryForgetSchema(db: Database): void {
       PRIMARY KEY(assertion_key, source_key)
     )`);
     db.run('CREATE INDEX IF NOT EXISTS idx_memory_forget_source ON memory_forget_suppressions(source_key)');
+    // Only explicit changes to a field advance this identity. Existing settings
+    // keep their legacy refs until edited; initialization must not revive them.
+    db.run(`CREATE TABLE IF NOT EXISTS memory_profile_revisions (
+      field TEXT PRIMARY KEY, revision TEXT NOT NULL
+    )`);
   })();
 }
