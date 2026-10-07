@@ -746,7 +746,8 @@ export const captureScreenTool: ToolDefinition = {
       // reached the model as a truncated prefix of base64, like #658's.
       // Compacted when the raw PNG is over the image cap (#711), as the
       // routed branch is.
-      return localScreenshotResult(localCaptureScreen(), 'image/png', 'Screenshot captured', false);
+      // Awaited, not returned: a rejection must land in the catch below (#769).
+      return await localScreenshotResult(localCaptureScreen(), 'image/png', 'Screenshot captured', false);
     } catch (err) {
       return `Error capturing screen: ${err instanceof Error ? err.message : err}`;
     }
