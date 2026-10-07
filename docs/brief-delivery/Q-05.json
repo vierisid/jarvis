@@ -11,7 +11,7 @@
     "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-05.json"
   },
   "status": {
-    "implementation": "verified locally; review fixes in 76abaabc",
+    "implementation": "verified locally; review fixes in 76abaabc; the pre-existing Google refresh-token handoff (P1) fixed in 8fc295f4",
     "merge": "not_merged",
     "capability_ready": "binding pins for enabled workflows, per-run connection identity, pinned computers and recipient fact checks on governed sends; active once merged, with no flag",
     "release_enabled": false,
@@ -44,7 +44,8 @@
     "A run keeps the connection identity it started with. The engine's first credential fetch in a run records the identity handed out, checked against the pins; every later fetch, at each step, retry and resumed approval, must resolve to the same identity, and a connection removed or revoked after the resolver found it is refused too: the daemon answers 409, hands out nothing and records the refusal on the run. Re-enabling accepts a change for later runs only. GET /api/workflow-runs/:runId returns connectionBindings (connection, kind, refusal; no grant fingerprint) and manage_workflow get_run returns bindingRefusals; run lists and status updates omit them.",
     "A run of a pinned flow uses the pinned computer: offline is WORKFLOW_MACHINE_OFFLINE at dispatch with no other computer taking over; no longer enrolled is WORKFLOW_MACHINE_REPLACED; pinned to this computer with local tools off is WORKFLOW_MACHINE_UNAVAILABLE. A computer enrolled later does not move the run. The pin uses servesCapability() (#611).",
     "A governed piece action in a sending or addressing category (send_email, send_message, write_data, modify_settings) matches each recipient address in receiver, to, cc, bcc, attendees, attendee_email, user_email and email (bare, Name <address>, or comma and semicolon lists) against memory's email and primary_email facts, ignoring case, once when its effect is recorded, and keeps the matching fact ids on the effect (bindings.facts), outside the request digest and target. The effect boundary rechecks them before the policy and any approval, in the dispatch checkpoint (which also covers an approval granted while its card is delivered), and before a recorded authorization is handed out on the engine's own retry. No current fact (superseded, expired, or deleted after recording) is WORKFLOW_FACT_STALE; only contested ones is WORKFLOW_FACT_AMBIGUOUS. The effect is recorded as blocked with that outcome, audited as denied, and keeps its frozen arguments; a refused retry of a succeeded authorization is kept as replayRefusal while the effect stays succeeded. Reads are never blocked; an address memory does not know is not checked.",
-    "BOUNDED_TOOLS and boundedToolCapability moved to runtime/tool-capability.ts and the readiness services to repos/readiness-services.ts (re-exported from flow-readiness.ts), so the database layer can pin a computer without importing the dispatch machinery."
+    "BOUNDED_TOOLS and boundedToolCapability moved to runtime/tool-capability.ts and the readiness services to repos/readiness-services.ts (re-exported from flow-readiness.ts), so the database layer can pin a computer without importing the dispatch machinery.",
+    "The managed Google source no longer hands its refresh token to the engine (the value carries refresh_token: \"\", as the engine's credential route documents). The engine asks for the connection at every step and gets an access token refreshed by the daemon, so nothing in the engine needs it, and a long-lived grant to the whole Google account no longer reaches sandboxed piece code. The daemon still uses it to identify the grant."
   ],
   "acceptance": [
     {
@@ -61,12 +62,12 @@
   "verification": [
     {
       "command": "bun test --preload ./src/test-preload.ts",
-      "result": "7,778 pass, 86 skip, 9 fail of 7,873 tests across 426 files (local WSL2, 76abaabc). All 9 also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. CI on the final head runs the full suite.",
+      "result": "7,778 pass, 86 skip, 9 fail of 7,873 tests across 426 files (local WSL2, 76abaabc). All 9 also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. 8fc295f4 (P1) changes only the Google source and its test; CI runs the full suite on the final head.",
       "log": "evidence/Q-05/full-suite-summary.log"
     },
     {
-      "command": "bun test --preload ./src/test-preload.ts src/workflows/db/repos/binding-pins.test.ts src/workflows/runtime/workflow-binding-pins.test.ts src/workflows/runtime/fact-bindings.test.ts src/workflows/sandbox-api/native-connections.test.ts src/workflows/credentials/google-source.test.ts src/workflows/runner/triggers/manager.test.ts src/sidecar/capability-predicate.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/governed-pieces.test.ts src/actions/tools/manage-workflow.test.ts src/workflows/db/repos/run-execution-config.test.ts",
-      "result": "336 pass, 0 fail across 12 files: the Q-05 tests plus the readiness, machine binding, Authority boundary, governed piece, manage_workflow, run record and capability-predicate tests they touch",
+      "command": "bun test --preload ./src/test-preload.ts src/workflows/db/repos/binding-pins.test.ts src/workflows/runtime/workflow-binding-pins.test.ts src/workflows/runtime/fact-bindings.test.ts src/workflows/sandbox-api/native-connections.test.ts src/workflows/credentials/google-source.test.ts src/workflows/runner/triggers/manager.test.ts src/sidecar/capability-predicate.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/governed-pieces.test.ts src/actions/tools/manage-workflow.test.ts src/workflows/db/repos/run-execution-config.test.ts src/workflows/credentials/credentials.test.ts src/workflows/runner/engine-runtime/end-to-end-l.test.ts",
+      "result": "344 pass, 0 fail across 14 files at 8fc295f4: the Q-05 tests plus the readiness, machine binding, Authority boundary, governed piece, manage_workflow, run record, credential, capability-predicate and real-engine plumbing tests they touch",
       "log": "evidence/Q-05/q05-tests.log"
     },
     {
@@ -80,8 +81,8 @@
       "log": "evidence/Q-05/guards.log"
     },
     {
-      "command": "remove each of 66 guarantees in turn and run its test",
-      "result": "66 of 66 removals fail their tests; source restored. The log lists the file, the exact text removed and its replacement for each.",
+      "command": "remove each of 67 guarantees in turn and run its test",
+      "result": "67 of 67 removals fail their tests; source restored. The log lists the file, the exact text removed and its replacement for each.",
       "log": "evidence/Q-05/revert-checks.log"
     }
   ],
@@ -104,8 +105,7 @@
     "Flows enabled before this build are pinned at its first startup against what they resolve to then, so a change made before that is accepted. On upgrade, a flow whose only capable computer is asleep now waits for it instead of running on this computer; with several capable computers it stays unpinned to a computer until enabled again.",
     "Only email addresses memory already holds are checked, and only on governed piece actions; chat ids, phone numbers and ungoverned pieces are not. A fact deleted before the effect is recorded leaves nothing to match.",
     "Google's own refresh-token rotation changes the grant fingerprint and pauses the flow until it is enabled again.",
-    "The engine reports a refused credential fetch as a bare loading error; the reason is on the run and in get_run, not in the step's error text.",
-    "The Google source hands the refresh token to the engine although the credential route's header says it is empty; that predates Q-05 and is left to its own card."
+    "The engine reports a refused credential fetch as a bare loading error; the reason is on the run and in get_run, not in the step's error text."
   ],
   "found": [
     "Before this card, the engine looked up a connection's credential fresh at every step, retry and resumed approval, so a credential replaced under the same name took effect mid-run and in every later run without anyone accepting it.",
@@ -139,8 +139,10 @@
       "the re-encryption test drives the real credential migration instead of a raw UPDATE"
     ],
     "deferred": [
-      "P1, pre-existing: the Google source hands the refresh token to the engine; its own card",
       "a notice when a workflow goes stale, a person-only accept action, subject-scoped fact matching, and account-based Google identity: follow-up cards"
+    ],
+    "also_fixed": [
+      "P1, pre-existing and fixed at the owner's request in 8fc295f4: the Google source handed its refresh token to the engine although the credential route documents it as empty"
     ]
   }
 }
