@@ -1,0 +1,54 @@
+/* Native UI-21: a centered writing group above calm, whole-row run targets. */
+.brief-root .brief-workflow-creation { min-width:0; width:100%; }
+.brief-root .brief-workflow-create-group { display:flex; flex-direction:column; justify-content:flex-end; margin:0 auto; max-width:792px; min-height:360px; box-sizing:border-box; }
+.brief-root .brief-workflow-create-group h1 { text-align:center; margin:0 0 24px; }
+.brief-root .brief-workflow-create-group .brief-composer { margin-top:0; }
+.brief-root .brief-workflow-create-group .brief-composer-suggestions { justify-content:center; flex-wrap:wrap; overflow:visible; }
+.brief-root .brief-workflow-create-group .brief-composer-status:empty { display:none; }
+.brief-root .brief-workflow-create-feedback { min-height:124px; padding-top:16px; box-sizing:border-box; font:400 14px/22px var(--brief-sans); color:var(--brief-secondary); overflow-wrap:anywhere; }
+.brief-root .brief-workflow-create-feedback p { margin:0 0 8px; }
+.brief-root .brief-workflow-create-feedback ul { list-style:disc; padding-left:20px; margin:8px 0; }
+.brief-root .brief-recent-workflows { margin-top:74px; min-width:0; }
+.brief-root .brief-recent-workflows h2 { margin:0 0 26px; }
+.brief-root .brief-recent-workflows > ul { list-style:none; padding:0; margin:0 0 44px; }
+.brief-root .brief-recent-workflows > .brief-button :is(.brief-button__label,.brief-button__reserve) { display:flex; align-items:center; gap:24px; }
+.brief-root :is(.brief-recent-head,.brief-recent-row) { display:grid; grid-template-columns:minmax(0,1.2fr) minmax(0,1.25fr) 128px 120px; align-items:center; column-gap:24px; }
+.brief-root .brief-recent-head { padding:0 16px 14px; color:var(--brief-secondary); font:400 12px/18px var(--brief-sans); }
+.brief-root .brief-recent-row { width:100%; min-height:96px; text-align:left; border:0; border-bottom:1px solid var(--brief-card-edge); padding:20px 16px; border-radius:var(--brief-corner-control); background:transparent; color:var(--brief-ink); font:400 14px/22px var(--brief-sans); cursor:pointer; }
+.brief-root .brief-recent-row:hover { background:var(--brief-soft); }
+.brief-root .brief-recent-row[data-selected="true"] { background:var(--brief-selected); }
+.brief-root .brief-recent-row:focus-visible { outline:2px solid var(--brief-focus); outline-offset:-2px; }
+.brief-root .brief-recent-name { display:flex; align-items:center; gap:12px; min-width:0; }
+.brief-root .brief-recent-name svg { flex:none; color:var(--brief-secondary); }
+.brief-root .brief-recent-name strong { overflow-wrap:anywhere; font-weight:600; }
+.brief-root .brief-recent-result { color:var(--brief-secondary); overflow-wrap:anywhere; }
+.brief-root :is(.brief-recent-status,.brief-recent-row time) { font:400 12px/18px var(--brief-sans); font-variant-numeric:tabular-nums; color:var(--brief-secondary); }
+.brief-root .brief-recent-status { display:flex; gap:8px; align-items:center; }
+.brief-root .brief-recent-status i { width:6px; height:6px; border-radius:50%; background:currentColor; flex:none; }
+.brief-root .brief-recent-status[data-tone="success"] { color:var(--brief-success-text); }
+.brief-root .brief-recent-status[data-tone="running"] { color:var(--brief-running-text); }
+.brief-root .brief-recent-status[data-tone="attention"] { color:var(--brief-attention-text); }
+.brief-root .brief-recent-status[data-tone="error"] { color:var(--brief-error-text); }
+.brief-root .brief-recent-compact-label { display:none; }
+.brief-root .brief-workflow-notice { color:var(--brief-secondary); font:400 14px/22px var(--brief-sans); min-height:72px; }
+.brief-root .brief-workflow-notice button { color:var(--brief-ink); text-decoration:underline; padding:6px; }
+@container brief-work (max-width: 980px) {
+  .brief-root :is(.brief-recent-head,.brief-recent-row) { grid-template-columns:minmax(0,1fr) 116px 108px; gap:6px 18px; }
+  .brief-root .brief-recent-result-heading { display:none; }
+  .brief-root .brief-recent-compact-label { display:inline; }
+  .brief-root .brief-recent-name { grid-column:1; grid-row:1; }
+  .brief-root .brief-recent-result { grid-column:1; grid-row:2; padding-left:31px; }
+  .brief-root .brief-recent-status { grid-column:2; grid-row:1 / span 2; }
+  .brief-root .brief-recent-row time { grid-column:3; grid-row:1 / span 2; }
+}
+@container brief-work (max-width: 560px) {
+  .brief-root .brief-workflow-create-group { min-height:340px; padding-top:12px; }
+  .brief-root .brief-workflow-create-group h1 { font-size:28px; }
+  .brief-root .brief-recent-workflows { margin-top:32px; }
+  .brief-root .brief-recent-head { display:none; }
+  .brief-root .brief-recent-row { grid-template-columns:minmax(0,1fr) auto; padding:18px 8px; }
+  .brief-root .brief-recent-name { grid-column:1 / -1; }
+  .brief-root .brief-recent-result { grid-column:1 / -1; }
+  .brief-root .brief-recent-status { grid-column:1; grid-row:3; padding-left:31px; }
+  .brief-root .brief-recent-row time { grid-column:2; grid-row:3; }
+}

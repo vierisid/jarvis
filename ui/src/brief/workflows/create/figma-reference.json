@@ -1,0 +1,20 @@
+{
+  "task": "D-16",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "node": "81:1313",
+  "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
+  "reference_step": "UI-21",
+  "source": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-21-workflow-entry-2026-10-03",
+  "inspected": [
+    "README.md",
+    "renders/81-1313-Light-Empty.png",
+    "renders/81-1530-Dark-Multiline.png"
+  ],
+  "deviations": [
+    "Generic workflow glyph when the API has no verified service identity.",
+    "Current run status determines truthful copy; PAUSED does not imply an authority approval.",
+    "Canonical recent reader supplies Run completed, not inferred business outcomes.",
+    "Only generation and recent navigation are implemented. Destination fixtures identify exact IDs; canvas, picker and manage-list bodies remain subsequent cards."
+  ]
+}
