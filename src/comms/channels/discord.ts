@@ -1,5 +1,5 @@
-import { Client, GatewayIntentBits, Partials, type Message } from 'discord.js';
-import type { ChannelAdapter, ChannelHandler, ChannelMessage } from './telegram.ts';
+import { Client, GatewayIntentBits, MessageFlags, Partials, escapeMarkdown, type Message } from 'discord.js';
+import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 import type { STTProvider } from '../voice.ts';
 
 export class DiscordAdapter implements ChannelAdapter {
@@ -97,7 +97,7 @@ export class DiscordAdapter implements ChannelAdapter {
     console.log('[DiscordAdapter] Disconnected');
   }
 
-  async sendMessage(channelId: string, text: string): Promise<void> {
+  async sendMessage(channelId: string, text: string, options?: SendOptions): Promise<void> {
     if (!this.client) throw new Error('Discord not connected');
 
     const channel = await this.client.channels.fetch(channelId);
@@ -105,9 +105,8 @@ export class DiscordAdapter implements ChannelAdapter {
       throw new Error(`Invalid or non-text channel: ${channelId}`);
     }
 
-    const chunks = splitMessage(text, 2000);
-    for (const chunk of chunks) {
-      await (channel as any).send(chunk);
+    for (const payload of discordPayloads(text, options)) {
+      await (channel as any).send(payload);
     }
   }
 
@@ -201,6 +200,45 @@ export class DiscordAdapter implements ChannelAdapter {
       }
     }
   }
+}
+
+/**
+ * Discord renders markdown in every message and has no plain-text mode, so
+ * literal text (#718) is escaped instead: `escapeMarkdown` with every construct
+ * on, plus what it misses (`discordLiteral`) -- `<@id>`, `<#id>`, `<t:0:R>`
+ * and `<:name:id>` otherwise render as a name, a channel, a date or an emoji
+ * rather than as what was written. `allowedMentions: { parse: [] }`
+ * stops `@everyone` or a user mention notifying anyone, and SuppressEmbeds
+ * stops a link preview attaching the linked page's own text beside it.
+ *
+ * Escaping at most doubles a character (`*` -> `\*`, `||` -> `\|\|`), so the
+ * text is split at half the 2000 limit FIRST and each piece escaped on its
+ * own: splitting after escaping could part a backslash from the character it
+ * escapes. `discordLiteral`'s test pins the doubling bound.
+ */
+export function discordPayloads(text: string, options?: SendOptions): Array<string | Record<string, unknown>> {
+  if (!options?.literal) return splitMessage(text, DISCORD_MAX_CHARS);
+  return splitMessage(text, DISCORD_MAX_CHARS / 2).map((chunk) => ({
+    content: discordLiteral(chunk),
+    allowedMentions: { parse: [] },
+    flags: MessageFlags.SuppressEmbeds,
+  }));
+}
+
+const DISCORD_MAX_CHARS = 2000;
+
+/**
+ * Text that Discord shows as written. `escapeMarkdown` covers emphasis, code,
+ * spoilers, strikethrough, headings and lists. Three things it misses are
+ * escaped here: every `[` (its own masked-link option escapes only the first
+ * link on a line: its regex is greedy, so `[a](x) [b](y)` left `[b](y)` live), every `<`
+ * (mentions, channels, timestamps, custom emoji), and a `>` quote or `-#`
+ * subtext marker at the start of a line.
+ */
+export function discordLiteral(text: string): string {
+  return escapeMarkdown(text, { heading: true, bulletedList: true, numberedList: true })
+    .replace(/[[<]/g, '\\$&')
+    .replace(/^(\s*)(>|-#)/gm, '$1\\$2');
 }
 
 export function splitMessage(text: string, maxLength: number): string[] {

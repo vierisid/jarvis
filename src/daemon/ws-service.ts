@@ -17,11 +17,10 @@ import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
 import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
-import { approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
+import { approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
-import { boundedApprovalLabel } from '../authority/approval-delivery.ts';
-import { commandForCard } from '../util/card-text.ts';
+import { formatApprovalIntent } from '../authority/approval-delivery.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -2770,163 +2769,6 @@ function looksLikeCommitment(text: string): boolean {
   if (/\bon (mon|tue|wed|thu|fri|sat|sun)(day)?\b/.test(lower)) return true;
 
   return false;
-}
-
-/**
- * The sentence the dashboard ApprovalCard leads with.
- *
- * WHAT WILL HAPPEN leads; WHY approval was needed follows in parentheses
- * (#721). `request.reason` is the Authority engine's decision reason on every
- * request but one, and the engine's wording names a category or a rule, never
- * the effect: `Override requires approval for execute_command`, a context
- * rule's own `description`, `send_email is a governed action requiring user
- * approval`. This used to recognise the engine only by two suffixes and the
- * taint label and let any other reason REPLACE the sentence, so an override or
- * a context rule hid the command, the path or the skill's steps entirely: the
- * reviewer saw why approval was needed but not what would happen.
- *
- * The one exception is `request_approval`, whose `reason` IS the model's
- * declared intent (#696): that is the headline, reduced to one line with no
- * format characters and not cut, since this card is where the whole intent can
- * be read. Its `context` is model-written too, so it is never read as a gate
- * sentence (`approvalIntentFromContext`) -- before #721 an intent ending in
- * "requires user approval" made the model's own context JSON the headline.
- *
- * The appended reason gets the same one-line reduction: a context rule's
- * description is free text from config. The engine's own wording comes back
- * byte-exact, so a gated card with an engine reason reads as it did.
- */
-function formatApprovalIntent(request: ApprovalRequest): string {
-  const reason = (request.reason ?? '').trim();
-  const why = boundedApprovalLabel(reason, reason.length).trim();
-  if (request.tool_name === 'request_approval' && why) return why;
-  const synthesized = synthesizeApprovalIntent(request);
-  return why ? `${synthesized} (${why})` : synthesized;
-}
-
-function synthesizeApprovalIntent(request: ApprovalRequest): string {
-  // A gated tool (run_skill, record_skill, manage_skills delete) writes the
-  // sentence that names what will actually happen, with resolved values.
-  // Never for request_approval, whose context the model wrote.
-  const gated = approvalIntentFromContext(request);
-  if (gated) return gated;
-
-  let args: Record<string, unknown> = {};
-  try {
-    args = JSON.parse(request.tool_arguments ?? '{}');
-  } catch {
-    // fall through with empty args
-  }
-
-  // Per-tool fallbacks for the common destructive/external intents.
-  switch (request.tool_name) {
-    case 'send_email': {
-      const to = labelOf(args.to) ?? 'someone';
-      const subject = labelOf(args.subject);
-      // Quoted with its quotes escaped, so a subject cannot close its own
-      // literal and continue the sentence; a plain subject reads as it did.
-      return subject
-        ? `Send email to ${to} — ${JSON.stringify(subject)}`
-        : `Send email to ${to}`;
-    }
-    case 'send_message': {
-      const channel = labelOf(args.channel) ?? 'channel';
-      return `Send message via ${channel}`;
-    }
-    case 'run_command':
-    case 'execute_command': {
-      // Only an approval recorded before `run_command` had a gate (#720)
-      // reaches this; every new one carries the gate's sentence above. Shown
-      // as the gate shows it, never raw: a newline collapsed in HTML let a
-      // second line hide behind a `#` comment, and a bidi override reordered
-      // the line. A plain one-line command reads exactly as it always did.
-      const shown = commandForCard(asString(args.command) ?? '', { trim: false });
-      return asString(args.command) === undefined ? 'Run a shell command' : `R${shown.slice(1)}`;
-    }
-    case 'delete_file':
-    case 'delete_data': {
-      const path = labelOf(args.path) ?? labelOf(args.target) ?? 'the target';
-      return `Delete ${path}`;
-    }
-    case 'install_software': {
-      const pkg = labelOf(args.package) ?? labelOf(args.name) ?? 'software';
-      return `Install ${pkg}`;
-    }
-    case 'make_payment': {
-      const amount = labelOf(args.amount) ?? labelOf(args.total);
-      const to = labelOf(args.recipient) ?? labelOf(args.to) ?? 'recipient';
-      return amount ? `Pay ${amount} to ${to}` : `Make a payment to ${to}`;
-    }
-    case 'spawn_agent': {
-      const role = labelOf(args.role) ?? 'an agent';
-      return `Spawn ${role}`;
-    }
-    default: {
-      // Governed workflow-piece effects: `piece:<catalog id>/<action>`. The
-      // durable effect's target rides along in `context`, so the sentence can
-      // name the recipient, file or endpoint rather than just the piece.
-      const governedPiece = /^piece:([^/]+)\/(.+)$/u.exec(request.tool_name);
-      if (governedPiece) return describeGovernedPieceIntent(governedPiece[1]!, governedPiece[2]!, request);
-      const verb = request.tool_name.replace(/_/g, ' ');
-      return `${verb}`.replace(/^./, (c) => c.toUpperCase());
-    }
-  }
-}
-
-/** A governed piece's target value in the dashboard sentence: the 80 it always had. */
-const GOVERNED_TARGET_VALUE_MAX_CHARS = 80;
-
-/**
- * "Gmail - send email to finance@example.test, subject: Q3 invoice".
- *
- * Reads the reviewed target out of the approval's context, which is what the
- * piece adapter resolved from the step's real input. A card that said only
- * "gmail" would not be governance.
- */
-function describeGovernedPieceIntent(pieceId: string, action: string, request: ApprovalRequest): string {
-  const label = pieceId.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
-  const verb = action.replace(new RegExp(`^${pieceId.replace(/-/g, '_')}_`, 'u'), '').replace(/[_-]/g, ' ');
-  let target: Record<string, unknown> = {};
-  try {
-    const context: unknown = JSON.parse(request.context ?? '{}');
-    if (context && typeof context === 'object' && !Array.isArray(context)) {
-      const raw = (context as Record<string, unknown>).target;
-      if (raw && typeof raw === 'object' && !Array.isArray(raw)) target = raw as Record<string, unknown>;
-    }
-  } catch {
-    // No context to read; the piece and action alone still describe the step.
-  }
-  const details: string[] = [];
-  for (const [key, value] of Object.entries(target)) {
-    if (key === 'piece' || key === 'action' || key === 'unmappedAction') continue;
-    const rendered = Array.isArray(value) ? value.map(item => String(item)).join(', ')
-      : value === null || typeof value === 'object' ? undefined : String(value);
-    if (!rendered) continue;
-    // The step's real input, which a flow can wire from anything it read, so
-    // one line with no format characters before the 80-character cut (#697):
-    // the same reduction #651 gave the Telegram card's labels.
-    const shown = boundedApprovalLabel(rendered, GOVERNED_TARGET_VALUE_MAX_CHARS) || '(invisible characters only)';
-    details.push(`${key.replace(/_/g, ' ')}: ${shown}`);
-    if (details.length === 3) break;
-  }
-  const head = `${label} - ${verb}`;
-  return details.length > 0 ? `${head} (${details.join(', ')})` : head;
-}
-
-function asString(v: unknown): string | undefined {
-  return typeof v === 'string' && v.length > 0 ? v : undefined;
-}
-
-/**
- * A model-supplied argument in a fallback sentence: one line with no format
- * characters, not cut (#721 review). Since #721 these sentences lead the card
- * whenever the engine's reason is an override or a context rule, where before
- * the reason replaced them, so they get the reduction the headline gets. A
- * value that reduces to nothing falls back like a missing one.
- */
-function labelOf(v: unknown): string | undefined {
-  const s = asString(v);
-  return s === undefined ? undefined : boundedApprovalLabel(s, s.length).trim() || undefined;
 }
 
 /**

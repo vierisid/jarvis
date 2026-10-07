@@ -60,7 +60,7 @@ import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, ApprovalDelivery, approvalNotificati
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
-import { applyApprovalDecision } from "./approval-decision.ts";
+import { applyApprovalDecision, channelApprovalReply } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
@@ -4934,17 +4934,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Note: toolRegistry set after startAll() below
 
     // Wire channel approval handler
-    channelService.setApprovalHandler(async (action, shortId, channel) => {
-      const request = approvalManager.findByShortId(shortId);
-      if (!request) return `No pending approval found for ID ${shortId}`;
-
-      const outcome = await applyApprovalDecision(action, request.id, channel, { approvalManager, deferredExecutor, wsService });
-      if (outcome.status === 'already_decided') return 'Request already decided';
-      if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;
-      if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
-      if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
-      return 'Approved. The agent will continue and report back in chat.';
-    });
+    channelService.setApprovalHandler((action, shortId, channel) =>
+      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService }));
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 

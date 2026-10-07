@@ -455,3 +455,44 @@ describe("delivery failure handler", () => {
     await expect(svc.sendToChannel("fake", "user", "hi")).resolves.toBeUndefined();
   });
 });
+
+/**
+ * #718. The approval card asks for literal text; that has to reach the
+ * adapter on the first attempt and on every retry.
+ */
+describe("#718: send options reach the adapter", () => {
+  class OptionsAdapter {
+    name = "fake";
+    public calls: unknown[][] = [];
+    constructor(private failures = 1) {}
+    isConnected() { return true; }
+    async sendMessage(...args: unknown[]): Promise<void> {
+      this.calls.push(args);
+      if (this.failures-- > 0) throw rateLimitError();
+    }
+  }
+
+  test("sendWithRetry passes them on every attempt, and passes nothing when given none", async () => {
+    const adapter = new OptionsAdapter();
+    const { sleep } = makeSleepRecorder();
+    await sendWithRetry(adapter, "user", "card", { sleep, send: { literal: true } });
+    expect(adapter.calls).toEqual([["user", "card", { literal: true }], ["user", "card", { literal: true }]]);
+
+    const plain = new OptionsAdapter();
+    await sendWithRetry(plain, "user", "hi", { sleep });
+    expect(plain.calls).toEqual([["user", "hi"], ["user", "hi"]]);
+  });
+
+  test("broadcastToAll hands them to each channel", async () => {
+    initDatabase(":memory:");
+    setSetting("channel.lastRecipient.fake", "user-1");
+    const svc = new ChannelService({} as never, {} as never);
+    await svc.start();
+    const adapter = new OptionsAdapter(0);
+    svc.getManager().register(adapter as unknown as ChannelAdapter);
+
+    await svc.broadcastToAll("card", { literal: true });
+
+    expect(adapter.calls).toEqual([["user-1", "card", { literal: true }]]);
+  });
+});

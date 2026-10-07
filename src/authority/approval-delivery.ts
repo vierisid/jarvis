@@ -3,8 +3,10 @@
  * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
-import type { ApprovalRequest } from './approval.ts';
+import { approvalIntentFromContext, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
+import { commandForCard } from '../util/card-text.ts';
+import type { SendOptions } from '../comms/channels/telegram.ts';
 
 /**
  * Line breaks, other C0/C1 controls and the two Unicode line separators: every
@@ -67,8 +69,8 @@ function codePointName(ch: string): string {
  * `boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS) === text`.
  * The other branches only say WHICH alteration it would be, in words a model
  * can act on. That covers what THIS code does to the text, not what a
- * renderer does after it: Telegram and Discord render the channel card as Markdown, and
- * an OS toast clamps a long body to a few lines beside its Approve button.
+ * renderer does after it. (Since #718 the channel card is sent as literal
+ * text, so no channel renders its markup.)
  *
  * It refuses ordinary text that carries a format character, too: an emoji
  * built with a zero-width joiner, a left-to-right or right-to-left mark in
@@ -106,12 +108,240 @@ export function approvalNotificationText(request: Pick<ApprovalRequest, 'tool_na
   return { title: `Approve: ${tool}?`, body: reason || `${label(request.agent_name)} wants to run ${tool}.` };
 }
 
+/**
+ * What an approval will do, and why it needed approval, as two separate texts.
+ *
+ * WHAT WILL HAPPEN (`action`) is what the person is deciding on; WHY approval
+ * was needed (`reason`) is the Authority engine's decision reason (#721).
+ * `request.reason` is that reason on every request but one, and the engine's
+ * wording names a category or a rule, never the effect: `Override requires
+ * approval for execute_command`, a context rule's own `description`,
+ * `send_email is a governed action requiring user approval`. This used to
+ * recognise the engine only by two suffixes and the taint label and let any
+ * other reason REPLACE the sentence, so an override or a context rule hid the
+ * command, the path or the skill's steps entirely: the reviewer saw why
+ * approval was needed but not what would happen.
+ *
+ * The one exception is `request_approval`, whose `reason` IS the model's
+ * declared intent (#696): that is the action, reduced to one line with no
+ * format characters and not cut, and it has no separate reason. Its `context`
+ * is model-written too, so it is never read as a gate sentence
+ * (`approvalIntentFromContext`) -- before #721 an intent ending in "requires
+ * user approval" made the model's own context JSON the headline.
+ *
+ * The reason gets the same one-line reduction: a context rule's description is
+ * free text from config. The engine's own wording comes back byte-exact.
+ *
+ * Neither part is cut here. Each surface decides how much it can show, and a
+ * surface that cannot show the action whole must not offer to approve it
+ * (`approvalChannelCard`, the desktop toast).
+ */
+export function approvalIntentParts(request: ApprovalRequest): { action: string; reason: string } {
+  const raw = (request.reason ?? '').trim();
+  const reason = boundedApprovalLabel(raw, raw.length).trim();
+  if (request.tool_name === 'request_approval' && reason) return { action: reason, reason: '' };
+  return { action: synthesizeApprovalIntent(request), reason };
+}
+
+/**
+ * The two parts as one sentence, the reason in parentheses after the action:
+ * the dashboard's `intent` field, and what a REST client of
+ * `/api/authority/approvals` reads.
+ */
+export function formatApprovalIntent(request: ApprovalRequest): string {
+  const { action, reason } = approvalIntentParts(request);
+  return reason ? `${action} (${reason})` : action;
+}
+
+function synthesizeApprovalIntent(request: ApprovalRequest): string {
+  // A gated tool (run_skill, record_skill, manage_skills delete) writes the
+  // sentence that names what will actually happen, with resolved values.
+  // Never for request_approval, whose context the model wrote.
+  const gated = approvalIntentFromContext(request);
+  if (gated) return gated;
+
+  let args: Record<string, unknown> = {};
+  try {
+    args = JSON.parse(request.tool_arguments ?? '{}');
+  } catch {
+    // fall through with empty args
+  }
+
+  // Per-tool fallbacks for the common destructive/external intents.
+  switch (request.tool_name) {
+    case 'send_email': {
+      const to = labelOf(args.to) ?? 'someone';
+      const subject = labelOf(args.subject);
+      // Quoted with its quotes escaped, so a subject cannot close its own
+      // literal and continue the sentence; a plain subject reads as it did.
+      return subject
+        ? `Send email to ${to} — ${JSON.stringify(subject)}`
+        : `Send email to ${to}`;
+    }
+    case 'send_message': {
+      const channel = labelOf(args.channel) ?? 'channel';
+      return `Send message via ${channel}`;
+    }
+    case 'run_command':
+    case 'execute_command': {
+      // Only an approval recorded before `run_command` had a gate (#720)
+      // reaches this; every new one carries the gate's sentence above. Shown
+      // as the gate shows it, never raw: a newline collapsed in HTML let a
+      // second line hide behind a `#` comment, and a bidi override reordered
+      // the line. A plain one-line command reads exactly as it always did.
+      const shown = commandForCard(asString(args.command) ?? '', { trim: false });
+      return asString(args.command) === undefined ? 'Run a shell command' : `R${shown.slice(1)}`;
+    }
+    case 'delete_file':
+    case 'delete_data': {
+      const path = labelOf(args.path) ?? labelOf(args.target) ?? 'the target';
+      return `Delete ${path}`;
+    }
+    case 'install_software': {
+      const pkg = labelOf(args.package) ?? labelOf(args.name) ?? 'software';
+      return `Install ${pkg}`;
+    }
+    case 'make_payment': {
+      const amount = labelOf(args.amount) ?? labelOf(args.total);
+      const to = labelOf(args.recipient) ?? labelOf(args.to) ?? 'recipient';
+      return amount ? `Pay ${amount} to ${to}` : `Make a payment to ${to}`;
+    }
+    case 'spawn_agent': {
+      const role = labelOf(args.role) ?? 'an agent';
+      return `Spawn ${role}`;
+    }
+    default: {
+      // Governed workflow-piece effects: `piece:<catalog id>/<action>`. The
+      // durable effect's target rides along in `context`, so the sentence can
+      // name the recipient, file or endpoint rather than just the piece.
+      const governedPiece = /^piece:([^/]+)\/(.+)$/u.exec(request.tool_name);
+      if (governedPiece) return describeGovernedPieceIntent(governedPiece[1]!, governedPiece[2]!, request);
+      const verb = request.tool_name.replace(/_/g, ' ');
+      return `${verb}`.replace(/^./, (c) => c.toUpperCase());
+    }
+  }
+}
+
+/** A governed piece's target value in the dashboard sentence: the 80 it always had. */
+const GOVERNED_TARGET_VALUE_MAX_CHARS = 80;
+
+/**
+ * "Gmail - send email to finance@example.test, subject: Q3 invoice".
+ *
+ * Reads the reviewed target out of the approval's context, which is what the
+ * piece adapter resolved from the step's real input. A card that said only
+ * "gmail" would not be governance.
+ */
+function describeGovernedPieceIntent(pieceId: string, action: string, request: ApprovalRequest): string {
+  const label = pieceId.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
+  const verb = action.replace(new RegExp(`^${pieceId.replace(/-/g, '_')}_`, 'u'), '').replace(/[_-]/g, ' ');
+  let target: Record<string, unknown> = {};
+  try {
+    const context: unknown = JSON.parse(request.context ?? '{}');
+    if (context && typeof context === 'object' && !Array.isArray(context)) {
+      const raw = (context as Record<string, unknown>).target;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) target = raw as Record<string, unknown>;
+    }
+  } catch {
+    // No context to read; the piece and action alone still describe the step.
+  }
+  const details: string[] = [];
+  for (const [key, value] of Object.entries(target)) {
+    if (key === 'piece' || key === 'action' || key === 'unmappedAction') continue;
+    const rendered = Array.isArray(value) ? value.map(item => String(item)).join(', ')
+      : value === null || typeof value === 'object' ? undefined : String(value);
+    if (!rendered) continue;
+    // The step's real input, which a flow can wire from anything it read, so
+    // one line with no format characters before the 80-character cut (#697):
+    // the same reduction #651 gave the Telegram card's labels.
+    const shown = boundedApprovalLabel(rendered, GOVERNED_TARGET_VALUE_MAX_CHARS) || '(invisible characters only)';
+    details.push(`${key.replace(/_/g, ' ')}: ${shown}`);
+    if (details.length === 3) break;
+  }
+  const head = `${label} - ${verb}`;
+  return details.length > 0 ? `${head} (${details.join(', ')})` : head;
+}
+
+function asString(v: unknown): string | undefined {
+  return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/**
+ * A model-supplied argument in a fallback sentence: one line with no format
+ * characters, not cut (#721 review). Since #721 these sentences lead the card
+ * whenever the engine's reason is an override or a context rule, where before
+ * the reason replaced them, so they get the reduction the headline gets. A
+ * value that reduces to nothing falls back like a missing one.
+ */
+function labelOf(v: unknown): string | undefined {
+  const s = asString(v);
+  return s === undefined ? undefined : boundedApprovalLabel(s, s.length).trim() || undefined;
+}
+
+
+/** A label as the channel card shows it, and whether showing it cut anything. */
+function cardLine(text: string): { shown: string; cut: boolean } {
+  const shown = boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
+  return { shown, cut: shown !== boundedApprovalLabel(text, text.length) };
+}
+
+/**
+ * The Telegram/Discord approval card (#718), and whether it may be approved by
+ * replying to it.
+ *
+ * It leads with what will happen -- the gate's sentence, the same one the
+ * dashboard leads with -- on its own `Intent:` line. Before #718 it carried
+ * only `Action:`, `Agent:` and `Reason:`, so a `site_run_command` was approved
+ * from a chat without the command ever being shown. The reason keeps its own
+ * `Reason:` line rather than following the sentence in parentheses, so a
+ * command cannot imitate it.
+ *
+ * Every line is reduced like any label: one line, no format characters, the
+ * delivery backstop. A line the backstop CUT is not shown whole, so the card
+ * then offers only `deny` and sends the person to the dashboard to approve;
+ * `approvable` is what the channel reply handler (`channelApprovalReply`)
+ * checks before it acts on an `approve`. Denying something you could not
+ * read whole is always safe.
+ *
+ * The card is sent as literal text (`{ literal: true }`): Telegram's Markdown
+ * and Discord's markdown would otherwise render a label's own `[text](url)`,
+ * `||spoiler||`, `*`/`_` pairs or mentions, which can hide or drop part of
+ * what is being approved.
+ */
+export function approvalChannelCard(request: ApprovalRequest): { text: string; approvable: boolean } {
+  const shortId = request.id.slice(0, 8);
+  const { action, reason } = approvalIntentParts(request);
+  const intent = cardLine(action);
+  const tool = cardLine(request.tool_name);
+  const agent = cardLine(request.agent_name);
+  const why = cardLine(reason);
+  const approvable = ![intent, tool, agent, why].some((line) => line.cut);
+  return {
+    approvable,
+    text: [
+      `[APPROVAL NEEDED]`,
+      `Intent: ${intent.shown}`,
+      `Action: ${tool.shown} (${request.action_category})`,
+      `Agent: ${agent.shown}`,
+      ...(why.shown ? [`Reason: ${why.shown}`] : []),
+      ``,
+      ...(approvable
+        ? [`Reply with:`, `  approve ${shortId}`, `  deny ${shortId}`]
+        : [
+            `This is too long to show whole here, so it cannot be approved from this chat.`,
+            `Open the Jarvis dashboard to read all of it and decide, or reply:`,
+            `  deny ${shortId}`,
+          ]),
+    ].join('\n'),
+  };
+}
+
 export type ApprovalBroadcaster = {
   broadcastApprovalRequest(request: ApprovalRequest): void;
 };
 
 export type ChannelSender = {
-  broadcastToAll(text: string): Promise<void>;
+  broadcastToAll(text: string, options?: SendOptions): Promise<void>;
 };
 
 export class ApprovalDelivery {
@@ -136,32 +366,12 @@ export class ApprovalDelivery {
     // Always push to Telegram/Discord so users can approve/deny directly
     // from messaging channels without opening the dashboard.
     if (this.channelSender) {
-      const message = this.formatApprovalMessage(request);
       try {
-        await this.channelSender.broadcastToAll(message);
+        const card = approvalChannelCard(request);
+        await this.channelSender.broadcastToAll(card.text, { literal: true });
       } catch (err) {
         console.error('[ApprovalDelivery] Failed to send to external channels:', err);
       }
     }
-  }
-
-  private formatApprovalMessage(request: ApprovalRequest): string {
-    const shortId = request.id.slice(0, 8);
-    const label = (text: string) => boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
-    // `reason` too (#696). The Authority engine's reasons are its own wording,
-    // but `request_approval` stores the model's `intent` there verbatim, so a
-    // line break in it forged an `Action:` or `Agent:` line under this one.
-    // Same backstop as the labels: an engine reason is far below it and comes
-    // back byte-exact, and a declared intent is meant to be one line.
-    return [
-      `[APPROVAL NEEDED]`,
-      `Action: ${label(request.tool_name)} (${request.action_category})`,
-      `Agent: ${label(request.agent_name)}`,
-      `Reason: ${label(request.reason)}`,
-      ``,
-      `Reply with:`,
-      `  approve ${shortId}`,
-      `  deny ${shortId}`,
-    ].join('\n');
   }
 }

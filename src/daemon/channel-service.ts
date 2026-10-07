@@ -10,7 +10,7 @@
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
-import type { ChannelAdapter, ChannelMessage } from '../comms/channels/telegram.ts';
+import type { ChannelAdapter, ChannelMessage, SendOptions } from '../comms/channels/telegram.ts';
 import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
@@ -187,7 +187,7 @@ export class ChannelService implements Service {
    * Broadcast a message to ALL connected external channels.
    * Uses the last known recipient per channel (from most recent inbound message).
    */
-  async broadcastToAll(text: string): Promise<void> {
+  async broadcastToAll(text: string, options?: SendOptions): Promise<void> {
     // Channels are sent concurrently so one channel's retry backoff can't
     // delay delivery of a time-boxed message (e.g. an approval request) to
     // the others.
@@ -203,7 +203,7 @@ export class ChannelService implements Service {
       }
 
       sends.push(
-        sendWithRetry(adapter, lastRecipient, text).then((result) => {
+        sendWithRetry(adapter, lastRecipient, text, options ? { send: options } : undefined).then((result) => {
           if (!result.ok) {
             this.reportDeliveryFailure(name, result);
           }
@@ -401,6 +401,8 @@ export interface SendRetryOptions {
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
   isTransient?: (err: unknown) => boolean;
+  /** Passed to every attempt's `sendMessage`, e.g. `{ literal: true }` for an approval card. */
+  send?: SendOptions;
 }
 
 export type SendRetryResult =
@@ -463,7 +465,8 @@ export async function sendWithRetry(
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
-      await adapter.sendMessage(recipient, currentText);
+      if (opts?.send) await adapter.sendMessage(recipient, currentText, opts.send);
+      else await adapter.sendMessage(recipient, currentText);
       return { ok: true, attempts: attempt };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
