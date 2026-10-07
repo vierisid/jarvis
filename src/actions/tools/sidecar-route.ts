@@ -632,6 +632,20 @@ export function routeToSidecarAction(target: string, method: string,
 }
 
 /**
+ * `routeToSidecarAction`, also handing back the reply it rendered, for a
+ * caller that decides something from the reply's STRUCTURE (#708) rather than
+ * by parsing the display text. `text` is byte for byte what
+ * `routeToSidecarAction` returns; `reply` is undefined when no reply arrived
+ * (a message the dispatch wrote itself).
+ */
+export async function routeToSidecarActionReply(target: string, method: string,
+  params: Record<string, unknown>, capability: SidecarCapability): Promise<{ text: string; reply: unknown }> {
+  const out = await dispatchToSidecar(target, method, params, capability, true);
+  if (out.kind === 'message') return { text: out.text, reply: undefined };
+  return { text: typeof out.result === 'string' ? out.result : JSON.stringify(out.result, null, 2), reply: out.result };
+}
+
+/**
  * Image types a provider accepts in an image block. A sidecar's `capture_screen`
  * sends PNG, or JPEG when asked to compact (sidecar/handlers.go); the other two
  * are the rest of the set every provider here takes. Anything else is refused
