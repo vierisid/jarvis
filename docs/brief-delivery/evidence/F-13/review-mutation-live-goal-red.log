@@ -1,0 +1,67 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: /tmp/jarvis-f13-1N4Gy5/fixture.db
+Database initialized at: /tmp/jarvis-f13-eCLOKE/fixture.db
+
+src/brief/recommendations.test.ts:
+144 |     const p = plan(at); if (p.outcome !== 'recommend') throw Error();
+145 |     return { ...p, action: { ...p.action, workItemId: work.id,
+146 |       goal: context === 'missing' ? null : { goalId: other.id, revision: String(other.updated_at), path: [other.title] } } };
+147 |   } }; wire();
+148 |   const rec = provider.generate(`mismatched-${context}`);
+149 |   expect(() => provider.accept(rec.recommendationId, `mismatched-${context}`, rec.revision)).toThrow('Work no longer belongs to this goal');
+                                                                                                   ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "Work no longer belongs to this goal"
+
+Received function did not throw
+Received value: {
+  receiptId: "af2f0c9f-7c14-4eab-9102-1c36321a1119",
+  recommendationId: "2450db28-cd1e-4156-9eef-327d98dd2885",
+  requestId: "mismatched-missing",
+  revision: "cd04d6682b3b02dfd550fd321bcd45e5d0c33d453aeb7c18db7504c2aa448a25",
+  acceptedAt: 1791360740010,
+  destination: {
+    decisionId: "work:2c27cd66-dfef-488f-8414-267ceeacdf22",
+    workItemId: "2c27cd66-dfef-488f-8414-267ceeacdf22",
+    title: "Work with a live goal",
+  },
+  created: false,
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:149:94)
+(fail) a missing planner goal cannot link work that belongs to a live goal [568.67ms]
+144 |     const p = plan(at); if (p.outcome !== 'recommend') throw Error();
+145 |     return { ...p, action: { ...p.action, workItemId: work.id,
+146 |       goal: context === 'missing' ? null : { goalId: other.id, revision: String(other.updated_at), path: [other.title] } } };
+147 |   } }; wire();
+148 |   const rec = provider.generate(`mismatched-${context}`);
+149 |   expect(() => provider.accept(rec.recommendationId, `mismatched-${context}`, rec.revision)).toThrow('Work no longer belongs to this goal');
+                                                                                                   ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "Work no longer belongs to this goal"
+
+Received function did not throw
+Received value: {
+  receiptId: "66ab1bb9-0d46-4715-b301-140acd7e4ef1",
+  recommendationId: "3fc21537-a482-45b3-ab14-4eefce1ef936",
+  requestId: "mismatched-different",
+  revision: "eca4cfb06c14a2a21fd9b763d679975b5b7919c72eb1b9181a48016d06a0f9d8",
+  acceptedAt: 1791360740455,
+  destination: {
+    decisionId: "work:493ab94a-3cb8-483a-95c7-80e28e8083ed",
+    workItemId: "493ab94a-3cb8-483a-95c7-80e28e8083ed",
+    title: "Work with a live goal",
+  },
+  created: false,
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:149:94)
+(fail) a different planner goal cannot link work that belongs to a live goal [420.30ms]
+
+ 0 pass
+ 17 filtered out
+ 2 fail
+ 2 expect() calls
+Ran 2 tests across 1 file. [1038.00ms]
