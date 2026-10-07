@@ -476,6 +476,27 @@ before. With it, `result` is an object:
 | `text` | the formatted snapshot, identical to the string reply |
 | `page_url` | the main frame's URL as the BROWSER reported it, for the document the text came from |
 | `loader_id` | that document's loaderId, which changes on every commit |
+| `elem_gen` | the generation of the element-id map THIS read filled (#676); an opaque string, compared for equality only |
+
+### `elem_gen`: binding a reviewed element action to its snapshot (#676)
+
+`elem_gen` is `<epoch>.<counter>`: the counter is bumped on every fill and every
+drop of the element map, and the epoch is random per browser client, so a
+relaunched browser or a restarted sidecar never hands out a generation an older
+map already used. It travels independently of the `page_url`/`loader_id` pair:
+it names the id map, not the document.
+
+The brain records the newest one per sidecar, copies it onto an approval when a
+`browser_click`, `browser_type` or `browser_hover` card is raised, and sends it
+back as the action's `elem_gen` param when the approved call runs. The sidecar
+compares it in `refuseStaleElement`, under `elemMu`, before anything else, and
+refuses a mismatch -- or a present-but-malformed value -- with RPC error code
+`BROWSER_SNAPSHOT_SUPERSEDED`, before any CDP command. An absent `elem_gen`
+means the call was not reviewed and is not compared.
+
+A sidecar older than this ignores the param, so the brain sends a reviewed
+element action only to a sidecar advertising `browser_elem_gen`, and refuses it
+otherwise with a message saying the sidecar must be updated.
 
 **`page_url` and `loader_id` travel as a pair, or not at all.** The sidecar omits
 both unless `assertSamePage` confirmed the same document after the read, and the
@@ -1155,6 +1176,7 @@ Currently all events are enqueued as `normal` and processed round-robin. When pr
 |---|---|
 | `update_prompt` | the sidecar can show its native update prompt (`sidecar.update_prompt`); Windows and macOS |
 | `update_apply` | the sidecar can install an update on request (`sidecar.update_apply`) |
+| `browser_elem_gen` | page replies carry `elem_gen`, and `browser_click`/`browser_type`/`browser_hover` compare a reviewed `elem_gen` (#676). Advertised on every build, dev included |
 
 The brain answers every accepted registration with an ack carrying the sidecar version it ships with (`SIDECAR_LATEST_VERSION`, always equal to `sidecar/VERSION` at the brain's release):
 

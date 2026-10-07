@@ -35,13 +35,14 @@ describe("Outer worker: real delay pause and timer continuation", () => {
   let tempDir: string | undefined;
   let runId: string | undefined;
   let bundlePath: string;
+  let expectedDigest: string | null;
   let dbPath: string;
 
   const startRuntime = async () => {
     initWorkflowDb(dbPath);
     api = new SandboxApi({ services: { credentialResolver: new CredentialResolver() } });
     await api.start({ port: 0 });
-    runtime = new EngineRuntime({ api, bundlePath, devPieces: ["jarvis-test", "delay"] });
+    runtime = new EngineRuntime({ api, bundlePath, expectedDigest, devPieces: ["jarvis-test", "delay"] });
   };
   const stopRuntime = async () => {
     await runtime?.shutdown();
@@ -53,7 +54,9 @@ describe("Outer worker: real delay pause and timer continuation", () => {
 
   beforeAll(async () => {
     if (skip) return;
-    bundlePath = (initialCached ?? await buildEngineBundle()).bundlePath;
+    const bundle = initialCached ?? await buildEngineBundle();
+    bundlePath = bundle.bundlePath;
+    expectedDigest = bundle.digest;
     if (buildOptIn) for (const pieceDir of pieceDirs) await buildPiece(pieceDir);
     tempDir = mkdtempSync(resolve(tmpdir(), "jarvis-worker-delay-"));
     dbPath = resolve(tempDir, "workflows.sqlite");

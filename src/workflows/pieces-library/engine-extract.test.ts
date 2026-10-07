@@ -101,7 +101,7 @@ describe("engine extracts metadata for an npm-installed piece (gated)", () => {
     // what to extract).
     runtime = new EngineRuntime({
       api,
-      bundlePath: cached.bundlePath,
+      bundlePath: cached.bundlePath, expectedDigest: cached.digest,
       customPiecesPaths: [piecesDir],
     });
   });

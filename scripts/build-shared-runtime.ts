@@ -34,7 +34,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { cpSync, copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
-import { buildEngineBundle, ENGINE_BUILD_PATHS } from "../src/workflows/runner/engine-runtime/build";
+import { buildEngineBundle, ENGINE_BUILD_PATHS, PUBLISH_TMP_SUFFIX } from "../src/workflows/runner/engine-runtime/build";
 import { buildAllJarvisPieces } from "../src/workflows/runner/engine-runtime/build-pieces";
 import { EngineRuntime } from "../src/workflows/runner/engine-runtime/engine-runtime";
 import { SandboxApi } from "../src/workflows/sandbox-api/server";
@@ -89,14 +89,19 @@ await buildAllJarvisPieces();
 const bundle = await buildEngineBundle({ force: true });
 const engineOutDir = resolve(out, "engine", bundle.hash);
 mkdirSync(engineOutDir, { recursive: true });
-cpSync(bundle.bundleDir, engineOutDir, { recursive: true });
+// Not an in-flight publish left by a killed build: only finished files ship.
+cpSync(bundle.bundleDir, engineOutDir, { recursive: true, filter: (src) => !src.endsWith(PUBLISH_TMP_SUFFIX) });
 // Content manifest: the dir NAME is a hash of build INPUTS, not of main.js —
 // consumers verify the sha256 of the bytes they are about to execute.
 const mainBytes = readFileSync(resolve(engineOutDir, "main.js"));
-writeFileSync(
-  resolve(engineOutDir, "main.js.sha256"),
-  createHash("sha256").update(mainBytes).digest("hex") + "\n",
-);
+const copiedDigest = createHash("sha256").update(mainBytes).digest("hex");
+// The copy must be the bytes that were built (#761: the build returns their
+// digest). Digesting the destination alone would make a truncated or swapped
+// copy produce a manifest that agrees with it.
+if (copiedDigest !== bundle.digest) {
+  throw new Error(`engine bundle copy does not match the build (built ${bundle.digest}, copied ${copiedDigest})`);
+}
+writeFileSync(resolve(engineOutDir, "main.js.sha256"), copiedDigest + "\n");
 log(`engine bundle ${bundle.hash} -> ${engineOutDir}`);
 
 // 3. Full pieces catalog install. The synthesized package.json is the SAME
@@ -152,6 +157,7 @@ await api.start({ host: "127.0.0.1", port: 0 });
 const runtime = new EngineRuntime({
   api,
   bundlePath: bundle.bundlePath,
+  expectedDigest: bundle.digest,
   pool: false,
   customPiecesPaths: [resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"), piecesDir],
 });

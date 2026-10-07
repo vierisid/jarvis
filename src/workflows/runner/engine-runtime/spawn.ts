@@ -23,7 +23,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, utimesSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import { isSecretEnvName } from "../../../util/subprocess-env";
 import { assertBundleUnchanged } from "./bundle-integrity";
 import {
@@ -72,6 +72,11 @@ export interface SpawnedEngine {
 
 export interface SpawnEngineOptions {
   bundlePath: string;
+  /**
+   * sha256 `bundlePath` must hash to, or `null` when nothing verified it. See
+   * `EngineRuntimeOptions.expectedDigest`; required for the same reason.
+   */
+  expectedDigest: string | null;
   sandboxId: string;
   sandboxWsPort: number;
   baseCodeDir: string;
@@ -168,7 +173,7 @@ export function isEngineEnvName(name: string): boolean {
  * The engine's complete environment, from `opts` and this process's env, pid,
  * clock and /proc entry. Warns (names only) about dropped overrides.
  */
-export function engineEnv(opts: SpawnEngineOptions): Record<string, string> {
+export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of ENGINE_ENV_PASSTHROUGH) {
     const v = process.env[key];
@@ -246,21 +251,49 @@ export function engineEnv(opts: SpawnEngineOptions): Record<string, string> {
     // Names only: the values are exactly what must not be printed.
     console.warn(`[engine-spawn] dropped non-engine env override(s): ${dropped.join(", ")}`);
   }
+  // `ws`'s own switches for its optional native helpers (#759), so it never
+  // looks `bufferutil` / `utf-8-validate` up at all -- in the bundle, which
+  // compiles both out anyway (ENGINE_ABSENT_MODULES in build.ts), and in any
+  // piece module the engine imports that carries its own copy of `ws`. Set
+  // AFTER the override loop, because that loop can DELETE a name (an
+  // `undefined` value) as well as set one, and these are not the caller's to
+  // remove.
+  env["WS_NO_BUFFER_UTIL"] = "1";
+  env["WS_NO_UTF_8_VALIDATE"] = "1";
   return env;
 }
 
 export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
-  // A bundle that verified at resolution must still be those bytes (#671).
-  // Throws BEFORE anything is started, so a refusal leaves no process behind.
-  // Per spawn, not per acquire: a warm pooled engine already holds the code.
-  assertBundleUnchanged(opts.bundlePath);
+  // A bundle that verified at resolution must still be those bytes (#671),
+  // checked against the digest the caller carries rather than one looked up by
+  // path (#762). Throws BEFORE anything is started, so a refusal leaves no
+  // process behind. Per spawn, not per acquire: a warm pooled engine already
+  // holds the code.
+  //
+  // ABSOLUTE only: the hash below resolves a relative path against THIS
+  // process's cwd and the child resolves it against `opts.cwd`, so a relative
+  // path would let the daemon verify one file and the engine run another.
+  if (!isAbsolute(opts.bundlePath)) {
+    throw new TypeError("spawnEngine: bundlePath must be absolute, or the bytes checked are not the bytes run");
+  }
+  assertBundleUnchanged(opts.bundlePath, opts.expectedDigest);
   const env = engineEnv(opts);
   const runtime = opts.runtime ?? process.execPath;
   // --smol: the engine is a short-lived-to-parked sandbox that grows to
   // ~100MB under default JSC heap growth; the smaller-heap GC profile is the
   // right trade for a subprocess whose CPU time is dominated by piece I/O.
   // Bun-only flag, so skip it when opts.runtime overrides the binary.
-  const args = opts.runtime ? [opts.bundlePath] : ["--smol", opts.bundlePath];
+  //
+  // --no-install (#759): with no `node_modules` above `main.js` -- the per-user
+  // cache has none -- Bun's default is to AUTO-INSTALL any bare name the code
+  // requires, from the npm registry, at the latest version, and run it. That is
+  // how a real engine fetched and loaded `bufferutil`, `node-gyp-build` and
+  // `supports-color` on every cold cache (measured; see ENGINE_ABSENT_MODULES).
+  // The build now refuses a bundle with a bare run-time name, but a `require`
+  // of a COMPUTED name is invisible to that check, so the engine is also told
+  // never to fetch one. It cannot break a piece: Bun only auto-installs for a
+  // file with no `node_modules` above it, and pieces load from installed trees.
+  const args = opts.runtime ? [opts.bundlePath] : ["--smol", "--no-install", opts.bundlePath];
   const child = spawn(runtime, args, {
     env,
     cwd: opts.cwd,

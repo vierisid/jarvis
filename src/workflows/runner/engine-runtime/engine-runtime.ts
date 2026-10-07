@@ -21,7 +21,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { EngineContract, EngineResponse } from "../../sandbox-api/contracts";
 import type { SandboxApi } from "../../sandbox-api/server";
 import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
@@ -50,6 +50,14 @@ export interface EngineRuntimeOptions {
   api: SandboxApi;
   /** Absolute path to the built engine bundle (`main.js`). */
   bundlePath: string;
+  /**
+   * sha256 the bundle's bytes must still have at every spawn -- the
+   * `EngineBundle.digest` the lookup or build returned -- or `null` when
+   * nothing verified them (an adopted per-user bundle, a test fixture).
+   * REQUIRED so that dropping it is a type error: a verified bundle reaching
+   * spawn without its digest would be spawned unchecked (#762).
+   */
+  expectedDigest: string | null;
   /**
    * When true, `release()` returns the engine to a single-slot warm pool
    * instead of killing it. The next `acquire()` reuses the same process,
@@ -561,6 +569,8 @@ function envHandshakeTimeoutMs(): number | undefined {
 export class EngineRuntime {
   private readonly api: SandboxApi;
   private readonly bundlePath: string;
+  /** Fixed at construction: a later resolution elsewhere cannot change it (#762). */
+  private readonly expectedDigest: string | null;
   private readonly baseCodeDir: string;
   private readonly customPiecesPaths: string[];
   private readonly handshakeTimeoutMs: number;
@@ -608,6 +618,15 @@ export class EngineRuntime {
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
     this.bundlePath = opts.bundlePath;
+    // Fail at construction, not at the first spawn minutes later: a caller the
+    // type system cannot see that left the digest out is a wiring bug (#762).
+    if (!isAbsolute(opts.bundlePath)) {
+      throw new TypeError("EngineRuntime: bundlePath must be absolute, or the bytes checked are not the bytes run");
+    }
+    if (opts.expectedDigest === undefined) {
+      throw new TypeError("EngineRuntime: expectedDigest is required -- the bundle's verified sha256, or null if nothing verified it");
+    }
+    this.expectedDigest = opts.expectedDigest;
     this.poolEnabled = opts.pool ?? false;
     // 5 minutes by default. The engine cold-spawn is ~3s, so an idle TTL
     // shorter than the gap between cron fires defeats the pool's purpose;
@@ -723,6 +742,7 @@ export class EngineRuntime {
 
     const spawnOptions: SpawnEngineOptions = {
       bundlePath: this.bundlePath,
+      expectedDigest: this.expectedDigest,
       sandboxId,
       sandboxWsPort: this.api.sandboxWsPort,
       baseCodeDir: this.baseCodeDir,

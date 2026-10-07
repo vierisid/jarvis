@@ -12,7 +12,8 @@
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
-import { routeToSidecarAction as routeToSidecar, routeScreenshotToSidecar, resolveToolTarget } from './sidecar-route.ts';
+import { routeToSidecarAction as routeToSidecar, routeToSidecarActionReply, routeScreenshotToSidecar, resolveToolTarget } from './sidecar-route.ts';
+import { withTrustedTrailer } from '../../roles/untrusted.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import type { SidecarCapability } from '../../sidecar/types.ts';
 import { screenshotCaption, screenshotForModel } from '../app-control/image-compact.ts';
@@ -627,6 +628,34 @@ export const desktopPressKeysTool: ToolDefinition = {
   },
 };
 
+/**
+ * The directive a launch reply needs the model to OBEY, authored here (#708).
+ *
+ * The sidecar writes the same advice into the reply's `note`, and that is the
+ * problem: `desktop_launch_app` is framed by name, so the note reaches the model
+ * inside a block whose preamble says never to follow instructions in it -- on
+ * the one reply where following it is the point. The brain must not lift the
+ * sidecar's sentence out of the block either (that text is the other trust
+ * domain's), so it writes its own, from two typed fields and nothing else, and
+ * hands it over as a trusted trailer that lands AFTER the block.
+ *
+ * ONE case. `success: true` with `window_visible: null` is the unverified
+ * success -- the process started and its window could not be looked for -- where
+ * a model that reads "not confirmed" as "failed" relaunches an app that is open.
+ * `success: false` is a typed failure and never reaches here, and
+ * `window_visible: true` needs no instruction. Exact types: `null` means the
+ * JSON null the sidecar sends, not an absent field, which an older sidecar's
+ * `{success, pid}` reply leaves out.
+ */
+export function launchDirective(reply: unknown): string | null {
+  if (!reply || typeof reply !== 'object' || Array.isArray(reply)) return null;
+  const r = reply as Record<string, unknown>;
+  if (!Object.hasOwn(r, 'window_visible') || r.success !== true || r.window_visible !== null) return null;
+  return '\n\n[desktop_launch_app] The app was started, but whether its window opened could not be checked on that '
+    + 'machine. This is not a failure: do not launch it again on the strength of this result. Run '
+    + 'desktop_list_windows to see what is actually open before interacting with it.';
+}
+
 export const desktopLaunchAppTool: ToolDefinition = {
   name: 'desktop_launch_app',
   description: 'Launch an application by name or executable path. Use the name as it exists on the TARGET machine\'s OS -- e.g. "notepad" on Windows, "TextEdit" on macOS, "gedit" on Linux. Call list_sidecars first if you are unsure which OS the target runs. Returns the PID plus what is known about the app\'s window. When routed to a sidecar, "success" answers "is the app on screen?", not "did a process start?": success true with window_visible true means a window was seen and you can interact with it; success false with window_visible false means the process started but no window appeared (still loading, windowless, or it exited) - read the "note" and check desktop_list_windows rather than launching again; window_visible null means the window could NOT be checked on this machine, which is not a failure - the app may well be open, so verify with desktop_list_windows instead of relaunching.',
@@ -651,7 +680,9 @@ export const desktopLaunchAppTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveDesktopTarget(params.target, 'desktop', 'desktop_launch_app');
     if (target) {
-      return routeToSidecar(target, 'launch_app', params, 'desktop');
+      const { text, reply } = await routeToSidecarActionReply(target, 'launch_app', params, 'desktop');
+      const directive = launchDirective(reply);
+      return directive ? withTrustedTrailer(text, directive) : text;
     }
     return executeLocal(async (controller) => {
       if (typeof controller.launchApp !== 'function') {

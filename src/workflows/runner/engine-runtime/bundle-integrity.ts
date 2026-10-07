@@ -6,8 +6,23 @@
  * `EngineRuntime` and spawned many times over the daemon's whole life, and the
  * engine re-reads the file from disk each time -- so without this the window
  * between check and use was the daemon's lifetime. Here the digest the check
- * actually computed is PINNED in memory against the path, and `spawnEngine`
- * re-hashes the file and refuses to start an engine from bytes that differ.
+ * actually computed is PINNED in memory, and `spawnEngine` re-hashes the file
+ * and refuses to start an engine from bytes that differ.
+ *
+ * WHERE THE PIN LIVES (#762). It travels with the bundle it describes: the
+ * lookup returns it (`EngineBundle.digest`), `EngineRuntime` holds it as
+ * `expectedDigest`, and every spawn is handed it. It used to sit in a
+ * module-level map keyed by resolved path, which had two faults. A caller that
+ * spelled the same file differently -- a symlinked root, a bind mount -- MISSED
+ * the map, and a miss meant "never verified", so the check was skipped rather
+ * than failed: fail-open on a lookup. And the map was global, so a later
+ * resolution of the same path (an evaluation engine built mid-life, say)
+ * silently changed what every existing runtime would accept. Carried
+ * explicitly, there is no lookup to miss, and a runtime accepts exactly the
+ * bytes it was built for until it is replaced. `expectedDigest` is a REQUIRED
+ * field on both `EngineRuntimeOptions` and `SpawnEngineOptions`, `null` meaning
+ * "nothing verified these bytes", so dropping it is a type error and not a
+ * silent downgrade.
  *
  * Why the pin and not "run the manifest check again": the manifest sits beside
  * the bundle with the same ownership, so whatever can swap `main.js` can swap
@@ -26,27 +41,27 @@
  * have to key on ctime, which is sound against a non-root writer but is one
  * more assumption than hashing the bytes.
  *
- * WHAT THIS STILL IS NOT. It covers `main.js` and nothing the engine loads
- * from beside it: the bundle leaves `bufferutil`, `utf-8-validate` and
- * `isolated-vm` external (ENGINE_ESBUILD_CONFIG), and `ws` resolves the first
- * two through `node_modules` directories above the bundle at load time, so a
- * writer of the bundle tree can run code without touching `main.js` at all.
- * Neither the manifest nor this pin ever covered that. And the check runs
+ * WHAT THIS STILL IS NOT. It covers `main.js` and nothing else, which is only
+ * enough because the bundle no longer loads anything from beside itself
+ * (#759): it used to leave `bufferutil` and `supports-color` to run-time
+ * resolution, from `node_modules` above the bundle or by Bun auto-install, so
+ * a writer of the bundle tree could run code without touching `main.js`.
+ * ENGINE_ABSENT_MODULES and `assertSelfContainedBundle` (build.ts) hold that
+ * shut; this pin depends on them staying so. And the check runs
  * microseconds before `spawn()`, after which the engine opens the file itself,
  * so a writer that wins that race is not caught either: for `main.js` the
  * window is narrowed from the daemon's lifetime to the spawn, not closed.
  * Closing both is an immutable mount (or spawning from bytes the daemon holds),
- * which is a deployment change. Finally, only bundles that were VERIFIED are
- * pinned: the per-user cache has no manifest by design, so there is nothing to
- * pin it to, and it spawns as before.
+ * which is a deployment change. Finally, what is pinned is a bundle whose
+ * bytes this daemon has a reason to trust: a shared bundle that verified
+ * against its manifest, and one `buildEngineBundle` has just built itself
+ * (#761). A per-user bundle ADOPTED from the cache has no manifest by design,
+ * so there is nothing to pin it to, and it spawns as before.
  */
 
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
-
-/** resolved bundle path -> sha256 hex of the bytes that were verified. */
-const pinned = new Map<string, string>();
+import { basename, dirname } from "node:path";
 
 /**
  * sha256 of a REGULAR file. Anything else throws instead of being read: a FIFO
@@ -67,15 +82,6 @@ export function sha256OfFile(path: string): string {
   }
 }
 
-/**
- * Record that `bundlePath` verified with `digest`. A later verification of the
- * same path replaces the pin, so a host that republishes a shared root (with
- * its manifest) is followed on the next resolution rather than refused forever.
- */
-export function pinVerifiedBundle(bundlePath: string, digest: string): void {
-  pinned.set(resolve(bundlePath), digest);
-}
-
 export class BundleIntegrityError extends Error {
   readonly reason: "changed_since_verification" | "unreadable";
   constructor(reason: BundleIntegrityError["reason"], message: string) {
@@ -86,18 +92,29 @@ export class BundleIntegrityError extends Error {
 }
 
 /**
- * Throw a `BundleIntegrityError` if `bundlePath` was verified at resolution
- * and its bytes are no longer the ones that verified. A path that was never
- * verified (the per-user cache, a test fixture) passes untouched.
+ * Throw a `BundleIntegrityError` unless `bundlePath` still hashes to
+ * `expectedDigest`, the sha256 recorded when the bundle was verified or built.
+ * `null` -- nothing verified these bytes (an adopted per-user bundle, a test
+ * fixture) -- passes untouched. Any other value is compared full-string, so a
+ * malformed or empty digest refuses rather than matching nothing.
+ *
+ * Whatever spelling an ABSOLUTE `bundlePath` has, the bytes hashed are the
+ * bytes the engine is about to open from that same spelling; `spawnEngine`
+ * refuses a relative one, which the child would resolve against its own cwd.
  *
  * The message names the bundle by its cache directory -- the 16-hex build hash
  * the path ends in -- and not by its full path: the root is operator config,
  * forwarded into model-directed children, and this message reaches logs a
  * model reads. The digests are hex. Nothing in it is attacker-chosen text.
  */
-export function assertBundleUnchanged(bundlePath: string): void {
-  const want = pinned.get(resolve(bundlePath));
-  if (want === undefined) return;
+export function assertBundleUnchanged(bundlePath: string, expectedDigest: string | null): void {
+  // A caller the type system cannot see (generated JS, an `as` cast) that
+  // leaves the field out gets a refusal that says so, never an unchecked spawn.
+  if (expectedDigest === undefined) {
+    throw new TypeError("spawnEngine: expectedDigest is required -- the bundle's verified sha256, or null if nothing verified it");
+  }
+  if (expectedDigest === null) return;
+  const want = expectedDigest;
   const label = `${safeLabel(basename(dirname(bundlePath)))}/${safeLabel(basename(bundlePath))}`;
   let got: string;
   try {
@@ -122,7 +139,3 @@ function safeLabel(segment: string): string {
   return /^[A-Za-z0-9._-]{1,64}$/u.test(segment) ? segment : "<unprintable>";
 }
 
-/** Test-only: forget every pin. */
-export function __resetBundlePinsForTest(): void {
-  pinned.clear();
-}

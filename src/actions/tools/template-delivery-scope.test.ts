@@ -40,8 +40,12 @@ const read = (rel: string): string => readFileSync(join(SRC, rel), 'utf8');
 
 describe('who decides a site-playbook delivery scope, derived from the source', () => {
   test('exactly these files enter a delivery scope', () => {
-    // The reader of the scope, plus the four dispatch boundaries that set one.
+    // The two readers of the scope, plus the four dispatch boundaries that set one.
     expect(importersOf('template-delivery-scope.ts')).toEqual([
+      // Reads it as the identity of the READER of a remote snapshot, so a
+      // sub-agent's or a workflow's snapshot cannot become the generation a
+      // chat card binds (#676). Enters no scope.
+      'actions/tools/sidecar-route.ts',
       // Reads it: refuses a suppressed scope before resolving a template, and
       // keys the redelivery memory by the rest.
       'actions/tools/webapp-template-injection.ts',

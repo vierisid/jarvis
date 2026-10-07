@@ -14,7 +14,8 @@
 
 import { getDb, generateId } from '../vault/schema.ts';
 import type { ActionCategory } from '../roles/authority.ts';
-import type { ToolDefinition, ToolRegistry } from '../actions/tools/registry.ts';
+import type { ApprovalGuard, ToolDefinition, ToolRegistry } from '../actions/tools/registry.ts';
+import type { ReviewedExecution } from '../actions/tools/reviewed-call-scope.ts';
 import { rawUiGate } from './ui-intent';
 
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'executed';
@@ -146,7 +147,7 @@ export class ApprovalManager {
   // browser controllers and structural element IDs do not. A missing binding
   // must require fresh review, never fall back to the main agent's registry.
   private uiExecutions = new Map<string, {
-    registry: ToolRegistry; tool: ToolDefinition; arguments: string; current: () => boolean;
+    registry: ToolRegistry; tool: ToolDefinition; arguments: string; current: ApprovalGuard;
   }>();
 
   constructor(bootId: string = PROCESS_BOOT_ID) {
@@ -175,7 +176,7 @@ export class ApprovalManager {
     const toolArgs = JSON.stringify(params.toolArguments);
     const executionMode = params.executionMode ?? 'deferred';
     const tool = params.toolRegistry?.get(params.toolName);
-    let current: (() => boolean) | undefined;
+    let current: ApprovalGuard | undefined;
     if (tool && rawUiGate(params.toolName, params.toolArguments)) {
       try {
         current = tool.captureApprovalGuard?.(JSON.parse(toolArgs)) ?? (() => true);
@@ -224,11 +225,24 @@ export class ApprovalManager {
 
   /** Resolve only the exact live implementation/subject captured for this row. */
   getUiExecutionRegistry(request: ApprovalRequest): ToolRegistry | null {
+    return this.getUiExecution(request)?.registry ?? null;
+  }
+
+  /**
+   * The same resolution, together with what the guard bound at review (#676)
+   * -- for the executor, which has to run the call inside that scope.
+   *
+   * `reviewed` is ALWAYS an object here, `{}` for a guard that bound nothing,
+   * so the execution can tell "approved, with nothing bound" from "not an
+   * approved execution at all". Read from the SAME binding the check passed
+   * on, so the two cannot come from different approvals.
+   */
+  getUiExecution(request: ApprovalRequest): { registry: ToolRegistry; reviewed: ReviewedExecution } | null {
     const binding = this.uiExecutions.get(request.id);
     if (!binding || binding.arguments !== request.tool_arguments ||
         binding.registry.get(request.tool_name) !== binding.tool) return null;
     try {
-      return binding.current() ? binding.registry : null;
+      return binding.current() ? { registry: binding.registry, reviewed: binding.current.reviewed ?? {} } : null;
     } catch {
       return null;
     }

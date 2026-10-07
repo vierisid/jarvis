@@ -607,7 +607,7 @@ describe('workflow effect boundary', () => {
     const api = new SandboxApi({ services: f.backends });
     await api.start({ port: 0 });
     const bundle = await buildEngineBundle(); await buildAllJarvisPieces();
-    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
     const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });
@@ -641,7 +641,7 @@ describe('workflow effect boundary', () => {
     await api.start({ port: 0 });
     const bundle = await buildEngineBundle();
     await buildAllJarvisPieces();
-    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
     const makeWorker = () => new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });
@@ -690,7 +690,7 @@ describe('workflow effect boundary', () => {
     await api.start({ port: 0 });
     const bundle = await buildEngineBundle();
     await buildAllJarvisPieces();
-    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
     const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });

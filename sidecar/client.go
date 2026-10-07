@@ -1296,6 +1296,30 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	return c.readLoop(ctx)
 }
 
+// featureBrowserElemGen says this sidecar compares the snapshot generation a
+// reviewed browser element action carries (`elem_gen`, #676) and puts one on
+// every page reply. The brain REFUSES a reviewed remote click, type or hover on
+// a sidecar that does not advertise it: an older sidecar ignores the param it
+// has never heard of, so sending it there would be a guard that never fires.
+const featureBrowserElemGen = "browser_elem_gen"
+
+// protocolFeatures are the features that describe what this build's RPC
+// handlers do, as opposed to what its updater can do.
+//
+// Advertised on EVERY build, dev included. The updater's features are withheld
+// from a dev build because it must never self-update; a protocol feature is a
+// fact about the code that is running, and withholding it would make the brain
+// refuse a reviewed click on exactly the build a developer is testing.
+var protocolFeatures = []string{featureBrowserElemGen}
+
+// registrationFeatures is the register `features` list: the updater's, then the
+// protocol's.
+func registrationFeatures(updater []string) []string {
+	out := make([]string, 0, len(updater)+len(protocolFeatures))
+	out = append(out, updater...)
+	return append(out, protocolFeatures...)
+}
+
 func (c *SidecarClient) sendRegistration(ctx context.Context) error {
 	hostname, _ := os.Hostname()
 	msg := SidecarRegistration{
@@ -1304,7 +1328,7 @@ func (c *SidecarClient) sendRegistration(ctx context.Context) error {
 		OS:                      runtime.GOOS,
 		Platform:                runtime.GOARCH,
 		Version:                 sidecarVersion,
-		Features:                c.updater.Features(),
+		Features:                registrationFeatures(c.updater.Features()),
 		Capabilities:            c.availableCaps,
 		UnavailableCapabilities: c.unavailableCaps,
 		Timezone:                DetectIANATimezone(),

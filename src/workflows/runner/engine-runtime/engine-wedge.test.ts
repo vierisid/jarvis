@@ -53,7 +53,7 @@ describe("a live engine that stops answering", () => {
     ]);
     runtime = new EngineRuntime({
       api,
-      bundlePath: cached.bundlePath,
+      bundlePath: cached.bundlePath, expectedDigest: cached.digest,
       // No pooling: each acquire is its own process, so "was it replaced" is
       // observable rather than hidden behind the warm slot.
       pool: false,

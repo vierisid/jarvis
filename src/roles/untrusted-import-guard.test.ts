@@ -45,12 +45,22 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
 
   /**
    * `withTrustedTrailer` marks text as repo-authored, and its caller places that
-   * text OUTSIDE the untrusted block. Exactly one module has a reason to: the
-   * webapp template delivery, whose instructions come from
-   * vault/webapp-template-seeds.ts and are not writable by any tool.
+   * text OUTSIDE the untrusted block. Two modules have a reason to, and the
+   * test of a third is whether its sentence is written HERE from typed fields,
+   * never lifted out of what the other trust domain sent:
+   *
+   * - `webapp-template-injection.ts`, whose instructions come from
+   *   vault/webapp-template-seeds.ts and are not writable by any tool.
+   * - `desktop.ts` (#708), whose `launchDirective` returns a fixed repo string
+   *   for exactly one reply shape (`success: true` with `window_visible: null`),
+   *   decided from those two typed fields and quoting no sidecar text. The
+   *   sidecar writes the same advice into the reply's `note`, and that copy
+   *   stays inside the frame where it is disclaimed; this one is the brain's own
+   *   sentence, which is why it may sit outside.
    */
-  test('only the webapp template delivery mints a trusted trailer', () => {
+  test('only the webapp template delivery and the launch directive mint a trusted trailer', () => {
     expect(importersOf('withTrustedTrailer(', ['roles/untrusted.ts'])).toEqual([
+      'actions/tools/desktop.ts',
       'actions/tools/webapp-template-injection.ts',
     ]);
   });

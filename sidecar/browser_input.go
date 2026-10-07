@@ -277,6 +277,12 @@ func makeBrowserHoverHandler(cfg *SidecarConfig) RPCHandler {
 		if !ok {
 			return nil, fmt.Errorf("missing required parameter: element_id")
 		}
+		// The snapshot this call was reviewed against, if it was (#676). Read
+		// before the browser is touched: a malformed one refuses outright.
+		reviewed, err := reviewedElemGen(params)
+		if err != nil {
+			return nil, err
+		}
 
 		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
@@ -289,7 +295,7 @@ func makeBrowserHoverHandler(cfg *SidecarConfig) RPCHandler {
 		// or trigger UI nobody reviewed (#592).
 		// Hover dispatches at the stored coordinate, so a scroll since the
 		// snapshot disqualifies it (#603).
-		el, _, refusal, err := refuseStaleElement(cdp, id, true)
+		el, _, refusal, err := refuseStaleElement(cdp, id, true, reviewed)
 		if err != nil {
 			return nil, err
 		}
