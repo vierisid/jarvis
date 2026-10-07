@@ -220,6 +220,7 @@ export const PATCHED_VENDOR_SOURCES = [
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
   '../../runtime/piece-effect-guard.ts',
+  '../../runtime/decision-document.ts',
   // The CODE-step sandbox builds its child's env from this allowlist, so it is
   // compiled into the bundle too: widening or narrowing the allowlist has to
   // reach the engine, not just the daemon. The cost, accepted over keeping a

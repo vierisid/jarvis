@@ -1,3 +1,4 @@
+import type { DocumentReviewRow } from '../authority/decision-document-schema';
 import type { Database } from 'bun:sqlite';
 import { createHash } from 'node:crypto';
 import { getDb } from '../vault/schema';
@@ -26,8 +27,9 @@ const text = (value: unknown, max = 256): value is string => typeof value === 's
 
 const DECISION_CANDIDATES = `
         WITH candidates AS (
-          SELECT 'approval:' || a.id AS id, a.created_at AS created FROM approval_requests a
-          WHERE (a.status = 'pending' OR (a.status = 'approved' AND a.execution_outcome IN ('unknown','not_started'))
+          SELECT coalesce(d.decision_id, 'approval:' || a.id) AS id, coalesce(d.created_at, a.created_at) AS created FROM approval_requests a
+          LEFT JOIN brief_decision_document d ON d.approval_id = a.id
+          WHERE (d.decision_id IS NOT NULL AND d.disposition != 'rejected' AND a.status IN ('pending','expired') OR a.status = 'pending' OR (a.status = 'approved' AND a.execution_outcome IN ('unknown','not_started'))
             OR (a.status = 'executed' AND (a.execution_outcome IS NULL OR a.execution_outcome IN ('failed','blocked','unknown')))
             OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.status != 'succeeded'))
             AND (?1 IS NULL OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.run_id = ?1))
@@ -87,7 +89,14 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     return { rows: rows.slice(0, 50), truncated: rows.length > 50, unresolved, counts };
   }
   private project(id: string): QueuedDecision {
-    const [kind, sourceId] = this.parseId(id);
+    let [kind, sourceId] = this.parseId(id);
+    let document: DocumentReviewRow | null = null;
+    if (kind === 'approval') {
+      document = this.db.query<DocumentReviewRow, [string, string, string]>(
+        `SELECT * FROM brief_decision_document WHERE decision_id=? OR approval_id=?
+          OR decision_id=(SELECT decision_id FROM brief_decision_document_revision WHERE approval_id=?)`).get(id, sourceId, sourceId);
+      if (document) { id = document.decision_id; sourceId = document.approval_id; }
+    }
     // Effect detail and run detail resolve to the same approval identity as the
     // global queue. A missing approval remains an inspectable effect, never success.
     if (kind === 'effect') {
@@ -117,7 +126,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       // A legacy executed row without a receipt is not proof of a committed effect.
       item.state = approval.status === 'executed' && !approval.execution_outcome ? 'unknown' : executionState(approval);
       item.refs.push({ kind: 'approval', id: sourceId });
-      item.createdAt = approval.created_at;
+      item.createdAt = document?.created_at ?? approval.created_at;
       linked = this.effects('approval_id', sourceId);
       runId = linked.rows[0]?.run_id ?? null;
       if (linked.unresolved && linked.unresolved !== 'pending') item.state = linked.unresolved;
@@ -161,7 +170,10 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
           item.refs.push({ kind: 'work_item', id: work.work_id }); }
       }
     }
-    item.revision = hash({ source, item, effects: linked.counts });
+    if (document?.disposition === 'deferred' && !['denied','approved','executed'].includes(item.approval?.status ?? '')) {
+      item.state = 'deferred'; item.actions = ['inspect']; item.supportedActions = ['inspect'];
+    }
+    item.revision = hash({ source, item, effects: linked.counts, ...(document ? { document } : {}) });
     return item;
   }
   get(id: string): QueuedDecision {
@@ -207,7 +219,8 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       const key = this.db.query<Key, [null, string]>(`${DECISION_CANDIDATES}
         SELECT * FROM ordered WHERE id = 'work:' || ?2 OR EXISTS (
           SELECT 1 FROM commitment_work w JOIN workflow_effect e ON e.run_id = w.run_id
-          WHERE w.work_id = ?2 AND (ordered.id = 'effect:' || e.id OR ordered.id = 'approval:' || e.approval_id)
+          WHERE w.work_id = ?2 AND (ordered.id = 'effect:' || e.id OR ordered.id = 'approval:' || e.approval_id
+            OR ordered.id = (SELECT decision_id FROM brief_decision_document WHERE approval_id=e.approval_id))
         ) ORDER BY position, created, id LIMIT 1`).get(null, workId);
       if (!key) throw new DecisionError('Work no longer has an unresolved queue item', 409, 'work_not_queued');
       if (created) {

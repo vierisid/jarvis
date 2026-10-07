@@ -1,0 +1,24 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-Cq1GBj/db.sqlite
+71 |   expect(after.document).toEqual(edit); expect(after.decision.placement).toBe(-3); expect(after.decision.createdAt).toBe(initial.decision.createdAt);
+72 |   expect(after.decision.decisionId).toBe(id); expect(after.decision.approval!.status).toBe('pending');
+73 |   expect(after.decision.approval!.approvalId).not.toBe(old); expect(manager.getRequest(old)!.status).toBe('expired');
+74 |   expect(manager.approve(old, 'legacy')).toBeNull();
+75 |   await expect(queue.resolve(id, { revision: before.decision.revision, action: 'approve_permission' })).rejects.toThrow(/changed/);
+76 |   expect(claimWorkflowEffect(originalEffect)).toBe(false);
+                                                   ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:76:47)
+(fail) email edit saves a new pending revision, retires every old approval control and dispatches edited parameters only [634.21ms]
+
+ 0 pass
+ 20 filtered out
+ 1 fail
+ 11 expect() calls
+Ran 1 test across 1 file. [719.00ms]

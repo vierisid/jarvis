@@ -1,0 +1,76 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-pgVWFR/db.sqlite
+79 |   expect(queue.get(`effect:${originalEffect.id}`).decisionId).toBe(id);
+80 |   expect((await f.engine()).reply).toMatchObject({ dispatch: 'approval_required' });
+81 |   f.command(id, 'approve');
+82 |   const execution = await f.engine();
+83 |   expect(execution.reply).toMatchObject({ dispatch: 'authorized' });
+84 |   expect(execution.processed).toMatchObject({ receiver: edit.to, body: edit.body, subject: edit.subject, auth: { access_token: 'ENGINE_ONLY_SECRET' } });
+                                   ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "auth": {
+      "access_token": "ENGINE_ONLY_SECRET",
+    },
+-   "body": "Edited body Edited body Edited body Edited body Edited body Edited body Edited body Edite... (2213 bytes truncated) ...y Edited body Edited body Edited body Edited body Edited body Edited body Edited body Edited body ",
++   "bcc": [],
++   "body": "Original body",
++   "body_type": "plain_text",
++   "cc": [],
++   "draft": false,
+    "receiver": [
+-     "second@example.test",
++     "first@example.test",
+    ],
+-   "subject": "Revised",
++   "subject": "Follow up",
+  }
+
+- Expected  - 3
++ Received  + 7
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:84:31)
+(fail) email edit saves a new pending revision, retires every old approval control and dispatches edited parameters only [849.51ms]
+Database initialized at: /tmp/jarvis-f14-AjXAqK/db.sqlite
+92 |   const edit = { ...view.document!, start: '2026-12-03T14:00:00+01:00', end: '2026-12-03T15:00:00+01:00', attendees: ['second@example.test'] };
+93 |   f.command(id, 'save', edit); expect(manager.approve(view.decision.approval!.approvalId, 'legacy')).toBeNull();
+94 |   expect(documents.get(id).options).toMatchObject({ calendarId: 'primary', notifications: 'all' });
+95 |   expect(() => f.command(id, 'save', { ...edit, calendarId: 'attacker' })).toThrow(/Unknown/);
+96 |   f.command(id, 'approve'); const result = await f.engine();
+97 |   expect(result.processed).toMatchObject({ calendar_id: 'primary', send_notifications: 'all', start_date_time: edit.start, end_date_time: edit.end, attendees: edit.attendees });
+                                ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "attendees": [
+-     "second@example.test",
++     "first@example.test",
+    ],
++   "auth": {
++     "access_token": "ENGINE_ONLY_SECRET",
++   },
+    "calendar_id": "primary",
+-   "end_date_time": "2026-12-03T15:00:00+01:00",
++   "description": "Original agenda",
++   "end_date_time": "2026-11-01T09:30:00Z",
++   "location": "",
+    "send_notifications": "all",
+-   "start_date_time": "2026-12-03T14:00:00+01:00",
++   "start_date_time": "2026-11-01T09:00:00Z",
++   "title": "Review",
+  }
+
+- Expected  - 3
++ Received  + 9
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-14/src/brief/decision-documents.test.ts:97:28)
+(fail) date and attendee edits are frozen, calendar and notification options stay read-only [721.13ms]
+
+ 0 pass
+ 19 filtered out
+ 2 fail
+ 24 expect() calls
+Ran 2 tests across 1 file. [1.66s]

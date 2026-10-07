@@ -27,6 +27,7 @@ import { join, relative, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { expressionPatches, applyExpressionPatch } from './activepieces-expression-patch';
+import { applyPieceApprovalPatch, PIECE_EXECUTOR_PATH } from './activepieces-piece-approval-patch';
 
 const PINNED_TAG = "0.82.1";
 const PINNED_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -575,6 +576,10 @@ for (const [relPath, replacements] of Object.entries(expressionPatches)) {
   writeFileSync(dst, applyExpressionPatch(readFileSync(dst, 'utf8'), replacements));
   info(`applied expression boundary patch to ${relPath}`);
 }
+
+const pieceExecutorPath = join(VENDOR_DIR, PIECE_EXECUTOR_PATH);
+writeFileSync(pieceExecutorPath, applyPieceApprovalPatch(readFileSync(pieceExecutorPath, 'utf8')));
+info('applied governed-piece document approval patch');
 
 // 8. Defense-in-depth: walk the vendor tree and abort if any /ee/ path slipped through
 assertNoEePaths(VENDOR_DIR);

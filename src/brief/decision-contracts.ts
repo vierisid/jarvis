@@ -11,7 +11,7 @@ export type DecisionAction = 'accept_intent' | 'reject_intent' | 'approve_permis
 export interface QueuedDecision extends BriefDecision {
   kind: 'intent' | 'permission' | 'recovery';
   title: string;
-  state: ApprovalExecutionState | NonNullable<BriefDecision['workStatus']> | EffectStatus;
+  state: 'deferred' | ApprovalExecutionState | NonNullable<BriefDecision['workStatus']> | EffectStatus;
   /** These are separate facts. A permission grant or committed effect is not a verified result. */
   refs: DecisionReference[];
   relatedTruncated: boolean;

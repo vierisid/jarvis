@@ -40,7 +40,7 @@ import { join } from 'node:path';
 import ts from 'typescript';
 
 /** Relative to this directory. Mirrors `PATCHED_VENDOR_SOURCES`' two entries. */
-const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts'];
+const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts', 'decision-document.ts'];
 
 /**
  * A value import of ANOTHER registered source is fine, and is the one shape
@@ -49,7 +49,7 @@ const BUNDLED_DAEMON_SOURCES = ['piece-effects.ts', 'piece-effect-guard.ts'];
  * that file's content, so the bundle hash follows it. What this guard is for is
  * a value import that reaches OUTSIDE the registry.
  */
-const REGISTERED_SPECIFIERS = new Set(['./piece-effects', './piece-effect-guard']);
+const REGISTERED_SPECIFIERS = new Set(['./piece-effects', './piece-effect-guard', './decision-document']);
 
 const reachesOutsideTheRegistry = (specifier: string): boolean =>
   !REGISTERED_SPECIFIERS.has(specifier.replace(/^['"]|['"]$/gu, '').replace(/\.ts$/u, ''));

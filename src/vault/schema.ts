@@ -1,3 +1,4 @@
+import { ensureDecisionDocumentSchema } from '../authority/decision-document-schema';
 import { Database } from "bun:sqlite";
 import { ensureSuggestionSchema } from './suggestion-schema.ts';
 import { ensureGoalEventSchema } from './goal-event-schema.ts';
@@ -393,6 +394,8 @@ function createTables(db: Database): void {
   `);
 
   db.run(`CREATE INDEX IF NOT EXISTS idx_attachments_content ON content_attachments(content_id)`);
+
+  ensureDecisionDocumentSchema(db);
 
   // Authority: Approval requests
   db.run(`

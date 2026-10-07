@@ -1,3 +1,4 @@
+import { documentInput, projectDocument } from './decision-document';
 /**
  * Glue layer: wraps existing Jarvis adapters into the function-shape that the
  * SandboxApi service-backend slots expect. Each `/v1/jarvis/*` route takes a
@@ -58,6 +59,8 @@ import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
+  /** F-14 enrollment is explicitly enabled only with the F-12 queue. */
+  decisionDocumentsEnabled?: boolean;
   credentialResolver: CredentialResolver;
   llmManager: LLMManager;
   toolRegistry?: ToolRegistry;
@@ -614,7 +617,21 @@ export function buildSandboxServiceBackends(
     // `piece-effects.ts` stays free of the import the engine bundle would have
     // to start tracking. See `piece-effect-receipt.ts` for the whole argument,
     // including which in-flight approvals a changed projection invalidates.
-    const input = defangPieceProjection(sanitizePieceInput(req.input));
+    let document = req.documentProtocol === 1 ? documentInput(req.piece, req.action, req.input) : null;
+    if (req.documentProtocol === 1 && !document) throw new Error('Unsupported document protocol input');
+    let input = document ?? defangPieceProjection(sanitizePieceInput(req.input));
+    if (document) {
+      const context = resolveEffectContext(ctx, req.piece, req.action);
+      const previous = getWorkflowEffect(workflowEffectId(context.run.id, context.stepName, context.executionPath, 'piece'));
+      // F13 engines bounded once before transport, and the daemon bounded again.
+      // Keep only an exact historical invocation on that read-only protocol. New
+      // protocol records (including flag-off ones) can never match this digest.
+      const legacyInput = defangPieceProjection(sanitizePieceInput(sanitizePieceInput(req.input)));
+      if (previous && previous.documentRevision === undefined && previous.requestDigest === digest({ piece: req.piece, action: req.action, input: legacyInput })) {
+        document = null;
+        input = legacyInput;
+      }
+    }
     const tool = governedPieceToolDefinition(resolved);
     const capability = (() => {
       try { return toolEffectCapability(tool); }
@@ -627,14 +644,17 @@ export function buildSandboxServiceBackends(
       route: 'piece', toolName: tool.name, category: capability.category, toolCategory: tool.category,
       // Digested over the whole resolved input, so a change to any prop -- not
       // just the ones the card shows -- invalidates an approval granted earlier.
-      request: { piece: req.piece, action: req.action, input },
+      request: { piece: req.piece, action: req.action, input, ...(document ? { documentProtocol: 1 } : {}) },
+      documentReview: !!document && opts.decisionDocumentsEnabled === true,
       prepare: () => ({ arguments: input, target: capability.target(input) }),
-      validateTarget: (_args, target) => {
-        if (digest(capability.target(input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
+      validateTarget: (args, target) => {
+        if (digest(capability.target(document ? args : input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
       },
-      execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; } });
+      execute: async (args, checkpoint) => { checkpoint(); return { dispatch: 'authorized',
+        ...(document ? { document: projectDocument(req.piece, req.action, args) } : {}) }; } });
     return reply.approval ? { governed: true, dispatch: 'approval_required', approval: reply.approval }
-      : { governed: true, dispatch: 'authorized' };
+      : { governed: true, dispatch: 'authorized',
+          ...(document ? { document: (reply.result as { document: ReturnType<typeof projectDocument> }).document } : {}) };
   };
 
   const services: SandboxApiServices = {

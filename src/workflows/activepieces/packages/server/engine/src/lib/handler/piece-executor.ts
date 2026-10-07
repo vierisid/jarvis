@@ -150,10 +150,6 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
                 externalId: constants.externalProjectId,
             },
         }
-        const backwardCompatibleContext = backwardCompatabilityContextUtils.makeActionContextBackwardCompatible({
-            contextVersion: piece.getContextInfo?.().version,
-            context,
-        })
         const testSingleStepMode = !isNil(constants.stepNameToTest)
         const runMethodToExecute = (testSingleStepMode && !isNil(pieceAction.test)) ? pieceAction.test : pieceAction.run
         // Jarvis: a verified piece's action passes the daemon's Authority
@@ -168,12 +164,18 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
             stepName: action.name,
             executionPath: executionState.currentPath.path,
             input: processedInput,
+            recordedInput: stepOutput.input,
         })
         if (governance.governed && governance.dispatch === 'approval_required') {
             // Same pause the jarvis-tool piece uses: park on the approval
             // waitpoint without running the action.
             params.hookResponse = { ...params.hookResponse, type: 'paused' }
         }
+        // The guard applies the approved document to processedInput before conversion.
+        const backwardCompatibleContext = backwardCompatabilityContextUtils.makeActionContextBackwardCompatible({
+            contextVersion: piece.getContextInfo?.().version,
+            context,
+        })
         const output = (governance.governed && governance.dispatch === 'approval_required')
             ? { approval: governance.approval }
             : await runMethodToExecute(backwardCompatibleContext)
