@@ -26,12 +26,13 @@ import {
   existsSync,
   writeFileSync,
   readFileSync,
+  renameSync,
   rmSync,
   utimesSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { homedir } from "node:os";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { builtinModules } from "node:module";
 import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
@@ -646,7 +647,10 @@ export async function buildEngineBundle(opts?: {
   // direct dep on it at the project level. Declared locally with the surface
   // we actually use rather than pulling in @types/esbuild.
   const esbuild = (await import(esbuildEntry)) as {
-    build(options: Record<string, unknown>): Promise<{ metafile: EngineMetafile }>;
+    build(options: Record<string, unknown>): Promise<{
+      metafile: EngineMetafile;
+      outputFiles?: Array<{ path: string; contents: Uint8Array }>;
+    }>;
   };
 
   const result = await esbuild.build({
@@ -663,28 +667,53 @@ export async function buildEngineBundle(opts?: {
     },
     nodePaths: [resolve(stagingDir, "node_modules")],
     plugins: [absentModulesPlugin()],
+    // In memory, not to disk: the bundle is checked, hashed and only then
+    // published (below). esbuild writing `main.js` in place would leave a
+    // window in which a refused or half-written bundle sat at the path the
+    // next call adopts on `existsSync` alone.
+    write: false,
     logLevel: "warning",
   });
 
-  // Checked before the metafile is written, and a refusal deletes what esbuild
-  // wrote: a refused bundle left on disk would be ADOPTED by the next call's
-  // existsSync fast path.
-  try {
-    assertSelfContainedBundle(result.metafile);
-  } catch (err) {
-    for (const f of [bundlePath, bundlePath + ".map"]) rmSync(f, { force: true });
-    throw err;
-  }
-  writeFileSync(bundlePath + ".meta.json", JSON.stringify(result.metafile));
+  // Refused before anything is written, so a refusal leaves nothing to adopt.
+  assertSelfContainedBundle(result.metafile);
+  const outputs = result.outputFiles ?? [];
+  const main = outputs.find((f) => resolve(f.path) === bundlePath);
+  if (!main) throw new Error(`esbuild produced no ${bundlePath}`);
 
   // Pin what was just built (#761), so every later spawn re-checks these bytes
   // exactly as a verified shared bundle's are (#671). This path is the one that
   // exists FOR safety -- it is how a refused shared root is answered -- and it
   // writes into BUNDLE_ROOT, the tenant-writable tree that refusal declined to
   // adopt from; without the pin the bundle it produces was spawned unchecked
-  // for the daemon's lifetime. Hashed from disk rather than from esbuild's
-  // output, so the pin is of the file the engine will actually open.
-  return { bundlePath, hash, bundleDir, digest: sha256OfFile(bundlePath) };
+  // for the daemon's lifetime. The digest is of the bytes esbuild produced, in
+  // memory, NOT re-read from disk after the write: a re-read is exactly the
+  // window in which another writer of that tree (or a second builder of the
+  // same predictable path) would get its bytes pinned as "built".
+  const digest = createHash("sha256").update(main.contents).digest("hex");
+  // Published by rename, `main.js` LAST: the sourcemap and metafile first, so
+  // the file whose existence means "built" never appears before its siblings,
+  // and a reader (or a crash) never sees it torn.
+  for (const f of outputs) if (f !== main) publishAtomically(resolve(f.path), f.contents);
+  publishAtomically(bundlePath + ".meta.json", JSON.stringify(result.metafile));
+  publishAtomically(bundlePath, main.contents);
+  return { bundlePath, hash, bundleDir, digest };
+}
+
+/**
+ * Write `data` beside `target` under a name no one else picks (O_EXCL), then
+ * rename it over `target`. Rename within a directory is atomic, so `target`
+ * is either its old bytes or all of the new ones.
+ */
+function publishAtomically(target: string, data: Uint8Array | string): void {
+  const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  try {
+    writeFileSync(tmp, data, { flag: "wx" });
+    renameSync(tmp, target);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
 }
 
 export const ENGINE_BUILD_PATHS = {

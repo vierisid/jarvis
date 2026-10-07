@@ -93,10 +93,14 @@ cpSync(bundle.bundleDir, engineOutDir, { recursive: true });
 // Content manifest: the dir NAME is a hash of build INPUTS, not of main.js —
 // consumers verify the sha256 of the bytes they are about to execute.
 const mainBytes = readFileSync(resolve(engineOutDir, "main.js"));
-writeFileSync(
-  resolve(engineOutDir, "main.js.sha256"),
-  createHash("sha256").update(mainBytes).digest("hex") + "\n",
-);
+const copiedDigest = createHash("sha256").update(mainBytes).digest("hex");
+// The copy must be the bytes that were built (#761: the build returns their
+// digest). Digesting the destination alone would make a truncated or swapped
+// copy produce a manifest that agrees with it.
+if (copiedDigest !== bundle.digest) {
+  throw new Error(`engine bundle copy does not match the build (built ${bundle.digest}, copied ${copiedDigest})`);
+}
+writeFileSync(resolve(engineOutDir, "main.js.sha256"), copiedDigest + "\n");
 log(`engine bundle ${bundle.hash} -> ${engineOutDir}`);
 
 // 3. Full pieces catalog install. The synthesized package.json is the SAME

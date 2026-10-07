@@ -528,9 +528,15 @@ describe("engine bundle build", () => {
         `const fs = require("fs");\n` +
         `exports.build = async (o) => {\n` +
         `  fs.appendFileSync(${JSON.stringify(log)}, o.outfile + "\\n");\n` +
-        `  fs.writeFileSync(o.outfile, ${JSON.stringify(BUILT)});\n` +
         `  const imports = ${JSON.stringify(externals)}.map((path) => ({ path, kind: "require-call", external: true }));\n` +
-        `  return { metafile: { inputs: {}, outputs: { [o.outfile]: { imports } } } };\n` +
+        `  const metafile = { inputs: {}, outputs: { [o.outfile]: { imports } } };\n` +
+        // Real esbuild's two modes: write the outfile itself, or hand the bytes back.
+        `  if (o.write !== false) { fs.writeFileSync(o.outfile, ${JSON.stringify(BUILT)}); return { metafile }; }\n` +
+        `  const enc = new TextEncoder();\n` +
+        `  return { metafile, outputFiles: [\n` +
+        `    { path: o.outfile, contents: enc.encode(${JSON.stringify(BUILT)}) },\n` +
+        `    { path: o.outfile + ".map", contents: enc.encode("{}") },\n` +
+        `  ] };\n` +
         `};\n`);
       return { stagingDir, builds: () => readFileSync(log, "utf8").split("\n").filter(Boolean).length };
     };
@@ -642,8 +648,25 @@ describe("engine bundle build", () => {
         .rejects.toThrow(/REFUSED: it would resolve "supports-color" at run time/u);
       expect(builds()).toBe(1);
       expect(existsSync(resolve(bundleRoot, bundleHash(), "main.js"))).toBe(false);
+      expect(existsSync(resolve(bundleRoot, bundleHash(), "main.js.map"))).toBe(false);
       await expect(buildEngineBundle({ sharedRoot: null, bundleRoot, stagingDir })).rejects.toThrow(/REFUSED/u);
       expect(builds()).toBe(2);
+    });
+
+    test("a build is published whole: digest of the produced bytes, siblings first, no temp files left (#761)", async () => {
+      // The bundle is built in memory and published by rename, so the pinned
+      // digest is of the bytes esbuild produced -- never re-read from a path
+      // another writer of the tree could have touched -- and the file whose
+      // existence means "built" is never there half-written.
+      const { stagingDir } = seededStaging();
+      const bundleRoot = tmp("user");
+      const built = await buildEngineBundle({ sharedRoot: null, bundleRoot, stagingDir });
+      expect(built.digest).toBe(createHash("sha256").update(BUILT).digest("hex"));
+      expect(readFileSync(built.bundlePath, "utf8")).toBe(BUILT);
+      expect(readFileSync(built.bundlePath + ".map", "utf8")).toBe("{}");
+      expect(existsSync(built.bundlePath + ".meta.json")).toBe(true);
+      const { readdirSync } = await import("node:fs");
+      expect(readdirSync(built.bundleDir).filter((n) => n.endsWith(".tmp"))).toEqual([]);
     });
 
     test("force rebuilds over an existing per-user bundle", async () => {
