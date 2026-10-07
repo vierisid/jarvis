@@ -156,9 +156,11 @@ export type ApprovalToast = {
 /**
  * The desktop approval toast (`notify.show` to every sidecar, daemon/index.ts).
  *
- * The sidecar renders `body · meta` as one text under the title, and the OS
- * cuts it to a few lines (#791). So the part the person decides on -- the body,
- * then the impact that leads the meta -- must fit `TOAST_APPROVABLE_MAX_COLUMNS`
+ * The body is what will happen (`approvalIntentParts`, #789); the meta is the
+ * impact, the tool and then why approval was needed. The sidecar renders
+ * `body · meta` as one text under the title, and the OS cuts it to a few lines
+ * (#791). So the part the person decides on -- the body, then the impact that
+ * leads the meta -- must fit `TOAST_APPROVABLE_MAX_COLUMNS`
  * for the toast to carry Approve and Deny. What follows the impact may be cut
  * by the OS, and is never what the decision is about.
  *
@@ -181,15 +183,22 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   const label = (text: string) => boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
   const words = label(request.tool_name).replace(/[_-]+/g, ' ').trim();
   const tool = words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Action';
-  const reason = boundedApprovalLabel(request.reason?.trim() ?? '', (request.reason ?? '').length);
-  const body = reason || `${label(request.agent_name)} wants to run ${tool}.`;
+  // What will happen leads (#789): the gate's sentence, the same one the
+  // dashboard and the channel card lead with. Before, the body was `reason`
+  // alone, so every gated tool's toast read "execute_command requires user
+  // approval" and the command, machine, path or skill steps were never shown.
+  const { action, reason } = approvalIntentParts(request);
+  const body = boundedApprovalLabel(action, action.length);
   const impact = impactFromCategory(request.action_category);
   const toolLabel = label(request.tool_name);
   const destructive = impact === 'destructive';
   const approvable = toastColumns(`${body} · ${impact}`) <= TOAST_APPROVABLE_MAX_COLUMNS;
   if (approvable) {
+    // The reason goes last, after the impact and the tool: it says why
+    // approval was needed, and it is the part an OS cut may take.
     return {
-      id: request.id, kind: 'approval', title: `Approve: ${tool}?`, body, meta: `${impact} · ${toolLabel}`, destructive,
+      id: request.id, kind: 'approval', title: `Approve: ${tool}?`, body,
+      meta: `${impact} · ${toolLabel}${reason ? ` · ${reason}` : ''}`, destructive,
       actions: [{ id: 'deny', label: 'Deny' }, { id: 'approve', label: 'Approve', primary: true }],
       approvable,
     };

