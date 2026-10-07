@@ -239,7 +239,23 @@ jobs:
       # lockfile records — the PR gate enforces this, and the shipping path is
       # where it matters most.
       - run: bun install --frozen-lockfile
-      - run: bun test
+      # `--retry=2`, matching test.yml (which has had it since #501's Chromium
+      # flake class was identified). This gate has run bare `bun test` since
+      # #230, which made it STRICTER than the PR gate on exactly the tests
+      # known to flake -- so a release could fail on something no PR would.
+      #
+      # The 2026-10-07 dry run (#774's validation) failed here on three of
+      # them: `launchChrome on this host (real headless Chromium)` twice and
+      # the webapp-template browser integration test, 7994 pass / 3 fail. And
+      # because this gate is first, every publish job downstream skipped -- so
+      # a flake here does not just delay a release, it hides whether the rest
+      # of the path works.
+      #
+      # --retry is per TEST, not a step-level retry: a flaky test gets three
+      # attempts while a deterministic failure still fails all three, and
+      # retried tests print as "(attempt N)" so a flake stays visible rather
+      # than silent.
+      - run: bun test --retry=2
       - run: bunx tsc --noEmit
 
   # ─── Gate: build AND RUN the image before publishing anything ──
