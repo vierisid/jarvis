@@ -17,6 +17,7 @@ import { MessageSpecimen } from "../chat/message/preview/MessageSpecimen";
 import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCreationSpecimen";
 
 import { WorkflowContextSpecimen } from "../workflows/context/WorkflowContextSpecimen";
+import { WorkflowManagementSpecimen } from "../workflows/manage-list/WorkflowManagementSpecimen";
 import { WorkflowRunsSpecimen } from "../workflows/runs/WorkflowRunsSpecimen";
 import { WorkflowCanvasSpecimen } from "../workflows/canvas/WorkflowCanvasSpecimen";
 
@@ -44,6 +45,7 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
   if (specimen === "workflow-context") return <WorkflowContextSpecimen />;
+  if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;
   if (specimen === "workflow-runs") return <WorkflowRunsSpecimen />;
   if (specimen === "workflow-canvas") return <WorkflowCanvasSpecimen />;
   if (specimen === "ingredient-picker") return <WorkflowCreationSpecimen ingredients />;

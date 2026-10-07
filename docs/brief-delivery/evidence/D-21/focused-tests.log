@@ -1,0 +1,40 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/manage-list/controller.test.ts:
+(pass) load/commands are default off and retirement prevents new or late writes [3.39ms]
+(pass) same identity, revision and operation are sent; acknowledgement changes only that row [9.95ms]
+(pass) failed enable keeps paused value and the exact blocker [3.51ms]
+(pass) cancel does not mutate anything or submit; confirmation required [2.67ms]
+(pass) two removals and reverse-order Undo restore exact slots and version/run identity, paused [9.88ms]
+(pass) refresh retains pending Undo and order despite provider timestamp sorting [6.82ms]
+(pass) rejected delete and restore never change visibility [6.47ms]
+(pass) expired receipt never restores locally or dispatches another command [4.22ms]
+(pass) uncertain delete locks row; refresh cannot clear it; reconciliation does not replay [5.41ms]
+(pass) uncertain restore retains receipt and resolves once into paused original identity [6.15ms]
+(pass) concurrent row requests settle independently and repeated actions submit once [4.19ms]
+(pass) access loss blocks new commands while keeping submitted acknowledgement [3.53ms]
+(pass) stale, unavailable, unsupported and empty are distinct; stale actions fail closed [5.99ms]
+(pass) read rejects mismatched owner and duplicate IDs without a partial list [1.04ms]
+(pass) wrong request/owner/flow/action/version or enabled restoration cannot acknowledge [1.98ms]
+(pass) invalid acknowledgement becomes uncertain and cannot unlock a second attempt [4.13ms]
+(pass) newest read wins even when a provider ignores abort [0.91ms]
+(pass) all removed and empty refresh still permit receipt-backed restoration [10.39ms]
+(pass) list position/selection persist independently of row actions [4.89ms]
+(pass) a loading projection can be refreshed later without a stuck busy state [3.18ms]
+
+ui/src/brief/workflows/manage-list/WorkflowManagementRoom.test.tsx:
+(pass) missing, wrong-source, wrong-owner and capability-off binding fail closed [28.48ms]
+(pass) switch and bin are separate targets; only the name opens the exact workflow [104.39ms]
+(pass) inline confirm is keyboard reachable; Escape restores focus to the same bin [32.64ms]
+(pass) acknowledged deletion hides and inerts only its row, Undo restores it paused [45.76ms]
+(pass) failed enable exposes blocker and leaves Paused, not Draft [32.05ms]
+(pass) uncertain mutation exposes Check result instead of another Delete; matching result resolves once [40.36ms]
+(pass) all eight shell states and unmount/remount retain activation and removed identity [136.53ms]
+(pass) read failures and missing live capability do not invent a zero-count empty list [12.98ms]
+(pass) no removed date, subtitle, footer, global creation control or irreversible route appears [14.89ms]
+(pass) a late row acknowledgement does not steal focus from conversation input [286.58ms]
+
+ 30 pass
+ 0 fail
+ 132 expect() calls
+Ran 30 tests across 2 files. [1202.00ms]

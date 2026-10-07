@@ -1,0 +1,102 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2339 files).
+[pre-commit] Running 2 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/manage-list/controller.test.ts:
+(pass) load/commands are default off and retirement prevents new or late writes [1.43ms]
+(pass) same identity, revision and operation are sent; acknowledgement changes only that row [4.44ms]
+(pass) failed enable keeps paused value and the exact blocker [2.96ms]
+(pass) cancel does not mutate anything or submit; confirmation required [1.78ms]
+(pass) two removals and reverse-order Undo restore exact slots and version/run identity, paused [7.20ms]
+(pass) refresh retains pending Undo and order despite provider timestamp sorting [5.35ms]
+(pass) rejected delete and restore never change visibility [5.64ms]
+(pass) expired receipt never restores locally or dispatches another command [2.86ms]
+(pass) uncertain delete locks row; refresh cannot clear it; reconciliation does not replay [4.49ms]
+(pass) uncertain restore retains receipt and resolves once into paused original identity [5.14ms]
+(pass) concurrent row requests settle independently and repeated actions submit once [3.01ms]
+(pass) access loss blocks new commands while keeping submitted acknowledgement [2.86ms]
+(pass) stale, unavailable, unsupported and empty are distinct; stale actions fail closed [5.08ms]
+(pass) read rejects mismatched owner and duplicate IDs without a partial list [0.43ms]
+(pass) wrong request/owner/flow/action/version or enabled restoration cannot acknowledge [1.44ms]
+(pass) invalid acknowledgement becomes uncertain and cannot unlock a second attempt [2.73ms]
+(pass) newest read wins even when a provider ignores abort [0.24ms]
+(pass) all removed and empty refresh still permit receipt-backed restoration [9.02ms]
+(pass) list position/selection persist independently of row actions [3.91ms]
+(pass) a loading projection can be refreshed later without a stuck busy state [2.56ms]
+
+ui/src/brief/workflows/manage-list/WorkflowManagementRoom.test.tsx:
+(pass) missing, wrong-source, wrong-owner and capability-off binding fail closed [30.13ms]
+(pass) switch and bin are separate targets; only the name opens the exact workflow [124.87ms]
+(pass) inline confirm is keyboard reachable; Escape restores focus to the same bin [32.25ms]
+(pass) acknowledged deletion hides and inerts only its row, Undo restores it paused [37.67ms]
+(pass) failed enable exposes blocker and leaves Paused, not Draft [25.70ms]
+(pass) uncertain mutation exposes Check result instead of another Delete; matching result resolves once [31.73ms]
+(pass) all eight shell states and unmount/remount retain activation and removed identity [125.36ms]
+(pass) read failures and missing live capability do not invent a zero-count empty list [11.45ms]
+(pass) no removed date, subtitle, footer, global creation control or irreversible route appears [11.75ms]
+(pass) a late row acknowledgement does not steal focus from conversation input [296.83ms]
+
+ 30 pass
+ 0 fail
+ 132 expect() calls
+Ran 30 tests across 2 files. [1042.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-21 9a6530ad] feat(brief): add workflow management with scoped removal receipts
+ 48 files changed, 3914 insertions(+)
+ create mode 100644 docs/brief-delivery/D-21.json
+ create mode 100644 docs/brief-delivery/D-21.md
+ create mode 100644 docs/brief-delivery/evidence/D-21/browser-check.cjs
+ create mode 100644 docs/brief-delivery/evidence/D-21/browser-results.json
+ create mode 100644 docs/brief-delivery/evidence/D-21/build.log
+ create mode 100644 docs/brief-delivery/evidence/D-21/dark-expanded-chat-confirm.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/dark-expanded-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/dark-expanded-closed-confirm.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/dark-expanded-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/dark-rail-chat-confirm.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/dark-rail-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/dark-rail-closed-confirm.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/dark-rail-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/diagnostic-before-scroll-return-fix.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/diagnostic-before-scroll-return-fix.txt
+ create mode 100644 docs/brief-delivery/evidence/D-21/enable-blocked.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/focused-tests.log
+ create mode 100644 docs/brief-delivery/evidence/D-21/format-check.log
+ create mode 100644 docs/brief-delivery/evidence/D-21/format.log
+ create mode 100644 docs/brief-delivery/evidence/D-21/install.log
+ create mode 100644 docs/brief-delivery/evidence/D-21/light-expanded-chat-confirm.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/light-expanded-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/light-expanded-closed-confirm.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/light-expanded-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/light-rail-chat-confirm.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/light-rail-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/light-rail-closed-confirm.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/light-rail-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/list-to-canvas.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/long-compact.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/long-list-return.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/long-list-undo.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/narrow-reduced.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/open-prs.json
+ create mode 100644 docs/brief-delivery/evidence/D-21/regression-tests.log
+ create mode 100644 docs/brief-delivery/evidence/D-21/two-deleted.png
+ create mode 100644 docs/brief-delivery/evidence/D-21/typecheck.log
+ create mode 100644 docs/brief-delivery/evidence/D-21/uncertain-removal.png
+ create mode 100644 ui/src/brief/workflows/manage-list/WorkflowManagementRoom.test.tsx
+ create mode 100644 ui/src/brief/workflows/manage-list/WorkflowManagementRoom.tsx
+ create mode 100644 ui/src/brief/workflows/manage-list/WorkflowManagementSpecimen.tsx
+ create mode 100644 ui/src/brief/workflows/manage-list/controller.test.ts
+ create mode 100644 ui/src/brief/workflows/manage-list/controller.ts
+ create mode 100644 ui/src/brief/workflows/manage-list/figma-reference.json
+ create mode 100644 ui/src/brief/workflows/manage-list/fixtures.ts
+ create mode 100644 ui/src/brief/workflows/manage-list/management.css
+ create mode 100644 ui/src/brief/workflows/manage-list/model.ts

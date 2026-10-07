@@ -1,0 +1,9 @@
+ui/src/brief/workflows/manage-list/controller.test.ts 197ms (unchanged)
+ui/src/brief/workflows/manage-list/controller.ts 87ms (unchanged)
+ui/src/brief/workflows/manage-list/figma-reference.json 47ms (unchanged)
+ui/src/brief/workflows/manage-list/fixtures.ts 36ms (unchanged)
+ui/src/brief/workflows/manage-list/management.css 75ms (unchanged)
+ui/src/brief/workflows/manage-list/model.ts 32ms (unchanged)
+ui/src/brief/workflows/manage-list/WorkflowManagementRoom.test.tsx 55ms (unchanged)
+ui/src/brief/workflows/manage-list/WorkflowManagementRoom.tsx 71ms
+ui/src/brief/workflows/manage-list/WorkflowManagementSpecimen.tsx 31ms (unchanged)
