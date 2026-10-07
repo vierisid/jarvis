@@ -169,6 +169,7 @@ function BoundContext({
           onClick={() => void store.refresh(query)}
         />
       </div>
+      {sharedRuns && <ContextRunFeedback store={sharedRuns} />}
       <div
         className="brief-context-scroll"
         ref={scroll}
@@ -407,18 +408,26 @@ function ContextRunAction({
       });
   }
   return (
-    <div className="brief-context-run-action">
-      <BriefButton
-        variant="primary"
-        disabled={!store.canRun}
-        title={`Run version ${store.scope.versionId}`}
-        onClick={() => void start()}
-      >
-        {state.submission === "pending" ? "Requesting…" : "Run workflow"}
-      </BriefButton>
-      <span role="status" className="brief-context-run-message">
-        {state.message}
-      </span>
+    <BriefButton
+      variant="primary"
+      disabled={!store.canRun}
+      title={`Run version ${store.scope.versionId}`}
+      onClick={() => void start()}
+    >
+      {state.submission === "pending" ? "Requesting…" : "Run workflow"}
+    </BriefButton>
+  );
+}
+/** Feedback has its own flow row so long failures cannot cover the header controls. */
+function ContextRunFeedback({ store }: { store: WorkflowRunsController }) {
+  const state = useSyncExternalStore(
+    store.subscribe,
+    store.getSnapshot,
+    store.getSnapshot,
+  );
+  return (
+    <div role="status" className="brief-context-run-message">
+      {state.message}
     </div>
   );
 }

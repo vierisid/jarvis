@@ -69,7 +69,7 @@
       "skipped": 2,
       "assertions": 4703,
       "files": 37,
-      "evidence": "evidence/D-20/affected-tests.log",
+      "evidence": "evidence/D-20/review-tests.log",
       "note": "Unchanged optional F07/F08 skips; F21 integration not claimed"
     },
     {
@@ -83,18 +83,18 @@
     {
       "command": "bun x tsc --noEmit",
       "result": "pass",
-      "evidence": "evidence/D-20/typecheck.log"
+      "evidence": "evidence/D-20/review-typecheck.log"
     },
     {
       "command": "bun run build:ui",
       "result": "pass",
-      "evidence": "evidence/D-20/build.log",
+      "evidence": "evidence/D-20/review-build.log",
       "warnings": "Existing Tailwind at-rule warnings"
     }
   ],
   "browser": {
     "script": "evidence/D-20/browser-check.cjs",
-    "evidence": "evidence/D-20/browser-results.json",
+    "evidence": "evidence/D-20/review-browser-results.json",
     "result": "pass",
     "layouts": 8,
     "basisCycles": 10,
@@ -115,10 +115,24 @@
     "Code permission is a separate workflow API setting; its real inspector destination must be supplied before activation; no new permission editor",
     "UI field stripping is not server authorization/redaction certification",
     "Shared command owner and durable uncertainty must be integrated across Canvas/Runs/Context by host",
-    "Independent PR review pending"
+    "Review R1/R2/R3 corrected; independent post-fix re-review not claimed"
   ],
   "rollback": "Disable optional Context registration/capability. Keep legacy route and durable command reconciliation state. No migrations or backend writes.",
   "base_ci": "Corrected D19 Tests/Docker/applicable platform checks pass",
-  "ci": "New head must be assessed after push",
-  "next": "D-21; not started"
+  "ci": "Corrected head must be assessed after push; reviewed head checks pass",
+  "next": "D-21; not started",
+  "review": {
+    "reviewed_head": "c89053d24892eda348763bb5b35025bd185a6fef",
+    "fixed": ["R1", "R2", "R3"],
+    "checks": 120,
+    "layouts": 12,
+    "red_failed_checks": 64,
+    "green_failed_checks": 0,
+    "red": "evidence/D-20/review-red-results.json",
+    "green": "evidence/D-20/review-green-results.json",
+    "script": "evidence/D-20/review-browser.cjs",
+    "original_matrix": "evidence/D-20/review-browser-results.json",
+    "prior_ci": "Reviewed head Tests/Docker/applicable platform checks pass",
+    "post_fix_independent_review": false
+  }
 }
