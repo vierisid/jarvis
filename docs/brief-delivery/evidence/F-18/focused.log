@@ -1,0 +1,52 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-memory-usage.test.ts:
+(pass) missing, mismatched, disabled and replaced providers never return an empty success [39.36ms]
+(pass) safe summaries preserve deleted fact IDs and stages without exposing content or crossing conversations [23.57ms]
+(pass) strict target filters reject missing, ambiguous, duplicate, unknown and malformed values [17.29ms]
+(pass) real F18 provider satisfies the F17 dependency only with both flags, and exposes coverage [20.99ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f18-http-GatJC8/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) usage history is protected by real HTTP panel authentication and stays no-store [34.23ms]
+
+src/daemon/agent-service-memory.test.ts:
+(pass) real transport and classic AgentService preserve packed provenance across two chats and replay [57.28ms]
+(pass) real transport and router-first AgentService preserve packed provenance across two chats and replay [40.39ms]
+
+src/vault/memory-usage.test.ts:
+(pass) packer emits only successfully appended IDs; omitted facts are selected but never supplied [412.10ms]
+(pass) actual chat provider handoff records once across duplicate calls [354.27ms]
+(pass) actual chatTier provider handoff records once across duplicate calls [397.55ms]
+(pass) actual stream provider handoff records once across duplicate calls [413.97ms]
+(pass) actual streamTier provider handoff records once across duplicate calls [435.37ms]
+(pass) zero budget, removed blocks and user text cannot manufacture supply [360.53ms]
+(pass) known role delimiter transformation preserves manifest supply without parsing IDs [338.20ms]
+(pass) interleaved chats cannot borrow another turn's packed manifest [356.99ms]
+[LLM] Provider fixture failed (attempt 1/3) [no retry]: Memory changed before provider handoff; refresh the context
+(pass) delete between packing and dispatch refuses stale context, preserves truthful history [336.43ms]
+[LLM] Provider fixture failed (attempt 1/3) [no retry]: Memory changed before provider handoff; refresh the context
+(pass) correct between packing and dispatch refuses stale context, preserves truthful history [541.90ms]
+[LLM] Provider fixture failed (attempt 1/3) [no retry]: Memory changed before provider handoff; refresh the context
+(pass) expire between packing and dispatch refuses stale context, preserves truthful history [383.23ms]
+(pass) supplied history survives correction, deletion and restart with old revisions and no copied content [357.11ms]
+[LLM] Provider retry failed (attempt 1/3): network
+(pass) retry after provider failure deduplicates supply, and success never creates outcome verification [415.05ms]
+(pass) disabled and unscoped retrieval create no invented usage [388.71ms]
+(pass) cancelled turns and foreign workspaces cannot append provenance [397.20ms]
+(pass) age and row retention bound storage, advance coverage, and oversized summaries are unavailable [394.50ms]
+(pass) stream uses real ledger coverage; selected-only is unavailable and supplied filters by exact conversation [492.17ms]
+(pass) a closed/replaced vault cannot be used through a retained ledger [403.03ms]
+(pass) no automatic writer may promote supply to outcome-verified evidence [437.87ms]
+
+src/workflows/runtime/memory-usage.test.ts:
+Database initialized at: :memory:
+(pass) governed workflow asks record run/workflow/revision/purpose, and effect replay appends nothing [31.86ms]
+Database initialized at: :memory:
+(pass) explicit system override skips retrieval and cannot claim memory was supplied [25.26ms]
+Database initialized at: :memory:
+(pass) pending Authority approval cannot record selected or supplied context [24.74ms]
+
+ 29 pass
+ 0 fail
+ 162 expect() calls
+Ran 29 tests across 4 files. [8.09s]

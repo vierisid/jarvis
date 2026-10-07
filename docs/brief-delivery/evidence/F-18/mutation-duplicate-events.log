@@ -1,0 +1,23 @@
+bun test v1.4.2 (744846f84)
+
+src/vault/memory-usage.test.ts:
+69 |       if (mode === 'chatTier') await llm.chatTier('medium', 'fixture', messages);
+70 |       if (mode === 'stream') for await (const _event of llm.stream(messages)) {}
+71 |       if (mode === 'streamTier') for await (const _event of llm.streamTier('medium', 'fixture', messages)) {}
+72 |     }
+73 |   });
+74 |   expect(calls).toBe(2); expect(history(ref).filter(u => u.stage === 'supplied')).toHaveLength(2);
+                                                                                       ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 2
+Received length: 4
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:74:83)
+(fail) actual chat provider handoff records once across duplicate calls [378.90ms]
+
+ 0 pass
+ 18 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [419.00ms]
