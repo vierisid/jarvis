@@ -1,8 +1,7 @@
-import { readFileSync, unlinkSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import type { DesktopController } from './desktop-controller.ts';
+import { captureViaPrivateFile } from './capture-file.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
 import { SidecarProbe } from './sidecar-probe.ts';
 
@@ -228,14 +227,11 @@ export class MacAppController implements AppController {
     return this.captureToBuffer(['-x', '-R', `${x},${y},${width},${height}`, '-t', 'png']);
   }
 
+  /** Through a private, unpredictable file (#746): see capture-file.ts. */
   private captureToBuffer(captureArgs: string[]): Buffer {
-    const tmpFile = join(tmpdir(), `jarvis-capture-${process.pid}-${Date.now()}.png`);
-    try {
-      runNative(this.exec, ['screencapture', ...captureArgs, tmpFile], '', 'screencapture');
-      return Buffer.from(readFileSync(tmpFile));
-    } finally {
-      try { unlinkSync(tmpFile); } catch {}
-    }
+    return captureViaPrivateFile((file) => {
+      runNative(this.exec, ['screencapture', ...captureArgs, file], '', 'screencapture');
+    });
   }
 
   async focusWindow(pid: number): Promise<void> {

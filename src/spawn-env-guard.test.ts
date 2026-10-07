@@ -106,7 +106,11 @@ const EXEMPT: Record<string, Exemption> = {
 
   'actions/tools/builtin.ts': {
     reason: 'Clipboard and screenshot tools (pbcopy/xclip/xsel/clip/powershell/scrot/import/screencapture); the only interpolation is the same generated temp path, in the screenshot commands. ' + DESKTOP_SESSION,
-    calls: { localClipboardRead: 5, localClipboardWrite: 5, localCaptureScreen: 4 },
+    // localCaptureScreen's spawns moved into the captureViaPrivateFile callback
+    // (#746), hence the `/<anonymous>` key, and dropped from 4 to 3 because the
+    // win32 PowerShell one-liner now passes sanitizedEnv({ JARVIS_CAPTURE_PATH })
+    // instead of a process.env spread, so it is no longer unsanitized.
+    calls: { localClipboardRead: 5, localClipboardWrite: 5, 'localCaptureScreen/<anonymous>': 3 },
   },
   'comms/desktop-notify.ts': {
     reason:
@@ -126,8 +130,11 @@ const EXEMPT: Record<string, Exemption> = {
       'parsing; key chords are checked against keysym names first (#518). ' +
       'launchApp, the model-chosen executable, is in MODEL_EXEC.',
     calls: {
-      'LinuxAppController.captureScreen': 3,
-      'LinuxAppController.captureWindow': 2,
+      // Both capture bodies moved into the captureViaPrivateFile callback
+      // (#746), hence `/<anonymous>`, and each lost one spawn: the shell no
+      // longer mints the temp path, mkdtemp does.
+      'LinuxAppController.captureScreen/<anonymous>': 2,
+      'LinuxAppController.captureWindow/<anonymous>': 1,
       'LinuxAppController.checkTool': 1,
       'LinuxAppController.clickElement': 4,
       'LinuxAppController.findWindowByPid': 1,

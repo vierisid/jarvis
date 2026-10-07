@@ -1,5 +1,6 @@
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
+import { captureViaPrivateFileAsync } from './capture-file.ts';
 import { $ } from 'bun';
 import { modelExecEnv } from '../../util/model-exec-env.ts';
 
@@ -365,18 +366,14 @@ export class LinuxAppController implements AppController {
     }
 
     try {
-      const tmpFile = `/tmp/jarvis-screen-${Date.now()}.png`;
-
-      if (hasImport) {
-        await $`import -window root ${tmpFile}`;
-      } else {
-        await $`scrot ${tmpFile}`;
-      }
-
-      const buffer = await Bun.file(tmpFile).arrayBuffer();
-      await $`rm ${tmpFile}`;
-
-      return Buffer.from(buffer);
+      // Through a private, unpredictable file (#746): see capture-file.ts.
+      return await captureViaPrivateFileAsync(async (file) => {
+        if (hasImport) {
+          await $`import -window root ${file}`;
+        } else {
+          await $`scrot ${file}`;
+        }
+      });
     } catch (error) {
       throw new Error(`Failed to capture screen: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -396,13 +393,9 @@ export class LinuxAppController implements AppController {
     try {
       const windowId = await this.findWindowByPid(pid);
 
-      const tmpFile = `/tmp/jarvis-window-${pid}-${Date.now()}.png`;
-      await $`import -window ${windowId} ${tmpFile}`;
-
-      const buffer = await Bun.file(tmpFile).arrayBuffer();
-      await $`rm ${tmpFile}`;
-
-      return Buffer.from(buffer);
+      return await captureViaPrivateFileAsync(async (file) => {
+        await $`import -window ${windowId} ${file}`;
+      });
     } catch (error) {
       throw new Error(`Failed to capture window: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -453,7 +446,7 @@ export class LinuxAppController implements AppController {
    * One copy for both callers, which had the same parse written twice. Trimmed
    * so a stray "\r" or space cannot travel as part of the id into `xprop -id`
    * or `import -window`; `filter(Boolean)` then makes non-empty an invariant of
-   * what this returns, which `import -window ${windowId} ${tmpFile}` relies on
+   * what this returns, which `import -window ${windowId} ${file}` relies on
    * -- an empty id is the one value `$` would DROP, sliding the temp path into
    * the -window slot rather than passing an empty operand (see typeText).
    */

@@ -39,8 +39,12 @@ export function findSidecarExecutable(): string | null {
       // Not model-directed: a fixed command, so the allowlist plus the WSL
       // interop extras it needs to launch a Windows executable -- the same env
       // as actions/terminal/wsl-bridge.ts (#519).
+      // Bounded, because every DesktopController.connect now runs this first
+      // (#747) and a hung interop would otherwise hold the daemon's thread:
+      // the call measured 38 to 50 ms here, so 5 s only catches a hang.
       const userProfileResult = Bun.spawnSync(['cmd.exe', '/C', 'echo', '%USERPROFILE%'], {
         env: sanitizedEnv(wslInteropExtras()),
+        timeout: 5000,
       });
       const userProfile = userProfileResult.stdout.toString().trim();
       if (userProfile && !userProfile.includes('%')) {

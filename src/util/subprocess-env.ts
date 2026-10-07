@@ -165,6 +165,19 @@ export const EXTRA_ENV_KEYS = [
   // allowlist can be). A socket path and names, not credentials. Extras are
   // opt-in per call site: only a spawn that names these receives them.
   'WSL_INTEROP', 'WSL_DISTRO_NAME', 'WSLENV',
+  // The private capture path, added for localCaptureScreen (#746). A filesystem
+  // path to a file this process just created with mkdtemp, like WSL_INTEROP's
+  // socket path -- not a credential.
+  //
+  // Why it travels in the environment at all: the win32 capture runs a
+  // PowerShell one-liner, and reading the path from $env:JARVIS_CAPTURE_PATH
+  // keeps it out of the command text, so neither cmd.exe's %VAR% expansion nor
+  // PowerShell's quoting (which ends a literal at a typographic quote) ever
+  // sees it. Registering it here is what lets that call site pass
+  // sanitizedEnv({ JARVIS_CAPTURE_PATH: file }) instead of spreading the whole
+  // daemon environment, which the allowlist exists to prevent. Opt-in per call
+  // site: only a spawn that names it receives it.
+  'JARVIS_CAPTURE_PATH',
 ] as const;
 
 export type ExtraEnvKey = (typeof EXTRA_ENV_KEYS)[number];
