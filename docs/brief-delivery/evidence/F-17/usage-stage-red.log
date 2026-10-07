@@ -1,0 +1,31 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/memory-stream.test.ts:
+65 |   const a = fact('green tea', 'import'); now += 100;
+66 |   createFact(subject, 'likes', 'green tea', { source: 'meeting', sourceRef: 'note:1', basis: 'reported' });
+67 |   const b = fact('black tea', 'meeting'), c = fact('coffee', 'meeting');
+68 |   uses.push(supplied(a.id), supplied(b.id, { stage: 'selected' }), supplied(c.id, { turn: null, runId: 'run-a' }));
+69 |   const query = { q: 'tea', source: 'meeting', usedIn: 'conversation:conversation-a', updatedFrom: now, updatedBefore: now + 1 };
+70 |   const view = await page(query); expect(view.count).toEqual({ total: 3, matched: 1, returned: 1 });
+                                                          ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "matched": 1,
+-   "returned": 1,
++   "matched": 2,
++   "returned": 2,
+    "total": 3,
+  }
+
+- Expected  - 2
++ Received  + 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/brief/memory-stream.test.ts:70:54)
+(fail) search, multi-evidence Source, actual Used in and half-open Updated range combine with exact counts [828.62ms]
+
+ 0 pass
+ 20 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [897.00ms]

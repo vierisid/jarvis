@@ -1,0 +1,80 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/memory-stream.test.ts:
+89 |     if (change === 'verify') verifyFact(a.id);
+90 |     if (change === 'rename') getDb().run('UPDATE entities SET name=? WHERE id=?', ['Grace', subject]);
+91 |     if (change === 'evidence') createFact(subject, 'likes', 'tea', { source: 'meeting' });
+92 |     if (change === 'usage') uses.push(supplied(a.id));
+93 |     const stale = await provider.read({ limit: 1, cursor: first.nextCursor! });
+94 |     expect(stale).toEqual({ state: 'stale', reason: 'source_changed' }); expect('data' in stale).toBe(false);
+                       ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "reason": "source_changed",
+-   "state": "stale",
++   "asOf": 1791356400000,
++   "data": {
++     "count": {
++       "matched": 2,
++       "returned": 1,
++       "total": 2,
++     },
++     "items": [
++       {
++         "basis": "unspecified",
++         "detailHref": "/api/brief/memory/1d19eea4-c623-4281-a859-8e5638de5dee",
++         "factId": "1d19eea4-c623-4281-a859-8e5638de5dee",
++         "historyHref": "/api/brief/memory/1d19eea4-c623-4281-a859-8e5638de5dee/history",
++         "permissions": {
++           "canCorrect": false,
++           "canForget": false,
++           "canRead": true,
++         },
++         "provenance": [
++           {
++             "id": "0e30ecdc-7000-48a7-a0c6-2f68bf8e7432",
++             "kind": "source",
++             "revision": "d97d07c4dc2ababd3dfcd26b27da1db260f60d9c1f58739a97c0ec09109c52e2",
++           },
++         ],
++         "revision": "362a1002ae2ab47d958e29254791fa1a78a5b5ce2b78e6cf6150eb5f6e9846ba",
++         "sentence": "Ada likes coffee",
++         "sourceId": null,
++         "sourceSummary": {
++           "evidenceCount": 1,
++           "labels": [
++             "dashboard",
++           ],
++         },
++         "status": "active",
++         "subjectId": "994291d9-6080-4151-a445-6eb90fb32d14",
++         "supersededBy": null,
++         "updatedAt": 1791356400000,
++         "uses": [],
++         "validity": {
++           "from": null,
++           "to": null,
++         },
++       },
++     ],
++     "nextCursor": null,
++     "usedIn": {
++       "reason": "no_supplied_evidence",
++       "state": "unavailable",
++     },
++   },
++   "state": "ready",
+  }
+
+- Expected  - 2
++ Received  + 52
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/brief/memory-stream.test.ts:94:19)
+(fail) delete invalidates an existing snapshot without returning cached content [857.01ms]
+
+ 0 pass
+ 20 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [952.00ms]
