@@ -9,7 +9,32 @@
 import { createConnection, type Socket } from 'node:net';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { ElementCache, resolveElement, uiElementPrint } from './element-cache.ts';
-import { launchSidecar, stopSidecar, isSidecarRunning, type RunningSidecar } from './sidecar-launcher.ts';
+import { MAX_DECODE_BYTES } from './image-compact.ts';
+import { findSidecarExecutable, launchSidecar, stopSidecar, isSidecarRunning, type RunningSidecar } from './sidecar-launcher.ts';
+
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/**
+ * A capture as the bridge sent it, checked (#747): base64 text whose bytes
+ * are a PNG -- the one format the bridge ever wrote (ScreenHandler.cs saved
+ * ImageFormat.Png). The reply used to be labelled image/png whatever it held,
+ * and handed on as is. PNG only, rather than whatever the bytes are, because
+ * the macOS and Windows controllers pass captureScreen's bytes on and the
+ * desktop tool labels those image/png; a check of the label's own format
+ * keeps it true on every path.
+ *
+ * What is returned is the checked bytes re-encoded: Node's base64 decoder
+ * skips what is not base64, so the reply's own text could differ from what
+ * was checked. This is about the label, not trust: anything that can answer
+ * on the port can still send a real PNG of its choosing.
+ */
+function bridgeImage(reply: unknown): { base64: string; bytes: Buffer; mimeType: 'image/png' } {
+  if (typeof reply === 'string') {
+    const bytes = Buffer.from(reply, 'base64');
+    if (bytes.length >= 8 && bytes.subarray(0, 8).equals(PNG_MAGIC)) return { base64: bytes.toString('base64'), bytes, mimeType: 'image/png' };
+  }
+  throw new Error('the desktop bridge sent a capture that is not a PNG image, so it was not used');
+}
 
 export type DesktopSnapshot = {
   window: { pid: number; title: string; className: string };
@@ -64,13 +89,37 @@ export class DesktopController implements AppController {
 
   // --- Connection lifecycle ---
 
+  /** Where desktop-bridge.exe is installed, if anywhere. A method so a test can say. */
+  protected findBridgeExecutable(): string | null {
+    return findSidecarExecutable();
+  }
+
+  /**
+   * The channel is a localhost TCP port with no authentication (#747), and
+   * nothing this repo ships serves it: the .NET bridge was deleted in 28e43ed.
+   * So on a machine without the legacy desktop-bridge.exe the port is free
+   * for any local process of any user to take, answer "pong", and become this
+   * controller -- feeding it screenshots and window trees, and receiving
+   * every typeText. Without the executable on disk nothing is sent to the
+   * port at all. With it, the channel is as unauthenticated as that
+   * program made it; authenticating it needs a bridge that can take part.
+   */
   async connect(): Promise<void> {
     if (this._connected) return;
+
+    const exe = this.findBridgeExecutable();
+    if (!exe) {
+      throw new Error(
+        'Desktop bridge sidecar not found: no desktop-bridge.exe at any known path, so port '
+        + `${this.port} is not contacted (it has no authentication, and anything could be listening there).\n`
+        + 'Expected at %USERPROFILE%\\.jarvis\\sidecar\\desktop-bridge.exe; this repo no longer builds it.',
+      );
+    }
 
     // Check if sidecar is already running
     if (!(await isSidecarRunning(this.port))) {
       console.log('[DesktopController] Sidecar not running, launching...');
-      this.runningSidecar = await launchSidecar(this.port);
+      this.runningSidecar = await launchSidecar(this.port, exe);
       this.host = this.runningSidecar.host;
     }
 
@@ -145,14 +194,12 @@ export class DesktopController implements AppController {
 
   async captureScreen(): Promise<Buffer> {
     await this.ensureConnected();
-    const base64 = await this.send('captureScreen') as string;
-    return Buffer.from(base64, 'base64');
+    return bridgeImage(await this.send('captureScreen')).bytes;
   }
 
   async captureWindow(pid: number): Promise<Buffer> {
     await this.ensureConnected();
-    const base64 = await this.send('captureWindow', { pid }) as string;
-    return Buffer.from(base64, 'base64');
+    return bridgeImage(await this.send('captureWindow', { pid })).bytes;
   }
 
   async focusWindow(pid: number): Promise<void> {
@@ -291,8 +338,8 @@ export class DesktopController implements AppController {
   async screenshotBase64(pid?: number): Promise<{ base64: string; mimeType: string }> {
     await this.ensureConnected();
     const method = pid ? 'captureWindow' : 'captureScreen';
-    const base64 = await this.send(method, pid ? { pid } : {}) as string;
-    return { base64, mimeType: 'image/png' };
+    const { base64, mimeType } = bridgeImage(await this.send(method, pid ? { pid } : {}));
+    return { base64, mimeType };
   }
 
   // --- Private helpers ---
@@ -316,6 +363,25 @@ export class DesktopController implements AppController {
 
   /** How long a connect may take before it is abandoned. A field so a test can shorten it. */
   protected connectTimeoutMs = 5000;
+
+  /**
+   * The longest reply line kept, in characters. Derived from the largest
+   * capture the decoder accepts: MAX_DECODE_BYTES of rows, stored with no
+   * compression at all (deflate's stored blocks add 5 bytes per 65535, PNG
+   * a few chunk headers), in base64 (4/3), inside a JSON envelope. Any longer
+   * line could not hold a usable image, so it is refused rather than held.
+   * A field so a test can shorten it.
+   */
+  protected maxReplyChars = Math.ceil(((MAX_DECODE_BYTES * (1 + 5 / 65535) + 64 * 1024) * 4) / 3) + 64 * 1024;
+
+  private dropOverlongReply(socket: Socket): void {
+    socket.destroy();
+    this._connected = false;
+    this.buffer = '';
+    const err = new Error('the desktop bridge sent a reply longer than any capture could be, so the connection was dropped');
+    for (const p of this.pending.values()) p.reject(err);
+    this.pending.clear();
+  }
 
   /** Opens the TCP connection. A method so a test can hand back a socket that never connects. */
   protected createSocket(onConnect: () => void): Socket {
@@ -341,7 +407,16 @@ export class DesktopController implements AppController {
 
       socket.on('data', (chunk: string) => {
         this.buffer += chunk;
+        // A reply is one line, so a line past the cap is refused whole: the
+        // peer is not a bridge, or not one this daemon can use (#747 review).
+        // Split only when the chunk ends a line, not on every chunk of a
+        // long one, which re-scanned the whole buffer each time.
+        if (!chunk.includes('\n')) {
+          if (this.buffer.length > this.maxReplyChars) this.dropOverlongReply(socket);
+          return;
+        }
         this.processBuffer();
+        if (this.buffer.length > this.maxReplyChars) this.dropOverlongReply(socket);
       });
 
       socket.on('error', (err) => {

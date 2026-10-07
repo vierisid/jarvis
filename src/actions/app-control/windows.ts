@@ -209,8 +209,8 @@ export class WindowsAppController implements AppController {
     throw new Error(
       'UI element traversal on Windows requires the desktop-bridge sidecar, ' +
       'which is not reachable. Expected desktop-bridge.exe at ' +
-      '%USERPROFILE%\\.jarvis\\sidecar\\desktop-bridge.exe, or a bridge already ' +
-      'speaking its JSON-RPC protocol on port 9224; this repo no longer builds it.',
+      '%USERPROFILE%\\.jarvis\\sidecar\\desktop-bridge.exe (port 9224 is only ' +
+      'contacted when that file exists); this repo no longer builds it.',
     );
   }
 

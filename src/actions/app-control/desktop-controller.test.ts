@@ -187,3 +187,139 @@ describe('DesktopController reconnect', () => {
     expect(destroyed).toBe(1);
   });
 });
+
+/**
+ * #747: the bridge channel is a plain localhost TCP port with no
+ * authentication, and nothing in the repo serves it any more (the .NET bridge
+ * was deleted in 28e43ed). Any local process -- any user's -- that listened on
+ * the port and answered "pong" became the daemon's desktop controller: it
+ * supplied the screenshots (labelled image/png whatever they were) and
+ * received every typeText payload. A real TCP listener stands in for it here.
+ */
+describe('DesktopController and an unauthenticated bridge port (#747)', () => {
+  function impostor(capture: Buffer) {
+    const seen: string[] = [];
+    let connections = 0;
+    const server = Bun.listen<{ buf: string }>({
+      hostname: '127.0.0.1',
+      port: 0,
+      socket: {
+        open(s) { connections++; s.data = { buf: '' }; },
+        data(s, chunk) {
+          s.data.buf += chunk.toString();
+          const lines = s.data.buf.split('\n');
+          s.data.buf = lines.pop() ?? '';
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            const req = JSON.parse(line) as { id: number; method: string; params?: Record<string, unknown> };
+            seen.push(`${req.method} ${JSON.stringify(req.params ?? {})}`);
+            const result = req.method === 'ping' ? 'pong'
+              : req.method === 'captureScreen' || req.method === 'captureWindow' ? capture.toString('base64')
+              : { success: true };
+            s.write(JSON.stringify({ jsonrpc: '2.0', id: req.id, result }) + '\n');
+          }
+        },
+      },
+    });
+    return { port: server.port, seen, connections: () => connections, stop: () => server.stop(true) };
+  }
+
+  /** A controller whose search for desktop-bridge.exe finds `exe`. */
+  function controller(port: number, exe: string | null) {
+    const ctrl = new DesktopController(port);
+    (ctrl as any).findBridgeExecutable = () => exe;
+    return ctrl;
+  }
+
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const JPEG = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 1, 2, 3]);
+
+  test('with no desktop-bridge.exe installed, whatever answers on the port is never contacted', async () => {
+    const fake = impostor(PNG);
+    const ctrl = controller(fake.port, null);
+    try {
+      await expect(ctrl.connect()).rejects.toThrow('desktop-bridge.exe');
+      await expect(ctrl.typeText('hunter2')).rejects.toThrow('desktop-bridge.exe');
+      expect(fake.connections()).toBe(0);
+      expect(fake.seen).toEqual([]);
+    } finally {
+      await ctrl.disconnect();
+      fake.stop();
+    }
+  });
+
+  test('a capture is checked to be the PNG the bridge produces, and anything else is refused', async () => {
+    const fake = impostor(PNG);
+    const ok = controller(fake.port, '/legacy/desktop-bridge.exe');
+    try {
+      expect(await ok.screenshotBase64()).toEqual({ base64: PNG.toString('base64'), mimeType: 'image/png' });
+      expect((await ok.captureScreen()).equals(PNG)).toBe(true);
+    } finally {
+      await ok.disconnect();
+      fake.stop();
+    }
+    // A JPEG too: the bridge only ever wrote PNG (ScreenHandler.cs), and the
+    // macOS and Windows controllers hand captureScreen's bytes on as
+    // image/png, so a PNG check is what keeps that label true.
+    for (const other of [Buffer.from('GIF89a not a png at all'), JPEG]) {
+      const bad = impostor(other);
+      const ctrl = controller(bad.port, '/legacy/desktop-bridge.exe');
+      try {
+        await expect(ctrl.screenshotBase64()).rejects.toThrow('not a PNG image');
+        await expect(ctrl.screenshotBase64(42)).rejects.toThrow('not a PNG image');
+        await expect(ctrl.captureScreen()).rejects.toThrow('not a PNG image');
+        await expect(ctrl.captureWindow(42)).rejects.toThrow('not a PNG image');
+      } finally {
+        await ctrl.disconnect();
+        bad.stop();
+      }
+    }
+  });
+
+  test('a reply that is not base64 text at all is refused, not decoded', async () => {
+    const ctrl = new DesktopController() as any;
+    ctrl.ensureConnected = async () => {};
+    ctrl.send = async () => ({ base64: 'iVBORw0KGgo=' });
+    await expect(ctrl.screenshotBase64()).rejects.toThrow('not a PNG image');
+  });
+
+  test('a reply that never ends is cut off at the cap, not buffered without bound', async () => {
+    const { EventEmitter } = await import('node:events');
+    const ctrl = new DesktopController() as any;
+    ctrl.maxReplyChars = 1000;
+    let destroyed = 0;
+    const socket = Object.assign(new EventEmitter(), {
+      destroyed: false, setEncoding() {}, write(_d: string, cb?: (e?: Error) => void) { cb?.(); return true; },
+      destroy() { destroyed++; this.destroyed = true; },
+    });
+    ctrl.createSocket = (onConnect: () => void) => { queueMicrotask(onConnect); return socket; };
+    await ctrl.openSocket();
+    ctrl._connected = true;
+    const pending = ctrl.send('captureScreen');
+    // 999 characters and no newline is still a reply on its way.
+    socket.emit('data', 'x'.repeat(999));
+    expect(destroyed).toBe(0);
+    socket.emit('data', 'xx');
+    await expect(pending).rejects.toThrow('longer than any capture');
+    expect(destroyed).toBe(1);
+    expect(ctrl.buffer).toBe('');
+    expect(ctrl.connected).toBe(false);
+  });
+
+  test('the cap is derived from the largest capture the decoder takes, so no real reply reaches it', () => {
+    const ctrl = new DesktopController() as any;
+    // base64 of a PNG holding MAX_DECODE_BYTES of rows stored uncompressed.
+    expect(ctrl.maxReplyChars).toBeGreaterThan((256_000_000 * 4) / 3);
+    expect(ctrl.maxReplyChars).toBeLessThan(400_000_000);
+  });
+
+  test('what goes on is the bytes that were checked, re-encoded, not the reply as sent', async () => {
+    // Node's base64 decoder skips what is not base64; the model's provider
+    // may not. The check ran on the decoded bytes, so those are what is sent.
+    const ctrl = new DesktopController() as any;
+    ctrl.ensureConnected = async () => {};
+    const canonical = PNG.toString('base64');
+    ctrl.send = async () => `${canonical.slice(0, 6)}\n !${canonical.slice(6)}`;
+    expect(await ctrl.screenshotBase64()).toEqual({ base64: canonical, mimeType: 'image/png' });
+  });
+});
