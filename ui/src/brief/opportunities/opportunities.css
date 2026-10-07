@@ -17,13 +17,17 @@
   margin: 0;
 }
 .brief-opportunities-scroll {
-  overflow: auto;
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  overflow: hidden;
   min-height: 0;
-  padding: 1px 4px 64px 1px;
-  scrollbar-gutter: stable;
+  padding: 4px;
 }
 .brief-opportunities-grid {
   display: grid;
+  flex: 1;
+  min-height: 0;
   grid-template-columns: minmax(240px, 1fr) minmax(0, 1.95fr);
   align-items: start;
   gap: 22px;
@@ -32,6 +36,13 @@
   display: grid;
   gap: 16px;
   align-content: start;
+  min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  padding: 4px;
 }
 .brief-root .brief-proposal-choice {
   display: flex;
@@ -100,6 +111,12 @@
 }
 .brief-finished {
   min-width: 0;
+  min-height: 0;
+  max-height: 100%;
+  box-sizing: border-box;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   border: 1px solid var(--brief-card-edge);
   border-radius: var(--brief-corner-card);
   background: var(--brief-card);
@@ -339,10 +356,14 @@
 @container (max-width:850px) {
   .brief-opportunities-grid {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     gap: 20px;
   }
   .brief-opportunity-list {
-    grid-template-columns: repeat(auto-fit, minmax(min(100%, 220px), 1fr));
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(min(100%, 220px), 1fr);
+    max-height: 180px;
+    scrollbar-gutter: auto;
   }
   .brief-root .brief-proposal-choice {
     padding: 18px 20px;
@@ -398,8 +419,5 @@
   .brief-pebble-layout[data-pebble-available]
   .brief-workspace-content:has(> .brief-opportunities) {
   overflow: hidden;
-  padding-bottom: 24px;
-}
-.brief-opportunities[data-compact="true"] .brief-opportunities-scroll {
   padding-bottom: 24px;
 }

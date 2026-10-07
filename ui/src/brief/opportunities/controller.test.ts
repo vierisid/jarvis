@@ -38,6 +38,13 @@ function fixture() {
   const c = owner(f.port);
   return { ...f, c };
 }
+function threeProposals(example: "ready" | "registration pending" = "ready") {
+  const f = makeOpportunitiesFixture(example);
+  const third = structuredClone(f.records[1]!);
+  third.proposal.proposalId = "fixture-proposal-2";
+  f.records.push(third);
+  return { ...f, c: owner(f.port) };
+}
 afterEach(() => {
   owners.splice(0).forEach((c) => c.retire());
 });
@@ -103,6 +110,60 @@ test("dismissal has a distinct receipt and leaves no saved/dismissed destination
   await pause();
   expect(f.c.snapshot().rows).toEqual([]);
   expect(f.c.snapshot().selectedId).toBeNull();
+});
+test.each(["approve", "dismiss"] as const)(
+  "R1: refresh during %s acknowledgement retains the slot and advances to the original successor",
+  async (decision) => {
+    const f = threeProposals();
+    await f.c.refresh();
+    await f.c.act("fixture-proposal-0", decision);
+    await f.c.refresh();
+    expect(f.c.snapshot().rows.map((x) => x.proposal.proposalId)).toEqual([
+      "fixture-proposal-0",
+      "fixture-proposal-1",
+      "fixture-proposal-2",
+    ]);
+    await pause();
+    expect(f.c.snapshot().selectedId).toBe("fixture-proposal-1");
+    expect(f.calls.length).toBe(1);
+  },
+);
+test("R1: pending registration keeps its slot through reorder and recovers the original next identity", async () => {
+  const f = threeProposals("registration pending");
+  await f.c.refresh();
+  await f.c.act("fixture-proposal-0", "approve");
+  f.reorder();
+  await f.c.refresh();
+  expect(f.c.snapshot().rows.map((x) => x.proposal.proposalId)).toEqual([
+    "fixture-proposal-0",
+    "fixture-proposal-2",
+    "fixture-proposal-1",
+  ]);
+  f.receipts.get("fixture-proposal-0")!.registration.state = "registered";
+  await f.c.recover("fixture-proposal-0");
+  await pause();
+  expect(f.c.snapshot().selectedId).toBe("fixture-proposal-1");
+  expect(f.calls.length).toBe(1);
+});
+test("R1: a vanished successor is skipped and a newer user selection wins", async () => {
+  const f = threeProposals("registration pending");
+  await f.c.refresh();
+  await f.c.act("fixture-proposal-0", "approve");
+  f.records.splice(1, 1);
+  await f.c.refresh();
+  f.receipts.get("fixture-proposal-0")!.registration.state = "registered";
+  await f.c.recover("fixture-proposal-0");
+  await pause();
+  expect(f.c.snapshot().selectedId).toBe("fixture-proposal-2");
+  const other = threeProposals("registration pending");
+  await other.c.refresh();
+  await other.c.act("fixture-proposal-0", "approve");
+  await other.c.refresh();
+  other.c.select("fixture-proposal-2");
+  other.receipts.get("fixture-proposal-0")!.registration.state = "registered";
+  await other.c.recover("fixture-proposal-0");
+  await pause();
+  expect(other.c.snapshot().selectedId).toBe("fixture-proposal-2");
 });
 test("duplicate intent is locked synchronously, including opposite actions", async () => {
   const f = makeOpportunitiesFixture("ready", 20),

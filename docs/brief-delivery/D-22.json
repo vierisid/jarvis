@@ -18,7 +18,7 @@
     "file": "eNfKeirIKLZLlZEasrurZa",
     "page": "81:2",
     "node": "81:2931",
-    "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+    "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
     "evidence": "ui/src/brief/opportunities/figma-reference.json"
   },
   "activation": {
@@ -41,16 +41,16 @@
     {
       "command": "bun test ui/src/brief/opportunities",
       "result": "pass",
-      "tests": 44,
-      "assertions": 135,
+      "tests": 49,
+      "assertions": 155,
       "evidence": "evidence/D-22/focused-tests.log"
     },
     {
       "command": "bun test ui/src/brief",
       "result": "pass",
-      "tests": 469,
+      "tests": 474,
       "skipped": 2,
-      "assertions": 4643,
+      "assertions": 4663,
       "files": 32,
       "evidence": "evidence/D-22/brief-regression.log"
     },
@@ -158,6 +158,10 @@
           "approveThenDismiss": true
         }
       ],
+      "tenProposalsAllLayouts": true,
+      "independentSelectorAndBrief": true,
+      "selectedChoiceVisibleAfterReflow": true,
+      "narrowTenProposalKeyboard": true,
       "rapidPebbleCycles": 10,
       "hoverCycles": 10,
       "interruptedReflowSelection": true,
@@ -185,5 +189,14 @@
   "rollback": "Disable optional opportunitiesRegistration and specimen route; preserve host receipts; legacy/default routes unchanged.",
   "quick_verify": "http://127.0.0.1:4402/?brief=preview&specimen=opportunities#/_brief_preview",
   "next": "D-23, not started",
-  "implementation_head": "f4384d1ee003539904926d26c01bef0bce97384d"
+  "implementation_head": "f4384d1ee003539904926d26c01bef0bce97384d",
+  "review_fixes": {
+    "reviewed_head": "4850f539fdd9a6af0139625a698e877020766bed",
+    "R1": "Pending slots and captured successor IDs survive refresh/recovery; three-proposal regressions fail before the fix and pass after.",
+    "R2": "Independent bounded list/brief scrolling and a single compact horizontal selector; ten-item browser matrix and independent-position return test.",
+    "before_fix_evidence": {
+      "R1": "evidence/D-22/review-r1-before-fix.log",
+      "R2": "Chrome at 1440x1100: selecting proposal 10 left the finished-header y=-1261; after fix it remains visible."
+    }
+  }
 }

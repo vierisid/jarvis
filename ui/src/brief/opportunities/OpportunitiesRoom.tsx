@@ -90,7 +90,7 @@ function ConnectedOpportunities({
     controller.snapshot,
   );
   const reduced = useBriefReducedMotion();
-  const scroll = useRef<HTMLDivElement>(null),
+  const scroll = useRef<HTMLElement>(null),
     list = useRef<HTMLElement>(null),
     actions = useRef<HTMLDivElement>(null);
   const appliedRoute = useRef<string | undefined>(undefined);
@@ -105,8 +105,42 @@ function ConnectedOpportunities({
   }, [controller]);
   useLayoutEffect(() => {
     if (scroll.current) scroll.current.scrollTop = controller.scrollTop;
+    if (list.current) {
+      list.current.scrollTop = controller.listScrollTop;
+      list.current.scrollLeft = controller.listScrollLeft;
+    }
   }, [controller]);
   useLayoutEffect(() => {
+    const choices = list.current;
+    if (!choices) return;
+    // Scroll only the selector, never the shared workspace or finished brief.
+    const revealSelection = () => {
+      const selected = choices.querySelector<HTMLElement>(
+        '[aria-pressed="true"]',
+      );
+      if (!selected || !choices.clientWidth) return;
+      const row = selected.getBoundingClientRect(),
+        pane = choices.getBoundingClientRect();
+      if (row.top < pane.top) choices.scrollTop += row.top - pane.top - 4;
+      else if (row.bottom > pane.top + choices.clientHeight)
+        choices.scrollTop += row.bottom - pane.top - choices.clientHeight + 4;
+      if (row.left < pane.left) choices.scrollLeft += row.left - pane.left - 4;
+      else if (row.right > pane.left + choices.clientWidth)
+        choices.scrollLeft += row.right - pane.left - choices.clientWidth + 4;
+    };
+    revealSelection();
+    const observer =
+      typeof ResizeObserver === "undefined"
+        ? null
+        : new ResizeObserver(revealSelection);
+    observer?.observe(choices);
+    return () => observer?.disconnect();
+  }, [state.selectedId, controller, !!state.rows.length]);
+  useLayoutEffect(() => {
+    if (previousId.current !== state.selectedId) {
+      if (scroll.current) scroll.current.scrollTop = 0;
+      controller.scrollTop = 0;
+    }
     if (
       previousId.current !== state.selectedId &&
       moveFocus.current &&
@@ -121,7 +155,7 @@ function ConnectedOpportunities({
     }
     if (previousId.current !== state.selectedId) moveFocus.current = false;
     previousId.current = state.selectedId;
-  }, [state.selectedId]);
+  }, [state.selectedId, controller]);
   useEffect(() => {
     const id = shell.route.selection.opportunityId;
     if (
@@ -192,14 +226,7 @@ function ConnectedOpportunities({
           onClick={() => void controller.refresh()}
         />
       </header>
-      <div
-        className="brief-opportunities-scroll"
-        ref={scroll}
-        tabIndex={-1}
-        onScroll={(e) => {
-          controller.scrollTop = e.currentTarget.scrollTop;
-        }}
-      >
+      <div className="brief-opportunities-scroll">
         {(state.read.status === "stale" || unavailable) && (
           <p className="brief-opportunities-notice" role="status">
             {"reason" in state.read
@@ -230,6 +257,10 @@ function ConnectedOpportunities({
               ref={list}
               className="brief-opportunity-list"
               aria-label="Available proposals"
+              onScroll={(e) => {
+                controller.listScrollTop = e.currentTarget.scrollTop;
+                controller.listScrollLeft = e.currentTarget.scrollLeft;
+              }}
             >
               {state.rows.map((row) => (
                 <button
@@ -271,6 +302,11 @@ function ConnectedOpportunities({
               ))}
             </nav>
             <article
+              ref={scroll}
+              tabIndex={-1}
+              onScroll={(e) => {
+                controller.scrollTop = e.currentTarget.scrollTop;
+              }}
               className="brief-finished"
               data-proposal={item.proposal.proposalId}
               data-revision={item.proposal.revision}

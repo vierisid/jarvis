@@ -73,6 +73,10 @@
       "approveThenDismiss": true
     }
   ],
+  "tenProposalsAllLayouts": true,
+  "independentSelectorAndBrief": true,
+  "selectedChoiceVisibleAfterReflow": true,
+  "narrowTenProposalKeyboard": true,
   "rapidPebbleCycles": 10,
   "hoverCycles": 10,
   "interruptedReflowSelection": true,
