@@ -20,6 +20,7 @@ import type {
   JarvisConnectionSource,
   ResolvedConnection,
 } from "./adapter";
+import { credentialFingerprint } from "./adapter";
 
 export const JARVIS_GOOGLE_PREFIX = "jarvis:google";
 
@@ -43,9 +44,23 @@ export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
     return externalId === JARVIS_GOOGLE_PREFIX || externalId.startsWith(`${JARVIS_GOOGLE_PREFIX}:`);
   }
 
+  /**
+   * The grant this source would hand out: a fingerprint of the refresh token,
+   * so reconnecting Google (possibly to another account) changes it. Null while
+   * not connected or while Google has revoked the grant.
+   */
+  identity(_externalId: string): string | null {
+    const auth = this.getAuth();
+    if (!auth || !auth.isAuthenticated() || auth.reconnectRequired?.()) return null;
+    const token = auth.getTokens()?.refresh_token;
+    return token ? credentialFingerprint(token) : null;
+  }
+
   async resolve(_externalId: string): Promise<ResolvedConnection | null> {
     const auth = this.getAuth();
-    if (!auth || !auth.isAuthenticated()) {
+    // A revoked grant is not a credential to hand out, even while its last
+    // access token has not expired yet.
+    if (!auth || !auth.isAuthenticated() || auth.reconnectRequired?.()) {
       // Not configured or not yet authenticated -- piece will see
       // "connection not found". Surface as null (vs throw) so other
       // sources / repo lookups can still run.

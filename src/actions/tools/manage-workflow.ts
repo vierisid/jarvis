@@ -1203,6 +1203,10 @@ function actGetRun(project: string, runId: string): Record<string, unknown> {
 }
 
 function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknown> {
+  // Q-05: a connection that changed under the run is refused by the engine's
+  // fetch, which reports only a bare loading error; the reason lives here.
+  const bindingRefusals = (run.connectionBindings ?? []).filter(binding => binding.refusal)
+    .map(binding => ({ connection: binding.externalId, reason: binding.refusal!.message }));
   return {
     id: run.id,
     flow_id: run.flowId,
@@ -1214,6 +1218,7 @@ function summarizeRun(run: FlowRun, includeSteps = false): Record<string, unknow
     durationMs: run.startTime && run.finishTime ? run.finishTime - run.startTime : null,
     stepsCount: run.stepsCount,
     failedStep: run.failedStep,
+    ...(bindingRefusals.length ? { bindingRefusals } : {}),
     ...(includeSteps ? { steps: run.steps } : {}),
   };
 }

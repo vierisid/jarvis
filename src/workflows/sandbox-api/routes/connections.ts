@@ -13,7 +13,11 @@
  * Failures map to HTTP:
  *   - 404 when the connection doesn't exist or its source returns null.
  *   - 403 when the requested project differs from the verified engine token.
- *   - 409 when an external ID without a piece name matches multiple rows.
+ *   - 409 when an external ID without a piece name matches multiple rows, or
+ *     when the connection no longer resolves to the identity the run started
+ *     with or its workflow was enabled against (Q-05, repos/binding-pins.ts).
+ *     The refusal is recorded on the run, because the engine reports any 409
+ *     as a bare loading error.
  *
  * Per CredentialResolver contract for Jarvis-managed Google connections, the
  * resolved value's `refresh_token` is intentionally empty; pieces that need a
@@ -22,6 +26,7 @@
 
 import type { CredentialResolver } from "../../credentials/adapter";
 import { AmbiguousConnectionError } from "../../db/repos/app-connection";
+import { enforceRunConnectionBinding } from "../../db/repos/binding-pins";
 import type { EngineTokenClaims } from "../types";
 import { json, err, type RouteContext, type RouteHandler } from "./shared";
 
@@ -67,6 +72,11 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
       throw error;
     }
     if (!resolved || resolved.status === "MISSING") return err(`connection ${externalId} not found`, 404);
+    // Every fetch in a run (each step, a retry, a resumed approval) hands out
+    // the identity the run started with, and only one its workflow was enabled
+    // against. Never another account that now answers to the same name.
+    const refusal = enforceRunConnectionBinding(ctx.claims.runId, projectId, externalId);
+    if (refusal) return err(refusal, 409);
 
     // Ensure value.type is set so the engine's switch() in
     // makeConnectionValueCompatibleWithContextV0 sees the discriminator.

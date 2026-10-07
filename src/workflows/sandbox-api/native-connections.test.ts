@@ -4,6 +4,9 @@ import { CredentialResolver } from "../credentials/adapter";
 import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
 import { setEncryptionKey } from "../db/encryption";
 import { upsertConnection } from "../db/repos/app-connection";
+import { createFlow } from "../db/repos/flow";
+import { createDraftVersion } from "../db/repos/flow-version";
+import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { SandboxApi } from "./server";
 
 const TOKEN = "synthetic-native-lookup-token";
@@ -59,6 +62,29 @@ async function lookup(externalId: string, query: Record<string, string> = {}, pr
     headers: { Authorization: `Bearer ${token}` },
   });
 }
+
+describe("Q-05: a run keeps the connection identity it started with", () => {
+  test("a credential replaced after the run first fetched it is refused, and the run records why", async () => {
+    await save("account");
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Run binding", trigger: { name: "trigger", type: "EMPTY" } as any });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
+    const { token, expiresAt } = await api.signer.mint(identity, 60);
+    api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
+    const fetchAccount = () => fetch(`${api.baseUrl}/v1/worker/app-connections/account?projectId=${DEFAULT_IDS.project}`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    expect((await fetchAccount()).status).toBe(200);
+    // Saving the connection again replaces its credential under the same name.
+    await save("account");
+    const refused = await fetchAccount();
+    expect(refused.status).toBe(409);
+    expect(JSON.stringify(await refused.json())).not.toContain(TOKEN);
+    expect(getFlowRun(run.id)!.connectionBindings[0]!.refusal!.message)
+      .toBe("The credential stored in connection account was replaced during this run, after the run first used it. "
+        + "Its credential was not handed out; start a new run once the connection is right.");
+  });
+});
 
 describe("native connections through the authenticated engine endpoint", () => {
   test("API save resolves by external ID with no pieceName, including encoded IDs", async () => {
