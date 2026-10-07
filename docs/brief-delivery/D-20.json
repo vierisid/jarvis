@@ -1,0 +1,138 @@
+{
+  "task": "D-20",
+  "title": "Build workflow Context & rules",
+  "date": "2026-10-07",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "branch": "brief/d-20",
+  "stack_base": "brief/d-19",
+  "baseline": "dbce047b453ff8309cd2c3f3195922bfe42d051c",
+  "inspected_main": "2281a8235d4987af202e3b99f7ea514ac7ed4ff8",
+  "head": {
+    "ref": "brief/d-20",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-20.json"
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-20",
+  "preview": "http://127.0.0.1:4400/?brief=preview&specimen=workflow-context#/_brief_preview",
+  "dependency_prs": ["https://github.com/vierisid/jarvis/pull/804"],
+  "activation_dependencies": [
+    "F-21 authenticated/redacted context projection",
+    "Scoped host source destinations, code/target inspector integration and durable shared manual command owner",
+    "D-33 release checks"
+  ],
+  "owns": [
+    "ui/src/brief/workflows/context/**",
+    "Bounded fixture-only FoundationPreview route",
+    "docs/brief-delivery/D-20.*",
+    "docs/brief-delivery/evidence/D-20/**"
+  ],
+  "figma": {
+    "task": "D-20",
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "node": "255:3515",
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=255-3515",
+    "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
+    "inspection": "Saved native UI-24 handoff and Context Light/Dark exports under approved UI-35; no fresh editor session claimed",
+    "source_directory": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-24-runs-context-2026-10-03",
+    "inspected_exports": [
+      {
+        "file": "renders/expanded-closed-context-light-012.png",
+        "sha256": "53112fce4843d7d6ec1b1a962432c2931c79aedc7f830194658cda3839626b13"
+      },
+      {
+        "file": "renders/expanded-open-context-dark-012.png",
+        "sha256": "f9da3483715bd8c9614853b1be06f56d3d4ff4bb7ff1dd7526daf977b49078d7"
+      }
+    ],
+    "preserved": [
+      "Same workflow name, Canvas/Runs/Context tabs and Run workflow geometry",
+      "Linked goal, contextual memory, connections and rules without nested instruction cards",
+      "Approved asymmetric corners, theme materials, single-column chat reflow and scrolling",
+      "No date, subtitle or explanatory footer"
+    ],
+    "bounded_deviations": [
+      "Configured / Used by run distinguishes planned sources from actual captured evidence, as D-20 requires",
+      "Read-only execution target and code-permission source references stay inspectable; this adds no permission editor",
+      "Unknown, missing, removed, stale and redacted states remain distinct",
+      "Typed source callbacks carry exact IDs; fixture dialog demonstrates identity and return focus, not real source-room integration",
+      "Long groups scroll within the work area; header remains fixed"
+    ]
+  },
+  "checks": [
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/rooms/workflows ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "result": "pass",
+      "tests": 504,
+      "skipped": 2,
+      "assertions": 4703,
+      "files": 37,
+      "evidence": "evidence/D-20/review-tests.log",
+      "note": "Unchanged optional F07/F08 skips; F21 integration not claimed"
+    },
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows/context",
+      "result": "pass",
+      "tests": 24,
+      "assertions": 97,
+      "files": 2,
+      "evidence": "evidence/D-20/focused-tests.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-20/review-typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-20/review-build.log",
+      "warnings": "Existing Tailwind at-rule warnings"
+    }
+  ],
+  "browser": {
+    "script": "evidence/D-20/browser-check.cjs",
+    "evidence": "evidence/D-20/review-browser-results.json",
+    "result": "pass",
+    "layouts": 8,
+    "basisCycles": 10,
+    "sourceFocusReturn": true,
+    "historicalVersion": true,
+    "headerAligned": true,
+    "canvasInspector": true,
+    "scrollReturn": true,
+    "narrow": 390,
+    "reducedMotion": true,
+    "sharedRunReceipt": true,
+    "errors": [],
+    "mutations": []
+  },
+  "limitations": [
+    "F21 provider and actual authenticated source destinations not implemented/verified",
+    "Production module remains unregistered; illustrative fixtures only",
+    "Code permission is a separate workflow API setting; its real inspector destination must be supplied before activation; no new permission editor",
+    "UI field stripping is not server authorization/redaction certification",
+    "Shared command owner and durable uncertainty must be integrated across Canvas/Runs/Context by host",
+    "Review R1/R2/R3 corrected; independent post-fix re-review not claimed"
+  ],
+  "rollback": "Disable optional Context registration/capability. Keep legacy route and durable command reconciliation state. No migrations or backend writes.",
+  "base_ci": "Corrected D19 Tests/Docker/applicable platform checks pass",
+  "ci": "Corrected head must be assessed after push; reviewed head checks pass",
+  "next": "D-21; not started",
+  "review": {
+    "reviewed_head": "c89053d24892eda348763bb5b35025bd185a6fef",
+    "fixed": ["R1", "R2", "R3"],
+    "checks": 120,
+    "layouts": 12,
+    "red_failed_checks": 64,
+    "green_failed_checks": 0,
+    "red": "evidence/D-20/review-red-results.json",
+    "green": "evidence/D-20/review-green-results.json",
+    "script": "evidence/D-20/review-browser.cjs",
+    "original_matrix": "evidence/D-20/review-browser-results.json",
+    "prior_ci": "Reviewed head Tests/Docker/applicable platform checks pass",
+    "post_fix_independent_review": false
+  }
+}

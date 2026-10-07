@@ -1,0 +1,256 @@
+.brief-root
+  .brief-pebble-layout
+  .brief-workspace-content:has(> .brief-workflow-context) {
+  padding: 0;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+.brief-workflow-context {
+  height: 100%;
+  min-height: 440px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  color: var(--brief-ink);
+}
+.brief-context-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 32px;
+  flex-wrap: wrap;
+  flex: none;
+}
+/* Reserve both selected labels; the version can wrap onto the next line. */
+.brief-context-toolbar .brief-segments {
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  width: max-content;
+}
+.brief-context-toolbar .brief-segment > span {
+  white-space: nowrap;
+}
+.brief-context-version {
+  font: 12px/1.5 var(--brief-mono);
+  color: var(--brief-secondary);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.brief-context-toolbar > button {
+  margin-left: auto;
+}
+.brief-context-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 2px 32px 84px;
+  scrollbar-gutter: stable;
+}
+.brief-context-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr);
+  grid-template-areas: "goal rules" "memory rules" "bindings target";
+  gap: 20px 24px;
+  align-items: stretch;
+}
+.brief-context-goal {
+  grid-area: goal;
+}
+.brief-context-memory {
+  grid-area: memory;
+}
+.brief-context-bindings {
+  grid-area: bindings;
+}
+.brief-context-rules {
+  grid-area: rules;
+}
+.brief-context-target {
+  grid-area: target;
+}
+.brief-context-card {
+  border: 1px solid var(--brief-card-edge);
+  border-radius: var(--brief-corner-card);
+  background: var(--brief-card);
+  padding: 24px;
+  min-width: 0;
+}
+.brief-context-card h2 {
+  font: 600 20px/1.3 var(--brief-sans);
+  letter-spacing: -0.02em;
+  margin: 0 0 20px;
+}
+.brief-context-card h3 {
+  font: 600 14px/1.5 var(--brief-sans);
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.brief-context-goal h2 {
+  font-size: 12px;
+  font-weight: 400;
+  letter-spacing: 0;
+  color: var(--brief-secondary);
+  margin-bottom: 12px;
+}
+.brief-context-goal h3 {
+  font-size: 24px;
+  line-height: 1.3;
+  letter-spacing: -0.02em;
+}
+.brief-context-row + .brief-context-row {
+  margin-top: 24px;
+}
+.brief-context-rules .brief-context-row + .brief-context-row {
+  margin-top: 32px;
+}
+.brief-context-row-heading {
+  display: flex;
+  gap: 8px 14px;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.brief-context-row p {
+  color: var(--brief-secondary);
+  font: 14px/1.65 var(--brief-sans);
+  max-width: 68ch;
+  margin: 6px 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.brief-context-source {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 2px 16px;
+  margin-top: 8px;
+}
+.brief-context-source-id {
+  color: var(--brief-secondary);
+  font: 12px/1.5 var(--brief-mono);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+.brief-context-source-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  padding: 6px 0;
+  font: 600 13px/1.5 var(--brief-sans);
+  color: var(--brief-ink);
+  cursor: pointer;
+}
+.brief-context-source-link svg {
+  transition: transform 180ms ease-out;
+  flex: none;
+}
+.brief-context-source-link:hover svg {
+  transform: translateX(3px);
+}
+.brief-context-source-link:focus-visible {
+  outline: 2px solid var(--brief-focus);
+  outline-offset: 4px;
+  border-radius: 2px;
+}
+.brief-context-status {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font: 12px/1.5 var(--brief-sans);
+  color: var(--brief-attention-text);
+}
+.brief-context-status i {
+  width: 5px;
+  height: 5px;
+  background: currentColor;
+  border-radius: 50%;
+}
+.brief-context-row[data-availability="redacted"] .brief-context-status {
+  color: var(--brief-secondary);
+}
+.brief-context-muted,
+.brief-context-notice,
+.brief-context-feedback {
+  font: 14px/1.6 var(--brief-sans);
+  color: var(--brief-secondary);
+  margin: 0;
+}
+.brief-context-notice {
+  color: var(--brief-attention-text);
+  margin-bottom: 16px;
+}
+.brief-context-feedback {
+  margin: 0 0 20px;
+}
+.brief-context-skeleton {
+  height: 120px;
+  width: 100%;
+  border-radius: var(--brief-corner-card);
+  background: var(--brief-soft);
+}
+.brief-context-run-message {
+  flex: none;
+  margin: 0;
+  font: 12px/1.4 var(--brief-sans);
+  color: var(--brief-secondary);
+  overflow-wrap: anywhere;
+}
+.brief-context-run-message:not(:empty) {
+  padding: 0 32px 12px;
+}
+@container brief-work (max-width: 850px) {
+  .brief-context-grid {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: "goal" "memory" "bindings" "rules" "target";
+    gap: 18px;
+  }
+}
+@container brief-work (max-width: 650px) {
+  .brief-context-toolbar {
+    padding: 14px 18px;
+    gap: 8px 12px;
+  }
+  .brief-context-scroll {
+    padding: 2px 18px 84px;
+  }
+  .brief-context-run-message:not(:empty) {
+    padding-inline: 18px;
+  }
+  .brief-context-card {
+    padding: 20px;
+  }
+  .brief-context-goal h3 {
+    font-size: 22px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brief-context-source-link svg {
+    transition: none;
+  }
+}
+
+.brief-context-source-preview {
+  max-width: min(520px, calc(100vw - 40px));
+  padding: 28px;
+  border-radius: 14px 0 14px 14px;
+  background: var(--brief-card, white);
+  color: var(--brief-ink, #151719);
+  border: 1px solid var(--brief-card-edge, #dbe0e7);
+}
+.brief-context-source-preview p {
+  overflow-wrap: anywhere;
+  margin-block: 16px;
+  font-size: 14px;
+}
+.brief-context-source-preview::backdrop {
+  background: #12151833;
+}
+
+.brief-context-source:has(.brief-context-source-link) .brief-context-source-id {
+  display: none;
+}
+.brief-context-bindings .brief-context-row {
+  padding-block: 2px;
+}

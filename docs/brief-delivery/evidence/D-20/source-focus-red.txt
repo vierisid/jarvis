@@ -1,0 +1,1 @@
+The first browser run failed source focus return: after closing the fixture source dialog, document.activeElement was not its originating source link. Fixed by retaining the opener and restoring focus during dialog cleanup. The full browser rerun checks this assertion.
