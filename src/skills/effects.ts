@@ -166,8 +166,8 @@ export function classifyStep(
   // Display only. The classifier below judges the raw accessible name, its
   // uncapped reduction and a folded form, and keeps every reading (#723), so
   // invisible characters, whitespace, fullwidth letters and edge punctuation
-  // cannot make this label say Send while the category says nothing.
-  // Cross-script look-alikes still can (see `uiEffectHints`).
+  // cannot make this label say Send while the category says nothing, and
+  // since #794 neither can a cross-script look-alike (the skeleton reading).
   // A name that reduces to nothing (invisibles only) falls back to the role.
   // Quoted (#795), like a typed value: a recorded label is page text, and
   // unquoted it could print `Done; +3 more steps` -- the very tail that says
@@ -272,6 +272,15 @@ function hiddenStepsTail(hidden: StepEffect[]): string {
  * "Workflow execution target changed after review" in a workflow) and the
  * person asks again and gets the quoted card. Categories are unchanged: the
  * quotes are display only, and the classifier reads the label as before.
+ *
+ * WHAT #794 MOVED, by the same mechanism. A step whose label or app matches a
+ * send, pay, delete or settings pattern only as its UTS #39 skeleton -- a
+ * cross-script look-alike (`Send` with a Cyrillic S), or an ASCII one (`rn`
+ * for `m`, `I` for `l`) -- now gains that effect, on the card and in the
+ * categories the run must clear, so a pending approval of such a skill is
+ * refused when approved and asked again, and a deny rule on that category now
+ * applies. Measured over 81 common labels in four apps, no ordinary label
+ * gains a category.
  */
 export function resolveSkillEffect(skill: Skill, callerArgs: Record<string, string>): SkillEffect {
   // The card shows the values the run will actually type: the caller's over

@@ -362,7 +362,7 @@ export const uiActTool: ToolDefinition = {
       // The hints are computed on the raw name, its UNCAPPED reduction and a
       // folded form (#723), so a long label cannot drop a `make_payment` or
       // `delete_data` raise by being cut, and an invisible character cannot
-      // hide one. A cross-script look-alike still can (see `uiEffectHints`).
+      // hide one; since #794 neither can a cross-script look-alike.
       intent: `Review ${cardPlain(params.action) || 'click'} on ${entry.kind} element [${params.element_id}] ${cardValue(entry.node.name)} on ${cardPlain(entry.target) || '(unnamed machine)'}. Business effect unknown beyond UI hints${hints.length ? ` (${hints.join(', ')})` : ''}; inspect the current screen and arguments. UI labels do not prove what an action will do.`,
     };
   },
