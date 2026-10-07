@@ -610,6 +610,108 @@ describe('delegated approvals through the workflow effect boundary', () => {
     ]);
   });
 
+  /**
+   * #731. The resumed call above is refused at this dispatch, so the boundary
+   * never sees it -- and the `agent-tool:N` record the first pass parked stayed
+   * `pending` with its approval granted, for good: no terminal state, and
+   * nothing for an operator reading the run's effects to tell it was refused.
+   * Reachable with a real tool, not only this synthetic gate:
+   * `browser_upload_file`'s gate is null for a path that does not exist yet
+   * (an ordinary governed write that parks) and `confirm: 'always'` once it
+   * does. Now the record is `blocked` with the refusal as its reason, which is
+   * what the boundary does for its own refusals, and stays blocked.
+   */
+  test('a resumed call refused at the dispatch marks its parked effect blocked with the reason, for good (#731)', async () => {
+    let raised = false;
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => (raised
+      ? { actionCategory: 'execute_command', intent: 'Write a shell startup file', confirm: 'always' }
+      : null) });
+    const parked = await f.delegate({ requiredTools: ['write_file'] });
+    expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'pending' });
+    raised = true;
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate({ requiredTools: ['write_file'] });
+    expect(f.effects()).toBe(0);
+    const refusal = done.toolCalls[0]!.error!;
+    expect(refusal).toMatch(/requires the user's explicit confirmation/);
+    const effect = listWorkflowEffects(ids.run.id)[1]!;
+    expect(effect).toMatchObject({ route: 'agent-tool:1', status: 'blocked', decision: 'denied',
+      approvalId: parked.approval!.approvalId, finishedAt: expect.any(Number) });
+    // The reason an operator reads is the refusal the agent got.
+    expect(refusal).toContain(effect.error!);
+    expect(effect.reason).toBe(effect.error!);
+    expect(effect.error).toMatch(/^Unsupported workflow capability: write_file requires the user's explicit confirmation/);
+
+    // Terminal: the gate relaxing does not revive it, the scheduler has
+    // nothing to resume, and asking again answers the same without running.
+    raised = false;
+    expect(resumeResolvedWorkflowEffects()).toBe(0);
+    expect(await f.delegate({ requiredTools: ['write_file'] })).toEqual(done);
+    expect(f.effects()).toBe(0);
+    expect(listWorkflowEffects(ids.run.id)[1]).toEqual(effect);
+  });
+
+  test('a refusal blocks only the record of the call it refused, not another call parked at the same position (#731)', async () => {
+    // A record at the same `agent-tool:N` bound to different arguments is a
+    // different call (a turn re-run from an earlier checkpoint can produce
+    // one). Blocking it would put this refusal's reason on a call nobody
+    // refused, so it is left alone.
+    let raised = false;
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => (raised
+      ? { actionCategory: 'execute_command', intent: 'Write a shell startup file', confirm: 'always' }
+      : null) });
+    const parked = await f.delegate();
+    const { saveDelegation } = await import('../db/repos/delegation');
+    const checkpoint = getDelegation(delegationId(ids.run.id))!;
+    saveDelegation({ ...checkpoint, pending: { ...checkpoint.pending!,
+      toolCall: { ...checkpoint.pending!.toolCall, arguments: { path: '/tmp/other', content: 'other' } } } });
+    raised = true;
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(done.toolCalls[0]!.error).toMatch(/requires the user's explicit confirmation/);
+    expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'pending', arguments: ARGS });
+  });
+
+  test('a refusal never rewrites a record that already finished (#731)', async () => {
+    // The call ran under its approval, and the process died before the
+    // checkpoint said so, so the resume hands the same call back. If the
+    // route now refuses it, the record that says it SUCCEEDED -- the replay
+    // state a resumed conversation reads instead of acting again -- must not
+    // be turned into a refusal that never happened.
+    let raised = false;
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => (raised
+      ? { actionCategory: 'execute_command', intent: 'Write a shell startup file', confirm: 'always' }
+      : null) });
+    const parked = await f.delegate();
+    const { saveDelegation } = await import('../db/repos/delegation');
+    const pausedCheckpoint = getDelegation(delegationId(ids.run.id))!;
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    await f.delegate();
+    expect(f.effects()).toBe(1);
+    const succeeded = listWorkflowEffects(ids.run.id)[1]!;
+    expect(succeeded).toMatchObject({ route: 'agent-tool:1', status: 'succeeded' });
+    saveDelegation(pausedCheckpoint);
+    raised = true;
+    const again = await f.delegate();
+    expect(again.toolCalls[0]!.error).toMatch(/requires the user's explicit confirmation/);
+    expect(f.effects()).toBe(1);
+    expect(listWorkflowEffects(ids.run.id)[1]).toEqual(succeeded);
+  });
+
+  test('a first-pass refusal at the dispatch creates no effect record to block (#731)', async () => {
+    // The control: the blocking above is of the PARKED record, and a refusal
+    // that never parked has none. Nothing is invented for it.
+    const ids = createRun();
+    const f = backends(ids, { script: [{ call: 'run_command', args: { command: 'true' } }, 'finish'],
+      authority: { governed_categories: ['execute_command'] } });
+    const done = await f.delegate();
+    expect(done.toolCalls[0]!.error).toMatch(/Unsupported workflow capability/);
+    expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
+  });
+
   test('the refusal does not catch the reads this route legitimately carries (#638)', async () => {
     // Non-over-refusal, in the direction the obvious fix got wrong: calling
     // `toolEffectCapability` here, as the other two routes do, would also have
