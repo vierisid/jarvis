@@ -516,7 +516,12 @@ jobs:
     # Publishing is bound to this environment, so the OIDC claim must carry it.
     # It must be declared HERE rather than on the calling job, because GitHub
     # does not allow `environment:` on a job that uses a reusable workflow.
-    environment: release
+    # See the matching block in release-exec.yml: a dry run records its
+    # deployment against a separate environment so a rehearsal cannot appear as
+    # the live state of `release`. `env` is not an allowed context in an
+    # environment name, so this reads the input directly.
+    environment:
+      name: ${{ inputs.dry_run && 'release-dry-run' || 'release' }}
     needs: [resolve, build-sidecar, sign-sidecar-windows]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
