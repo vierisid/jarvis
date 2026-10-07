@@ -143,8 +143,9 @@ export class MemoryUsageLedger implements MemoryUsageReader {
       this.assertReady();
       return this.db.transaction(() => {
         const column = query.conversationId ? 'conversation_id' : 'run_id';
-        const rows = this.db.query<Stored & { fact_state: string | null }, [string, number, number]>(`SELECT u.*, f.status AS fact_state
+        const rows = this.db.query<Stored & { fact_state: string | null }, [string, number, number]>(`SELECT u.*, CASE WHEN forgotten.fact_id IS NOT NULL THEN 'forgotten' ELSE f.status END AS fact_state
           FROM memory_use_events u LEFT JOIN facts f ON f.id = u.fact_id
+          LEFT JOIN memory_forget_receipts forgotten ON forgotten.fact_id = u.fact_id
           WHERE u.${column} = ? AND u.recorded_at >= ? ORDER BY u.recorded_at DESC, u.use_id LIMIT ?`)
           .all((query.conversationId ?? query.runId)!, this.cutoff(), this.limits.summary + 1);
         if (rows.length > this.limits.summary) return { state: 'unavailable' as const, reason: 'capacity_exceeded' };

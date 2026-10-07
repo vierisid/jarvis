@@ -1,0 +1,33 @@
+# Verdict-only evidence; fixture payloads and diagnostic output omitted.
+bun test v1.4.2 (744846f84)
+(pass) prepare and cancel do not mutate; confirmed POST and repeated POST return the same content-free receipt [49.01ms]
+(pass) unknown, stale, malformed, oversized and ambiguous requests cannot delete [43.42ms]
+(pass) missing, mismatched, disabled and foreign-vault providers fail closed without depending on F18 activation [69.70ms]
+(pass) Forget GET and POST require real HTTP panel authentication [48.94ms]
+(pass) real classic legacy AgentService refuses forgotten prepared profile and rebuilds next turn [56.18ms]
+(pass) real router-first legacy AgentService refuses forgotten prepared profile and rebuilds next turn [55.45ms]
+(pass) new realtime instructions withhold a forgotten profile name while retaining separate configured identity [29.19ms]
+(pass) Forget removes only the selected fact and evidence, keeps content-free history and invalidates a cursor [711.89ms]
+(pass) same automatic source revision stays suppressed across restart; unrelated assertions and new source survive [646.47ms]
+(pass) explicit later correction can create new information without erasing the old tombstone [566.90ms]
+(pass) correction racing a confirmation conflicts in either ordering and never forgets the replacement [482.01ms]
+(pass) idempotency is stable and a reused request cannot delete another fact [515.22ms]
+(pass) a failed deletion rolls back suppression and receipt atomically [680.33ms]
+(pass) tombstone capacity refuses the mutation without silently evicting suppression [509.48ms]
+(pass) profile re-sync skips forgotten projection and withholds its original source field from model prompts [411.55ms]
+(pass) derived profile aliases cannot return from an unrelated profile save [468.12ms]
+(pass) real extractor replay cannot revive forgotten facts with different confidence or quote selection [409.91ms]
+(pass) goal completion replays skip only the forgotten performance fact [442.17ms]
+(pass) previous usage is explicitly forgotten without deleting immutable event evidence [463.13ms]
+(pass) Forget fences prepared conversation context even with usage logging disabled [399.59ms]
+(pass) Forget fences prepared workflow context even with usage logging disabled [380.87ms]
+(pass) disabled, foreign-vault and malformed commands never mutate facts [450.09ms]
+(pass) migrated unknown provenance stays suppressed, including profile prompts, after restart [451.45ms]
+(pass) disabling new Forget actions cannot turn off existing suppression [455.48ms]
+(pass) profile context prepared before Forget cannot escape through a later handoff [399.18ms]
+(pass) legacy async stream retains its recall scope after preparation returns [472.55ms]
+(pass) canonical later input can repeat identical words while old input replay remains forgotten [462.96ms]
+ 27 pass
+ 0 fail
+ 160 expect() calls
+Ran 27 tests across 3 files. [10.43s]

@@ -1,3 +1,4 @@
+import { assertAutomaticFactAllowed } from './memory-suppression';
 import { createHash } from 'node:crypto';
 import { getDb, generateId } from './schema.ts';
 import { findEntities } from './entities.ts';
@@ -8,11 +9,14 @@ import { appliesAt, isSingleValued, predicateKey, valueKey, samePeriod, type Fac
 export interface FactEvidence {
   id: string; fact_id: string; source: string | null; source_ref: string | null;
   quote: string | null; basis: FactBasis; confidence: number; recorded_at: number;
+  replay_source_ref?: string | null;
 }
 export type Fact = FactRow & { evidence: FactEvidence[]; basis: FactBasis; binding_eligible: boolean };
 export type FactOptions = {
   confidence?: number; source?: string; sourceRef?: string; quote?: string;
   basis?: Exclude<FactBasis, 'confirmed'>; confirmed?: boolean;
+  /** Internal ingestion metadata, supplied only from a canonical user turn. */
+  replay?: { sourceRef: string; explicitInputAt: number };
   scope?: string; validFrom?: number | null; validTo?: number | null;
 };
 export class FactInputError extends Error {
@@ -38,9 +42,14 @@ function addEvidence(id: string, options: FactOptions, now: number): void {
   const basis = options.confirmed ? 'confirmed' : options.basis ?? (options.source === 'llm_extraction' ? 'inferred' : 'unspecified');
   const fields = [options.source ?? null, options.sourceRef ?? null, options.quote ?? null, basis, options.confidence ?? 1];
   const key = createHash('sha256').update(JSON.stringify(fields)).digest('hex');
-  getDb().run(`INSERT OR IGNORE INTO fact_evidence
-    (id, fact_id, source, source_ref, quote, basis, confidence, recorded_at, evidence_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  [generateId(), id, ...fields, now, key]);
+  // Keep the old dedup key so re-ingestion can enrich pre-upgrade evidence.
+  // The alias is a digest, and is deleted with the rest of the fact's evidence.
+  getDb().run(`INSERT INTO fact_evidence
+    (id, fact_id, source, source_ref, quote, basis, confidence, recorded_at, evidence_key, replay_source_ref)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(fact_id, evidence_key) DO UPDATE SET
+      replay_source_ref = COALESCE(fact_evidence.replay_source_ref, excluded.replay_source_ref)`,
+  [generateId(), id, ...fields, now, key, options.replay?.sourceRef ?? null]);
 }
 /**
  * Provenance is unforgeable because `confirmed` is read from `verified_at`
@@ -77,6 +86,8 @@ export function createFact(subject_id: string, predicate: string, object: string
   subject_id = factText(subject_id, 'subject_id', 200);
   predicate = factText(predicate, 'predicate', 200); object = factText(object, 'object'); validate(options);
   return getDb().transaction(() => {
+    assertAutomaticFactAllowed(getDb(), { subject_id, predicate, object, scope: options.scope, valid_from: options.validFrom, valid_to: options.validTo },
+      { source: options.source, source_ref: options.sourceRef, quote: options.quote, replay: options.replay });
     const key = predicateKey(predicate), value = valueKey(predicate, object), scope = options.scope?.trim() ?? '';
     const from = options.validFrom ?? null, to = options.validTo ?? null, now = Date.now();
     const existing = getDb().query<FactRow, [string, string, string, string, number | null, number | null]>(`SELECT * FROM facts
@@ -128,7 +139,8 @@ export function queryFact(subjectName: string, predicate: string, scope = ''): F
 export function correctFact(id: string, object: string, reason: string): Fact {
   object = factText(object, 'object'); reason = factText(reason, 'reason', 1000);
   return getDb().transaction(() => {
-    const old = getFact(id); if (!old) throw new FactInputError('Fact not found', 404);
+    const old = getFact(id); if (!old) throw new FactInputError('Fact is missing or was forgotten; refresh before correcting',
+      getDb().query('SELECT 1 FROM memory_forget_receipts WHERE fact_id = ?').get(id) ? 409 : 404);
     if (old.status === 'superseded') {
       const replacement = old.superseded_by ? getFact(old.superseded_by) : null;
       if (replacement && replacement.status !== 'superseded' && replacement.object === object) return replacement;

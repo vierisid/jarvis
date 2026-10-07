@@ -1,3 +1,6 @@
+import { currentBriefTurn } from '../brief/chat-context';
+import { ChatTurnRepository } from './chat-turns';
+import { FactSuppressedError } from './memory-suppression';
 import type { LLMManager } from '../llm/manager.ts';
 import { getDb } from './schema.ts';
 import { createHash } from 'node:crypto';
@@ -174,6 +177,9 @@ export async function extractAndStore(
   }
 
   try {
+    const turnRef = currentBriefTurn();
+    const turn = turnRef ? new ChatTurnRepository(getDb()).get(turnRef) : null;
+    if (turn && turn.text !== userMessage) throw new Error('Extraction input does not match the canonical turn');
     // Build prompt
     const prompt = buildExtractionPrompt(userMessage, assistantResponse);
 
@@ -257,8 +263,12 @@ export async function extractAndStore(
       }
     }
 
+    // A canonical turn identity distinguishes explicit later input from replay. Legacy callers use the input pair.
     // Stable reference for replay deduplication. Exact quotes are reported, not confirmed.
-    const sourceRef = `conversation:${createHash('sha256').update(JSON.stringify([userMessage, assistantResponse])).digest('hex')}`;
+    const digest = (parts: string[]) => `conversation:${createHash('sha256').update(JSON.stringify(parts)).digest('hex')}`;
+    const legacyRef = digest([userMessage, assistantResponse]);
+    const sourceRef = turn ? digest([turn.conversationId, turn.turnId, userMessage, assistantResponse]) : legacyRef;
+    const replay = turn ? { sourceRef: legacyRef, explicitInputAt: turn.createdAt } : undefined;
     // Store facts
     for (const factData of extraction.facts) {
       if (!factData || typeof factData.subject !== 'string' || typeof factData.predicate !== 'string'
@@ -277,10 +287,10 @@ export async function extractAndStore(
       try {
         createFact(subjectId, predicate, object, {
           confidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.5,
-          source: 'llm_extraction', sourceRef, quote, basis: quote ? 'reported' : 'inferred',
+          source: 'llm_extraction', sourceRef, quote, replay, basis: quote ? 'reported' : 'inferred',
           scope: factData.scope, validFrom: factData.valid_from, validTo: factData.valid_to,
         });
-      } catch (error) { console.warn('[Extractor] Skipping invalid fact:', error); }
+      } catch (error) { if (!(error instanceof FactSuppressedError)) console.warn('[Extractor] Skipping invalid fact:', error); }
     }
 
     // Store relationships
@@ -362,31 +372,35 @@ export function extractGoalCompletion(goal: {
     entityId = entity.id;
   }
 
+  const store = (...args: Parameters<typeof createFact>) => {
+    try { createFact(...args); } catch (e) { if (!(e instanceof FactSuppressedError)) throw e; }
+  };
+
   // Store performance facts
-  createFact(entityId, 'goal_final_score', goal.score.toFixed(2), {
+  store(entityId, 'goal_final_score', goal.score.toFixed(2), {
     confidence: 1.0,
     source: 'goal_completion',
   });
 
-  createFact(entityId, 'goal_outcome', goal.status, {
+  store(entityId, 'goal_outcome', goal.status, {
     confidence: 1.0,
     source: 'goal_completion',
   });
 
-  createFact(entityId, 'goal_level', goal.level, {
+  store(entityId, 'goal_level', goal.level, {
     confidence: 1.0,
     source: 'goal_completion',
   });
 
   if (goal.estimated_hours !== null) {
-    createFact(entityId, 'estimated_hours', goal.estimated_hours.toString(), {
+    store(entityId, 'estimated_hours', goal.estimated_hours.toString(), {
       confidence: 1.0,
       source: 'goal_completion',
     });
   }
 
   if (goal.actual_hours > 0) {
-    createFact(entityId, 'actual_hours', goal.actual_hours.toFixed(1), {
+    store(entityId, 'actual_hours', goal.actual_hours.toFixed(1), {
       confidence: 1.0,
       source: 'goal_completion',
     });
@@ -395,7 +409,7 @@ export function extractGoalCompletion(goal: {
   // Time to complete
   if (goal.completed_at) {
     const durationDays = Math.ceil((goal.completed_at - goal.created_at) / 86400000);
-    createFact(entityId, 'days_to_complete', durationDays.toString(), {
+    store(entityId, 'days_to_complete', durationDays.toString(), {
       confidence: 1.0,
       source: 'goal_completion',
     });
@@ -404,7 +418,7 @@ export function extractGoalCompletion(goal: {
   // Estimation accuracy
   if (goal.estimated_hours !== null && goal.actual_hours > 0) {
     const accuracy = (goal.estimated_hours / goal.actual_hours).toFixed(2);
-    createFact(entityId, 'estimation_accuracy', accuracy, {
+    store(entityId, 'estimation_accuracy', accuracy, {
       confidence: 1.0,
       source: 'goal_completion',
     });
@@ -417,7 +431,7 @@ export function extractGoalCompletion(goal: {
     const joined = goal.tags.join(', ');
     const compact = joined.length <= FACT_TEXT_LIMIT;
     for (const value of compact ? [joined] : goal.tags) {
-      createFact(entityId, compact ? 'goal_tags' : 'goal_tag', value, {
+      store(entityId, compact ? 'goal_tags' : 'goal_tag', value, {
         confidence: 1.0,
         source: 'goal_completion',
       });
