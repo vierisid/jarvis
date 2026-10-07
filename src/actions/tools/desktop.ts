@@ -131,8 +131,8 @@ function getLocalController(): SnapshotCapableController {
  * typed failure (not_started: a capture changes nothing on the machine), the
  * legacy `capture_screen` returns the message.
  */
-export function localScreenshotResult(base64: string, mediaType: string, label: string, typedErrors: boolean): ToolResult | string {
-  const shot = screenshotForModel(base64, mediaType);
+export async function localScreenshotResult(base64: string, mediaType: string, label: string, typedErrors: boolean): Promise<ToolResult | string> {
+  const shot = await screenshotForModel(base64, mediaType);
   if (!shot.ok) {
     const message = `Error: the screenshot is too large to send, and ${shot.reason}, so there is nothing to look at.`;
     if (typedErrors) throw new ActionOutcomeError({ status: 'error', code: 'LOCAL_IMAGE_TOO_LARGE', message, effect: 'not_started' });
@@ -713,7 +713,8 @@ export const desktopScreenshotTool: ToolDefinition = {
         base64 = buffer.toString('base64');
       }
 
-      return localScreenshotResult(base64, mimeType, 'Desktop screenshot captured', true);
+      // Awaited for symmetry with capture_screen; executeLocal awaits it either way.
+      return await localScreenshotResult(base64, mimeType, 'Desktop screenshot captured', true);
     });
   },
 };

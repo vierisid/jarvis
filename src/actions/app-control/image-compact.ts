@@ -27,7 +27,7 @@
  * tables with the IJG formula.
  */
 
-import { constants as zlibConstants, createInflate, crc32, deflateSync, inflateSync } from 'node:zlib';
+import { createInflate, crc32 } from 'node:zlib';
 import { guardImageSize, type ContentBlock } from '../../llm/provider.ts';
 
 /** The compact capture's parameters, shared with the routed fallback. */
@@ -68,13 +68,41 @@ const PNG_CHANNELS: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
  * 18048x3384 desktop, +27 MB in 0.38 s [+742 MB, 0.82 s]; 5120x2880, +32 MB in
  * 0.15 s [+207 MB, 0.27 s]; 1x64000000, the most rows, +17 MB in 0.74 to
  * 0.91 s [+514 MB, 0.71 to 0.76 s]. About 15 MB of each is what compacting
- * even an 8001x4 capture costs, most of it JSC's optimising compilers. The
- * time is synchronous on the daemon's thread; the bounds keep a hostile or
- * broken file from costing more of it. The one shape memory still follows is
- * width, since a row is held whole: see decodeRows.
+ * even an 8001x4 capture costs, most of it JSC's optimising compilers.
+ *
+ * Those times were synchronous on the daemon's thread. Since #769 the
+ * inflate runs off it, on node:zlib's stream, and the event loop runs
+ * between pieces; the wall time grew and the memory stayed within a few MB. Measured
+ * against the synchronous decode, three runs each: the three-display
+ * desktop, 0.24 s -> 0.60 s, +25.6 -> +29 to +31 MB; 8100x2000 RGBA, 0.09 s
+ * -> 0.20 s, +25.4 -> +25.4 to +25.9 MB; 8000x8000 RGBA noise, 1.8 s -> 2.25
+ * s, the same peak within 3 MB. A 256 KB inflate piece halves the extra
+ * time and costs +10 MB more on each, so the piece stays 64 KB: the daemon's
+ * memory is the constraint here, not a capture's latency. The bounds keep a
+ * hostile or broken file from costing more time. The one shape memory still
+ * follows is width, since a row is held whole, and MAX_DECODE_WIDTH bounds
+ * that.
  */
 export const MAX_DECODE_PIXELS = 64_000_000;
 export const MAX_DECODE_BYTES = 256_000_000;
+
+/**
+ * The widest image decoded at all (#768). The decode holds a row at a time
+ * (see decodeRows), so its memory follows width, and the two caps above still
+ * admitted 64000000x1 RGBA -- a 256 MB row, +505 MB peak for a ~250 KB PNG,
+ * measured. No display is anywhere near: three 6K panels side by side are
+ * 18048 px, and JPEG, what a compacted capture becomes, cannot pass 65535
+ * either. At this bound a row is at most 512 KB (16-bit RGBA), so a decode's
+ * rows stay around 1.4 MB; 65535x900 RGBA compacted for +18.6 MB, the same as
+ * 65536x900 did before the bound, and 64000000x1 is now refused for +1.4 MB.
+ *
+ * This is a refusal, where the policy for real captures is to shrink rather
+ * than refuse; it only reaches a geometry no screen produces, so what it
+ * catches is a capture tool writing nonsense, and the message says so. Height
+ * is not bounded here: rows are streamed, so a tall image costs time, which
+ * the caps above already bound, not memory.
+ */
+export const MAX_DECODE_WIDTH = 65_535;
 
 /**
  * The longest side an image block may have. Anthropic's API rejects an image
@@ -140,6 +168,9 @@ function readPng(png: Uint8Array): PngLayout {
   }
   const channels = PNG_CHANNELS[colorType];
   if (!width || !height || channels === undefined) throw new Error('PNG has no usable header');
+  if (width > MAX_DECODE_WIDTH) {
+    throw new Error(`a ${width}x${height} image is a geometry no screen produces (wider than ${MAX_DECODE_WIDTH} px), so the capture tool that wrote it is misbehaving`);
+  }
   if (width * height > MAX_DECODE_PIXELS) throw new Error(`a ${width}x${height} image is larger than any screen this decodes`);
   if (interlace !== 0) throw new Error('interlaced PNG is not supported');
   const depthOk = colorType === 0 || colorType === 3 ? [1, 2, 4, 8, 16].includes(depth) && !(colorType === 3 && depth === 16) : depth === 8 || depth === 16;
@@ -151,163 +182,100 @@ function readPng(png: Uint8Array): PngLayout {
   return { width, height, depth, colorType, channels, rowBytes, palette, paletteAlpha, idat };
 }
 
-/** How much inflated data is handed on at a time: the one inflate buffer. */
+/** How much inflated data is handed on at a time: the inflate's chunk size. */
 const INFLATE_CHUNK = 64 * 1024;
-
-/**
- * The incremental, synchronous zlib primitive under node:zlib: the native
- * handle's `writeSync(flush, in, inOff, inLen, out, outOff, outLen)`, which
- * leaves [availOut, availIn] in the stream's `_writeState`. It is what
- * `inflateSync` itself runs on (zlibBufferSync -> processChunkSync, in Node's
- * lib/zlib.js, which Bun ports), but `inflateSync` gathers the whole output
- * and then concatenates it -- twice the image, briefly -- and the one public
- * incremental API, `createInflate`, is asynchronous. Neither underscored name
- * is documented, so `streamingInflateWorks` checks the pair before use.
- */
-type InflateInternals = {
-  _handle?: { writeSync?: (flush: number, input: Uint8Array, inOff: number, inLen: number, out: Uint8Array, outOff: number, outLen: number) => void };
-  _writeState?: unknown;
-  on(event: 'error', listener: (err: unknown) => void): unknown;
-  close(): void;
-};
 
 /**
  * Inflate one zlib stream given in `parts`, handing the output to `sink` in
  * pieces of at most INFLATE_CHUNK bytes as it is produced, and refusing the
  * stream as soon as it has produced more than `limit` bytes -- the bound that
- * keeps a zip bomb from expanding past what the header declares. Returns how
- * many bytes it produced. Bytes after the end of the stream are ignored, as
- * `inflateSync` ignores them.
+ * keeps a zip bomb from expanding past what the header declares. Resolves to
+ * how many bytes it produced. Bytes after the end of the stream are ignored,
+ * as `inflateSync` ignores them.
  *
- * Errors are not thrown by `writeSync`: Bun records them on the stream,
- * leaves `_writeState` untouched, and emits 'error' -- in a script after the
- * call returns, inside a bun test callback during it -- and an 'error' with no
- * listener is an uncaught exception that ends the process (measured, Bun
- * 1.3.8). So the state is set to an impossible value before each call, an
- * untouched state is the failure, and an 'error' listener is always attached.
+ * On `createInflate`, node:zlib's documented streaming API (#769). #748 drove
+ * the native handle's undocumented `writeSync`/`_writeState` instead, because
+ * this chain was synchronous and the public synchronous API, `inflateSync`,
+ * gathers the whole output and then concatenates it -- twice the image,
+ * briefly. The chain is async now, so the stream does it: the inflate runs
+ * off the daemon's thread in INFLATE_CHUNK pieces, each piece is consumed by
+ * `sink` in its 'data' handler before the next is produced, and the event
+ * loop keeps running between them.
+ *
+ * Paced both ways: an input part is written only once the stream has taken
+ * the last one ('drain'), and the output never queues, because a 'data'
+ * listener consumes each piece as it comes and zlib does not produce the next
+ * while its readable side is full. A refusal -- the bound, or `sink` throwing
+ * -- destroys the stream, which stops the inflate.
+ *
+ * An 'error' listener is always attached: a zlib error with no listener is an
+ * uncaught exception, which in the daemon is the end of the process. Every
+ * zlib error is the stream's fault (a bad header, a stream cut short, a bad
+ * checksum), and all of them read the same way.
  */
-function inflateStreaming(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Array) => void): number {
-  const inflater = createInflate() as unknown as InflateInternals;
-  let failed = false;
-  inflater.on('error', () => { failed = true; });
-  // No IDAT at all still runs one (empty) Z_FINISH write, so it is refused
-  // the way inflateSync refuses an empty buffer.
-  const inputs = parts.length > 0 ? parts : [new Uint8Array(0)];
+function inflateStream(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Array) => void): Promise<number> {
+  const inflater = createInflate({ chunkSize: INFLATE_CHUNK });
   let total = 0;
-  try {
-    const write = inflater._handle!.writeSync!.bind(inflater._handle);
-    const state = inflater._writeState as Uint32Array;
-    // Zeroed, not allocUnsafe: were a runtime ever to under-report availOut,
-    // the bytes it counted would be zeros, never stale heap.
-    const out = Buffer.alloc(INFLATE_CHUNK);
-    for (let k = 0; k < inputs.length; k++) {
-      const input = inputs[k]!;
-      // Z_FINISH on the last input is what turns a stream cut short into an
-      // error ("unexpected end of file"), exactly as in inflateSync.
-      const flush = k === inputs.length - 1 ? zlibConstants.Z_FINISH : zlibConstants.Z_NO_FLUSH;
-      let inOff = 0, availIn = input.length;
-      for (;;) {
-        state[0] = state[1] = 0xffffffff;
-        write(flush, input, inOff, availIn, out, 0, INFLATE_CHUNK);
-        const availOut = state[0]!, availInAfter = state[1]!;
-        if (failed || availOut > INFLATE_CHUNK || availInAfter > availIn) throw new Error('PNG image data is not a valid zlib stream');
-        const produced = INFLATE_CHUNK - availOut;
-        total += produced;
-        // Checked per INFLATE_CHUNK, before the piece is used: the stream is
-        // stopped within 64 KB of the bound, never inflated to its end.
-        if (total > limit) throw new Error('PNG image data is longer than its header says');
-        if (produced > 0) sink(out.subarray(0, produced));
-        inOff += availIn - availInAfter;
-        availIn = availInAfter;
-        // A full buffer means there may be more; anything else means this
-        // input is used up, or the stream has ended.
-        if (availOut !== 0) break;
+  let failure: Error | null = null;
+  const refuse = (err: Error): void => {
+    failure ??= err;
+    inflater.destroy();
+  };
+  const settled = new Promise<void>((resolve) => {
+    inflater.on('data', (piece: Buffer) => {
+      if (failure) return;
+      total += piece.length;
+      // Checked per piece, before the piece is used: the stream is stopped
+      // within INFLATE_CHUNK of the bound, never inflated to its end.
+      if (total > limit) return refuse(new Error('PNG image data is longer than its header says'));
+      try {
+        sink(piece);
+      } catch (err) {
+        refuse(err instanceof Error ? err : new Error(String(err)));
       }
-    }
-  } finally {
-    inflater.close();
-  }
-  return total;
-}
-
-/** The same contract by `inflateSync`, all at once: what a runtime without the primitive gets. */
-function inflateBatch(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Array) => void): number {
-  let raw: Buffer;
-  try {
-    raw = inflateSync(parts.length === 1 ? parts[0]! : Buffer.concat(parts), { maxOutputLength: limit });
-  } catch (err) {
-    const tooLong = err instanceof RangeError || (err as { code?: string }).code === 'ERR_BUFFER_TOO_LARGE';
-    throw new Error(tooLong ? 'PNG image data is longer than its header says' : 'PNG image data is not a valid zlib stream');
-  }
-  sink(raw);
-  return raw.length;
-}
-
-let streamingChecked: boolean | undefined;
-
-/**
- * Whether this runtime's zlib has the incremental primitive and it behaves:
- * the names exist, a known stream split in two inflates to exactly its data,
- * and both kinds of broken stream are refused -- one cut short (an error at
- * Z_FINISH) and one with a wrong checksum (a data error mid-call). Checked
- * once per process. A runtime that fails it falls back to `inflateBatch` --
- * correct, at the old memory cost -- rather than refusing every capture.
- */
-export function streamingInflateWorks(): boolean {
-  if (streamingChecked !== undefined) return streamingChecked;
-  try {
-    const probe = createInflate() as unknown as InflateInternals;
-    let usable = false;
-    try {
-      usable = typeof probe._handle?.writeSync === 'function' && probe._writeState instanceof Uint32Array && probe._writeState.length >= 2;
-    } finally {
-      probe.close();
-    }
-    if (!usable) return (streamingChecked = false);
-    // Known data, 3 * INFLATE_CHUNK + 5 patterned bytes so that inflating it
-    // fills the output buffer and continues more than once, as every real
-    // capture does; deflated by the batch API.
-    const PROBE_DATA = Buffer.alloc(3 * INFLATE_CHUNK + 5);
-    for (let i = 0; i < PROBE_DATA.length; i++) PROBE_DATA[i] = (i * 7 + (i >> 9)) & 0xff;
-    const PROBE_STREAM = deflateSync(PROBE_DATA);
-    const got = Buffer.alloc(PROBE_DATA.length);
-    let at = 0;
-    const half = PROBE_STREAM.length >> 1;
-    const length = inflateStreaming([PROBE_STREAM.subarray(0, half), PROBE_STREAM.subarray(half)], PROBE_DATA.length, (b) => {
-      if (at + b.length <= got.length) got.set(b, at);
-      at += b.length;
     });
-    const refuses = (stream: Uint8Array) => {
-      try { inflateStreaming([stream], PROBE_DATA.length, () => {}); } catch { return true; }
-      return false;
+    inflater.on('error', () => {
+      failure ??= new Error('PNG image data is not a valid zlib stream');
+      resolve();
+    });
+    inflater.on('end', resolve);
+    inflater.on('close', resolve);
+  });
+  // Waits for the stream to take more input, or to be gone.
+  const ready = (): Promise<void> => new Promise((resolve) => {
+    const done = (): void => {
+      inflater.off('drain', done);
+      inflater.off('close', done);
+      resolve();
     };
-    const badSum = Buffer.from(PROBE_STREAM);
-    badSum[badSum.length - 1] = badSum[badSum.length - 1]! ^ 1;
-    streamingChecked = length === PROBE_DATA.length && at === length && got.equals(PROBE_DATA)
-      && refuses(PROBE_STREAM.subarray(0, PROBE_STREAM.length - 2)) && refuses(badSum);
-  } catch {
-    streamingChecked = false;
-  }
-  return streamingChecked;
-}
-
-/**
- * @internal Test only. Forget the check above so it runs again, or pin its
- * answer so a test can drive the fallback (the batch API shares the native
- * handle, so breaking the primitive breaks the fallback too).
- */
-export function resetStreamingInflateCheck(pinned?: boolean): void {
-  streamingChecked = pinned;
+    inflater.on('drain', done);
+    inflater.on('close', done);
+  });
+  return (async () => {
+    // No IDAT at all still ends an (empty) stream, so it is refused the way
+    // inflateSync refuses an empty buffer.
+    for (const part of parts) {
+      if (failure || inflater.destroyed) break;
+      // Destroyed inside write (a refusal during a synchronous 'data'): do not
+      // wait on a 'close' that may already have been emitted.
+      if (!inflater.write(part) && !inflater.destroyed) await ready();
+    }
+    if (!failure && !inflater.destroyed) inflater.end();
+    await settled;
+    if (failure) throw failure;
+    return total;
+  })();
 }
 
 /**
  * Decode a checked PNG one row at a time: inflate, unfilter and convert
  * each row to 8-bit RGBA, and hand it to `onRow` (the buffer is reused: copy
  * what is kept). The whole image never exists at once, inflated or decoded --
- * two rows of filtered bytes, one of RGBA and the 64 KB inflate buffer do.
+ * two rows of filtered bytes, one of RGBA and a 64 KB inflate piece do.
  * Those rows are small for any screen (18048 px of RGBA is 72 KB), but they
- * are a row: an absurd geometry the caps still admit, 64000000x1, makes them
- * the whole image again (+505 MB measured, against +760 MB batch).
+ * are a row, so they follow width: 64000000x1, inside the area caps, made
+ * them the whole image again (+505 MB measured, against +760 MB batch) until
+ * MAX_DECODE_WIDTH refused it (#768). At that bound a row is at most 512 KB.
  *
  * Every colour type, bit depths 1/2/4/8 for grey and palette and 8/16 for the
  * rest (16-bit samples keep their high byte). A palette image's tRNS alpha is
@@ -320,7 +288,7 @@ export function resetStreamingInflateCheck(pinned?: boolean): void {
  * come before a broken zlib stream that the batch decode named first. Either
  * way the image is refused, never sent half-decoded.
  */
-function decodeRows(layout: PngLayout, onRow: (rgba: Uint8Array, y: number) => void): void {
+async function decodeRows(layout: PngLayout, onRow: (rgba: Uint8Array, y: number) => void): Promise<void> {
   const { width, height, depth, colorType, channels, rowBytes, palette, paletteAlpha } = layout;
   const stride = rowBytes + 1;
   const expected = stride * height;
@@ -418,9 +386,8 @@ function decodeRows(layout: PngLayout, onRow: (rgba: Uint8Array, y: number) => v
     // tolerated and ignored, as libpng does with a warning; the inflate's
     // bound refuses more.
   };
-  const inflate = streamingInflateWorks() ? inflateStreaming : inflateBatch;
   // Bounded by what the header declares, plus that slack.
-  const produced = inflate(layout.idat, expected + 64, take);
+  const produced = await inflateStream(layout.idat, expected + 64, take);
   if (produced < expected) throw new Error('PNG image data is shorter than its header says');
 }
 
@@ -429,10 +396,10 @@ function decodeRows(layout: PngLayout, onRow: (rgba: Uint8Array, y: number) => v
  * form. A capture on its way to the model goes through `decodeShrunkPng`,
  * which never holds the full-size image.
  */
-export function decodePng(png: Uint8Array): DecodedImage {
+export async function decodePng(png: Uint8Array): Promise<DecodedImage> {
   const layout = readPng(png);
   const whole = new AreaAverage(layout.width, layout.height, Infinity, Infinity);
-  decodeRows(layout, (row, y) => whole.addRow(row, y));
+  await decodeRows(layout, (row, y) => whole.addRow(row, y));
   return whole.result();
 }
 
@@ -445,10 +412,10 @@ export function decodePng(png: Uint8Array): DecodedImage {
  * (within maxWidth and maxHeight) the output is the full-size image, as it
  * always was: for a screenshot, up to 1600x8000, 51 MB.
  */
-export function decodeShrunkPng(png: Uint8Array, maxWidth: number, maxHeight = Infinity): DecodedImage & { origWidth: number; origHeight: number } {
+export async function decodeShrunkPng(png: Uint8Array, maxWidth: number, maxHeight = Infinity): Promise<DecodedImage & { origWidth: number; origHeight: number }> {
   const layout = readPng(png);
   const avg = new AreaAverage(layout.width, layout.height, maxWidth, maxHeight);
-  decodeRows(layout, (row, y) => avg.addRow(row, y));
+  await decodeRows(layout, (row, y) => avg.addRow(row, y));
   return { ...avg.result(), origWidth: layout.width, origHeight: layout.height };
 }
 
@@ -831,31 +798,68 @@ export function tooBigToSend(block: ContentBlock): boolean {
 }
 
 /**
+ * One compaction at a time, in the order they were asked for. While the
+ * decode was synchronous that was a given; now that it yields to the event
+ * loop, two tool calls (a background agent and the main one, say) could
+ * otherwise decode at once and hold two sets of row buffers and outputs. The
+ * daemon's memory is the constraint the streaming exists for, so they queue.
+ */
+let compactions: Promise<unknown> = Promise.resolve();
+let compactionsInFlight = 0;
+let compactionsInFlightPeak = 0;
+
+/** @internal Exported for its test; screenshotForModel is the one caller. */
+export function oneCompactionAtATime<T>(work: () => Promise<T>): Promise<T> {
+  const counted = async (): Promise<T> => {
+    compactionsInFlightPeak = Math.max(compactionsInFlightPeak, ++compactionsInFlight);
+    try {
+      return await work();
+    } finally {
+      compactionsInFlight--;
+    }
+  };
+  // The chain only ever holds settled-ok links (the catch below), so the
+  // previous link cannot reject into this one.
+  const run = compactions.then(counted);
+  compactions = run.catch(() => {});
+  return run;
+}
+
+/** @internal Test only: the most compactions that have run at once since the last call. */
+export function takeCompactionsInFlightPeak(): number {
+  const peak = compactionsInFlightPeak;
+  compactionsInFlightPeak = compactionsInFlight;
+  return peak;
+}
+
+/**
  * The image block a local screenshot should reach the model as.
  *
  * Full resolution whenever it fits, exactly as before; only a capture
  * `guardImageSize` would replace with a placeholder is compacted, once, with
  * the shared values. Unlike the routed path this does not take a second
  * capture: the compaction happens here, on the bytes already in hand, so the
- * picture is of the same moment.
+ * picture is of the same moment. Async because the inflate is (#769).
  */
-export function screenshotForModel(base64: string, mediaType: string): ScreenshotForModel {
+export async function screenshotForModel(base64: string, mediaType: string): Promise<ScreenshotForModel> {
   const block: ContentBlock = { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } };
   if (!tooBigToSend(block) && !(mediaType === 'image/png' && sideTooLong(base64))) return { ok: true, block, compacted: false };
   if (mediaType !== 'image/png') return { ok: false, reason: `the capture is ${mediaType}, which cannot be compacted here` };
-  const bytes = Buffer.from(base64, 'base64');
-  let jpeg: Uint8Array;
-  let small: ReturnType<typeof decodeShrunkPng>;
-  try {
-    // Straight to the shrunk size, never the full-size image (#748).
-    small = decodeShrunkPng(bytes, SCREENSHOT_COMPACT.maxWidth, MAX_IMAGE_SIDE);
-    jpeg = encodeJpeg(small, SCREENSHOT_COMPACT.jpegQuality);
-  } catch (err) {
-    return { ok: false, reason: `it could not be compacted (${err instanceof Error ? err.message : String(err)})` };
-  }
-  const compact: ContentBlock = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from(jpeg).toString('base64') } };
-  if (tooBigToSend(compact)) return { ok: false, reason: 'it is too large to send even after compacting it' };
-  return { ok: true, block: compact, compacted: true, width: small.width, height: small.height, origWidth: small.origWidth, origHeight: small.origHeight };
+  return oneCompactionAtATime(async (): Promise<ScreenshotForModel> => {
+    const bytes = Buffer.from(base64, 'base64');
+    let jpeg: Uint8Array;
+    let small: Awaited<ReturnType<typeof decodeShrunkPng>>;
+    try {
+      // Straight to the shrunk size, never the full-size image (#748).
+      small = await decodeShrunkPng(bytes, SCREENSHOT_COMPACT.maxWidth, MAX_IMAGE_SIDE);
+      jpeg = encodeJpeg(small, SCREENSHOT_COMPACT.jpegQuality);
+    } catch (err) {
+      return { ok: false, reason: `it could not be compacted (${err instanceof Error ? err.message : String(err)})` };
+    }
+    const compact: ContentBlock = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from(jpeg).toString('base64') } };
+    if (tooBigToSend(compact)) return { ok: false, reason: 'it is too large to send even after compacting it' };
+    return { ok: true, block: compact, compacted: true, width: small.width, height: small.height, origWidth: small.origWidth, origHeight: small.origHeight };
+  });
 }
 
 /**
