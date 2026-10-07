@@ -209,6 +209,83 @@ if (mode === "dry-run") {
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
+if (mode === "sidecar-digests") {
+  // #781: every sidecar-* artifact publish-sidecar publishes crosses with a
+  // digest carried as a job output, and is checked against it first.
+  const out = [];
+  const isUpload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/upload-artifact@");
+  // Legs of a job: 1 with no matrix, or with a matrix that is exactly one
+  // include entry and no axis. Any axis multiplies the legs (and include can
+  // add more), so anything else counts as many: they would share one
+  // outputs block.
+  const legsOf = (j) => {
+    const m = jobs[j]?.strategy?.matrix;
+    if (m === undefined) return 1;
+    if (!m || typeof m !== "object") return Infinity;
+    const keys = Object.keys(m);
+    return keys.length === 1 && keys[0] === "include" && Array.isArray(m.include) ? m.include.length : Infinity;
+  };
+  // The digest is taken of the finished file: after it, the job only uploads.
+  const digestLast = (name) => {
+    const steps = jobs[name]?.steps ?? [];
+    const at = steps.findIndex((st) => st.id === "digest");
+    if (at < 0) { out.push(name + ": no step with id digest"); return; }
+    if (!steps.slice(at + 1).length || !steps.slice(at + 1).every(isUpload))
+      out.push(name + ": steps other than uploads run after the digest is taken, so it may not describe what is uploaded");
+    if (!steps.slice(at + 1).some((st) => /^sidecar-/.test(String(st.with?.name ?? ""))))
+      out.push(name + ": does not upload a sidecar-* artifact after the digest");
+    if (steps[at]["continue-on-error"] !== undefined) out.push(name + ": the digest step has continue-on-error");
+    if (jobs[name]?.outputs?.sha256 !== "${{ steps.digest.outputs.sha256 }}")
+      out.push(name + ": output sha256 must be ${{ steps.digest.outputs.sha256 }} (got " + JSON.stringify(jobs[name]?.outputs?.sha256) + ")");
+  };
+  // A matrix shares ONE outputs block across its legs, so any leg can write
+  // a name another leg owns. Whatever uploads a sidecar-* artifact is
+  // therefore a job with at most one leg, and so the only writer of its own
+  // digest.
+  for (const [name, job] of Object.entries(jobs))
+    if ((job.steps ?? []).some((st) => isUpload(st) && /^sidecar-/.test(String(st.with?.name ?? ""))) && legsOf(name) > 1)
+      out.push(name + ": uploads a sidecar-* artifact from a matrix of " + legsOf(name) + " legs, any of which can set the digest output");
+  // Each leg job: one leg, the npm package its name says.
+  const expectEnv = {};
+  for (const leg of ["linux-x64", "linux-arm64", "darwin-arm64", "darwin-x64"]) {
+    const j = "build-sidecar-" + leg;
+    if (!jobs[j]) { out.push("no " + j + " job"); continue; }
+    const inc = jobs[j].strategy?.matrix?.include ?? [];
+    if (legsOf(j) !== 1 || inc[0]?.npm_pkg !== leg) out.push(j + ": must build exactly the " + leg + " leg (got " + JSON.stringify(inc.map((l) => l.npm_pkg)) + ")");
+    digestLast(j);
+    expectEnv[leg] = "needs." + j + ".outputs.sha256";
+  }
+  digestLast("sign-sidecar-windows");
+  expectEnv["win32-x64"] = "needs.sign-sidecar-windows.outputs.sha256";
+  const pub = jobs["publish-sidecar"];
+  if (!pub) out.push("no publish-sidecar job");
+  else {
+    for (const ref of Object.values(expectEnv)) {
+      const n = ref.split(".")[1];
+      if (!needsOf("publish-sidecar").includes(n)) out.push("publish-sidecar: does not list " + n + " in needs, so its outputs read as empty");
+    }
+    const steps = pub.steps ?? [];
+    const dl = steps.findIndex((st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@"));
+    const v = steps[dl + 1];
+    if (dl < 0) out.push("publish-sidecar: no artifact download");
+    else if (!v || typeof v.run !== "string" || !/\bsha256sum\s+--strict\s+-c\b/.test(v.run))
+      out.push("publish-sidecar: the step right after the download is not a sha256sum --strict -c of the artifacts");
+    else {
+      if (v.if !== undefined) out.push("publish-sidecar: the artifact check has an if:, so it can be switched off on its own");
+      for (const st of [steps[dl], v])
+        if (st["continue-on-error"] !== undefined) out.push("publish-sidecar: continue-on-error on " + (st.name ?? st.uses) + ", so a failed check would not stop the publish");
+      // By name, so two legs cannot be crossed over: the script binds each
+      // SHA_<LEG> to that leg file, which the fixtures below exercise.
+      for (const [leg, ref] of Object.entries(expectEnv)) {
+        const k = "SHA_" + leg.toUpperCase().replace(/-/g, "_");
+        if (v.env?.[k] !== "${{ " + ref + " }}")
+          out.push("publish-sidecar: the artifact check must take " + k + " from ${{ " + ref + " }} (got " + JSON.stringify(v.env?.[k]) + ")");
+      }
+    }
+  }
+  if (out.length) console.log(out.join("\n"));
+  process.exit(0);
+}
 // mode === "structure": one violation per line, nothing when clean.
 const out = [];
 const EXPECT_OUTPUTS = {
@@ -735,6 +812,190 @@ if [ -f "$copy" ] && [ -n "$(YQ_FILE="$copy" yq run-expressions)" ]; then
 	ok "reports: a \${{ }} expression back inside a sidecar-release.yml run:"
 else
 	no "reports: a \${{ }} expression back inside a sidecar-release.yml run:"
+fi
+
+echo
+echo "sidecar artifacts cross into publish-sidecar with their digests (#781)"
+found="$(YQ_FILE="$SIDECAR_WORKFLOW" yq sidecar-digests)" || {
+	no "sidecar digest structure check ran" "the bun helper failed"
+	found=""
+}
+if [ -z "$found" ]; then
+	ok "every build leg and the signer output a digest taken last, and publish-sidecar checks all five first"
+else
+	no "sidecar artifact digests" "$found"
+fi
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=sidecar-digests
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'publish-sidecar no longer checking the artifacts it publishes (#781)' \
+		'      - name: Verify sidecar artifacts' $'      - run: ls artifacts\n      - name: Verify sidecar artifacts'
+	mutant 'one leg left out of the check (#781)' \
+		'          SHA_LINUX_ARM64: ${{ needs.build-sidecar-linux-arm64.outputs.sha256 }}' ''
+	mutant 'two legs crossed over in the check (#781)' \
+		'          SHA_LINUX_ARM64: ${{ needs.build-sidecar-linux-arm64.outputs.sha256 }}' '          SHA_LINUX_ARM64: ${{ needs.build-sidecar-linux-x64.outputs.sha256 }}'
+	mutant 'the signed Windows binary unchecked (#781)' \
+		'          SHA_WIN32_X64: ${{ needs.sign-sidecar-windows.outputs.sha256 }}' ''
+	mutant 'two legs back in one matrix, sharing one outputs block (#781 review)' \
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n' \
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n          - goos: linux\n            goarch: arm64\n            npm_pkg: linux-arm64\n            runner: ubuntu-24.04-arm\n            setup: linux\n'
+	mutant 'a second matrix axis beside the one include entry, two legs again (#781 re-review)' \
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n' \
+		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n        shard: [a, b]\n'
+	mutant 'a leg job whose output is not its digest step (#781)' \
+		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}' \
+		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.other.outputs.sha256 }}'
+	mutant 'publish-sidecar not waiting for one leg, so its digest reads empty (#781)' \
+		' build-sidecar-darwin-x64, sign-sidecar-windows]' ' sign-sidecar-windows]'
+	mutant 'the digest taken before the bundle is packaged (#781)' \
+		'      # tar the bundle before upload' $'      - id: digest\n        run: "true"\n      # tar the bundle before upload'
+	mutant 'the signer digest dropped, so the signed binary has none (#781)' \
+		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      # For scripts/sign-windows.sh' $'    steps:\n      # For scripts/sign-windows.sh'
+	mutant 'the artifact check switched off on its own (#781)' \
+		$'      - name: Verify sidecar artifacts\n        env:' $'      - name: Verify sidecar artifacts\n        if: false\n        env:'
+	mutant 'the artifact check allowed to fail (#781 review)' \
+		$'      - name: Verify sidecar artifacts\n        env:' $'      - name: Verify sidecar artifacts\n        continue-on-error: true\n        env:'
+	unset MUTANT_MODE MUTANT_FROM
+}
+
+# The check itself, executed verbatim against artifact fixtures.
+VERIFY="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step publish-sidecar 'Verify sidecar artifacts')" || VERIFY=""
+if [ -z "$VERIFY" ]; then
+	no "found publish-sidecar's 'Verify sidecar artifacts' step"
+else
+	# fixture: lay out the five artifacts as download-artifact does, and set
+	# SUM_<LEG> to each digest.
+	fixture() {
+		rm -rf "${WORK}/pub" && mkdir -p "${WORK}/pub/artifacts"
+		local leg file
+		for leg in linux-x64:jarvis linux-arm64:jarvis darwin-arm64:jarvis-app.tar.gz darwin-x64:jarvis-app.tar.gz win32-x64:jarvis.exe; do
+			file="${leg#*:}"
+			leg="${leg%%:*}"
+			mkdir -p "${WORK}/pub/artifacts/sidecar-${leg}"
+			printf 'payload for %s\n' "$leg" >"${WORK}/pub/artifacts/sidecar-${leg}/${file}"
+		done
+		SUM_LINUX_X64="$(sha256sum "${WORK}/pub/artifacts/sidecar-linux-x64/jarvis" | cut -d' ' -f1)"
+		SUM_LINUX_ARM64="$(sha256sum "${WORK}/pub/artifacts/sidecar-linux-arm64/jarvis" | cut -d' ' -f1)"
+		SUM_DARWIN_ARM64="$(sha256sum "${WORK}/pub/artifacts/sidecar-darwin-arm64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+		SUM_DARWIN_X64="$(sha256sum "${WORK}/pub/artifacts/sidecar-darwin-x64/jarvis-app.tar.gz" | cut -d' ' -f1)"
+		SUM_WIN32_X64="$(sha256sum "${WORK}/pub/artifacts/sidecar-win32-x64/jarvis.exe" | cut -d' ' -f1)"
+	}
+	# run_verify: run the step as the runner would; sets RC.
+	run_verify() {
+		(cd "${WORK}/pub" && env -i PATH="$PATH" SIDECAR_BIN=jarvis \
+			SHA_LINUX_X64="$SUM_LINUX_X64" SHA_LINUX_ARM64="$SUM_LINUX_ARM64" \
+			SHA_DARWIN_ARM64="$SUM_DARWIN_ARM64" SHA_DARWIN_X64="$SUM_DARWIN_X64" \
+			SHA_WIN32_X64="$SUM_WIN32_X64" bash -c "$VERIFY") >"${WORK}/pub.log" 2>&1
+		RC=$?
+	}
+	fixture
+	run_verify
+	if [ "$RC" -eq 0 ]; then
+		ok "the artifact check passes the five artifacts the build jobs hashed"
+	else
+		no "the artifact check passes the five artifacts the build jobs hashed" "$(cat "${WORK}/pub.log")"
+	fi
+	# expect_refused <label> <::error:: text or empty>
+	expect_refused() {
+		run_verify
+		if [ "$RC" -eq 0 ]; then
+			no "the artifact check refuses ${1}" "exited 0: $(cat "${WORK}/pub.log")"
+		elif [ -n "$2" ] && ! grep -qF "$2" "${WORK}/pub.log"; then
+			no "the artifact check refuses ${1} with '${2}'" "$(cat "${WORK}/pub.log")"
+		else
+			ok "the artifact check refuses ${1}"
+		fi
+	}
+	fixture
+	printf 'swapped\n' >"${WORK}/pub/artifacts/sidecar-linux-arm64/jarvis"
+	expect_refused "a leg replaced after its build hashed it" "FAILED"
+	fixture
+	printf 'swapped\n' >"${WORK}/pub/artifacts/sidecar-win32-x64/jarvis.exe"
+	expect_refused "the signed Windows binary replaced after signing" "FAILED"
+	fixture
+	SUM_DARWIN_X64=""
+	expect_refused "a leg that reported no digest" "::error::no digest was reported for sidecar-darwin-x64/jarvis-app.tar.gz"
+	fixture
+	mkdir -p "${WORK}/pub/artifacts/sidecar-evil" && printf 'x\n' >"${WORK}/pub/artifacts/sidecar-evil/jarvis"
+	expect_refused "an extra sidecar-* artifact in the download" "not exactly the five"
+	fixture
+	printf 'x\n' >"${WORK}/pub/artifacts/sidecar-linux-x64/extra"
+	expect_refused "an extra file inside a leg (Prepare copies the whole directory)" "not exactly the five"
+	fixture
+	rm "${WORK}/pub/artifacts/sidecar-darwin-arm64/jarvis-app.tar.gz"
+	expect_refused "a missing artifact" "not exactly the five"
+	fixture
+	mv "${WORK}/pub/artifacts/sidecar-linux-x64/jarvis" "${WORK}/pub/real"
+	ln -s "${WORK}/pub/real" "${WORK}/pub/artifacts/sidecar-linux-x64/jarvis"
+	expect_refused "a link in place of a file" "other than files and directories"
+	fixture
+	tmp="$SUM_LINUX_X64"
+	SUM_LINUX_X64="$SUM_LINUX_ARM64"
+	SUM_LINUX_ARM64="$tmp"
+	expect_refused "two legs digests crossed over" "FAILED"
+fi
+# The other three digest checks on the release path, executed verbatim too
+# (#781 re-review): the structure rules see their shape, and only running
+# them shows a tampered file actually stops the job.
+# verbatim_case <label> <0|nonzero> <dir> <script> [VAR=value ...]
+verbatim_case() {
+	local label="$1" want="$2" dir="$3" script="$4"
+	shift 4
+	# bash -e, no pipefail: what GitHub runs for a step with no shell: key.
+	(cd "$dir" && env -i PATH="$PATH" "$@" bash -e -c "$script") >"${WORK}/v.log" 2>&1
+	local rc=$?
+	if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -ne 0 ]; }; then
+		ok "$label"
+	else
+		no "$label" "exit ${rc}: $(cat "${WORK}/v.log")"
+	fi
+}
+SIGNV="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-windows 'Verify the binary')" || SIGNV=""
+BRAINV="$(yq step publish-brain 'Verify the tarball')" || BRAINV=""
+RELV="$(yq step github-release 'Verify sidecar binaries')" || RELV=""
+if [ -z "$SIGNV" ] || [ -z "$BRAINV" ] || [ -z "$RELV" ]; then
+	no "found the three remaining digest checks (sign-sidecar-windows, publish-brain, github-release)"
+else
+	d="${WORK}/v" && rm -rf "$d" && mkdir -p "$d/sidecar" "$d/tmp/brain-pack" "$d/rel/artifacts/sidecar-linux-x64"
+	printf 'unsigned exe\n' >"$d/sidecar/jarvis.exe"
+	exe_sum="$(sha256sum "$d/sidecar/jarvis.exe" | cut -d' ' -f1)"
+	verbatim_case "sign-sidecar-windows accepts the binary its build hashed" 0 "$d/sidecar" "$SIGNV" SHA256="$exe_sum" SIDECAR_BIN=jarvis
+	verbatim_case "sign-sidecar-windows refuses an empty digest" 1 "$d/sidecar" "$SIGNV" SHA256= SIDECAR_BIN=jarvis
+	printf 'swapped\n' >"$d/sidecar/jarvis.exe"
+	verbatim_case "sign-sidecar-windows refuses a binary replaced after the build" 1 "$d/sidecar" "$SIGNV" SHA256="$exe_sum" SIDECAR_BIN=jarvis
+
+	tgz=usejarvis-brain-1.2.3.tgz
+	printf 'tarball\n' >"$d/tmp/brain-pack/$tgz"
+	tgz_sum="$(sha256sum "$d/tmp/brain-pack/$tgz" | cut -d' ' -f1)"
+	verbatim_case "publish-brain accepts the tarball pack-brain hashed" 0 "$d" "$BRAINV" TARBALL="$tgz" SHA256="$tgz_sum" RUNNER_TEMP="$d/tmp"
+	verbatim_case "publish-brain refuses an empty digest" 1 "$d" "$BRAINV" TARBALL="$tgz" SHA256= RUNNER_TEMP="$d/tmp"
+	verbatim_case "publish-brain refuses a tarball name outside the package" 1 "$d" "$BRAINV" TARBALL="../evil.tgz" SHA256="$tgz_sum" RUNNER_TEMP="$d/tmp"
+	printf 'swapped\n' >"$d/tmp/brain-pack/$tgz"
+	verbatim_case "publish-brain refuses a tarball replaced after packing" 1 "$d" "$BRAINV" TARBALL="$tgz" SHA256="$tgz_sum" RUNNER_TEMP="$d/tmp"
+
+	printf 'linux binary\n' >"$d/rel/artifacts/sidecar-linux-x64/jarvis"
+	sums="$(cd "$d/rel/artifacts" && sha256sum ./sidecar-linux-x64/jarvis | base64 -w0)"
+	verbatim_case "github-release accepts the binaries publish-sidecar published" 0 "$d/rel" "$RELV" SUMS="$sums"
+	verbatim_case "github-release refuses when the sidecar reported no digests" 1 "$d/rel" "$RELV" SUMS=
+	printf 'swapped\n' >"$d/rel/artifacts/sidecar-linux-x64/jarvis"
+	verbatim_case "github-release refuses a binary replaced after publish-sidecar" 1 "$d/rel" "$RELV" SUMS="$sums"
+fi
+# The leg side, run as the runner would.
+LEGDIGEST="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step build-sidecar-darwin-arm64 digest)" || LEGDIGEST=""
+if [ -z "$LEGDIGEST" ]; then
+	no "found build-sidecar-darwin-arm64's digest step"
+else
+	rm -rf "${WORK}/leg" && mkdir -p "${WORK}/leg"
+	printf 'a darwin bundle\n' >"${WORK}/leg/jarvis-app.tar.gz"
+	: >"${WORK}/leg/out"
+	(cd "${WORK}/leg" && env -i PATH="$PATH" GITHUB_OUTPUT="${WORK}/leg/out" FILE=jarvis-app.tar.gz LEG=darwin-arm64 bash -c "$LEGDIGEST") >/dev/null 2>&1
+	want="sha256=$(sha256sum "${WORK}/leg/jarvis-app.tar.gz" | cut -d' ' -f1)"
+	if [ "$(cat "${WORK}/leg/out")" = "$want" ]; then
+		ok "a leg job writes exactly its own digest output"
+	else
+		no "a leg job writes exactly its own digest output" "got: $(cat "${WORK}/leg/out"); want: ${want}"
+	fi
 fi
 
 echo

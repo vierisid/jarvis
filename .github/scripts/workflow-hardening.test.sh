@@ -37,7 +37,9 @@
 #      exactly the secrets it declares, which are exactly the ones it reads; a
 #      job that runs `npm publish` with id-token runs no Bun and no dependency
 #      install or build; on the release path no checkout leaves its token in
-#      the repository config; and no registry login happens on a dry run.
+#      the repository config; no registry login happens on a dry run; and
+#      (#781) a privileged job takes an artifact only by a digest another
+#      job reported as an output, checked in the step right after the download.
 #   7. (#687) "Authority" also counts any use of the `secrets` context other
 #      than secrets.GITHUB_TOKEN (including toJSON(secrets)), and `secrets:
 #      inherit`; and every rule that reads steps descends into local
@@ -429,6 +431,58 @@ if (rule === "narrow") {
         if (String(st.uses ?? "").startsWith("./"))
           out.push(name + ": runs local action " + st.uses + " in a job holding id-token");
     }
+    // Artifacts are writable by every job in the run, so on the release path
+    // a job holding id-token or a write scope takes one only by digest
+    // (#781): the step right after each download runs `sha256sum -c` on a
+    // digest that arrives as a job output (`needs.<job>.outputs`, which only
+    // that job can set), under the same condition as the download.
+    const privileged = oidc || perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
+    if (release && privileged) {
+      // Action names are case-insensitive to GitHub.
+      const isDownload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
+      for (const [i, st] of steps.entries()) {
+        if (!isDownload(st)) continue;
+        const next = steps[i + 1];
+        const label = name + ": download " + JSON.stringify(st.with?.name ?? st.with?.pattern ?? "(all)");
+        // The check, on a line that is not a comment, not excused by || true.
+        const code = typeof next?.run === "string" ? next.run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n") : "";
+        const checkLine = code.split("\n").find((l) => /\bsha256sum\b[^\n]*\s-c\b/.test(l));
+        // The env vars that carry a job-output digest; the script must read
+        // one of them, not merely have it in scope.
+        const carriers = Object.entries(next?.env ?? {})
+          .filter(([, v]) => /\$\{\{\s*needs\s*\.\s*[\w-]+\s*\.\s*outputs\s*\.\s*[\w-]+\s*\}\}/.test(String(v))).map(([k]) => k);
+        if (!checkLine)
+          out.push(label + " is not followed at once by a sha256sum -c of what it fetched");
+        else if (!carriers.length)
+          out.push(label + " is checked against no needs.<job>.outputs digest");
+        else if (!carriers.some((k) => new RegExp("\\$\\{?" + k + "\\b").test(code)))
+          out.push(label + " has a needs.<job>.outputs digest in env that its check never reads");
+        // Its failure must end the step: no || after it (on its line or
+        // continued onto the next), no if or ! around it, no set +e, and no
+        // shell other than the default bash -e.
+        // The check must also be the LAST command of its line: a pipe after it
+        // (GitHub default shell is bash -e, without pipefail), a trailing &,
+        // or a $( ) or backtick around it would each take its exit status.
+        else if (/\|\|/.test(checkLine) || /^\s*(?:if|elif|while|until)\b|^\s*!/.test(checkLine) ||
+                 !/\bsha256sum\b[^|;&)`]*\s-c\b[^|;&)`]*$/.test(checkLine) || /\$\(|`/.test(checkLine.split(/\bsha256sum\b/).slice(-2, -1)[0] ?? "") ||
+                 /(?:^|[;&|]\s*)set\s+\+o\s+pipefail\b/m.test(code) ||
+                 /(?:^|[;&|]\s*)set\s+\+[a-z]*e/m.test(code) || /(?:^|[;&|]\s*)set\s+\+o\s+errexit/m.test(code) ||
+                 (next.shell !== undefined && !/^bash\s+-e\b|^bash$/.test(String(next.shell))))
+          out.push(label + " is checked with a failure excused (||, if, !, a pipe, & or $( ) after or around it, set +e, set +o pipefail, or a shell without -e)");
+        else if ((next.if ?? null) !== (st.if ?? null))
+          out.push(label + " is checked under a different condition (" + JSON.stringify(next.if) + ") than it is downloaded (" + JSON.stringify(st.if) + ")");
+        for (const s2 of [st, next])
+          if (s2 && s2["continue-on-error"] !== undefined)
+            out.push(label + ": continue-on-error on " + JSON.stringify(s2.name ?? s2.uses ?? "a step") + ", so a failed check would not stop the job");
+      }
+      // Other ways to fetch an artifact, which this rule cannot follow.
+      for (const line of lines)
+        if (/\bgh\s+run\s+download\b|\bactions\/(?:runs\/[^\s/]+\/)?artifacts\b/.test(line))
+          out.push(name + ": fetches artifacts outside actions/download-artifact, which the digest rule cannot check: " + line);
+      for (const st of steps)
+        if (/^actions\/github-script@/i.test(String(st.uses ?? "")) && /artifact/i.test(String(st.with?.script ?? "")))
+          out.push(name + ": github-script touching artifacts, which the digest rule cannot check");
+    }
     // google-github-actions/auth writes a credentials file by default that
     // can mint further tokens; on the release path only access_token is used.
     if (release)
@@ -469,7 +523,9 @@ expect_clean() {
 	if [ -z "$found" ]; then ok "$1"; else no "$1" "$found"; fi
 }
 
-# expect_caught <label> <rule> <file> <exact text> <replacement>
+# expect_caught <label> <rule> <file> <exact text> <replacement> [reason]
+# With a reason, the report must contain it: a mutant that some OTHER rule
+# happens to report proves nothing about the rule it was written for.
 expect_caught() {
 	local copy="${WORK}/mutant.yml"
 	if ! FROM="$3" TO="$copy" OLD="$4" NEW="$5" bun -e '
@@ -481,10 +537,15 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 		no "mutant '$1' could be applied (the workflow no longer has the text it mutates)"
 		return
 	fi
-	if [ -n "$(check "$2" "$copy")" ]; then
-		ok "reports: $1"
-	else
+	local found
+	found="$(check "$2" "$copy")"
+	if [ -z "$found" ]; then
 		no "reports: $1" "the check passed a workflow with this hole"
+	elif [ -n "${6:-}" ] && ! grep -qF -- "$6" <<<"$found"; then
+		no "reports: $1, for the reason it exists" "wanted '${6}', got:
+${found}"
+	else
+		ok "reports: $1"
 	fi
 }
 
@@ -692,7 +753,7 @@ fi
 echo
 echo "per-job authority on the release path"
 for f in "$WORKFLOWS"/*.yml; do
-	expect_clean "$(basename "$f"): no id-token matrix, no inherited secrets, OIDC publish jobs run no build, no persisted credentials" narrow "$f"
+	expect_clean "$(basename "$f"): no id-token matrix, no inherited secrets, OIDC publish jobs run no build, no persisted credentials, artifacts taken by digest" narrow "$f"
 done
 
 echo
@@ -831,34 +892,43 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		$'    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n' $'    secrets: inherit\n    x-was:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n'
 	expect_caught 'a declared signing secret the caller does not pass (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
-	expect_caught 'id-token back on the four-leg sidecar matrix' narrow "$WORKFLOWS/sidecar-release.yml" \
-		$'    permissions:\n      contents: read\n    env:\n      # secrets can' $'    permissions:\n      contents: read\n      id-token: write\n    env:\n      # secrets can'
+	expect_caught 'id-token back on a sidecar build leg' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env: &build-sidecar-leg-env' $'      contents: read\n      id-token: write\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env: &build-sidecar-leg-env' \
+		'a matrix job holding id-token'
 	expect_caught 'the brain build back in the job that holds id-token' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: bun run prepublishOnly\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: bun run prepublishOnly\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'a token left in .git/config by the release job' narrow "$WORKFLOWS/release-exec.yml" \
 		$'          fetch-depth: 0\n          persist-credentials: false\n' $'          fetch-depth: 0\n'
 	expect_caught 'no secrets passed to the sidecar call at all (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}\n      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}\n      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}\n      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
 	expect_caught 'a checkout back in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Verify the tarball' \
+		'uses actions/checkout@'
 	expect_caught 'a directory npm publish (runs lifecycle scripts)' narrow "$WORKFLOWS/release-exec.yml" \
 		'npm publish "${RUNNER_TEMP}/brain-pack/${TARBALL}" --access public' 'npm publish --access public'
 	expect_caught 'the digest check removed before the publish' narrow "$WORKFLOWS/release-exec.yml" \
 		'| sha256sum -c -' '| cat'
 	expect_caught 'another global package installed in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: npm install -g evil@1.0.0\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: npm install -g evil@1.0.0\n      - name: Verify the tarball' \
+		'installs something other than npm'
 	expect_caught 'a node script run in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: node scripts/x.js\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: node scripts/x.js\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'the Windows build back in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
 		'      - name: Install osslsigncode' $'      - run: ../.github/scripts/build-sidecar.sh\n      - name: Install osslsigncode'
 	expect_caught 'a global install with the flag after the package' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: npm install evil@1.0.0 -g\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: npm install evil@1.0.0 -g\n      - name: Verify the tarball' \
+		'installs something other than npm'
 	expect_caught 'npm test in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: npm test\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: npm test\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'a command behind sudo in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: sudo node x.js\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: sudo node x.js\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'a non-shell step in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - shell: node {0}\n        run: console.log(1)\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - shell: node {0}\n        run: console.log(1)\n      - name: Verify the tarball' \
+		'step with shell:'
 	expect_caught 'go test in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
 		'      - name: Install osslsigncode' $'      - run: go test ./...\n      - name: Install osslsigncode'
 	expect_caught 'a local action in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
@@ -866,9 +936,64 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'the Google credentials file left in the workspace' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'          create_credentials_file: false\n' ''
 	expect_caught 'node behind an if, in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: if node x.js; then true; fi\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: if node x.js; then true; fi\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'node behind an assignment and a path, in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: X=1 /usr/bin/node evil.js\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: X=1 /usr/bin/node evil.js\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
+	expect_caught 'a digest check allowed to fail (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Verify the binary\n' $'      - name: Verify the binary\n        continue-on-error: true\n' \
+		'continue-on-error on "Verify the binary"'
+	expect_caught 'a digest check that hashes the file against itself, the digest left unread (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-sidecar-windows reported no digest"; exit 1; }\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		'          sha256sum "${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		'has a needs.<job>.outputs digest in env that its check never reads'
+	expect_caught 'a digest check whose failure is excused (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' 'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - || true' \
+		'failure excused'
+	expect_caught 'a digest check excused with || echo (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' 'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - || echo ignored' \
+		'failure excused'
+	expect_caught 'a digest check wrapped in if ! (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          if ! echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -; then echo ignored; fi' \
+		'failure excused'
+	expect_caught 'a digest check after set +e (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +e\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -\n          true' \
+		'failure excused'
+	expect_caught 'a digest check excused on the next line (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - ||\n            true' \
+		'failure excused'
+	expect_caught 'a digest check piped into cat, without pipefail (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - | cat' \
+		'failure excused'
+	expect_caught 'a digest check swallowed by a command substitution (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "$(echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -)"' \
+		'failure excused'
+	expect_caught 'a digest check sent to the background (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - &' \
+		'failure excused'
+	expect_caught 'pipefail switched off before the digest check (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +o pipefail\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		'failure excused'
+	expect_caught 'the download action spelled in another case, used before its check (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: sidecar\n' \
+		$'      - uses: Actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: sidecar\n      - run: ls sidecar\n' \
+		'is not followed at once by a sha256sum -c'
+	expect_caught 'an artifact fetched with gh run download in a signing job (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Install osslsigncode' $'      - run: gh run download "$GITHUB_RUN_ID" -n unsigned-win32-x64\n      - name: Install osslsigncode' \
+		'fetches artifacts outside actions/download-artifact'
+	expect_caught 'publish-sidecar using the artifacts before checking them (#781)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Verify sidecar artifacts' $'      - run: ls artifacts\n      - name: Verify sidecar artifacts' \
+		'is not followed at once by a sha256sum -c'
+	expect_caught 'the signer checking the binary against something other than a job output (#781)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          SHA256: ${{ needs.build-sidecar-windows.outputs.sha256 }}' '          SHA256: ${{ vars.EXPECTED_SHA256 }}' \
+		'is checked against no needs.<job>.outputs digest'
+	expect_caught 'the release attaching sidecar binaries whose check can be switched off alone (#781)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Verify sidecar binaries\n        if: needs.sidecar.outputs.released == \'true\'' $'      - name: Verify sidecar binaries\n        if: false' \
+		'is checked under a different condition'
+	expect_caught 'the npm publish job doing something between the tarball download and its check (#781)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: ls\n      - name: Verify the tarball' \
+		'is not followed at once by a sha256sum -c'
 	expect_caught 'a registry login on a dry run' narrow "$WORKFLOWS/release-exec.yml" \
 		$'        if: env.DRY_RUN != \'true\'\n        uses: docker/login-action@' $'        uses: docker/login-action@'
 }
