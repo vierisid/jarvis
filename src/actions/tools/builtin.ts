@@ -22,9 +22,10 @@ import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upl
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import {
-  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget,
+  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
   type SidecarPageRead,
 } from './sidecar-route.ts';
+import { getMachineScope } from '../machine-scope.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
@@ -43,7 +44,7 @@ import {
   secretInodeRefusal,
   secretListRefusal, secretRead, secretReadRefusal, secretRefusalTextFor, secretScanRefusal, siteGitRefusal,
 } from './file-path-policy.ts';
-import { forCard } from '../../util/card-text.ts';
+import { forCard, commandForCard, escapedLiteralForCard } from '../../util/card-text.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 
@@ -307,6 +308,72 @@ export const runCommandTool: ToolDefinition = {
       description: 'Timeout in milliseconds (optional, defaults to 30000)',
       required: false,
     },
+  },
+  /**
+   * The card for a shell command (#720): which machine, which directory, and
+   * the command itself, shown by the same `commandForCard` as
+   * `site_run_command` (#707). Without this gate the dashboard fell back to
+   * `Run: ${command}` raw, so a newline collapsed in HTML (a second line hid
+   * behind a `#` comment on the first) and a bidi override reordered the line,
+   * and nothing said where it would run.
+   *
+   * It adds no category and no `confirm`: `execute_command` is already the
+   * static floor, so the decision -- allowed, approval, denied, the voice gate,
+   * the approval learner -- is exactly what it was. What it adds is the
+   * sentence, and with it the deferred executor's comparison: an approval is
+   * of THIS machine and directory, and a call that would now land elsewhere
+   * (a sidecar picked automatically went away, a name now matches another
+   * sidecar, the site chat whose cwd it was ended) is refused rather than run
+   * under the old click.
+   *
+   * The machine is named as the dispatch will find it, not as the model spelled
+   * it (#720 review): `findSidecar` matches an id, then a name ignoring case,
+   * then the first name CONTAINING the text, so `target: "server"` runs on
+   * "prod-server". The card shows the enrolled name and the id, which also puts
+   * the id into the deferred comparison: a spelling that resolves to another
+   * machine by the time the click lands no longer has the approved sentence.
+   *
+   * Every model-supplied value is shown whole: names, the id and the directory
+   * as escaped literals, since they sit mid-sentence and must not be able to
+   * forge its ending, the command last. Total, as a gate must be: a throw
+   * would turn every call into a mandatory "business effect unknown" card.
+   */
+  authorityGate: (params) => {
+    const command = commandForCard(params.command, { trim: false });
+    const dir = params.cwd ? `in ${escapedLiteralForCard(params.cwd)}` : 'in its default directory';
+    // Under a workflow's machine scope the scope picks the machine at dispatch.
+    // Asking it here would create the run's durable machine binding as a side
+    // effect of a call that may yet be refused (run_command is opaque to the
+    // effect boundary), so the card says so instead of resolving.
+    if (getMachineScope()) {
+      return { actionCategory: 'execute_command',
+        intent: `On the machine this workflow run is bound to, ${dir}, ${command}` };
+    }
+    let routed: string | null;
+    try {
+      routed = params.target ? String(params.target) : autoTargetForCapability('terminal');
+    } catch {
+      return { actionCategory: 'execute_command',
+        intent: `On a machine that could not be resolved (this call will fail), ${command}` };
+    }
+    if (routed) {
+      let found: { id: string; name: string } | null = null;
+      try {
+        found = findSidecar(routed, getSidecarManager()?.listSidecars() ?? []);
+      } catch { /* named as spelled below */ }
+      const how = params.target ? '' : ', picked automatically';
+      const machine = found
+        ? `sidecar ${escapedLiteralForCard(found.name)} (id ${escapedLiteralForCard(found.id)}${how})`
+        : `sidecar ${escapedLiteralForCard(routed)}, which matches no enrolled sidecar (this call will fail)`;
+      return { actionCategory: 'execute_command', intent: `On ${machine}, ${dir}, ${command}` };
+    }
+    if (isNoLocalTools()) {
+      return { actionCategory: 'execute_command',
+        intent: `On this Jarvis host, where local tools are disabled (this call will be refused), ${command}` };
+    }
+    const cwd = resolve(String(params.cwd || getDefaultCwd() || homedir()));
+    return { actionCategory: 'execute_command',
+      intent: `On this Jarvis host, in ${escapedLiteralForCard(cwd)}, ${command}` };
   },
   execute: async (params) => {
     const target = (params.target as string | undefined) || autoTargetForCapability('terminal');

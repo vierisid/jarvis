@@ -22,6 +22,7 @@ import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
 import { boundedApprovalLabel } from '../authority/approval-delivery.ts';
+import { commandForCard } from '../util/card-text.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -2829,8 +2830,13 @@ function synthesizeApprovalIntent(request: ApprovalRequest): string {
     }
     case 'run_command':
     case 'execute_command': {
-      const cmd = asString(args.command) ?? 'a shell command';
-      return `Run: ${cmd}`;
+      // Only an approval recorded before `run_command` had a gate (#720)
+      // reaches this; every new one carries the gate's sentence above. Shown
+      // as the gate shows it, never raw: a newline collapsed in HTML let a
+      // second line hide behind a `#` comment, and a bidi override reordered
+      // the line. A plain one-line command reads exactly as it always did.
+      const shown = commandForCard(asString(args.command) ?? '', { trim: false });
+      return asString(args.command) === undefined ? 'Run a shell command' : `R${shown.slice(1)}`;
     }
     case 'delete_file':
     case 'delete_data': {
