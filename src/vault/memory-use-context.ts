@@ -1,5 +1,5 @@
 import { getDb } from './schema';
-import { assertNoForgottenMemory, assertNoForgottenProfileSources, automaticSourceKey } from './memory-suppression';
+import { assertNoForgottenMemory, assertNoForgottenProfileSources, automaticSourceKey, profileSourceRef } from './memory-suppression';
 import type { Database } from 'bun:sqlite';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentBriefTurn, type BriefExecutionContext } from '../brief/chat-context';
@@ -89,6 +89,6 @@ export function captureProfileSources(answers: Record<string, string | undefined
   const capture = current(); if (!capture) return;
   for (const [field, answer] of Object.entries(answers)) if (answer) {
     for (const kind of ['answer', 'derived']) capture.profileSources.add(automaticSourceKey(capture.db,
-      { source: 'user_profile', source_ref: `profile:${kind}:${field}`, quote: answer })!);
+      { source: 'user_profile', source_ref: profileSourceRef(capture.db, kind, field), quote: answer })!);
   }
 }

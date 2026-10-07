@@ -1,6 +1,6 @@
 import { captureProfileSources } from './memory-use-context';
 import { predicateKey, valueKey } from './fact-policy';
-import { FactSuppressedError, profileSourceForgotten } from './memory-suppression';
+import { FactSuppressedError, profileSourceForgotten, profileSourceRef } from './memory-suppression';
 import { deleteSetting, getSetting, setSetting } from './settings.ts';
 import { createEntity, updateEntity } from './entities.ts';
 import { createFact, findFacts, type Fact } from './facts.ts';
@@ -62,6 +62,11 @@ function saveUserProfileRecord(input: Record<string, unknown>): UserProfileRecor
   const existing = getUserProfile();
   const now = Date.now();
   const answers = normalizeUserProfileAnswers(input);
+  for (const question of USER_PROFILE_QUESTIONS) {
+    if (answers[question.id] !== existing?.answers[question.id]) getDb().run(
+      `INSERT INTO memory_profile_revisions (field, revision) VALUES (?, ?)
+       ON CONFLICT(field) DO UPDATE SET revision = excluded.revision`, [question.id, crypto.randomUUID()]);
+  }
   const profile: UserProfileRecord = {
     version: 1,
     answers,
@@ -193,7 +198,7 @@ function syncUserProfileKnowledge(profile: UserProfileRecord): void {
     const desired = USER_PROFILE_QUESTIONS.flatMap<ProfileKnowledgeFact>(question => {
       const answer = profile.answers[question.id]?.trim();
       return answer ? [{ predicate: question.id, object: answer, confirmed: true,
-        sourceRef: `profile:answer:${question.id}`, quote: answer }] : [];
+        sourceRef: profileSourceRef(getDb(), 'answer', question.id), quote: answer }] : [];
     }).concat(getDerivedUserProfileFacts(profile));
     const saved = desired.flatMap(fact => {
       try { return [createFact(entity.id, fact.predicate, fact.object, {
@@ -226,7 +231,7 @@ function getDerivedUserProfileFacts(profile: UserProfileRecord): ProfileKnowledg
   const preferredName = profile.answers.preferred_name?.trim();
   if (preferredName) {
     facts.push({ predicate: 'name', object: preferredName, confirmed: true,
-      sourceRef: 'profile:answer:preferred_name', quote: preferredName });
+      sourceRef: profileSourceRef(getDb(), 'answer', 'preferred_name'), quote: preferredName });
   }
 
   const aliasQuestions = ['important_people', 'anything_else', 'work_role', 'communication_preferences'] as const;
@@ -236,7 +241,7 @@ function getDerivedUserProfileFacts(profile: UserProfileRecord): ProfileKnowledg
     if (!answer) continue;
     for (const alias of extractAliases(answer)) {
       for (const predicate of ['alias', 'username']) facts.push({ predicate, object: alias,
-        confirmed: false, sourceRef: `profile:derived:${question}`, quote: answer });
+        confirmed: false, sourceRef: profileSourceRef(getDb(), 'derived', question), quote: answer });
     }
   }
 
@@ -270,7 +275,7 @@ export function profileSourceRevisionsForFact(fact: Fact): { source: string; sou
   if (entity?.id !== fact.subject_id || fact.scope || fact.valid_from !== null || fact.valid_to !== null) return [];
   const desired: ProfileKnowledgeFact[] = USER_PROFILE_QUESTIONS.flatMap(question => {
     const answer = profile.answers[question.id];
-    return answer ? [{ predicate: question.id, object: answer, confirmed: true, sourceRef: `profile:answer:${question.id}`, quote: answer }] : [];
+    return answer ? [{ predicate: question.id, object: answer, confirmed: true, sourceRef: profileSourceRef(getDb(), 'answer', question.id), quote: answer }] : [];
   });
   desired.push(...getDerivedUserProfileFacts(profile));
   return desired.filter(item => predicateKey(item.predicate) === fact.predicate_key && valueKey(item.predicate, item.object) === fact.value_key)

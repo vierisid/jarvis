@@ -34,6 +34,8 @@ export function ensureFactSchema(db: Database): void {
       confidence REAL NOT NULL, recorded_at INTEGER NOT NULL, evidence_key TEXT NOT NULL,
       UNIQUE(fact_id, evidence_key)
     )`);
+    const evidenceColumns = new Set(db.query<{ name: string }, []>('PRAGMA table_info(fact_evidence)').all().map(c => c.name));
+    if (!evidenceColumns.has('replay_source_ref')) db.run('ALTER TABLE fact_evidence ADD COLUMN replay_source_ref TEXT');
     db.run('CREATE INDEX IF NOT EXISTS idx_fact_evidence_fact ON fact_evidence(fact_id)');
     db.run('CREATE INDEX IF NOT EXISTS idx_facts_identity ON facts(subject_id, predicate_key, scope, value_key)');
     const legacy = db.query<FactRow, []>('SELECT * FROM facts WHERE predicate_key IS NULL ORDER BY created_at, id').all();

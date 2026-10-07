@@ -230,3 +230,115 @@ test('canonical later input can repeat identical words while old input replay re
   await withBriefTurn(fresh, () => extractAndStore('Ada uses Emacs', 'Understood', llm(content)));
   expect(findFacts({ predicate: 'preferred_editor' })).toEqual([]);
 });
+
+// Review regressions: explicit source revisions must survive round trips and replay contexts.
+test('a changed-back profile answer is new input, while later unrelated saves stay suppressed', () => {
+  saveUserProfile({ preferred_name: 'Ada', interests: 'Chemistry', work_role: 'Founder' });
+  const original = findFacts({ predicate: 'interests' })[0]!; forget(original.id);
+  closeDb(); initDatabase(file, { quiet: true }); service = new MemoryForget(getDb());
+  saveUserProfile({ ...getUserProfile()!.answers, work_role: 'CEO' });
+  expect(findFacts({ predicate: 'interests' })).toEqual([]);
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Physics' });
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Chemistry' });
+  const restored = findFacts({ predicate: 'interests' })[0]!;
+  expect(restored?.object).toBe('Chemistry'); expect(restored.id).not.toBe(original.id);
+  expect(getUserProfileForPrompt()?.answers.interests).toBe('Chemistry');
+  forget(restored.id);
+  saveUserProfile({ ...getUserProfile()!.answers, work_role: 'Engineer' });
+  expect(findFacts({ predicate: 'interests' })).toEqual([]);
+  expect(getUserProfileForPrompt()?.answers.interests).toBeUndefined();
+  expect(service.get(original.id).state).toBe('forgotten');
+});
+test('removing and re-entering a profile field restores its derived alias as a fresh revision', () => {
+  saveUserProfile({ preferred_name: 'Ada', anything_else: 'My alias is secret_handle' });
+  const original = findFacts({ predicate: 'alias' })[0]!; forget(original.id);
+  saveUserProfile({ ...getUserProfile()!.answers, anything_else: '' });
+  saveUserProfile({ ...getUserProfile()!.answers, anything_else: 'My alias is secret_handle' });
+  expect(findFacts({ predicate: 'alias' })[0]?.object).toBe('secret_handle');
+  expect(getUserProfileForPrompt()?.answers.anything_else).toBe('My alias is secret_handle');
+});
+test('canonical profile correction back to a forgotten answer restores the prompt too', () => {
+  saveUserProfile({ preferred_name: 'Ada', interests: 'Chemistry' });
+  forget(findFacts({ predicate: 'interests' })[0]!.id);
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Physics' });
+  correctFact(findFacts({ predicate: 'interests' })[0]!.id, 'Chemistry', 'Explicitly changed my answer back');
+  expect(findFacts({ predicate: 'interests' })[0]?.object).toBe('Chemistry');
+  expect(getUserProfileForPrompt()?.answers.interests).toBe('Chemistry');
+});
+for (const legacy of [false, true]) test(`old profile provenance (unknown=${legacy}) stays suppressed until its field is explicitly edited`, () => {
+  saveUserProfile({ preferred_name: 'Ada', interests: 'Chemistry', work_role: 'Founder' });
+  // Emulate a profile saved before per-field revision identities existed.
+  if (getDb().query("SELECT 1 FROM sqlite_master WHERE name = 'memory_profile_revisions'").get()) getDb().run('DELETE FROM memory_profile_revisions');
+  const fact = findFacts({ predicate: 'interests' })[0]!;
+  getDb().run('UPDATE fact_evidence SET source_ref = ?, quote = ? WHERE fact_id = ?',
+    [legacy ? `legacy:${fact.id}` : 'profile:answer:interests', legacy ? null : 'Chemistry', fact.id]);
+  forget(fact.id); closeDb(); initDatabase(file, { quiet: true }); service = new MemoryForget(getDb());
+  saveUserProfile({ ...getUserProfile()!.answers, work_role: 'CEO' });
+  expect(findFacts({ predicate: 'interests' })).toEqual([]);
+  expect(getUserProfileForPrompt()?.answers.interests).toBeUndefined();
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Physics' });
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Chemistry' });
+  expect(findFacts({ predicate: 'interests' })[0]?.object).toBe('Chemistry');
+  expect(getUserProfileForPrompt()?.answers.interests).toBe('Chemistry');
+});
+test('restored profile input cannot authorize a context prepared before the original Forget', async () => {
+  saveUserProfile({ preferred_name: 'Ada', interests: 'Chemistry' });
+  await withMemoryRecall(async () => {
+    const oldText = formatUserProfileForPrompt(getUserProfileForPrompt())!;
+    forget(findFacts({ predicate: 'interests' })[0]!.id);
+    saveUserProfile({ ...getUserProfile()!.answers, interests: 'Physics' });
+    saveUserProfile({ ...getUserProfile()!.answers, interests: 'Chemistry' });
+    expect(findFacts({ predicate: 'interests' })[0]?.object).toBe('Chemistry');
+    await expect(llm('answer').chat([{ role: 'system', content: oldText }])).rejects.toThrow('forgotten');
+  });
+  await withMemoryRecall(async () => {
+    const freshText = formatUserProfileForPrompt(getUserProfileForPrompt())!;
+    expect(freshText).toContain('Chemistry');
+    await expect(llm('answer').chat([{ role: 'system', content: freshText }])).resolves.toMatchObject({ content: 'answer' });
+    forget(findFacts({ predicate: 'interests' })[0]!.id);
+    await expect(llm('answer').chat([{ role: 'system', content: freshText }])).rejects.toThrow('forgotten');
+  });
+});
+test('scoped extraction remains forgotten on unscoped replay after restart and repeated Forget', async () => {
+  const content = JSON.stringify({ entities: [{ name: 'Ada', type: 'person' }], facts: [{ subject: 'Ada', predicate: 'preferred_editor', object: 'Emacs' }] });
+  const accept = (turnId: string) => {
+    const repo = new ChatTurnRepository(getDb());
+    const ref = { conversationId: repo.conversations.create().conversationId, turnId, requestId: turnId };
+    repo.accept({ ...ref, text: 'Ada uses Emacs' }); repo.start(ref);
+    return { ...ref, signal: new AbortController().signal, progress: () => {} };
+  };
+  const extract = () => extractAndStore('Ada uses Emacs', 'Understood', llm(content));
+  const original = accept('original'); await withBriefTurn(original, extract);
+  forget(findFacts({ predicate: 'preferred_editor' })[0]!.id);
+  closeDb(); initDatabase(file, { quiet: true }); service = new MemoryForget(getDb());
+  await extract(); expect(findFacts({ predicate: 'preferred_editor' })).toEqual([]);
+  expect(new ChatTurnRepository(getDb()).get(original)?.text).toBe('Ada uses Emacs');
+  await Bun.sleep(3); const fresh = accept('fresh'); await withBriefTurn(fresh, extract);
+  const restored = findFacts({ predicate: 'preferred_editor' })[0]!; expect(restored).toBeDefined();
+  const pending = accept('pending-before-second-forget'); await Bun.sleep(3); forget(restored.id);
+  for (const ref of [original, fresh, pending]) {
+    await withBriefTurn({ ...ref }, extract); expect(findFacts({ predicate: 'preferred_editor' })).toEqual([]);
+  }
+  await extract(); expect(findFacts({ predicate: 'preferred_editor' })).toEqual([]);
+  await Bun.sleep(3); await withBriefTurn(accept('after-second-forget'), extract);
+  expect(findFacts({ predicate: 'preferred_editor' })).toHaveLength(1);
+});
+test('re-ingestion enriches existing scoped evidence with its durable replay alias without duplicating it', async () => {
+  const content = JSON.stringify({ entities: [{ name: 'Ada', type: 'person' }], facts: [{ subject: 'Ada', predicate: 'preferred_editor', object: 'Emacs' }] });
+  const repo = new ChatTurnRepository(getDb());
+  const ref = { conversationId: repo.conversations.create().conversationId, turnId: 'old-evidence', requestId: 'old-evidence' };
+  repo.accept({ ...ref, text: 'Ada uses Emacs' }); repo.start(ref);
+  const context = { ...ref, signal: new AbortController().signal, progress: () => {} };
+  const extract = () => extractAndStore('Ada uses Emacs', 'Understood', llm(content));
+  await withBriefTurn({ ...context }, extract);
+  const fact = findFacts({ predicate: 'preferred_editor' })[0]!;
+  // Reopen the pre-fix evidence schema, which did not store the replay alias.
+  if (getDb().query<{ name: string }, []>('PRAGMA table_info(fact_evidence)').all().some(c => c.name === 'replay_source_ref')) {
+    getDb().run('ALTER TABLE fact_evidence DROP COLUMN replay_source_ref');
+  }
+  closeDb(); initDatabase(file, { quiet: true }); service = new MemoryForget(getDb());
+  await withBriefTurn({ ...context }, extract);
+  expect(getFact(fact.id)?.evidence).toHaveLength(1);
+  forget(fact.id); await extract();
+  expect(findFacts({ predicate: 'preferred_editor' })).toEqual([]);
+});
