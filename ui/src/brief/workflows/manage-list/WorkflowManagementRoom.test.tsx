@@ -228,3 +228,42 @@ test("a late row acknowledgement does not steal focus from conversation input", 
   expect(f.controller.getRow("meeting")!.removed).toBe(true);
   input.remove();
 });
+
+test("R1: Refresh reveals an externally restored workflow and removes its obsolete Undo", async () => {
+  await render();
+  const original = structuredClone(f.records.get("inbox")!);
+  await click("Delete Morning inbox brief");
+  await click("Delete");
+  expect(button("Undo delete Morning inbox brief")).toBeTruthy();
+  f.records.set("inbox", { ...original, revision: "3", activation: "ENABLED" });
+  f.tombstones.delete("inbox");
+  await click("Refresh workflows");
+  expect(
+    row("inbox").closest("[data-removed]")!.getAttribute("data-removed"),
+  ).toBe("false");
+  expect(button("Undo delete Morning inbox brief")).toBeUndefined();
+  expect(
+    button("Enable Morning inbox brief").getAttribute("aria-checked"),
+  ).toBe("true");
+  expect(host.textContent).toContain("4 workflows");
+  await click("Enable Morning inbox brief");
+  expect(
+    button("Enable Morning inbox brief").getAttribute("aria-checked"),
+  ).toBe("false");
+});
+
+test("R2: Refresh cannot show an Enabled switch beside obsolete paused feedback", async () => {
+  await render();
+  await click("Enable Meeting follow-ups");
+  expect(row("meeting").textContent).toContain("Workflow paused.");
+  f.records.set("meeting", {
+    ...f.records.get("meeting")!,
+    revision: "3",
+    activation: "ENABLED",
+  });
+  await click("Refresh workflows");
+  expect(button("Enable Meeting follow-ups").getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  expect(row("meeting").textContent).not.toContain("Workflow paused.");
+});

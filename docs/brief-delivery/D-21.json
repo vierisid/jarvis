@@ -228,5 +228,44 @@
     "Chrome keyboard/geometry/reduced-motion checks are not screen-reader or all-browser certification."
   ],
   "rollback": "Disable/remove the optional management registration and specimen route; preserve live host pending commands; legacy routes unchanged.",
-  "next": "D-22, not started"
+  "next": "D-22, not started",
+  "review_corrections": {
+    "reviewed_head": "5fa008e40fe7aec8ad69892346ba7f3e648302e7",
+    "inspected_main": "485bb9b3b70f4d3874798810efc6f06355f86ef6",
+    "findings": {
+      "R1": "fixed: authoritative active records supersede local tombstones in their reserved slots; stale snapshots and still-deleted records retain receipts",
+      "R2": "fixed: fresh snapshots clear obsolete settled action feedback"
+    },
+    "red": {
+      "command": "bun test ui/src/brief/workflows/manage-list",
+      "passed": 31,
+      "failed": 7,
+      "evidence": "evidence/D-21/review-red.log"
+    },
+    "green": {
+      "command": "bun test ui/src/brief/workflows/manage-list",
+      "passed": 38,
+      "failed": 0,
+      "assertions": 172,
+      "new_cases": 8,
+      "evidence": "evidence/D-21/review-green.log"
+    },
+    "typecheck": {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-21/review-typecheck.log"
+    },
+    "build": {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-21/review-build.log",
+      "warnings": "Existing @theme/@tailwind at-rule warnings"
+    },
+    "format": {
+      "command": "prettier --check ui/src/brief/workflows/manage-list; git diff --check",
+      "result": "pass",
+      "evidence": "evidence/D-21/review-format.log"
+    },
+    "coverage_limits": "Controller and rendered-room regressions rerun. Previous broad regression and Chrome matrices retained as initial-delivery evidence, not rerun. F-20/live provider remains gated."
+  }
 }

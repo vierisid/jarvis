@@ -1,0 +1,214 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/manage-list/controller.test.ts:
+(pass) load/commands are default off and retirement prevents new or late writes [48.18ms]
+(pass) same identity, revision and operation are sent; acknowledgement changes only that row [38.68ms]
+(pass) failed enable keeps paused value and the exact blocker [7.77ms]
+(pass) cancel does not mutate anything or submit; confirmation required [2.38ms]
+(pass) two removals and reverse-order Undo restore exact slots and version/run identity, paused [11.72ms]
+(pass) refresh retains pending Undo and order despite provider timestamp sorting [6.30ms]
+(pass) rejected delete and restore never change visibility [5.35ms]
+(pass) expired receipt never restores locally or dispatches another command [2.94ms]
+(pass) uncertain delete locks row; refresh cannot clear it; reconciliation does not replay [7.27ms]
+(pass) uncertain restore retains receipt and resolves once into paused original identity [5.63ms]
+(pass) concurrent row requests settle independently and repeated actions submit once [6.15ms]
+(pass) access loss blocks new commands while keeping submitted acknowledgement [3.06ms]
+(pass) stale, unavailable, unsupported and empty are distinct; stale actions fail closed [5.46ms]
+(pass) read rejects mismatched owner and duplicate IDs without a partial list [3.15ms]
+(pass) wrong request/owner/flow/action/version or enabled restoration cannot acknowledge [1.98ms]
+(pass) invalid acknowledgement becomes uncertain and cannot unlock a second attempt [3.33ms]
+(pass) newest read wins even when a provider ignores abort [0.72ms]
+(pass) all removed and empty refresh still permit receipt-backed restoration [12.05ms]
+(pass) list position/selection persist independently of row actions [4.74ms]
+(pass) a loading projection can be refreshed later without a stuck busy state [3.03ms]
+376 |     // changed, but this controller must recover its original slot and new data.
+377 |     f.tombstones.delete("inbox");
+378 |     f.records.set("inbox", { ...original, revision: "3", activation });
+379 |     const calls = f.stats().calls;
+380 |     await f.controller.refresh();
+381 |     expect(visible(f.controller)).toEqual([
+                                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    "meeting",
+-   "inbox",
+    "competitor",
+    "investor",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-21/ui/src/brief/workflows/manage-list/controller.test.ts:381:35)
+(fail) R1: a ready snapshot restores an externally DISABLED workflow to its reserved slot [34.01ms]
+376 |     // changed, but this controller must recover its original slot and new data.
+377 |     f.tombstones.delete("inbox");
+378 |     f.records.set("inbox", { ...original, revision: "3", activation });
+379 |     const calls = f.stats().calls;
+380 |     await f.controller.refresh();
+381 |     expect(visible(f.controller)).toEqual([
+                                        ^
+error: expect(received).toEqual(expected)
+
+  [
+    "meeting",
+-   "inbox",
+    "competitor",
+    "investor",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-21/ui/src/brief/workflows/manage-list/controller.test.ts:381:35)
+(fail) R1: a ready snapshot restores an externally ENABLED workflow to its reserved slot [5.14ms]
+(pass) R1: a stale pre-deletion snapshot cannot resurrect a removed workflow or clear its receipt [7.35ms]
+424 |   expect(f.controller.getRow("meeting")!.message).toBe("Workflow paused.");
+425 |   f.records.set("meeting", {
+426 |     ...f.records.get("meeting")!, activation: "ENABLED", revision: "3",
+427 |   });
+428 |   await f.controller.refresh();
+429 |   expect(f.controller.getRow("meeting")).toMatchObject({
+                                               ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "command": null,
++   "confirming": false,
+    "item": {
+      "activation": "ENABLED",
++     "description": "Turn meetings into an agreed next step.",
++     "flowId": "meeting",
++     "latestRun": {
++       "label": "12 min ago",
++       "runId": "meeting-run",
++     },
++     "name": "Meeting follow-ups",
++     "publication": "published",
++     "readiness": {
++       "reason": null,
++       "state": "ready",
++     },
+      "revision": "3",
++     "trigger": "Meeting ends",
++     "versionId": "meeting-v3",
+    },
+-   "message": null,
++   "message": "Workflow paused.",
++   "phase": "idle",
++   "receipt": null,
++   "removed": false,
+  }
+
+- Expected  - 1
++ Received  + 20
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-21/ui/src/brief/workflows/manage-list/controller.test.ts:429:42)
+(fail) R2: fresh external activation supersedes the previous local status message [20.01ms]
+439 |     ...f.records.get("investor")!, revision: "2",
+440 |     readiness: { state: "ready", reason: null },
+441 |   });
+442 |   f.setMode("normal");
+443 |   await f.controller.refresh();
+444 |   expect(f.controller.getRow("investor")).toMatchObject({
+                                                ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "command": null,
++   "confirming": false,
+    "item": {
++     "activation": "DISABLED",
++     "description": "Your progress, ready to share.",
++     "flowId": "investor",
++     "latestRun": null,
++     "name": "Weekly investor update",
++     "publication": "unpublished",
+      "readiness": {
+        "reason": null,
+        "state": "ready",
+      },
++     "revision": "2",
++     "trigger": "Not scheduled",
++     "versionId": "investor-v1",
+    },
+-   "message": null,
++   "message": "Connect Notion before enabling.",
++   "phase": "idle",
++   "receipt": null,
++   "removed": false,
+  }
+
+- Expected  - 1
++ Received  + 15
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-21/ui/src/brief/workflows/manage-list/controller.test.ts:444:43)
+(fail) R2: a fresh ready snapshot clears a resolved blocker and permits enabling with its new revision [5.56ms]
+454 |   f.setMode("stale");
+455 |   await f.controller.refresh();
+456 |   expect(f.controller.getRow("meeting")!.message).toBe("Workflow paused.");
+457 |   f.setMode("normal");
+458 |   await f.controller.refresh();
+459 |   expect(f.controller.getRow("meeting")!.message).toBeNull();
+                                                        ^
+error: expect(received).toBeNull()
+
+Received: "Workflow paused."
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-21/ui/src/brief/workflows/manage-list/controller.test.ts:459:51)
+(fail) R2: unchanged fresh data clears transient command feedback, but a stale response does not [8.83ms]
+
+ui/src/brief/workflows/manage-list/WorkflowManagementRoom.test.tsx:
+(pass) missing, wrong-source, wrong-owner and capability-off binding fail closed [45.32ms]
+(pass) switch and bin are separate targets; only the name opens the exact workflow [283.55ms]
+(pass) inline confirm is keyboard reachable; Escape restores focus to the same bin [104.76ms]
+(pass) acknowledged deletion hides and inerts only its row, Undo restores it paused [110.42ms]
+(pass) failed enable exposes blocker and leaves Paused, not Draft [31.61ms]
+(pass) uncertain mutation exposes Check result instead of another Delete; matching result resolves once [80.01ms]
+(pass) all eight shell states and unmount/remount retain activation and removed identity [207.64ms]
+(pass) read failures and missing live capability do not invent a zero-count empty list [15.98ms]
+(pass) no removed date, subtitle, footer, global creation control or irreversible route appears [16.77ms]
+(pass) a late row acknowledgement does not steal focus from conversation input [295.49ms]
+236 |   await click("Delete");
+237 |   expect(button("Undo delete Morning inbox brief")).toBeTruthy();
+238 |   f.records.set("inbox", { ...original, revision: "3", activation: "ENABLED" });
+239 |   f.tombstones.delete("inbox");
+240 |   await click("Refresh workflows");
+241 |   expect(row("inbox").closest("[data-removed]")!.getAttribute("data-removed")).toBe("false");
+                                                                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "false"
+Received: "true"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-21/ui/src/brief/workflows/manage-list/WorkflowManagementRoom.test.tsx:241:80)
+(fail) R1: Refresh reveals an externally restored workflow and removes its obsolete Undo [53.69ms]
+253 |   f.records.set("meeting", {
+254 |     ...f.records.get("meeting")!, revision: "3", activation: "ENABLED",
+255 |   });
+256 |   await click("Refresh workflows");
+257 |   expect(button("Enable Meeting follow-ups").getAttribute("aria-checked")).toBe("true");
+258 |   expect(row("meeting").textContent).not.toContain("Workflow paused.");
+                                               ^
+error: expect(received).not.toContain(expected)
+
+Expected to not contain: "Workflow paused."
+Received: "Meeting follow-upsTurn meetings into an agreed next step.Runs whenMeeting endsEnabledPausedEnabledLatest run12 min agoWorkflow paused."
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-21/ui/src/brief/workflows/manage-list/WorkflowManagementRoom.test.tsx:258:42)
+(fail) R2: Refresh cannot show an Enabled switch beside obsolete paused feedback [25.28ms]
+
+7 tests failed:
+(fail) R1: a ready snapshot restores an externally DISABLED workflow to its reserved slot [34.01ms]
+(fail) R1: a ready snapshot restores an externally ENABLED workflow to its reserved slot [5.14ms]
+(fail) R2: fresh external activation supersedes the previous local status message [20.01ms]
+(fail) R2: a fresh ready snapshot clears a resolved blocker and permits enabling with its new revision [5.56ms]
+(fail) R2: unchanged fresh data clears transient command feedback, but a stale response does not [8.83ms]
+(fail) R1: Refresh reveals an externally restored workflow and removes its obsolete Undo [53.69ms]
+(fail) R2: Refresh cannot show an Enabled switch beside obsolete paused feedback [25.28ms]
+
+ 31 pass
+ 7 fail
+ 155 expect() calls
+Ran 38 tests across 2 files. [2.87s]
