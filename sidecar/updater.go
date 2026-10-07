@@ -25,6 +25,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -283,65 +284,180 @@ func registryStateFor(version string, err error) UpdateState {
 // version) is offered by the tray and the dashboard instead of a window
 // popping up in the middle of work. A blocked sidecar is the exception: it
 // cannot work at all until updated.
+//
+// It runs on its own goroutine (from advertise, and again from the retry
+// timer), so nothing above it recovers a panic: before #760 one ended the
+// process. See recoverCheck for the state a contained panic leaves.
 func (u *Updater) check(gen int, version string, retry bool) {
+	// Set once this check's result is in the updater's state. A panic before
+	// that leaves the check undecided and recoverCheck decides it; a panic
+	// after it (in a hook: emit, the tray, the prompt) leaves an accurate
+	// state that is only logged.
+	recorded := false
+	defer u.recoverCheck(gen, version, &recorded)
+
 	_, err := u.resolve(u.registry, version)
 
-	u.mu.Lock()
-	if gen != u.checkGen {
-		u.mu.Unlock()
-		return
-	}
-	startup := gen == u.firstGen && !retry
-	if err != nil && u.available == version {
-		// Already confirmed on an earlier check (this is a reconnect): a
-		// transient registry error must not take the offer away.
-		u.mu.Unlock()
-		log.Printf("[update] re-check of sidecar %s failed (%v); keeping the confirmed offer", version, err)
-		return
-	}
-	// The brain (and so the dashboard) learns the outcome too: without it,
-	// it would offer an update the sidecar cannot install yet.
-	var report *UpdateState
-	if err != nil {
-		u.available = ""
-		if !u.applying.Load() {
-			s := registryStateFor(version, err)
+	startup := false
+	// The locked region is a closure with a deferred unlock, for the reason
+	// advertise gives (#670): a panic between a bare Lock and Unlock would be
+	// contained with u.mu still held, and every later Offer() -- the tray --
+	// and the next ack's advertise on the read loop would block forever.
+	stale, kept, report, blocked := func() (stale, kept bool, report *UpdateState, blocked bool) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		if gen != u.checkGen {
+			recorded = true
+			return true, false, nil, false
+		}
+		startup = gen == u.firstGen && !retry
+		if err != nil && u.available == version {
+			// Already confirmed on an earlier check (this is a reconnect): a
+			// transient registry error must not take the offer away.
+			recorded = true
+			return false, true, nil, false
+		}
+		// The brain (and so the dashboard) learns the outcome too: without
+		// it, it would offer an update the sidecar cannot install yet.
+		if err != nil {
+			u.available = ""
+			if !u.applying.Load() {
+				s := registryStateFor(version, err)
+				u.state = s
+				report = &s
+			}
+			u.cancelRetry = u.schedule(updateRetryInterval, func() { u.check(gen, version, true) })
+			recorded = true
+			return false, false, report, u.blocked
+		}
+		u.available = version
+		keepFailure := u.state.Phase == updatePhaseFailed && u.state.Version == version
+		if !u.applying.Load() && !keepFailure {
+			s := UpdateState{Phase: updatePhaseAvailable, Version: version}
 			u.state = s
 			report = &s
 		}
-		u.cancelRetry = u.schedule(updateRetryInterval, func() { u.check(gen, version, true) })
-		blocked := u.blocked
-		u.mu.Unlock()
+		recorded = true
+		return false, false, report, u.blocked
+	}()
+	if stale {
+		return
+	}
+	if kept {
+		log.Printf("[update] re-check of sidecar %s failed (%v); keeping the confirmed offer", version, err)
+		return
+	}
+	if err != nil {
 		if !errors.Is(err, update.ErrVersionNotFound) {
 			log.Printf("[update] could not check sidecar %s on the registry: %v (retrying in %s)", version, err, updateRetryInterval)
 		} else {
 			log.Printf("[update] sidecar %s is not published yet (retrying in %s)", version, updateRetryInterval)
 		}
-		u.report(report)
-		u.changed()
-		if blocked {
-			u.fireBlockedOffer()
-		}
+		u.announce(report, blocked, false)
 		return
 	}
-	u.available = version
-	keepFailure := u.state.Phase == updatePhaseFailed && u.state.Version == version
-	if !u.applying.Load() && !keepFailure {
-		s := UpdateState{Phase: updatePhaseAvailable, Version: version}
-		u.state = s
-		report = &s
-	}
-	blocked := u.blocked
-	u.mu.Unlock()
 	log.Printf("[update] sidecar %s is available (running %s)", version, u.running)
-	u.report(report)
-	u.changed()
+	u.announce(report, blocked, startup)
+}
+
+// announce tells the brain, the tray and (when it applies) the prompt about a
+// check's recorded result. Each hook is contained on its own (#760), so a
+// panicking emit cannot cost a blocked sidecar its prompt, which it needs to
+// work at all.
+func (u *Updater) announce(report *UpdateState, blocked, startup bool) {
+	containUpdaterPanic("reporting the check to the brain", func() { u.report(report) })
+	containUpdaterPanic("updating the tray", u.changed)
 	switch {
 	case blocked:
-		u.fireBlockedOffer()
+		containUpdaterPanic("showing the blocked prompt", u.fireBlockedOffer)
 	case startup:
-		u.fireFirstOffer()
+		containUpdaterPanic("showing the startup prompt", u.fireFirstOffer)
 	}
+}
+
+// checkPanicError is the state a check that panicked before deciding leaves
+// behind. Not a registry answer, so the prompt shows it as an error rather
+// than as "not published yet".
+const checkPanicError = "the update check failed unexpectedly; it will be retried"
+
+// recoverCheck contains a panic in check (#760) and picks the state it leaves.
+// It is a terminal decision because nothing above check can make one: check is
+// fire-and-forget, with no connection to fail closed into (the asymmetry #670
+// drew for the read loop's register_rejected) and no caller to report to.
+//
+// Undecided (the panic came before the result was recorded): the check is
+// treated as one that could not reach the registry, which is what it is from
+// the outside. The version is unavailable with checkPanicError, the brain and
+// the tray are told (and a blocked sidecar still gets its prompt), and the
+// retry timer is armed, so the version is checked
+// again on updateRetryInterval as well as on the next ack and on Start --
+// rather than nothing at all until a reconnect. Two exceptions, the same as
+// the registry-error path: an offer an earlier check already confirmed is
+// kept, and the state of an update that is installing is not overwritten.
+// A superseded check (another advertise since) changes nothing.
+//
+// Decided (the panic came after the result was recorded): the state is
+// already accurate and is left alone. The hooks that run then are each
+// contained in announce, so this is only for a panic outside them; a hook that
+// panicked lost only its own delivery (a prompt under its sync.Once is lost
+// for this process, a missed emit or tray refresh waits for the next change).
+func (u *Updater) recoverCheck(gen int, version string, recorded *bool) {
+	r := recover()
+	if r == nil {
+		return
+	}
+	if *recorded {
+		log.Printf("[update] after checking sidecar %s, telling the brain or the UI panicked; the offer state "+
+			"stands: %v\n%s", version, r, debug.Stack())
+		return
+	}
+	log.Printf("[update] checking sidecar %s panicked; treating it as a failed check and retrying in %s: %v\n%s",
+		version, updateRetryInterval, r, debug.Stack())
+	report, blocked, apply := func() (*UpdateState, bool, bool) {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		if gen != u.checkGen || u.available == version {
+			return nil, false, false
+		}
+		u.available = ""
+		var report *UpdateState
+		if !u.applying.Load() {
+			s := UpdateState{Phase: updatePhaseUnavailable, Version: version, Error: checkPanicError}
+			u.state = s
+			report = &s
+		}
+		// Defensive: check records its result straight after arming a retry,
+		// so an undecided check never armed one of its own. What can be here
+		// is the timer that fired this very retry; stopping it is harmless,
+		// and it keeps "at most one armed" true by construction.
+		if u.cancelRetry != nil {
+			cancel := u.cancelRetry
+			u.cancelRetry = nil
+			containUpdaterPanic("cancelling the previous retry", cancel)
+		}
+		containUpdaterPanic("arming the retry", func() {
+			u.cancelRetry = u.schedule(updateRetryInterval, func() { u.check(gen, version, true) })
+		})
+		return report, u.blocked, true
+	}()
+	if !apply {
+		return
+	}
+	// As on the registry-error path: a sidecar the brain refused cannot work
+	// until updated, so it gets its prompt whatever the check found.
+	u.announce(report, blocked, false)
+}
+
+// containUpdaterPanic runs f and logs a panic in it instead of letting it out.
+// For the follow-up work a recover does itself, which runs in a deferred
+// function where a second panic would no longer be contained by anything.
+func containUpdaterPanic(what string, f func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[update] %s panicked: %v\n%s", what, r, debug.Stack())
+		}
+	}()
+	f()
 }
 
 func (u *Updater) report(s *UpdateState) {
@@ -592,14 +708,40 @@ func (u *Updater) fail(version string, err error) {
 
 // cleanupPrevious drops the copy a previous self-update kept for rollback,
 // once this process has proven itself by registering with the brain.
+//
+// It runs on its own goroutine from OnAck, so nothing above it recovers a
+// panic: before #760 one ended the process. A contained panic sets `cleaned`
+// back to false, so the next accepted registration in this process tries
+// again, and that is the state to fall back to because of what this proves:
+// clearing the pending-update marker is how a fresh self-update is marked
+// healthy (update_pending.go), and a marker left behind by a panic that was
+// recorded as done would get a good update rolled back after three starts.
+// Both steps are idempotent (removing a file, a directory), so a retry is
+// safe; one that panics every time costs a logged stack per reconnect, not
+// the process.
 func (u *Updater) cleanupPrevious() {
-	u.mu.Lock()
-	if u.cleaned {
-		u.mu.Unlock()
+	defer func() {
+		if r := recover(); r != nil {
+			log.Printf("[update] cleaning up after the previous update panicked; retrying on the next registration: %v\n%s",
+				r, debug.Stack())
+			u.mu.Lock()
+			u.cleaned = false
+			u.mu.Unlock()
+		}
+	}()
+	// A closure with a deferred unlock: the panic above must never be
+	// recovered with u.mu still held (see advertise).
+	if done := func() bool {
+		u.mu.Lock()
+		defer u.mu.Unlock()
+		if u.cleaned {
+			return true
+		}
+		u.cleaned = true
+		return false
+	}(); done {
 		return
 	}
-	u.cleaned = true
-	u.mu.Unlock()
 	// This process reached the brain: an update that installed it is proven.
 	u.clearPending()
 	if u.mode.Kind == update.ModePackageManager {

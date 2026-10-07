@@ -217,10 +217,17 @@ policy (#670), chosen by what the frame decides:
   proves a fresh self-update and is rolled back after three starts, as before,
   though that now takes three ordinary restarts rather than a crash loop.
 
-Both cases log the panic with its stack. The containment covers only the read
-loop: the goroutines the updater starts from an ack (`cleanupPrevious`, the
-registry `check`) have no recover of their own, so a panic in one of them still
-ends the process.
+Both cases log the panic with its stack. The goroutines the updater starts from
+an ack (`cleanupPrevious`, the registry `check` and its hourly retry) are off the
+read loop and recover their own panics (#760). Having no connection to fail into
+and no caller to report to, each falls back to a fixed state: a `check` that
+panicked before deciding is treated as one that could not reach the registry
+(`unavailable` with an error, reported to the brain, retried on the hourly
+timer; an offer an earlier check confirmed is kept), a panic in one of the hooks
+that announce a decided result (the brain, the tray, the prompt) is contained on
+its own so the others still run, and a `cleanupPrevious` that panicked is
+not marked done, so the next accepted registration tries again to mark a fresh
+self-update proven.
 
 | Code | Meaning | How the brain reads the effect |
 |---|---|---|

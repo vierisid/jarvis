@@ -1411,8 +1411,11 @@ func (c *SidecarClient) runRegisterRejected(data []byte, handle func([]byte)) {
 // ordinary restarts.
 //
 // That containment covers only what runs on the read loop. The goroutines the
-// updater starts from an ack (cleanupPrevious, check) have no recover of their
-// own, so a panic in one of them still ends the process.
+// updater starts from an ack (cleanupPrevious, check, and check's retry timer)
+// recover their own panics (#760), each falling back to a state chosen in
+// updater.go: a check that panicked before deciding is a failed check that
+// retries, and a cleanup that panicked is not marked done, so the next
+// accepted registration tries again.
 //
 // `handle` is the handler body (handleRegisterAck from the read loop).
 func (c *SidecarClient) runRegisterAck(data []byte, handle func([]byte)) {
