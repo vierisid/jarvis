@@ -29,8 +29,9 @@
 #      version, no `@latest`-style run, no `curl | sh`, the QEMU binfmt and
 #      BuildKit images pinned by digest, and no Bun, Go cache or binfmt image
 #      restored from the Actions cache (writable by any run on main). Both
-#      npm publishers pin the same exact npm. Not checked: Dockerfile base
-#      images, and setup-node's node-version major (runner tool cache).
+#      npm publishers pin the same exact npm, and every Dockerfile base image
+#      is pinned by tag and digest, its Bun bases at BUN_VERSION (#783). Not
+#      checked: setup-node's node-version major (runner tool cache).
 #   6. Per-job authority (#682): no matrix job holds id-token (every leg would
 #      get it); no `secrets: inherit`, and a local reusable workflow is passed
 #      exactly the secrets it declares, which are exactly the ones it reads; a
@@ -519,6 +520,167 @@ if [ "$(printf '%s\n' "$npm_pins" | wc -l)" -eq 1 ] && [[ "$npm_pins" =~ ^\"[0-9
 else
 	no "release-exec.yml and sidecar-release.yml pin the same exact npm" "got: ${npm_pins}"
 fi
+# The image publish-docker pushes is built FROM these (#783). A base by tag
+# alone is whatever the registry says that day, so every external FROM names a
+# tag AND a digest, one tag never maps to two digests, and the Bun bases run
+# the Bun CI tests (release-exec.yml BUN_VERSION).
+# dockerfile_check <Dockerfile> <workflow with BUN_VERSION>: one violation per
+# line, nothing when clean.
+dockerfile_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DOCKERFILE="$1" FILE="$2" bun -e '
+const text = await Bun.file(process.env.DOCKERFILE).text();
+const bun = String(Bun.YAML.parse(await Bun.file(process.env.FILE).text()).env?.BUN_VERSION ?? "");
+const out = [];
+if (!/^\d+\.\d+\.\d+$/.test(bun)) out.push("BUN_VERSION is not an exact version: " + JSON.stringify(bun));
+const stages = new Set(["scratch"]);
+const digests = new Map();
+let bases = 0;
+// Continuations joined, so a FROM split over lines is still one instruction.
+for (const line of text.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+  const m = /^\s*FROM\s+(.*)$/i.exec(line);
+  if (!m) continue;
+  const words = m[1].trim().split(/\s+/).filter((w) => !w.startsWith("--"));
+  const image = words[0] ?? "";
+  const as = words.findIndex((w) => /^as$/i.test(w));
+  // A stage defined on an EARLIER line is not a registry image.
+  const local = stages.has(image.toLowerCase());
+  if (as > 0 && words[as + 1]) stages.add(words[as + 1].toLowerCase());
+  if (local) continue;
+  const p = /^([^\s@:]+(?::\d+)?(?:\/[^\s@:]+)*):([^\s@:]+)@sha256:([0-9a-f]{64})$/.exec(image);
+  if (!p) { out.push("FROM " + image + " is not pinned by tag and digest (name:tag@sha256:...)"); continue; }
+  const [, name, tag, sum] = p;
+  const key = name.replace(/^(docker\.io\/)?(library\/)?/, "") + ":" + tag;
+  if (digests.has(key) && digests.get(key) !== sum) out.push(key + " is pinned to two different digests");
+  digests.set(key, sum);
+  if (/^(docker\.io\/)?oven\/bun$/.test(name)) {
+    bases++;
+    if (tag !== bun && !tag.startsWith(bun + "-"))
+      out.push("FROM " + image + " runs Bun " + tag + ", but CI tests BUN_VERSION " + bun);
+  }
+}
+// Without this, a Dockerfile that stopped naming oven/bun would pass vacuously.
+if (bases === 0) out.push("no oven/bun base image found, so the Bun version check checked nothing");
+if (out.length) console.log(out.join("\n"));
+'
+}
+found="$(dockerfile_check "${HERE}/../../Dockerfile" "$WORKFLOWS/release-exec.yml")"
+if [ -z "$found" ]; then
+	ok "Dockerfile: every base image is pinned by tag and digest, and the Bun bases match BUN_VERSION"
+else
+	no "Dockerfile: every base image is pinned by tag and digest, and the Bun bases match BUN_VERSION" "$found"
+fi
+# dockerfile_caught <label> <exact text> <replacement>: a mutated Dockerfile copy must be reported.
+dockerfile_caught() {
+	local copy="${WORK}/Dockerfile.mutant"
+	if ! FROM="${HERE}/../../Dockerfile" TO="$copy" OLD="$2" NEW="$3" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
+await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+'; then
+		no "Dockerfile mutant '$1' could be applied (the Dockerfile no longer has the text it mutates)"
+		return
+	fi
+	if [ -n "$(dockerfile_check "$copy" "$WORKFLOWS/release-exec.yml")" ]; then
+		ok "reports: $1"
+	else
+		no "reports: $1" "the check passed a Dockerfile with this hole"
+	fi
+}
+dockerfile_caught 'a floating oven/bun:1 base (#783)' \
+	'FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS deps' 'FROM oven/bun:1 AS deps'
+dockerfile_caught 'a floating slim production base (#783)' \
+	'FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS production' 'FROM oven/bun:1.4.2-slim AS production'
+dockerfile_caught 'a digest-pinned base on a Bun CI does not test (#783)' \
+	'FROM oven/bun:1.4.2-slim@sha256:' 'FROM oven/bun:1.3.14-slim@sha256:'
+dockerfile_caught 'one tag pinned to two digests (#783)' \
+	'FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS deps' 'FROM oven/bun:1.4.2@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS deps'
+dockerfile_caught 'an undigested base behind --platform (#783)' \
+	'FROM --platform=$BUILDPLATFORM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS workflows' 'FROM --platform=$BUILDPLATFORM oven/bun:latest AS workflows'
+dockerfile_caught 'some other base image by tag alone (#783)' \
+	'FROM deps AS build' 'FROM debian:trixie AS build'
+# ...and every other Bun pin is that same version (#783 review): the image
+# runs what CI tests only while CI tests one Bun. Every `bun-version:` and
+# BUN_VERSION in the workflows and in local composite actions (inputs
+# defaults), with env references resolved, and every oven/bun image a run:
+# starts (by digest).
+# bun_pins <workflow dir> <actions dir>: one violation per line.
+bun_pins() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DIR="$1" ACTIONS="$2" bun -e '
+const fs = require("node:fs");
+const out = [];
+const want = String(Bun.YAML.parse(fs.readFileSync(process.env.DIR + "/release-exec.yml", "utf8")).env?.BUN_VERSION ?? "");
+const envRef = /^\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$/;
+const inputRef = /^\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}$/;
+let seen = 0;
+const visit = (file, o, path, scopes, inputs) => {
+  if (!o || typeof o !== "object") return;
+  const env = o.env && typeof o.env === "object" ? [o.env, ...scopes] : scopes;
+  for (const [k, v] of Object.entries(o)) {
+    if ((k === "bun-version" || k === "BUN_VERSION") && (typeof v === "string" || typeof v === "number")) {
+      let val = String(v);
+      const e = envRef.exec(val);
+      if (e) { const sc = env.find((x) => x && e[1] in x); if (sc) val = String(sc[e[1]]); }
+      const n = inputRef.exec(val);
+      if (n && inputs && n[1] in inputs) val = String(inputs[n[1]]?.default ?? "");
+      seen++;
+      if (val !== want) out.push(file + ": " + path + "." + k + " is " + JSON.stringify(val) + ", but release-exec.yml BUN_VERSION (and so the Dockerfile) is " + JSON.stringify(want));
+    }
+    // An oven/bun image a run: starts is a Bun pin too, and must carry a digest.
+    if (k === "run" && typeof v === "string")
+      for (const m of v.matchAll(/\boven\/bun:([^\s@\\]+)(@sha256:[0-9a-f]{64})?/g)) {
+        seen++;
+        if (m[1] !== want && !m[1].startsWith(want + "-")) out.push(file + ": " + path + " runs " + m[0] + ", not Bun " + JSON.stringify(want));
+        if (!m[2]) out.push(file + ": " + path + " runs " + m[0] + " without a digest");
+      }
+    if (v && typeof v === "object") visit(file, v, path + "." + k, env, inputs);
+  }
+};
+for (const f of fs.readdirSync(process.env.DIR).filter((x) => /\.ya?ml$/.test(x))) {
+  const doc = Bun.YAML.parse(fs.readFileSync(process.env.DIR + "/" + f, "utf8"));
+  visit(f, doc, "", [], null);
+}
+for (const d of fs.existsSync(process.env.ACTIONS) ? fs.readdirSync(process.env.ACTIONS) : [])
+  for (const a of ["action.yml", "action.yaml"]) {
+    const p = process.env.ACTIONS + "/" + d + "/" + a;
+    if (!fs.existsSync(p)) continue;
+    const doc = Bun.YAML.parse(fs.readFileSync(p, "utf8"));
+    // An input default is a pin too.
+    for (const [k, v] of Object.entries(doc.inputs ?? {}))
+      if (k === "bun-version") { seen++; if (String(v?.default ?? "") !== want) out.push(d + "/" + a + ": input bun-version defaults to " + JSON.stringify(v?.default) + ", not " + JSON.stringify(want)); }
+    visit(d + "/" + a, doc.runs ?? {}, "runs", [], doc.inputs ?? {});
+  }
+if (seen === 0) out.push("no Bun pins found, so the agreement check checked nothing");
+if (out.length) console.log(out.join("\n"));
+'
+}
+ACTIONS_DIR="${HERE}/../actions"
+found="$(bun_pins "$WORKFLOWS" "$ACTIONS_DIR")"
+if [ -z "$found" ]; then
+	ok "every Bun pin in the workflows and local actions is release-exec.yml BUN_VERSION, the Bun the image runs"
+else
+	no "every Bun pin in the workflows and local actions is release-exec.yml BUN_VERSION" "$found"
+fi
+# bun_pin_caught <label> <file under .github> <exact text> <replacement>
+bun_pin_caught() {
+	rm -rf "${WORK}/pins" && mkdir -p "${WORK}/pins" && cp -r "$WORKFLOWS" "${WORK}/pins/workflows" && cp -r "$ACTIONS_DIR" "${WORK}/pins/actions"
+	if ! FROM="${WORK}/pins/$2" OLD="$3" NEW="$4" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+'; then
+		no "Bun pin mutant '$1' could be applied (the file no longer has the text it mutates)"
+		return
+	fi
+	if [ -n "$(bun_pins "${WORK}/pins/workflows" "${WORK}/pins/actions")" ]; then ok "reports: $1"; else no "reports: $1" "the check passed this drift"; fi
+}
+bun_pin_caught 'test.yml testing a different Bun than the image runs (#783 review)' workflows/test.yml 'bun-version: "1.4.2"' 'bun-version: "1.3.14"'
+bun_pin_caught 'the catalog sync on its own Bun (#783 review)' workflows/sync-pieces-catalog.yml '  BUN_VERSION: "1.4.2"' '  BUN_VERSION: "1.3.14"'
+bun_pin_caught 'the composite action defaulting to another Bun (#783 review)' actions/bun-setup/action.yml 'default: "1.4.2"' 'default: "1.3.14"'
+bun_pin_caught 'the catalog inspect image left on another Bun (#783 owner decision)' workflows/sync-pieces-catalog.yml 'oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895' 'oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4'
+bun_pin_caught 'the catalog inspect image by tag alone (#783 owner decision)' workflows/sync-pieces-catalog.yml 'oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895' 'oven/bun:1.4.2'
+bun_pin_caught 'release-exec.yml moved alone, leaving the rest behind (#783 review)' workflows/release-exec.yml '  BUN_VERSION: "1.4.2"' '  BUN_VERSION: "1.3.14"'
 # release-exec.yml alone holds id-token + packages: write; if the derivation
 # found nothing, the derivation is broken, not the repository clean.
 if grep -q 'release-exec.yml' < <(for f in "$WORKFLOWS"/*.yml; do [ -n "$(check authority "$f")" ] && basename "$f"; done); then
@@ -626,9 +788,9 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'npm@latest back in a job holding id-token' mutable "$WORKFLOWS/release-exec.yml" \
 		'npm install -g "npm@${NPM_VERSION}"' 'npm install -g npm@latest'
 	expect_caught 'a floating Bun reached through env indirection' mutable "$WORKFLOWS/release-exec.yml" \
-		'  BUN_VERSION: "1.3.14"' '  BUN_VERSION: latest'
+		'  BUN_VERSION: "1.4.2"' '  BUN_VERSION: latest'
 	expect_caught 'a floating Bun in the job that can tag a release' mutable "$WORKFLOWS/release.yml" \
-		'bun-version: "1.3.14"' 'bun-version: latest'
+		'bun-version: "1.4.2"' 'bun-version: latest'
 	expect_caught 'the binfmt image back to its :latest default' mutable "$WORKFLOWS/release-exec.yml" \
 		$'          image: ${{ env.BINFMT_IMAGE }}\n' ''
 	expect_caught 'the privileged binfmt image restored from the Actions cache' mutable "$WORKFLOWS/release-exec.yml" \
@@ -644,11 +806,11 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'the npm pin itself loosened to a major' mutable "$WORKFLOWS/sidecar-release.yml" \
 		'  NPM_VERSION: "12.1.0"' '  NPM_VERSION: "12"'
 	expect_caught 'a Bun range in the job that can tag a release' mutable "$WORKFLOWS/release.yml" \
-		'bun-version: "1.3.14"' 'bun-version: "1.x"'
+		'bun-version: "1.4.2"' 'bun-version: "1.x"'
 	expect_caught 'a download piped into a shell' mutable "$WORKFLOWS/release.yml" \
 		'      - name: Compute new version' $'      - run: curl -fsSL https://bun.sh/install | bash\n      - name: Compute new version'
 	expect_caught 'Bun taken from a version file' mutable "$WORKFLOWS/release.yml" \
-		'bun-version: "1.3.14"' 'bun-version-file: package.json'
+		'bun-version: "1.4.2"' 'bun-version-file: package.json'
 	# go-version-file is accepted only while go.mod names an exact version.
 	mkdir -p "${WORK}/gomod/sidecar"
 	sed 's/^go \([0-9]*\.[0-9]*\)\.[0-9]*$/go \1/' "${HERE}/../../sidecar/go.mod" >"${WORK}/gomod/sidecar/go.mod"

@@ -63,7 +63,7 @@ concurrency:
 env:
   # Pinned to match test.yml: the jobs below install with --frozen-lockfile,
   # and a floating Bun that migrates the lockfile format would fail a RELEASE.
-  BUN_VERSION: "1.3.14"
+  BUN_VERSION: "1.4.2"
   # Everything below is code a SHA-pinned action or a `run:` step downloads
   # and executes AFTER the pin has done its job, so it is pinned too (#681).
   # None of it is something Dependabot can see: bump by hand, and keep the
