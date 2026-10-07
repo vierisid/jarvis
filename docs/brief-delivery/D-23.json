@@ -68,8 +68,12 @@
       "evidence": "evidence/D-23/format-check.log"
     },
     {
-      "command": "git commit with normal hooks",
-      "result": "pending"
+      "command": "git commit with normal .githooks/pre-commit",
+      "result": "pass",
+      "tests": 35,
+      "assertions": 149,
+      "evidence": "evidence/D-23/hooks.log",
+      "note": "EE boundary, migrations, templates, package contents, both related test files and TypeScript passed; no bypass or coauthor trailer."
     }
   ],
   "browser": {
@@ -185,5 +189,6 @@
   ],
   "rollback": "Disable optional decisionsRegistration/specimen; preserve owner request receipts. Default/legacy routes unchanged.",
   "quick_verify": "http://127.0.0.1:4403/?brief=preview&specimen=decisions#/_brief_preview",
-  "next": "D-24 Goals, not started"
+  "next": "D-24 Goals, not started",
+  "implementation_head": "295ca73cc2264f662f66c20e8c934d73d085f8ea"
 }
