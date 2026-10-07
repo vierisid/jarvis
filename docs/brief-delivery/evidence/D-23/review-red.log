@@ -1,0 +1,123 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/decisions/controller.test.ts:
+(pass) selection follows identity through reorder and refresh [7.05ms]
+(pass) approval is acknowledged before next selection, and never claims execution [27.27ms]
+(pass) keep draft remains in the queue and requires reopening, not silent reapproval [47.24ms]
+(pass) rejection has a truthful local receipt and resolves only the chosen item [24.81ms]
+(pass) edit/save carries the complete typed document and uses the new approval revision [28.28ms]
+(pass) stale refresh preserves unsaved content and prevents save or approval [24.41ms]
+(pass) cancel edit writes nothing and restores original document [22.97ms]
+(pass) invalid edits cannot be submitted [2.68ms]
+(pass) stale never offers a mutation [2.21ms]
+(pass) read-only never offers a mutation [1.77ms]
+(pass) unavailable never offers a mutation [1.60ms]
+(pass) empty never offers a mutation [1.66ms]
+(pass) rendered revision must match even when a fresher controller view exists [3.09ms]
+(pass) lost responses stay pinned through empty/reordered reads; recovery never resends [28.64ms]
+(pass) unknown save keeps its draft frozen until receipt and fresh view reconcile [26.44ms]
+(pass) definitive refusal needs explicit refresh, unlike an unknown transport result [5.44ms]
+(pass) all receipt correlations are required; execution is not a document receipt [0.30ms]
+(pass) mismatched receipt cannot advance or unlock a decision [24.86ms]
+(pass) late reads cannot replace a newer refresh [1.12ms]
+(pass) scope revocation and retirement prevent mutation and stale repaint [1.87ms]
+(pass) concurrent press cannot create a second in-flight decision [32.18ms]
+(pass) retained rejected blocker is not fabricated away [21.93ms]
+(pass) calendar changes preserve readonly options and validate timezones [25.13ms]
+354 |     const doc = f.c.snapshot().draft!.document;
+355 |     if (doc.kind !== "email") throw Error("Expected email fixture");
+356 |     f.c.change({ ...doc, body: "A newer unsaved edit" });
+357 |     const draft = f.c.snapshot().draft;
+358 |     await f.c.recover(A);
+359 |     expect(f.c.snapshot().phase).toBe("rest");
+                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "rest"
+Received: "acknowledge"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-23/ui/src/brief/decisions/controller.test.ts:359:34)
+(fail) R1: recovering a settled save cannot discard a later edit or replay acknowledgement [33.93ms]
+354 |     const doc = f.c.snapshot().draft!.document;
+355 |     if (doc.kind !== "email") throw Error("Expected email fixture");
+356 |     f.c.change({ ...doc, body: "A newer unsaved edit" });
+357 |     const draft = f.c.snapshot().draft;
+358 |     await f.c.recover(A);
+359 |     expect(f.c.snapshot().phase).toBe("rest");
+                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "rest"
+Received: "acknowledge"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-23/ui/src/brief/decisions/controller.test.ts:359:34)
+(fail) R1: recovering a settled reopen cannot discard a later edit or replay acknowledgement [25.56ms]
+389 |     await wait();
+390 |     c.edit(A);
+391 |     const draft = c.snapshot().draft!;
+392 |     changed = true;
+393 |     await c.refresh();
+394 |     expect(c.snapshot().selectedId).toBe(A);
+                                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-decision-follow-up"
+Received: "fixture-decision-invitation"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-23/ui/src/brief/decisions/controller.test.ts:394:37)
+(fail) R2: a second edit remains visible and cancellable after a removed refresh [25.11ms]
+389 |     await wait();
+390 |     c.edit(A);
+391 |     const draft = c.snapshot().draft!;
+392 |     changed = true;
+393 |     await c.refresh();
+394 |     expect(c.snapshot().selectedId).toBe(A);
+                                          ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-decision-follow-up"
+Received: null
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-23/ui/src/brief/decisions/controller.test.ts:394:37)
+(fail) R2: a second edit remains visible and cancellable after a unavailable refresh [25.92ms]
+391 |     const draft = c.snapshot().draft!;
+392 |     changed = true;
+393 |     await c.refresh();
+394 |     expect(c.snapshot().selectedId).toBe(A);
+395 |     expect(c.snapshot().rows.find((x) => decisionId(x) === A)?.paper.decision.revision)
+396 |       .toBe(draft.revision);
+             ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-v2"
+Received: "remote-newer-revision"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-23/ui/src/brief/decisions/controller.test.ts:396:8)
+(fail) R2: a second edit remains visible and cancellable after a changed refresh [24.97ms]
+428 |   await c.act(first, "approve");
+429 |   await refreshing;
+430 |   expect(c.select(chosen)).toBe(true);
+431 |   finish(await f.port.read());
+432 |   await wait();
+433 |   expect(c.snapshot().selectedId).toBe(chosen);
+                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-decision-follow-up-2"
+Received: "fixture-decision-invitation-1"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-23/ui/src/brief/decisions/controller.test.ts:433:35)
+(fail) R3: selecting during settlement's delayed refresh wins over automatic advancement [29.77ms]
+
+6 tests failed:
+(fail) R1: recovering a settled save cannot discard a later edit or replay acknowledgement [33.93ms]
+(fail) R1: recovering a settled reopen cannot discard a later edit or replay acknowledgement [25.56ms]
+(fail) R2: a second edit remains visible and cancellable after a removed refresh [25.11ms]
+(fail) R2: a second edit remains visible and cancellable after a unavailable refresh [25.92ms]
+(fail) R2: a second edit remains visible and cancellable after a changed refresh [24.97ms]
+(fail) R3: selecting during settlement's delayed refresh wins over automatic advancement [29.77ms]
+
+ 23 pass
+ 6 fail
+ 91 expect() calls
+Ran 29 tests across 1 file. [601.00ms]
