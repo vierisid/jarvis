@@ -1,0 +1,6 @@
+Command: bundled Windows Node + Playwright; node docs/brief-delivery/evidence/D-23/browser-check.cjs
+Preview: http://127.0.0.1:4403/?brief=preview&specimen=decisions#/_brief_preview
+PASS: 8 layouts, read/edit/save/approve/reject, uncertain recovery, deferred/reopen, 10-item queue, long/narrow, keyboard and reduced motion
+Exit: 0
+New assertions: settled save removes Check result; editing again and refreshing retains the new input.
+Page errors: 0. Mutation network requests: 0.

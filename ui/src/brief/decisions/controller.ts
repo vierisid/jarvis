@@ -21,6 +21,8 @@ export interface Attempt {
   receipt?: DocumentReceipt;
   reason?: string;
   checking?: boolean;
+  settled?: boolean;
+  submittedDraft?: DecisionSnapshot["draft"];
 }
 export interface DecisionSnapshot {
   read: DecisionCollection;
@@ -48,6 +50,7 @@ export class DecisionsController {
   private access = false;
   private retired = false;
   private generation = 0;
+  private selectionVersion = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private reduced = false;
   scrollTop = 0;
@@ -102,7 +105,7 @@ export class DecisionsController {
       const pinned = (id: string) => {
         const a = attempts.get(id);
         return (
-          (this.state.draft?.id === id && a?.state !== "confirmed") ||
+          this.state.draft?.id === id ||
           (a &&
             (a.state === "sending" ||
               a.state === "unknown" ||
@@ -148,6 +151,7 @@ export class DecisionsController {
       !this.state.rows.some((x) => decisionId(x) === id)
     )
       return false;
+    if (this.state.selectedId !== id) this.selectionVersion++;
     this.publish({ selectedId: id, message: "" });
     return true;
   }
@@ -269,6 +273,7 @@ export class DecisionsController {
     const attempt: Attempt = {
       item,
       state: "sending",
+      submittedDraft: action === "save" ? this.state.draft : undefined,
       successors: [
         ...this.state.rows.slice(index + 1),
         ...this.state.rows.slice(0, index),
@@ -299,6 +304,7 @@ export class DecisionsController {
         (a) => a.state === "sending" || a.checking,
       ) ||
       !attempt ||
+      attempt.settled ||
       attempt.checking ||
       !["unknown", "confirmed"].includes(attempt.state) ||
       this.state.phase !== "rest"
@@ -317,6 +323,12 @@ export class DecisionsController {
   ) {
     if (this.retired) return;
     const id = attempt.request.decisionId;
+    const currentAttempt = this.state.attempts.get(id);
+    if (
+      currentAttempt?.request.requestId !== attempt.request.requestId ||
+      currentAttempt.settled
+    )
+      return;
     if (
       receipt &&
       "state" in receipt &&
@@ -361,14 +373,26 @@ export class DecisionsController {
   }
   private async settle(attempt: Attempt) {
     if (this.retired) return;
+    const id = attempt.request.decisionId;
+    const wasSelected = this.state.selectedId === id;
+    const selectionVersion = this.selectionVersion;
     this.publish({ phase: "rest" });
     if (!this.access) return;
-    const wasSelected = this.state.selectedId === attempt.request.decisionId;
     const fresh = await this.refresh();
     if (!fresh || !this.access || this.retired) return;
-    const id = attempt.request.decisionId;
-    const current = this.state.rows.find((x) => decisionId(x) === id);
-    const receipt = this.state.attempts.get(id)?.receipt;
+    const latestAttempt = this.state.attempts.get(id);
+    if (
+      latestAttempt?.request.requestId !== attempt.request.requestId ||
+      latestAttempt.settled
+    )
+      return;
+    // Visible rows may hold unsaved text. Reconcile the receipt against the
+    // authoritative projection, not that deliberately retained document.
+    const current =
+      this.state.read.status === "ready"
+        ? this.state.read.data.find((x) => decisionId(x) === id)
+        : undefined;
+    const receipt = latestAttempt.receipt;
     // A historical receipt never unlocks a newer document. Require the owner projection.
     if (
       current &&
@@ -387,14 +411,27 @@ export class DecisionsController {
       });
       return;
     }
+    if (attempt.submittedDraft && this.state.draft === attempt.submittedDraft) {
+      // Only this request's unchanged edit can be retired. An edit created or
+      // changed later remains pinned and cancellable, even if its source vanished.
+      const rows = this.state.rows.flatMap((row) =>
+        decisionId(row) === id ? (current ? [current] : []) : [row],
+      );
+      this.publish({
+        draft: null,
+        rows,
+        selectedId: rows.some((x) => decisionId(x) === this.state.selectedId)
+          ? this.state.selectedId
+          : decisionIdOrNull(rows[0]),
+      });
+    }
+    this.attempt(id, { ...latestAttempt, settled: true });
     if (
       attempt.request.action === "save" ||
       attempt.request.action === "reopen"
-    ) {
-      this.publish({ draft: null });
+    )
       return;
-    }
-    if (wasSelected) {
+    if (wasSelected && selectionVersion === this.selectionVersion) {
       const next = attempt.successors.find((candidate) =>
         this.state.rows.some((x) => decisionId(x) === candidate),
       );
