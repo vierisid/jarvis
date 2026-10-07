@@ -1,0 +1,189 @@
+{
+  "task": "D-23",
+  "title": "Build the Needs you decision room",
+  "status": "implemented_verified_not_activated",
+  "date": "2026-10-07",
+  "branch": "brief/d-23",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-23",
+  "base": "brief/d-22",
+  "baseline": "66b5d9da7611c174a2852a898ccc1c4774cfa078",
+  "head": "Commit containing this receipt; resolve with git log -1 --format=%H -- docs/brief-delivery/D-23.json",
+  "inspected_main": "16c5eec08d5d3e4250b100b584005561fcfded61",
+  "final_fetched_main": "17eadd7a0182a3173fac5862109b06b27025aa0b",
+  "unmerged_dependencies": {
+    "F-12": "f8a323060ca496c6e0d42b754d80a841faa1f3e5",
+    "F-14": "1d4cf952aa3ade0abb198f4304ab28df80187063"
+  },
+  "source_of_truth": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "node": "81:3271",
+    "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
+    "evidence": "ui/src/brief/decisions/figma-reference.json"
+  },
+  "activation": {
+    "production_registry_changed": false,
+    "real_effects_invoked": false,
+    "required_capabilities": [
+      "decisions"
+    ],
+    "host_gates": [
+      "Authenticated complete F-12 queue plus same-revision F-14 document projection",
+      "F-14 typed document actions and read-only original-request recovery",
+      "Durable pending request hydration before enabling controls",
+      "One shared decision owner for Today and Needs you",
+      "Canonical intent/effect-recovery paths remain with their owners, not mapped to document approval"
+    ]
+  },
+  "verification": [
+    {
+      "command": "bun test ui/src/brief/decisions",
+      "result": "pass",
+      "tests": 35,
+      "assertions": 149,
+      "evidence": "evidence/D-23/focused-tests.log"
+    },
+    {
+      "command": "bun test ui/src/brief",
+      "result": "pass",
+      "tests": 509,
+      "skipped": 2,
+      "assertions": 4812,
+      "evidence": "evidence/D-23/brief-regression.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-23/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-23/build.log",
+      "warnings": "Existing @theme/@tailwind at-rule warnings"
+    },
+    {
+      "command": "prettier --check ui/src/brief/decisions; git diff --check",
+      "result": "pass",
+      "evidence": "evidence/D-23/format-check.log"
+    },
+    {
+      "command": "git commit with normal hooks",
+      "result": "pending"
+    }
+  ],
+  "browser": {
+    "result": "pass",
+    "script": "evidence/D-23/browser-check.cjs",
+    "evidence": "evidence/D-23/browser-results.json",
+    "observed": {
+      "layouts": [
+        {
+          "theme": "light",
+          "rail": false,
+          "chat": false,
+          "selection": true,
+          "editGeometry": true,
+          "saveAndApprove": true,
+          "reject": true,
+          "tenDecisions": true
+        },
+        {
+          "theme": "light",
+          "rail": false,
+          "chat": true,
+          "selection": true,
+          "editGeometry": true,
+          "saveAndApprove": true,
+          "reject": true,
+          "tenDecisions": true
+        },
+        {
+          "theme": "light",
+          "rail": true,
+          "chat": false,
+          "selection": true,
+          "editGeometry": true,
+          "saveAndApprove": true,
+          "reject": true,
+          "tenDecisions": true
+        },
+        {
+          "theme": "light",
+          "rail": true,
+          "chat": true,
+          "selection": true,
+          "editGeometry": true,
+          "saveAndApprove": true,
+          "reject": true,
+          "tenDecisions": true
+        },
+        {
+          "theme": "dark",
+          "rail": false,
+          "chat": false,
+          "selection": true,
+          "editGeometry": true,
+          "saveAndApprove": true,
+          "reject": true,
+          "tenDecisions": true
+        },
+        {
+          "theme": "dark",
+          "rail": false,
+          "chat": true,
+          "selection": true,
+          "editGeometry": true,
+          "saveAndApprove": true,
+          "reject": true,
+          "tenDecisions": true
+        },
+        {
+          "theme": "dark",
+          "rail": true,
+          "chat": false,
+          "selection": true,
+          "editGeometry": true,
+          "saveAndApprove": true,
+          "reject": true,
+          "tenDecisions": true
+        },
+        {
+          "theme": "dark",
+          "rail": true,
+          "chat": true,
+          "selection": true,
+          "editGeometry": true,
+          "saveAndApprove": true,
+          "reject": true,
+          "tenDecisions": true
+        }
+      ],
+      "rapidPebbleCycles": 10,
+      "hoverCycles": 10,
+      "readOnlyRecovery": true,
+      "keptDraftReopen": true,
+      "multipleRecipients": true,
+      "workflowDestinationReturn": true,
+      "calendarEdit": true,
+      "longContent": true,
+      "narrow": true,
+      "keyboard": true,
+      "reducedMotion": true,
+      "errors": [],
+      "mutations": []
+    }
+  },
+  "limitations": [
+    "No live registration, backend mutation, effect or provider invocation. F-12/F-14 remain unmerged.",
+    "F-14 typed document permission actions only; unsupported documents, F-12 intent and effect-recovery commands remain readonly/source-owned in this module.",
+    "Controller survives room mounts, not browser restart; host persistence and hydration are release gates.",
+    "Today and Needs you fixtures share presentation identities, not a live domain store.",
+    "Open workflow shows exact source IDs in a fixture-only destination inspector; production host owns navigation.",
+    "Chrome evidence is not all-browser or screen-reader certification.",
+    "Two existing optional F07/F08 tests remain skipped."
+  ],
+  "rollback": "Disable optional decisionsRegistration/specimen; preserve owner request receipts. Default/legacy routes unchanged.",
+  "quick_verify": "http://127.0.0.1:4403/?brief=preview&specimen=decisions#/_brief_preview",
+  "next": "D-24 Goals, not started"
+}
