@@ -1,0 +1,79 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/ingredient-picker/ingredients.test.ts:
+(pass) canonical pins copy only the public union, reject extras, duplicates and stale hash formats [0.74ms]
+(pass) unknown receipts cannot drop, reorder or repin selected ingredients [0.94ms]
+(pass) pinned ingredients persist before POST, retry exact uncertain request and survive remount [1.85ms]
+(pass) clear only a matching prompt AND selection; retain edits during a pending success [0.42ms]
+(pass) legacy saved state without ingredients remains readable, malformed pins cannot replace stored state [0.16ms]
+(pass) F08 gates admission but existing receipts remain recoverable when the picker is disabled [0.64ms]
+(pass) real discovery pins grant selection; package metadata never does; credential fields never copied [11.40ms]
+(pass) disabled discovery performs no network request [2.60ms]
+(pass) duplicate pages and partial failures never masquerade as a complete catalog [0.71ms]
+(pass) retired catalog reads abort without committing partial choices; 100-entry discovery page is valid [1.29ms]
+35 | export function readSelected(value: unknown): SelectedIngredient[] {
+36 |   if (value === undefined) return [];
+37 |   if (!Array.isArray(value)) throw Error("Invalid selection");
+38 |   const pins = readIngredients(value.map(v => v?.selection));
+39 |   return value.map((v,i) => {
+40 |     if (!text(v.displayName,320)) throw Error("Invalid ingredient label");
+                                             ^
+error: Invalid ingredient label
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-17/ui/src/brief/workflows/ingredient-picker/model.ts:40:41)
+      at map (1:11)
+      at readIngredientCatalog (/home/vierisid/.cache/codex/jarvis-d-17/ui/src/brief/workflows/ingredient-picker/read.ts:28:26)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-d-17/ui/src/brief/workflows/ingredient-picker/ingredients.test.ts:78:19)
+(fail) discovery normalizes public whitespace labels without changing pinned identities [0.44ms]
+83 | });
+84 | test("service identities survive optional metadata loss and metadata renaming",async()=>{
+85 |  const discover=async(entries:unknown[])=>readIngredientCatalog(()=>capabilities(),new AbortController().signal,async url=>Response.json(url.includes("library")?{entries}:{ingredients:[selected[2]],nextOffset:null}));
+86 |  const named=await discover([{npmPackage:pins[2]!.id,displayName:"Gmail",installed:{}}]);
+87 |  const fallback=await discover([]),renamed=await discover([{npmPackage:pins[2]!.id,displayName:"Google Mail",installed:{}}]);
+88 |  expect(named[0]!.groupId).toBe(pins[2]!.id);expect(fallback[0]!.groupId).toBe(named[0]!.groupId);expect(renamed[0]!.groupId).toBe(named[0]!.groupId);
+                                ^
+error: expect(received).toBe(expected)
+
+Expected: "@activepieces/piece-gmail"
+Received: undefined
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-17/ui/src/brief/workflows/ingredient-picker/ingredients.test.ts:88:28)
+(fail) service identities survive optional metadata loss and metadata renaming [0.91ms]
+
+ui/src/brief/workflows/ingredient-picker/IngredientPicker.test.tsx:
+(pass) select both types, preserve search/category on reopen, remove chip without losing prompt focus [174.97ms]
+(pass) missing account and uninstalled entries explain availability without granting selection [25.61ms]
+(pass) off capability closes the picker and does not permit reopening; selections remain [19.48ms]
+An update to IngredientPicker inside a test was not wrapped in act(...).
+
+When testing, code that causes React state updates should be wrapped into act(...):
+
+act(() => {
+  /* fire events that update state */
+});
+/* assert on the output */
+
+This ensures that you're testing the behavior the user would see in the browser. Learn more at https://react.dev/link/wrap-tests-with-act
+(pass) rapid reversal keeps one portal and closes on outside interaction [99.62ms]
+39 |  // Find the option by its visible name so this also exposes the pre-fix display-name key.
+40 |  const textHelper=[...document.querySelectorAll<HTMLOptionElement>('option')].find(o=>o.textContent==='Text Helper')!;
+41 |  await filterService(textHelper.value);expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
+42 |  const node=INGREDIENT_FIXTURES.find(c=>c.group==='Text Helper')!,packageId=node.selection!.id;
+43 |  catalog={...catalog,choices:catalog.choices.map(c=>c===node?{...c,group:packageId}:c)};await render();
+44 |  expect((find('select') as HTMLSelectElement).value).toBe(packageId);expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
+                                                          ^
+error: expect(received).toBe(expected)
+
+Expected: "@activepieces/piece-text-helper"
+Received: ""
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-17/ui/src/brief/workflows/ingredient-picker/IngredientPicker.test.tsx:44:54)
+(fail) service filter survives renamed metadata and resets when its package disappears [55.29ms]
+
+ui/src/brief/workflows/ingredient-picker/f08-compatibility.test.ts:
+(skip) actual F08 discovery and pinned request recover one populated draft, no credentials or execution
+
+ 14 pass
+ 1 skip
+ 3 fail
+ 63 expect() calls
+Ran 18 tests across 3 files. [827.00ms]

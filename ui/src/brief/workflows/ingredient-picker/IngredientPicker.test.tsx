@@ -32,3 +32,23 @@ test("rapid reversal keeps one portal and closes on outside interaction",async()
  await click('.brief-ingredient-trigger');expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
  await React.act(async()=>host.lastElementChild!.dispatchEvent(new Event('pointerdown',{bubbles:true})));expect(find('.brief-ingredient-trigger').getAttribute('aria-expanded')).toBe('false');
 });
+
+async function filterService(value:string){await React.act(async()=>{const select=find('select') as HTMLSelectElement;select.value=value;select.dispatchEvent(new Event('change',{bubbles:true}));});}
+test("service filter survives renamed metadata and resets when its package disappears",async()=>{
+ await render();await click('.brief-ingredient-trigger');await click('[role="tab"]:last-child');
+ // Find the option by its visible name so this also exposes the pre-fix display-name key.
+ const textHelper=[...document.querySelectorAll<HTMLOptionElement>('option')].find(o=>o.textContent==='Text Helper')!;
+ await filterService(textHelper.value);expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
+ const node=INGREDIENT_FIXTURES.find(c=>c.group==='Text Helper')!,packageId=node.selection!.id;
+ catalog={...catalog,choices:catalog.choices.map(c=>c===node?{...c,group:packageId}:c)};await render();
+ expect((find('select') as HTMLSelectElement).value).toBe(packageId);expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
+ expect(find('[role="checkbox"]').textContent).toContain('Extract structured');
+ catalog={...catalog,state:'loading',choices:[]};await render();
+ catalog={...catalog,state:'ready',choices:INGREDIENT_FIXTURES.map(c=>c===node?{...c,group:'Renamed service'}:c)};await render();
+ expect((find('select') as HTMLSelectElement).value).toBe(packageId);expect(document.querySelectorAll('[role="checkbox"]')).toHaveLength(1);
+ catalog={...catalog,choices:catalog.choices.filter(c=>c.selection?.id!==packageId)};await render();
+ expect((find('select') as HTMLSelectElement).value).toBe('');expect(document.querySelectorAll('[role="checkbox"]').length).toBeGreaterThan(1);
+ expect(find('[role="status"]').textContent).toContain('All services');
+ await click('.brief-ingredient-footer button');await click('.brief-ingredient-trigger');
+ expect((find('select') as HTMLSelectElement).value).toBe('');expect(document.querySelectorAll('[role="checkbox"]').length).toBeGreaterThan(1);
+});

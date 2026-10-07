@@ -4,7 +4,7 @@ import type { CompositionIngredient } from "../../../../../src/workflows/runtime
 export type Ingredient = CompositionIngredient;
 export interface SelectedIngredient { selection: Ingredient; displayName: string }
 export interface IngredientChoice {
-  key: string; displayName: string; group: string; tab: "connection" | "library-action";
+  key: string; displayName: string; groupId: string; group: string; tab: "connection" | "library-action";
   selection?: Ingredient; status: "ready" | "uninstalled" | "missing-account" | "unavailable";
 }
 export interface IngredientCatalog {

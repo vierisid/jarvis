@@ -70,3 +70,21 @@ test("retired catalog reads abort without committing partial choices; 100-entry 
  const hundred=Array.from({length:100},(_,i)=>({selection:{...pins[0],id:`connection-${i}`},displayName:`Account ${i}`}));
  expect((await readIngredientCatalog(()=>capabilities(),new AbortController().signal,async url=>Response.json(url.includes("library")?{managed:true,entries:[]}:{ingredients:hundred,nextOffset:null}))).length).toBe(100);
 });
+
+// Review R1: presentation labels are not contract identities.
+test("discovery normalizes public whitespace labels without changing pinned identities",async()=>{
+ const names=[" Gmail: Create draft ","\tCalendar:\nList events\u0000 ","x".repeat(319)+" "," \n\t "];
+ const inputs=names.map((displayName,i)=>({selection:{...pins[2]!,actionName:`action-${i}`},displayName}));
+ const rows=await readIngredientCatalog(()=>capabilities(),new AbortController().signal,async url=>Response.json(url.includes("library")?{entries:[]}:{ingredients:inputs,nextOffset:null}));
+ expect(rows.map(r=>r.selection)).toEqual(inputs.map(r=>r.selection));
+ expect(rows.map(r=>r.displayName)).toEqual(["Gmail: Create draft","Calendar: List events","x".repeat(319),`${pins[2]!.id}: action-3`]);
+ expect(readSelected(rows)).toHaveLength(4);
+ await expect(readIngredientCatalog(()=>capabilities(),new AbortController().signal,async url=>Response.json(url.includes("library")?{entries:[]}:{ingredients:[{...inputs[0],selection:{...inputs[0]!.selection,pieceVersion:" bad "}}],nextOffset:null}))).rejects.toThrow();
+});
+test("service identities survive optional metadata loss and metadata renaming",async()=>{
+ const discover=async(entries:unknown[])=>readIngredientCatalog(()=>capabilities(),new AbortController().signal,async url=>Response.json(url.includes("library")?{entries}:{ingredients:[selected[2]],nextOffset:null}));
+ const named=await discover([{npmPackage:pins[2]!.id,displayName:"Gmail",installed:{}}]);
+ const fallback=await discover([]),renamed=await discover([{npmPackage:pins[2]!.id,displayName:"Google Mail",installed:{}}]);
+ expect(named[0]!.groupId).toBe(pins[2]!.id);expect(fallback[0]!.groupId).toBe(named[0]!.groupId);expect(renamed[0]!.groupId).toBe(named[0]!.groupId);
+ expect([named[0]!.group,fallback[0]!.group,renamed[0]!.group]).toEqual(["Gmail",pins[2]!.id,"Google Mail"]);
+});

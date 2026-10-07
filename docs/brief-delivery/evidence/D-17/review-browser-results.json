@@ -1,0 +1,2165 @@
+{
+  "results": [
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / wrapped chip",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / remove first",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / remove last",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 1 add",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 1 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 2 add",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 2 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 3 add",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 3 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 4 add",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 4 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 5 add",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 5 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 6 add",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 6 remove",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 7 add",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 7 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 8 add",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 8 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 9 add",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 9 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 10 add",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "cycle 10 remove",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / multiline add",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / multiline remove",
+      "samples": 31,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / wrapped chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / remove first",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / remove last",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / multiline add",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / multiline remove",
+      "samples": 31,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / wrapped chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / remove first",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / remove last",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / multiline add",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / multiline remove",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / wrapped chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / remove first",
+      "samples": 33,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / remove last",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / multiline add",
+      "samples": 31,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / multiline remove",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / wrapped chip",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / remove first",
+      "samples": 33,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / remove last",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / multiline add",
+      "samples": 33,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / multiline remove",
+      "samples": 31,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / wrapped chip",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / remove first",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / remove last",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / multiline add",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":false,\"chat\":true,\"width\":1440,\"reduced\":false} / multiline remove",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / wrapped chip",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / remove first",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / remove last",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / multiline add",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":1440,\"reduced\":false} / multiline remove",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / wrapped chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / remove first",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / remove last",
+      "samples": 31,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / multiline add",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":true,\"width\":1440,\"reduced\":false} / multiline remove",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 146,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":false} / first chip",
+      "samples": 30,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":false} / wrapped chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 168,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":false} / remove first",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 168,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 130,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":false} / remove last",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 130,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":false} / multiline add",
+      "samples": 33,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 178,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"light\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":false} / multiline remove",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 178,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":true} / first chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":true} / wrapped chip",
+      "samples": 32,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 98,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 168,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":true} / remove first",
+      "samples": 33,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 168,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 130,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": 50,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":true} / remove last",
+      "samples": 33,
+      "minTextHeight": 44,
+      "minTextTop": 6,
+      "first": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "last": {
+        "height": 56,
+        "textHeight": 44,
+        "textTop": 6,
+        "textBottom": 50,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 44
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":true} / multiline add",
+      "samples": 32,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 178,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 178,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": 98,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    },
+    {
+      "label": "{\"theme\":\"dark\",\"rail\":true,\"chat\":false,\"width\":390,\"reduced\":true} / multiline remove",
+      "samples": 30,
+      "minTextHeight": 92,
+      "minTextTop": 6,
+      "first": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "last": {
+        "height": 104,
+        "textHeight": 92,
+        "textTop": 6,
+        "textBottom": 98,
+        "chipsTop": null,
+        "sendInset": 6,
+        "sendWidth": 44,
+        "textHeightBefore": 92
+      },
+      "invalid": []
+    }
+  ],
+  "errors": []
+}

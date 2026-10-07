@@ -1,0 +1,10 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/ingredient-picker/f08-compatibility.test.ts:
+Database initialized at: /tmp/jarvis-d17-f08-vw3nmG/fixture.db
+(pass) actual F08 discovery and pinned request recover one populated draft, no credentials or execution [905.27ms]
+
+ 1 pass
+ 0 fail
+ 15 expect() calls
+Ran 1 test across 1 file. [947.00ms]

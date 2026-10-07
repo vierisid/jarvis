@@ -12,7 +12,7 @@ test.skipIf(!ownerRoot)("actual F08 discovery and pinned request recover one pop
   load("src/brief/composition.ts"),load("src/brief/capabilities.ts"),load("src/brief/composition-routes.ts"),load("src/workflows/db/index.ts"),load("src/workflows/db/repos/flow-readiness.ts"),load("src/workflows/runtime/piece-catalog.ts"),load("src/workflows/db/repos/flow.ts"),load("src/workflows/db/repos/flow-version.ts")]);
  const directory=mkdtempSync(join(tmpdir(),"jarvis-d17-f08-"));db.initWorkflowDb(join(directory,"fixture.db"));
  const pieceName="@fixture/piece-account",secret="D17_CREDENTIAL_CANARY";
- const catalog=new PieceCatalog([{name:pieceName,version:"1.2.3",displayName:"Account",description:"Fixture",auth:{type:"SECRET_TEXT"},actions:{send:{name:"send",displayName:"Send",description:"Send a message",requireAuth:true,inputSchema:{fields:[{name:"text",label:"Text",type:"string",required:true}]}}}}]);
+ const catalog=new PieceCatalog([{name:pieceName,version:"1.2.3",displayName:"  Account",description:"Fixture",auth:{type:"SECRET_TEXT"},actions:{send:{name:"send",displayName:"Send \n",description:"Send a message",requireAuth:true,inputSchema:{fields:[{name:"text",label:"Text",type:"string",required:true}]}}}}]);
  configureWorkflowReadiness({pieces:catalog});
  db.getWorkflowDb().run(`INSERT INTO app_connection(id,external_id,display_name,type,scope,status,piece_name,piece_version,project_id,owner_id,value,metadata,created,updated) VALUES (?,? ,?,'SECRET_TEXT','PROJECT','ACTIVE',?,'0.0.0',?,NULL,?,?,1,1)`,[pieceName,"selected-account",secret,pieceName,db.DEFAULT_IDS.project,secret,JSON.stringify({private:secret})]);
  const provider=new BriefCompositionProvider(db.getWorkflowDb(),undefined,3000);let calls=0,posts=0;
@@ -27,7 +27,7 @@ test.skipIf(!ownerRoot)("actual F08 discovery and pinned request recover one pop
    if(routes[path]){const response=await routes[path][req.method as "GET"|"POST"](req);if(req.method==="POST"){posts++;if(lose){lose=false;throw Error("lost");}}return response;}
    Object.assign(req,{params:{id:decodeURIComponent(path.split("/").at(-1)!)}});return routes["/api/brief/workflow-compositions/:id"].GET(req);
   };
-  const choices=await readIngredientCatalog(()=>caps.snapshot(),new AbortController().signal,request);expect(choices).toHaveLength(2);expect(JSON.stringify(choices)).not.toContain(secret);
+  const choices=await readIngredientCatalog(()=>caps.snapshot(),new AbortController().signal,request);expect(choices).toHaveLength(2);expect(choices.find(c=>c.tab==="library-action")!.displayName).toBe("Account: Send");expect(JSON.stringify(choices)).not.toContain(secret);
   expect(choices.map(c=>c.selection!.kind).sort()).toEqual(["connection","library-action"]);
   let raw:string|null=null;const controller=new WorkflowCreationController(createCompositionPort(()=>caps.snapshot(),request),{read:()=>raw,write:v=>{raw=v;}},{source:"fixture",scopeId:"account:vault",requestId:()=>"d17-f08"});
   const selected=choices.map(c=>({selection:c.selection!,displayName:c.displayName}));controller.setIngredients(selected);controller.setDraft("Use the chosen account and send action to prepare a workflow.");await controller.submit(controller.getSnapshot().draft);expect(controller.getSnapshot().error).not.toBeNull();await provider.idle();await controller.recover();
