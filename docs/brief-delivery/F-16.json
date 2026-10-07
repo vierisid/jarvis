@@ -1,0 +1,139 @@
+{
+  "task": "F-16",
+  "title": "Build evidence-backed outcomes and time-back data",
+  "date": "2026-10-07",
+  "branch": "brief/f-16",
+  "base_branch": "brief/f-15",
+  "baseline": "bc0fdf9cda343e45ad8081345a77e1814dbe979a",
+  "main_reviewed": "244658eed294af5d4b51de434d40cfd800adca67",
+  "head": "Commit containing this receipt; exact published head and normal hook results are recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-16",
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [
+      "F-15"
+    ],
+    "stack": "User-requested F stack on corrected F15. F15 source tables are checked at readiness; the outcome implementation does not import its writer."
+  },
+  "baseline_review": {
+    "pinned": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": [
+      "A18 src/workflows/db/schema.ts",
+      "A08 src/goals/work-items.ts",
+      "A09 src/goals/application-service.ts"
+    ],
+    "comparison": "Pinned audit and current main match these sources except F08 ingredient pins and F15 measurement writer/scoring protection on the stack.",
+    "open_prs": "Refreshed open PRs at task start; no existing F16 implementation. D09 outcome preview remains separate. Q05, Q13 and Q18 remain unmerged optional work.",
+    "parent_ci": "All active corrected F15 checks pass; path-gated jobs skipped.",
+    "parent_ci_log": "docs/brief-delivery/evidence/F-16/parent-ci.json",
+    "d09_reviewed": "7858a7a7d33b154f44c33591c8601266854f0a7e:ui/src/brief/today/outcomes/model.ts"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:3",
+    "visual": "Backend read model and optional time records only. No presentation activated or screenshot claimed."
+  },
+  "activation": {
+    "capability": "outcomes",
+    "flags": [
+      "JARVIS_BRIEF_GOAL_MEASUREMENTS=1",
+      "JARVIS_BRIEF_OUTCOMES=1"
+    ],
+    "default": "off",
+    "merged": false,
+    "release_enabled": false
+  },
+  "implementation": [
+    "Project accepted, completed, user-checked work through stable work/result-check/root-run identities, with globally deduplicated attribution before half-open window filtering.",
+    "Recheck production root/descendant runs, finish times, pinned flow/version, cancellation, waitpoints and durable effect status. Failed, pending, uncertain and test/sample executions contribute no benefit.",
+    "Optional additive time evidence records bind a baseline and observed intervention intervals to an exact result check, with revision checks, atomic command receipts and restart-safe idempotency.",
+    "Time back is the explicit manual baseline minus the union of intervention intervals. No baseline from engine duration, per-flow defaults, run counts or titles. Null, observed zero and negative overhead are distinct.",
+    "Time corrections replace the current claim in its original completion window. Day/week windows use IANA calendars, Monday week starts, DST and skipped-date handling.",
+    "Daily and weekly goal deltas use actual opening/ending measurements, preserve signed corrections and remain independent across parent/child goals. Missing openings or changed definitions omit the delta.",
+    "Authenticated bounded read/summary/time-command/recovery routes, default-off registration with F15 activation dependency, classified environment setting and reviewed workflow data boundary.",
+    "Coverage reports eligible/timed/untimed checked work and exclusion reasons. Captured run output and effect payloads are excluded from the projection."
+  ],
+  "verification": {
+    "focused": {
+      "passed": 54,
+      "failed": 0,
+      "assertions": 426,
+      "files": 3,
+      "command": "bun test src/brief/outcomes.test.ts src/daemon/api-brief-outcomes.test.ts src/util/model-exec-env.test.ts",
+      "log": "docs/brief-delivery/evidence/F-16/focused.log"
+    },
+    "affected": {
+      "passed": 665,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 4332,
+      "files": 45,
+      "command_file": "docs/brief-delivery/evidence/F-16/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-16/affected.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-16/typescript.log"
+    },
+    "mutations": {
+      "variants": 4,
+      "expected_failures": 9,
+      "log": "docs/brief-delivery/evidence/F-16/mutations.json",
+      "restoration": "Exact source bytes restored in finally; final focused and affected suites rerun."
+    },
+    "read_boundary": {
+      "status": "registered and verified",
+      "red_log": "docs/brief-delivery/evidence/F-16/read-boundary-red.log",
+      "regression": "Hostile run/effect payloads never appear in authenticated outcome projections."
+    },
+    "manual": "Authenticated HTTP over a temporary Unix socket using real canonical fixture writers, with restart/replay, goal corrections, root/child uncertainty, timezone/DST/skipped-date and malformed-input checks. No live provider/model calls.",
+    "guards": "Normal EE/migration/template/package, related-test and TypeScript commit hooks required before push; exact results recorded in PR."
+  },
+  "limitations": [
+    "Results and time evidence are user_reported, not independently provider-certified. Manual checked work has no automation time claim.",
+    "Current evidence projection, not an immutable historical dashboard. Optional at chooses a calendar window, not historical knowledge as-of.",
+    "Time evidence is manual opt-in; coverage concerns checked work, not all computer activity. Shared intervention across tasks is not inferred.",
+    "Goal changes are observations, not causal attribution to completed work; there is no cross-goal or hierarchy total.",
+    "Bounds: 10000 checked work items, 1000 runs/10000 effects per family, 50000 historical goal receipts. No silent truncation into an allegedly complete total.",
+    "D09/D10/D25 live adapters remain gated. Existing D09 preview needs negative-overhead handling and explicit goal selection before binding this summary.",
+    "No workflow execution policy, live service or approved headline is changed. F17 is not included; full repository CI reports separately on the PR."
+  ],
+  "rollback": "Unset JARVIS_BRIEF_OUTCOMES on the new runtime; retain additive time receipts and canonical work/goal data. Disabling F15 also disables outcomes.",
+  "guide": "docs/brief-outcomes.md",
+  "next_task": "F-17 not started",
+  "reviewCorrections": {
+    "reviewed_head": "9fa79ddc75080e0c447e372f9ef303a6b9efcf31",
+    "findings": {
+      "R1": "Qualify every durable workflow-launch receipt against its exact child run, parent, flow and pinned version. Missing child/grandchild evidence excludes the family, including after canonical workflow deletion and database reopen; retained time receipts cannot restore eligibility.",
+      "R2": "Authenticated GET /api/brief/outcomes/:workItemId/time without requestId returns the latest full time record and revision, or null. Querying requestId still recovers the immutable historical receipt. Clients can refresh after a stale-revision conflict and submit a correction."
+    },
+    "regressions": {
+      "passed": 10,
+      "assertions": 69,
+      "red": "docs/brief-delivery/evidence/F-16/review-red.log",
+      "green": "docs/brief-delivery/evidence/F-16/review-green.log",
+      "proof": "All ten checks fail with the original reviewed implementation. Exact corrected file bytes restored before the final focused and affected runs. Uses real workflow launch backend and canonical deletion with isolated fixtures; no live provider/model call."
+    },
+    "focused": {
+      "passed": 63,
+      "assertions": 501,
+      "log": "docs/brief-delivery/evidence/F-16/review-focused.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-16/review-typescript.log"
+    },
+    "guards": "Normal commit hooks required; exact results recorded in PR description.",
+    "activation": "Default off; no UI activation, deployment, merge or F17 work.",
+    "affected": {
+      "passed": 674,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 4407,
+      "files": 45,
+      "log": "docs/brief-delivery/evidence/F-16/review-affected.log"
+    }
+  }
+}

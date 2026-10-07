@@ -1,0 +1,45 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/outcomes.test.ts:
+66 |   expect(() => provider.recordTime(w.item.id, time(w))).toThrow('eligible checked workflow');
+67 | });
+68 | test('explicit baseline minus observed intervention, without double subtracting overlapping intervals', async () => {
+69 |   const w = work(), c = time(w); c.intervention.intervals.push({ start: w.created + 2 * 60_000, end: w.created + 10 * 60_000 });
+70 |   const receipt = provider.recordTime(w.item.id, c); expect(receipt.revision).toBe(1);
+71 |   const view = await summary(); expect(view.week).toMatchObject({ value: 20, baseline: 30, unit: 'minutes', qualification: 'user_reported' });
+                                                       ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "baseline": 30,
++   "provenance": [
++     {
++       "id": "manual-report-stopwatch",
++       "kind": "source",
++       "revision": "v1",
++     },
++     {
++       "id": "review-stopwatch",
++       "kind": "source",
++       "revision": "v1",
++     },
++   ],
+    "qualification": "user_reported",
++   "target": null,
+    "unit": "minutes",
+-   "value": 20,
++   "value": 30,
+  }
+
+- Expected  - 1
++ Received  + 15
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:71:51)
+(fail) explicit baseline minus observed intervention, without double subtracting overlapping intervals [496.45ms]
+
+ 0 pass
+ 28 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [533.00ms]

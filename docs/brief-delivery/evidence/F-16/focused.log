@@ -1,0 +1,70 @@
+Command: /home/vierisid/.bun/bin/bun test src/brief/outcomes.test.ts src/daemon/api-brief-outcomes.test.ts src/util/model-exec-env.test.ts
+Exit: 0
+bun test v1.4.2 (744846f84)
+
+src/util/model-exec-env.test.ts:
+(pass) the daemon-secret rule > every listed daemon secret is stripped, in any case [0.24ms]
+(pass) the daemon-secret rule > the sources the header cites are the names on the list [0.19ms]
+(pass) the daemon-secret rule > an unclassified JARVIS_ name is stripped: a future secret fails closed [0.07ms]
+(pass) the daemon-secret rule > settings stay, and no daemon secret is on the settings list [0.25ms]
+(pass) the daemon-secret rule > the engine wiring names are known, internal, and stripped [0.07ms]
+(pass) the daemon-secret rule > the user's shell and desktop survive whole, their own credentials included [0.10ms]
+(pass) the daemon-secret rule > stripping removes exactly the daemon secrets and nothing else [0.17ms]
+(pass) modelExecEnv() > marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off [0.24ms]
+(pass) modelExecEnv() > flags the env key only when this process holds it or inherited the flag [46.72ms]
+(pass) modelExecEnv() > an extra cannot put a daemon secret back, nor can a spread of process.env [0.16ms]
+(pass) modelExecEnv() > an undefined extra removes the key; the result is always an object [0.07ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the scan sees the names it must (not blind) [0.08ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [0.30ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the three buckets do not overlap [0.07ms]
+(pass) the model-exec markers (#514) > the key check: 16 hex chars, stable, case-insensitive, and not the key [31.65ms]
+(pass) the model-exec markers (#514) > the marker is exactly "1"; the flag is a check value or an older parent's "1" [0.35ms]
+(pass) the model-exec markers (#514) > modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged [0.08ms]
+(pass) the model-exec markers (#514) > silent for a file-key install, marked or not [0.24ms]
+(pass) the model-exec markers (#514) > warns while the parent's key is missing or a different one is set; silent once it is back [0.15ms]
+(pass) the model-exec markers (#514) > the CLI warns only for a detached start or restart [0.10ms]
+
+src/daemon/api-brief-outcomes.test.ts:
+(pass) every route requires the exact ready provider plus both outcome and measurement activation [38.21ms]
+(pass) empty, qualified time, immutable receipt recovery and conflict responses [39.15ms]
+(pass) strict bounded JSON and query validation fail before any time record can be written [22.50ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f16-http-wHvKet/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) authenticated socket requires a session for reads/writes and returns the same durable time receipt [42.00ms]
+
+src/brief/outcomes.test.ts:
+(pass) no evidence is empty; scores, run duration and flow defaults never invent time or goal counts [456.21ms]
+(pass) manual checked work counts once but cannot manufacture an automation time claim [428.31ms]
+(pass) explicit baseline minus observed intervention, without double subtracting overlapping intervals [484.43ms]
+(pass) time corrections replace benefit in the original completion window; exact recovery survives restart [434.48ms]
+(pass) negative time corrections retain overhead and measured zero is distinct from unknown [603.86ms]
+(pass) stale revisions, changed retries, invalid intervals and injected fields cannot rewrite time evidence [792.75ms]
+(pass) outer rollback leaves no time receipt and additive migration preserves old commitments [617.34ms]
+(pass) effect pending invalidates a checked success [691.20ms]
+(pass) effect dispatching invalidates a checked success [620.58ms]
+(pass) effect failed invalidates a checked success [628.90ms]
+(pass) effect blocked invalidates a checked success [632.64ms]
+(pass) effect unknown invalidates a checked success [823.88ms]
+(pass) succeeded effects need matching durable identities and completion time [696.59ms]
+(pass) current run evidence excludes status='FAILED' [737.62ms]
+(pass) current run evidence excludes environment='TESTING' [851.31ms]
+(pass) current run evidence excludes step_name_to_test='trigger' [747.17ms]
+(pass) current run evidence excludes execution_config='{"sampleData":{}}' [706.45ms]
+(pass) pending waitpoints and cancellation remain excluded even after a passed check [779.16ms]
+(pass) nested runs cannot count independently or hide uncertainty from their parent [671.15ms]
+(pass) unique run bindings and windowed reads prevent duplicate benefit through another goal link [624.62ms]
+(pass) half-open windows do not repeat work at an exact boundary [600.62ms]
+(pass) timezone midnight, DST spring/fall and Monday week boundaries are calendar based [621.65ms]
+(pass) goal deltas are actual signed observations, independent of work and parent/child totals [803.83ms]
+(pass) missing opening measurements and changed definitions omit the delta, with incomplete coverage [623.71ms]
+(pass) bad queries and replaced databases are unavailable, never fabricated empty success [565.58ms]
+(pass) missing F15 sources fail readiness rather than falling back to scores [582.84ms]
+(pass) time evidence alone cannot hide a later invalidated run or a failed work result [658.34ms]
+(pass) a skipped local date has no work and cannot mark two days current [644.88ms]
+(pass) daily and weekly goal deltas have distinct observed openings [621.10ms]
+(pass) outcome projections never expose captured run output or effect payloads [645.62ms]
+
+ 54 pass
+ 0 fail
+ 426 expect() calls
+Ran 54 tests across 3 files. [19.66s]

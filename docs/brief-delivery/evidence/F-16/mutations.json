@@ -1,0 +1,39 @@
+[
+  {
+    "variant": "ignore-intervention",
+    "exit": 1,
+    "failed_tests": [
+      "explicit baseline minus observed intervention, without double subtracting overlapping intervals [496.45ms]"
+    ],
+    "log": "docs/brief-delivery/evidence/F-16/ignore-intervention-mutation.log"
+  },
+  {
+    "variant": "ignore-effect-evidence",
+    "exit": 1,
+    "failed_tests": [
+      "effect pending invalidates a checked success [485.46ms]",
+      "effect dispatching invalidates a checked success [489.42ms]",
+      "effect failed invalidates a checked success [460.86ms]",
+      "effect blocked invalidates a checked success [446.54ms]",
+      "effect unknown invalidates a checked success [502.82ms]"
+    ],
+    "log": "docs/brief-delivery/evidence/F-16/ignore-effect-evidence-mutation.log"
+  },
+  {
+    "variant": "absolute-goal-count",
+    "exit": 1,
+    "failed_tests": [
+      "goal deltas are actual signed observations, independent of work and parent/child totals [476.73ms]",
+      "daily and weekly goal deltas have distinct observed openings [505.92ms]"
+    ],
+    "log": "docs/brief-delivery/evidence/F-16/absolute-goal-count-mutation.log"
+  },
+  {
+    "variant": "inclusive-window-end",
+    "exit": 1,
+    "failed_tests": [
+      "half-open windows do not repeat work at an exact boundary [523.20ms]"
+    ],
+    "log": "docs/brief-delivery/evidence/F-16/inclusive-window-end-mutation.log"
+  }
+]

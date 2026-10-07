@@ -1,3 +1,4 @@
+import { ensureOutcomeSchema } from './outcome-schema';
 import { ensureGoalMeasurementSchema } from './goal-measurement-schema';
 import { ensureDecisionDocumentSchema } from '../authority/decision-document-schema';
 import { Database } from "bun:sqlite";
@@ -789,6 +790,7 @@ function createTables(db: Database): void {
 
   ensureGoalEventSchema(db);
   ensureGoalMeasurementSchema(db);
+  ensureOutcomeSchema(db);
 
   // Additive review audit: the exact bounded inputs and rejected score proposals.
   db.run(`CREATE TABLE IF NOT EXISTS goal_review_evidence (
