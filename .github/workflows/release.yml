@@ -2,10 +2,11 @@ name: Release
 
 # Cuts a release end-to-end: bumps package.json on a release branch, opens a
 # PR and merges it (main requires PRs), tags the merge commit, then dispatches
-# the Release Executor workflow (release-exec.yml) against that tag. The
-# explicit dispatch is required because tags pushed with GITHUB_TOKEN never
-# trigger tag-push workflows (GitHub's recursion guard) -- workflow_dispatch
-# is exempt from that guard.
+# the Release Executor workflow (release-exec.yml) against that tag and waits
+# for that run, failing unless it succeeds (#683). The explicit dispatch is
+# required because tags pushed with GITHUB_TOKEN never trigger tag-push
+# workflows (GitHub's recursion guard) -- workflow_dispatch is exempt from
+# that guard.
 
 on:
   workflow_dispatch:
@@ -20,13 +21,22 @@ permissions:
   pull-requests: write
   actions: write
 
+# queue: max (#683). `cut` now holds this group until the release it
+# dispatched has finished, which can be hours, and the default queue keeps ONE
+# pending run: a third dispatch would silently cancel the waiting one. `max`
+# queues them in order, as release-exec.yml does. actionlint 1.7.x predates
+# the key and reports it as unexpected.
 concurrency:
   group: release
   cancel-in-progress: false
+  queue: max
 
 jobs:
   cut:
     runs-on: ubuntu-latest
+    # Above the release-executor watch bound (WATCH_TIMEOUT_SECONDS below,
+    # 300 minutes), so the watch fails with a message first; see that step.
+    timeout-minutes: 330
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -152,12 +162,31 @@ jobs:
           NEW: ${{ steps.version.outputs.NEW }}
         run: git push origin --delete "release/v${NEW}" || true
 
-      - name: Start release executor
+      # Dispatch AND wait (#683). This used to dispatch and exit, so a failed
+      # or cancelled release left the merged bump and the pushed tag with
+      # nothing published while this workflow stayed green. The script gets
+      # the run id from the dispatch (or looks the run up by workflow, tag,
+      # commit and time when the answer has none), checks it is that run,
+      # and fails unless it concludes `success`.
+      #
+      # The wait is bounded so it fails with the run URL instead of the job
+      # being killed at its clock. Measured on the last 23 release-exec runs
+      # (2026-06-11 to 2026-10-07): median about 10 minutes, longest 83
+      # (v0.7.0). It also covers the `release` environment approvals, which
+      # wait for a person, and the release-exec concurrency queue, so the
+      # bound is 5 hours: under the 6 a hosted job may run, with the job
+      # timeout at 330 minutes leaving 30 for the steps before this one.
+      # Hitting it does not stop the release; it only stops this job waiting.
+      #
+      # This job now holds the `release` concurrency group until the release
+      # finishes, so a second Release dispatch queues behind it instead of
+      # cutting the next version while this one is still publishing.
+      - name: Start the release executor and wait for it
         env:
-          NEW: ${{ steps.version.outputs.NEW }}
-        run: |
-          gh workflow run release-exec.yml --ref "v${NEW}" -f tag="v${NEW}" -f dry_run=false
-          echo "Dispatched release-exec.yml for v${NEW}"
+          TAG: v${{ steps.version.outputs.NEW }}
+          SHA: ${{ steps.merge.outputs.SHA }}
+          WATCH_TIMEOUT_SECONDS: "18000"
+        run: .github/scripts/watch-release-run.sh
 
       # Don't leave an orphaned release branch / open PR behind: a re-run would
       # otherwise fail at git push / gh pr create because they already exist.

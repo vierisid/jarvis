@@ -44,8 +44,9 @@ permissions: {}
 #
 # queue: max, because the default queue (`single`) holds ONE pending run and
 # cancels it when another is queued: a third release arriving while one runs
-# and one waits would silently drop the waiting one, and release.yml does not
-# watch the run it dispatches. `max` keeps up to 100 pending runs and starts
+# and one waits would silently drop the waiting one. (release.yml now waits
+# for the run it dispatches (#683) and would go red, but a hand-pushed tag
+# has no such watcher.) `max` keeps up to 100 pending runs and starts
 # them in order (GitHub docs, workflow-level `concurrency.queue`; changelog
 # 2026-05-07). It is rejected only together with cancel-in-progress: true.
 #

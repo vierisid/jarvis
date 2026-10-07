@@ -112,6 +112,9 @@ jobs:
       # #646: every job's token scope is written down, the publish path holds
       # nothing by default, and every action it runs is pinned to a commit.
       - run: .github/scripts/workflow-hardening.test.sh
+      # #683: release.yml waits for the release it dispatches. The watcher only
+      # runs on a real release, so it is tested here against a fake gh.
+      - run: .github/scripts/watch-release-run.test.sh
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xdotool && echo JARVIS_REQUIRE_XDOTOOL_SHIM=1 >> "$GITHUB_ENV" # linux.test.ts runs the real xdotool's argument parsing (#518)
       # --retry=2 (3 attempts per test), NOT a retry around the whole step.
       # Every flake this suite has produced in CI is a per-test hook timing out
