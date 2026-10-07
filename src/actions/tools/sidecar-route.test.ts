@@ -113,6 +113,19 @@ describe('typed desktop outcomes', () => {
     });
   });
 
+  test('a reviewed browser action refused for a superseded snapshot is not started (#676)', async () => {
+    // sidecar/browser_snapshot.go's refuseStaleElement sends
+    // BROWSER_SNAPSHOT_SUPERSEDED before its first CDP command
+    // (browser_elem_gen_test.go pins that nothing reached the browser).
+    setSidecarManagerRef(stubManager([{ ...mac, capabilities: ['browser'] }], async () => {
+      throw new SidecarRPCError('BROWSER_SNAPSHOT_SUPERSEDED',
+        'element [3] was reviewed against a browser snapshot that has since been replaced or dropped, so nothing was done.');
+    }));
+    await expect(routeToSidecarAction(mac.id, 'browser_click', { element_id: 3 }, 'browser')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'BROWSER_SNAPSHOT_SUPERSEDED', effect: 'not_started' },
+    });
+  });
+
   /**
    * #623, the brain half. The sidecar now answers a panicking handler with
    * `HANDLER_PANIC` instead of dropping the socket, and the question this pins

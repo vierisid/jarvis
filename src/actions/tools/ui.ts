@@ -174,6 +174,14 @@ const BROWSER_ACTIONS = new Set(['click', 'set_value']);
 /** Actions that only read, so there is nothing to verify or diff. */
 const READ_ONLY_ACTIONS = new Set(['get_value']);
 
+/**
+ * What a read says when the surface or the element moved under its id (#677).
+ * Repo-authored, and naming nothing off the screen: the value itself is the
+ * screen's, and these sentences are only about which screen it came from.
+ */
+const READ_SURFACE_CHANGED = ' (the window or page this [id] was taken from has been replaced or retitled since the ui_snapshot that listed it, so this value may come from a different surface than the one the id named; take a fresh ui_snapshot before relying on it)';
+const READ_ELEMENT_CHANGED = ' (the element now at this [id]\'s ref has a different role or name than the one the ui_snapshot listed, so this value may be a different element\'s; take a fresh ui_snapshot before relying on it)';
+
 function fmtNode(n: SemanticNode, id: number): string {
   const bits: string[] = [`[${id}] ${n.role}`];
   if (n.name) bits.push(`"${n.name}"`);
@@ -394,11 +402,13 @@ export const uiActTool: ToolDefinition = {
 
     let before: SemanticNode[] = [];
     let beforeTitle: string | undefined;
+    let surfaceChanged = false;
     try {
       const pre = await captureSurface({ kind, target, pid, full: false });
       before = pre.surface.nodes;
       beforeTitle = pre.surface.root.title;
-      if (!READ_ONLY_ACTIONS.has(action) && surfaceMoved(entry, pre.surface)) {
+      surfaceChanged = surfaceMoved(entry, pre.surface);
+      if (!READ_ONLY_ACTIONS.has(action) && surfaceChanged) {
         return 'Error: the UI surface changed since review - nothing was done; take a fresh ui_snapshot and review the action again';
       }
     } catch (err) {
@@ -412,7 +422,8 @@ export const uiActTool: ToolDefinition = {
     }
 
     const pc = parsePostcondition(params.verify, actedRef, beforeTitle, value);
-    if (!READ_ONLY_ACTIONS.has(action) && (live.node.name !== actedRef.name || live.node.role !== actedRef.role)) {
+    const controlChanged = live.node.name !== actedRef.name || live.node.role !== actedRef.role;
+    if (!READ_ONLY_ACTIONS.has(action) && controlChanged) {
       return 'Error: the UI control changed since review - nothing was done; take a fresh ui_snapshot and review the action again';
     }
     if (typeof pc === 'string') return `Error: ${pc} - nothing was done`;
@@ -424,9 +435,37 @@ export const uiActTool: ToolDefinition = {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
 
-    // Read-only actions need no verification/diff.
+    // Read-only actions need no verification/diff -- but they DO need to say
+    // whether the id still names what it named (#677). A read skips the two
+    // refusals above by design, because refusing the one UI action with no
+    // effect is the wrong trade; that leaves the model holding a value it would
+    // otherwise take as the reviewed element's, with no way to know the window
+    // was replaced or the element re-pointed in between. So the same two
+    // comparisons are reported instead of enforced, as fields the model reads,
+    // on every read and not only when they fire: an absent field would be
+    // indistinguishable from a read that never checked.
+    //
+    // Both are measured on the capture taken just before the read, the same
+    // instant the action path's refusals use; a surface replaced between that
+    // capture and the read itself is not seen, exactly as it is not there.
+    //
+    // An element re-found by anything but its address (`sig`, a hash of role,
+    // name, stable id, path and ordinal) or its `stableId` is reported as
+    // changed too. That is the limit of what a read can say: an element
+    // replaced by one with the same address still reads false. `path+name` or
+    // `role+name+ordinal` can land on a DIFFERENT node with the same role and name -- the second of two
+    // "Amount" fields after a relayout -- and comparing role and name alone
+    // would then say false for another element's value.
     if (READ_ONLY_ACTIONS.has(action)) {
-      return `${action} -> ${JSON.stringify(actResult)}`;
+      const reFound = live.method !== 'sig' && live.method !== 'stableId';
+      const elementChanged = controlChanged || reFound;
+      const elementWhy = controlChanged ? READ_ELEMENT_CHANGED
+        : ` (re-found by ${live.method} at ${Math.round(live.confidence * 100)}%, not by its address or stable id, so this may be a different element with the same role and name; take a fresh ui_snapshot before relying on it)`;
+      return [
+        `${action} -> ${JSON.stringify(actResult)}`,
+        `surface_changed_since_snapshot: ${surfaceChanged}${surfaceChanged ? READ_SURFACE_CHANGED : ''}`,
+        `element_changed_since_snapshot: ${elementChanged}${elementChanged ? elementWhy : ''}`,
+      ].join('\n');
     }
 
     const how = live.method === 'sig' || live.method === 'stableId'

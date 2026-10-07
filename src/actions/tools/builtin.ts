@@ -19,12 +19,14 @@ import { WSLBridge } from '../terminal/wsl-bridge.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import { checkNavigationUrl } from '../browser/url-policy.ts';
 import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upload-policy.ts';
-import type { ToolDefinition, ToolResult } from './registry.ts';
+import type { ApprovalGuard, ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import {
   routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
+  routeElementActionToSidecar, remoteSnapshotGeneration, currentSnapshotReader,
   type SidecarPageRead,
 } from './sidecar-route.ts';
+import { currentReviewedExecution, type ReviewedExecution, type ReviewedRemoteSnapshot } from './reviewed-call-scope.ts';
 import { getMachineScope } from '../machine-scope.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
@@ -1143,16 +1145,18 @@ function resolveBrowserTarget(
  * tool path.) A router that throws degrades to the unbound guard rather than to
  * a dead approval: `execute` will refuse the call itself, with a reason.
  *
- * REMAINING GAP, deliberate and recorded: a reviewed REMOTE call is still
- * unbound. The sidecar has its own `elemGen` and its own document checks at use
- * time, but nothing in this process can read them synchronously, and the
- * arguments -- including `target` -- are already compared byte for byte by
- * `getUiExecutionRegistry`.
+ * A REVIEWED REMOTE ELEMENT ACTION is bound by the sidecar, not here (#676).
+ * Nothing in this process can read the sidecar's `elemGen` synchronously, so
+ * this guard does not compare it: it COPIES the generation the sidecar's newest
+ * snapshot reply carried onto the guard as `reviewed`, the approval executor
+ * runs the call inside that scope, and `routeElementActionToSidecar` sends it
+ * as `elem_gen` for the sidecar to compare under its own lock -- or refuses to
+ * send the call to a sidecar too old to compare it.
  */
 function browserCallGuard(
   tool: string,
   opts: { bindDocument?: boolean } = {},
-): (params: Record<string, unknown>) => (() => boolean) {
+): (params: Record<string, unknown>) => ApprovalGuard {
   return (params) => {
     let reviewedRoute: string | null;
     try {
@@ -1180,7 +1184,20 @@ function browserCallGuard(
     // really does mean nothing was reviewed.
     const mayConnectLazily = !opts.bindDocument;
     const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
-    return () => {
+    // What the remote call will be held to (#676), captured NOW -- the newest
+    // generation is re-recorded on every snapshot, so reading it at execution
+    // would name a snapshot the person never saw. Only for the element-
+    // addressed tools: a generation is a property of the id map, and the other
+    // tools address none.
+    //
+    // Every remote call also carries the READER that raised the card, so a
+    // snapshot the approved call takes (a navigate) is recorded as that
+    // reader's rather than as the executor's.
+    const reviewed: ReviewedExecution | undefined = !reviewedRoute ? undefined
+      : opts.bindDocument
+        ? { remoteBrowserSnapshot: reviewedRemoteSnapshot(reviewedRoute), reader: currentSnapshotReader() }
+        : { reader: currentSnapshotReader() };
+    const guard = () => {
       // The ROUTE is compared, never used to pick one. Reviewed local and
       // executed remote is a change of machine, not just of surface: the card
       // named element [5] from the local snapshot, and id 5 on the sidecar is
@@ -1196,12 +1213,25 @@ function browserCallGuard(
       }
       if (nowRoute !== reviewedRoute) return false;
       // Remote: nothing in this process holds the reviewed surface. The
-      // sidecar runs its own document and generation checks at use time, and
-      // the arguments (including `target`) are already compared byte for byte
-      // by `getUiExecutionRegistry`.
+      // sidecar runs its own document and generation checks at use time --
+      // against the generation `reviewed` carries, for an element action --
+      // and the arguments (including `target`) are already compared byte for
+      // byte by `getUiExecutionRegistry`.
       return local ? local() : true;
     };
+    return reviewed ? Object.assign(guard, { reviewed }) : guard;
   };
+}
+
+/**
+ * The remote snapshot a reviewed element action is being approved against:
+ * the canonical sidecar the route names, and the newest `elem_gen` that
+ * sidecar reported (#676). Either may be null, and `routeElementActionToSidecar`
+ * refuses the call at execution if one is -- this records, it does not judge.
+ */
+function reviewedRemoteSnapshot(route: string): ReviewedRemoteSnapshot {
+  const sidecar = findSidecar(route, getSidecarManager()?.listSidecars() ?? []);
+  return { sidecarId: sidecar?.id ?? null, elemGen: sidecar ? remoteSnapshotGeneration(sidecar.id) : null };
 }
 
 /**
@@ -1371,11 +1401,11 @@ export const browserClickTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveBrowserTarget(params, 'browser_click');
     if (target) {
-      return routeToSidecar(target, 'browser_click', {
+      return routeElementActionToSidecar(target, 'browser_click', {
         element_id: params.element_id,
         button: params.button,
         double: params.double,
-      }, 'browser');
+      }, currentReviewedExecution());
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
@@ -1410,7 +1440,8 @@ export const browserHoverTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveBrowserTarget(params, 'browser_hover');
     if (target) {
-      return routeToSidecar(target, 'browser_hover', { element_id: params.element_id }, 'browser');
+      return routeElementActionToSidecar(target, 'browser_hover', { element_id: params.element_id },
+        currentReviewedExecution());
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
@@ -1489,12 +1520,12 @@ export const browserTypeTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveBrowserTarget(params, 'browser_type');
     if (target) {
-      return routeToSidecar(target, 'browser_type', {
+      return routeElementActionToSidecar(target, 'browser_type', {
         element_id: params.element_id,
         text: params.text,
         submit: params.submit,
         append: params.append,
-      }, 'browser');
+      }, currentReviewedExecution());
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;

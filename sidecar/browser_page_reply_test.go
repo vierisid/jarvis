@@ -248,7 +248,7 @@ func TestPageResultIsABareStringWhenNotAsked(t *testing.T) {
 		"flag is a number": {"page_identity": 1},
 	} {
 		t.Run(name, func(t *testing.T) {
-			res := browserPageResult(replyText, goodIdentity(), params)
+			res := browserPageResult(replyText, goodIdentity(), "", params)
 			got, ok := res.Result.(string)
 			if !ok {
 				t.Fatalf("result is %T, want string: %+v", res.Result, res.Result)
@@ -264,7 +264,7 @@ func TestPageResultIsABareStringWhenNotAsked(t *testing.T) {
 // text is byte-identical to the string reply. Parity is the premise of the whole
 // sidecar snapshot path, so the object must not reformat anything.
 func TestPageResultCarriesTheConfirmedIdentity(t *testing.T) {
-	res := browserPageResult(replyText, goodIdentity(), map[string]any{"page_identity": true})
+	res := browserPageResult(replyText, goodIdentity(), "", map[string]any{"page_identity": true})
 	got := replyJSON(t, res)
 	if got["text"] != replyText {
 		t.Fatalf("text = %q, want %q", got["text"], replyText)
@@ -303,7 +303,7 @@ func TestPageResultOmitsAnIdentityItCannotVouchFor(t *testing.T) {
 	}
 	for name, id := range cases {
 		t.Run(name, func(t *testing.T) {
-			got := replyJSON(t, browserPageResult(replyText, id, map[string]any{"page_identity": true}))
+			got := replyJSON(t, browserPageResult(replyText, id, "", map[string]any{"page_identity": true}))
 			// The text still goes: losing a playbook is the cost, losing the page
 			// would be a regression.
 			if got["text"] != replyText {
@@ -331,7 +331,7 @@ func TestPageResultAcceptsTheBoundExactly(t *testing.T) {
 	if len(url) != maxWirePageURL {
 		t.Fatalf("fixture is %d bytes, want %d", len(url), maxWirePageURL)
 	}
-	got := replyJSON(t, browserPageResult(replyText, pageIdentity{url: url, loaderID: "9A1F2C"},
+	got := replyJSON(t, browserPageResult(replyText, pageIdentity{url: url, loaderID: "9A1F2C"}, "",
 		map[string]any{"page_identity": true}))
 	if got["page_url"] != url {
 		t.Fatalf("a URL on the bound was dropped")
@@ -348,7 +348,7 @@ func TestPageResultDoesNotSecondGuessUrlPolicy(t *testing.T) {
 		"about:blank",
 		"blob:https://evil.example/x",
 	} {
-		got := replyJSON(t, browserPageResult(replyText, pageIdentity{url: url, loaderID: "9A1F2C"},
+		got := replyJSON(t, browserPageResult(replyText, pageIdentity{url: url, loaderID: "9A1F2C"}, "",
 			map[string]any{"page_identity": true}))
 		if got["page_url"] != url {
 			t.Fatalf("page_url = %v, want %q verbatim (the brain refuses it, not us)", got["page_url"], url)

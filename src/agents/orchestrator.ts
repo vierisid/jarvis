@@ -1700,16 +1700,30 @@ export class AgentOrchestrator {
             this.noteTaint(toolCall.name, tool?.category);
             return markUntrustedToolBlocks(toolCall.name, tool?.category, receipt.content.map(guardImageSize));
           }
+          // A trusted trailer (#708): the tool's own repo-authored sentence,
+          // placed AFTER the block the way the ungated path below places it,
+          // instead of inside it with the rest of the receipt -- and, like
+          // that path, with the OUTSIDE half capped before it is framed, so
+          // the cap never competes with the trailer and never cuts a frame.
+          // The executor hands a trailer over only when the tool returned a
+          // carrier, which no reply from another machine can produce.
+          if (receipt.trailer) {
+            let outside = receipt.outside ?? '';
+            if (outside.length > MAX_TOOL_RESULT_CHARS) {
+              outside = outside.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${outside.length} chars)`;
+            }
+            return frame(outside) + receipt.trailer;
+          }
           return frame(receipt.result);
         };
 
         // Every return below is a single string except one: an approved call
         // that returned a picture comes back as blocks (#709), which the
-        // executor hands over separately from its receipt text. Otherwise that
-        // is no longer a limitation worth noting for documents:
-        // `DeferredExecution` collapses the tool's return with
-        // `toolReturnText` before writing its receipt, which would drop any
-        // out-of-band metadata a tool tried to hand over here. #584 briefly made that a gap -- an approved `create_document`
+        // executor hands over separately from its receipt text. The other
+        // thing the executor hands over beside its receipt text is a trusted
+        // trailer (#708), placed after the block above. Anything else is
+        // still collapsed into the one receipt string, which would drop any
+        // other out-of-band metadata a tool tried to hand over here. #584 briefly made that a gap -- an approved `create_document`
         // would have lost its download card while an ungated one kept it -- and
         // then removed the card entirely, so there is nothing left to lose. If
         // a tool ever does need to hand structured metadata to the chat loop,
