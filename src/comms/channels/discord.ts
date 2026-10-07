@@ -244,11 +244,25 @@ const DISCORD_LINE_START_MARKUP = /^(\s*)([>#+-]|\d+\.)/gm;
  * character as the character itself.
  */
 export function discordLiteral(text: string): string {
-  return text
-    .replace(DISCORD_INLINE_MARKUP, '\\$&')
-    .replace(DISCORD_LINE_START_MARKUP, (_m, lead: string, mark: string) =>
-      mark.endsWith('.') ? `${lead}${mark.slice(0, -1)}\\.` : `${lead}\\${mark}`);
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(DISCORD_URL)) {
+    out += text.slice(last, m.index).replace(DISCORD_INLINE_MARKUP, '\\$&');
+    // Inside an autolinked URL Discord renders no emphasis, code or mention,
+    // and shows a backslash as a backslash, so escaping there ADDED text: a
+    // `\@` made `https://good.example@evil.example` read as a path on
+    // good.example (#718 re-review). Only `|` is still escaped, since a
+    // spoiler marker is the one construct whose pairing could reach past it.
+    out += m[0].replace(/\|/g, '\\|');
+    last = m.index! + m[0].length;
+  }
+  out += text.slice(last).replace(DISCORD_INLINE_MARKUP, '\\$&');
+  return out.replace(DISCORD_LINE_START_MARKUP, (_m, lead: string, mark: string) =>
+    mark.endsWith('.') ? `${lead}${mark.slice(0, -1)}\\.` : `${lead}\\${mark}`);
 }
+
+/** What Discord autolinks: a scheme and everything up to whitespace or `<`. */
+const DISCORD_URL = /https?:\/\/[^\s<]+/g;
 
 /**
  * Split for literal text: at the last line break that leaves at least half a
