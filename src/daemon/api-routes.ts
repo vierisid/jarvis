@@ -136,6 +136,7 @@ import { readGoalEvents } from '../goals/event-delivery.ts';
 import { GoalValidationError, number as goalNumber, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
 
 import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
+import { approvalIntentFields } from '../authority/approval-delivery.ts';
 
 export type ApiContext = {
   suggestionComposer?: import('../awareness/suggestion-composer.ts').SuggestionComposer | null;
@@ -3150,17 +3151,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // dashboard rehydration on reconnect doesn't have to derive them
         // client-side from `tool_name` + `action_category`.
         const { impactFromCategory } = require('../roles/authority.ts');
-        const wsService = ctx.wsService as
-          | { computeApprovalIntent?: (r: typeof rows[number]) => string }
-          | undefined;
-
         const enriched = rows.map((r) => ({
           ...r,
           execution_state: executionState(r),
           impact: impactFromCategory(r.action_category as ActionCategory),
-          intent:
-            wsService?.computeApprovalIntent?.(r) ??
-            (r.reason && r.reason.trim() ? r.reason : r.tool_name),
+          // `intent` is the joined sentence; since #792 `intent_action` and
+          // `intent_reason` carry its two parts apart, so a card can show the
+          // reason in its own element.
+          ...approvalIntentFields(r),
         }));
 
         return json(enriched);

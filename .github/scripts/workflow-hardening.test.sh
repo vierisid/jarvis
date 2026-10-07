@@ -29,14 +29,17 @@
 #      version, no `@latest`-style run, no `curl | sh`, the QEMU binfmt and
 #      BuildKit images pinned by digest, and no Bun, Go cache or binfmt image
 #      restored from the Actions cache (writable by any run on main). Both
-#      npm publishers pin the same exact npm. Not checked: Dockerfile base
-#      images, and setup-node's node-version major (runner tool cache).
+#      npm publishers pin the same exact npm, and every Dockerfile base image
+#      is pinned by tag and digest, its Bun bases at BUN_VERSION (#783). Not
+#      checked: setup-node's node-version major (runner tool cache).
 #   6. Per-job authority (#682): no matrix job holds id-token (every leg would
 #      get it); no `secrets: inherit`, and a local reusable workflow is passed
 #      exactly the secrets it declares, which are exactly the ones it reads; a
 #      job that runs `npm publish` with id-token runs no Bun and no dependency
 #      install or build; on the release path no checkout leaves its token in
-#      the repository config; and no registry login happens on a dry run.
+#      the repository config; no registry login happens on a dry run; and
+#      (#781) a privileged job takes an artifact only by a digest another
+#      job reported as an output, checked in the step right after the download.
 #   7. (#687) "Authority" also counts any use of the `secrets` context other
 #      than secrets.GITHUB_TOKEN (including toJSON(secrets)), and `secrets:
 #      inherit`; and every rule that reads steps descends into local
@@ -75,6 +78,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | untrusted | mutable
+#          | narrow | pushcache
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -332,7 +336,13 @@ if (rule === "narrow") {
     if (n === "release") return true;
     return n.includes("${{") && /(^|[^-\w])'release'([^-\w]|$)/.test(n);
   };
-  const release = Object.values(jobs).some(gatedByRelease);
+  // ...and (#779) any workflow in which a job can mint an OIDC token. The
+  // environment test alone missed installer-release.yml, which has no
+  // `release` environment yet compiled in the job that federates into the
+  // same KMS signing key as the sidecar. A token is the authority, whatever
+  // the environment is called, so holding one puts a workflow on this path.
+  const mintsToken = Object.values(jobs).some((j) => writes(j.permissions ?? doc.permissions, "id-token"));
+  const release = Object.values(jobs).some(gatedByRelease) || mintsToken;
   for (const [name, job] of Object.entries(jobs)) {
     const perm = job.permissions ?? doc.permissions;
     const oidc = writes(perm, "id-token");
@@ -428,6 +438,58 @@ if (rule === "narrow") {
         if (String(st.uses ?? "").startsWith("./"))
           out.push(name + ": runs local action " + st.uses + " in a job holding id-token");
     }
+    // Artifacts are writable by every job in the run, so on the release path
+    // a job holding id-token or a write scope takes one only by digest
+    // (#781): the step right after each download runs `sha256sum -c` on a
+    // digest that arrives as a job output (`needs.<job>.outputs`, which only
+    // that job can set), under the same condition as the download.
+    const privileged = oidc || perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
+    if (release && privileged) {
+      // Action names are case-insensitive to GitHub.
+      const isDownload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
+      for (const [i, st] of steps.entries()) {
+        if (!isDownload(st)) continue;
+        const next = steps[i + 1];
+        const label = name + ": download " + JSON.stringify(st.with?.name ?? st.with?.pattern ?? "(all)");
+        // The check, on a line that is not a comment, not excused by || true.
+        const code = typeof next?.run === "string" ? next.run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n") : "";
+        const checkLine = code.split("\n").find((l) => /\bsha256sum\b[^\n]*\s-c\b/.test(l));
+        // The env vars that carry a job-output digest; the script must read
+        // one of them, not merely have it in scope.
+        const carriers = Object.entries(next?.env ?? {})
+          .filter(([, v]) => /\$\{\{\s*needs\s*\.\s*[\w-]+\s*\.\s*outputs\s*\.\s*[\w-]+\s*\}\}/.test(String(v))).map(([k]) => k);
+        if (!checkLine)
+          out.push(label + " is not followed at once by a sha256sum -c of what it fetched");
+        else if (!carriers.length)
+          out.push(label + " is checked against no needs.<job>.outputs digest");
+        else if (!carriers.some((k) => new RegExp("\\$\\{?" + k + "\\b").test(code)))
+          out.push(label + " has a needs.<job>.outputs digest in env that its check never reads");
+        // Its failure must end the step: no || after it (on its line or
+        // continued onto the next), no if or ! around it, no set +e, and no
+        // shell other than the default bash -e.
+        // The check must also be the LAST command of its line: a pipe after it
+        // (GitHub default shell is bash -e, without pipefail), a trailing &,
+        // or a $( ) or backtick around it would each take its exit status.
+        else if (/\|\|/.test(checkLine) || /^\s*(?:if|elif|while|until)\b|^\s*!/.test(checkLine) ||
+                 !/\bsha256sum\b[^|;&)`]*\s-c\b[^|;&)`]*$/.test(checkLine) || /\$\(|`/.test(checkLine.split(/\bsha256sum\b/).slice(-2, -1)[0] ?? "") ||
+                 /(?:^|[;&|]\s*)set\s+\+o\s+pipefail\b/m.test(code) ||
+                 /(?:^|[;&|]\s*)set\s+\+[a-z]*e/m.test(code) || /(?:^|[;&|]\s*)set\s+\+o\s+errexit/m.test(code) ||
+                 (next.shell !== undefined && !/^bash\s+-e\b|^bash$/.test(String(next.shell))))
+          out.push(label + " is checked with a failure excused (||, if, !, a pipe, & or $( ) after or around it, set +e, set +o pipefail, or a shell without -e)");
+        else if ((next.if ?? null) !== (st.if ?? null))
+          out.push(label + " is checked under a different condition (" + JSON.stringify(next.if) + ") than it is downloaded (" + JSON.stringify(st.if) + ")");
+        for (const s2 of [st, next])
+          if (s2 && s2["continue-on-error"] !== undefined)
+            out.push(label + ": continue-on-error on " + JSON.stringify(s2.name ?? s2.uses ?? "a step") + ", so a failed check would not stop the job");
+      }
+      // Other ways to fetch an artifact, which this rule cannot follow.
+      for (const line of lines)
+        if (/\bgh\s+run\s+download\b|\bactions\/(?:runs\/[^\s/]+\/)?artifacts\b/.test(line))
+          out.push(name + ": fetches artifacts outside actions/download-artifact, which the digest rule cannot check: " + line);
+      for (const st of steps)
+        if (/^actions\/github-script@/i.test(String(st.uses ?? "")) && /artifact/i.test(String(st.with?.script ?? "")))
+          out.push(name + ": github-script touching artifacts, which the digest rule cannot check");
+    }
     // google-github-actions/auth writes a credentials file by default that
     // can mint further tokens; on the release path only access_token is used.
     if (release)
@@ -442,6 +504,34 @@ if (rule === "narrow") {
       if (String(st.uses ?? "").startsWith("docker/login-action@") && "dry_run" in ((doc.on ?? doc[true] ?? {}).workflow_dispatch?.inputs ?? {}) &&
           !/env\.DRY_RUN\s*!=\s*.true./.test(String(st.if ?? "")))
         out.push(name + ": logs in to a registry on a dry run");
+  }
+}
+if (rule === "pushcache") {
+  // #782: a job that pushes an image to a registry builds it cold. The GHA
+  // cache is writable by any run on main and by every job in the same run, so
+  // a job that both restores from it and pushes can ship layers nobody built
+  // in that job. "Pushes": a build-push or bake step whose push is not false,
+  // a registry login, or a `docker push` / `buildx ... --push` command. Every
+  // image build in such a job is held to it, dry-run twins included, so a
+  // rehearsal builds what the release does.
+  for (const [name, job] of Object.entries(jobs)) {
+    const steps = flatSteps(job.steps).map((x) => x.st);
+    const u = (st) => String(st.uses ?? "").toLowerCase();
+    const isBuild = (st) => /^docker\/(build-push-action|bake-action)@/.test(u(st));
+    const runs = steps.map((st) => typeof st.run === "string" ? st.run : "").join("\n");
+    const pushes = steps.some((st) => isBuild(st) && String(st.with?.push ?? "false") !== "false") ||
+      steps.some((st) => /^docker\/login-action@/.test(u(st))) ||
+      /\bdocker\s+(?:image\s+)?push\b|\bbuildx\s+(?:build|bake)\b[^\n]*--push\b/.test(runs);
+    if (!pushes) continue;
+    for (const [i, st] of steps.entries()) {
+      const label = name + ": step " + (st.name ?? st.id ?? st.uses ?? String(i));
+      if (isBuild(st) && st.with?.["cache-from"] !== undefined)
+        out.push(label + " restores cache-from " + JSON.stringify(st.with["cache-from"]) + " in a job that pushes to a registry");
+      if (isBuild(st) && /cache-from/.test(JSON.stringify(st.with?.set ?? "")))
+        out.push(label + " sets cache-from through bake in a job that pushes to a registry");
+      if (typeof st.run === "string" && /--cache-from\b/.test(st.run))
+        out.push(label + " runs a build with --cache-from in a job that pushes to a registry");
+    }
   }
 }
 if (rule === "pinned") {
@@ -468,7 +558,9 @@ expect_clean() {
 	if [ -z "$found" ]; then ok "$1"; else no "$1" "$found"; fi
 }
 
-# expect_caught <label> <rule> <file> <exact text> <replacement>
+# expect_caught <label> <rule> <file> <exact text> <replacement> [reason]
+# With a reason, the report must contain it: a mutant that some OTHER rule
+# happens to report proves nothing about the rule it was written for.
 expect_caught() {
 	local copy="${WORK}/mutant.yml"
 	if ! FROM="$3" TO="$copy" OLD="$4" NEW="$5" bun -e '
@@ -480,10 +572,15 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 		no "mutant '$1' could be applied (the workflow no longer has the text it mutates)"
 		return
 	fi
-	if [ -n "$(check "$2" "$copy")" ]; then
-		ok "reports: $1"
-	else
+	local found
+	found="$(check "$2" "$copy")"
+	if [ -z "$found" ]; then
 		no "reports: $1" "the check passed a workflow with this hole"
+	elif [ -n "${6:-}" ] && ! grep -qF -- "$6" <<<"$found"; then
+		no "reports: $1, for the reason it exists" "wanted '${6}', got:
+${found}"
+	else
+		ok "reports: $1"
 	fi
 }
 
@@ -519,6 +616,167 @@ if [ "$(printf '%s\n' "$npm_pins" | wc -l)" -eq 1 ] && [[ "$npm_pins" =~ ^\"[0-9
 else
 	no "release-exec.yml and sidecar-release.yml pin the same exact npm" "got: ${npm_pins}"
 fi
+# The image publish-docker pushes is built FROM these (#783). A base by tag
+# alone is whatever the registry says that day, so every external FROM names a
+# tag AND a digest, one tag never maps to two digests, and the Bun bases run
+# the Bun CI tests (release-exec.yml BUN_VERSION).
+# dockerfile_check <Dockerfile> <workflow with BUN_VERSION>: one violation per
+# line, nothing when clean.
+dockerfile_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DOCKERFILE="$1" FILE="$2" bun -e '
+const text = await Bun.file(process.env.DOCKERFILE).text();
+const bun = String(Bun.YAML.parse(await Bun.file(process.env.FILE).text()).env?.BUN_VERSION ?? "");
+const out = [];
+if (!/^\d+\.\d+\.\d+$/.test(bun)) out.push("BUN_VERSION is not an exact version: " + JSON.stringify(bun));
+const stages = new Set(["scratch"]);
+const digests = new Map();
+let bases = 0;
+// Continuations joined, so a FROM split over lines is still one instruction.
+for (const line of text.replace(/\\\r?\n/g, " ").split(/\r?\n/)) {
+  const m = /^\s*FROM\s+(.*)$/i.exec(line);
+  if (!m) continue;
+  const words = m[1].trim().split(/\s+/).filter((w) => !w.startsWith("--"));
+  const image = words[0] ?? "";
+  const as = words.findIndex((w) => /^as$/i.test(w));
+  // A stage defined on an EARLIER line is not a registry image.
+  const local = stages.has(image.toLowerCase());
+  if (as > 0 && words[as + 1]) stages.add(words[as + 1].toLowerCase());
+  if (local) continue;
+  const p = /^([^\s@:]+(?::\d+)?(?:\/[^\s@:]+)*):([^\s@:]+)@sha256:([0-9a-f]{64})$/.exec(image);
+  if (!p) { out.push("FROM " + image + " is not pinned by tag and digest (name:tag@sha256:...)"); continue; }
+  const [, name, tag, sum] = p;
+  const key = name.replace(/^(docker\.io\/)?(library\/)?/, "") + ":" + tag;
+  if (digests.has(key) && digests.get(key) !== sum) out.push(key + " is pinned to two different digests");
+  digests.set(key, sum);
+  if (/^(docker\.io\/)?oven\/bun$/.test(name)) {
+    bases++;
+    if (tag !== bun && !tag.startsWith(bun + "-"))
+      out.push("FROM " + image + " runs Bun " + tag + ", but CI tests BUN_VERSION " + bun);
+  }
+}
+// Without this, a Dockerfile that stopped naming oven/bun would pass vacuously.
+if (bases === 0) out.push("no oven/bun base image found, so the Bun version check checked nothing");
+if (out.length) console.log(out.join("\n"));
+'
+}
+found="$(dockerfile_check "${HERE}/../../Dockerfile" "$WORKFLOWS/release-exec.yml")"
+if [ -z "$found" ]; then
+	ok "Dockerfile: every base image is pinned by tag and digest, and the Bun bases match BUN_VERSION"
+else
+	no "Dockerfile: every base image is pinned by tag and digest, and the Bun bases match BUN_VERSION" "$found"
+fi
+# dockerfile_caught <label> <exact text> <replacement>: a mutated Dockerfile copy must be reported.
+dockerfile_caught() {
+	local copy="${WORK}/Dockerfile.mutant"
+	if ! FROM="${HERE}/../../Dockerfile" TO="$copy" OLD="$2" NEW="$3" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
+await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+'; then
+		no "Dockerfile mutant '$1' could be applied (the Dockerfile no longer has the text it mutates)"
+		return
+	fi
+	if [ -n "$(dockerfile_check "$copy" "$WORKFLOWS/release-exec.yml")" ]; then
+		ok "reports: $1"
+	else
+		no "reports: $1" "the check passed a Dockerfile with this hole"
+	fi
+}
+dockerfile_caught 'a floating oven/bun:1 base (#783)' \
+	'FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS deps' 'FROM oven/bun:1 AS deps'
+dockerfile_caught 'a floating slim production base (#783)' \
+	'FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS production' 'FROM oven/bun:1.4.2-slim AS production'
+dockerfile_caught 'a digest-pinned base on a Bun CI does not test (#783)' \
+	'FROM oven/bun:1.4.2-slim@sha256:' 'FROM oven/bun:1.3.14-slim@sha256:'
+dockerfile_caught 'one tag pinned to two digests (#783)' \
+	'FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS deps' 'FROM oven/bun:1.4.2@sha256:0000000000000000000000000000000000000000000000000000000000000000 AS deps'
+dockerfile_caught 'an undigested base behind --platform (#783)' \
+	'FROM --platform=$BUILDPLATFORM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS workflows' 'FROM --platform=$BUILDPLATFORM oven/bun:latest AS workflows'
+dockerfile_caught 'some other base image by tag alone (#783)' \
+	'FROM deps AS build' 'FROM debian:trixie AS build'
+# ...and every other Bun pin is that same version (#783 review): the image
+# runs what CI tests only while CI tests one Bun. Every `bun-version:` and
+# BUN_VERSION in the workflows and in local composite actions (inputs
+# defaults), with env references resolved, and every oven/bun image a run:
+# starts (by digest).
+# bun_pins <workflow dir> <actions dir>: one violation per line.
+bun_pins() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DIR="$1" ACTIONS="$2" bun -e '
+const fs = require("node:fs");
+const out = [];
+const want = String(Bun.YAML.parse(fs.readFileSync(process.env.DIR + "/release-exec.yml", "utf8")).env?.BUN_VERSION ?? "");
+const envRef = /^\$\{\{\s*env\.([A-Za-z_][A-Za-z0-9_]*)\s*\}\}$/;
+const inputRef = /^\$\{\{\s*inputs\.([A-Za-z0-9_-]+)\s*\}\}$/;
+let seen = 0;
+const visit = (file, o, path, scopes, inputs) => {
+  if (!o || typeof o !== "object") return;
+  const env = o.env && typeof o.env === "object" ? [o.env, ...scopes] : scopes;
+  for (const [k, v] of Object.entries(o)) {
+    if ((k === "bun-version" || k === "BUN_VERSION") && (typeof v === "string" || typeof v === "number")) {
+      let val = String(v);
+      const e = envRef.exec(val);
+      if (e) { const sc = env.find((x) => x && e[1] in x); if (sc) val = String(sc[e[1]]); }
+      const n = inputRef.exec(val);
+      if (n && inputs && n[1] in inputs) val = String(inputs[n[1]]?.default ?? "");
+      seen++;
+      if (val !== want) out.push(file + ": " + path + "." + k + " is " + JSON.stringify(val) + ", but release-exec.yml BUN_VERSION (and so the Dockerfile) is " + JSON.stringify(want));
+    }
+    // An oven/bun image a run: starts is a Bun pin too, and must carry a digest.
+    if (k === "run" && typeof v === "string")
+      for (const m of v.matchAll(/\boven\/bun:([^\s@\\]+)(@sha256:[0-9a-f]{64})?/g)) {
+        seen++;
+        if (m[1] !== want && !m[1].startsWith(want + "-")) out.push(file + ": " + path + " runs " + m[0] + ", not Bun " + JSON.stringify(want));
+        if (!m[2]) out.push(file + ": " + path + " runs " + m[0] + " without a digest");
+      }
+    if (v && typeof v === "object") visit(file, v, path + "." + k, env, inputs);
+  }
+};
+for (const f of fs.readdirSync(process.env.DIR).filter((x) => /\.ya?ml$/.test(x))) {
+  const doc = Bun.YAML.parse(fs.readFileSync(process.env.DIR + "/" + f, "utf8"));
+  visit(f, doc, "", [], null);
+}
+for (const d of fs.existsSync(process.env.ACTIONS) ? fs.readdirSync(process.env.ACTIONS) : [])
+  for (const a of ["action.yml", "action.yaml"]) {
+    const p = process.env.ACTIONS + "/" + d + "/" + a;
+    if (!fs.existsSync(p)) continue;
+    const doc = Bun.YAML.parse(fs.readFileSync(p, "utf8"));
+    // An input default is a pin too.
+    for (const [k, v] of Object.entries(doc.inputs ?? {}))
+      if (k === "bun-version") { seen++; if (String(v?.default ?? "") !== want) out.push(d + "/" + a + ": input bun-version defaults to " + JSON.stringify(v?.default) + ", not " + JSON.stringify(want)); }
+    visit(d + "/" + a, doc.runs ?? {}, "runs", [], doc.inputs ?? {});
+  }
+if (seen === 0) out.push("no Bun pins found, so the agreement check checked nothing");
+if (out.length) console.log(out.join("\n"));
+'
+}
+ACTIONS_DIR="${HERE}/../actions"
+found="$(bun_pins "$WORKFLOWS" "$ACTIONS_DIR")"
+if [ -z "$found" ]; then
+	ok "every Bun pin in the workflows and local actions is release-exec.yml BUN_VERSION, the Bun the image runs"
+else
+	no "every Bun pin in the workflows and local actions is release-exec.yml BUN_VERSION" "$found"
+fi
+# bun_pin_caught <label> <file under .github> <exact text> <replacement>
+bun_pin_caught() {
+	rm -rf "${WORK}/pins" && mkdir -p "${WORK}/pins" && cp -r "$WORKFLOWS" "${WORK}/pins/workflows" && cp -r "$ACTIONS_DIR" "${WORK}/pins/actions"
+	if ! FROM="${WORK}/pins/$2" OLD="$3" NEW="$4" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+'; then
+		no "Bun pin mutant '$1' could be applied (the file no longer has the text it mutates)"
+		return
+	fi
+	if [ -n "$(bun_pins "${WORK}/pins/workflows" "${WORK}/pins/actions")" ]; then ok "reports: $1"; else no "reports: $1" "the check passed this drift"; fi
+}
+bun_pin_caught 'test.yml testing a different Bun than the image runs (#783 review)' workflows/test.yml 'bun-version: "1.4.2"' 'bun-version: "1.3.14"'
+bun_pin_caught 'the catalog sync on its own Bun (#783 review)' workflows/sync-pieces-catalog.yml '  BUN_VERSION: "1.4.2"' '  BUN_VERSION: "1.3.14"'
+bun_pin_caught 'the composite action defaulting to another Bun (#783 review)' actions/bun-setup/action.yml 'default: "1.4.2"' 'default: "1.3.14"'
+bun_pin_caught 'the catalog inspect image left on another Bun (#783 owner decision)' workflows/sync-pieces-catalog.yml 'oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895' 'oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4'
+bun_pin_caught 'the catalog inspect image by tag alone (#783 owner decision)' workflows/sync-pieces-catalog.yml 'oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895' 'oven/bun:1.4.2'
+bun_pin_caught 'release-exec.yml moved alone, leaving the rest behind (#783 review)' workflows/release-exec.yml '  BUN_VERSION: "1.4.2"' '  BUN_VERSION: "1.3.14"'
 # release-exec.yml alone holds id-token + packages: write; if the derivation
 # found nothing, the derivation is broken, not the repository clean.
 if grep -q 'release-exec.yml' < <(for f in "$WORKFLOWS"/*.yml; do [ -n "$(check authority "$f")" ] && basename "$f"; done); then
@@ -530,8 +788,39 @@ fi
 echo
 echo "per-job authority on the release path"
 for f in "$WORKFLOWS"/*.yml; do
-	expect_clean "$(basename "$f"): no id-token matrix, no inherited secrets, OIDC publish jobs run no build, no persisted credentials" narrow "$f"
+	expect_clean "$(basename "$f"): no id-token matrix, no inherited secrets, OIDC publish jobs run no build, no persisted credentials, artifacts taken by digest" narrow "$f"
 done
+
+echo
+echo "no job that pushes an image restores it from a cache (#782)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f"): every image a pushing job builds is built cold" pushcache "$f"
+done
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'the gha cache back on the build that pushes (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'          push: true\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n' \
+		$'          push: true\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n          cache-from: type=gha\n' \
+		'restores cache-from "type=gha" in a job that pushes'
+	expect_caught 'the gha cache back on the dry-run twin in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'          push: false\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n' \
+		$'          push: false\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n          cache-from: type=registry,ref=ghcr.io/x/y:cache\n' \
+		'in a job that pushes'
+	expect_caught 'a buildx command line restoring a cache in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		'      - name: Build Docker image (dry run)' $'      - run: docker buildx build --cache-from type=gha --push .\n      - name: Build Docker image (dry run)' \
+		'runs a build with --cache-from'
+	expect_caught 'the push step spelled in another case, with its cache back (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          push: true\n' \
+		$'        uses: Docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          cache-from: type=gha\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          push: true\n' \
+		'restores cache-from'
+}
+# build-docker keeps its cache on purpose: it pushes nothing. If the rule
+# flagged it, the rule would be wrong, not the workflow.
+if [ -z "$(check pushcache "$WORKFLOWS/release-exec.yml" | grep 'build-docker')" ]; then
+	ok "the validate-only build-docker job, which pushes nothing, may keep its cache"
+else
+	no "the validate-only build-docker job, which pushes nothing, may keep its cache"
+fi
 
 echo
 echo "the catalog sync processes third-party data without write access"
@@ -543,8 +832,8 @@ echo "each rule reports the hole it exists for (mutated copies)"
 expect_caught 'a workflow and job with no permissions anywhere' scoped "$WORKFLOWS/test.yml" \
 	$'permissions:\n  contents: read\n' ''
 expect_caught 'a publish job with no permissions of its own' publish-perms "$WORKFLOWS/release-exec.yml" \
-	$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ !inputs.dry_run }}\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-	$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ !inputs.dry_run }}\n    runs-on: ubuntu-latest\n'
+	$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ inputs.dry_run != true }}\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
+	$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ inputs.dry_run != true }}\n    runs-on: ubuntu-latest\n'
 expect_caught 'write scopes back at the top of the publish path' publish-perms "$WORKFLOWS/release-exec.yml" \
 	$'permissions: {}\n' $'permissions:\n  contents: write\n'
 expect_caught 'a major tag on the publish path' pinned "$WORKFLOWS/release-exec.yml" \
@@ -626,9 +915,9 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'npm@latest back in a job holding id-token' mutable "$WORKFLOWS/release-exec.yml" \
 		'npm install -g "npm@${NPM_VERSION}"' 'npm install -g npm@latest'
 	expect_caught 'a floating Bun reached through env indirection' mutable "$WORKFLOWS/release-exec.yml" \
-		'  BUN_VERSION: "1.3.14"' '  BUN_VERSION: latest'
+		'  BUN_VERSION: "1.4.2"' '  BUN_VERSION: latest'
 	expect_caught 'a floating Bun in the job that can tag a release' mutable "$WORKFLOWS/release.yml" \
-		'bun-version: "1.3.14"' 'bun-version: latest'
+		'bun-version: "1.4.2"' 'bun-version: latest'
 	expect_caught 'the binfmt image back to its :latest default' mutable "$WORKFLOWS/release-exec.yml" \
 		$'          image: ${{ env.BINFMT_IMAGE }}\n' ''
 	expect_caught 'the privileged binfmt image restored from the Actions cache' mutable "$WORKFLOWS/release-exec.yml" \
@@ -644,11 +933,11 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'the npm pin itself loosened to a major' mutable "$WORKFLOWS/sidecar-release.yml" \
 		'  NPM_VERSION: "12.1.0"' '  NPM_VERSION: "12"'
 	expect_caught 'a Bun range in the job that can tag a release' mutable "$WORKFLOWS/release.yml" \
-		'bun-version: "1.3.14"' 'bun-version: "1.x"'
+		'bun-version: "1.4.2"' 'bun-version: "1.x"'
 	expect_caught 'a download piped into a shell' mutable "$WORKFLOWS/release.yml" \
 		'      - name: Compute new version' $'      - run: curl -fsSL https://bun.sh/install | bash\n      - name: Compute new version'
 	expect_caught 'Bun taken from a version file' mutable "$WORKFLOWS/release.yml" \
-		'bun-version: "1.3.14"' 'bun-version-file: package.json'
+		'bun-version: "1.4.2"' 'bun-version-file: package.json'
 	# go-version-file is accepted only while go.mod names an exact version.
 	mkdir -p "${WORK}/gomod/sidecar"
 	sed 's/^go \([0-9]*\.[0-9]*\)\.[0-9]*$/go \1/' "${HERE}/../../sidecar/go.mod" >"${WORK}/gomod/sidecar/go.mod"
@@ -669,34 +958,43 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		$'    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n' $'    secrets: inherit\n    x-was:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n'
 	expect_caught 'a declared signing secret the caller does not pass (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
-	expect_caught 'id-token back on the four-leg sidecar matrix' narrow "$WORKFLOWS/sidecar-release.yml" \
-		$'    permissions:\n      contents: read\n    env:\n      # secrets can' $'    permissions:\n      contents: read\n      id-token: write\n    env:\n      # secrets can'
+	expect_caught 'id-token back on a sidecar build leg' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env: &build-sidecar-leg-env' $'      contents: read\n      id-token: write\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env: &build-sidecar-leg-env' \
+		'a matrix job holding id-token'
 	expect_caught 'the brain build back in the job that holds id-token' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: bun run prepublishOnly\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: bun run prepublishOnly\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'a token left in .git/config by the release job' narrow "$WORKFLOWS/release-exec.yml" \
 		$'          fetch-depth: 0\n          persist-credentials: false\n' $'          fetch-depth: 0\n'
 	expect_caught 'no secrets passed to the sidecar call at all (signing would silently skip)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'    secrets:\n      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}\n      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}\n      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}\n      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}\n      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}\n' ''
 	expect_caught 'a checkout back in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Verify the tarball' \
+		'uses actions/checkout@'
 	expect_caught 'a directory npm publish (runs lifecycle scripts)' narrow "$WORKFLOWS/release-exec.yml" \
 		'npm publish "${RUNNER_TEMP}/brain-pack/${TARBALL}" --access public' 'npm publish --access public'
 	expect_caught 'the digest check removed before the publish' narrow "$WORKFLOWS/release-exec.yml" \
 		'| sha256sum -c -' '| cat'
 	expect_caught 'another global package installed in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: npm install -g evil@1.0.0\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: npm install -g evil@1.0.0\n      - name: Verify the tarball' \
+		'installs something other than npm'
 	expect_caught 'a node script run in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: node scripts/x.js\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: node scripts/x.js\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'the Windows build back in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
 		'      - name: Install osslsigncode' $'      - run: ../.github/scripts/build-sidecar.sh\n      - name: Install osslsigncode'
 	expect_caught 'a global install with the flag after the package' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: npm install evil@1.0.0 -g\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: npm install evil@1.0.0 -g\n      - name: Verify the tarball' \
+		'installs something other than npm'
 	expect_caught 'npm test in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: npm test\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: npm test\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'a command behind sudo in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: sudo node x.js\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: sudo node x.js\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'a non-shell step in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - shell: node {0}\n        run: console.log(1)\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - shell: node {0}\n        run: console.log(1)\n      - name: Verify the tarball' \
+		'step with shell:'
 	expect_caught 'go test in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
 		'      - name: Install osslsigncode' $'      - run: go test ./...\n      - name: Install osslsigncode'
 	expect_caught 'a local action in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
@@ -704,9 +1002,82 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'the Google credentials file left in the workspace' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'          create_credentials_file: false\n' ''
 	expect_caught 'node behind an if, in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: if node x.js; then true; fi\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: if node x.js; then true; fi\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
 	expect_caught 'node behind an assignment and a path, in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
-		'      - name: Verify the tarball' $'      - run: X=1 /usr/bin/node evil.js\n      - name: Verify the tarball'
+		'      - name: Verify the tarball' $'      - run: X=1 /usr/bin/node evil.js\n      - name: Verify the tarball' \
+		'publishes with id-token and runs'
+	expect_caught 'a digest check allowed to fail (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Verify the binary\n' $'      - name: Verify the binary\n        continue-on-error: true\n' \
+		'continue-on-error on "Verify the binary"'
+	expect_caught 'a digest check that hashes the file against itself, the digest left unread (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-sidecar-windows reported no digest"; exit 1; }\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		'          sha256sum "${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		'has a needs.<job>.outputs digest in env that its check never reads'
+	expect_caught 'a digest check whose failure is excused (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' 'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - || true' \
+		'failure excused'
+	expect_caught 'a digest check excused with || echo (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' 'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - || echo ignored' \
+		'failure excused'
+	expect_caught 'a digest check wrapped in if ! (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          if ! echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -; then echo ignored; fi' \
+		'failure excused'
+	expect_caught 'a digest check after set +e (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +e\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -\n          true' \
+		'failure excused'
+	expect_caught 'a digest check excused on the next line (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - ||\n            true' \
+		'failure excused'
+	expect_caught 'a digest check piped into cat, without pipefail (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - | cat' \
+		'failure excused'
+	expect_caught 'a digest check swallowed by a command substitution (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "$(echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -)"' \
+		'failure excused'
+	expect_caught 'a digest check sent to the background (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - &' \
+		'failure excused'
+	expect_caught 'pipefail switched off before the digest check (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +o pipefail\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		'failure excused'
+	expect_caught 'the download action spelled in another case, used before its check (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: sidecar\n' \
+		$'      - uses: Actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: sidecar\n      - run: ls sidecar\n' \
+		'is not followed at once by a sha256sum -c'
+	expect_caught 'an artifact fetched with gh run download in a signing job (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Install osslsigncode' $'      - run: gh run download "$GITHUB_RUN_ID" -n unsigned-win32-x64\n      - name: Install osslsigncode' \
+		'fetches artifacts outside actions/download-artifact'
+	expect_caught 'publish-sidecar using the artifacts before checking them (#781)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Verify sidecar artifacts' $'      - run: ls artifacts\n      - name: Verify sidecar artifacts' \
+		'is not followed at once by a sha256sum -c'
+	expect_caught 'the signer checking the binary against something other than a job output (#781)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          SHA256: ${{ needs.build-sidecar-windows.outputs.sha256 }}' '          SHA256: ${{ vars.EXPECTED_SHA256 }}' \
+		'is checked against no needs.<job>.outputs digest'
+	expect_caught 'the release attaching sidecar binaries whose check can be switched off alone (#781)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Verify sidecar binaries\n        if: needs.sidecar.outputs.released == \'true\'' $'      - name: Verify sidecar binaries\n        if: false' \
+		'is checked under a different condition'
+	expect_caught 'the npm publish job doing something between the tarball download and its check (#781)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - run: ls\n      - name: Verify the tarball' \
+		'is not followed at once by a sha256sum -c'
+	expect_caught 'the installer build back in the job that signs with id-token (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Install osslsigncode' $'      - run: go build -o Jarvis-Setup.exe ./installer/\n      - name: Install osslsigncode' \
+		'builds in a job holding id-token'
+	expect_caught 'id-token back on the installer build job (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'    permissions:\n      contents: read\n    outputs:' $'    permissions:\n      contents: read\n      id-token: write\n    outputs:' \
+		'build-windows: builds in a job holding id-token'
+	expect_caught 'the installer Google credentials file left in the workspace (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          create_credentials_file: false\n' '' \
+		'create_credentials_file is not false'
+	expect_caught 'an installer checkout leaving its token in .git/config (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'        with:\n          persist-credentials: false\n      - id: v' $'      - id: v' \
+		'resolve: checkout leaves the token'
+	expect_caught 'the installer signer using the build before checking it (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'      - name: Verify the installer\n' $'      - run: ls sidecar\n      - name: Verify the installer\n' \
+		'sign-windows: download "unsigned-installer-win32-x64" is not followed at once'
+	expect_caught 'the installer release publishing artifacts it has not checked (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Verify the installers' $'      - run: ls artifacts\n      - name: Verify the installers' \
+		'publish: download "installer-*" is not followed at once'
 	expect_caught 'a registry login on a dry run' narrow "$WORKFLOWS/release-exec.yml" \
 		$'        if: env.DRY_RUN != \'true\'\n        uses: docker/login-action@' $'        uses: docker/login-action@'
 }

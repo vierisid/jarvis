@@ -91,11 +91,11 @@ export function escapedLiteralForCard(value: unknown): string {
  * it. Its two worries about a long value were prose appended after the real
  * sentence and newlines pushing the real verb out of view. The command goes
  * LAST in its sentence, and no line break reaches the card raw in either form.
- * (The dashboard appends the Authority engine's reason in parentheses after a
- * gate's sentence -- `formatApprovalIntent` -- so on that surface something
- * does follow it; it is reduced to one line, it cannot remove a character of
- * the command, and in the escaped form the closing quote marks where the
- * command ends.) Its other point -- that cutting the command is the WORSE
+ * (The joined `intent` field appends the Authority engine's reason in
+ * parentheses after a gate's sentence -- `formatApprovalIntent` -- so there
+ * something does follow it. Since #792 no approval surface renders that joined
+ * string: each shows the reason in an element of its own, the channel card on
+ * its own `Reason:` line, and the toast after the impact.) Its other point -- that cutting the command is the WORSE
  * failure, because an injected payload is unlikely to be in the first few
  * words -- is what having no budget honours. A command too long to read is a
  * card to deny; a card showing less than will run cannot be judged at all. Nor

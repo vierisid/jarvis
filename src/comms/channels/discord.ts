@@ -1,5 +1,5 @@
-import { Client, GatewayIntentBits, Partials, type Message } from 'discord.js';
-import type { ChannelAdapter, ChannelHandler, ChannelMessage } from './telegram.ts';
+import { Client, GatewayIntentBits, MessageFlags, Partials, type Message } from 'discord.js';
+import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 import type { STTProvider } from '../voice.ts';
 
 export class DiscordAdapter implements ChannelAdapter {
@@ -97,7 +97,7 @@ export class DiscordAdapter implements ChannelAdapter {
     console.log('[DiscordAdapter] Disconnected');
   }
 
-  async sendMessage(channelId: string, text: string): Promise<void> {
+  async sendMessage(channelId: string, text: string, options?: SendOptions): Promise<void> {
     if (!this.client) throw new Error('Discord not connected');
 
     const channel = await this.client.channels.fetch(channelId);
@@ -105,9 +105,8 @@ export class DiscordAdapter implements ChannelAdapter {
       throw new Error(`Invalid or non-text channel: ${channelId}`);
     }
 
-    const chunks = splitMessage(text, 2000);
-    for (const chunk of chunks) {
-      await (channel as any).send(chunk);
+    for (const payload of discordPayloads(text, options)) {
+      await (channel as any).send(payload);
     }
   }
 
@@ -201,6 +200,90 @@ export class DiscordAdapter implements ChannelAdapter {
       }
     }
   }
+}
+
+/**
+ * Discord renders markdown in every message and has no plain-text mode, so
+ * literal text (#718) is escaped instead (`discordLiteral`), with
+ * `allowedMentions: { parse: [] }` so `@everyone` or a user mention notifies
+ * no one, and SuppressEmbeds so no link preview attaches the linked page's own
+ * text beside it.
+ *
+ * Escaping at most doubles the text (one backslash per character), so the
+ * text is split at half the 2000 limit FIRST and each piece escaped on its
+ * own: splitting after escaping could part a backslash from the character it
+ * escapes. The literal split (`splitLiteral`) never parts a surrogate pair and
+ * never trims what it moves to the next piece.
+ */
+export function discordPayloads(text: string, options?: SendOptions): Array<string | Record<string, unknown>> {
+  if (!options?.literal) return splitMessage(text, DISCORD_MAX_CHARS);
+  return splitLiteral(text, DISCORD_MAX_CHARS / 2).map((chunk) => ({
+    content: discordLiteral(chunk),
+    allowedMentions: { parse: [] },
+    flags: MessageFlags.SuppressEmbeds,
+  }));
+}
+
+const DISCORD_MAX_CHARS = 2000;
+
+/**
+ * The ASCII characters Discord's inline markdown gives a meaning to, plus `@`:
+ * emphasis, underline, strikethrough, spoilers, code, masked links, and the
+ * `<...>` forms (mentions, channels, timestamps, custom emoji).
+ */
+const DISCORD_INLINE_MARKUP = /[\\*_~|`[<@]/g;
+/** What only means something at the start of a line: quotes, headings, subtext, lists. */
+const DISCORD_LINE_START_MARKUP = /^(\s*)([>#+-]|\d+\.)/gm;
+
+/**
+ * Text that Discord shows as written: a backslash before every inline markup
+ * character, unconditionally, and before a line-start marker (#718 review).
+ * `escapeMarkdown` from discord.js was not enough: it is heuristic, and it
+ * skipped every `_` after a `<:` or `<a:` earlier on the line, and every
+ * masked link after the first. Discord shows a backslash-escaped punctuation
+ * character as the character itself.
+ */
+export function discordLiteral(text: string): string {
+  let out = '';
+  let last = 0;
+  for (const m of text.matchAll(DISCORD_URL)) {
+    out += text.slice(last, m.index).replace(DISCORD_INLINE_MARKUP, '\\$&');
+    // Inside an autolinked URL Discord renders no emphasis, code or mention,
+    // and shows a backslash as a backslash, so escaping there ADDED text: a
+    // `\@` made `https://good.example@evil.example` read as a path on
+    // good.example (#718 re-review). Only `|` is still escaped, since a
+    // spoiler marker is the one construct whose pairing could reach past it.
+    out += m[0].replace(/\|/g, '\\|');
+    last = m.index! + m[0].length;
+  }
+  out += text.slice(last).replace(DISCORD_INLINE_MARKUP, '\\$&');
+  return out.replace(DISCORD_LINE_START_MARKUP, (_m, lead: string, mark: string) =>
+    mark.endsWith('.') ? `${lead}${mark.slice(0, -1)}\\.` : `${lead}\\${mark}`);
+}
+
+/** What Discord autolinks: a scheme and everything up to whitespace or `<`. */
+const DISCORD_URL = /https?:\/\/[^\s<]+/gi;
+
+/**
+ * Split for literal text: at the last line break that leaves at least half a
+ * piece, else at the limit, stepping back off a high surrogate so a character
+ * is never cut in two. Nothing is trimmed: the pieces concatenate back exactly.
+ */
+export function splitLiteral(text: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > maxLength) {
+    let at = rest.lastIndexOf('\n', maxLength - 1) + 1;
+    if (at < maxLength / 2) {
+      at = maxLength;
+      const before = rest.charCodeAt(at - 1);
+      if (before >= 0xd800 && before <= 0xdbff) at--;
+    }
+    chunks.push(rest.slice(0, at));
+    rest = rest.slice(at);
+  }
+  chunks.push(rest);
+  return chunks;
 }
 
 export function splitMessage(text: string, maxLength: number): string[] {

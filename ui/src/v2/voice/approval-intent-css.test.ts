@@ -51,6 +51,9 @@ const SENTENCES: Array<[string, string, string]> = [
   ["the thread's repeat-back transcript", "thread/RepeatBackCard.css", ".v2-repeatback__heard-text"],
   ["the Authority room's pending card", "rooms/authority/AuthorityRoom.css", ".v2-auth__pending-intent"],
   ["the Now room's waiting widget", "shell/roomShell.css", ".rs-apr .t2"],
+  // #792: the reason, in its own element on every one of those surfaces.
+  ["the approval reason on every surface", "thread/ApprovalWhy.css", ".v2-approval-why"],
+  ["the approval reason's text", "thread/ApprovalWhy.css", ".v2-approval-why__text"],
 ];
 
 const CUTS: Array<[string, RegExp]> = [

@@ -33,6 +33,7 @@ import {
   type PerActionOverride,
 } from "./useAuthorityData";
 import "./AuthorityRoom.css";
+import { ApprovalWhy } from "../../thread/ApprovalWhy";
 
 type TabId = "approvals" | "audit" | "grants" | "learning";
 
@@ -475,6 +476,20 @@ function ApprovalsTab({
   );
 }
 
+/**
+ * The sentence and, apart from it, why approval was needed (#792). A daemon
+ * that predates `intent_action` sends only the joined `intent`, shown whole.
+ */
+export function ApprovalSentenceBlock({ approval }: { approval: { intent?: string; intent_action?: string; intent_reason?: string; reason: string } }) {
+  const split = typeof approval.intent_action === "string" && approval.intent_action !== "";
+  return (
+    <>
+      <div className="v2-auth__pending-intent">{split ? approval.intent_action : (approval.intent ?? approval.reason)}</div>
+      {split && <ApprovalWhy reason={approval.intent_reason} />}
+    </>
+  );
+}
+
 function PendingApprovalCard({
   approval,
   onApprove,
@@ -504,7 +519,7 @@ function PendingApprovalCard({
         </div>
         <span className="v2-auth__pending-agent">{approval.agent_name}</span>
       </header>
-      <div className="v2-auth__pending-intent">{approval.intent ?? approval.reason}</div>
+      <ApprovalSentenceBlock approval={approval} />
       <div className="v2-auth__pending-meta-row">
         <span className="v2-auth__pending-tool">{approval.tool_name}</span>
         <span className="v2-auth__pending-cat">{approval.action_category}</span>
@@ -564,7 +579,7 @@ function UnresolvedApprovalCard({
         </div>
         <span className="v2-auth__pending-agent">{approval.agent_name}</span>
       </header>
-      <div className="v2-auth__pending-intent">{approval.intent ?? approval.reason}</div>
+      <ApprovalSentenceBlock approval={approval} />
       <div className="v2-auth__pending-meta-row">
         <span className="v2-auth__pending-tool">{approval.tool_name}</span>
         <span className="v2-auth__pending-cat">

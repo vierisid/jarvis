@@ -50,17 +50,16 @@ import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
-import { impactFromCategory } from "../roles/authority.ts";
 import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
-import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, ApprovalDelivery, approvalNotificationText, boundedApprovalLabel } from "../authority/approval-delivery.ts";
+import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, ApprovalDelivery, approvalToast, boundedApprovalLabel } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
-import { applyApprovalDecision } from "./approval-decision.ts";
+import { channelApprovalReply, notificationApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
@@ -4739,6 +4738,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Approve/Deny to ordinary actions and gave irreversible ones "Review in
     // Jarvis" only; the founder opted to allow Approve/Deny on every approval
     // notification (the impact still shows in the body's meta as a risk cue).
+    // Since #791 a toast too long to read whole is review-only whatever its
+    // impact (approvalToast, TOAST_APPROVABLE_MAX_COLUMNS).
     // All four reasons are wired: approval, done (an approved action finished),
     // sidecar-offline, and update (a connecting sidecar that is behind and
     // cannot update itself; see the onSidecarConnected handler below).
@@ -4760,26 +4761,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (notifiedApprovalIds.has(req.id)) continue;
           notifiedApprovalIds.add(req.id);
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
-          // Product call (founder): Approve/Deny on every approval notification,
-          // including irreversible ones — the review-only candor exception is
-          // dropped. The impact still rides along in `meta` ("destructive ·
-          // delete_data") so the toast reads the risk even when it's approvable.
-          const impact = impactFromCategory(req.action_category);
-          // Reduced like the channel card (#696): `reason` can be the model's
-          // own request_approval intent, and this toast has an Approve button.
-          const text = approvalNotificationText(req);
-          notifyAll({
-            id: req.id,
-            kind: 'approval',
-            title: text.title,
-            body: text.body,
-            meta: `${impact} · ${boundedApprovalLabel(req.tool_name, APPROVAL_LABEL_DELIVERY_MAX_CHARS)}`,
-            destructive: impact === 'destructive',
-            actions: [
-              { id: 'deny', label: 'Deny' },
-              { id: 'approve', label: 'Approve', primary: true },
-            ],
-          });
+          // Product call (founder): Approve/Deny on approval notifications,
+          // including irreversible ones; the impact rides along in `meta`
+          // ("destructive · delete_data") so the toast reads the risk. Since
+          // #791 only when the toast can show what is being approved: above
+          // TOAST_APPROVABLE_MAX_COLUMNS it is review-only (approvalToast).
+          const { approvable: _approvable, ...toast } = approvalToast(req);
+          notifyAll(toast);
         }
         if (notifiedApprovalIds.size > 200) {
           const pending = new Set(approvalManager.getPending().map((r) => r.id));
@@ -4898,12 +4886,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // are handled sidecar-side (it opened the app) so there's nothing to do here.
     sidecarManager.onEvent((_sidecarId, event) => {
       if (event.event_type !== 'notify.action') return;
-      const p = (event.payload ?? {}) as { id?: string; kind?: string; action?: string };
-      if (p.kind === 'approval' && p.id && (p.action === 'approve' || p.action === 'deny')) {
-        const { id, action } = p;
-        void applyApprovalDecision(action, id, 'notification', { approvalManager, deferredExecutor, wsService })
-          .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
-      }
+      void notificationApprovalDecision(event.payload, { approvalManager, deferredExecutor, wsService })
+        .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
     });
 
     // Wire authority engine into orchestrator
@@ -4934,17 +4918,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Note: toolRegistry set after startAll() below
 
     // Wire channel approval handler
-    channelService.setApprovalHandler(async (action, shortId, channel) => {
-      const request = approvalManager.findByShortId(shortId);
-      if (!request) return `No pending approval found for ID ${shortId}`;
-
-      const outcome = await applyApprovalDecision(action, request.id, channel, { approvalManager, deferredExecutor, wsService });
-      if (outcome.status === 'already_decided') return 'Request already decided';
-      if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;
-      if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
-      if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
-      return 'Approved. The agent will continue and report back in chat.';
-    });
+    channelService.setApprovalHandler((action, shortId, channel) =>
+      channelApprovalReply(action, shortId, channel, { approvalManager, deferredExecutor, wsService }));
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 

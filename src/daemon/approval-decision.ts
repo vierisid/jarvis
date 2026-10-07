@@ -11,6 +11,7 @@
 
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
+import { approvalChannelCard, approvalToast } from '../authority/approval-delivery.ts';
 
 export interface ApprovalDecisionDeps {
   approvalManager: ApprovalManager;
@@ -60,6 +61,66 @@ export async function applyApprovalDecision(
   deferredExecutor.recordDenial(denied);
   wsService?.broadcastApprovalUpdate(denied);
   return { status: 'denied', request: denied };
+}
+
+/** What the channel reply handler answers when an `approve` names a card that could not be shown whole. */
+export const CHANNEL_APPROVE_REFUSED =
+  'This approval is too long to show whole in a chat message, so it cannot be approved from here. Open the Jarvis dashboard to read it and decide.';
+
+/**
+ * A Telegram/Discord `approve <id>` or `deny <id>` reply, and the answer sent
+ * back to the chat.
+ *
+ * An `approve` is refused for a request whose card could not show all of what
+ * would happen (`approvalChannelCard(...).approvable`, #718): that card offered
+ * only `deny`, and typing `approve` must not get past what the card withheld.
+ * Recomputed from the request rather than remembered, so it holds across a
+ * restart and for a card delivered before it.
+ */
+export async function channelApprovalReply(
+  action: 'approve' | 'deny',
+  shortId: string,
+  channel: string,
+  deps: ApprovalDecisionDeps,
+): Promise<string> {
+  const request = deps.approvalManager.findByShortId(shortId);
+  if (!request) return `No pending approval found for ID ${shortId}`;
+  if (action === 'approve' && !approvalChannelCard(request).approvable) return CHANNEL_APPROVE_REFUSED;
+
+  const outcome = await applyApprovalDecision(action, request.id, channel, deps);
+  if (outcome.status === 'already_decided') return 'Request already decided';
+  if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;
+  if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
+  if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
+  return 'Approved. The agent will continue and report back in chat.';
+}
+
+/**
+ * The person's choice from a desktop notification (`notify.action`), or null
+ * when it is not an approval decision the daemon acts on.
+ *
+ * Only kind `approval` carries Approve and Deny, and only for a request whose
+ * toast can still show what is being approved (`approvalToast(...).approvable`,
+ * #791): a review-only toast has no such buttons, and a click reported for one
+ * anyway -- an older sidecar, a stale notification, a sidecar that reports the
+ * wrong kind -- is ignored rather than acted on, so the person decides in the
+ * dashboard. Recomputed from the request rather than remembered, so it holds
+ * across a restart.
+ */
+export async function notificationApprovalDecision(
+  payload: unknown,
+  deps: ApprovalDecisionDeps,
+): Promise<ApprovalDecisionOutcome | null> {
+  const p = (payload ?? {}) as { id?: unknown; kind?: unknown; action?: unknown };
+  if (p.kind !== 'approval' || typeof p.id !== 'string' || !p.id) return null;
+  if (p.action !== 'approve' && p.action !== 'deny') return null;
+  // Fails closed: a request that cannot be read cannot be judged approvable.
+  const request = deps.approvalManager.getRequest(p.id);
+  if (!request || !approvalToast(request).approvable) {
+    console.warn(`[Approval] ignored a notification ${p.action} for ${p.id}: ${request ? 'its toast was review-only' : 'no such request'}`);
+    return null;
+  }
+  return applyApprovalDecision(p.action, p.id, 'notification', deps);
 }
 
 export type ExecutionResolutionOutcome =

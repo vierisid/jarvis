@@ -94,8 +94,9 @@ export function createRequestApprovalTool(deps: RequestApprovalDeps): ToolDefini
       // or multi-line intent was approved there with part of it unseen. An
       // intent that passes reaches every surface's text exactly as written.
       // What a surface's renderer then does with that text is outside this
-      // check: Telegram and Discord render the card as Markdown, and an OS toast clamps
-      // a long body to a few lines (both filed separately). Nothing is created
+      // check. Since #718 the channel card is sent as literal text, so no
+      // channel renders its markup; since #791 a toast too long to show whole
+      // is review-only, and an over-long card offers only deny. Nothing is created
       // or delivered for a refused intent; the model rewrites it. The message
       // keeps the material detail IN the intent: `context` reaches no surface
       // with an Approve action, so detail moved there would go unseen.

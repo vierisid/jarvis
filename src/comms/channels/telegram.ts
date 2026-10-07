@@ -11,11 +11,24 @@ export type ChannelMessage = {
 
 export type ChannelHandler = (message: ChannelMessage) => Promise<string>;
 
+/**
+ * How a message is rendered. By default a channel renders its own markup
+ * (Telegram Markdown, Discord markdown), which is what a chat reply wants.
+ *
+ * `literal` is for text a person must read exactly as written before acting
+ * on it -- the approval card (#718). The channel shows every character as
+ * sent: no markup is interpreted (a `[text](url)` no longer shows only its
+ * text, a `||spoiler||` no longer hides a clause, `_`/`*` pairs no longer
+ * vanish), no mention notifies or renders as a name, and no link preview is
+ * attached, since a preview shows text the linked page chose beside the card.
+ */
+export type SendOptions = { literal?: boolean };
+
 export interface ChannelAdapter {
   name: string;
   connect(): Promise<void>;
   disconnect(): Promise<void>;
-  sendMessage(to: string, text: string): Promise<void>;
+  sendMessage(to: string, text: string, options?: SendOptions): Promise<void>;
   onMessage(handler: ChannelHandler): void;
   isConnected(): boolean;
 }
@@ -51,6 +64,18 @@ export function telegramErrorFromResponse(status: number, body: unknown): Telegr
     return new TelegramSendError(`Telegram API error 429: ${description}`, { status: 429, retryAfterMs });
   }
   return new TelegramSendError(`Telegram API error: ${description}`, { status });
+}
+
+/**
+ * The `sendMessage` body. Literal text omits `parse_mode`, which is the only
+ * way to stop Telegram interpreting markup: with no `parse_mode` it shows the
+ * text exactly as sent, so there is nothing to escape. Link previews are off
+ * for it too (`link_preview_options`, Bot API 7.0).
+ */
+export function telegramSendBody(chatId: string, text: string, options?: SendOptions): Record<string, unknown> {
+  return options?.literal
+    ? { chat_id: chatId, text, link_preview_options: { is_disabled: true } }
+    : { chat_id: chatId, text, parse_mode: 'Markdown' };
 }
 
 type TelegramUpdate = {
@@ -146,7 +171,7 @@ export class TelegramAdapter implements ChannelAdapter {
     console.log('[TelegramAdapter] Disconnected');
   }
 
-  async sendMessage(chatId: string, text: string): Promise<void> {
+  async sendMessage(chatId: string, text: string, options?: SendOptions): Promise<void> {
     // Telegram has a 4096 char limit per message
     const chunks = splitText(text, 4096);
     for (let i = 0; i < chunks.length; i++) {
@@ -155,11 +180,7 @@ export class TelegramAdapter implements ChannelAdapter {
         const response = await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            chat_id: chatId,
-            text: chunk,
-            parse_mode: 'Markdown',
-          }),
+          body: JSON.stringify(telegramSendBody(chatId, chunk, options)),
         }, 15_000);
 
         // A proxy/outage 5xx can carry a non-JSON body; map it through the
@@ -168,7 +189,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
         if (!data?.ok) {
           // Retry without Markdown if parsing failed
-          if (data?.description?.includes('parse')) {
+          if (!options?.literal && data?.description?.includes('parse')) {
             const fallback = await fetchWithTimeout(`${this.baseUrl}/sendMessage`, {
               method: 'POST',
               headers: { 'Content-Type': 'application/json' },

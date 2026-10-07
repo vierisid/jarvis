@@ -1,10 +1,27 @@
 # ─── J.A.R.V.I.S. Docker Image ──────────────────────────────────────
 #
 # Multi-stage build for the JARVIS daemon.
-# Uses the Debian-based Bun images (`oven/bun:1`, the default tag) rather than
-# the Alpine variants. Nothing in the tree needs glibc today — there are no
-# native addons left after sharp was dropped — so this is just the default,
-# not a constraint; Alpine is a fair option if an image-size push wants it.
+# Uses the Debian-based Bun images (`oven/bun:<version>` and its `-slim`)
+# rather than the Alpine variants. Nothing in the tree needs glibc today — there
+# are no native addons left after sharp was dropped — so this is just the
+# default, not a constraint; Alpine is a fair option if an image-size push
+# wants it.
+#
+# Base images are pinned by tag AND digest (#783). They used to float on `1`
+# and `1-slim`, so every release shipped whatever Bun those resolved to that
+# day, with no record of it, while CI tested 1.3.14. On 2026-10-07 `1` was
+# 1.4.2 (these exact digests), so the shipped runtime is pinned where it
+# already was and CI moved up to it. The version here is the one CI pins
+# (BUN_VERSION in release-exec.yml), so the image runs the runtime the test
+# suite ran; workflow-hardening.test.sh fails
+# if they drift apart or if a FROM loses its digest. Dependabot does not
+# watch this file, so bump by hand, all four FROM lines together with every
+# other Bun pin (BUN_VERSION in release-exec.yml and sync-pieces-catalog.yml,
+# its inspect-job image, test.yml, release.yml, .github/actions/bun-setup);
+# the same test checks they all agree. Resolve a
+# digest from the registry, never by guessing:
+#   docker buildx imagetools inspect oven/bun:<version>       (the index digest)
+#   docker buildx imagetools inspect oven/bun:<version>-slim
 #
 # Build:   docker build --build-arg VERSION=0.3.1 -t jarvis .
 #          VERSION is REQUIRED and has no default; see the stamp step below for
@@ -39,14 +56,14 @@ ARG VERSION
 #
 # Pinned to BUILDPLATFORM like the `workflows` stage, which copies from it: a
 # target-platform stage here would make that stage per-architecture again.
-FROM --platform=$BUILDPLATFORM oven/bun:1 AS manifest
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS manifest
 
 WORKDIR /app
 COPY package.json ./
 RUN bun -e 'const p = await Bun.file("package.json").json(); p.version = "0.0.0"; await Bun.write("package.json", JSON.stringify(p, null, 2) + String.fromCharCode(10))'
 
 # ─── Stage 1: Install dependencies ─────────────────────────────────
-FROM oven/bun:1 AS deps
+FROM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS deps
 
 WORKDIR /app
 
@@ -238,7 +255,7 @@ RUN set -eu; \
 # No `bun install` in this stage: build-workflows.ts and everything it
 # imports resolve to node: builtins and the repo's own source. esbuild is
 # fetched by the build itself, into the engine staging dir under $HOME.
-FROM --platform=$BUILDPLATFORM oven/bun:1 AS workflows
+FROM --platform=$BUILDPLATFORM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS workflows
 
 WORKDIR /app
 
@@ -311,7 +328,7 @@ RUN set -eu; \
     echo "staged engine bundle $hash"
 
 # ─── Stage 4: Production image ─────────────────────────────────────
-FROM oven/bun:1-slim AS production
+FROM oven/bun:1.4.2-slim@sha256:cb3bbbb08e13a4a2ff400f24c7a2a1d5efa83f6ef8544d52d95a519631e2fc61 AS production
 
 # ca-certificates: HTTPS calls to LLM APIs
 # git: required by the Site Builder for project version control

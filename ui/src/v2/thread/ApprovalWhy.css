@@ -1,0 +1,27 @@
+/* Why an approval was needed (#792): its own block under the sentence, set in
+   the mono caption face with a label, so it never reads as the tail of a
+   command. Wrapped and never cut, like the sentence above it (#719). */
+
+.v2-approval-why {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 2px 0 4px;
+  padding-left: 8px;
+  border-left: 2px solid var(--rule, currentColor);
+  font-family: var(--font-mono, var(--mono, monospace));
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--ink-3, inherit);
+  overflow-wrap: anywhere;
+}
+
+.v2-approval-why__label {
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.v2-approval-why__text {
+  overflow-wrap: anywhere;
+}

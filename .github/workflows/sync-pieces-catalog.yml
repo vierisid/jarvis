@@ -85,7 +85,7 @@ env:
   # below is --frozen-lockfile, and a floating Bun that migrates the lockfile
   # format would fail the run with no repo change to blame. Bump all of them
   # together, with the image digest in the inspect job.
-  BUN_VERSION: "1.3.14"
+  BUN_VERSION: "1.4.2"
   # Stands in for the PR URL in the review issue rendered by `generate`, which
   # runs before the PR exists; `publish` substitutes the real URL. Rendering
   # there instead would mean running repository JavaScript with the write token.
@@ -122,7 +122,7 @@ jobs:
             -v "$GITHUB_WORKSPACE:/repo:ro" \
             -v "$RUNNER_TEMP/inspection:/out" \
             -w /repo \
-            oven/bun:1.3.14@sha256:e10577f0db68676a7024391c6e5cb4b879ebd17188ab750cf10024a6d700e5c4 \
+            oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 \
             bun run scripts/inspect-verified-pieces.ts /out/inspection.json
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

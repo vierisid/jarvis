@@ -273,7 +273,10 @@ export type ApprovalImpact = "read" | "write" | "destructive" | "external";
 export type PendingApproval = {
   id: string;
   shortId: string;
+  /** What will happen: the card's headline. */
   intent: string;
+  /** Why approval was needed, shown in its own element (#792); "" when none. */
+  intentReason: string;
   category: string;
   impact: ApprovalImpact;
   agentName: string;
@@ -282,6 +285,15 @@ export type PendingApproval = {
   reason: string;
   timestamp: number;
 };
+
+/**
+ * The sentence and the reason apart (#792). A daemon that sends
+ * `intent_action` sends `intent_reason` beside it; one that predates them
+ * sends only the joined `intent`, which is then shown whole as before.
+ */
+export function approvalSentence(action: string | undefined, reason: string | undefined, joined: string): { intent: string; intentReason: string } {
+  return typeof action === "string" && action ? { intent: action, intentReason: reason ?? "" } : { intent: joined, intentReason: "" };
+}
 
 export type VoiceIntentLite = {
   label: string;
@@ -624,12 +636,14 @@ export function useWebSocket() {
             reason: string;
             created_at: number;
             intent?: string;
+            intent_action?: string;
+            intent_reason?: string;
             impact?: ApprovalImpact;
           }>;
           const rehydrated: PendingApproval[] = rows.map((r) => ({
             id: r.id,
             shortId: r.id.slice(0, 8),
-            intent: r.intent ?? r.reason ?? r.tool_name,
+            ...approvalSentence(r.intent_action, r.intent_reason, r.intent ?? r.reason ?? r.tool_name),
             category: r.action_category,
             impact: r.impact ?? deriveImpactFromCategory(r.action_category),
             agentName: r.agent_name,
@@ -1007,12 +1021,14 @@ export function useWebSocket() {
           shortId?: string;
           impact?: ApprovalImpact;
           intent?: string;
+          intent_action?: string;
+          intent_reason?: string;
         };
         if (p.request) {
           const pending: PendingApproval = {
             id: p.request.id,
             shortId: p.shortId ?? p.request.id.slice(0, 8),
-            intent: p.intent ?? p.request.reason ?? p.request.tool_name,
+            ...approvalSentence(p.intent_action, p.intent_reason, p.intent ?? p.request.reason ?? p.request.tool_name),
             category: p.request.action_category,
             impact: p.impact ?? "write",
             agentName: p.request.agent_name,

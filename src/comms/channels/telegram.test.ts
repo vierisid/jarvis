@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { TelegramAdapter, TelegramSendError, telegramErrorFromResponse } from './telegram.ts';
+import { TelegramAdapter, TelegramSendError, telegramErrorFromResponse, telegramSendBody } from './telegram.ts';
 
 describe('telegramErrorFromResponse', () => {
   test('returns null for a successful response', () => {
@@ -127,6 +127,38 @@ describe('sendMessage chunking', () => {
       expect(thrown).toBeInstanceOf(TelegramSendError);
       expect((thrown as TelegramSendError).status).toBe(502);
       expect((thrown as TelegramSendError).message).toBe('Telegram API error: HTTP 502');
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+/**
+ * #718. Every Telegram message was sent with `parse_mode: 'Markdown'`, the
+ * approval card included, so a label's `[text](url)` showed only its text and
+ * a `_` or `*` pair vanished from what was being approved.
+ */
+describe('#718: literal text is sent without parse_mode', () => {
+  test('the literal body has no parse_mode and no link preview; the default keeps Markdown', () => {
+    expect(telegramSendBody('c1', 'x', { literal: true })).toEqual({ chat_id: 'c1', text: 'x', link_preview_options: { is_disabled: true } });
+    expect(telegramSendBody('c1', 'x')).toEqual({ chat_id: 'c1', text: 'x', parse_mode: 'Markdown' });
+  });
+
+  test('sendMessage posts exactly that body for a literal send', async () => {
+    const originalFetch = globalThis.fetch;
+    const bodies: unknown[] = [];
+    globalThis.fetch = (async (_url: string, init: RequestInit) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return { status: 200, json: async () => ({ ok: true }) };
+    }) as unknown as typeof fetch;
+    try {
+      const card = 'Intent: run: rm -rf /tmp/a_b_c [docs](https://x.example)';
+      await new TelegramAdapter('test-token').sendMessage('chat-1', card, { literal: true });
+      await new TelegramAdapter('test-token').sendMessage('chat-1', 'a *reply*');
+      expect(bodies).toEqual([
+        { chat_id: 'chat-1', text: card, link_preview_options: { is_disabled: true } },
+        { chat_id: 'chat-1', text: 'a *reply*', parse_mode: 'Markdown' },
+      ]);
     } finally {
       globalThis.fetch = originalFetch;
     }

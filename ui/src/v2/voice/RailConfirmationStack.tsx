@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { Check, ShieldAlert, MessageSquare, X } from "lucide-react";
 import { Icon } from "../ui";
 import { useLiveData } from "../shell/LiveDataContext";
+import { ApprovalWhy } from "../thread/ApprovalWhy";
 import "./RailConfirmationStack.css";
 
 /**
@@ -38,7 +39,7 @@ export function RailConfirmationStack() {
       </div>
       <div className="v2-rail-confirm__list">
         {sortedApprovals.map((a) => (
-          <ApprovalRow key={a.id} id={a.id} intent={a.intent} category={a.category} impact={a.impact} />
+          <ApprovalRow key={a.id} id={a.id} intent={a.intent} reason={a.intentReason} category={a.category} impact={a.impact} />
         ))}
         {sortedClarifiers.map((c) => (
           <VoiceConfirmRow
@@ -71,11 +72,13 @@ export function RailConfirmationStack() {
 function ApprovalRow({
   id,
   intent,
+  reason,
   category,
   impact,
 }: {
   id: string;
   intent: string;
+  reason?: string;
   category: string;
   impact: "read" | "write" | "destructive" | "external";
 }) {
@@ -106,6 +109,7 @@ function ApprovalRow({
         </span>
       </div>
       <div className="v2-rail-confirm__card-title">{intent}</div>
+      <ApprovalWhy reason={reason} />
       {category && <div className="v2-rail-confirm__card-sub">{category}</div>}
       {error && <div className="v2-rail-confirm__card-error">{error}</div>}
       <div className="v2-rail-confirm__card-actions">
