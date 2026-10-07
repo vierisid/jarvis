@@ -213,6 +213,23 @@ for (const [name, job] of Object.entries(jobs)) {
   else if (steps.slice(dl + 1, v).some((st) => st.run !== undefined || st.uses))
     out.push(name + ": does something with the sidecar artifacts before checking their digests");
 }
+// A write call to the releases API needs `contents: write`, and each job
+// declares its own permissions (#646), so a step pasted into the wrong job
+// gets a 403 at the END of a release -- after the tag exists and npm has
+// published. #786 did exactly that: the dry-run notes step landed in
+// github-release (contents: write, correct) AND in publish-docker
+// (contents: read); the copy that got a 403 failed the run, which skipped the
+// copy that worked. A GET is fine on read, so this keys on the method.
+for (const [name, job] of Object.entries(jobs))
+  for (const [i, s] of (job.steps ?? []).entries()) {
+    if (typeof s.run !== "string" || !/\bgh\s+api\b/.test(s.run)) continue;
+    if (!/--method\s+(POST|PUT|PATCH|DELETE)\b/.test(s.run)) continue;
+    if (!/\/releases\b/.test(s.run)) continue;
+    if (job.permissions?.contents !== "write")
+      out.push(name + ": step " + (s.name ?? s.id ?? String(i)) +
+        " writes to the releases API but its job has contents: " +
+        JSON.stringify(job.permissions?.contents ?? null) + " (needs \"write\", or it 403s)");
+  }
 if (out.length) console.log(out.join("\n"));
 ' "$@"
 }
@@ -454,6 +471,12 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 		'enable=${{ needs.validate-tag.outputs.prerelease' 'enable=${{ needs.validate-tag.outputs.prerelaese'
 	mutant 'a per-ref concurrency group (#645)' \
 		"group: release-exec" 'group: release-exec-${{ github.ref }}'
+	mutant 'a releases-API write in a job that only has contents: read (#786)' \
+		'which needs no token scope.
+    permissions:
+      contents: write' 'which needs no token scope.
+    permissions:
+      contents: read'
 	mutant 'a dry-run-split concurrency group (#645)' \
 		'  group: release-exec
 ' "  group: release-exec\${{ inputs.dry_run && '-dry-run' || '' }}
