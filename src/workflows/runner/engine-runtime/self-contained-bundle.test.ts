@@ -118,6 +118,36 @@ describe.skipIf(!existsSync(stagingEsbuild))("an absent module throws at every r
 });
 
 /**
+ * Two builds of one hash must be the same bytes wherever they run from. Since
+ * #761 the builder pins its digest, so a rebuild of the same path by a process
+ * started in another directory (a script, a second daemon) used to change the
+ * bytes under a pinned runtime and refuse every later spawn: esbuild wrote
+ * cwd-relative module keys. Real builds, into scratch roots, through the seam.
+ */
+describe.skipIf(!existsSync(stagingEsbuild))("the build does not depend on the builder's cwd (#761)", () => {
+  test("building from two different working directories yields one digest", async () => {
+    // Separate PROCESSES, as in the scenario: esbuild's service takes its
+    // working directory from the process that starts it, so a chdir inside one
+    // test process would not move it and could not see the bug.
+    const builder = join(scratch("builder"), "build.ts");
+    writeFileSync(builder,
+      `import { buildEngineBundle } from ${JSON.stringify(resolve(import.meta.dir, "build.ts"))};\n` +
+      `const b = await buildEngineBundle({ force: true, sharedRoot: null, bundleRoot: process.argv[2] });\n` +
+      `console.log(b.digest);\n`);
+    const digests: string[] = [];
+    for (const cwd of [ENGINE_BUILD_PATHS.REPO_ROOT, scratch("elsewhere")]) {
+      const proc = Bun.spawnSync([process.execPath, builder, scratch("root")], {
+        cwd, env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "" }, stderr: "pipe",
+      });
+      expect({ code: proc.exitCode, stderr: proc.stderr.toString().slice(0, 500) }).toEqual({ code: 0, stderr: "" });
+      digests.push(proc.stdout.toString().trim().split("\n").pop() ?? "");
+    }
+    expect(digests[0]).toMatch(/^[0-9a-f]{64}$/u);
+    expect(digests[1]).toBe(digests[0]);
+  }, 60_000);
+});
+
+/**
  * The bundle actually built for this source state. Skipped when none is
  * cached and the build is not opted into, the same gate the end-to-end
  * suites use; CI opts in.

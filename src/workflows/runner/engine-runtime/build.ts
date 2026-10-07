@@ -29,6 +29,10 @@ import {
   renameSync,
   rmSync,
   utimesSync,
+  openSync,
+  writeSync,
+  fsyncSync,
+  closeSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -324,7 +328,9 @@ export const PATCHED_VENDOR_SOURCES = [
  * while leaving the constant in the file changes what the engine executes and
  * leaves the key untouched, which is the same stale-bundle trap
  * PATCHED_VENDOR_SOURCES exists to close. Paths stay out because they differ
- * per machine and must not fragment the cache.
+ * per machine and must not fragment the cache -- but the working directory DOES
+ * change the output (module keys are relative to it), which is why the build
+ * pins `absWorkingDir` and `bundleHash` records that it does.
  */
 export const ENGINE_ESBUILD_CONFIG = {
   bundle: true,
@@ -539,6 +545,9 @@ export function bundleHash(): string {
     .update(JSON.stringify(ENGINE_ESBUILD_CONFIG));
   // The absent-module plugin is a function, which JSON.stringify would drop, so
   // what it compiles in is hashed here instead (#759).
+  // The esbuild working directory is pinned to the repo root (see the build
+  // call); its VALUE is a path and stays out, the fact that it is pinned is in.
+  hasher.update("\0").update("abs-working-dir=repo-root");
   hasher.update("\0").update("absent-modules");
   for (const name of ENGINE_ABSENT_MODULES) hasher.update("\0").update(absentModuleSource(name));
   return hasher.digest("hex").slice(0, 16);
@@ -658,6 +667,12 @@ export async function buildEngineBundle(opts?: {
     // that changes the output must live in ENGINE_ESBUILD_CONFIG or it is
     // outside the cache key.
     ...ENGINE_ESBUILD_CONFIG,
+    // Pinned so the OUTPUT does not depend on the builder's cwd: esbuild writes
+    // cwd-relative module keys into the bundle, so two builds of one hash from
+    // different directories used to differ in bytes -- and since #761 a
+    // rebuild by another process at the same path refuses every later spawn of
+    // a daemon that pinned the first. `bundleHash` marks this choice.
+    absWorkingDir: REPO_ROOT,
     entryPoints: [resolve(ENGINE_DIR, "src/main.ts")],
     outfile: bundlePath,
     alias: {
@@ -706,15 +721,30 @@ export async function buildEngineBundle(opts?: {
  * is either its old bytes or all of the new ones.
  */
 function publishAtomically(target: string, data: Uint8Array | string): void {
-  const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  const tmp = `${target}.${process.pid}.${randomBytes(6).toString("hex")}${PUBLISH_TMP_SUFFIX}`;
+  // Outside the cleanup below: if this fails (EEXIST), the name is someone
+  // else's file and not ours to remove.
+  const fd = openSync(tmp, "wx");
   try {
-    writeFileSync(tmp, data, { flag: "wx" });
+    try {
+      writeSync(fd, typeof data === "string" ? Buffer.from(data) : data);
+      // Data durable BEFORE the rename: without it some filesystems persist the
+      // rename first, and a power loss leaves a short `main.js` at the final
+      // path -- which the next boot adopts on existsSync alone, and nothing
+      // rebuilds because the hash is unchanged.
+      fsyncSync(fd);
+    } finally {
+      closeSync(fd);
+    }
     renameSync(tmp, target);
   } catch (err) {
     rmSync(tmp, { force: true });
     throw err;
   }
 }
+
+/** Suffix of an in-flight publish; a copy of a bundle dir must skip these. */
+export const PUBLISH_TMP_SUFFIX = ".publish.tmp";
 
 export const ENGINE_BUILD_PATHS = {
   REPO_ROOT,
