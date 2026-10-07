@@ -1,0 +1,25 @@
+Command: /home/vierisid/.bun/bin/bun test src/brief/outcomes.test.ts src/daemon/api-brief-outcomes.test.ts --test-name-pattern F16 review|authenticated socket
+Exit: 0
+bun test v1.4.2 (744846f84)
+[WebSocketServer] Started on unix:/tmp/jarvis-f16-http-UrJEuO/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+
+src/daemon/api-brief-outcomes.test.ts:
+(pass) authenticated socket requires a session for reads/writes and returns the same durable time receipt [116.87ms]
+(pass) F16 review R2: a fresh client can refresh current time evidence and correct a concurrent revision [46.55ms]
+
+src/brief/outcomes.test.ts:
+(pass) F16 review R1: deleting a FAILED child's workflow cannot qualify its parent [1098.46ms]
+(pass) F16 review R1: deleting a QUEUED child's workflow cannot qualify its parent [1173.34ms]
+(pass) F16 review R1: deleting a SUCCEEDED child's workflow cannot qualify its parent [1244.02ms]
+(pass) F16 review R1: a deleted grandchild leaves the surviving family incomplete [1315.43ms]
+(pass) F16 review R1: an inconsistent child launch receipt is unavailable (missing-result) [1018.58ms]
+(pass) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-parent) [1133.06ms]
+(pass) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-flow) [1207.63ms]
+(pass) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-version) [1330.75ms]
+
+ 10 pass
+ 33 filtered out
+ 0 fail
+ 69 expect() calls
+Ran 10 tests across 2 files. [9.91s]

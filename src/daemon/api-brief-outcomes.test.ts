@@ -52,6 +52,7 @@ test('every route requires the exact ready provider plus both outcome and measur
     expect((await call(table)).status).toBe(status);
     expect((await call(table, `${base}/summary`, 'GET', '?timezone=UTC')).status).toBe(status);
     expect((await call(table, timePath, 'GET', '?requestId=x')).status).toBe(status);
+    expect((await call(table, timePath, 'GET', '')).status).toBe(status);
     expect((await call(table, timePath, 'POST', '', {})).status).toBe(status);
   }
   const table = routes(); closeDb(); initDatabase(':memory:', { quiet: true });
@@ -88,11 +89,34 @@ test('authenticated socket requires a session for reads/writes and returns the s
   try {
     server.start(); expect((await send(`${base}${query()}`)).status).toBe(401);
     expect((await send(path, { method: 'POST', body: JSON.stringify(command) })).status).toBe(401);
+    expect((await send(path)).status).toBe(401);
     const bootstrap = await send(`${base}?token=fixture-access`, { redirect: 'manual' });
     const headers = { Cookie: bootstrap.headers.get('set-cookie')!.split(';')[0]!, 'Content-Type': 'application/json' };
     const saved = await send(path, { method: 'POST', headers, body: JSON.stringify(command) }); expect(saved.status).toBe(200);
     const receipt = await saved.json();
+    const current = await send(path, { headers }); expect(current.status).toBe(200);
+    expect((await current.json() as any).record).toEqual(receipt);
     expect((await (await send(`${path}?requestId=http-time`, { headers })).json() as any).receipt).toEqual(receipt);
     expect((await (await send(`${base}/summary?timezone=UTC`, { headers })).json() as any).data.week.value).toBe(10);
   } finally { server.stop(); rmSync(dir, { recursive: true, force: true }); }
+});
+
+
+test('F16 review R2: a fresh client can refresh current time evidence and correct a concurrent revision', async () => {
+  const table = routes(), { work, command } = checkedWork();
+  const current = () => call(table, timePath, 'GET', '', undefined, work.id);
+  expect(await current()).toMatchObject({ status: 200, body: { record: null } });
+  const first = await call(table, timePath, 'POST', '', command, work.id);
+  const firstView = await current(); expect(firstView.body.record).toEqual(first.body);
+  const secondCommand = { ...command, requestId: 'second-client', revision: 1, baseline: { ...command.baseline, minutes: 20 } };
+  const second = await call(table, timePath, 'POST', '', secondCommand, work.id);
+  const stale = { ...command, requestId: 'correction', revision: firstView.body.record.revision };
+  expect((await call(table, timePath, 'POST', '', stale, work.id)).status).toBe(409);
+  const refreshed = await current(); expect(refreshed.body.record).toEqual(second.body);
+  const corrected = await call(table, timePath, 'POST', '', { ...stale, revision: refreshed.body.record.revision }, work.id);
+  expect(corrected.status).toBe(200); expect(corrected.body.revision).toBe(3);
+  expect((await current()).body.record).toEqual(corrected.body);
+  expect((await call(table, timePath, 'GET', '?requestId=http-time', undefined, work.id)).body.receipt).toEqual(first.body);
+  for (const suffix of ['?requestId=', '?requestId=x&requestId=y', '?unexpected=true'])
+    expect((await call(table, timePath, 'GET', suffix, undefined, work.id)).status).toBe(400);
 });

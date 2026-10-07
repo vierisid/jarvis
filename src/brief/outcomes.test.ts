@@ -6,9 +6,9 @@ import { Database } from 'bun:sqlite';
 import { closeDb, getDb, initDatabase } from '../vault/schema';
 import { ensureWorkflowSchema } from '../workflows/db';
 import { ensureOutcomeSchema } from '../vault/outcome-schema';
-import { createFlow, setPublishedVersion } from '../workflows/db/repos/flow';
+import { createFlow, deleteFlow, setPublishedVersion } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion } from '../workflows/db/repos/flow-version';
-import { createFlowRun, updateRun } from '../workflows/db/repos/flow-run';
+import { createFlowRun, getFlowRun, updateRun } from '../workflows/db/repos/flow-run';
 import { createWaitpoint } from '../workflows/db/repos/waitpoint';
 import { createWorkItem, decideWorkItem, checkWorkResult } from '../goals/work-items';
 import { startWorkItemRun } from '../goals/workflow-bridge';
@@ -78,6 +78,7 @@ test('time corrections replace benefit in the original completion window; exact 
   const correction = time(w, 1, 'corrected'); correction.baseline.minutes = 10;
   provider.recordTime(w.item.id, correction);
   closeDb(); initDatabase(file, { quiet: true }); ensureWorkflowSchema(); provider = new Outcomes(getDb());
+  expect(provider.currentTime(w.item.id)).toMatchObject({ revision: 2, baseline: { minutes: 10 }, intervention: correction.intervention });
   expect(provider.recordTime(w.item.id, first)).toEqual(original); expect(provider.timeReceipt(w.item.id, first.requestId)).toEqual(original);
   const view = await summary(); expect(view.week?.value).toBe(5); expect(view.today).toBeNull();
   expect(view.days.find(d => d.id === '2026-10-07')?.time?.value).toBe(5);
@@ -220,3 +221,92 @@ test('outcome projections never expose captured run output or effect payloads', 
   expect(projected).toContain('checked work items');
   for (const payload of ['CAPTURED-PROMPT-INJECTION', 'PRIVATE-RUN-INPUT', 'PRIVATE-EFFECT-ARGUMENT', 'PRIVATE-EFFECT-OUTPUT', 'PRIVATE-TARGET']) expect(projected).not.toContain(payload);
 });
+
+
+// Use the production launch backend so the retained receipt has its real shape.
+async function nestedWork(depth = 1) {
+  const { configureWorkflowReadiness } = await import('../workflows/db/repos/flow-readiness');
+  const { PieceCatalog } = await import('../workflows/runtime/piece-catalog');
+  configureWorkflowReadiness({ pieces: new PieceCatalog([{
+    name: '@jarvispieces/piece-jarvis-trigger', version: '0.0.1', displayName: 'Workflow', description: 'Fixture metadata',
+    actions: { run_workflow: { name: 'run_workflow', displayName: 'Run workflow', description: 'Launch child', requireAuth: false } },
+  }]) });
+  const { buildSandboxServiceBackends } = await import('../workflows/runtime/service-backends');
+  const { AuthorityEngine } = await import('../authority/engine');
+  const { EmergencyController } = await import('../authority/emergency');
+  const { AuditTrail } = await import('../authority/audit');
+  const { CredentialResolver } = await import('../workflows/credentials/adapter');
+  const { WorkflowEventBuffer } = await import('../workflows/runtime/event-buffer');
+  const backend = buildSandboxServiceBackends({
+    credentialResolver: new CredentialResolver(), eventBuffer: new WorkflowEventBuffer(),
+    llmManager: {} as any, channelService: {} as any, wsService: {} as any,
+    authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: [], overrides: [],
+      context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
+    emergencyController: new EmergencyController(), auditTrail: new AuditTrail(),
+  });
+  const create = (launch: boolean) => {
+    const flow = createFlow(), version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Nested report', trigger: {
+      name: 'trigger', type: 'EMPTY', ...(launch ? { nextAction: { name: 'child', type: 'PIECE', settings: {
+        pieceName: '@jarvispieces/piece-jarvis-trigger', pieceVersion: '0.0.1', actionName: 'run_workflow', input: {},
+      } } } : {}),
+    } }).id);
+    setPublishedVersion(flow.id, version.id); return { flow, version };
+  };
+  const created = now, root = create(true);
+  const item = createWorkItem({ title: 'Parent work', mode: 'workflow', workflowId: root.flow.id, workflowVersionId: root.version.id });
+  decideWorkItem(item.id, { outcome: 'accepted', reason: 'Requested nested report' });
+  const run = startWorkItemRun(item.id, root.flow.id), children = [];
+  let parent = run;
+  for (let i = 0; i < depth; i++) {
+    updateRun(parent.id, { status: 'RUNNING' });
+    const child = create(i + 1 < depth);
+    const launched = await backend.workflowsStart!({ flowId: child.flow.id }, { runId: parent.id, projectId: parent.projectId, stepName: 'child', executionPath: [] });
+    const childRun = getFlowRun(launched.runId!)!;
+    children.push({ ...child, run: childRun }); parent = childRun;
+  }
+  now += HOUR;
+  return { ...root, item, run, created, children };
+}
+for (const status of ['FAILED', 'QUEUED', 'SUCCEEDED'] as const) test(`F16 review R1: deleting a ${status} child's workflow cannot qualify its parent`, async () => {
+  const w = await nestedWork(), child = w.children[0]!;
+  updateRun(child.run.id, { status, finishTime: status === 'QUEUED' ? null : now });
+  updateRun(w.run.id, { status: 'SUCCEEDED', finishTime: now });
+  const checked = checkWorkResult(w.item.id, result), command = time({ ...w, checked });
+  if (status === 'SUCCEEDED') {
+    provider.recordTime(w.item.id, command); expect((await summary()).week?.value).toBe(25);
+  } else expect((await provider.read(query())).state).toBe('empty');
+  deleteFlow(child.flow.id);
+  expect(getFlowRun(child.run.id)).toBeNull(); expect(getFlowRun(w.run.id)).not.toBeNull();
+  expect(await provider.read(query())).toMatchObject({ state: 'unavailable', coverage: { eligible: 0, excluded: { run_coverage_incomplete: 1 } } });
+  expect((await provider.summary({ timezone: 'UTC' })).state).toBe('unavailable');
+  expect(() => provider.recordTime(w.item.id, { ...command, revision: status === 'SUCCEEDED' ? 1 : 0, requestId: 'after-delete' })).toThrow('eligible checked workflow');
+  closeDb(); initDatabase(file, { quiet: true }); ensureWorkflowSchema(); provider = new Outcomes(getDb());
+  expect((await provider.read(query())).state).toBe('unavailable');
+  if (status === 'SUCCEEDED') expect(provider.timeReceipt(w.item.id, command.requestId)).not.toBeNull();
+});
+test('F16 review R1: a deleted grandchild leaves the surviving family incomplete', async () => {
+  const w = await nestedWork(2);
+  for (const child of w.children) updateRun(child.run.id, { status: 'SUCCEEDED', finishTime: now });
+  updateRun(w.run.id, { status: 'SUCCEEDED', finishTime: now });
+  const checked = checkWorkResult(w.item.id, result); provider.recordTime(w.item.id, time({ ...w, checked }));
+  expect((await summary()).week?.value).toBe(25);
+  deleteFlow(w.children[1]!.flow.id);
+  expect((await provider.read(query())).state).toBe('unavailable');
+});
+
+for (const invalid of ['missing-result', 'wrong-parent', 'wrong-flow', 'wrong-version'] as const)
+  test(`F16 review R1: an inconsistent child launch receipt is unavailable (${invalid})`, async () => {
+    const { listWorkflowEffects, saveWorkflowEffect } = await import('../workflows/db/repos/workflow-effect');
+    const w = await nestedWork(), child = w.children[0]!;
+    updateRun(child.run.id, { status: 'SUCCEEDED', finishTime: now });
+    updateRun(w.run.id, { status: 'SUCCEEDED', finishTime: now });
+    checkWorkResult(w.item.id, result);
+    expect(await read()).toHaveLength(1);
+    const receipt = listWorkflowEffects(w.run.id)[0]!;
+    if (invalid === 'missing-result') receipt.result = null;
+    if (invalid === 'wrong-parent') receipt.result = { runId: w.run.id };
+    if (invalid === 'wrong-flow') receipt.target.flowId = w.flow.id;
+    if (invalid === 'wrong-version') receipt.target.versionId = w.version.id;
+    saveWorkflowEffect(receipt);
+    expect((await provider.read(query())).state).toBe('unavailable');
+  });

@@ -1,0 +1,79 @@
+Command: /home/vierisid/.bun/bin/bun test src/brief/outcomes.test.ts src/daemon/api-brief-outcomes.test.ts src/util/model-exec-env.test.ts
+Exit: 0
+bun test v1.4.2 (744846f84)
+[WebSocketServer] Started on unix:/tmp/jarvis-f16-http-p45LwD/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+
+src/util/model-exec-env.test.ts:
+(pass) the daemon-secret rule > every listed daemon secret is stripped, in any case [0.64ms]
+(pass) the daemon-secret rule > the sources the header cites are the names on the list [0.47ms]
+(pass) the daemon-secret rule > an unclassified JARVIS_ name is stripped: a future secret fails closed [0.30ms]
+(pass) the daemon-secret rule > settings stay, and no daemon secret is on the settings list [1.01ms]
+(pass) the daemon-secret rule > the engine wiring names are known, internal, and stripped [0.30ms]
+(pass) the daemon-secret rule > the user's shell and desktop survive whole, their own credentials included [0.34ms]
+(pass) the daemon-secret rule > stripping removes exactly the daemon secrets and nothing else [0.32ms]
+(pass) modelExecEnv() > marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off [0.56ms]
+(pass) modelExecEnv() > flags the env key only when this process holds it or inherited the flag [65.29ms]
+(pass) modelExecEnv() > an extra cannot put a daemon secret back, nor can a spread of process.env [0.23ms]
+(pass) modelExecEnv() > an undefined extra removes the key; the result is always an object [0.10ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the scan sees the names it must (not blind) [0.11ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [0.44ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the three buckets do not overlap [0.15ms]
+(pass) the model-exec markers (#514) > the key check: 16 hex chars, stable, case-insensitive, and not the key [57.61ms]
+(pass) the model-exec markers (#514) > the marker is exactly "1"; the flag is a check value or an older parent's "1" [0.78ms]
+(pass) the model-exec markers (#514) > modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged [0.18ms]
+(pass) the model-exec markers (#514) > silent for a file-key install, marked or not [0.42ms]
+(pass) the model-exec markers (#514) > warns while the parent's key is missing or a different one is set; silent once it is back [0.30ms]
+(pass) the model-exec markers (#514) > the CLI warns only for a detached start or restart [0.22ms]
+
+src/daemon/api-brief-outcomes.test.ts:
+(pass) every route requires the exact ready provider plus both outcome and measurement activation [115.71ms]
+(pass) empty, qualified time, immutable receipt recovery and conflict responses [80.60ms]
+(pass) strict bounded JSON and query validation fail before any time record can be written [46.89ms]
+(pass) authenticated socket requires a session for reads/writes and returns the same durable time receipt [72.86ms]
+(pass) F16 review R2: a fresh client can refresh current time evidence and correct a concurrent revision [44.39ms]
+
+src/brief/outcomes.test.ts:
+(pass) no evidence is empty; scores, run duration and flow defaults never invent time or goal counts [1080.76ms]
+(pass) manual checked work counts once but cannot manufacture an automation time claim [968.05ms]
+(pass) explicit baseline minus observed intervention, without double subtracting overlapping intervals [1110.06ms]
+(pass) time corrections replace benefit in the original completion window; exact recovery survives restart [1218.59ms]
+(pass) negative time corrections retain overhead and measured zero is distinct from unknown [972.88ms]
+(pass) stale revisions, changed retries, invalid intervals and injected fields cannot rewrite time evidence [1127.00ms]
+(pass) outer rollback leaves no time receipt and additive migration preserves old commitments [976.12ms]
+(pass) effect pending invalidates a checked success [988.14ms]
+(pass) effect dispatching invalidates a checked success [979.14ms]
+(pass) effect failed invalidates a checked success [967.08ms]
+(pass) effect blocked invalidates a checked success [991.25ms]
+(pass) effect unknown invalidates a checked success [942.61ms]
+(pass) succeeded effects need matching durable identities and completion time [985.92ms]
+(pass) current run evidence excludes status='FAILED' [998.89ms]
+(pass) current run evidence excludes environment='TESTING' [1066.22ms]
+(pass) current run evidence excludes step_name_to_test='trigger' [966.18ms]
+(pass) current run evidence excludes execution_config='{"sampleData":{}}' [913.85ms]
+(pass) pending waitpoints and cancellation remain excluded even after a passed check [975.42ms]
+(pass) nested runs cannot count independently or hide uncertainty from their parent [958.35ms]
+(pass) unique run bindings and windowed reads prevent duplicate benefit through another goal link [999.51ms]
+(pass) half-open windows do not repeat work at an exact boundary [964.13ms]
+(pass) timezone midnight, DST spring/fall and Monday week boundaries are calendar based [897.81ms]
+(pass) goal deltas are actual signed observations, independent of work and parent/child totals [913.49ms]
+(pass) missing opening measurements and changed definitions omit the delta, with incomplete coverage [981.18ms]
+(pass) bad queries and replaced databases are unavailable, never fabricated empty success [987.33ms]
+(pass) missing F15 sources fail readiness rather than falling back to scores [923.19ms]
+(pass) time evidence alone cannot hide a later invalidated run or a failed work result [1056.14ms]
+(pass) a skipped local date has no work and cannot mark two days current [892.94ms]
+(pass) daily and weekly goal deltas have distinct observed openings [950.68ms]
+(pass) outcome projections never expose captured run output or effect payloads [1035.22ms]
+(pass) F16 review R1: deleting a FAILED child's workflow cannot qualify its parent [1076.88ms]
+(pass) F16 review R1: deleting a QUEUED child's workflow cannot qualify its parent [1133.00ms]
+(pass) F16 review R1: deleting a SUCCEEDED child's workflow cannot qualify its parent [1042.31ms]
+(pass) F16 review R1: a deleted grandchild leaves the surviving family incomplete [1118.09ms]
+(pass) F16 review R1: an inconsistent child launch receipt is unavailable (missing-result) [1015.73ms]
+(pass) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-parent) [1005.11ms]
+(pass) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-flow) [1053.78ms]
+(pass) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-version) [1027.39ms]
+
+ 63 pass
+ 0 fail
+ 501 expect() calls
+Ran 63 tests across 3 files. [38.84s]

@@ -1,0 +1,341 @@
+Command: /home/vierisid/.bun/bin/bun test src/brief/outcomes.test.ts src/daemon/api-brief-outcomes.test.ts --test-name-pattern F16 review|authenticated socket
+Original reviewed implementation, both corrections removed
+Exit: 1
+bun test v1.4.2 (744846f84)
+[WebSocketServer] Started on unix:/tmp/jarvis-f16-http-CLpjJ3/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+
+src/daemon/api-brief-outcomes.test.ts:
+92 |     expect((await send(path)).status).toBe(401);
+93 |     const bootstrap = await send(`${base}?token=fixture-access`, { redirect: 'manual' });
+94 |     const headers = { Cookie: bootstrap.headers.get('set-cookie')!.split(';')[0]!, 'Content-Type': 'application/json' };
+95 |     const saved = await send(path, { method: 'POST', headers, body: JSON.stringify(command) }); expect(saved.status).toBe(200);
+96 |     const receipt = await saved.json();
+97 |     const current = await send(path, { headers }); expect(current.status).toBe(200);
+                                                                               ^
+error: expect(received).toBe(expected)
+
+Expected: 200
+Received: 400
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/daemon/api-brief-outcomes.test.ts:97:75)
+(fail) authenticated socket requires a session for reads/writes and returns the same durable time receipt [148.20ms]
+103 | 
+104 | 
+105 | test('F16 review R2: a fresh client can refresh current time evidence and correct a concurrent revision', async () => {
+106 |   const table = routes(), { work, command } = checkedWork();
+107 |   const current = () => call(table, timePath, 'GET', '', undefined, work.id);
+108 |   expect(await current()).toMatchObject({ status: 200, body: { record: null } });
+                                ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "body": {
+-     "record": null,
++     "code": "INVALID_OUTCOME",
++     "error": "query: has missing, duplicate or unsupported parameters",
+    },
+-   "status": 200,
++   "status": 400,
+  }
+
+- Expected  - 2
++ Received  + 3
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/daemon/api-brief-outcomes.test.ts:108:27)
+(fail) F16 review R2: a fresh client can refresh current time evidence and correct a concurrent revision [52.13ms]
+
+src/brief/outcomes.test.ts:
+275 |   if (status === 'SUCCEEDED') {
+276 |     provider.recordTime(w.item.id, command); expect((await summary()).week?.value).toBe(25);
+277 |   } else expect((await provider.read(query())).state).toBe('empty');
+278 |   deleteFlow(child.flow.id);
+279 |   expect(getFlowRun(child.run.id)).toBeNull(); expect(getFlowRun(w.run.id)).not.toBeNull();
+280 |   expect(await provider.read(query())).toMatchObject({ state: 'unavailable', coverage: { eligible: 0, excluded: { run_coverage_incomplete: 1 } } });
+                                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "coverage": {
+-     "eligible": 0,
+-     "excluded": {
+-       "run_coverage_incomplete": 1,
+-     },
++     "candidates": 1,
++     "complete": false,
++     "eligible": 1,
++     "excluded": {},
++     "timed": 0,
++     "untimed": 1,
+    },
+-   "state": "unavailable",
++   "data": [
++     {
++       "goalIds": [],
++       "outcomeId": "run:0ZV9RXxH7Fsk0lQdF4OCt",
++       "result": {
++         "asOf": 1791367200000,
++         "baseline": null,
++         "provenance": [
++           {
++             "id": "work-check:89370bbc-9214-4387-9918-d42fd1e10f21",
++             "kind": "source",
++             "revision": "1",
++           },
++           {
++             "id": "owner:report",
++             "kind": "source",
++             "revision": "user-cited",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "checked work items",
++         "value": 1,
++       },
++       "runId": "0ZV9RXxH7Fsk0lQdF4OCt",
++       "timeBack": null,
++       "window": {
++         "end": 1791763200000,
++         "start": 1791158400000,
++         "timezone": "UTC",
++       },
++       "workItemId": "006fdd46-9ae0-4709-ad77-91e93ec05d42",
++     },
++   ],
++   "state": "ready",
+  }
+
+- Expected  - 5
++ Received  + 42
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:280:40)
+(fail) F16 review R1: deleting a FAILED child's workflow cannot qualify its parent [1309.39ms]
+275 |   if (status === 'SUCCEEDED') {
+276 |     provider.recordTime(w.item.id, command); expect((await summary()).week?.value).toBe(25);
+277 |   } else expect((await provider.read(query())).state).toBe('empty');
+278 |   deleteFlow(child.flow.id);
+279 |   expect(getFlowRun(child.run.id)).toBeNull(); expect(getFlowRun(w.run.id)).not.toBeNull();
+280 |   expect(await provider.read(query())).toMatchObject({ state: 'unavailable', coverage: { eligible: 0, excluded: { run_coverage_incomplete: 1 } } });
+                                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "coverage": {
+-     "eligible": 0,
+-     "excluded": {
+-       "run_coverage_incomplete": 1,
+-     },
++     "candidates": 1,
++     "complete": false,
++     "eligible": 1,
++     "excluded": {},
++     "timed": 0,
++     "untimed": 1,
+    },
+-   "state": "unavailable",
++   "data": [
++     {
++       "goalIds": [],
++       "outcomeId": "run:PTbRtswwES39JnqwVer2U",
++       "result": {
++         "asOf": 1791367200000,
++         "baseline": null,
++         "provenance": [
++           {
++             "id": "work-check:a6160105-0305-4581-976d-22e6aab15963",
++             "kind": "source",
++             "revision": "1",
++           },
++           {
++             "id": "owner:report",
++             "kind": "source",
++             "revision": "user-cited",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "checked work items",
++         "value": 1,
++       },
++       "runId": "PTbRtswwES39JnqwVer2U",
++       "timeBack": null,
++       "window": {
++         "end": 1791763200000,
++         "start": 1791158400000,
++         "timezone": "UTC",
++       },
++       "workItemId": "5adfd82b-d06e-430c-a3e8-38ef7f91b538",
++     },
++   ],
++   "state": "ready",
+  }
+
+- Expected  - 5
++ Received  + 42
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:280:40)
+(fail) F16 review R1: deleting a QUEUED child's workflow cannot qualify its parent [1300.43ms]
+275 |   if (status === 'SUCCEEDED') {
+276 |     provider.recordTime(w.item.id, command); expect((await summary()).week?.value).toBe(25);
+277 |   } else expect((await provider.read(query())).state).toBe('empty');
+278 |   deleteFlow(child.flow.id);
+279 |   expect(getFlowRun(child.run.id)).toBeNull(); expect(getFlowRun(w.run.id)).not.toBeNull();
+280 |   expect(await provider.read(query())).toMatchObject({ state: 'unavailable', coverage: { eligible: 0, excluded: { run_coverage_incomplete: 1 } } });
+                                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "coverage": {
+-     "eligible": 0,
+-     "excluded": {
+-       "run_coverage_incomplete": 1,
+-     },
++     "candidates": 1,
++     "complete": true,
++     "eligible": 1,
++     "excluded": {},
++     "timed": 1,
++     "untimed": 0,
+    },
+-   "state": "unavailable",
++   "data": [
++     {
++       "goalIds": [],
++       "outcomeId": "run:Vq6mnBpiGLaEJt8zc3fn5",
++       "result": {
++         "asOf": 1791367200000,
++         "baseline": null,
++         "provenance": [
++           {
++             "id": "work-check:693c39d4-e55c-41be-b13a-3a53b3629584",
++             "kind": "source",
++             "revision": "1",
++           },
++           {
++             "id": "owner:report",
++             "kind": "source",
++             "revision": "user-cited",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "checked work items",
++         "value": 1,
++       },
++       "runId": "Vq6mnBpiGLaEJt8zc3fn5",
++       "timeBack": {
++         "asOf": 1791367200000,
++         "baseline": 30,
++         "provenance": [
++           {
++             "id": "manual-report-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++           {
++             "id": "review-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "minutes",
++         "value": 25,
++       },
++       "window": {
++         "end": 1791763200000,
++         "start": 1791158400000,
++         "timezone": "UTC",
++       },
++       "workItemId": "d3846ec0-473f-4316-9bbf-e20631014ad4",
++     },
++   ],
++   "state": "ready",
+  }
+
+- Expected  - 5
++ Received  + 61
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:280:40)
+(fail) F16 review R1: deleting a SUCCEEDED child's workflow cannot qualify its parent [1348.10ms]
+289 |   for (const child of w.children) updateRun(child.run.id, { status: 'SUCCEEDED', finishTime: now });
+290 |   updateRun(w.run.id, { status: 'SUCCEEDED', finishTime: now });
+291 |   const checked = checkWorkResult(w.item.id, result); provider.recordTime(w.item.id, time({ ...w, checked }));
+292 |   expect((await summary()).week?.value).toBe(25);
+293 |   deleteFlow(w.children[1]!.flow.id);
+294 |   expect((await provider.read(query())).state).toBe('unavailable');
+                                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:294:48)
+(fail) F16 review R1: a deleted grandchild leaves the surviving family incomplete [1377.41ms]
+306 |     if (invalid === 'missing-result') receipt.result = null;
+307 |     if (invalid === 'wrong-parent') receipt.result = { runId: w.run.id };
+308 |     if (invalid === 'wrong-flow') receipt.target.flowId = w.flow.id;
+309 |     if (invalid === 'wrong-version') receipt.target.versionId = w.version.id;
+310 |     saveWorkflowEffect(receipt);
+311 |     expect((await provider.read(query())).state).toBe('unavailable');
+                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:311:50)
+(fail) F16 review R1: an inconsistent child launch receipt is unavailable (missing-result) [1079.74ms]
+306 |     if (invalid === 'missing-result') receipt.result = null;
+307 |     if (invalid === 'wrong-parent') receipt.result = { runId: w.run.id };
+308 |     if (invalid === 'wrong-flow') receipt.target.flowId = w.flow.id;
+309 |     if (invalid === 'wrong-version') receipt.target.versionId = w.version.id;
+310 |     saveWorkflowEffect(receipt);
+311 |     expect((await provider.read(query())).state).toBe('unavailable');
+                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:311:50)
+(fail) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-parent) [1074.28ms]
+306 |     if (invalid === 'missing-result') receipt.result = null;
+307 |     if (invalid === 'wrong-parent') receipt.result = { runId: w.run.id };
+308 |     if (invalid === 'wrong-flow') receipt.target.flowId = w.flow.id;
+309 |     if (invalid === 'wrong-version') receipt.target.versionId = w.version.id;
+310 |     saveWorkflowEffect(receipt);
+311 |     expect((await provider.read(query())).state).toBe('unavailable');
+                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:311:50)
+(fail) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-flow) [1325.63ms]
+306 |     if (invalid === 'missing-result') receipt.result = null;
+307 |     if (invalid === 'wrong-parent') receipt.result = { runId: w.run.id };
+308 |     if (invalid === 'wrong-flow') receipt.target.flowId = w.flow.id;
+309 |     if (invalid === 'wrong-version') receipt.target.versionId = w.version.id;
+310 |     saveWorkflowEffect(receipt);
+311 |     expect((await provider.read(query())).state).toBe('unavailable');
+                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:311:50)
+(fail) F16 review R1: an inconsistent child launch receipt is unavailable (wrong-version) [1343.61ms]
+
+ 0 pass
+ 33 filtered out
+ 10 fail
+ 35 expect() calls
+Ran 10 tests across 2 files. [10.73s]
