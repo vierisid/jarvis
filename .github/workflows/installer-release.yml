@@ -61,7 +61,11 @@ jobs:
       version: ${{ steps.v.outputs.version }}
       should_release: ${{ steps.v.outputs.should_release }}
     steps:
+      # persist-credentials: false (#779): nothing here runs git; `gh` takes
+      # GH_TOKEN from the step env.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: v
         env:
           GH_TOKEN: ${{ github.token }}
@@ -90,20 +94,24 @@ jobs:
             echo "Installer v${VERSION} is not yet released — building."
           fi
 
-  # ─── Windows: mingw cross-build + Authenticode via Cloud KMS ───
-
+  # ─── Windows: mingw cross-build (no OIDC) ───────────────────────
+  # Split from signing (#779), as #682 split the sidecar: mingw, `make
+  # manifest-installer` and the Go module graph run here, in a job that
+  # cannot mint an OIDC token, so a compromised toolchain or module cannot ask
+  # Workload Identity Federation for a token and have KMS sign anything. The
+  # binary crosses to sign-windows with its digest as a job output.
   build-windows:
     needs: resolve
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
-    # OIDC, for google-github-actions/auth: signing federates into Google
-    # Cloud KMS with no stored credential. Only this job gets a token — the
-    # workflow default stays contents: read.
     permissions:
       contents: read
-      id-token: write
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The Actions cache is writable by any run on main, and Go reuses
@@ -112,32 +120,11 @@ jobs:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
 
-      # Windows signing needs BOTH the KMS keyring variable AND the issued
-      # certificate chain in the repo. They arrive at DIFFERENT times: the
-      # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
-      # exists days before the certificate does. Gating on the variable alone
-      # would turn that window into hard release failures instead of unsigned
-      # builds — so check the chain file too.
-      - name: Windows signing readiness
-        id: winsign
-        run: |
-          set -euo pipefail
-          if [ -z "${{ vars.GCP_KMS_KEYRING }}" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned Jarvis-Setup.exe (SmartScreen will block it)."
-          elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing — the certificate has not been issued/committed yet, so Jarvis-Setup.exe ships UNSIGNED."
-          else
-            echo "ready=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Install mingw-w64
         run: |
           set -euo pipefail
           sudo apt-get update
-          # osslsigncode: post-sign verification inside sign-windows.sh
-          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 osslsigncode
+          sudo apt-get install -y gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
 
       - name: Build installer
         working-directory: sidecar
@@ -173,6 +160,90 @@ jobs:
             exit 1
           fi
 
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        run: echo "sha256=$(sha256sum Jarvis-Setup.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
+      # Not under the installer-* name: that is the signed installer, which
+      # only sign-windows uploads and publish downloads by that pattern.
+      - name: Upload unsigned installer
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: unsigned-installer-win32-x64
+          path: sidecar/Jarvis-Setup.exe
+          if-no-files-found: error
+          retention-days: 1
+
+  # ─── Windows: Authenticode via Cloud KMS ────────────────────────
+  # The only job here that holds id-token. It builds nothing: it verifies the
+  # installer build-windows reported, signs it with scripts/sign-windows.sh
+  # (whose jsign download is checksum-pinned), and uploads the result as
+  # installer-win32-x64 -- signed, or unsigned when signing is not
+  # configured, exactly as before.
+  sign-windows:
+    needs: [resolve, build-windows]
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    # OIDC, for google-github-actions/auth: signing federates into Google
+    # Cloud KMS with no stored credential. Only this job gets a token — the
+    # workflow default stays contents: read.
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+    steps:
+      # For scripts/sign-windows.sh and the committed certificate chain.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: unsigned-installer-win32-x64
+          path: sidecar
+
+      # The digest travels as a job output, which only build-windows can set;
+      # the artifact store is writable by every job in this run.
+      - name: Verify the installer
+        working-directory: sidecar
+        env:
+          SHA256: ${{ needs.build-windows.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-windows reported no digest"; exit 1; }
+          echo "${SHA256}  Jarvis-Setup.exe" | sha256sum -c -
+
+      # osslsigncode: post-sign verification inside sign-windows.sh
+      - name: Install osslsigncode
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osslsigncode
+
+      # Windows signing needs BOTH the KMS keyring variable AND the issued
+      # certificate chain in the repo. They arrive at DIFFERENT times: the
+      # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
+      # exists days before the certificate does. Gating on the variable alone
+      # would turn that window into hard release failures instead of unsigned
+      # builds — so check the chain file too.
+      - name: Windows signing readiness
+        id: winsign
+        env:
+          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
+        run: |
+          set -euo pipefail
+          if [ -z "${GCP_KMS_KEYRING}" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned Jarvis-Setup.exe (SmartScreen will block it)."
+          elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing — the certificate has not been issued/committed yet, so Jarvis-Setup.exe ships UNSIGNED."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Authenticate to Google Cloud
         id: gcp-auth
         if: steps.winsign.outputs.ready == 'true'
@@ -181,6 +252,11 @@ jobs:
           workload_identity_provider: ${{ vars.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ vars.GCP_SIGNING_SERVICE_ACCOUNT }}
           token_format: "access_token"
+          # Only access_token is used. The default (true) writes a
+          # gha-creds-*.json into the workspace that carries what is needed
+          # to mint further OIDC tokens; nothing here reads it (#779, as #682
+          # did for the sidecar).
+          create_credentials_file: false
 
       - name: Sign installer (Cloud KMS)
         if: steps.winsign.outputs.ready == 'true'
@@ -198,10 +274,18 @@ jobs:
           SIGN_REQUIRE_TRUSTED_CHAIN: "1"
         run: scripts/sign-windows.sh Jarvis-Setup.exe
 
+      # The SIGNED installer's digest: signing changes the bytes, and publish
+      # takes the artifact only by this.
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        run: echo "sha256=$(sha256sum Jarvis-Setup.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-win32-x64
           path: sidecar/Jarvis-Setup.exe
+          if-no-files-found: error
 
   # ─── macOS: universal binary → Install Jarvis.app → signed DMG ──
   build-macos:
@@ -210,8 +294,12 @@ jobs:
     runs-on: macos-latest
     env:
       HAVE_APPLE_SIGNING: ${{ secrets.APPLE_CERT_P12 != '' }}
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The Actions cache is writable by any run on main, and Go reuses
@@ -321,14 +409,24 @@ jobs:
           echo "::warning::Apple signing credentials not configured — shipping an unsigned Install-Jarvis.dmg (Gatekeeper will block it)."
           make dmg-installer
 
+      # shasum: macOS has it, and not always sha256sum. Same hex either way.
+      - name: Digest
+        id: digest
+        working-directory: sidecar
+        run: |
+          set -euo pipefail
+          sum="$(shasum -a 256 dist/macos/Install-Jarvis.dmg)"
+          echo "sha256=${sum%% *}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: installer-darwin
           path: sidecar/dist/macos/Install-Jarvis.dmg
+          if-no-files-found: error
 
   # ─── Publish ───────────────────────────────────────────────────
   publish:
-    needs: [resolve, build-windows, build-macos]
+    needs: [resolve, sign-windows, build-macos]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -339,6 +437,31 @@ jobs:
         with:
           pattern: installer-*
           path: artifacts
+
+      # Exactly what sign-windows signed and build-macos built (#779): their
+      # digests arrive as job outputs, and the artifacts could have been
+      # replaced by any job in this run since. Exactly these two files, too:
+      # `pattern: installer-*` would fetch any other artifact so named.
+      - name: Verify the installers
+        env:
+          SHA_WIN32_X64: ${{ needs.sign-windows.outputs.sha256 }}
+          SHA_DARWIN: ${{ needs.build-macos.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          for v in SHA_WIN32_X64 SHA_DARWIN; do
+            [[ "${!v}" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no digest was reported for ${v#SHA_}"; exit 1; }
+          done
+          cd artifacts
+          got="$(find . -mindepth 1 -not -type d | sort)"
+          want="$(printf '%s\n' ./installer-darwin/Install-Jarvis.dmg ./installer-win32-x64/Jarvis-Setup.exe)"
+          if [ "$got" != "$want" ] || [ -n "$(find . -mindepth 1 -not -type d -not -type f -print -quit)" ]; then
+            echo "::error::the downloaded installer artifacts are not exactly the two that were built"
+            printf '%s\n' "$got"
+            exit 1
+          fi
+          printf '%s  %s\n' "$SHA_WIN32_X64" installer-win32-x64/Jarvis-Setup.exe "$SHA_DARWIN" installer-darwin/Install-Jarvis.dmg |
+            sha256sum --strict -c -
 
       - name: Stage release assets
         env:

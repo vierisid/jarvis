@@ -28,6 +28,10 @@
 #   Plus (#685) the dry-run decision in release-exec.yml and
 #   sidecar-release.yml: each site that makes it is evaluated under a tag
 #   push, a real dispatch and a dry dispatch, and they must agree.
+#   Plus (#781, #779) the artifact handoffs into the jobs that sign and
+#   publish: sidecar-release.yml publish-sidecar, and installer-release.yml
+#   sign-windows and publish. Each check is executed verbatim against
+#   tampered, extra, missing and undigested fixtures.
 #   Plus one sink executed directly -- pack-brain's `npm version` -- with a
 #   hostile value and no validator in front of it, to show the env-quoted form
 #   is safe on its own and not just because the gate stopped the input.
@@ -283,6 +287,54 @@ if (mode === "sidecar-digests") {
       }
     }
   }
+  if (out.length) console.log(out.join("\n"));
+  process.exit(0);
+}
+if (mode === "installer-digests") {
+  // #779: the installer crosses build-windows -> sign-windows -> publish, and
+  // build-macos -> publish, each by a digest that is a job output of the job
+  // that produced the bytes, checked in the step right after the download.
+  const out = [];
+  const isUpload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/upload-artifact@");
+  const isDownload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
+  for (const name of ["build-windows", "sign-windows", "build-macos"]) {
+    const job = jobs[name];
+    if (!job) { out.push("no " + name + " job"); continue; }
+    // None of the three needs a matrix; with one, its legs would share one
+    // outputs block and any leg could set the digest (#779 re-review).
+    if (job.strategy?.matrix !== undefined)
+      out.push(name + ": has a matrix, whose legs would share one outputs block");
+    const dg = (job.steps ?? []).find((st) => st.id === "digest");
+    if (dg && dg["continue-on-error"] !== undefined) out.push(name + ": the digest step has continue-on-error");
+    if (job.outputs?.sha256 !== "${{ steps.digest.outputs.sha256 }}")
+      out.push(name + ": output sha256 must be ${{ steps.digest.outputs.sha256 }} (got " + JSON.stringify(job.outputs?.sha256) + ")");
+    const steps = job.steps ?? [];
+    const at = steps.findIndex((st) => st.id === "digest");
+    if (at < 0) out.push(name + ": no step with id digest");
+    else if (!steps.slice(at + 1).length || !steps.slice(at + 1).every(isUpload))
+      out.push(name + ": steps other than uploads run after the digest is taken");
+  }
+  // check <job> <env var> <expected needs reference>: the step after the
+  // job download reads that digest, under no condition of its own.
+  const check = (job, want) => {
+    const steps = jobs[job]?.steps ?? [];
+    const dl = steps.findIndex(isDownload);
+    const v = steps[dl + 1];
+    if (dl < 0 || !v || typeof v.run !== "string" || !/\bsha256sum\b[^\n]*\s-c\b/.test(v.run)) {
+      out.push(job + ": the step right after its download is not a sha256sum -c");
+      return;
+    }
+    if (v.if !== undefined || v["continue-on-error"] !== undefined || steps[dl]["continue-on-error"] !== undefined)
+      out.push(job + ": its digest check can be skipped or allowed to fail");
+    for (const [k, ref] of Object.entries(want)) {
+      if (v.env?.[k] !== "${{ " + ref + " }}") out.push(job + ": the check must take " + k + " from ${{ " + ref + " }} (got " + JSON.stringify(v.env?.[k]) + ")");
+      const n = ref.split(".")[1];
+      if (!needsOf(job).includes(n)) out.push(job + ": does not list " + n + " in needs, so its outputs read as empty");
+    }
+  };
+  check("sign-windows", { SHA256: "needs.build-windows.outputs.sha256" });
+  // The SIGNED installer: its digest comes from the signer, not the build.
+  check("publish", { SHA_WIN32_X64: "needs.sign-windows.outputs.sha256", SHA_DARWIN: "needs.build-macos.outputs.sha256" });
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
@@ -996,6 +1048,110 @@ else
 	else
 		no "a leg job writes exactly its own digest output" "got: $(cat "${WORK}/leg/out"); want: ${want}"
 	fi
+fi
+
+echo
+echo "installer-release.yml: the signer and the publisher take artifacts only by digest (#779)"
+# The installer build was split from its signing like the sidecar (#779),
+# so the unsigned installer crosses build-windows -> sign-windows, and the
+# signed one and the DMG cross into publish, each by a job-output digest.
+# Both checks executed verbatim against fixtures.
+INSTALLER_WORKFLOW="${INSTALLER_RELEASE_WORKFLOW:-${HERE}/../workflows/installer-release.yml}"
+found="$(YQ_FILE="$INSTALLER_WORKFLOW" yq installer-digests)" || {
+	no "installer digest structure check ran" "the bun helper failed"
+	found=""
+}
+if [ -z "$found" ]; then
+	ok "build-windows, sign-windows and build-macos output a digest taken last, and each consumer checks the right one first"
+else
+	no "installer artifact digests" "$found"
+fi
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=installer-digests
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'publish checking the Windows installer against the UNSIGNED build digest (#779)' \
+		'          SHA_WIN32_X64: ${{ needs.sign-windows.outputs.sha256 }}' '          SHA_WIN32_X64: ${{ needs.build-windows.outputs.sha256 }}'
+	mutant 'publish not waiting for the signer, so its digest reads empty (#779)' \
+		'    needs: [resolve, sign-windows, build-macos]' '    needs: [resolve, build-windows, build-macos]'
+	mutant 'the DMG digest dropped from build-macos (#779)' \
+		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          # The Actions cache is writable by any run on main, and Go reuses\n          # cached modules and build output without re-verifying them (#681).\n          cache: false\n          go-version-file: sidecar/go.mod\n          cache-dependency-path: sidecar/go.sum\n\n      - name: Build universal' \
+		$'    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          # The Actions cache is writable by any run on main, and Go reuses\n          # cached modules and build output without re-verifying them (#681).\n          cache: false\n          go-version-file: sidecar/go.mod\n          cache-dependency-path: sidecar/go.sum\n\n      - name: Build universal'
+	mutant 'the signed digest taken before signing (#779)' \
+		'      - name: Sign installer (Cloud KMS)' $'      - id: digest\n        run: "true"\n      - name: Sign installer (Cloud KMS)'
+	mutant 'a matrix on the macOS installer build, sharing its digest output (#779 re-review)' \
+		$'    runs-on: macos-latest\n    env:\n      HAVE_APPLE_SIGNING' $'    runs-on: macos-latest\n    strategy:\n      matrix:\n        include:\n          - arch: universal\n        shard: [a, b]\n    env:\n      HAVE_APPLE_SIGNING'
+	mutant 'the signed digest step allowed to fail (#779 re-review)' \
+		$'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n' $'      # The SIGNED installer\'s digest: signing changes the bytes, and publish\n      # takes the artifact only by this.\n      - name: Digest\n        id: digest\n        continue-on-error: true\n'
+	mutant 'the publish check switched off on its own (#779)' \
+		$'      - name: Verify the installers\n        env:' $'      - name: Verify the installers\n        if: false\n        env:'
+	unset MUTANT_MODE MUTANT_FROM
+}
+SIGNCHECK="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step sign-windows 'Verify the installer')" || SIGNCHECK=""
+PUBCHECK="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step publish 'Verify the installers')" || PUBCHECK=""
+if [ -z "$SIGNCHECK" ]; then
+	no "found installer-release.yml sign-windows step 'Verify the installer'"
+else
+	rm -rf "${WORK}/inst" && mkdir -p "${WORK}/inst/sidecar"
+	printf 'unsigned installer\n' >"${WORK}/inst/sidecar/Jarvis-Setup.exe"
+	good="$(sha256sum "${WORK}/inst/sidecar/Jarvis-Setup.exe" | cut -d' ' -f1)"
+	# sign_check <digest>: sets RC.
+	sign_check() {
+		(cd "${WORK}/inst/sidecar" && env -i PATH="$PATH" SHA256="$1" bash -c "$SIGNCHECK") >"${WORK}/inst.log" 2>&1
+		RC=$?
+	}
+	sign_check "$good"
+	if [ "$RC" -eq 0 ]; then ok "sign-windows accepts the installer build-windows hashed"; else no "sign-windows accepts the installer build-windows hashed" "$(cat "${WORK}/inst.log")"; fi
+	sign_check ""
+	if [ "$RC" -ne 0 ] && grep -qF "::error::build-windows reported no digest" "${WORK}/inst.log"; then ok "sign-windows refuses when build-windows reported no digest"; else no "sign-windows refuses when build-windows reported no digest" "$(cat "${WORK}/inst.log")"; fi
+	printf 'swapped\n' >"${WORK}/inst/sidecar/Jarvis-Setup.exe"
+	sign_check "$good"
+	if [ "$RC" -ne 0 ]; then ok "sign-windows refuses an installer replaced after the build hashed it"; else no "sign-windows refuses an installer replaced after the build hashed it"; fi
+fi
+if [ -z "$PUBCHECK" ]; then
+	no "found installer-release.yml publish step 'Verify the installers'"
+else
+	inst_fixture() {
+		rm -rf "${WORK}/ipub" && mkdir -p "${WORK}/ipub/artifacts/installer-win32-x64" "${WORK}/ipub/artifacts/installer-darwin"
+		printf 'signed exe\n' >"${WORK}/ipub/artifacts/installer-win32-x64/Jarvis-Setup.exe"
+		printf 'dmg\n' >"${WORK}/ipub/artifacts/installer-darwin/Install-Jarvis.dmg"
+		SUM_WIN="$(sha256sum "${WORK}/ipub/artifacts/installer-win32-x64/Jarvis-Setup.exe" | cut -d' ' -f1)"
+		SUM_DMG="$(sha256sum "${WORK}/ipub/artifacts/installer-darwin/Install-Jarvis.dmg" | cut -d' ' -f1)"
+	}
+	pub_check() {
+		(cd "${WORK}/ipub" && env -i PATH="$PATH" SHA_WIN32_X64="$SUM_WIN" SHA_DARWIN="$SUM_DMG" bash -c "$PUBCHECK") >"${WORK}/ipub.log" 2>&1
+		RC=$?
+	}
+	# pub_refused <label> <expected text>
+	pub_refused() {
+		pub_check
+		if [ "$RC" -ne 0 ] && grep -qF -- "$2" "${WORK}/ipub.log"; then
+			ok "publish refuses ${1}"
+		else
+			no "publish refuses ${1} with '${2}'" "exit ${RC}: $(cat "${WORK}/ipub.log")"
+		fi
+	}
+	inst_fixture
+	pub_check
+	if [ "$RC" -eq 0 ]; then ok "publish accepts the two installers their jobs hashed"; else no "publish accepts the two installers their jobs hashed" "$(cat "${WORK}/ipub.log")"; fi
+	inst_fixture
+	printf 'unsigned\n' >"${WORK}/ipub/artifacts/installer-win32-x64/Jarvis-Setup.exe"
+	pub_refused "a Windows installer replaced after signing" "FAILED"
+	inst_fixture
+	printf 'other\n' >"${WORK}/ipub/artifacts/installer-darwin/Install-Jarvis.dmg"
+	pub_refused "a DMG replaced after its build" "FAILED"
+	inst_fixture
+	SUM_DMG=""
+	pub_refused "a DMG with no digest" "::error::no digest was reported for DARWIN"
+	inst_fixture
+	mkdir -p "${WORK}/ipub/artifacts/installer-evil" && printf 'x\n' >"${WORK}/ipub/artifacts/installer-evil/Jarvis-Setup.exe"
+	pub_refused "an extra installer-* artifact" "not exactly the two"
+	inst_fixture
+	rm "${WORK}/ipub/artifacts/installer-darwin/Install-Jarvis.dmg"
+	pub_refused "a missing DMG" "not exactly the two"
+	inst_fixture
+	tmp="$SUM_WIN"; SUM_WIN="$SUM_DMG"; SUM_DMG="$tmp"
+	pub_refused "the two digests crossed over" "FAILED"
 fi
 
 echo

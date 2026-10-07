@@ -335,7 +335,13 @@ if (rule === "narrow") {
     if (n === "release") return true;
     return n.includes("${{") && /(^|[^-\w])'release'([^-\w]|$)/.test(n);
   };
-  const release = Object.values(jobs).some(gatedByRelease);
+  // ...and (#779) any workflow in which a job can mint an OIDC token. The
+  // environment test alone missed installer-release.yml, which has no
+  // `release` environment yet compiled in the job that federates into the
+  // same KMS signing key as the sidecar. A token is the authority, whatever
+  // the environment is called, so holding one puts a workflow on this path.
+  const mintsToken = Object.values(jobs).some((j) => writes(j.permissions ?? doc.permissions, "id-token"));
+  const release = Object.values(jobs).some(gatedByRelease) || mintsToken;
   for (const [name, job] of Object.entries(jobs)) {
     const perm = job.permissions ?? doc.permissions;
     const oidc = writes(perm, "id-token");
@@ -994,6 +1000,24 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'the npm publish job doing something between the tarball download and its check (#781)' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Verify the tarball' $'      - run: ls\n      - name: Verify the tarball' \
 		'is not followed at once by a sha256sum -c'
+	expect_caught 'the installer build back in the job that signs with id-token (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Install osslsigncode' $'      - run: go build -o Jarvis-Setup.exe ./installer/\n      - name: Install osslsigncode' \
+		'builds in a job holding id-token'
+	expect_caught 'id-token back on the installer build job (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'    permissions:\n      contents: read\n    outputs:' $'    permissions:\n      contents: read\n      id-token: write\n    outputs:' \
+		'build-windows: builds in a job holding id-token'
+	expect_caught 'the installer Google credentials file left in the workspace (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          create_credentials_file: false\n' '' \
+		'create_credentials_file is not false'
+	expect_caught 'an installer checkout leaving its token in .git/config (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'        with:\n          persist-credentials: false\n      - id: v' $'      - id: v' \
+		'resolve: checkout leaves the token'
+	expect_caught 'the installer signer using the build before checking it (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'      - name: Verify the installer\n' $'      - run: ls sidecar\n      - name: Verify the installer\n' \
+		'sign-windows: download "unsigned-installer-win32-x64" is not followed at once'
+	expect_caught 'the installer release publishing artifacts it has not checked (#779)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Verify the installers' $'      - run: ls artifacts\n      - name: Verify the installers' \
+		'publish: download "installer-*" is not followed at once'
 	expect_caught 'a registry login on a dry run' narrow "$WORKFLOWS/release-exec.yml" \
 		$'        if: env.DRY_RUN != \'true\'\n        uses: docker/login-action@' $'        uses: docker/login-action@'
 }
