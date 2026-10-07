@@ -118,8 +118,16 @@ export function approvalNeedsClick(request: Pick<ApprovalRequest, 'context'>): b
   }
 }
 
-/** The card sentence a gated tool wrote into the request context, if any. */
-export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'context'>): string | null {
+/**
+ * The card sentence a gated tool wrote into the request context, if any.
+ *
+ * Never for `request_approval`: its `context` is the model's own `context`
+ * argument, stored verbatim, so a JSON object there is not a gate's sentence
+ * however it is spelled (#721). Every other writer of `context` is trusted
+ * code (`gateContext`, the workflow effect boundary).
+ */
+export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'context' | 'tool_name'>): string | null {
+  if (request.tool_name === 'request_approval') return null;
   const raw = request.context ?? '';
   if (!raw.startsWith('{')) return null;
   try {

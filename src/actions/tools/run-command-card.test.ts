@@ -152,7 +152,7 @@ describe('#720: what the gate costs', () => {
     const context = gateContext(g, 'run_command', { command: 'ls', cwd: '/tmp' });
     expect(JSON.parse(context)).toEqual({ intent: 'On this Jarvis host, in "/tmp", run: ls' });
     expect(approvalNeedsClick({ context })).toBe(false);
-    expect(approvalIntentFromContext({ context })).toBe('On this Jarvis host, in "/tmp", run: ls');
+    expect(approvalIntentFromContext({ tool_name: 'run_command', context })).toBe('On this Jarvis host, in "/tmp", run: ls');
   });
 });
 
