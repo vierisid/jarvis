@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from '../index';
-import { setEncryptionKey } from '../encryption';
+import { encryptJson, setEncryptionKey } from '../encryption';
+import { bindNativeCredentials } from '../credential-migration';
 import { createFlow, getFlow, updateFlowStatus } from './flow';
 import { createDraftVersion, updateDraftVersion } from './flow-version';
 import { publishFlowVersion } from './flow-publication';
 import { assertFlowReady, assertVersionReady, configureWorkflowReadiness, versionReadiness, WorkflowReadinessError } from './flow-readiness';
-import { deleteConnection, upsertConnection } from './app-connection';
+import { deleteConnection, getConnection, upsertConnection } from './app-connection';
 import { createFlowRun, getFlowRun } from './flow-run';
 import { enforceRunConnectionBinding, listRunConnectionBindings, pinUnpinnedEnabledFlows, readBindingPins } from './binding-pins';
 import { PieceCatalog } from '../../runtime/piece-catalog';
@@ -22,12 +26,8 @@ let grant: string | null = 'grant-a';
 const managed: JarvisConnectionSource = { id: 'google', canResolve: id => id.startsWith('jarvis:google'),
   resolve: async () => null, identity: () => grant };
 
-beforeEach(() => {
-  initWorkflowDb(':memory:');
-  setEncryptionKey(Buffer.alloc(32, 0x52));
-  machines = [machine('laptop', true)];
-  localTools = true;
-  grant = 'grant-a';
+/** Readiness services belong to one database handle. */
+function configureServices() {
   const credentials = new CredentialResolver();
   credentials.register(managed);
   configureWorkflowReadiness({
@@ -40,6 +40,15 @@ beforeEach(() => {
     machines: () => machines,
     localTools: () => localTools,
   });
+}
+
+beforeEach(() => {
+  initWorkflowDb(':memory:');
+  setEncryptionKey(Buffer.alloc(32, 0x52));
+  machines = [machine('laptop', true)];
+  localTools = true;
+  grant = 'grant-a';
+  configureServices();
 });
 afterEach(() => { setEncryptionKey(null); closeWorkflowDb(); });
 
@@ -94,12 +103,117 @@ describe('pins are what a person accepted when publishing or enabling', () => {
     expect(blockers(flowId)).toEqual([]);
   });
 
-  test('re-encrypting the stored credential (a key rotation) does not pause anything', () => {
+  test('renaming a connection, changing its status or saving the same credential again pauses nothing', () => {
     const connection = connect();
     const { flowId } = published(send());
-    // Key rotation and migration rewrite the ciphertext directly, never through the upsert.
-    getWorkflowDb().run('UPDATE app_connection SET value = value, updated = ? WHERE id = ?', [Date.now(), connection.id]);
+    const save = (changes: Partial<Parameters<typeof upsertConnection>[0]>) => upsertConnection({ externalId: 'account',
+      pieceName: 'private-piece', displayName: 'Account', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret_text: 'first' }, ...changes });
+    // The dashboard's PATCH sends every edit through the upsert with the stored value.
+    save({ displayName: 'Renamed in the dashboard' });
+    save({ status: 'ERROR' });
+    save({ status: 'ACTIVE' });
+    save({});
+    expect(getConnection(connection.id)!.credentialGeneration).toBe(0);
     expect(blockers(flowId)).toEqual([]);
+    save({ value: { secret_text: 'another account' } });
+    expect(getConnection(connection.id)!.credentialGeneration).toBe(1);
+    expect(blockers(flowId)).toEqual([expect.stringMatching(/^The credential stored in connection account was replaced since/)]);
+  });
+
+  test('re-encrypting the stored credential (the credential migration) does not pause anything', () => {
+    // On a database file: the migration's recovery file names the database it belongs to.
+    closeWorkflowDb();
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-binding-pins-'));
+    try {
+      initWorkflowDb(join(dir, 'workflows.db'));
+      configureServices();
+      const connection = connect();
+      const { flowId } = published(send());
+      // The unbound envelope an earlier build stored, which the migration seals to its row.
+      getWorkflowDb().run('UPDATE app_connection SET value = ? WHERE id = ?', [encryptJson({ secret_text: 'first' }), connection.id]);
+      expect(bindNativeCredentials(getWorkflowDb(), join(dir, 'recovery.enc'), 'test').bound).toBe(1);
+      expect(getConnection(connection.id)!.value).toEqual({ secret_text: 'first' });
+      expect(blockers(flowId)).toEqual([]);
+    } finally {
+      closeWorkflowDb();
+      rmSync(dir, { recursive: true, force: true });
+      initWorkflowDb(':memory:');
+    }
+  });
+
+  test('a connection named in any input, not only auth, is pinned and checked', () => {
+    connect();
+    connect('second');
+    const step = { ...send(), settings: { ...send().settings, input: { auth: "{{connections['account']}}", header: "Bearer {{connections['second']}}" } } };
+    const { flowId } = published(step);
+    expect(Object.keys(readBindingPins(flowId)!.connections).sort()).toEqual(['account', 'second']);
+    connect('second', 'rotated');
+    expect(blockers(flowId)).toEqual([expect.stringMatching(/^The credential stored in connection second was replaced since/)]);
+  });
+
+  test('saving the live draft is an edit, not an acceptance: a replaced credential stays a blocker', () => {
+    connect();
+    const flow = createFlow({});
+    const draft = createDraftVersion({ flowId: flow.id, displayName: 'Live', trigger: graph(send()) });
+    updateFlowStatus(flow.id, 'ENABLED');
+    connect('account', 'pasted from another account');
+    updateDraftVersion(draft.id, { displayName: 'Live, renamed' });
+    expect(blockers(flow.id)).toEqual([expect.stringMatching(/^The credential stored in connection account was replaced since/)]);
+    // Naming it again after dropping it from the draft does not slip the change through either.
+    updateDraftVersion(draft.id, { trigger: graph(readFile()) });
+    updateDraftVersion(draft.id, { trigger: graph(send()) });
+    expect(blockers(flow.id)).toHaveLength(1);
+    updateFlowStatus(flow.id, 'ENABLED');
+    expect(blockers(flow.id)).toEqual([]);
+  });
+
+  test('a connection that did not resolve when pinned is pinned as unresolved; connecting it later pauses the flow', () => {
+    const { flowId, versionId } = published(send('jarvis:google'));
+    // Waiting for a reconnect at the first start of this build.
+    grant = null;
+    getWorkflowDb().run('UPDATE flow SET binding_pins = NULL');
+    expect(pinUnpinnedEnabledFlows()).toBe(1);
+    expect(readBindingPins(flowId)!.connections['jarvis:google']).toEqual({ kind: 'unresolved' });
+    // Reconnected, perhaps to another account.
+    grant = 'grant-b';
+    expect(blockers(flowId)).toEqual([expect.stringMatching(/^Connection jarvis:google was reconnected since this workflow was enabled\./)]);
+    const run = createFlowRun({ flowId, flowVersionId: versionId, status: 'RUNNING' });
+    expect(enforceRunConnectionBinding(run.id, getFlow(flowId)!.project_id, 'jarvis:google'))
+      .toStartWith('Connection jarvis:google was reconnected since this workflow was enabled.');
+  });
+
+  test('publishing again with nothing new to publish accepts the change, on the dashboard and in chat', async () => {
+    connect();
+    const { flowId } = published(send());
+    connect('account', 'pasted from another account');
+    // The dashboard's Publish button sends no version.
+    publishFlowVersion(flowId);
+    expect(blockers(flowId)).toEqual([]);
+    connect('account', 'and another');
+    await createManageWorkflowTool({}).execute({ action: 'publish', flow: flowId });
+    expect(blockers(flowId)).toEqual([]);
+  });
+
+  test('the assistant cannot accept a change on its own: enabling or publishing it asks a person first', () => {
+    connect();
+    const { flowId } = published(send());
+    const gate = (action: string, flow = flowId) => createManageWorkflowTool({}).authorityGate!({ action, flow });
+    expect(gate('enable')).toBeNull();
+    expect(gate('publish')).toBeNull();
+    connect('account', 'pasted from another account');
+    for (const action of ['enable', 'publish']) {
+      expect(gate(action)).toEqual({ actionCategory: 'write_data', confirm: 'always',
+        intent: expect.stringContaining('accept: The credential stored in connection account was replaced; it may now act as a different account.') });
+    }
+    // A flow nothing was accepted for yet has nothing to accept again.
+    const fresh = createFlow({});
+    createDraftVersion({ flowId: fresh.id, displayName: 'Fresh', trigger: graph(send()) });
+    expect(gate('enable', fresh.id)).toBeNull();
+    // Another computer counts too: the laptop sleeps, and enabling now would pin the connected desktop.
+    const onLaptop = published(readFile()).flowId;
+    machines = [machine('laptop', false), machine('desk', true)];
+    expect(gate('enable', onLaptop)).toMatchObject({ confirm: 'always',
+      intent: expect.stringContaining('The computer it runs on changes from Computer laptop to Computer desk.') });
   });
 
   test('a managed connection reconnected pauses the flow; revoked, it is not ready at all', () => {
@@ -183,6 +297,31 @@ describe('the computer a flow is pinned to', () => {
     expect(readBindingPins(several.flowId)!.machine).toEqual({ sidecarId: 'laptop', name: 'Computer laptop' });
   });
 
+  test('saving the live draft keeps the computer while it fits the steps, and follows a computer the steps name', () => {
+    const flow = createFlow({});
+    const draft = createDraftVersion({ flowId: flow.id, displayName: 'Live', trigger: graph(readFile()) });
+    updateFlowStatus(flow.id, 'ENABLED');
+    expect(readBindingPins(flow.id)!.machine).toEqual({ sidecarId: 'laptop', name: 'Computer laptop' });
+    // The laptop sleeps and a desktop is connected while the person edits: the pin does not move.
+    machines = [machine('laptop', false), machine('desk', true)];
+    updateDraftVersion(draft.id, { displayName: 'Live, edited' });
+    expect(readBindingPins(flow.id)!.machine).toEqual({ sidecarId: 'laptop', name: 'Computer laptop' });
+    // Naming a computer in the steps is choosing it.
+    updateDraftVersion(draft.id, { trigger: graph(readFile('Computer desk')) });
+    expect(readBindingPins(flow.id)!.machine).toEqual({ sidecarId: 'desk', name: 'Computer desk' });
+    // A pinned computer that was removed stays a blocker; a save does not pick another.
+    machines = [machine('laptop', true)];
+    updateDraftVersion(draft.id, { trigger: graph(readFile()) });
+    expect(readBindingPins(flow.id)!.machine).toEqual({ sidecarId: 'desk', name: 'Computer desk' });
+    expect(blockers(flow.id)).toEqual([expect.stringContaining('(Computer desk) is no longer enrolled')]);
+  });
+
+  test('the startup pass sees --no-local-tools, which reaches the tools only later in startup', () => {
+    const daemon = readFileSync(join(import.meta.dir, '../../../daemon/index.ts'), 'utf8');
+    const wiring = daemon.slice(daemon.indexOf('configureWorkflowReadiness({'), daemon.indexOf('pinUnpinnedEnabledFlows()'));
+    expect(wiring).toContain('localTools: () => !config.noLocalTools && !isNoLocalTools()');
+  });
+
   test('a pinned computer that is no longer enrolled blocks admission', () => {
     const { flowId } = published(readFile());
     machines = [machine('replacement', true)];
@@ -224,7 +363,26 @@ describe('a run hands out the connection identity it started with', () => {
     expect(listRunConnectionBindings(run.id)[0]!.refusal).toBeDefined();
   });
 
-  test('a run of an unpinned flow binds what it finds; missing connections and non-runs are left to their own paths', () => {
+  test('a connection removed after the resolver found it is refused, not handed out unbound', () => {
+    const connection = connect();
+    const { flowId, versionId } = published(send());
+    const run = createFlowRun({ flowId, flowVersionId: versionId, status: 'RUNNING' });
+    // Between the resolver's answer and this check.
+    deleteConnection(connection.id);
+    expect(enforceRunConnectionBinding(run.id, getFlow(flowId)!.project_id, 'account'))
+      .toBe('Connection account was removed while this run asked for it. Its credential was not handed out; start a new run once the connection is right.');
+    expect(listRunConnectionBindings(run.id)[0]!.refusal).toBeDefined();
+  });
+
+  test("the run API shows which connection and what happened, never a managed grant's fingerprint", () => {
+    const { flowId, versionId } = published(send('jarvis:google'));
+    const run = createFlowRun({ flowId, flowVersionId: versionId, status: 'RUNNING' });
+    expect(enforceRunConnectionBinding(run.id, getFlow(flowId)!.project_id, 'jarvis:google')).toBeNull();
+    expect(listRunConnectionBindings(run.id)[0]!.identity).toEqual({ kind: 'managed', source: 'google', grant: 'grant-a' });
+    expect(getFlowRun(run.id)!.connectionBindings).toEqual([{ externalId: 'jarvis:google', identity: { kind: 'managed', source: 'google' }, boundAt: expect.any(Number) }]);
+  });
+
+  test('a run of an unpinned flow binds what it finds; a fetch outside any run is left alone', () => {
     connect();
     const flow = createFlow({});
     const version = createDraftVersion({ flowId: flow.id, displayName: 'Unpinned', trigger: graph(send()) });
@@ -232,7 +390,6 @@ describe('a run hands out the connection identity it started with', () => {
     expect(enforceRunConnectionBinding(run.id, flow.project_id, 'account')).toBeNull();
     connect('account', 'swapped');
     expect(enforceRunConnectionBinding(run.id, flow.project_id, 'account')).toStartWith('The credential stored in connection account was replaced during this run');
-    expect(enforceRunConnectionBinding(run.id, flow.project_id, 'nowhere')).toBeNull();
     expect(enforceRunConnectionBinding('trigger-poll', flow.project_id, 'account')).toBeNull();
   });
 });

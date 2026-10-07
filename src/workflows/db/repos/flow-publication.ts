@@ -6,7 +6,9 @@ import { assertCodeStepsAllowed } from "./flow-code-steps";
 import { assertVersionReady } from './flow-readiness';
 
 /**
- * Publish an owned explicit version, or the latest draft. Selection, locking,
+ * Publish an owned explicit version, or the latest draft, or with no draft the
+ * published version again: publishing again is how a person accepts the
+ * connections and computer it runs with now (Q-05). Selection, locking,
  * attachment and enabling commit together. Trigger refresh belongs AFTER this
  * function returns; no asynchronous hooks run inside the database transaction.
  */
@@ -19,7 +21,10 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
       }
       assertFlowVersionOwnership(flowId, versionId);
     }
-    let target = versionId === undefined ? getLatestDraft(flowId) : getFlowVersion(versionId);
+    const published = getFlow(flowId)!.published_version_id;
+    let target = versionId === undefined
+      ? getLatestDraft(flowId) ?? (published ? getFlowVersion(published) : null)
+      : getFlowVersion(versionId);
     if (!target) throw new FlowVersionRequestError("no draft version to publish", 400);
     // The CODE gate. Publish is the moment a human asked for this flow to
     // start running for real and is waiting on the answer, so a flow carrying

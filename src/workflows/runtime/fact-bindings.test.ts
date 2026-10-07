@@ -58,6 +58,11 @@ describe('which addresses and facts a step depends on', () => {
       attendees: ['ana@example.com'], subject: 'hello@example.com' })).toEqual(['ana@example.com', 'bob@example.com']);
   });
 
+  test('addresses inside display names and lists count, as bare addresses', () => {
+    expect(recipientAddresses({ receiver: 'Ana <ana@old.example>', to: 'e@v.example.', cc: 'a@x.example, b@y.example',
+      bcc: 'c@z.example; Dan <d@w.example>' })).toEqual(['ana@old.example', 'e@v.example', 'a@x.example', 'b@y.example', 'c@z.example', 'd@w.example']);
+  });
+
   test('an address memory knows must still be current; one it does not know is not checked', () => {
     const subject = ana();
     const old = createFact(subject, 'email', 'ana@old.example', { confirmed: true });
@@ -95,6 +100,15 @@ describe('a governed send checks the facts its recipients matched', () => {
     expect(f.approvals.getPending()).toEqual([]);
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', approvalId: null,
       outcome: { code: 'WORKFLOW_FACT_STALE', effect: 'not_started' }, bindings: { facts: [{ value: 'ana@old.example', factIds: [old.id] }] } });
+    // Authority never ran and nothing was sent: the trail says denied.
+    expect(new AuditTrail().query({ agentId: `workflow:${f.run.id}` })).toEqual([expect.objectContaining({ authority_decision: 'denied' })]);
+  });
+
+  test('a send to "Name <address>" is checked like the bare address', async () => {
+    const f = fixture();
+    const old = createFact(ana(), 'email', 'ana@old.example', { confirmed: true });
+    correctFact(old.id, 'ana@new.example', 'Ana moved');
+    await expect(f.authorize('Ana <ana@old.example>')).rejects.toThrow(/Recipient ana@old\.example is no longer current in memory/);
   });
 
   test('a fact superseded while the send waits for approval blocks it at dispatch, with its arguments still frozen', async () => {
@@ -131,6 +145,9 @@ describe('a governed send checks the facts its recipients matched', () => {
     expect(await f.authorize('ana@old.example')).toEqual({ governed: true, dispatch: 'authorized' });
     correctFact(fact.id, 'ana@new.example', 'Ana moved between attempts');
     await expect(f.authorize('ana@old.example')).rejects.toThrow(/no longer current in memory/);
+    // The effect keeps what it did and records why the retry was refused.
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded',
+      replayRefusal: { outcome: { code: 'WORKFLOW_FACT_STALE' }, at: expect.any(Number) } });
   });
 
   test('reading mail is never blocked by a recipient fact', async () => {

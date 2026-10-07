@@ -35,12 +35,12 @@ afterEach(async () => {
   setEncryptionKey(null);
 });
 
-async function save(externalId: string, pieceName = "fixture-piece") {
+async function save(externalId: string, pieceName = "fixture-piece", token = TOKEN) {
   const post = createWorkflowRoutes()["/api/workflows/connections"]!.POST!;
   const response = await post(new Request("http://localhost/api/workflows/connections", {
     method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ externalId, pieceName, pieceVersion: "1.0.0", displayName: "Fixture",
-      type: "OAUTH2", value: { access_token: TOKEN } }),
+      type: "OAUTH2", value: { access_token: token } }),
   }));
   expect(response.status).toBe(201);
   const result = await response.json() as { id: string };
@@ -75,14 +75,34 @@ describe("Q-05: a run keeps the connection identity it started with", () => {
     const fetchAccount = () => fetch(`${api.baseUrl}/v1/worker/app-connections/account?projectId=${DEFAULT_IDS.project}`,
       { headers: { Authorization: `Bearer ${token}` } });
     expect((await fetchAccount()).status).toBe(200);
-    // Saving the connection again replaces its credential under the same name.
+    // Saving the same credential again is not a replacement.
     await save("account");
+    expect((await fetchAccount()).status).toBe(200);
+    // Saving a different one under the same name is.
+    await save("account", "fixture-piece", `${TOKEN}-another-account`);
     const refused = await fetchAccount();
     expect(refused.status).toBe(409);
     expect(JSON.stringify(await refused.json())).not.toContain(TOKEN);
-    expect(getFlowRun(run.id)!.connectionBindings[0]!.refusal!.message)
+    expect(getFlowRun(run.id)!.connectionBindings![0]!.refusal!.message)
       .toBe("The credential stored in connection account was replaced during this run, after the run first used it. "
         + "Its credential was not handed out; start a new run once the connection is right.");
+  });
+});
+
+describe("Q-05: a managed connection is bound like a saved one", () => {
+  test("the resolver that hands a managed connection out is the one that identifies it", async () => {
+    const flow = createFlow({});
+    const version = createDraftVersion({ flowId: flow.id, displayName: "Managed binding", trigger: { name: "trigger", type: "EMPTY" } as any });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+    const identity = { projectId: DEFAULT_IDS.project, sandboxId: crypto.randomUUID(), runId: run.id };
+    const { token, expiresAt } = await api.signer.mint(identity, 60);
+    api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
+    // No readiness services here: only the route's own resolver knows this source.
+    const response = await fetch(`${api.baseUrl}/v1/worker/app-connections/${encodeURIComponent("jarvis:fixture")}?projectId=${DEFAULT_IDS.project}`,
+      { headers: { Authorization: `Bearer ${token}` } });
+    expect(response.status).toBe(200);
+    expect(getFlowRun(run.id)!.connectionBindings).toEqual([{ externalId: "jarvis:fixture",
+      identity: { kind: "managed", source: "fixture" }, boundAt: expect.any(Number) }]);
   });
 });
 

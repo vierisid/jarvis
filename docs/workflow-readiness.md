@@ -10,7 +10,8 @@ Run admission also compares the connections and computer a flow was enabled
 against with what they resolve to now. A replaced credential, a connection
 deleted and created again, a reconnected Google account or a computer no longer
 enrolled is a `BINDING_STALE` issue until a person enables or publishes the
-flow again, which pins the current bindings. See
+flow again, which pins the current bindings; saving a draft does not. In chat,
+that acceptance needs a person's approval. See
 `docs/workflow-binding-pins.md`.
 
 Single-step previews validate the selected node using its saved sample input
