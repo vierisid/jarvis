@@ -19,7 +19,7 @@
  */
 
 import type { ActionCategory } from '../../roles/authority.ts';
-import type { ApprovalDelivery } from '../../authority/approval-delivery.ts';
+import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, approvalLabelAlteration, type ApprovalDelivery } from '../../authority/approval-delivery.ts';
 import type { ApprovalManager } from '../../authority/approval.ts';
 import { AUTHORITY_REQUIREMENTS } from '../../roles/authority.ts';
 import type { ToolDefinition } from './registry.ts';
@@ -69,7 +69,7 @@ export function createRequestApprovalTool(deps: RequestApprovalDeps): ToolDefini
       intent: {
         type: 'string',
         description:
-          'One imperative line saying exactly what you will do, e.g. ' +
+          `One imperative line (no line breaks, at most ${APPROVAL_LABEL_DELIVERY_MAX_CHARS} characters) saying exactly what you will do, e.g. ` +
           '"Send email to alice@example.com with subject \'Weekly Update\'".',
         required: true,
       },
@@ -86,6 +86,26 @@ export function createRequestApprovalTool(deps: RequestApprovalDeps): ToolDefini
 
       if (!intent) {
         return `[ERROR] request_approval requires a non-empty intent sentence.`;
+      }
+      // Refused at the source rather than shortened at each surface (#724).
+      // `intent` is the card: the dashboard shows it whole, but the Telegram/
+      // Discord card and the desktop toast -- both with an Approve action --
+      // reduce it to one line and cut it at the delivery ceiling, so a longer
+      // or multi-line intent was approved there with part of it unseen. An
+      // intent that passes reaches every surface's text exactly as written.
+      // What a surface's renderer then does with that text is outside this
+      // check: Telegram and Discord render the card as Markdown, and an OS toast clamps
+      // a long body to a few lines (both filed separately). Nothing is created
+      // or delivered for a refused intent; the model rewrites it. The message
+      // keeps the material detail IN the intent: `context` reaches no surface
+      // with an Approve action, so detail moved there would go unseen.
+      const alteration = approvalLabelAlteration(intent);
+      if (alteration) {
+        return `[ERROR] request_approval needs the intent as one plain line the approval card can show exactly as written, `
+          + `and ${alteration}. No approval was requested. Rewrite it as one imperative line `
+          + `(at most ${APPROVAL_LABEL_DELIVERY_MAX_CHARS} characters, no line breaks or invisible characters) and call request_approval again. `
+          + `Keep everything the person needs to decide -- the recipient, target, amount, what is sent or deleted -- in the intent; `
+          + `context is only for why, and the approval card on a phone or a notification does not show it.`;
       }
       if (!VALID_CATEGORIES.has(category)) {
         return (
