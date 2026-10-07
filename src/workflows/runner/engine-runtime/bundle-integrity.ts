@@ -6,8 +6,20 @@
  * `EngineRuntime` and spawned many times over the daemon's whole life, and the
  * engine re-reads the file from disk each time -- so without this the window
  * between check and use was the daemon's lifetime. Here the digest the check
- * actually computed is PINNED in memory against the path, and `spawnEngine`
- * re-hashes the file and refuses to start an engine from bytes that differ.
+ * actually computed is PINNED in memory, and `spawnEngine` re-hashes the file
+ * and refuses to start an engine from bytes that differ.
+ *
+ * WHERE THE PIN LIVES (#762). It travels with the bundle it describes: the
+ * lookup returns it (`EngineBundle.digest`), `EngineRuntime` holds it as
+ * `expectedDigest`, and every spawn is handed it. It used to sit in a
+ * module-level map keyed by resolved path, which had two faults. A caller that
+ * spelled the same file differently -- a symlinked root, a bind mount -- MISSED
+ * the map, and a miss meant "never verified", so the check was skipped rather
+ * than failed: fail-open on a lookup. And the map was global, so a later
+ * resolution of the same path (an evaluation engine built mid-life, say)
+ * silently changed what every existing runtime would accept. Carried
+ * explicitly, there is no lookup to miss, and a runtime accepts exactly the
+ * bytes it was built for until it is replaced.
  *
  * Why the pin and not "run the manifest check again": the manifest sits beside
  * the bundle with the same ownership, so whatever can swap `main.js` can swap
@@ -46,10 +58,7 @@
 
 import { createHash } from "node:crypto";
 import { closeSync, constants, fstatSync, openSync, readFileSync } from "node:fs";
-import { basename, dirname, resolve } from "node:path";
-
-/** resolved bundle path -> sha256 hex of the bytes that were verified. */
-const pinned = new Map<string, string>();
+import { basename, dirname } from "node:path";
 
 /**
  * sha256 of a REGULAR file. Anything else throws instead of being read: a FIFO
@@ -70,15 +79,6 @@ export function sha256OfFile(path: string): string {
   }
 }
 
-/**
- * Record that `bundlePath` verified with `digest`. A later verification of the
- * same path replaces the pin, so a host that republishes a shared root (with
- * its manifest) is followed on the next resolution rather than refused forever.
- */
-export function pinVerifiedBundle(bundlePath: string, digest: string): void {
-  pinned.set(resolve(bundlePath), digest);
-}
-
 export class BundleIntegrityError extends Error {
   readonly reason: "changed_since_verification" | "unreadable";
   constructor(reason: BundleIntegrityError["reason"], message: string) {
@@ -89,18 +89,24 @@ export class BundleIntegrityError extends Error {
 }
 
 /**
- * Throw a `BundleIntegrityError` if `bundlePath` was verified at resolution
- * and its bytes are no longer the ones that verified. A path that was never
- * verified (the per-user cache, a test fixture) passes untouched.
+ * Throw a `BundleIntegrityError` unless `bundlePath` still hashes to
+ * `expectedDigest`, the sha256 recorded when the bundle was verified or built.
+ * `null` -- nothing verified these bytes (an adopted per-user bundle, a test
+ * fixture) -- passes untouched. Any other value is compared full-string, so a
+ * malformed or empty digest refuses rather than matching nothing.
+ *
+ * Whatever spelling `bundlePath` has, the bytes hashed are the bytes the
+ * engine is about to open from that same spelling.
  *
  * The message names the bundle by its cache directory -- the 16-hex build hash
  * the path ends in -- and not by its full path: the root is operator config,
  * forwarded into model-directed children, and this message reaches logs a
  * model reads. The digests are hex. Nothing in it is attacker-chosen text.
  */
-export function assertBundleUnchanged(bundlePath: string): void {
-  const want = pinned.get(resolve(bundlePath));
-  if (want === undefined) return;
+export function assertBundleUnchanged(bundlePath: string, expectedDigest: string | null | undefined): void {
+  // Transitional: optional until every caller passes it (#762).
+  if (expectedDigest === null || expectedDigest === undefined) return;
+  const want = expectedDigest;
   const label = `${safeLabel(basename(dirname(bundlePath)))}/${safeLabel(basename(bundlePath))}`;
   let got: string;
   try {
@@ -125,7 +131,3 @@ function safeLabel(segment: string): string {
   return /^[A-Za-z0-9._-]{1,64}$/u.test(segment) ? segment : "<unprintable>";
 }
 
-/** Test-only: forget every pin. */
-export function __resetBundlePinsForTest(): void {
-  pinned.clear();
-}

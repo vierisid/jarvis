@@ -24,7 +24,7 @@ import {
   PATCHED_VENDOR_SOURCES,
 } from "./build";
 import { ENGINE_LIFECYCLE_SHIM, ENGINE_OWNER_PID_ENV } from "./engine-lifecycle";
-import { BundleIntegrityError, __resetBundlePinsForTest } from "./bundle-integrity";
+import { BundleIntegrityError } from "./bundle-integrity";
 import { spawnEngine } from "./spawn";
 
 describe("engine bundle build", () => {
@@ -441,7 +441,8 @@ describe("engine bundle build", () => {
           writeFileSync(resolve(bundleDir, "main.js.meta.json"), "{}");
           // No shared root at all, so only the per-user branch can answer.
           const { value: found, warnings } = withWarnings(() => findCachedBundle({ sharedRoot: null, bundleRoot }));
-          expect(found).toEqual({ bundlePath: resolve(bundleDir, "main.js"), hash: bundleHash() });
+          // `digest: null`: adopted, so nothing verified it and no spawn re-checks it.
+          expect(found).toEqual({ bundlePath: resolve(bundleDir, "main.js"), hash: bundleHash(), digest: null });
           // Not refused quietly and not refused loudly either.
           expect(warnings).toEqual([]);
         } finally {
@@ -498,7 +499,6 @@ describe("engine bundle build", () => {
   describe("buildEngineBundle's own branches (#761)", () => {
     const made: string[] = [];
     afterEach(() => {
-      __resetBundlePinsForTest();
       for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
     });
     const tmp = (tag: string): string => {
@@ -555,8 +555,9 @@ describe("engine bundle build", () => {
     };
 
     /** `/bin/true` as the runtime: a spawn that is real but runs nothing from the bundle. */
-    const spawnOpts = (bundlePath: string) => ({
+    const spawnOpts = (bundlePath: string, expectedDigest: string | null) => ({
       bundlePath,
+      expectedDigest,
       sandboxId: "761-probe",
       sandboxWsPort: 1,
       baseCodeDir: tmp("code"),
@@ -573,11 +574,13 @@ describe("engine bundle build", () => {
         buildEngineBundle({ sharedRoot: refusedSharedRoot(), bundleRoot, stagingDir }));
       expect(builds()).toBe(1);
       expect(built.bundlePath).toBe(resolve(bundleRoot, bundleHash(), "main.js"));
+      // The digest of the bytes on disk, which is what a spawn re-checks.
+      expect(built.digest).toBe(createHash("sha256").update(BUILT).digest("hex"));
 
       writeFileSync(built.bundlePath, "// swapped after the build\n");
       let thrown: unknown;
       try {
-        spawnEngine(spawnOpts(built.bundlePath));
+        spawnEngine(spawnOpts(built.bundlePath, built.digest));
       } catch (err) {
         thrown = err;
       }
@@ -588,7 +591,7 @@ describe("engine bundle build", () => {
     test("an unchanged self-built bundle spawns", async () => {
       const { stagingDir } = seededStaging();
       const built = await buildEngineBundle({ sharedRoot: null, bundleRoot: tmp("user"), stagingDir });
-      const engine = spawnEngine(spawnOpts(built.bundlePath));
+      const engine = spawnEngine(spawnOpts(built.bundlePath, built.digest));
       engine.stdout?.resume();
       engine.stderr?.resume();
       expect((await engine.exited).code).toBe(0);
@@ -623,7 +626,7 @@ describe("engine bundle build", () => {
       writeFileSync(resolve(bundleDir, "main.js.meta.json"), "{}");
       const { value: built, warnings } = await quietly(() =>
         buildEngineBundle({ sharedRoot: null, bundleRoot, stagingDir }));
-      expect(built).toEqual({ bundlePath: resolve(bundleDir, "main.js"), hash: bundleHash(), bundleDir });
+      expect(built).toEqual({ bundlePath: resolve(bundleDir, "main.js"), hash: bundleHash(), bundleDir, digest: null });
       expect(builds()).toBe(0);
       expect(readFileSync(built.bundlePath, "utf8")).toBe("// built locally, earlier\n");
       expect(warnings).toEqual([]);

@@ -155,7 +155,7 @@ describe("the engine is spawned so nothing is resolved from outside the bundle (
     const bundlePath = join(dir, "main.js");
     writeFileSync(bundlePath,
       `console.log(JSON.stringify({ execArgv: process.execArgv, bu: process.env.WS_NO_BUFFER_UTIL ?? null, u8: process.env.WS_NO_UTF_8_VALIDATE ?? null }));\n`);
-    const engine = spawnEngine({ bundlePath, sandboxId: "argv-probe", sandboxWsPort: 1, baseCodeDir: dir });
+    const engine = spawnEngine({ bundlePath, expectedDigest: null, sandboxId: "argv-probe", sandboxWsPort: 1, baseCodeDir: dir });
     let out = "";
     engine.stdout?.on("data", (d: Buffer) => { out += d.toString(); });
     engine.stderr?.resume();

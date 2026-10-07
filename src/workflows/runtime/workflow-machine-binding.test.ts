@@ -288,7 +288,7 @@ test('API previews can repeat after auto-capture and with unrelated saved output
   const routes = createWorkflowRoutes();
   const api = new SandboxApi({ services: f.backend() }); await api.start({ port: 0 });
   const bundle = await buildEngineBundle(); await buildAllJarvisPieces();
-  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
   const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }) }) } });
   try {
     for (let attempt = 0; attempt < 4; attempt++) {
@@ -449,7 +449,7 @@ for (const disconnect of [false, true]) test(`real outer worker: ${disconnect ? 
   const api = new SandboxApi({ services: f.backend() });
   await api.start({ port: 0 });
   const bundle = await buildEngineBundle(); await buildAllJarvisPieces();
-  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
   const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }) }) } });
   try {
     enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id } });
@@ -470,7 +470,7 @@ test('real worker approval resume rejects a replacement session without dispatch
   updateRun(f.run.id, { status: 'QUEUED' });
   const api = new SandboxApi({ services: f.backend() }); await api.start({ port: 0 });
   const bundle = await buildEngineBundle(); await buildAllJarvisPieces();
-  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
   const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }) }) } });
   try {
     enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id } });

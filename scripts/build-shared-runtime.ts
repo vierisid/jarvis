@@ -152,6 +152,7 @@ await api.start({ host: "127.0.0.1", port: 0 });
 const runtime = new EngineRuntime({
   api,
   bundlePath: bundle.bundlePath,
+  expectedDigest: bundle.digest,
   pool: false,
   customPiecesPaths: [resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"), piecesDir],
 });

@@ -38,7 +38,7 @@ import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-
 import { ENGINE_LIFECYCLE_SHIM } from "./engine-lifecycle";
 import { sanitizedEnv } from "../../../util/subprocess-env";
 import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../../util/sanitized-install";
-import { pinVerifiedBundle, sha256OfFile } from "./bundle-integrity";
+import { sha256OfFile } from "./bundle-integrity";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -74,6 +74,14 @@ export interface EngineBundle {
   hash: string;
   /** Absolute path to the directory containing the bundle (useful as cwd for the spawned engine). */
   bundleDir: string;
+  /**
+   * sha256 of `main.js` as this daemon VERIFIED it (a shared bundle that
+   * matched its manifest) or BUILT it, or `null` for a per-user bundle that was
+   * adopted from the cache and that nothing verified. Hand it to
+   * `EngineRuntime` as `expectedDigest`, which re-checks it at every spawn
+   * (#671, #762; see bundle-integrity.ts).
+   */
+  digest: string | null;
 }
 
 /**
@@ -598,7 +606,7 @@ export async function buildEngineBundle(opts?: {
   // So a refusal degrades to a BUILD, not to an adoption. That costs the
   // staging install, which is the cost the warning already announces.
   if (!opts?.force && shared.kind !== "refused" && existsSync(bundlePath)) {
-    return { bundlePath, hash, bundleDir };
+    return { bundlePath, hash, bundleDir, digest: null };
   }
 
   mkdirSync(bundleDir, { recursive: true });
@@ -651,8 +659,7 @@ export async function buildEngineBundle(opts?: {
   // adopt from; without the pin the bundle it produces was spawned unchecked
   // for the daemon's lifetime. Hashed from disk rather than from esbuild's
   // output, so the pin is of the file the engine will actually open.
-  pinVerifiedBundle(bundlePath, sha256OfFile(bundlePath));
-  return { bundlePath, hash, bundleDir };
+  return { bundlePath, hash, bundleDir, digest: sha256OfFile(bundlePath) };
 }
 
 export const ENGINE_BUILD_PATHS = {
@@ -786,8 +793,9 @@ function refuseSharedBundle(bundlePath: string, reason: string, detail: string):
  * EXECUTION-TIME INTEGRITY is pinned, not re-derived (#671). Verification
  * happens once, HERE, at resolution, and the path is then carried on the
  * `EngineRuntime` and spawned many times over the daemon's whole life. So a hit
- * pins the digest it just computed (`pinVerifiedBundle`), and `spawnEngine`
- * re-hashes the file and refuses bytes that differ -- which narrows the window
+ * returns the digest it just computed (`EngineBundle.digest`), the runtime
+ * carries it, and `spawnEngine` re-hashes the file and refuses bytes that
+ * differ -- which narrows the window
  * between check and use from the daemon's lifetime to the spawn itself. It
  * does not close it (the engine opens the file after the check -- see
  * bundle-integrity.ts); that is an immutable mount. Nor would it mean much if
@@ -869,11 +877,10 @@ function findSharedBundle(sharedRoot?: string | null): SharedBundleLookup {
     return refuseSharedBundle(bundlePath, "digest_mismatch",
       `manifest says ${shown}, bytes hash to ${got}`);
   }
-  // Pin the digest that just verified, so every later spawn of this path is
-  // checked against THESE bytes and not merely against whatever the manifest
-  // beside them says by then (#671, bundle-integrity.ts).
-  pinVerifiedBundle(bundlePath, got);
-  return { kind: "hit", bundle: { bundlePath, hash, bundleDir } };
+  // Return the digest that just verified, so every later spawn of this bundle
+  // is checked against THESE bytes and not merely against whatever the
+  // manifest beside them says by then (#671, #762, bundle-integrity.ts).
+  return { kind: "hit", bundle: { bundlePath, hash, bundleDir, digest: got } };
 }
 
 /**
@@ -896,9 +903,11 @@ function findSharedBundle(sharedRoot?: string | null): SharedBundleLookup {
 export function findCachedBundle(opts?: {
   sharedRoot?: string | null;
   bundleRoot?: string;
-}): { bundlePath: string; hash: string } | null {
+}): { bundlePath: string; hash: string; digest: string | null } | null {
   const shared = findSharedBundle(opts?.sharedRoot);
-  if (shared.kind === "hit") return { bundlePath: shared.bundle.bundlePath, hash: shared.bundle.hash };
+  if (shared.kind === "hit") {
+    return { bundlePath: shared.bundle.bundlePath, hash: shared.bundle.hash, digest: shared.bundle.digest };
+  }
   // A REFUSED shared bundle is answered by "nothing is cached", never by the
   // per-user copy (#624): that tree is tenant-writable and unverified, so
   // adopting it would answer a failed integrity check by lowering the trust
@@ -917,5 +926,6 @@ export function findCachedBundle(opts?: {
   } catch {
     /* read-only or gone */
   }
-  return { bundlePath, hash };
+  // `digest: null`: adopted, and nothing verified it (see EngineBundle.digest).
+  return { bundlePath, hash, digest: null };
 }

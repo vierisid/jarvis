@@ -72,6 +72,11 @@ export interface SpawnedEngine {
 
 export interface SpawnEngineOptions {
   bundlePath: string;
+  /**
+   * sha256 `bundlePath` must hash to, or `null` when nothing verified it. See
+   * `EngineRuntimeOptions.expectedDigest`.
+   */
+  expectedDigest?: string | null;
   sandboxId: string;
   sandboxWsPort: number;
   baseCodeDir: string;
@@ -168,7 +173,7 @@ export function isEngineEnvName(name: string): boolean {
  * The engine's complete environment, from `opts` and this process's env, pid,
  * clock and /proc entry. Warns (names only) about dropped overrides.
  */
-export function engineEnv(opts: SpawnEngineOptions): Record<string, string> {
+export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of ENGINE_ENV_PASSTHROUGH) {
     const v = process.env[key];
@@ -259,10 +264,12 @@ export function engineEnv(opts: SpawnEngineOptions): Record<string, string> {
 }
 
 export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
-  // A bundle that verified at resolution must still be those bytes (#671).
-  // Throws BEFORE anything is started, so a refusal leaves no process behind.
-  // Per spawn, not per acquire: a warm pooled engine already holds the code.
-  assertBundleUnchanged(opts.bundlePath);
+  // A bundle that verified at resolution must still be those bytes (#671),
+  // checked against the digest the caller carries rather than one looked up by
+  // path (#762). Throws BEFORE anything is started, so a refusal leaves no
+  // process behind. Per spawn, not per acquire: a warm pooled engine already
+  // holds the code.
+  assertBundleUnchanged(opts.bundlePath, opts.expectedDigest);
   const env = engineEnv(opts);
   const runtime = opts.runtime ?? process.execPath;
   // --smol: the engine is a short-lived-to-parked sandbox that grows to

@@ -51,6 +51,12 @@ export interface EngineRuntimeOptions {
   /** Absolute path to the built engine bundle (`main.js`). */
   bundlePath: string;
   /**
+   * sha256 the bundle's bytes must still have at every spawn -- the
+   * `EngineBundle.digest` the lookup or build returned -- or `null` when
+   * nothing verified them (an adopted per-user bundle, a test fixture).
+   */
+  expectedDigest?: string | null;
+  /**
    * When true, `release()` returns the engine to a single-slot warm pool
    * instead of killing it. The next `acquire()` reuses the same process,
    * mints a fresh engineToken, and rebinds the registry sandbox to the new
@@ -561,6 +567,8 @@ function envHandshakeTimeoutMs(): number | undefined {
 export class EngineRuntime {
   private readonly api: SandboxApi;
   private readonly bundlePath: string;
+  /** Fixed at construction: a later resolution elsewhere cannot change it (#762). */
+  private readonly expectedDigest: string | null | undefined;
   private readonly baseCodeDir: string;
   private readonly customPiecesPaths: string[];
   private readonly handshakeTimeoutMs: number;
@@ -608,6 +616,7 @@ export class EngineRuntime {
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
     this.bundlePath = opts.bundlePath;
+    this.expectedDigest = opts.expectedDigest;
     this.poolEnabled = opts.pool ?? false;
     // 5 minutes by default. The engine cold-spawn is ~3s, so an idle TTL
     // shorter than the gap between cron fires defeats the pool's purpose;
@@ -723,6 +732,7 @@ export class EngineRuntime {
 
     const spawnOptions: SpawnEngineOptions = {
       bundlePath: this.bundlePath,
+      expectedDigest: this.expectedDigest,
       sandboxId,
       sandboxWsPort: this.api.sandboxWsPort,
       baseCodeDir: this.baseCodeDir,

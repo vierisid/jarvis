@@ -341,6 +341,7 @@ describe("real engine bundle", () => {
       const codeDir = mkdtempSync(resolve(tmpdir(), "jarvis-engine-code-"));
       const engine = spawnEngine({
         bundlePath: bundle.bundlePath,
+        expectedDigest: bundle.digest,
         sandboxId: "sigterm-probe",
         sandboxWsPort: 1,
         baseCodeDir: codeDir,
