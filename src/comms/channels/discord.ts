@@ -262,7 +262,7 @@ export function discordLiteral(text: string): string {
 }
 
 /** What Discord autolinks: a scheme and everything up to whitespace or `<`. */
-const DISCORD_URL = /https?:\/\/[^\s<]+/g;
+const DISCORD_URL = /https?:\/\/[^\s<]+/gi;
 
 /**
  * Split for literal text: at the last line break that leaves at least half a

