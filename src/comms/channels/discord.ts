@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, MessageFlags, Partials, escapeMarkdown, type Message } from 'discord.js';
+import { Client, GatewayIntentBits, MessageFlags, Partials, type Message } from 'discord.js';
 import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 import type { STTProvider } from '../voice.ts';
 
@@ -204,21 +204,20 @@ export class DiscordAdapter implements ChannelAdapter {
 
 /**
  * Discord renders markdown in every message and has no plain-text mode, so
- * literal text (#718) is escaped instead: `escapeMarkdown` with every construct
- * on, plus what it misses (`discordLiteral`) -- `<@id>`, `<#id>`, `<t:0:R>`
- * and `<:name:id>` otherwise render as a name, a channel, a date or an emoji
- * rather than as what was written. `allowedMentions: { parse: [] }`
- * stops `@everyone` or a user mention notifying anyone, and SuppressEmbeds
- * stops a link preview attaching the linked page's own text beside it.
+ * literal text (#718) is escaped instead (`discordLiteral`), with
+ * `allowedMentions: { parse: [] }` so `@everyone` or a user mention notifies
+ * no one, and SuppressEmbeds so no link preview attaches the linked page's own
+ * text beside it.
  *
- * Escaping at most doubles a character (`*` -> `\*`, `||` -> `\|\|`), so the
+ * Escaping at most doubles the text (one backslash per character), so the
  * text is split at half the 2000 limit FIRST and each piece escaped on its
  * own: splitting after escaping could part a backslash from the character it
- * escapes. `discordLiteral`'s test pins the doubling bound.
+ * escapes. The literal split (`splitLiteral`) never parts a surrogate pair and
+ * never trims what it moves to the next piece.
  */
 export function discordPayloads(text: string, options?: SendOptions): Array<string | Record<string, unknown>> {
   if (!options?.literal) return splitMessage(text, DISCORD_MAX_CHARS);
-  return splitMessage(text, DISCORD_MAX_CHARS / 2).map((chunk) => ({
+  return splitLiteral(text, DISCORD_MAX_CHARS / 2).map((chunk) => ({
     content: discordLiteral(chunk),
     allowedMentions: { parse: [] },
     flags: MessageFlags.SuppressEmbeds,
@@ -228,17 +227,49 @@ export function discordPayloads(text: string, options?: SendOptions): Array<stri
 const DISCORD_MAX_CHARS = 2000;
 
 /**
- * Text that Discord shows as written. `escapeMarkdown` covers emphasis, code,
- * spoilers, strikethrough, headings and lists. Three things it misses are
- * escaped here: every `[` (its own masked-link option escapes only the first
- * link on a line: its regex is greedy, so `[a](x) [b](y)` left `[b](y)` live), every `<`
- * (mentions, channels, timestamps, custom emoji), and a `>` quote or `-#`
- * subtext marker at the start of a line.
+ * The ASCII characters Discord's inline markdown gives a meaning to, plus `@`:
+ * emphasis, underline, strikethrough, spoilers, code, masked links, and the
+ * `<...>` forms (mentions, channels, timestamps, custom emoji).
+ */
+const DISCORD_INLINE_MARKUP = /[\\*_~|`[<@]/g;
+/** What only means something at the start of a line: quotes, headings, subtext, lists. */
+const DISCORD_LINE_START_MARKUP = /^(\s*)([>#+-]|\d+\.)/gm;
+
+/**
+ * Text that Discord shows as written: a backslash before every inline markup
+ * character, unconditionally, and before a line-start marker (#718 review).
+ * `escapeMarkdown` from discord.js was not enough: it is heuristic, and it
+ * skipped every `_` after a `<:` or `<a:` earlier on the line, and every
+ * masked link after the first. Discord shows a backslash-escaped punctuation
+ * character as the character itself.
  */
 export function discordLiteral(text: string): string {
-  return escapeMarkdown(text, { heading: true, bulletedList: true, numberedList: true })
-    .replace(/[[<]/g, '\\$&')
-    .replace(/^(\s*)(>|-#)/gm, '$1\\$2');
+  return text
+    .replace(DISCORD_INLINE_MARKUP, '\\$&')
+    .replace(DISCORD_LINE_START_MARKUP, (_m, lead: string, mark: string) =>
+      mark.endsWith('.') ? `${lead}${mark.slice(0, -1)}\\.` : `${lead}\\${mark}`);
+}
+
+/**
+ * Split for literal text: at the last line break that leaves at least half a
+ * piece, else at the limit, stepping back off a high surrogate so a character
+ * is never cut in two. Nothing is trimmed: the pieces concatenate back exactly.
+ */
+export function splitLiteral(text: string, maxLength: number): string[] {
+  const chunks: string[] = [];
+  let rest = text;
+  while (rest.length > maxLength) {
+    let at = rest.lastIndexOf('\n', maxLength - 1) + 1;
+    if (at < maxLength / 2) {
+      at = maxLength;
+      const before = rest.charCodeAt(at - 1);
+      if (before >= 0xd800 && before <= 0xdbff) at--;
+    }
+    chunks.push(rest.slice(0, at));
+    rest = rest.slice(at);
+  }
+  chunks.push(rest);
+  return chunks;
 }
 
 export function splitMessage(text: string, maxLength: number): string[] {

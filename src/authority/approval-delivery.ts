@@ -71,7 +71,9 @@ function codePointName(ch: string): string {
  * The other branches only say WHICH alteration it would be, in words a model
  * can act on. That covers what THIS code does to the text, not what a
  * renderer does after it. (Since #718 the channel card is sent as literal
- * text, so no channel renders its markup.)
+ * text: Telegram with no parse mode, Discord with every markup character
+ * escaped. Telegram still turns a URL or an @name into a link, with its text
+ * unchanged.)
  *
  * It refuses ordinary text that carries a format character, too: an emoji
  * built with a zero-width joiner, a left-to-right or right-to-left mark in
@@ -472,8 +474,10 @@ function cardLine(text: string): { shown: string; cut: boolean } {
  * command cannot imitate it.
  *
  * Every line is reduced like any label: one line, no format characters, the
- * delivery backstop. A line the backstop CUT is not shown whole, so the card
- * then offers only `deny` and sends the person to the dashboard to approve;
+ * delivery backstop. A line the backstop CUT is not shown whole, and a card
+ * longer than one message (`CHANNEL_CARD_APPROVABLE_MAX_CHARS`) is not shown
+ * as one piece, so either card then offers only `deny` and sends the person
+ * to the dashboard to approve;
  * `approvable` is what the channel reply handler (`channelApprovalReply`)
  * checks before it acts on an `approve`. Denying something you could not
  * read whole is always safe.
@@ -490,26 +494,41 @@ export function approvalChannelCard(request: ApprovalRequest): { text: string; a
   const tool = cardLine(request.tool_name);
   const agent = cardLine(request.agent_name);
   const why = cardLine(reason);
-  const approvable = ![intent, tool, agent, why].some((line) => line.cut);
+  const head = [
+    `[APPROVAL NEEDED]`,
+    `Intent: ${intent.shown}`,
+    `Action: ${tool.shown} (${request.action_category})`,
+    `Agent: ${agent.shown}`,
+    ...(why.shown ? [`Reason: ${why.shown}`] : []),
+    ``,
+  ];
+  const approvableText = [...head, `Reply with:`, `  approve ${shortId}`, `  deny ${shortId}`].join('\n');
+  // Whole on every line AND one message on every channel: a card split over
+  // several messages can interleave with another card sent at the same time,
+  // so one card's tail -- its `approve` line included -- would sit under
+  // another card's head (#718 review).
+  const approvable = ![intent, tool, agent, why].some((line) => line.cut)
+    && approvableText.length <= CHANNEL_CARD_APPROVABLE_MAX_CHARS;
+  if (approvable) return { approvable, text: approvableText };
   return {
     approvable,
     text: [
-      `[APPROVAL NEEDED]`,
-      `Intent: ${intent.shown}`,
-      `Action: ${tool.shown} (${request.action_category})`,
-      `Agent: ${agent.shown}`,
-      ...(why.shown ? [`Reason: ${why.shown}`] : []),
-      ``,
-      ...(approvable
-        ? [`Reply with:`, `  approve ${shortId}`, `  deny ${shortId}`]
-        : [
-            `This is too long to show whole here, so it cannot be approved from this chat.`,
-            `Open the Jarvis dashboard to read all of it and decide, or reply:`,
-            `  deny ${shortId}`,
-          ]),
+      ...head,
+      `This is too long to show whole in one message here, so it cannot be approved from this chat.`,
+      `Open the Jarvis dashboard to read all of it and decide, or reply:`,
+      `  deny ${shortId}`,
     ].join('\n'),
   };
 }
+
+/**
+ * The longest approval card that can be approved by reply: one that every
+ * channel delivers as ONE message. Discord's limit is 2000 characters and the
+ * literal escape at most doubles the text (`discordLiteral`, pinned by its
+ * test), so 1000 raw characters always fit; Telegram's 4096 is larger.
+ * Derived, not chosen: raising it lets a card span two Discord messages.
+ */
+export const CHANNEL_CARD_APPROVABLE_MAX_CHARS = 1000;
 
 export type ApprovalBroadcaster = {
   broadcastApprovalRequest(request: ApprovalRequest): void;

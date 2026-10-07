@@ -3,6 +3,7 @@ import {
   APPROVAL_LABEL_DELIVERY_MAX_CHARS,
   ApprovalDelivery,
   approvalChannelCard,
+  CHANNEL_CARD_APPROVABLE_MAX_CHARS,
   approvalToast,
   TOAST_APPROVABLE_MAX_COLUMNS,
   toastColumns,
@@ -518,8 +519,20 @@ describe('#718: the channel card says what will happen, as literal text', () => 
     expect(approvalChannelCard(gated({ agent_name: over })).approvable).toBe(false);
     expect(approvalChannelCard(gated({ tool_name: over })).approvable).toBe(false);
     expect(approvalChannelCard(gated({ reason: over })).approvable).toBe(false);
-    // Exactly at the backstop nothing is cut, so the card stays approvable.
-    expect(approvalChannelCard(gated({ agent_name: over.slice(1) })).approvable).toBe(true);
+  });
+
+  test('a card longer than one message withholds approval even when no line is cut (#718 review)', () => {
+    // Split over two Discord messages, a card can interleave with another one
+    // sent at the same moment, so its approve line could sit under the other's head.
+    const fits = approvalChannelCard(gated());
+    const room = CHANNEL_CARD_APPROVABLE_MAX_CHARS - fits.text.length;
+    const atLimit = approvalChannelCard(gated({ agent_name: `Test Agent${'a'.repeat(room)}` }));
+    expect(atLimit.text.length).toBe(CHANNEL_CARD_APPROVABLE_MAX_CHARS);
+    expect(atLimit.approvable).toBe(true);
+    const over = approvalChannelCard(gated({ agent_name: `Test Agent${'a'.repeat(room + 1)}` }));
+    expect(over.approvable).toBe(false);
+    expect(over.text.split('\n').some(line => line.trim().startsWith('approve '))).toBe(false);
+    expect(over.text).toContain(`Agent: Test Agent${'a'.repeat(room + 1)}`);
   });
 });
 

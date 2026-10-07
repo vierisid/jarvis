@@ -5,7 +5,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { MessageFlags } from 'discord.js';
-import { discordLiteral, discordPayloads } from './discord.ts';
+import { discordLiteral, discordPayloads, splitLiteral } from './discord.ts';
 
 /**
  * Discord's escape rule as a model: a backslash before a character that is
@@ -30,6 +30,7 @@ const HOSTILE: Array<[string, string]> = [
   ['a user mention, everyone, a timestamp and an emoji', '<@123> @everyone <t:0:R> <:ok:456> <#789>'],
   ['a backslash already escaping', 'C:\\Users\\bob \\*'],
   ['line-start markup', '# head\n> quote\n-# small\n- item\n1. first'],
+  ['underscores after a custom-emoji opener, which escapeMarkdown skips', '<a: __u__ _i_ and <: rm -rf __cache__'],
 ];
 
 describe('#718: discordLiteral', () => {
@@ -61,7 +62,7 @@ describe('#718: discordPayloads', () => {
   test('a literal send escapes each piece, notifies no one and attaches no preview', () => {
     const payloads = discordPayloads('approve @everyone ||now||', { literal: true });
     expect(payloads).toEqual([{
-      content: 'approve @everyone \\|\\|now\\|\\|',
+      content: 'approve \\@everyone \\|\\|now\\|\\|',
       allowedMentions: { parse: [] },
       flags: MessageFlags.SuppressEmbeds,
     }]);
@@ -72,7 +73,18 @@ describe('#718: discordPayloads', () => {
     const payloads = discordPayloads(text, { literal: true }) as Array<{ content: string }>;
     expect(payloads.length).toBeGreaterThan(1);
     for (const p of payloads) expect(p.content.length).toBeLessThanOrEqual(2000);
-    expect(payloads.map((p) => shown(p.content)).join('')).toBe(text.replace('\n', ''));
+    // Nothing trimmed at a boundary: the pieces read back as exactly the text.
+    expect(payloads.map((p) => shown(p.content)).join('')).toBe(text);
+  });
+
+  test('a literal split never cuts a surrogate pair, and keeps the spaces at a boundary (#718 review)', () => {
+    const emoji = String.fromCodePoint(0x1f600);
+    const text = `${'x'.repeat(999)}${emoji}${' '.repeat(5)}tail`;
+    const chunks = splitLiteral(text, 1000);
+    expect(chunks.join('')).toBe(text);
+    for (const chunk of chunks) expect(chunk.isWellFormed()).toBe(true);
+    const spaced = `${'w '.repeat(600)}`;
+    expect(splitLiteral(spaced, 1000).join('')).toBe(spaced);
   });
 
   test('an ordinary send is unchanged: plain strings, markdown left to render', () => {
