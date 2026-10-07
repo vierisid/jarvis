@@ -1,0 +1,70 @@
+bun test v1.4.2 (744846f84)
+
+src/util/model-exec-env.test.ts:
+(pass) the daemon-secret rule > every listed daemon secret is stripped, in any case [0.22ms]
+(pass) the daemon-secret rule > the sources the header cites are the names on the list [0.14ms]
+(pass) the daemon-secret rule > an unclassified JARVIS_ name is stripped: a future secret fails closed [0.05ms]
+(pass) the daemon-secret rule > settings stay, and no daemon secret is on the settings list [0.20ms]
+(pass) the daemon-secret rule > the engine wiring names are known, internal, and stripped [0.08ms]
+(pass) the daemon-secret rule > the user's shell and desktop survive whole, their own credentials included [0.08ms]
+(pass) the daemon-secret rule > stripping removes exactly the daemon secrets and nothing else [0.13ms]
+(pass) modelExecEnv() > marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off [0.20ms]
+(pass) modelExecEnv() > flags the env key only when this process holds it or inherited the flag [27.41ms]
+(pass) modelExecEnv() > an extra cannot put a daemon secret back, nor can a spread of process.env [0.20ms]
+(pass) modelExecEnv() > an undefined extra removes the key; the result is always an object [0.05ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the scan sees the names it must (not blind) [0.07ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [0.23ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the three buckets do not overlap [0.05ms]
+(pass) the model-exec markers (#514) > the key check: 16 hex chars, stable, case-insensitive, and not the key [27.57ms]
+(pass) the model-exec markers (#514) > the marker is exactly "1"; the flag is a check value or an older parent's "1" [0.26ms]
+(pass) the model-exec markers (#514) > modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged [0.06ms]
+(pass) the model-exec markers (#514) > silent for a file-key install, marked or not [0.12ms]
+(pass) the model-exec markers (#514) > warns while the parent's key is missing or a different one is set; silent once it is back [0.11ms]
+(pass) the model-exec markers (#514) > the CLI warns only for a detached start or restart [0.07ms]
+
+src/daemon/api-brief-memory.test.ts:
+(pass) provider absence, wrong instance, disabled flags and absent F18 all fail closed on every route [35.46ms]
+(pass) enabled collection, safe detail/history, no match, and missing detail have distinct responses [19.49ms]
+(pass) stale pagination returns 409 without old fact content and exact filters must be repeated [15.95ms]
+(pass) strict query and path validation reject duplicates, unknowns, blanks and oversized requests [17.02ms]
+(pass) legacy fact routes still return canonical facts and preserve their independent behavior [16.50ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f17-http-eUEOG6/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) real socket authenticates list/detail/history and returns no-store projections only after session bootstrap [33.00ms]
+(pass) F17 review R1: collection retains canonical scope across independent confirmed preferences and correction [14.56ms]
+(pass) F17 review R1: detail retains canonical scope across independent confirmed preferences and correction [13.97ms]
+(pass) F17 review R1: history retains canonical scope across independent confirmed preferences and correction [16.66ms]
+(pass) F17 review R2: canonical Source with spaces round-trips through exact filters, counts and cursors [16.31ms]
+(pass) F17 review R2: canonical Source with nonbreaking spaces round-trips through exact filters, counts and cursors [16.41ms]
+(pass) F17 review R2: canonical Source with tabs/newlines round-trips through exact filters, counts and cursors [15.32ms]
+(pass) F17 review R2: evidence Source with spaces round-trips through exact filters, counts and cursors [16.24ms]
+(pass) F17 review R2: evidence Source with nonbreaking spaces round-trips through exact filters, counts and cursors [16.37ms]
+(pass) F17 review R2: evidence Source with tabs/newlines round-trips through exact filters, counts and cursors [16.99ms]
+
+src/brief/memory-stream.test.ts:
+(pass) empty returns exact counts, while missing instrumentation is unknown rather than unused [372.26ms]
+(pass) tied timestamps paginate every fact once with frozen counts despite concurrent same-time/backdated inserts [434.85ms]
+(pass) long sentences remain intact; literal case-insensitive search does not interpret SQL wildcards [410.68ms]
+(pass) search, multi-evidence Source, actual Used in and half-open Updated range combine with exact counts [384.10ms]
+(pass) selected is not supplied; outcomes preserve explicit evidence stage without claiming model reliance [353.09ms]
+(pass) delete invalidates an existing snapshot without returning cached content [273.84ms]
+(pass) correct invalidates an existing snapshot without returning cached content [263.72ms]
+(pass) verify invalidates an existing snapshot without returning cached content [281.98ms]
+(pass) rename invalidates an existing snapshot without returning cached content [365.55ms]
+(pass) evidence invalidates an existing snapshot without returning cached content [359.40ms]
+(pass) usage invalidates an existing snapshot without returning cached content [281.51ms]
+(pass) canonical correction history has safe internal links, excludes superseded facts from stream and never links raw sources [301.56ms]
+(pass) unconfirmed source/evidence labels cannot claim confirmed status; quotes and extra usage payload never leak [289.72ms]
+(pass) expired, evicted and restarted cursors report stale and refresh works [357.47ms]
+(pass) cursors are bound to query and page size and signed against offset tampering [361.10ms]
+(pass) strict bounds reject unsupported fields and malformed query inputs [271.73ms]
+(pass) closed or replaced database and failing usage provider return unavailable, not zero matches [341.91ms]
+(pass) malformed and duplicate usage records fail closed [338.62ms]
+(pass) hard collection cap is unavailable, never a silently truncated count [386.48ms]
+(pass) usage and provenance caps fail closed before returning misleading partial evidence [689.16ms]
+(pass) history cycles terminate and oversized lineage is unavailable without truncation [367.38ms]
+
+ 56 pass
+ 0 fail
+ 596 expect() calls
+Ran 56 tests across 3 files. [9.08s]

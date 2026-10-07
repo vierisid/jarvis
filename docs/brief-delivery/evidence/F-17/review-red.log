@@ -1,0 +1,275 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-memory.test.ts:
+102 |       { factId: unscoped.id, scope: '', status: 'active' },
+103 |     ];
+104 |     if (view === 'collection') {
+105 |       const response = await call(table); expect(response.status).toBe(200);
+106 |       expect(response.body.data.count).toEqual({ total: 3, matched: 3, returned: 3 });
+107 |       for (const item of expected) expect(response.body.data.items.find((f: any) => f.factId === item.factId)).toMatchObject({ ...item, basis: 'confirmed' });
+                                                                                                                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "basis": "confirmed",
++   "detailHref": "/api/brief/memory/b2e5805b-ff46-4e15-8ce7-24a34f94ec50",
+    "factId": "b2e5805b-ff46-4e15-8ce7-24a34f94ec50",
+-   "scope": "work",
++   "historyHref": "/api/brief/memory/b2e5805b-ff46-4e15-8ce7-24a34f94ec50/history",
++   "permissions": {
++     "canCorrect": false,
++     "canForget": false,
++     "canRead": true,
++   },
++   "provenance": [
++     {
++       "id": "0b6b868a-3506-4f15-b252-7677b82532e0",
++       "kind": "source",
++       "revision": "047a326cbfe9cc76d4cb9f3dfa18bfede9cb25475115c7306a2c75d54fd0e9e6",
++     },
++   ],
++   "revision": "bbe3a63fe95d583bf2ebd1672b73ce88f5fb0f18dad133e4ecb00eb5d6df93b1",
++   "sentence": "Ada preferred_editor Emacs",
++   "sourceId": null,
++   "sourceSummary": {
++     "evidenceCount": 1,
++     "labels": [
++       "user_correction",
++     ],
++   },
+    "status": "active",
++   "subjectId": "13da7a47-7766-4497-b780-928e8bdd41a7",
++   "supersededBy": null,
++   "updatedAt": 1791383801116,
++   "uses": [],
++   "validity": {
++     "from": null,
++     "to": null,
++   },
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:107:112)
+(fail) F17 review R1: collection retains canonical scope across independent confirmed preferences and correction [24.15ms]
+106 |       expect(response.body.data.count).toEqual({ total: 3, matched: 3, returned: 3 });
+107 |       for (const item of expected) expect(response.body.data.items.find((f: any) => f.factId === item.factId)).toMatchObject({ ...item, basis: 'confirmed' });
+108 |     } else if (view === 'detail') {
+109 |       for (const item of [...expected, { factId: work.id, scope: 'work', status: 'superseded' }]) {
+110 |         const response = await call(table, '', `${base}/:id`, item.factId); expect(response.status).toBe(200);
+111 |         expect(response.body.data).toMatchObject({ ...item, basis: 'confirmed' });
+                                         ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "basis": "confirmed",
++   "detailHref": "/api/brief/memory/597170c4-ecb7-4e39-8278-216eaf32c6c6",
+    "factId": "597170c4-ecb7-4e39-8278-216eaf32c6c6",
+-   "scope": "work",
++   "historyHref": "/api/brief/memory/597170c4-ecb7-4e39-8278-216eaf32c6c6/history",
++   "permissions": {
++     "canCorrect": false,
++     "canForget": false,
++     "canRead": true,
++   },
++   "provenance": [
++     {
++       "id": "447b0997-b8dd-4112-a70c-9f7027936ec9",
++       "kind": "source",
++       "revision": "10723ae88cd24609a2cdc38d8646f25d2f80a837a7b6a834a8f43f183ddd0802",
++     },
++   ],
++   "revision": "65a289118f19f879d7c7a34861f1c75b66aa00db6e0f0ef24e418710d23caf78",
++   "sentence": "Ada preferred_editor Emacs",
++   "sourceId": null,
++   "sourceSummary": {
++     "evidenceCount": 1,
++     "labels": [
++       "user_correction",
++     ],
++   },
+    "status": "active",
++   "subjectId": "7bd67e29-e367-44a7-b562-3c97207767d9",
++   "supersededBy": null,
++   "updatedAt": 1791383801136,
++   "uses": [],
++   "validity": {
++     "from": null,
++     "to": null,
++   },
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:111:36)
+(fail) F17 review R1: detail retains canonical scope across independent confirmed preferences and correction [14.62ms]
+111 |         expect(response.body.data).toMatchObject({ ...item, basis: 'confirmed' });
+112 |       }
+113 |     } else {
+114 |       const response = await call(table, '', `${base}/:id/history`, corrected.id); expect(response.status).toBe(200);
+115 |       expect(response.body.data).toHaveLength(2);
+116 |       expect(response.body.data.find((f: any) => f.factId === work.id)).toMatchObject({ scope: 'work', status: 'superseded' });
+                                                                              ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "scope": "work",
++   "basis": "confirmed",
++   "detailHref": "/api/brief/memory/53bf2daf-195b-42cd-b681-a4d41c3f4921",
++   "factId": "53bf2daf-195b-42cd-b681-a4d41c3f4921",
++   "historyHref": "/api/brief/memory/53bf2daf-195b-42cd-b681-a4d41c3f4921/history",
++   "permissions": {
++     "canCorrect": false,
++     "canForget": false,
++     "canRead": true,
++   },
++   "provenance": [
++     {
++       "id": "7032712a-211e-490f-8693-212791ec4e47",
++       "kind": "source",
++       "revision": "78395ddda3dc6dc9fd29755d85476117b33a30d0f80306580d34eb13a60b54ac",
++     },
++   ],
++   "revision": "c921a86d562fc1e2b24471c644ae6903caf17ca473181db08d4b7aaf1034fdb8",
++   "sentence": "Ada preferred_editor Vim",
++   "sourceId": null,
++   "sourceSummary": {
++     "evidenceCount": 1,
++     "labels": [],
++   },
+    "status": "superseded",
++   "subjectId": "58671788-01e3-4fd4-af7a-12016fa44b14",
++   "supersededBy": "957f089c-534d-447b-a4e9-811bb900fe7c",
++   "updatedAt": 1791383801148,
++   "uses": [],
++   "validity": {
++     "from": null,
++     "to": null,
++   },
+  }
+
+- Expected  - 1
++ Received  + 31
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:116:73)
+(fail) F17 review R1: history retains canonical scope across independent confirmed preferences and correction [13.64ms]
+134 |       const all = await call(table);
+135 |       const label = all.body.data.items.find((f: any) => f.factId === ids[0]).sourceSummary.labels.find((value: string) => value === source);
+136 |       expect(label).toBe(source);
+137 |       const query = new URLSearchParams({ source: label, limit: '1' });
+138 |       const first = await call(table, `?${query}`); expect(first.status).toBe(200);
+139 |       expect(first.body.data.count).toEqual({ total: 3, matched: 2, returned: 1 });
+                                          ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "matched": 2,
++   "matched": 1,
+    "returned": 1,
+    "total": 3,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:139:37)
+(fail) F17 review R2: canonical Source with spaces round-trips through exact filters, counts and cursors [15.02ms]
+134 |       const all = await call(table);
+135 |       const label = all.body.data.items.find((f: any) => f.factId === ids[0]).sourceSummary.labels.find((value: string) => value === source);
+136 |       expect(label).toBe(source);
+137 |       const query = new URLSearchParams({ source: label, limit: '1' });
+138 |       const first = await call(table, `?${query}`); expect(first.status).toBe(200);
+139 |       expect(first.body.data.count).toEqual({ total: 3, matched: 2, returned: 1 });
+                                          ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "matched": 2,
++   "matched": 1,
+    "returned": 1,
+    "total": 3,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:139:37)
+(fail) F17 review R2: canonical Source with nonbreaking spaces round-trips through exact filters, counts and cursors [14.17ms]
+133 |       const plain = createFact(subject, 'likes', 'water', { source: 'meeting' }), table = routes();
+134 |       const all = await call(table);
+135 |       const label = all.body.data.items.find((f: any) => f.factId === ids[0]).sourceSummary.labels.find((value: string) => value === source);
+136 |       expect(label).toBe(source);
+137 |       const query = new URLSearchParams({ source: label, limit: '1' });
+138 |       const first = await call(table, `?${query}`); expect(first.status).toBe(200);
+                                                                               ^
+error: expect(received).toBe(expected)
+
+Expected: 200
+Received: 400
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:138:74)
+(fail) F17 review R2: canonical Source with tabs/newlines round-trips through exact filters, counts and cursors [12.61ms]
+134 |       const all = await call(table);
+135 |       const label = all.body.data.items.find((f: any) => f.factId === ids[0]).sourceSummary.labels.find((value: string) => value === source);
+136 |       expect(label).toBe(source);
+137 |       const query = new URLSearchParams({ source: label, limit: '1' });
+138 |       const first = await call(table, `?${query}`); expect(first.status).toBe(200);
+139 |       expect(first.body.data.count).toEqual({ total: 3, matched: 2, returned: 1 });
+                                          ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "matched": 2,
++   "matched": 1,
+    "returned": 1,
+    "total": 3,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:139:37)
+(fail) F17 review R2: evidence Source with spaces round-trips through exact filters, counts and cursors [13.52ms]
+134 |       const all = await call(table);
+135 |       const label = all.body.data.items.find((f: any) => f.factId === ids[0]).sourceSummary.labels.find((value: string) => value === source);
+136 |       expect(label).toBe(source);
+137 |       const query = new URLSearchParams({ source: label, limit: '1' });
+138 |       const first = await call(table, `?${query}`); expect(first.status).toBe(200);
+139 |       expect(first.body.data.count).toEqual({ total: 3, matched: 2, returned: 1 });
+                                          ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "matched": 2,
++   "matched": 1,
+    "returned": 1,
+    "total": 3,
+  }
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:139:37)
+(fail) F17 review R2: evidence Source with nonbreaking spaces round-trips through exact filters, counts and cursors [12.76ms]
+133 |       const plain = createFact(subject, 'likes', 'water', { source: 'meeting' }), table = routes();
+134 |       const all = await call(table);
+135 |       const label = all.body.data.items.find((f: any) => f.factId === ids[0]).sourceSummary.labels.find((value: string) => value === source);
+136 |       expect(label).toBe(source);
+137 |       const query = new URLSearchParams({ source: label, limit: '1' });
+138 |       const first = await call(table, `?${query}`); expect(first.status).toBe(200);
+                                                                               ^
+error: expect(received).toBe(expected)
+
+Expected: 200
+Received: 400
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/daemon/api-brief-memory.test.ts:138:74)
+(fail) F17 review R2: evidence Source with tabs/newlines round-trips through exact filters, counts and cursors [12.56ms]
+
+ 0 pass
+ 6 filtered out
+ 9 fail
+ 39 expect() calls
+Ran 9 tests across 1 file. [337.00ms]

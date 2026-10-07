@@ -29,8 +29,9 @@ export function memoryStreamQuery(input: MemoryStreamQuery): Required<Pick<Memor
   for (const [key, max] of [['q', 256], ['source', 4000], ['usedIn', 220], ['cursor', 256]] as const) {
     const value = input[key];
     if (value !== undefined) {
-      if (typeof value !== 'string' || !value.trim() || value.length > max || /[\u0000-\u001f\u007f]/.test(value)) throw new MemoryQueryError(`Invalid ${key}`);
-      result[key] = value.trim();
+      if (typeof value !== 'string' || !value.trim() || value.length > max || (key !== 'source' && /[\u0000-\u001f\u007f]/.test(value))) throw new MemoryQueryError(`Invalid ${key}`);
+      // Source labels are canonical text, including stored whitespace, not identifiers.
+      result[key] = key === 'source' ? value : value.trim();
     }
   }
   if (result.usedIn) {
@@ -107,7 +108,7 @@ export class MemoryStream {
       const revision = digest([row, ev, factUses]);
       const href = `/api/brief/memory/${encodeURIComponent(row.id)}`;
       items.set(row.id, { factId: row.id, sourceId: null, sentence: `${row.subject_name} ${row.predicate} ${row.object}`,
-        revision, subjectId: row.subject_id, updatedAt, basis, status: row.status,
+        revision, subjectId: row.subject_id, scope: row.scope, updatedAt, basis, status: row.status,
         validity: { from: row.valid_from, to: row.valid_to }, sourceSummary: { labels, evidenceCount: ev.length },
         provenance: ev.map(e => ({ kind: 'source', id: e.id, revision: digest(e) })), uses: factUses,
         permissions: { canRead: true, canCorrect: false, canForget: false },
