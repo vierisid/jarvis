@@ -410,16 +410,29 @@ export const ENGINE_REQUEST_BASE_SHIM = `(() => {
  */
 export const ENGINE_ABSENT_MODULES = ["bufferutil", "utf-8-validate", "supports-color", "isolated-vm"] as const;
 
-/** The whole body of an absent module: what Node throws for a missing one. */
+/**
+ * The whole body of an absent module: what Node throws for a missing one, on
+ * EVERY require of it.
+ *
+ * Throwing once is not enough. esbuild's CommonJS wrapper assigns the module
+ * record before running the body and returns `module.exports` on every later
+ * call, so a stub that only threw would hand its SECOND requirer an empty `{}`
+ * -- and `ws` given `{}` as `bufferutil` installs `bufferUtil.mask`, undefined,
+ * and throws on the first large frame, outside any `try`. The bundle already
+ * requires `supports-color` from two copies of `debug`. Making `exports` a
+ * getter that throws the same error turns every later require into the same
+ * catchable MODULE_NOT_FOUND, at the require, inside the caller's `try`.
+ */
 export function absentModuleSource(name: string): string {
   const message = `Cannot find module '${name}' (compiled out of the Jarvis engine bundle, #759)`;
-  return `var e = new Error(${JSON.stringify(message)}); e.code = "MODULE_NOT_FOUND"; throw e;`;
+  return `var e = new Error(${JSON.stringify(message)}); e.code = "MODULE_NOT_FOUND"; ` +
+    `Object.defineProperty(module, "exports", { get: function () { throw e; } }); throw e;`;
 }
 
 const ABSENT_NAMESPACE = "jarvis-absent-module";
 
 /** esbuild plugin resolving every ENGINE_ABSENT_MODULES name to its stub. */
-function absentModulesPlugin(): { name: string; setup(build: EsbuildPluginBuild): void } {
+export function absentModulesPlugin(): { name: string; setup(build: EsbuildPluginBuild): void } {
   const names = new Set<string>(ENGINE_ABSENT_MODULES);
   return {
     name: "jarvis-absent-modules",
@@ -455,18 +468,30 @@ export interface EngineMetafile {
  * lists type-only imports that never reach the bundle.
  */
 export function runtimeResolvedModules(metafile: EngineMetafile): string[] {
-  const builtins = new Set(builtinModules);
   const found = new Set<string>();
   for (const output of Object.values(metafile.outputs)) {
     for (const imp of output.imports ?? []) {
       if (!imp.external) continue;
       const name = imp.path;
-      if (name.startsWith("node:") || builtins.has(name)) continue;
+      if (name.startsWith("node:") || NODE_BUILTINS.has(name)) continue;
       found.add(name);
     }
   }
   return [...found].sort();
 }
+
+/**
+ * Node's builtins, not the runtime's. Under Bun `builtinModules` also lists
+ * `bun`, `bun:*`, `ws` and `undici`: Bun shadows those names with its own
+ * implementations, so a bundle that left `ws` external would load Bun's `ws`
+ * instead of the one it was built with, and under a non-Bun runtime it would
+ * resolve it from disk beside the bundle. The bundle targets node, so those
+ * count as run-time resolution like any other package.
+ */
+const RUNTIME_ONLY_BUILTINS = new Set(["bun", "ws", "undici"]);
+const NODE_BUILTINS = new Set(
+  builtinModules.filter((name) => !RUNTIME_ONLY_BUILTINS.has(name) && !name.startsWith("bun:")),
+);
 
 /** Refuse a bundle that would load anything from beside itself (#759). */
 export function assertSelfContainedBundle(metafile: EngineMetafile): void {

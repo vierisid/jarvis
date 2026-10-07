@@ -12,13 +12,16 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import {
+  absentModulesPlugin,
   assertSelfContainedBundle,
   buildEngineBundle,
   ENGINE_ABSENT_MODULES,
+  ENGINE_BUILD_PATHS,
+  ENGINE_ESBUILD_CONFIG,
   findCachedBundle,
   runtimeResolvedModules,
   type EngineMetafile,
@@ -59,6 +62,14 @@ describe("the build refuses a bundle that resolves code at run time (#759)", () 
     expect(() => assertSelfContainedBundle(metafile)).toThrow(/REFUSED: it would resolve "@scope\/pkg\/sub", "supports-color" at run time/u);
   });
 
+  test("names Bun shadows are run-time resolution too, not builtins", () => {
+    // Bun's builtinModules lists these; the bundle targets node, and leaving one
+    // external would swap in the runtime's copy (or, off Bun, resolve it from disk).
+    expect(runtimeResolvedModules(metafileImporting(
+      { path: "ws" }, { path: "undici" }, { path: "bun" }, { path: "bun:sqlite" },
+    ))).toEqual(["bun", "bun:sqlite", "undici", "ws"]);
+  });
+
   test("an import that was bundled is not reported, however it is spelled", () => {
     expect(runtimeResolvedModules(metafileImporting({ path: "ws", external: false }))).toEqual([]);
   });
@@ -78,6 +89,32 @@ describe("the build refuses a bundle that resolves code at run time (#759)", () 
     expect(fn).toContain("ENGINE_ABSENT_MODULES");
     expect(fn).toContain("absentModuleSource(name)");
   });
+});
+
+/**
+ * The stub through REAL esbuild, because its correctness depends on esbuild's
+ * CommonJS wrapper: that wrapper memoizes the module record before the body
+ * runs, so a stub that merely threw handed its second requirer `{}`. Skipped
+ * where the staging install (and so esbuild) is absent; CI's build opt-in has it.
+ */
+const stagingEsbuild = resolve(ENGINE_BUILD_PATHS.STAGING_DIR, "node_modules/esbuild/lib/main.js");
+describe.skipIf(!existsSync(stagingEsbuild))("an absent module throws at every require (#759)", () => {
+  test("the second require of a compiled-out name throws MODULE_NOT_FOUND, not an empty object", async () => {
+    const dir = scratch("stub");
+    const entry = join(dir, "entry.js");
+    writeFileSync(entry,
+      `const seen = [];\n` +
+      `for (const name of ["first", "second", "third"]) {\n` +
+      `  try { const m = require("bufferutil"); seen.push(name + ":returned " + typeof m + " " + JSON.stringify(Object.keys(m))); }\n` +
+      `  catch (e) { seen.push(name + ":" + e.code); }\n` +
+      `}\n` +
+      `console.log(JSON.stringify(seen));\n`);
+    const esbuild = (await import(stagingEsbuild)) as { build(o: Record<string, unknown>): Promise<unknown> };
+    const outfile = join(dir, "out.js");
+    await esbuild.build({ ...ENGINE_ESBUILD_CONFIG, banner: undefined, entryPoints: [entry], outfile, plugins: [absentModulesPlugin()], logLevel: "silent" });
+    const proc = Bun.spawnSync([process.execPath, outfile], { env: { PATH: process.env.PATH ?? "" } });
+    expect(JSON.parse(proc.stdout.toString().trim())).toEqual(["first:MODULE_NOT_FOUND", "second:MODULE_NOT_FOUND", "third:MODULE_NOT_FOUND"]);
+  }, 20_000);
 });
 
 /**
