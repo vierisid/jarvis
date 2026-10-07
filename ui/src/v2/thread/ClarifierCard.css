@@ -45,6 +45,8 @@
   font-size: var(--text-sm);
   color: var(--ink-2);
   line-height: 1.4;
+  /* A long unbroken token wraps instead of being clipped (#719). */
+  overflow-wrap: anywhere;
 }
 
 .v2-clarifier__primary {
@@ -54,6 +56,8 @@
   color: var(--ink);
   margin: 0;
   font-weight: 400;
+  /* A long unbroken token wraps instead of being clipped (#719). */
+  overflow-wrap: anywhere;
 }
 
 .v2-clarifier__primary em {
