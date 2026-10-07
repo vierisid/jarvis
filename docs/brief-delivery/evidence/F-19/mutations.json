@@ -1,0 +1,32 @@
+[
+  {
+    "variant": "bypass-suppression",
+    "file": "src/vault/memory-suppression.ts",
+    "pattern": "same automatic source revision stays suppressed",
+    "exit": 1,
+    "failures": [
+      "(fail) same automatic source revision stays suppressed across restart; unrelated assertions and new source survive [448.14ms]"
+    ],
+    "original_sha256": "0d857438a6f21470cb712fab674db8e1d6610c8fa6e91dd1cc5f3b634c152f2f"
+  },
+  {
+    "variant": "bypass-revision-check",
+    "file": "src/brief/memory-forget.ts",
+    "pattern": "correction racing a confirmation",
+    "exit": 1,
+    "failures": [
+      "(fail) correction racing a confirmation conflicts in either ordering and never forgets the replacement [386.70ms]"
+    ],
+    "original_sha256": "f0039f3b63b22e29d4059a69b922f27b665d09efa79b059cdb35fefe13b0affc"
+  },
+  {
+    "variant": "bypass-handoff-fence",
+    "file": "src/vault/memory-use-context.ts",
+    "pattern": "profile context prepared before Forget",
+    "exit": 1,
+    "failures": [
+      "(fail) profile context prepared before Forget cannot escape through a later handoff [361.94ms]"
+    ],
+    "original_sha256": "170995fdf94335736f0984a5d56f36f07ea43f0f06768411b8dabcaf73697b89"
+  }
+]

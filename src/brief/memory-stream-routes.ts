@@ -11,7 +11,7 @@ export function createMemoryStreamRoutes(capabilities: BriefCapabilities, json: 
       else if (!capabilities.snapshot().capabilities.memoryStream.enabled || !provider.usage || !capabilities.hasProvider('memoryUsage', provider.usage)) response = json({ state: 'unavailable' }, 503);
       else {
         const result = await fn(req) as { state: string };
-        response = json(result, result.state === 'unavailable' ? 503 : result.state === 'stale' ? 409 : result.state === 'not_found' ? 404 : 200);
+        response = json(result, result.state === 'unavailable' ? 503 : result.state === 'stale' ? 409 : result.state === 'not_found' ? 404 : result.state === 'forgotten' ? 410 : 200);
       }
     } catch (e) {
       response = e instanceof MemoryQueryError || e instanceof URIError ? json({ code: 'INVALID_MEMORY_QUERY' }, 400)
