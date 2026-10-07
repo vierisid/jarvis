@@ -1,0 +1,39 @@
+bun test v1.4.2 (744846f84)
+
+src/goals/measurements.test.ts:
+92 |   expect(vault.getProgressHistory(id)).toHaveLength(2);
+93 | });
+94 | for (const [baseline, target, value, score] of [[5, 15, 6, 0.1], [100, 0, 60, 0.4], [0, 10, 12, 1], [0, 10, -2, 0]]) {
+95 |   test(`absolute mapping ${baseline} -> ${target} at ${value} preserves the count and clamps only score`, () => {
+96 |     const input = command(); input.measurement = { ...input.measurement, baseline: baseline!, target: target!, value: value! };
+97 |     save(input); expect(goal().score).toBe(score!); expect(goal().measurement!.value).toBe(value!);
+                                           ^
+error: expect(received).toBe(expected)
+
+Expected: 0.1
+Received: 0.4
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:97:39)
+(fail) absolute mapping 5 -> 15 at 6 preserves the count and clamps only score [386.73ms]
+92 |   expect(vault.getProgressHistory(id)).toHaveLength(2);
+93 | });
+94 | for (const [baseline, target, value, score] of [[5, 15, 6, 0.1], [100, 0, 60, 0.4], [0, 10, 12, 1], [0, 10, -2, 0]]) {
+95 |   test(`absolute mapping ${baseline} -> ${target} at ${value} preserves the count and clamps only score`, () => {
+96 |     const input = command(); input.measurement = { ...input.measurement, baseline: baseline!, target: target!, value: value! };
+97 |     save(input); expect(goal().score).toBe(score!); expect(goal().measurement!.value).toBe(value!);
+                                           ^
+error: expect(received).toBe(expected)
+
+Expected: 0.4
+Received: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:97:39)
+(fail) absolute mapping 100 -> 0 at 60 preserves the count and clamps only score [370.16ms]
+(pass) absolute mapping 0 -> 10 at 12 preserves the count and clamps only score [375.47ms]
+(pass) absolute mapping 0 -> 10 at -2 preserves the count and clamps only score [299.90ms]
+
+ 2 pass
+ 16 filtered out
+ 2 fail
+ 6 expect() calls
+Ran 4 tests across 1 file. [1462.00ms]

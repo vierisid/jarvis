@@ -1,0 +1,54 @@
+[
+  {
+    "variant": "stale-revision",
+    "exit": 1,
+    "expected_failure": true,
+    "command": [
+      "bun",
+      "test",
+      "src/goals/measurements.test.ts",
+      "--test-name-pattern",
+      "same request"
+    ],
+    "log": "docs/brief-delivery/evidence/F-15/stale-revision-mutation.log"
+  },
+  {
+    "variant": "stale-time",
+    "exit": 1,
+    "expected_failure": true,
+    "command": [
+      "bun",
+      "test",
+      "src/goals/measurements.test.ts",
+      "--test-name-pattern",
+      "earlier and equal"
+    ],
+    "log": "docs/brief-delivery/evidence/F-15/stale-time-mutation.log"
+  },
+  {
+    "variant": "ignore-baseline",
+    "exit": 1,
+    "expected_failure": true,
+    "command": [
+      "bun",
+      "test",
+      "src/goals/measurements.test.ts",
+      "--test-name-pattern",
+      "absolute mapping"
+    ],
+    "log": "docs/brief-delivery/evidence/F-15/ignore-baseline-mutation.log"
+  },
+  {
+    "variant": "legacy-score-bypass",
+    "exit": 1,
+    "expected_failure": true,
+    "command": [
+      "bun",
+      "test",
+      "src/goals/measurements.test.ts",
+      "--test-name-pattern",
+      "measurement-backed"
+    ],
+    "log": "docs/brief-delivery/evidence/F-15/legacy-score-bypass-mutation.log"
+  }
+]

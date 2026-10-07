@@ -1,0 +1,43 @@
+bun test v1.4.2 (744846f84)
+
+src/goals/measurements.test.ts:
+68 |   for (const next of [
+69 |     { ...first, measurement: { ...first.measurement, value: 9 } },
+70 |     { ...first, requestId: 'stale' },
+71 |     { ...first, requestId: 'stale-fresh-evidence', measurement: { ...first.measurement, value: 9, measuredAt: first.measurement.measuredAt! + 100, evidence: { id: 'ledger', revision: 'v2' } } },
+72 |     { ...first, requestId: 'duplicate-evidence', revision: 1, measurement: { ...first.measurement, value: 9, measuredAt: first.measurement.measuredAt! + 100 } },
+73 |   ]) expect(() => save(next)).toThrow(GoalMeasurementConflict);
+                                   ^
+error: expect(received).toThrow(expected)
+
+Expected constructor: GoalMeasurementConflict
+
+Received function did not throw
+Received value: {
+  goalId: "11fb468d-a2a9-438f-91ff-595e39a11885",
+  requestId: "stale-fresh-evidence",
+  measurement: {
+    unit: "signed partners",
+    baseline: 0,
+    target: 10,
+    value: 9,
+    measuredAt: 1791367576765,
+    evidence: {
+      id: "ledger",
+      revision: "v2",
+    },
+    revision: 1,
+    qualification: "user_reported",
+  },
+  score: 0.9,
+  progressId: "bc213632-f784-4539-b9cd-563bf3e494d1",
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:73:31)
+(fail) same request with a different payload, stale revisions and duplicate evidence cannot write [444.45ms]
+
+ 0 pass
+ 19 filtered out
+ 1 fail
+ 3 expect() calls
+Ran 1 test across 1 file. [488.00ms]

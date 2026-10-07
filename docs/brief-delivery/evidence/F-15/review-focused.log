@@ -1,0 +1,70 @@
+bun test v1.4.2 (744846f84)
+
+src/util/model-exec-env.test.ts:
+(pass) the daemon-secret rule > every listed daemon secret is stripped, in any case [0.31ms]
+(pass) the daemon-secret rule > the sources the header cites are the names on the list [1.16ms]
+(pass) the daemon-secret rule > an unclassified JARVIS_ name is stripped: a future secret fails closed [0.12ms]
+(pass) the daemon-secret rule > settings stay, and no daemon secret is on the settings list [0.36ms]
+(pass) the daemon-secret rule > the engine wiring names are known, internal, and stripped [0.08ms]
+(pass) the daemon-secret rule > the user's shell and desktop survive whole, their own credentials included [0.15ms]
+(pass) the daemon-secret rule > stripping removes exactly the daemon secrets and nothing else [0.25ms]
+(pass) modelExecEnv() > marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off [0.20ms]
+(pass) modelExecEnv() > flags the env key only when this process holds it or inherited the flag [45.97ms]
+(pass) modelExecEnv() > an extra cannot put a daemon secret back, nor can a spread of process.env [0.18ms]
+(pass) modelExecEnv() > an undefined extra removes the key; the result is always an object [0.05ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the scan sees the names it must (not blind) [0.09ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [0.27ms]
+(pass) every JARVIS_ env name in src/, bin/ and scripts/ is classified > the three buckets do not overlap [0.05ms]
+(pass) the model-exec markers (#514) > the key check: 16 hex chars, stable, case-insensitive, and not the key [53.65ms]
+(pass) the model-exec markers (#514) > the marker is exactly "1"; the flag is a check value or an older parent's "1" [0.39ms]
+(pass) the model-exec markers (#514) > modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged [0.09ms]
+(pass) the model-exec markers (#514) > silent for a file-key install, marked or not [0.13ms]
+(pass) the model-exec markers (#514) > warns while the parent's key is missing or a different one is set; silent once it is back [0.12ms]
+(pass) the model-exec markers (#514) > the CLI warns only for a detached start or restart [0.11ms]
+
+src/daemon/api-brief-goal-measurements.test.ts:
+(pass) missing, wrong, disabled and unavailable providers gate every measurement route [44.78ms]
+(pass) read, write, receipt recovery and legacy goal routes agree on recorded measurement and progress [22.08ms]
+(pass) bad shapes, forged qualification, malformed bytes, oversized bodies and query injection cannot write [18.17ms]
+[WebSocketServer] Started on unix:/tmp/jarvis-f15-http-f1NAc3/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) authenticated HTTP requires a session for reads and writes, then recovers the same measurement receipt [38.24ms]
+(pass) work result checks refuse a conflicting score clearly and can complete without changing measured progress [23.71ms]
+
+src/goals/measurements.test.ts:
+(pass) a legacy 0.6 score never becomes six partners, including a numeric title [482.22ms]
+(pass) six of ten persists as an absolute user report, with matching score, history and evidence [492.28ms]
+(pass) configured unknown remains unknown, while observed zero is a real measurement [558.52ms]
+(pass) exact replay survives restart and newer measurements without rewriting history or score [561.76ms]
+(pass) same request with a different payload, stale revisions and duplicate evidence cannot write [688.92ms]
+(pass) earlier and equal measurement times cannot supersede a later report or erase its value [717.27ms]
+(pass) a fresh negative correction lowers absolute progress once, without negative deltas being added [670.36ms]
+(pass) absolute mapping 5 -> 15 at 6 preserves the count and clamps only score [455.37ms]
+(pass) absolute mapping 100 -> 0 at 60 preserves the count and clamps only score [485.21ms]
+(pass) absolute mapping 0 -> 10 at 12 preserves the count and clamps only score [427.02ms]
+(pass) absolute mapping 0 -> 10 at -2 preserves the count and clamps only score [477.88ms]
+(pass) child reports, shared evidence, corrections and deletion never add to a parent total [545.92ms]
+(pass) measurement-backed goals reject legacy manual/tool/work-result scoring, not ordinary goal edits [467.26ms]
+(pass) validation refuses malformed, inferred and future-dated claims atomically [451.52ms]
+(pass) event persistence failure rolls back snapshot, score, history and idempotency receipt [472.06ms]
+(pass) outer transaction rollback leaves no measurement, events or score [481.18ms]
+(pass) old schema migration is additive and repeatable without inferring any goal counts [491.96ms]
+(pass) replaced vault connections make old providers unavailable [536.98ms]
+(pass) two independent writers cannot commit different measurements from the same revision [551.64ms]
+[Goals] Event delivery deferred: 9f308d95-9464-4ab4-8f11-726335fac241
+(pass) event sink failure after commit preserves a recoverable receipt and later event delivery [487.62ms]
+(pass) health refresh cannot reuse the previous canonical goal revision within one clock tick [465.32ms]
+(pass) detail read keeps one measurement snapshot when a separate writer commits after the goal query [533.48ms]
+(pass) list read keeps one measurement snapshot when a separate writer commits after the goal query [634.88ms]
+(pass) roots read keeps one measurement snapshot when a separate writer commits after the goal query [567.49ms]
+(pass) tree read keeps one measurement snapshot when a separate writer commits after the goal query [643.26ms]
+(pass) children read keeps one measurement snapshot when a separate writer commits after the goal query [651.29ms]
+(pass) overdue read keeps one measurement snapshot when a separate writer commits after the goal query [570.68ms]
+(pass) dependency read keeps one measurement snapshot when a separate writer commits after the goal query [620.90ms]
+(pass) escalation read keeps one measurement snapshot when a separate writer commits after the goal query [574.86ms]
+(pass) brief read keeps one measurement snapshot when a separate writer commits after the goal query [590.91ms]
+
+ 55 pass
+ 0 fail
+ 448 expect() calls
+Ran 55 tests across 3 files. [16.75s]

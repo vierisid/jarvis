@@ -1,0 +1,520 @@
+bun test v1.4.2 (744846f84)
+
+src/util/model-exec-env.test.ts:
+264 |     // The failure prints what to do, not just the names.
+265 |     const fix = unclassified.length === 0 ? null
+266 |       : 'A setting (e.g. JARVIS_BROWSER_NO_SANDBOX from #521): add it to JARVIS_SETTINGS_ENV_NAMES in '
+267 |         + 'src/util/model-exec-env.ts. A secret: DAEMON_SECRET_ENV_NAMES. Set only on processes the daemon '
+268 |         + 'starts itself: JARVIS_INTERNAL_ENV_NAMES.';
+269 |     expect({ unclassified, fix }).toEqual({ unclassified: [], fix: null });
+                                        ^
+error: expect(received).toEqual(expected)
+
+  {
+-   "fix": null,
+-   "unclassified": [],
++   "fix": "A setting (e.g. JARVIS_BROWSER_NO_SANDBOX from #521): add it to JARVIS_SETTINGS_ENV_NAMES in src/util/model-exec-env.ts. A secret: DAEMON_SECRET_ENV_NAMES. Set only on processes the daemon starts itself: JARVIS_INTERNAL_ENV_NAMES.",
++   "unclassified": [
++     "JARVIS_BRIEF_GOAL_MEASUREMENTS (src/daemon/index.ts)",
++   ],
+  }
+
+- Expected  - 2
++ Received  + 4
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/util/model-exec-env.test.ts:269:35)
+(fail) every JARVIS_ env name in src/, bin/ and scripts/ is classified > each is either a daemon secret or a listed setting [5.75ms]
+
+src/goals/measurements.test.ts:
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "97404d68-4766-445f-b59e-d485b517e4cc",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373194769,
++     "asOf": 1791373194770,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373204770:1",
++   "revision": "1791373204770:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) detail read keeps one measurement snapshot when a separate writer commits after the goal query [413.03ms]
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "e3386128-79af-4781-b809-46818b829258",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373195139,
++     "asOf": 1791373195140,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373205139:1",
++   "revision": "1791373205139:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) list read keeps one measurement snapshot when a separate writer commits after the goal query [360.67ms]
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "1eaec6c1-6681-4aec-8ca2-0eb87f0f20bc",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373195485,
++     "asOf": 1791373195486,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373205485:1",
++   "revision": "1791373205485:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) roots read keeps one measurement snapshot when a separate writer commits after the goal query [345.13ms]
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "1aab9772-c273-41dc-bd8a-2c4f9cd820f2",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373195852,
++     "asOf": 1791373195853,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373205852:1",
++   "revision": "1791373205852:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) tree read keeps one measurement snapshot when a separate writer commits after the goal query [372.35ms]
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "2a65ae74-9d7c-4e58-8cd3-05f2db481b3f",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373196297,
++     "asOf": 1791373196298,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373206297:1",
++   "revision": "1791373206297:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) children read keeps one measurement snapshot when a separate writer commits after the goal query [473.00ms]
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "eb33fbaa-b66c-4390-87db-110d569ed396",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373196761,
++     "asOf": 1791373196762,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373206761:1",
++   "revision": "1791373206761:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) overdue read keeps one measurement snapshot when a separate writer commits after the goal query [438.13ms]
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "87d53d4f-21ca-4b74-ba85-a8f8aed479e9",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373197149,
++     "asOf": 1791373197150,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373207149:1",
++   "revision": "1791373207149:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) dependency read keeps one measurement snapshot when a separate writer commits after the goal query [379.24ms]
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "5a79d99f-8da3-442d-b50a-290b251f5b75",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373197512,
++     "asOf": 1791373197513,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373207512:1",
++   "revision": "1791373207512:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) escalation read keeps one measurement snapshot when a separate writer commits after the goal query [368.08ms]
+254 |           : reader === 'children' ? vault.getGoalChildren(parentId)
+255 |           : reader === 'overdue' ? vault.getOverdueGoals()
+256 |           : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+257 |           : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+258 |       expect(committed).toBe(true);
+259 |       expect(views.find(view => view.goalId === id)).toEqual(before);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+  {
+    "goalId": "17869c24-e5d6-4e3b-8365-fb49b558992a",
+    "health": "behind",
+    "measurement": {
+-     "asOf": 1791373198010,
++     "asOf": 1791373198011,
+      "baseline": 0,
+      "provenance": [
+        {
+          "id": "owner:partner-ledger",
+          "kind": "source",
+-         "revision": "v1",
++         "revision": "v2",
+        },
+      ],
+      "qualification": "user_reported",
+      "target": 10,
+      "unit": "signed partners",
+-     "value": 6,
++     "value": 7,
+    },
+    "measurementDefinition": {
+      "baseline": 0,
+      "target": 10,
+      "unit": "signed partners",
+    },
+-   "measurementRevision": 1,
++   "measurementRevision": 2,
+    "progress": {
+      "basis": "measurement",
+      "rollup": "independent",
+-     "value": 0.6,
++     "value": 0.7,
+    },
+-   "revision": "1791373208011:1",
++   "revision": "1791373208011:2",
+    "score": 0.6,
+    "status": "active",
+  }
+
+- Expected  - 6
++ Received  + 6
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:259:54)
+(fail) brief read keeps one measurement snapshot when a separate writer commits after the goal query [512.48ms]
+
+ 0 pass
+ 40 filtered out
+ 10 fail
+ 28 expect() calls
+Ran 10 tests across 2 files. [4.38s]

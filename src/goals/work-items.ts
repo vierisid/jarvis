@@ -243,6 +243,7 @@ export function checkWorkResult(id: string, body: unknown): WorkItem {
       }
       const goal = goals.getGoal(work.goalId);
       if (!goal) throw new WorkItemError('Linked goal no longer exists', 409);
+      if (goal.measurement) throw new WorkItemError('Record a new goal measurement instead of goalScore; the work result can be checked without a score', 409);
       const scored = getGoalApplication().recordScore(goal.id, input.goalScore, summary, `work_item:${id}:check:${check.id}`)!;
       check.goalProgressId = scored.progress.id;
     }

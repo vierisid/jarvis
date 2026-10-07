@@ -1,0 +1,9 @@
+{"before":1791367769773,"after":1791367769773,"health":"behind"}
+1 | import {initDatabase,closeDb} from './src/vault/schema'; import {getGoalApplication} from './src/goals/application-service'; import {getGoal} from './src/vault/goals';
+2 | initDatabase(':memory:',{quiet:true});const app=getGoalApplication();const before=app.createGoal('Snapshot freshness','objective'); const real=Date.now; Date.now=()=>before.updated_at;
+3 | try {app.recordMeasurement(before.id,{requestId:'freshness',revision:0,measurement:{unit:'partners',baseline:0,target:10,value:1,measuredAt:before.updated_at-1,evidence:{id:'ledger',revision:'v1'}}});const after=getGoal(before.id)!;console.log(JSON.stringify({before:before.updated_at,after:after.updated_at,health:after.health}));if(after.updated_at<=before.updated_at)throw Error('Measurement revision must advance canonical updated_at after health refresh');}finally{Date.now=real;closeDb();}
+                                                                                                                                                                                                                                                                                                                                                                                            ^
+error: Measurement revision must advance canonical updated_at after health refresh
+      at /home/vierisid/.cache/codex/jarvis-f-15/[eval]:3:377
+
+Bun v1.4.2 (Linux x64)
