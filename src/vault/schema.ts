@@ -1,3 +1,4 @@
+import { ensureMemoryUseSchema } from './memory-use-schema';
 import { ensureOutcomeSchema } from './outcome-schema';
 import { ensureGoalMeasurementSchema } from './goal-measurement-schema';
 import { ensureDecisionDocumentSchema } from '../authority/decision-document-schema';
@@ -339,6 +340,7 @@ function createTables(db: Database): void {
 
   ensureConversationSchema(db);
   ensureChatTurnSchema(db);
+  ensureMemoryUseSchema(db);
   ensureChatAttachmentSchema(db);
 
   // Content pipeline: items moving through creation stages

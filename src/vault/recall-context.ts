@@ -1,3 +1,4 @@
+import { memoryFactRef, type MemoryFactRef } from './memory-usage';
 import type { Entity } from './entities.ts';
 import { defangFactText as line, formatFact, MEMORY_USE_RULES } from './fact-format.ts';
 import { expandRecallDependencies, isCurrentRecallFact, type RecallFact, type RecallFactDependency } from './recall-ranking.ts';
@@ -11,10 +12,18 @@ export const RECALL_LIMITS = { chars: 12_000, entities: 6, facts: 18, factsPerEn
 // the fact repository. This module only ranks, selects and bounds the block.
 const omission = '\n\n[Additional memory omitted by relevance and context limits; this is not an exhaustive record.]';
 
-/** Round-robin allocation keeps a dense first subject from starving later subjects. */
+export type PackedRecall = { text: string; selected: MemoryFactRef[]; included: MemoryFactRef[] };
 export function packRecallContext(profiles: RecallProfile[], maxChars: number = RECALL_LIMITS.chars): string {
+  return packRecallEvidence(profiles, maxChars).text;
+}
+/** IDs come from successful append operations, never by parsing prompt text. */
+export function packRecallEvidence(profiles: RecallProfile[], maxChars: number = RECALL_LIMITS.chars): PackedRecall {
+  const selectedRefs = profiles.slice(0, RECALL_LIMITS.entities).flatMap(profile => profile.facts
+    .filter(fact => isCurrentRecallFact(fact)).map(fact => memoryFactRef(fact, profile.entity.name)));
+  const includedRefs: MemoryFactRef[] = [];
+  const result = (text: string): PackedRecall => ({ text, selected: selectedRefs, included: includedRefs });
   const budget = Math.min(RECALL_LIMITS.chars, Number.isFinite(maxChars) ? Math.max(0, Math.floor(maxChars)) : RECALL_LIMITS.chars);
-  if (!profiles.length || budget < MEMORY_USE_RULES.length + omission.length) return '';
+  if (!profiles.length || budget < MEMORY_USE_RULES.length + omission.length) return result('');
   const at = Date.now();
   const selected = profiles.slice(0, RECALL_LIMITS.entities);
   const sections = selected.map(profile => ({ header: `**${line(profile.entity.name)}** (${profile.entity.type})`, lines: [] as string[] }));
@@ -47,7 +56,10 @@ export function packRecallContext(profiles: RecallProfile[], maxChars: number = 
         omitted = true; continue;
       }
       if (append(i, group.map(item => `  - ${formatFact(item)}`).join('\n'))) {
-        for (const item of group) included[i]!.add(item.id);
+        for (const item of group) {
+          included[i]!.add(item.id);
+          includedRefs.push(memoryFactRef(item, selected[i]!.entity.name));
+        }
         count += group.length;
       }
     }
@@ -69,6 +81,6 @@ export function packRecallContext(profiles: RecallProfile[], maxChars: number = 
     if (!facts[i]!.length && !profile.relationships.length) append(i, '  - No current facts recorded.');
   }
   const body = sections.filter(section => section.lines.length).map(section => section.header + '\n' + section.lines.join('\n')).join('\n\n');
-  if (!body) return omitted ? MEMORY_USE_RULES + omission : '';
-  return MEMORY_USE_RULES + '\n\n' + body + (omitted ? omission : '');
+  if (!body) return result(omitted ? MEMORY_USE_RULES + omission : '');
+  return result(MEMORY_USE_RULES + '\n\n' + body + (omitted ? omission : ''));
 }

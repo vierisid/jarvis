@@ -1,3 +1,5 @@
+import { getMemoryUsageLedger } from '../vault/memory-usage';
+import { registerMemoryUsage } from '../brief/registrations/memory-usage';
 import { MemoryStream } from '../brief/memory-stream';
 import { registerMemoryStream } from '../brief/registrations/memory-stream';
 import { Outcomes } from '../brief/outcomes';
@@ -4993,7 +4995,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 9b. Set up API routes + dashboard static files
     const briefGoalMeasurements = new GoalMeasurements(getDb());
     const briefOutcomes = new Outcomes(getDb());
-    const briefMemoryStream = new MemoryStream(getDb());
+    const briefMemoryUsage = getMemoryUsageLedger();
+    const briefMemoryStream = new MemoryStream(getDb(), briefMemoryUsage);
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService });
     const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions, approvalManager, id => {
       const request = approvalManager.getRequest(id);
@@ -5023,6 +5026,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_GOAL_MEASUREMENTS === '1') briefEnabled.push('goalMeasurements');
     if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
+    if (process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') briefEnabled.push('memoryUsage');
     if (process.env.JARVIS_BRIEF_OUTCOMES === '1') briefEnabled.push('outcomes');
     if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
     if (process.env.JARVIS_BRIEF_DECISION_EDITS === '1') briefEnabled.push('decisionEdits');
@@ -5052,6 +5056,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerGoalMeasurements(briefGoalMeasurements),
       ...registerOutcomes(briefOutcomes),
       ...registerMemoryStream(briefMemoryStream),
+      ...registerMemoryUsage(briefMemoryUsage),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
@@ -5060,6 +5065,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefGoalMeasurements,
       briefOutcomes,
       briefMemoryStream,
+      briefMemoryUsage,
       briefDecisionDocuments,
       briefRecommendations,
       briefConversations,

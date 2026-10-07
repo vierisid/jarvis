@@ -1,3 +1,4 @@
+import type { MemoryUsageCoverage } from '../vault/memory-usage';
 import type { BriefMemory, BriefMemoryUse } from './contracts';
 import type { BriefProvider } from './providers';
 
@@ -17,6 +18,7 @@ export interface MemoryStreamItem extends BriefMemory {
   subjectId: string;
   /** Canonical assertion context; an empty string means unspecified. */
   scope: string;
+  usageCoverage?: MemoryUsageCoverage;
   updatedAt: number;
   validity: { from: number | null; to: number | null };
   sourceSummary: { labels: string[]; evidenceCount: number };
@@ -25,6 +27,7 @@ export interface MemoryStreamItem extends BriefMemory {
   supersededBy: string | null;
 }
 export interface MemoryStreamPage {
+  usageCoverage?: MemoryUsageCoverage;
   items: MemoryStreamItem[];
   nextCursor: string | null;
   count: { total: number; matched: number; returned: number };
@@ -38,8 +41,8 @@ export type MemoryStreamResult =
 
 /** F18 supplies this synchronous read seam from the SAME vault read transaction.
  * Return only committed ledger records, without prompts or inferred associations.
- * A ready empty ledger means known unused; missing instrumentation means unknown.
+ * A ready empty ledger means no retained events within its declared coverage; missing instrumentation means unknown.
  */
 export interface MemoryUsageReader extends BriefProvider {
-  readUses(factIds: readonly string[]): { state: 'ready'; uses: BriefMemoryUse[] } | { state: 'unavailable' };
+  readUses(factIds: readonly string[]): { state: 'ready'; uses: BriefMemoryUse[]; coverage?: MemoryUsageCoverage } | { state: 'unavailable' };
 }

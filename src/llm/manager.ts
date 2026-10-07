@@ -1,3 +1,4 @@
+import { recordMemoryHandoff } from '../vault/memory-use-context';
 import type {
   LLMProvider,
   LLMMessage,
@@ -511,7 +512,7 @@ export class LLMManager {
       options?.signal?.throwIfAborted();
       try {
         const result = await this.withTimeout(
-          (signal) => provider.chat(messages, { ...options, signal }),
+          (signal) => { recordMemoryHandoff(messages); return provider.chat(messages, { ...options, signal }); },
           provider.name,
           options?.signal,
           options?.checkDeadline,
@@ -560,6 +561,8 @@ export class LLMManager {
       let eventRetryAfterMs: number | undefined;
       try {
         let hasError = false;
+        options?.signal?.throwIfAborted();
+        recordMemoryHandoff(messages);
         for await (const event of provider.stream(messages, options)) {
           if (event.type === 'error') {
             hasError = true;
@@ -651,7 +654,7 @@ export class LLMManager {
         options?.signal?.throwIfAborted();
         try {
           const result = await this.withTimeout(
-            (signal) => provider.chat(messages, { ...options, signal }),
+            (signal) => { recordMemoryHandoff(messages); return provider.chat(messages, { ...options, signal }); },
             providerName,
             options?.signal,
             options?.checkDeadline,
@@ -725,6 +728,8 @@ export class LLMManager {
         let eventRetryAfterMs: number | undefined;
         try {
           let hasError = false;
+          options?.signal?.throwIfAborted();
+          recordMemoryHandoff(messages);
           for await (const event of provider.stream(messages, options)) {
             if (event.type === 'error') {
               hasError = true;

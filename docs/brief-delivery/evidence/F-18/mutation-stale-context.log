@@ -1,0 +1,57 @@
+bun test v1.4.2 (744846f84)
+
+src/vault/memory-usage.test.ts:
+108 |   await withBriefTurn(ref, async () => {
+109 |     const text = getKnowledgeForMessage('Ada');
+110 |     if (change === 'delete') deleteFact(fact!.id);
+111 |     if (change === 'correct') correctFact(fact!.id, 'corrected value', 'fixture correction');
+112 |     if (change === 'expire') getDb().run('UPDATE facts SET valid_to = ? WHERE id = ?', [Date.now() - 1, fact!.id]);
+113 |     await expect(manager(() => calls++).chat([{ role: 'system', content: text }])).rejects.toThrow('Memory changed');
+                                                                                                 ^
+error: expect(received).rejects.toThrow(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:113:92)
+      at run (node:async_hooks:144:29)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:108:9)
+(fail) delete between packing and dispatch refuses stale context, preserves truthful history [467.85ms]
+108 |   await withBriefTurn(ref, async () => {
+109 |     const text = getKnowledgeForMessage('Ada');
+110 |     if (change === 'delete') deleteFact(fact!.id);
+111 |     if (change === 'correct') correctFact(fact!.id, 'corrected value', 'fixture correction');
+112 |     if (change === 'expire') getDb().run('UPDATE facts SET valid_to = ? WHERE id = ?', [Date.now() - 1, fact!.id]);
+113 |     await expect(manager(() => calls++).chat([{ role: 'system', content: text }])).rejects.toThrow('Memory changed');
+                                                                                                 ^
+error: expect(received).rejects.toThrow(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:113:92)
+      at run (node:async_hooks:144:29)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:108:9)
+(fail) correct between packing and dispatch refuses stale context, preserves truthful history [446.15ms]
+108 |   await withBriefTurn(ref, async () => {
+109 |     const text = getKnowledgeForMessage('Ada');
+110 |     if (change === 'delete') deleteFact(fact!.id);
+111 |     if (change === 'correct') correctFact(fact!.id, 'corrected value', 'fixture correction');
+112 |     if (change === 'expire') getDb().run('UPDATE facts SET valid_to = ? WHERE id = ?', [Date.now() - 1, fact!.id]);
+113 |     await expect(manager(() => calls++).chat([{ role: 'system', content: text }])).rejects.toThrow('Memory changed');
+                                                                                                 ^
+error: expect(received).rejects.toThrow(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:113:92)
+      at run (node:async_hooks:144:29)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:108:9)
+(fail) expire between packing and dispatch refuses stale context, preserves truthful history [399.74ms]
+
+ 0 pass
+ 16 filtered out
+ 3 fail
+ 3 expect() calls
+Ran 3 tests across 1 file. [1351.00ms]

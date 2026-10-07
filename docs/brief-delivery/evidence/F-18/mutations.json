@@ -1,0 +1,29 @@
+{
+  "variants": [
+    {
+      "variant": "omitted-as-supplied",
+      "file": "src/vault/memory-use-context.ts",
+      "test": "packer emits only",
+      "exitCode": 1,
+      "expectedFailure": true,
+      "log": "docs/brief-delivery/evidence/F-18/mutation-omitted-as-supplied.log"
+    },
+    {
+      "variant": "duplicate-events",
+      "file": "src/vault/memory-usage.ts",
+      "test": "actual chat provider",
+      "exitCode": 1,
+      "expectedFailure": true,
+      "log": "docs/brief-delivery/evidence/F-18/mutation-duplicate-events.log"
+    },
+    {
+      "variant": "stale-context",
+      "file": "src/vault/memory-usage.ts",
+      "test": "between packing and dispatch",
+      "exitCode": 1,
+      "expectedFailure": true,
+      "log": "docs/brief-delivery/evidence/F-18/mutation-stale-context.log"
+    }
+  ],
+  "restoration": "Original bytes restored in finally after each variant. Fresh focused suite follows."
+}

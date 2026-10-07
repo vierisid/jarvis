@@ -1,3 +1,5 @@
+import { getFlowRun } from '../db/repos/flow-run';
+import { withWorkflowMemory } from '../../vault/memory-use-context';
 import { documentInput, projectDocument } from './decision-document';
 /**
  * Glue layer: wraps existing Jarvis adapters into the function-shape that the
@@ -143,7 +145,7 @@ export function buildSandboxServiceBackends(
     //   - no prompt builder wired   : whatever the piece sent (or nothing).
     //                                 Defensive fallback for tests / pre-
     //                                 agent-service bootstrap windows.
-    const jarvisParts = opts.buildJarvisSystemPrompt
+    const jarvisParts = !req.overrideSystem && opts.buildJarvisSystemPrompt
       ? opts.buildJarvisSystemPrompt(req.prompt)
       : undefined;
     let system: string | undefined;
@@ -184,7 +186,12 @@ export function buildSandboxServiceBackends(
       // The prompt is the payload that leaves the device, so it is what gets
       // frozen and reviewed -- not the daemon-composed system prompt above.
       prepare: () => ({ arguments: { ...effectRequest }, target: { destination: 'llm-provider', overrideSystem: req.overrideSystem === true } }),
-      execute: async (args, checkpoint) => { checkpoint(); return callLlm(args as unknown as LlmChatRequest); },
+      execute: async (args, checkpoint) => {
+        checkpoint();
+        const run = getFlowRun(ctx.runId);
+        if (!run) throw new Error('Workflow run unavailable');
+        return withWorkflowMemory(run.id, run.flowId, digest([ctx.stepName, ctx.executionPath]), () => callLlm(args as unknown as LlmChatRequest));
+      },
     });
     return reply.approval ? { text: '', approval: reply.approval } : reply.result as LlmChatResponse;
   };

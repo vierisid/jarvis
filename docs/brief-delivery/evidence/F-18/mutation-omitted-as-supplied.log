@@ -1,0 +1,36 @@
+bun test v1.4.2 (744846f84)
+
+src/vault/memory-usage.test.ts:
+52 |     expect(pack.included.length).toBe(8); expect(pack.selected.length).toBe(9);
+53 |     for (const included of pack.included) expect(pack.text).toContain(included.factId);
+54 |     capturePackedMemory(pack); expect(history(ref).every(use => use.stage === 'selected')).toBe(true);
+55 |     await manager().chat([{ role: 'system', content: pack.text }, { role: 'user', content: 'Ada' }]);
+56 |     const uses = history(ref); const supplied = uses.filter(u => u.stage === 'supplied');
+57 |     expect(supplied.map(u => u.factId).sort()).toEqual(pack.included.map(r => r.factId).sort());
+                                                    ^
+error: expect(received).toEqual(expected)
+
+  [
+    "1ad40543-f426-47c5-b27f-db96bd79a927",
+    "83091591-1db5-455f-b1dd-761266f5b907",
+    "8fbfc862-e5a9-4f44-ae6a-a6d921e4887f",
+    "aab034bd-2c1c-42e1-9ec6-28bb650a35a2",
+    "c95f4775-9b65-4a1c-88c1-6525ead0df40",
+    "ca5aa0ef-2e71-47ed-8537-7ced5bbbeab0",
++   "cb86c19f-e7ce-4348-ad1b-9ead736bcb54",
+    "f38d643d-73df-4166-bb6d-13e9006946cb",
+    "fe64bf87-acda-4a42-ad56-84737f1e5965",
+  ]
+
+- Expected  - 0
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:57:48)
+      at async <anonymous> (/home/vierisid/.cache/codex/jarvis-f-18/src/vault/memory-usage.test.ts:50:9)
+(fail) packer emits only successfully appended IDs; omitted facts are selected but never supplied [431.27ms]
+
+ 0 pass
+ 18 filtered out
+ 1 fail
+ 12 expect() calls
+Ran 1 test across 1 file. [475.00ms]
