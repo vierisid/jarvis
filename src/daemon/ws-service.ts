@@ -2546,9 +2546,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
-   * Public exposure of `formatApprovalIntent` so api-routes can produce the
-   * same intent string for REST responses (Phase 5B audit fix). Falls back
-   * to `reason || tool_name` if the helper isn't available.
+   * The joined approval sentence the WS broadcasts send as `intent`
+   * (`formatApprovalIntent`). The REST listing now calls
+   * `approvalIntentFields` itself; this stays for callers that hold only the
+   * service.
    */
   computeApprovalIntent(request: ApprovalRequest): string {
     return formatApprovalIntent(request);
