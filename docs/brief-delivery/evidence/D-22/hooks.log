@@ -1,0 +1,84 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2339 files).
+[pre-commit] Running 2 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/opportunities/controller.test.ts:
+(pass) a definitive refusal can be retried only after a fresh read, unlike uncertainty [6.85ms]
+(pass) selection survives reorder and refresh, uses IDs rather than indexes [2.62ms]
+(pass) a new revision replaces list and brief together; missing selection chooses a real remaining row [3.64ms]
+(pass) approval acknowledges the same item before settling the next and advances once [26.74ms]
+(pass) dismissal has a distinct receipt and leaves no saved/dismissed destination [42.59ms]
+(pass) R1: refresh during approve acknowledgement retains the slot and advances to the original successor [29.34ms]
+(pass) R1: refresh during dismiss acknowledgement retains the slot and advances to the original successor [25.11ms]
+(pass) R1: pending registration keeps its slot through reorder and recovers the original next identity [24.26ms]
+(pass) R1: a vanished successor is skipped and a newer user selection wins [47.91ms]
+(pass) duplicate intent is locked synchronously, including opposite actions [42.42ms]
+(pass) pending registration is approval saved, not enabled; refresh retains it for recovery [42.64ms]
+(pass) blocked registration and later paused workflow are never a successful enable [22.39ms]
+(pass) pending registration and later paused workflow are never a successful enable [20.46ms]
+(pass) lost response keeps the original identity locked; recovery is read-only [24.32ms]
+(pass) null recovery leaves unknown locked and does not resend [2.95ms]
+(pass) older and mismatched recovery receipts cannot replace an acknowledged result [23.88ms]
+(pass) a decision response cannot steal a newer user selection [42.70ms]
+(pass) out-of-order refresh and retired owners ignore late responses [1.87ms]
+(pass) stale remains a distinct read state with no actions [1.39ms]
+(pass) unavailable remains a distinct read state with no actions [1.87ms]
+(pass) unsupported remains a distinct read state with no actions [2.44ms]
+(pass) loading remains a distinct read state with no actions [1.90ms]
+(pass) empty remains a distinct read state with no actions [1.93ms]
+(pass) read failure preserves visible data as stale, and access revocation prevents dispatch [4.82ms]
+(pass) read-only capability permits browsing but no decisions [2.71ms]
+(pass) revoking access during refresh cannot strand the restored room in refreshing [5.46ms]
+(pass) legacy draft-ready, blocked binding and canApprove=false never become ready [0.10ms]
+(pass) receipt guard rejects mismatched proposalId [0.07ms]
+(pass) receipt guard rejects mismatched revision
+(pass) receipt guard rejects mismatched decision
+(pass) receipt guard rejects mismatched workflow
+(pass) receipt guard rejects mismatched receiptId
+
+ui/src/brief/opportunities/OpportunitiesRoom.test.tsx:
+(pass) wrong source, wrong scope and missing live capability fail closed without reads [83.59ms]
+(pass) list and detail retain exact selected identity through shell changes and refresh [125.91ms]
+(pass) a routed proposal selects its real identity once available [30.96ms]
+(pass) finished output stays qualified and legacy chrome remains absent [31.79ms]
+(pass) approval resolves locally, does not navigate, and advances focus to the next choice [999.62ms]
+(pass) late acknowledgement does not steal focus from the composer [1042.82ms]
+(pass) registration pending keeps the proposal visible and distinguishes saved from enabled [61.07ms]
+(pass) registration blocked keeps the proposal visible and distinguishes saved from enabled [49.28ms]
+(pass) unknown acknowledgement shows recovery and cannot duplicate the approval [90.02ms]
+(pass) preparing cannot visually or behaviorally promote a proposal to ready [24.66ms]
+(pass) blocked cannot visually or behaviorally promote a proposal to ready [24.45ms]
+(pass) stale cannot visually or behaviorally promote a proposal to ready [24.64ms]
+(pass) missing preview has an explicit unavailable state, no invented output [23.97ms]
+(pass) definitive refusal explains refresh without pretending the result is pending [69.58ms]
+(pass) room unmount/remount preserves pending decisions and selection in the owner [77.75ms]
+(pass) R2: selector and brief retain independent positions on return; another proposal starts at its heading [99.79ms]
+(pass) activation capability changes immediately update rendered controls [73.28ms]
+
+ 49 pass
+ 0 fail
+ 155 expect() calls
+Ran 49 tests across 2 files. [3.64s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-22 6e0cc7f8] fix(brief): preserve opportunity order and keep long lists usable
+ 37 files changed, 881 insertions(+), 553 deletions(-)
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-dark-expanded-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-dark-expanded-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-dark-rail-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-dark-rail-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-light-expanded-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-light-expanded-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-light-rail-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-light-rail-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/many-narrow-reduced.png
+ create mode 100644 docs/brief-delivery/evidence/D-22/review-r1-before-fix.log

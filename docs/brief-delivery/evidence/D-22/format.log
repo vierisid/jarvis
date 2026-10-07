@@ -1,0 +1,9 @@
+ui/src/brief/opportunities/controller.test.ts 208ms (unchanged)
+ui/src/brief/opportunities/controller.ts 88ms (unchanged)
+ui/src/brief/opportunities/figma-reference.json 24ms (unchanged)
+ui/src/brief/opportunities/fixtures.ts 30ms (unchanged)
+ui/src/brief/opportunities/model.ts 29ms (unchanged)
+ui/src/brief/opportunities/opportunities.css 88ms (unchanged)
+ui/src/brief/opportunities/OpportunitiesRoom.test.tsx 51ms
+ui/src/brief/opportunities/OpportunitiesRoom.tsx 76ms (unchanged)
+ui/src/brief/opportunities/OpportunitiesSpecimen.tsx 26ms (unchanged)
