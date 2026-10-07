@@ -1,0 +1,404 @@
+/* D-18: scoped presentation over the existing graph/editor engine. */
+.brief-root .brief-workspace-content:has(> .brief-workflow-canvas) {
+  padding: 0;
+  overflow: hidden;
+  scrollbar-gutter: auto;
+}
+.brief-workflow-canvas {
+  height: 100%;
+  min-height: 440px;
+  display: flex;
+  min-width: 0;
+  position: relative;
+  isolation: isolate;
+}
+.brief-workflow-canvas,
+.brief-workflow-portals {
+  --paper: var(--brief-card);
+  --paper-2: var(--brief-soft);
+  --paper-3: var(--brief-recessed);
+  --ink: var(--brief-ink);
+  --ink-2: var(--brief-secondary);
+  --ink-3: var(--brief-tertiary);
+  --rule-soft: var(--brief-card-edge);
+  --rule: var(--brief-field-edge);
+  --accent: var(--brief-focus);
+  --r-2: var(--brief-corner-control);
+  --r-3: var(--brief-corner-card);
+}
+.brief-workflow-canvas .wf-editor--workspace {
+  position: relative;
+  inset: auto;
+  z-index: 0;
+  width: 100%;
+  min-width: 0;
+  background: var(--brief-canvas);
+}
+.brief-canvas-header {
+  flex: none;
+  padding: 24px 32px 0;
+}
+.brief-canvas-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.brief-canvas-heading h1 {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.brief-canvas-heading > button {
+  flex: none;
+}
+.brief-canvas-tabs {
+  display: flex;
+  gap: 30px;
+  border-bottom: 1px solid var(--brief-card-edge);
+  margin-top: 12px;
+}
+.brief-canvas-tabs :is(span, button) {
+  font: inherit;
+  font-size: 14px;
+  padding: 16px 0;
+  background: transparent;
+  border: 0;
+  color: var(--brief-secondary);
+}
+.brief-canvas-tabs [aria-current] {
+  border-bottom: 2px solid var(--brief-ink);
+  color: var(--brief-ink);
+  font-weight: 600;
+}
+.brief-canvas-tabs button:hover {
+  color: var(--brief-ink);
+}
+.brief-canvas-tabs button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.brief-canvas-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  min-height: 48px;
+}
+.brief-canvas-feedback {
+  font-size: 12px;
+  margin-left: auto;
+  color: var(--brief-secondary);
+}
+.brief-workflow-canvas .wf-editor__body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  gap: 0;
+  overflow: hidden;
+  padding-bottom: 82px;
+}
+.brief-workflow-canvas .wf-editor__canvas {
+  min-width: 0;
+  min-height: 240px;
+  background: var(--brief-canvas);
+}
+.brief-workflow-canvas .wf-popover--inline {
+  position: relative;
+  inset: auto;
+  flex: 0 0 320px;
+  width: 320px;
+  min-width: 0;
+  max-height: none;
+  margin: 16px 16px 0 0;
+  border: 1px solid var(--brief-card-edge);
+  border-radius: var(--brief-corner-card);
+  box-shadow: none;
+  overflow: auto;
+  transition:
+    flex-basis 300ms ease,
+    opacity 160ms ease;
+}
+.brief-workflow-canvas .wf-popover--inline[data-open="false"] {
+  flex-basis: 0;
+  width: 0;
+  opacity: 0;
+  border: 0;
+  margin: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+.brief-workflow-canvas .wf-popover__body {
+  min-width: 288px;
+  padding: 20px 16px;
+}
+.brief-workflow-canvas .wf-popover__close {
+  width: 40px;
+  height: 40px;
+  right: 4px;
+  top: 4px;
+  z-index: 1;
+  background: transparent;
+}
+.brief-workflow-canvas .wf-props__header {
+  padding-right: 28px;
+}
+.brief-workflow-canvas .wf-props__header :is(h3, input) {
+  font-size: 18px;
+}
+.brief-workflow-canvas .wf-props__header p {
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+.brief-workflow-canvas .wf-inspector-tabs {
+  display: flex;
+  border-bottom: 1px solid var(--brief-card-edge);
+  margin: 12px 0 20px;
+}
+.brief-workflow-canvas .wf-inspector-tabs button {
+  flex: 1;
+  padding: 12px 0;
+  font: inherit;
+  font-size: 13px;
+  background: transparent;
+  color: var(--brief-secondary);
+  border: 0;
+  border-bottom: 2px solid transparent;
+}
+.brief-workflow-canvas .wf-inspector-tabs [aria-selected="true"] {
+  color: var(--brief-ink);
+  font-weight: 600;
+  border-bottom-color: var(--brief-ink);
+}
+.brief-workflow-canvas .wf-node {
+  border-radius: var(--brief-corner-card);
+  border: 1px solid var(--brief-card-edge);
+  background: var(--brief-card);
+  box-shadow: none;
+  transition: border-color 160ms ease;
+}
+.brief-workflow-canvas .wf-node:hover {
+  border-color: var(--brief-field-edge);
+}
+.brief-workflow-canvas .wf-node--selected {
+  outline: 2px solid var(--brief-focus);
+  outline-offset: -1px;
+}
+.brief-workflow-canvas .wf-node__name {
+  font-size: 14px;
+  white-space: normal;
+}
+.brief-workflow-canvas .wf-node__body,
+.brief-workflow-canvas .wf-node .v2-chip {
+  font-size: 12px;
+}
+.brief-workflow-canvas .wf-node--orphan {
+  border-style: dashed;
+}
+.brief-workflow-canvas .wf-handle {
+  --wf-handle-border: var(--brief-field-edge);
+}
+.brief-workflow-canvas .wf-node--selected .wf-handle {
+  --wf-handle-border: var(--brief-focus);
+}
+.brief-workflow-canvas .wf-io-title {
+  font-size: 13px;
+}
+.brief-workflow-canvas .wf-io-value {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  padding: 12px;
+  background: var(--brief-soft);
+  border-radius: var(--brief-corner-control);
+  font: 12px/1.6 var(--brief-mono);
+}
+.brief-workflow-canvas :is(input, textarea, select, [contenteditable]) {
+  font-size: 14px;
+}
+.brief-workflow-canvas .wf-props__hint {
+  font-size: 12px;
+  line-height: 1.5;
+}
+.brief-workflow-canvas
+  :is(button, input, textarea, select, [contenteditable]):focus-visible {
+  outline: 2px solid var(--brief-focus);
+  outline-offset: 2px;
+}
+.brief-workflow-canvas .react-flow__controls {
+  display: flex;
+  bottom: 16px;
+  left: 20px;
+  box-shadow: none;
+  border: 1px solid var(--brief-card-edge);
+  border-radius: var(--brief-corner-control);
+  overflow: hidden;
+}
+.brief-workflow-canvas .react-flow__controls-button {
+  width: 44px;
+  height: 44px;
+  background: var(--brief-card);
+  color: var(--brief-secondary);
+  border: 0;
+  border-right: 1px solid var(--brief-card-edge);
+  padding: 14px;
+}
+.brief-workflow-canvas .react-flow__controls-button:hover {
+  background: var(--brief-soft);
+}
+.brief-workflow-canvas .react-flow__controls-button svg {
+  fill: currentColor;
+}
+.brief-workflow-portals {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 5;
+}
+.brief-workflow-portals > * {
+  pointer-events: auto;
+}
+.brief-workflow-portals
+  :is(
+    .wf-canvas-menu,
+    .wf-library-picker,
+    .wf-flow-ref__popover,
+    .wf-var-picker
+  ) {
+  background: var(--brief-menu);
+  border-color: var(--brief-menu-edge);
+  border-radius: var(--brief-corner-menu);
+}
+@container brief-work (max-width: 650px) {
+  .brief-canvas-header {
+    padding: 16px 18px 0;
+  }
+  .brief-canvas-heading {
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .brief-canvas-heading h1 {
+    font-size: 22px;
+  }
+  .brief-workflow-canvas .wf-editor__body {
+    flex-direction: column;
+    overflow: auto;
+  }
+  .brief-workflow-canvas .wf-editor__canvas {
+    flex: 1 0 280px;
+  }
+  .brief-workflow-canvas .wf-popover--inline {
+    flex: 0 0 auto;
+    width: auto;
+    max-height: 360px;
+    margin: 8px 16px 0;
+  }
+  .brief-workflow-canvas .wf-popover--inline[data-open="false"] {
+    height: 0;
+    max-height: 0;
+    margin: 0;
+  }
+  .brief-canvas-feedback {
+    flex-basis: 100%;
+    margin: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brief-workflow-canvas * {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
+}
+
+.brief-workflow-canvas .wf-node {
+  width: 280px;
+  min-height: 84px;
+}
+.brief-workflow-canvas .wf-node__head {
+  flex-wrap: wrap;
+  padding-left: 40px;
+  position: relative;
+}
+.brief-workflow-canvas .wf-node__name {
+  flex-basis: 100%;
+}
+.brief-workflow-canvas .wf-node-identity {
+  display: inline-grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--brief-card-edge);
+  background: var(--brief-soft);
+  border-radius: 7px 0 7px 7px;
+  color: var(--brief-secondary);
+}
+.brief-workflow-canvas .wf-node__head .wf-node-identity {
+  position: absolute;
+  left: 0;
+  top: 10px;
+}
+.brief-workflow-canvas .wf-node__body {
+  padding-left: 40px;
+}
+.brief-workflow-canvas .wf-props__header > .wf-node-identity {
+  margin-bottom: 10px;
+}
+.brief-workflow-canvas .wf-props [hidden] {
+  display: none;
+}
+
+.brief-root
+  .brief-pebble-layout
+  .brief-workspace-content:has(> .brief-workflow-canvas) {
+  padding: 0;
+}
+.brief-workflow-canvas .wf-editor__canvas .react-flow__renderer {
+  background: var(--brief-canvas);
+}
+.brief-workflow-canvas .react-flow__controls {
+  flex-direction: row;
+}
+.brief-workflow-canvas .wf-popover--inline {
+  background: var(--brief-card);
+}
+.brief-workflow-canvas
+  .wf-node__head
+  > :not(.wf-node-identity):not(.wf-node__name) {
+  font-size: 12px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--brief-secondary);
+}
+.brief-workflow-canvas [contenteditable] {
+  font-family: var(--brief-sans);
+  line-height: 1.6;
+}
+
+.brief-canvas-name {
+  min-width: 0;
+  flex: 1;
+}
+.brief-canvas-name .wf-editor__title-text,
+.brief-canvas-name .wf-editor__title-input {
+  font: 600 30px/1.2 var(--brief-sans);
+  letter-spacing: -0.025em;
+  width: 100%;
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+@container brief-work (max-width: 650px) {
+  .brief-canvas-name .wf-editor__title-text,
+  .brief-canvas-name .wf-editor__title-input {
+    font-size: 22px;
+  }
+}
+
+@container brief-work (max-width: 420px) {
+  .brief-canvas-heading { flex-wrap: wrap; }
+  .brief-canvas-name { flex-basis: 100%; }
+  .brief-canvas-heading > button { margin-left: auto; }
+  .brief-canvas-tools { gap: 0; }
+  .brief-workflow-canvas .wf-editor__body { padding-bottom: 82px; }
+}

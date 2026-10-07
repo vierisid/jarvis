@@ -16,7 +16,8 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { confirmDialog } from "../../ui/ConfirmDialog";
-import { createPortal } from "react-dom";
+import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
+const createPortal = (children: React.ReactNode, _target: Element) => <WorkflowPortal>{children}</WorkflowPortal>;
 import {
   ReactFlow,
   Background,
@@ -31,7 +32,7 @@ import {
   type ReactFlowInstance,
 } from "@xyflow/react";
 import "@xyflow/react/dist/style.css";
-import { LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2, Play, History, CheckCircle2, XCircle, Clock, AlertTriangle, Pause, Undo2 } from "lucide-react";
+import { Calendar, Box, GitBranch, Repeat2, LayoutGrid, Save, RotateCcw, ShieldAlert, X, Plus, Trash2, Play, History, CheckCircle2, XCircle, Clock, AlertTriangle, Pause, Undo2 } from "lucide-react";
 import { Button, Chip, Icon } from "../../ui";
 import {
   useWorkflowEditor,
@@ -65,7 +66,18 @@ const NODE_Y_BASE = 40;
 const NODE_X_STEP = 280;
 const NODE_Y_BRANCH = 140;
 
+export interface WorkflowEditorControls {
+  editor: ReturnType<typeof useWorkflowEditor>;
+  save: () => Promise<void>;
+  saving: boolean;
+  discard: () => void;
+  arrange: () => void;
+  message: { tone: "ok" | "warn"; text: string } | null;
+}
 interface WorkflowEditorProps {
+  workspace?: boolean;
+  renderHeader?: (controls: WorkflowEditorControls) => React.ReactNode;
+  onDirtyChange?: (dirty: boolean) => void;
   flowId: string;
   onClose: () => void;
 }
@@ -102,13 +114,19 @@ interface StepNodeData extends Record<string, unknown> {
   runDuration: number | null;
 }
 
-export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.ReactElement {
+export function WorkflowEditor({ flowId, onClose, workspace = false, renderHeader, onDirtyChange }: WorkflowEditorProps): React.ReactElement {
+  const fetch = useWorkflowRequest();
+  const rootRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLElement>(null);
   const editor = useWorkflowEditor(flowId);
+  const saveLock = useRef(false);
+  const [workspaceSaving,setWorkspaceSaving] = useState(false);
   // Library catalog: pieces from npm that the user may or may not have
   // installed yet. The piece-library popover surfaces non-installed pieces
   // alongside installed ones so a user typing "telegram" can find it even
   // before they've installed it; picking an uninstalled row triggers the
   // install via this hook.
+  useEffect(() => { onDirtyChange?.(editor.dirty); }, [editor.dirty,onDirtyChange]);
   const library = useLibrary();
   // Scoped runs for this flow: powers the header Run button and the
   // right-side Runs panel. Polls adaptively (2s while active, 8s idle).
@@ -188,9 +206,13 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const closePopover = useCallback((): void => {
-    setSelectedStepName(null);
+    if (!workspace) setSelectedStepName(null);
     setPopoverAnchor(null);
-  }, []);
+    if (workspace) window.requestAnimationFrame(() => {
+      const node = Array.from(rootRef.current?.querySelectorAll<HTMLElement>(".react-flow__node") ?? []).find(el => el.dataset.id === selectedStepName);
+      node?.focus({preventScroll:true});
+    });
+  }, [workspace,selectedStepName]);
 
   // Auto-close the run-detail popover when overlay mode is exited or the
   // node it references is no longer in the graph. Keeps the popover from
@@ -213,7 +235,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   useEffect(() => {
     if (!selectedStepName) return;
     const inTree = editor.allSteps.some((fs) => fs.step.name === selectedStepName);
-    const inOrphans = editor.draftOrphans.some((o) => o.node.name === selectedStepName);
+    const inOrphans = editor.draftOrphans.some((o) => flattenSteps(o.node).some((f) => f.step.name === selectedStepName));
     if (!inTree && !inOrphans) setSelectedStepName(null);
   }, [editor.allSteps, editor.draftOrphans, selectedStepName]);
 
@@ -222,18 +244,18 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   const editorDirty = editor.dirty;
   useEffect(() => {
     const onKey = async (e: KeyboardEvent): Promise<void> => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || workspace) return;
       // Don't hijack Esc when the user is typing in an input/textarea/select
       // -- React Flow listens too, and form fields commonly use Esc to revert.
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
       if (editorDirty && !await confirmDialog("Discard unsaved changes?")) return;
       onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editorDirty, onClose]);
+  }, [editorDirty, onClose, workspace]);
 
   // Ctrl/Cmd+Z undoes the most recent destructive op (delete, disconnect,
   // piece replace). Scoped tight: ignore when the user is typing in a
@@ -243,19 +265,20 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   const editorCanUndo = editor.canUndo;
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
+      if (workspace && !rootRef.current?.contains(e.target as globalThis.Node)) return;
       if (e.key.toLowerCase() !== "z") return;
       if (!(e.ctrlKey || e.metaKey)) return;
       if (e.shiftKey) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
       if (!editorCanUndo) return;
       e.preventDefault();
       editorUndo();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editorUndo, editorCanUndo]);
+  }, [editorUndo, editorCanUndo, workspace]);
 
   const onSave = async (): Promise<void> => {
     if (editor.validationGaps.length > 0) {
@@ -288,8 +311,8 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
     if (!selectedStepName) return null;
     const inTree = editor.allSteps.find((fs) => fs.step.name === selectedStepName);
     if (inTree) return inTree;
-    const orphan = editor.draftOrphans.find((o) => o.node.name === selectedStepName);
-    if (orphan) return { step: orphan.node, depth: 0 };
+    const orphan = editor.draftOrphans.flatMap((o) => flattenSteps(o.node)).find((f) => f.step.name === selectedStepName);
+    if (orphan) return orphan;
     return null;
   }, [editor.allSteps, editor.draftOrphans, selectedStepName]);
   const selectedStep = selectedFlat?.step ?? null;
@@ -313,8 +336,8 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // chain's authoritative order; React Flow needs an internal mutable copy
   // so dragged positions update visually without losing reactivity.
   const { nodes: baseNodes, edges } = useMemo(
-    () => buildGraph(editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions, overlaySnapshots),
-    [editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions, overlaySnapshots],
+    () => buildGraph(editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions, overlaySnapshots, workspace),
+    [editor.draftTrigger, editor.allSteps, editor.draftOrphans, selectedStepName, editor.catalog, editor.stepPositions, overlaySnapshots, workspace],
   );
   const [nodes, setNodes, onNodesChange] = useNodesState<Node<StepNodeData>>(baseNodes);
   // Sync incoming chain order changes back into React Flow's internal state.
@@ -329,6 +352,37 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // for orphan placement.
   const rfInstanceRef = useRef<ReactFlowInstance<Node<StepNodeData>, Edge> | null>(null);
 
+  const selectedNameRef = useRef(selectedStepName);
+  selectedNameRef.current = selectedStepName;
+  // Preserve the graph point at the canvas center while the surrounding
+  // workspace makes room. Never refit, rescale or recreate the graph on reflow.
+  useLayoutEffect(() => {
+    if (!workspace || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    let width = canvas.clientWidth, height = canvas.clientHeight;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = canvas.clientWidth, nextHeight = canvas.clientHeight;
+      const instance = rfInstanceRef.current;
+      if (instance && width > 0 && height > 0 && nextWidth > 0 && nextHeight > 0) {
+        const view = instance.getViewport();
+        let x = view.x+(nextWidth-width)/2, y = view.y+(nextHeight-height)/2;
+        const selected = selectedNameRef.current ? instance.getNode(selectedNameRef.current) : undefined;
+        if (selected) {
+          const cx=(selected.position.x+(selected.measured?.width ?? 280)/2)*view.zoom;
+          const cy=(selected.position.y+(selected.measured?.height ?? 84)/2)*view.zoom;
+          // Very dense layouts may no longer contain the previous focal point.
+          // Pan the same graph just enough to keep its selected object reachable.
+          if (cx+x < 40 || cx+x > nextWidth-40) x=nextWidth/2-cx;
+          if (cy+y < 40 || cy+y > nextHeight-40) y=nextHeight/2-cy;
+        }
+        void instance.setViewport({...view,x,y},{duration:0});
+      }
+      width = nextWidth; height = nextHeight;
+    });
+    observer.observe(canvas);
+    return () => observer.disconnect();
+  }, [workspace]);
+
   // Drag-stop: persist the new (x, y) for both tree-resident and orphan
   // nodes. We deliberately DO NOT touch the chain wiring on drag --
   // moving C between A and B used to reorder the chain into A -> C -> B,
@@ -337,7 +391,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
   // position is purely visual.
   const onNodeDragStop = useCallback(
     (_e: React.MouseEvent | TouchEvent | MouseEvent, draggedNode: Node<StepNodeData>) => {
-      if (draggedNode.data?.isOrphan) {
+      if (draggedNode.data?.isOrphan && draggedNode.data?.targetIsFree) {
         editor.setOrphanPosition(draggedNode.id, draggedNode.position.x, draggedNode.position.y);
         return;
       }
@@ -628,7 +682,8 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
 
   return (
     <CurrentFlowIdContext.Provider value={flowId}>
-    <div className="wf-editor" role="dialog" aria-modal="true" aria-labelledby="wf-editor-title">
+    <div ref={rootRef} className={`wf-editor${workspace ? " wf-editor--workspace" : ""}`} role={workspace ? "region" : "dialog"} aria-modal={workspace ? undefined : true} aria-label={workspace ? "Workflow editor" : undefined} aria-labelledby={workspace ? undefined : "wf-editor-title"}>
+      {renderHeader ? renderHeader({ editor, saving:workspaceSaving, save: async () => { if(saveLock.current)return; saveLock.current=true;setWorkspaceSaving(true);try {await onSave();} finally {saveLock.current=false;setWorkspaceSaving(false);} }, discard: onDiscard, message: actionMessage, arrange: () => { editor.clearStepPositions(); window.requestAnimationFrame(() => rfInstanceRef.current?.fitView({padding: 0.15, duration: 0})); } }) : (
       <header className="wf-editor__header">
         <div className="wf-editor__title">
           {editor.version ? (
@@ -724,14 +779,14 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             <Icon icon={X} size={14} />
           </Button>
         </div>
-      </header>
+      </header>)}
 
       {/* Sticky banner: surfaces in-flight runs with status + duration so
           the user notices long-running executions even when the right
           panel is closed. Clicking the banner opens the panel; the close
           button just dismisses the banner for this session (the chip on
           the header Runs button still flags the count). */}
-      {activeRunCount > 0 && activeRun ? (
+      {!workspace && activeRunCount > 0 && activeRun ? (
         <RunningBanner
           activeCount={activeRunCount}
           run={activeRun}
@@ -754,8 +809,18 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
         />
       ) : null}
 
-      <div className="wf-editor__body">
-      <section className="wf-editor__canvas" aria-label="Workflow graph">
+      <div className="wf-editor__body" inert={workspace && workspaceSaving} aria-busy={workspace && workspaceSaving || undefined}>
+      <section ref={canvasRef} className="wf-editor__canvas" aria-label="Workflow graph" onKeyDownCapture={event => {
+        if (!workspace || !(event.target instanceof HTMLElement) || !event.target.matches(".react-flow__node")) return;
+        if (event.key === "Escape") { event.preventDefault(); event.stopPropagation(); closePopover(); return; }
+        if (event.key !== "Enter" && event.key !== " ") return;
+        const id = event.target.dataset.id;
+        if (!id) return;
+        event.preventDefault(); event.stopPropagation();
+        const rect = event.target.getBoundingClientRect();
+        setSelectedStepName(id); setPopoverAnchor({x:rect.right,y:rect.top});
+        window.requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(".wf-popover[data-open=true] .wf-popover__close")?.focus({preventScroll:true}));
+      }}>
         {editor.loading ? (
           <div className="wf-editor__placeholder">Loading flow…</div>
         ) : editor.error ? (
@@ -795,7 +860,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
               const isEmptyPiece =
                 step?.type === "PIECE" &&
                 (!step.settings?.pieceName || !step.settings.actionName);
-              if (isEmptyPiece) {
+              if (isEmptyPiece && !workspace) {
                 const flowPos = rfInstanceRef.current?.screenToFlowPosition({
                   x: event.clientX,
                   y: event.clientY,
@@ -838,18 +903,106 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             connectionRadius={140}
             // Per-node `draggable` flag (set to false for the trigger in
             // buildGraph) overrides this. Nodes default to draggable.
+            autoPanOnNodeFocus={!workspace}
             nodesDraggable
             nodesConnectable
             elementsSelectable
             panOnDrag
             zoomOnScroll
           >
-            <Background gap={16} />
+            <Background gap={workspace ? 24 : 16} color={workspace ? "var(--brief-card-edge)" : undefined} />
             <Controls showInteractive={false} />
           </ReactFlow>
         )}
       </section>
 
+      {selectedStep && (workspace || popoverAnchor) ? (
+        <NodeSettingsPopover
+          anchor={popoverAnchor ?? { x: 0, y: 0 }}
+          inline={workspace}
+          open={!!popoverAnchor}
+          onClose={closePopover}
+          predecessors={
+            editor.draftTrigger
+              ? pathToStep(editor.draftTrigger, selectedStep.name) ?? []
+              : []
+          }
+          sampleData={editor.version?.sampleData ?? {}}
+          catalog={editor.catalog}
+          // `allSteps` carries FlatStep wrappers; the variable picker
+          // wants bare FlowStepNode[] so it can match siblings on
+          // (piece, action). Map at the boundary.
+          allSteps={editor.allSteps.map((fs) => fs.step)}
+        >
+          <PropertiesPanel
+            key={selectedStep.name}
+            workspace={workspace}
+            onChoosePiece={() => setLibraryPicker({screen:popoverAnchor ?? {x:100,y:100},flow:rfInstanceRef.current?.getNode(selectedStep.name)?.position ?? {x:0,y:0},replaceStepName:selectedStep.name})}
+            step={selectedStep}
+            isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
+            hasNextAction={!!selectedStep.nextAction}
+            isTopLevel={selectedDepth === 0}
+            containerKind={selectedFlat?.containerKind}
+            catalog={editor.catalog}
+            connections={editor.connections}
+            onSetTriggerKind={(kind) => editor.setTriggerKind(kind)}
+            onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
+            onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
+            onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
+            onRemoveInputKey={(key) => {
+              const settings = selectedStep.settings ?? {};
+              const input = { ...(settings.input ?? {}) };
+              delete input[key];
+              editor.updateStep(selectedStep.name, { settings: { ...settings, input } });
+            }}
+            onSetDisplayName={(displayName) => {
+              const trimmed = displayName.trim();
+              // EditableStepName already guards its own commit; we still
+              // defend here so callers other than the widget can't blank
+              // the name accidentally.
+              if (!trimmed) return;
+              editor.updateStep(selectedStep.name, { displayName: trimmed });
+            }}
+            onAddStepAfter={() => {
+              const created = editor.insertStepAfter(selectedStep.name);
+              if (created) setSelectedStepName(created);
+            }}
+            onDelete={async () => {
+              if (await confirmDialog(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
+                editor.deleteStep(selectedStep.name);
+                closePopover();
+              }
+            }}
+            // LOOP-specific
+            onSetLoopItems={(items) => editor.setLoopItems(selectedStep.name, items)}
+            onAddStepToLoopBody={() => {
+              const created = editor.addStepToHead({ kind: "loop", parentName: selectedStep.name });
+              if (created) setSelectedStepName(created);
+            }}
+            // ROUTER-specific
+            onSetRouterExecutionType={(t) => editor.setRouterExecutionType(selectedStep.name, t)}
+            onAddRouterBranch={(name) => editor.addRouterBranch(selectedStep.name, name)}
+            onRemoveRouterBranch={(idx) => editor.removeRouterBranch(selectedStep.name, idx)}
+            onSetBranchConditions={(idx, conditions) =>
+              editor.setBranchConditions(selectedStep.name, idx, conditions)
+            }
+            onAddStepToBranch={(branchName) => {
+              const created = editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName });
+              if (created) setSelectedStepName(created);
+            }}
+            sampleData={editor.version?.sampleData?.[selectedStep.name]}
+            sampleInput={editor.version?.sampleInput?.[selectedStep.name]}
+            isLocked={editor.version?.state === "LOCKED"}
+            onSetSampleData={(output) =>
+              editor.setStepSampleData(selectedStep.name, output)
+            }
+            onSetSampleInput={(input) =>
+              editor.setStepSampleInput(selectedStep.name, input)
+            }
+            onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
+          />
+        </NodeSettingsPopover>
+      ) : null}
       {/* Side panel: this flow's run history. Toggled via the header Runs
           button. Stays mounted but visually collapsed when closed so the
           poll loop continues (badge in the header keeps incrementing). */}
@@ -966,88 +1119,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
       {/* Floating settings popover: opens at the cursor when a node is
           clicked, replaces the legacy right-rail aside. Outside-click and
           Esc close it via the shared `closePopover` handler. */}
-      {selectedStep && popoverAnchor ? (
-        <NodeSettingsPopover
-          anchor={popoverAnchor}
-          onClose={closePopover}
-          predecessors={
-            editor.draftTrigger
-              ? pathToStep(editor.draftTrigger, selectedStep.name) ?? []
-              : []
-          }
-          sampleData={editor.version?.sampleData ?? {}}
-          catalog={editor.catalog}
-          // `allSteps` carries FlatStep wrappers; the variable picker
-          // wants bare FlowStepNode[] so it can match siblings on
-          // (piece, action). Map at the boundary.
-          allSteps={editor.allSteps.map((fs) => fs.step)}
-        >
-          <PropertiesPanel
-            step={selectedStep}
-            isTriggerStep={editor.draftTrigger?.name === selectedStep.name}
-            hasNextAction={!!selectedStep.nextAction}
-            isTopLevel={selectedDepth === 0}
-            containerKind={selectedFlat?.containerKind}
-            catalog={editor.catalog}
-            connections={editor.connections}
-            onSetTriggerKind={(kind) => editor.setTriggerKind(kind)}
-            onSetErrorHandling={(patch) => editor.setStepErrorHandling(selectedStep.name, patch)}
-            onSetInput={(key, value) => editor.updateStepInput(selectedStep.name, key, value)}
-            onAddInputKey={(key) => editor.updateStepInput(selectedStep.name, key, "")}
-            onRemoveInputKey={(key) => {
-              const settings = selectedStep.settings ?? {};
-              const input = { ...(settings.input ?? {}) };
-              delete input[key];
-              editor.updateStep(selectedStep.name, { settings: { ...settings, input } });
-            }}
-            onSetDisplayName={(displayName) => {
-              const trimmed = displayName.trim();
-              // EditableStepName already guards its own commit; we still
-              // defend here so callers other than the widget can't blank
-              // the name accidentally.
-              if (!trimmed) return;
-              editor.updateStep(selectedStep.name, { displayName: trimmed });
-            }}
-            onAddStepAfter={() => {
-              const created = editor.insertStepAfter(selectedStep.name);
-              if (created) setSelectedStepName(created);
-            }}
-            onDelete={async () => {
-              if (await confirmDialog(`Delete step "${selectedStep.displayName ?? selectedStep.name}"?`)) {
-                editor.deleteStep(selectedStep.name);
-                closePopover();
-              }
-            }}
-            // LOOP-specific
-            onSetLoopItems={(items) => editor.setLoopItems(selectedStep.name, items)}
-            onAddStepToLoopBody={() => {
-              const created = editor.addStepToHead({ kind: "loop", parentName: selectedStep.name });
-              if (created) setSelectedStepName(created);
-            }}
-            // ROUTER-specific
-            onSetRouterExecutionType={(t) => editor.setRouterExecutionType(selectedStep.name, t)}
-            onAddRouterBranch={(name) => editor.addRouterBranch(selectedStep.name, name)}
-            onRemoveRouterBranch={(idx) => editor.removeRouterBranch(selectedStep.name, idx)}
-            onSetBranchConditions={(idx, conditions) =>
-              editor.setBranchConditions(selectedStep.name, idx, conditions)
-            }
-            onAddStepToBranch={(branchName) => {
-              const created = editor.addStepToHead({ kind: "branch", parentName: selectedStep.name, branchName });
-              if (created) setSelectedStepName(created);
-            }}
-            sampleData={editor.version?.sampleData?.[selectedStep.name]}
-            sampleInput={editor.version?.sampleInput?.[selectedStep.name]}
-            isLocked={editor.version?.state === "LOCKED"}
-            onSetSampleData={(output) =>
-              editor.setStepSampleData(selectedStep.name, output)
-            }
-            onSetSampleInput={(input) =>
-              editor.setStepSampleInput(selectedStep.name, input)
-            }
-            onTestFromHere={() => editor.testStepFromHere(selectedStep.name)}
-          />
-        </NodeSettingsPopover>
-      ) : null}
+
 
       {/* Run-detail popover (overlay mode only). Opens in place of the
           settings panel when the user clicks a node while a past run is
@@ -1083,7 +1155,7 @@ const CurrentFlowIdContext = createContext<string | null>(null);
  * are silently discarded so a stray double-click + clear-out can't blank
  * the workflow name. Published (LOCKED) versions are read-only.
  */
-function EditableTitle({
+export function EditableTitle({
   value,
   disabled,
   onCommit,
@@ -1358,7 +1430,11 @@ function NodeSettingsPopover({
   catalog,
   allSteps,
   children,
+  inline = false,
+  open = true,
 }: {
+  inline?: boolean;
+  open?: boolean;
   anchor: { x: number; y: number };
   onClose: () => void;
   predecessors: FlowStepNode[];
@@ -1411,13 +1487,14 @@ function NodeSettingsPopover({
   // correct on first paint -- no flicker from initial click coords to
   // clamped coords.
   useLayoutEffect(() => {
-    setPos(clampToViewport(anchor, ref.current ?? undefined));
-  }, [anchor]);
+    if (!inline) setPos(clampToViewport(anchor, ref.current ?? undefined));
+  }, [anchor, inline]);
 
   // Outside-click. Defer registration one tick so the same click that
   // opened us doesn't immediately close us. Clicks inside the variable
   // picker are also considered "inside" so they don't dismiss the popover.
   useEffect(() => {
+    if (inline) return;
     const handler = (e: MouseEvent): void => {
       if (!ref.current) return;
       // The xyflow `Node` type shadows the DOM Node in this module, so we
@@ -1442,50 +1519,38 @@ function NodeSettingsPopover({
       window.clearTimeout(timer);
       document.removeEventListener("mousedown", handler);
     };
-  }, [onClose]);
+  }, [onClose, inline]);
 
   // Esc closes.
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key !== "Escape") return;
+      if (e.key !== "Escape" || !open || (inline && !ref.current?.contains(e.target as globalThis.Node))) return;
       const target = e.target as HTMLElement | null;
       const tag = target?.tagName;
       // Don't hijack Esc when the user is editing a field; let it bubble
       // so the field's own handler can revert.
-      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable) return;
       onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, inline, open]);
 
   const variableRows = useMemo(
     () => buildVariableRows(predecessors, sampleData, catalog, allSteps),
     [predecessors, sampleData, catalog, allSteps],
   );
 
+  useEffect(() => { if (!open) setPickerActive(null); }, [open]);
+  const panel = (
+        <div ref={ref} className={`wf-popover${inline ? " wf-popover--inline" : ""}`} role={inline ? "complementary" : "dialog"} aria-label="Step settings" aria-hidden={!open || undefined} inert={!open} data-open={open} style={inline ? undefined : { left: pos.left, top: pos.top, width: POPOVER_WIDTH }}>
+          <button type="button" className="wf-popover__close" onClick={onClose} aria-label="Close settings"><Icon icon={X} size={14} /></button>
+          <div className="wf-popover__body">{children}</div>
+        </div>
+  );
   return (
     <VariablePickerContext.Provider value={pickerHandle}>
-      {createPortal(
-        <div
-          ref={ref}
-          className="wf-popover"
-          role="dialog"
-          aria-label="Step settings"
-          style={{ left: pos.left, top: pos.top, width: POPOVER_WIDTH }}
-        >
-          <button
-            type="button"
-            className="wf-popover__close"
-            onClick={onClose}
-            aria-label="Close settings"
-          >
-            <Icon icon={X} size={14} />
-          </button>
-          <div className="wf-popover__body">{children}</div>
-        </div>,
-        document.body,
-      )}
+      {inline ? panel : createPortal(panel, document.body)}
       {pickerActive ? (
         <VariablePickerPanel
           settingsPopoverRef={ref}
@@ -2813,7 +2878,9 @@ function buildGraph(
    * overlaid; populated drives per-node status pips + border tinting.
    */
   overlay: Record<string, CanvasStepSnapshot>,
+  vertical = false,
 ): { nodes: Node<StepNodeData>[]; edges: Edge[] } {
+  const orient = (p: {x:number;y:number}) => vertical ? {x:(p.y - NODE_Y_BASE) * 2.4, y:p.x * 0.5 + NODE_Y_BASE} : p;
   const autoPositions = computeAutoLayout(trigger);
   const buildNodeData = (
     step: FlowStepNode,
@@ -2856,7 +2923,7 @@ function buildGraph(
     // distribute their branches above/below rather than stacking.
     const saved = stepPositions[step.name];
     const auto = autoPositions[step.name];
-    const position = saved ?? auto ?? { x: 0, y: NODE_Y_BASE };
+    const position = saved ?? orient(auto ?? { x: 0, y: NODE_Y_BASE });
     return {
       id: step.name,
       type: "stepNode",
@@ -2864,8 +2931,8 @@ function buildGraph(
       // Tell xyflow the natural side for each default handle so smoothstep
       // edges route horizontally even before we render explicit <Handle/>
       // components (Task 2).
-      sourcePosition: Position.Right,
-      targetPosition: Position.Left,
+      sourcePosition: vertical ? Position.Bottom : Position.Right,
+      targetPosition: vertical ? Position.Top : Position.Left,
       // Tree steps always have a parent (the trigger or a predecessor)
       // so targetIsFree=false -- new drops are rejected.
       data: buildNodeData(step, entry.depth, entry.branchName, false, false),
@@ -2888,11 +2955,11 @@ function buildGraph(
     // computeAutoLayout sets the root at NODE_Y_BASE. We want the head
     // to land at the orphan entry's stored (x, y), so translate the
     // whole subtree by (orphan.x - subAuto[head].x, orphan.y - subAuto[head].y).
-    const headAuto = subAuto[o.node.name] ?? { x: 0, y: NODE_Y_BASE };
+    const headAuto = orient(subAuto[o.node.name] ?? { x: 0, y: NODE_Y_BASE });
     for (const entry of subFlat) {
       const step = entry.step;
       const isHead = step.name === o.node.name;
-      const auto = subAuto[step.name] ?? { x: 0, y: NODE_Y_BASE };
+      const auto = orient(subAuto[step.name] ?? { x: 0, y: NODE_Y_BASE });
       const saved = stepPositions[step.name];
       const position = saved ?? {
         x: o.x + (auto.x - headAuto.x),
@@ -2902,8 +2969,8 @@ function buildGraph(
         id: step.name,
         type: "stepNode",
         position,
-        sourcePosition: Position.Right,
-        targetPosition: Position.Left,
+        sourcePosition: vertical ? Position.Bottom : Position.Right,
+        targetPosition: vertical ? Position.Top : Position.Left,
         // Only the head has no parent -- internal orphan steps are wired
         // to the preceding orphan step and should reject new drops on
         // their target handle. Both render with the orphan styling.
@@ -2979,6 +3046,7 @@ function buildGraph(
 }
 
 function StepNode({ data }: NodeProps): React.ReactElement {
+  const { workspace } = useContext(WorkflowEditorEnvironment);
   const {
     step,
     selected,
@@ -3103,7 +3171,7 @@ function StepNode({ data }: NodeProps): React.ReactElement {
       {!isTrigger ? (
         <Handle
           type="target"
-          position={Position.Left}
+          position={workspace ? Position.Top : Position.Left}
           id="in"
           className="wf-handle wf-handle--target"
           isConnectableEnd={targetIsFree}
@@ -3121,10 +3189,10 @@ function StepNode({ data }: NodeProps): React.ReactElement {
           <Handle
             key={h.id}
             type="source"
-            position={Position.Right}
+            position={workspace ? Position.Bottom : Position.Right}
             id={h.id}
             className={`wf-handle wf-handle--source ${h.used ? "wf-handle--used" : ""}`}
-            style={{ top: `${pct}%` }}
+            style={workspace ? {left: `${pct}%`} : {top: `${pct}%`}}
             isConnectableStart={!h.used}
             isConnectableEnd={false}
             title={h.title}
@@ -3134,6 +3202,7 @@ function StepNode({ data }: NodeProps): React.ReactElement {
 
       {branchName ? <div className="wf-node__branch-label">branch: {branchName}</div> : null}
       <div className="wf-node__head">
+        {workspace && <NodeIdentityIcon step={step}/>}
         <Chip tone={kindTone} dot={false}>{kindLabel}</Chip>
         <span className="wf-node__name">{step.displayName ?? step.name}</span>
         {runPipTitle ? (
@@ -3168,9 +3237,16 @@ function StepNode({ data }: NodeProps): React.ReactElement {
   );
 }
 
+function NodeIdentityIcon({step}: {step:FlowStepNode}) {
+  const glyph = step.type === "EMPTY" || step.type === "PIECE_TRIGGER" ? Calendar : step.type === "ROUTER" ? GitBranch : step.type === "LOOP_ON_ITEMS" ? Repeat2 : Box;
+  return <span className="wf-node-identity"><Icon icon={glyph} size={17}/></span>;
+}
+
 /* =========================================================== properties */
 
 interface PropertiesPanelProps {
+  workspace?: boolean;
+  onChoosePiece?: () => void;
   step: FlowStepNode;
   isTriggerStep: boolean;
   hasNextAction: boolean;
@@ -3260,6 +3336,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   const schema = selectedSubAction?.inputSchema ?? null;
 
   const [newKey, setNewKey] = useState("");
+  const [tab, setTab] = useState("Configure");
 
   const inputEntries = useMemo(
     () => Object.entries(step.settings?.input ?? {}),
@@ -3269,16 +3346,19 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
   return (
     <div className="wf-props">
       <header className="wf-props__header">
+        {props.workspace && <NodeIdentityIcon step={step}/>}
         <EditableStepName
           name={step.displayName ?? step.name}
           fallback={step.name}
           onCommit={onSetDisplayName}
         />
         <p>
-          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : "Action"}
+          <code>{step.name}</code> · {isTrigger ? (isManual ? "Manual trigger" : "Piece trigger") : isLoop ? "Loop" : isRouter ? "Router" : "Action"}
         </p>
       </header>
 
+      {props.workspace && <div className="wf-inspector-tabs" role="tablist" aria-label="Node settings view">{["Configure", "Input", "Output"].map(name => <button type="button" key={name} role="tab" aria-selected={tab === name} onClick={() => setTab(name)}>{name}</button>)}</div>}
+      <div hidden={props.workspace && tab !== "Configure"}>
       {/* The display name is edited by clicking the title above
           (same UX as the workflow title in the editor header).
           The separate "Display name" Field that used to live here is
@@ -3320,6 +3400,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         </p>
       ) : null}
 
+      {props.workspace && step.type === "PIECE" && !piece && <Button onClick={props.onChoosePiece}>Choose a node</Button>}
       {detectedTriggerKind === "other" ? (
         <p className="wf-props__hint">
           This trigger uses a custom piece
@@ -3421,6 +3502,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
           not persisted across reloads (intentional: it's a working
           state, not a configuration). */}
       <AdvancedSettings
+        configurationOnly={props.workspace}
         // Key on step name so collapse state resets when the user
         // navigates to a different step. Otherwise an open Advanced
         // section on step A would silently carry over to step B even
@@ -3442,6 +3524,11 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
         onSetSampleInput={props.onSetSampleInput}
         onTestFromHere={props.onTestFromHere}
       />
+      </div>
+      {props.workspace && <>
+        <div hidden={tab !== "Input"}><h3 className="wf-io-title">Configured input</h3><pre className="wf-io-value">{JSON.stringify(step.settings?.input ?? {}, null, 2)}</pre><SampleInputSection stepName={step.name} sampleInput={props.sampleInput} isLocked={props.isLocked} onSetSampleInput={props.onSetSampleInput} /></div>
+        <div hidden={tab !== "Output"}><SampleDataSection stepName={step.name} sampleData={props.sampleData} declaredSample={selectedSubAction?.sampleData ?? selectedSubAction?.outputSample} isLocked={props.isLocked} isTriggerStep={isTriggerStep} onSetSampleData={props.onSetSampleData} onTestFromHere={props.onTestFromHere} /></div>
+      </>}
     </div>
   );
 }
@@ -3455,6 +3542,7 @@ function PropertiesPanel(props: PropertiesPanelProps): React.ReactElement {
  * to test this step" which expands the whole block in one click.
  */
 function AdvancedSettings(props: {
+  configurationOnly?: boolean;
   showErrorHandling: boolean;
   continueOnFailure: boolean;
   retryOnFailure: boolean;
@@ -3490,7 +3578,9 @@ function AdvancedSettings(props: {
               onChange={props.onSetErrorHandling}
             />
           ) : null}
+          {!props.configurationOnly && <>
           <SampleInputSection
+            stepName={props.stepName}
             sampleInput={props.sampleInput}
             isLocked={props.isLocked}
             onSetSampleInput={props.onSetSampleInput}
@@ -3504,6 +3594,7 @@ function AdvancedSettings(props: {
             onSetSampleData={props.onSetSampleData}
             onTestFromHere={props.onTestFromHere}
           />
+          </>}
         </div>
       ) : null}
     </section>
@@ -3647,11 +3738,23 @@ function ErrorHandlingSection({
  * The trigger step also accepts sample data -- that becomes the trigger
  * payload visible to the first action. The button label adapts.
  */
+function useSampleDraftText(key: string, incoming: string): [string, React.Dispatch<React.SetStateAction<string>>] {
+  const { sampleDrafts } = useContext(WorkflowEditorEnvironment);
+  const [text,setText] = useState(() => sampleDrafts?.get(key) ?? incoming);
+  useEffect(() => {
+    if (text === incoming) sampleDrafts?.delete(key);
+    else sampleDrafts?.set(key,text);
+  }, [sampleDrafts,key,text,incoming]);
+  return [text,setText];
+}
+
 function SampleInputSection({
+  stepName,
   sampleInput,
   isLocked,
   onSetSampleInput,
 }: {
+  stepName?: string;
   sampleInput: unknown | undefined;
   isLocked: boolean;
   onSetSampleInput: (input: Record<string, unknown> | null) => Promise<{ ok: boolean; message: string }>;
@@ -3663,7 +3766,7 @@ function SampleInputSection({
     () => (sampleInput === undefined ? "" : JSON.stringify(sampleInput, null, 2)),
     [sampleInput],
   );
-  const [text, setText] = useState<string>(incomingText);
+  const [text, setText] = useSampleDraftText(`input:${stepName}`, incomingText);
   const [savedText, setSavedText] = useState<string>(incomingText);
   const [parseError, setParseError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
@@ -3784,6 +3887,7 @@ function SampleInputSection({
 }
 
 function SampleDataSection({
+  stepName,
   sampleData,
   declaredSample,
   isLocked,
@@ -3815,7 +3919,7 @@ function SampleDataSection({
     () => (sampleData === undefined ? "" : JSON.stringify(sampleData, null, 2)),
     [sampleData],
   );
-  const [text, setText] = useState<string>(incomingText);
+  const [text, setText] = useSampleDraftText(`output:${stepName}`, incomingText);
   const [savedText, setSavedText] = useState<string>(incomingText);
   const [parseError, setParseError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
@@ -4280,6 +4384,7 @@ function FlowRefField({
   labelEl: React.ReactNode;
   isMissing: boolean;
 }): React.ReactElement {
+  const request = useWorkflowRequest();
   const flowId = typeof value === "string" ? value : "";
   // Filter the current workflow out of the list: picking yourself
   // would recurse (the daemon also guards against this at
@@ -4316,7 +4421,7 @@ function FlowRefField({
     setError(null);
     (async (): Promise<void> => {
       try {
-        const list = await fetchFlowsForPicker();
+        const list = await fetchFlowsForPicker(request as typeof fetch);
         if (!cancelled) setFlows(list);
       } catch (e) {
         if (!cancelled) setError(e instanceof Error ? e.message : String(e));

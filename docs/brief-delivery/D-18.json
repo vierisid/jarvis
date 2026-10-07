@@ -1,0 +1,102 @@
+{
+  "task": "D-18",
+  "title": "Refactor the full-workspace canvas and inspector",
+  "date": "2026-10-07",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "branch": "brief/d-18",
+  "stack_base": "brief/d-17",
+  "baseline": "3da277835bbbd5ffd0bff4810f88c806ff687d23",
+  "inspected_main": "82d7b3815f346d7cb963afbbe16a718fd4a941dd",
+  "head": {
+    "ref": "brief/d-18",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-18.json"
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-18",
+  "preview": "http://127.0.0.1:4398/?brief=preview&specimen=workflow-canvas#/_brief_preview",
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/780"
+  ],
+  "activation_dependencies": [
+    "F-21 workflowContext",
+    "Authenticated account/vault/machine host integration with draft navigation guard",
+    "D-33 release verification"
+  ],
+  "owns": [
+    "ui/src/brief/workflows/canvas/**",
+    "Bounded workspace presentation/request context in existing WorkflowEditor and editor hooks",
+    "One fixture-only preview registration",
+    "docs/brief-delivery/D-18.*",
+    "docs/brief-delivery/evidence/D-18/**"
+  ],
+  "figma": {
+    "reference": "ui/src/brief/workflows/canvas/figma-reference.json",
+    "inspection": "Saved native UI-23 handoff and exports under approved UI-35; no fresh editor session"
+  },
+  "checks": [
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/rooms/workflows ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "result": "pass",
+      "tests": 434,
+      "skipped": 2,
+      "assertions": 4426,
+      "files": 31,
+      "evidence": "evidence/D-18/affected-tests.log",
+      "note": "Two optional unmerged F07/F08 compatibility tests skipped; no F21 compatibility claim"
+    },
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows/canvas",
+      "result": "pass",
+      "tests": 10,
+      "assertions": 47,
+      "evidence": "evidence/D-18/focused-tests.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-18/typescript.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-18/build.log",
+      "warnings": "Existing Tailwind at-rule warnings"
+    }
+  ],
+  "browser": {
+    "script": "evidence/D-18/browser-check.cjs",
+    "evidence": "evidence/D-18/browser-results.json",
+    "result": "pass",
+    "layouts": 8,
+    "inspector_reversals": 80,
+    "node_inspectors": 10,
+    "assertions": [
+      "Light/Dark and expanded/rail/chat pairs",
+      "Selection and graph zoom/focal continuity",
+      "Configured input edit and real hook save to in-memory fixture",
+      "Sample JSON retained through close/reopen, tab and node changes",
+      "Branches, loops, configured/unconfigured pieces and orphan descendants",
+      "Selected orphan retained through chat reflow",
+      "390px containment with scrollable inspector and reduced motion",
+      "No browser errors or external mutations"
+    ],
+    "rapid_keyboard_reversals": 10,
+    "additional_keyboard_check": "evidence/D-18/keyboard-check.cjs (10 Enter/Space cycles and focus returns)"
+  },
+  "limitations": [
+    "Disabled optional room; legacy route still registered",
+    "F21 not implemented here, so exact live F21 API compatibility awaits owner integration",
+    "No real hosted auth, workflow execution, model, installation or account mutation",
+    "Input/Output are clearly labeled configured input/test samples; historical run I/O belongs to F21/D19",
+    "Below 650px work width inspector stacks below graph and may require local scrolling",
+    "Cross-room unsaved draft navigation remains a host integration requirement, with onDirtyChange supplied for its guard",
+    "Published save changes version identity; host must reconcile/rebind before another save/run",
+    "Manual run command cannot retry uncertain results; reconciliation belongs to F21/D19"
+  ],
+  "rollback": "Remove optional registration/disable capability; preserve legacy route and user drafts. No schema or production activation change. Retain bounded editor corrections unless deliberately reverted with tests.",
+  "base_ci": "Corrected D17 Tests, Docker and active platform checks pass",
+  "ci": "D18 CI reported after push, not inferred from base",
+  "next": "D-19; not started"
+}
