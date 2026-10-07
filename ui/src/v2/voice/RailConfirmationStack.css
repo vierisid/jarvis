@@ -3,9 +3,14 @@
    hit REST. The entire surface is also voice-resolvable via
    "approve" / "cancel" — see daemon's resolveLatestPendingByVoice. */
 
+/* The rail is a fixed-height column with overflow hidden; with the clamps
+   gone a long card could push its own buttons past the bottom of it, so the
+   stack shrinks and scrolls instead (#719). */
 .v2-rail-confirm {
   display: flex;
   flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
   gap: var(--s-2);
   padding: var(--s-3) var(--s-4);
   border-top: var(--hair-soft);
@@ -94,15 +99,18 @@
   color: var(--warn);
 }
 
+/* Never clamped (#719). This line is what Approve / Yes decides on: an
+   approval's intent, a clarifier's label. A three-line clamp with no expand
+   control approved a sentence with its tail hidden -- a site_run_command
+   command, which #716 stopped truncating at source, or the later steps of a
+   run_skill sentence, "(sends email)" included. overflow-wrap breaks a long
+   unbroken token instead of letting the card clip it. */
 .v2-rail-confirm__card-title {
   font-family: var(--font-sans);
   font-size: var(--text-sm);
   color: var(--ink);
   line-height: 1.3;
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .v2-rail-confirm__card-sub {
@@ -111,16 +119,16 @@
   color: var(--ink-3);
 }
 
+/* The transcript a clarifier or repeat-back row asks Yes / No about. Not
+   clamped either (#719): "Confirm what I heard" with the end of what was
+   heard cut off is the same defect as a clipped approval. */
 .v2-rail-confirm__card-quote {
   font-family: var(--font-display);
   font-style: italic;
   font-size: var(--text-xs);
   color: var(--ink-2);
   line-height: 1.35;
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
+  overflow-wrap: anywhere;
 }
 
 .v2-rail-confirm__card-error {

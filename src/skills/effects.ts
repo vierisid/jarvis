@@ -98,8 +98,8 @@ function categoryVerb(category: ActionCategory): string {
  * appends, the next step, the trailing review notice -- so each takes a short
  * cap, the one that stops a value forging an ending or pushing the step that
  * sends thousands of characters down the sentence. It bounds the sentence, not
- * the surface: a card that clamps to a few lines can still hide a later step,
- * and the eight-step cap below can drop one; neither is decided here. 80 for a
+ * the surface (#719 removed the rail's clamp), and the eight-step cap below
+ * names the effects of the steps it does not list (#723). 80 for a
  * name or label is the sibling convention
  * (`CARD_NAME_MAX` in actions/tools/skills.ts, `UI_CARD_VALUE` in ui.ts); 40
  * for a typed value, a key chord or a URL is the cap `shortValue` always had.
@@ -163,7 +163,11 @@ export function classifyStep(
   }
   const secret = referencesSecret(step.value, skill.params);
   const filled = step.value !== undefined && !secret ? fillParams(step.value, args) : step.value;
-  // Display only: the classifier below still judges the raw accessible name.
+  // Display only. The classifier below judges the raw accessible name, its
+  // uncapped reduction and a folded form, and keeps every reading (#723), so
+  // invisible characters, whitespace, fullwidth letters and edge punctuation
+  // cannot make this label say Send while the category says nothing.
+  // Cross-script look-alikes still can (see `uiEffectHints`).
   // A name that reduces to nothing (invisibles only) falls back to the role.
   const target = cardLabel(step.ref?.name) || cardLabel(step.ref?.role) || 'element';
 
@@ -208,6 +212,24 @@ export function classifyStep(
 const MAX_INTENT_STEPS = 8;
 
 /**
+ * The tail for the acting steps past the eighth (#723): how many, and every
+ * business effect among them. The cap used to drop a later step whole, so a
+ * ninth step that clicked Send left a card listing eight harmless clicks and
+ * "+1 more steps" -- the run was still gated on `send_email`, but the reviewer
+ * had no way to see it. Effects are named once each, most severe first, so
+ * the tail is bounded by the number of categories however long the skill is,
+ * and a step whose effect is unknown is already called out by the review
+ * notice the sentence ends with.
+ */
+function hiddenStepsTail(hidden: StepEffect[]): string {
+  const effects = [...new Set(hidden.flatMap((s) => s.reached))]
+    .filter((c) => c !== SKILL_EFFECT_FLOOR && c !== 'read_data')
+    .sort((a, b) => severityRank(b) - severityRank(a));
+  const count = `+${hidden.length} more steps`;
+  return effects.length ? `${count} (among them: ${effects.map(categoryVerb).join(', ')})` : count;
+}
+
+/**
  * WHAT #706 MOVED. The sentence is compared after approval: the deferred
  * executor refuses a call whose gate intent no longer equals the approved one,
  * and a workflow's run_skill step digests it into the reviewed target. So a
@@ -220,6 +242,19 @@ const MAX_INTENT_STEPS = 8;
  * after approval" in chat, "Workflow execution target changed after review"
  * in a workflow), and the person asks again and gets the reduced card. A
  * sentence made only of ordinary text is byte-exact, so its approvals stand.
+ *
+ * WHAT #723 MOVED, by the same mechanism. Two kinds of skill get a different
+ * sentence, and a pending approval of one is refused when approved and asked
+ * again: (1) a skill with a step whose label or app matches a send, pay,
+ * delete or settings pattern only once ignorables, controls and runs of
+ * whitespace are reduced, or once folded (fullwidth letters, combining marks,
+ * other format characters, punctuation at either end), or only when one
+ * reading of the label meets another of the app (`uiEffectHints`) -- that
+ * step now gains its effect,
+ * on the card and in the categories the run must clear, so a deny rule on that
+ * category now applies to it; (2) a skill with more than eight acting steps
+ * whose hidden steps have a business effect -- the "+N more steps" tail now
+ * names it. Every other skill's sentence and categories are unchanged.
  */
 export function resolveSkillEffect(skill: Skill, callerArgs: Record<string, string>): SkillEffect {
   // The card shows the values the run will actually type: the caller's over
@@ -239,7 +274,7 @@ export function resolveSkillEffect(skill: Skill, callerArgs: Record<string, stri
   const categories = [...reached].sort((a, b) => severityRank(b) - severityRank(a));
   const acting = steps.filter((s) => skill.steps[s.index]!.action !== 'wait');
   const shown = acting.slice(0, MAX_INTENT_STEPS).map((s) => s.summary);
-  const more = acting.length > MAX_INTENT_STEPS ? `; +${acting.length - MAX_INTENT_STEPS} more steps` : '';
+  const more = acting.length > MAX_INTENT_STEPS ? `; ${hiddenStepsTail(acting.slice(MAX_INTENT_STEPS))}` : '';
   const app = cardLabel(skill.app);
   const where = app ? ` in ${app}` : '';
   const requiresReview = acting.some(s => s.uncertain);

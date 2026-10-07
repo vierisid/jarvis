@@ -391,6 +391,8 @@
   font-size: var(--text-md);
   color: var(--ink);
   line-height: 1.4;
+  /* A long unbroken token wraps instead of being clipped (#719). */
+  overflow-wrap: anywhere;
 }
 
 .v2-auth__pending-meta-row {

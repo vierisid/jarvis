@@ -53,6 +53,42 @@ export function boundedApprovalLabel(text: string, maxChars: number): string {
  */
 export const APPROVAL_LABEL_DELIVERY_MAX_CHARS = 1024;
 
+/** `U+000A`: a code point as a model can name it back. */
+function codePointName(ch: string): string {
+  return `U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}`;
+}
+
+/**
+ * Why this code would alter `text` on its way to an approval surface, or null
+ * when every surface's text receives it exactly as written (#724).
+ *
+ * The test is `boundedApprovalLabel` itself at the delivery ceiling, so it
+ * cannot drift from what the channel card and the desktop toast do: null means
+ * `boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS) === text`.
+ * The other branches only say WHICH alteration it would be, in words a model
+ * can act on. That covers what THIS code does to the text, not what a
+ * renderer does after it: Telegram and Discord render the channel card as Markdown, and
+ * an OS toast clamps a long body to a few lines beside its Approve button.
+ *
+ * It refuses ordinary text that carries a format character, too: an emoji
+ * built with a zero-width joiner, a left-to-right or right-to-left mark in
+ * Hebrew or Arabic text, a soft hyphen. Each of those is stripped by the
+ * label reduction, so the card would not show what was written.
+ */
+export function approvalLabelAlteration(text: string): string | null {
+  const brk = new RegExp(LABEL_BREAKS.source, 'u').exec(text);
+  if (brk) return `it contains a line break, tab or other control character (${codePointName(brk[0])} at position ${brk.index})`;
+  const fmt = new RegExp(LABEL_FORMAT.source, 'u').exec(text);
+  if (fmt) return `it contains an invisible formatting character (${codePointName(fmt[0])} at position ${fmt.index})`;
+  if (text.length > APPROVAL_LABEL_DELIVERY_MAX_CHARS) {
+    return `it is ${text.length} characters long; the approval card shows at most ${APPROVAL_LABEL_DELIVERY_MAX_CHARS}`;
+  }
+  if (boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS) !== text) {
+    return 'it contains text the approval card would rewrite (a content-framing marker or an unpaired surrogate)';
+  }
+  return null;
+}
+
 /**
  * The text of the desktop approval notification, which carries Approve and
  * Deny buttons (`notify.show` to every sidecar, daemon/index.ts). It shows the

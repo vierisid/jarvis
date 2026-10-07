@@ -249,3 +249,67 @@ describe('#706: page-derived and model-chosen text on the run_skill card', () =>
     expect(step.summary).toBe(`unknown action "swipe\\" ${'z'.repeat(30)}..."`);
   });
 });
+
+/**
+ * #723. The classification is the half with authority, and it read only the
+ * raw accessible name while the card showed the reduced one, so the two could
+ * disagree: a deny rule on `send_email` was skipped while the card said
+ * `click Send`. And the eight-step cap dropped a later step whole.
+ */
+describe('#723: the classifier reads the name the card shows, as well as the raw one', () => {
+  const ZWSP = String.fromCharCode(0x200b);
+  const gmail = skill([], { app: 'Gmail' });
+
+  test.each([
+    ['a zero-width space inside the word', `Se${ZWSP}nd`],
+    ['a run of whitespace', 'Send  now'],
+    ['a control character', `Se${String.fromCharCode(1)}nd`],
+    ['a line break', `Send${String.fromCharCode(10)}now`],
+  ])('%s does not hide a send', (_label, name) => {
+    const step = classifyStep({ action: 'click', ref: ref('button', name) }, 0, gmail, {});
+    expect(step.reached).toContain('send_email');
+    expect(step.summary).toMatch(/^click Send( now)? \(sends email\)$/);
+    expect(step.uncertain).toBe(false);
+  });
+
+  test('a disguised app name still counts as the mail context', () => {
+    const step = classifyStep({ action: 'click', ref: ref('button', 'Send') }, 0, skill([], { app: `Gm${ZWSP}ail` }), {});
+    expect(step.reached).toContain('send_email');
+  });
+
+  test('the union only adds: a raw-name match is kept', () => {
+    // The raw reading matches the payment pattern; nothing about the reduction can remove it.
+    const step = classifyStep({ action: 'click', ref: ref('button', `${'x'.repeat(90)} pay now`) }, 0, skill([]), {});
+    expect(step.reached).toContain('make_payment');
+  });
+
+  test('a run that sends is gated on the send, so a deny rule on it applies', () => {
+    const e = resolveSkillEffect(skill([{ action: 'click', ref: ref('button', `Se${ZWSP}nd`) }], { app: 'Gmail' }), {});
+    expect(e.categories).toContain('send_email');
+  });
+});
+
+describe('#723: the steps past the eighth are counted with their effects', () => {
+  const clicks = (n: number): SkillStep[] => Array.from({ length: n }, (_, i) => ({ action: 'click', ref: ref('button', `B${i}`) }));
+
+  test('a ninth step that sends is named in the tail', () => {
+    const e = resolveSkillEffect(skill([...clicks(8), { action: 'click', ref: ref('button', 'Send') }], { app: 'Gmail' }), {});
+    expect(e.intent).not.toContain('click Send');
+    expect(e.intent).toContain('click B7; +1 more steps (among them: sends email)');
+  });
+
+  test('every effect among the hidden steps is named once, most severe first', () => {
+    const e = resolveSkillEffect(skill([
+      ...clicks(8),
+      { action: 'click', ref: ref('button', 'Send') },
+      { action: 'click', ref: ref('button', 'Delete') },
+      { action: 'click', ref: ref('button', 'Send') },
+      { action: 'click', ref: ref('button', 'Pay now') },
+    ], { app: 'Gmail' }), {});
+    expect(e.intent).toContain('+4 more steps (among them: pays, deletes, sends email)');
+  });
+
+  test('hidden steps with no business effect are only counted', () => {
+    expect(resolveSkillEffect(skill(clicks(12)), {}).intent).toContain('click B7; +4 more steps. Business effect unknown');
+  });
+});

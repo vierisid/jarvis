@@ -8,7 +8,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { forCard } from './card-text.ts';
+import { commandForCard, escapedLiteralForCard, forCard } from './card-text.ts';
 
 describe('forCard', () => {
   test('it collapses whitespace so a newline cannot hide the sentence', () => {
@@ -71,5 +71,22 @@ describe('forCard', () => {
   test('a null or undefined value is the empty string, not "null"', () => {
     expect(forCard(null)).toBe('');
     expect(forCard(undefined)).toBe('');
+  });
+});
+
+/** #720: shared by `run_command` and `site_run_command`; the site tests in tool-gate.test.ts pin the rest. */
+describe('escapedLiteralForCard and commandForCard', () => {
+  test('a literal decodes to exactly the value and cannot close its own quote', () => {
+    const value = `a"b\n${String.fromCharCode(0x202e)}c${String.fromCharCode(10)}`;
+    const literal = escapedLiteralForCard(value);
+    expect(literal).not.toMatch(/[^\x20-\x7e]/);
+    expect(JSON.parse(literal)).toBe(value);
+    expect(escapedLiteralForCard(undefined)).toBe('""');
+  });
+
+  test('trim follows the caller: untrimmed shows the outer whitespace the shell receives', () => {
+    expect(commandForCard('  ls \n')).toBe('run: ls');
+    expect(commandForCard('  ls', { trim: false })).toBe('run:   ls');
+    expect(commandForCard('ls\n', { trim: false })).toBe('run this 2-line command, as an escaped string (\\n is a new line): "ls\\n"');
   });
 });

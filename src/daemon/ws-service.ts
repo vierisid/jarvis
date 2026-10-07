@@ -20,8 +20,8 @@ import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
 import { approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
-import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
 import { boundedApprovalLabel } from '../authority/approval-delivery.ts';
+import { commandForCard } from '../util/card-text.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -2773,37 +2773,41 @@ function looksLikeCommitment(text: string): boolean {
 }
 
 /**
- * Build a short imperative sentence describing an approval request, for use
- * as the `intent` field in the dashboard ApprovalCard. Prefers the LLM-supplied
- * reason when it looks like a complete sentence; otherwise synthesizes one
- * from tool_name + arguments.
+ * The sentence the dashboard ApprovalCard leads with.
+ *
+ * WHAT WILL HAPPEN leads; WHY approval was needed follows in parentheses
+ * (#721). `request.reason` is the Authority engine's decision reason on every
+ * request but one, and the engine's wording names a category or a rule, never
+ * the effect: `Override requires approval for execute_command`, a context
+ * rule's own `description`, `send_email is a governed action requiring user
+ * approval`. This used to recognise the engine only by two suffixes and the
+ * taint label and let any other reason REPLACE the sentence, so an override or
+ * a context rule hid the command, the path or the skill's steps entirely: the
+ * reviewer saw why approval was needed but not what would happen.
+ *
+ * The one exception is `request_approval`, whose `reason` IS the model's
+ * declared intent (#696): that is the headline, reduced to one line with no
+ * format characters and not cut, since this card is where the whole intent can
+ * be read. Its `context` is model-written too, so it is never read as a gate
+ * sentence (`approvalIntentFromContext`) -- before #721 an intent ending in
+ * "requires user approval" made the model's own context JSON the headline.
+ *
+ * The appended reason gets the same one-line reduction: a context rule's
+ * description is free text from config. The engine's own wording comes back
+ * byte-exact, so a gated card with an engine reason reads as it did.
  */
 function formatApprovalIntent(request: ApprovalRequest): string {
   const reason = (request.reason ?? '').trim();
-
-  // `reason` is usually an imperative sentence drafted by the LLM (e.g.,
-  // "Reply to Anya, move Monday review to 3pm"). Keep it as-is when present,
-  // unless the authority engine wrote it ("... requires user approval"): then
-  // the per-tool sentence below is the headline the user needs (what will
-  // run), and the engine's reason follows it.
-  // The Authority engine's own wording names the CATEGORY, never the effect.
-  // For a governed category ("send_email is a governed action requiring user
-  // approval") the headline the reviewer needs is what will actually run, so
-  // the synthesized sentence leads and the engine's wording follows it.
-  const engineReason = reason.endsWith('requires user approval')
-    || reason.endsWith('is a governed action requiring user approval')
-    || reason.includes(TAINT_PROFILE_LABEL);
-  // One line with no format characters (#696): for request_approval this is the
-  // model's own intent, and a bidi override would reorder the headline. Not
-  // cut: this card is where the whole intent can be read.
-  if (reason.length > 0 && !engineReason) return boundedApprovalLabel(reason, reason.length);
+  const why = boundedApprovalLabel(reason, reason.length).trim();
+  if (request.tool_name === 'request_approval' && why) return why;
   const synthesized = synthesizeApprovalIntent(request);
-  return engineReason ? `${synthesized} (${reason})` : synthesized;
+  return why ? `${synthesized} (${why})` : synthesized;
 }
 
 function synthesizeApprovalIntent(request: ApprovalRequest): string {
   // A gated tool (run_skill, record_skill, manage_skills delete) writes the
   // sentence that names what will actually happen, with resolved values.
+  // Never for request_approval, whose context the model wrote.
   const gated = approvalIntentFromContext(request);
   if (gated) return gated;
 
@@ -2817,37 +2821,44 @@ function synthesizeApprovalIntent(request: ApprovalRequest): string {
   // Per-tool fallbacks for the common destructive/external intents.
   switch (request.tool_name) {
     case 'send_email': {
-      const to = asString(args.to) ?? 'someone';
-      const subject = asString(args.subject);
+      const to = labelOf(args.to) ?? 'someone';
+      const subject = labelOf(args.subject);
+      // Quoted with its quotes escaped, so a subject cannot close its own
+      // literal and continue the sentence; a plain subject reads as it did.
       return subject
-        ? `Send email to ${to} — "${subject}"`
+        ? `Send email to ${to} — ${JSON.stringify(subject)}`
         : `Send email to ${to}`;
     }
     case 'send_message': {
-      const channel = asString(args.channel) ?? 'channel';
+      const channel = labelOf(args.channel) ?? 'channel';
       return `Send message via ${channel}`;
     }
     case 'run_command':
     case 'execute_command': {
-      const cmd = asString(args.command) ?? 'a shell command';
-      return `Run: ${cmd}`;
+      // Only an approval recorded before `run_command` had a gate (#720)
+      // reaches this; every new one carries the gate's sentence above. Shown
+      // as the gate shows it, never raw: a newline collapsed in HTML let a
+      // second line hide behind a `#` comment, and a bidi override reordered
+      // the line. A plain one-line command reads exactly as it always did.
+      const shown = commandForCard(asString(args.command) ?? '', { trim: false });
+      return asString(args.command) === undefined ? 'Run a shell command' : `R${shown.slice(1)}`;
     }
     case 'delete_file':
     case 'delete_data': {
-      const path = asString(args.path) ?? asString(args.target) ?? 'the target';
+      const path = labelOf(args.path) ?? labelOf(args.target) ?? 'the target';
       return `Delete ${path}`;
     }
     case 'install_software': {
-      const pkg = asString(args.package) ?? asString(args.name) ?? 'software';
+      const pkg = labelOf(args.package) ?? labelOf(args.name) ?? 'software';
       return `Install ${pkg}`;
     }
     case 'make_payment': {
-      const amount = asString(args.amount) ?? asString(args.total);
-      const to = asString(args.recipient) ?? asString(args.to) ?? 'recipient';
+      const amount = labelOf(args.amount) ?? labelOf(args.total);
+      const to = labelOf(args.recipient) ?? labelOf(args.to) ?? 'recipient';
       return amount ? `Pay ${amount} to ${to}` : `Make a payment to ${to}`;
     }
     case 'spawn_agent': {
-      const role = asString(args.role) ?? 'an agent';
+      const role = labelOf(args.role) ?? 'an agent';
       return `Spawn ${role}`;
     }
     default: {
@@ -2904,6 +2915,18 @@ function describeGovernedPieceIntent(pieceId: string, action: string, request: A
 
 function asString(v: unknown): string | undefined {
   return typeof v === 'string' && v.length > 0 ? v : undefined;
+}
+
+/**
+ * A model-supplied argument in a fallback sentence: one line with no format
+ * characters, not cut (#721 review). Since #721 these sentences lead the card
+ * whenever the engine's reason is an override or a context rule, where before
+ * the reason replaced them, so they get the reduction the headline gets. A
+ * value that reduces to nothing falls back like a missing one.
+ */
+function labelOf(v: unknown): string | undefined {
+  const s = asString(v);
+  return s === undefined ? undefined : boundedApprovalLabel(s, s.length).trim() || undefined;
 }
 
 /**
