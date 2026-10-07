@@ -264,10 +264,11 @@ function hiddenStepsTail(hidden: StepEffect[]): string {
  *
  * WHAT #795 MOVED, by the same mechanism. A step's label is now quoted on the
  * card -- `click "Send"`, `type "x" into "To"` -- and so are pressed keys --
- * `press "enter"` -- the way typed values always were, so a recorded label
- * cannot print a fake `+N more steps` tail or a fake next step. That changes
- * the sentence of nearly every skill (any click, set_value or press_keys step
- * with a label or keys), so a run_skill approval still PENDING at upgrade is
+ * `press "enter"` -- and the app (`in "Gmail"`), the way typed values always
+ * were, so a recorded label cannot print a fake `+N more steps` tail or a fake
+ * next step, nor an app a fake header. That changes the sentence of nearly
+ * every skill (any app, or any click, set_value or press_keys step with a
+ * label or keys), so a run_skill approval still PENDING at upgrade is
  * refused when approved ("what it would do changed after approval" in chat,
  * "Workflow execution target changed after review" in a workflow) and the
  * person asks again and gets the quoted card. Categories are unchanged: the
@@ -302,7 +303,9 @@ export function resolveSkillEffect(skill: Skill, callerArgs: Record<string, stri
   const shown = acting.slice(0, MAX_INTENT_STEPS).map((s) => s.summary);
   const more = acting.length > MAX_INTENT_STEPS ? `; ${hiddenStepsTail(acting.slice(MAX_INTENT_STEPS))}` : '';
   const app = cardLabel(skill.app);
-  const where = app ? ` in ${app}` : '';
+  // Quoted too (#795 review): the app is recorded text, and unquoted it could
+  // print a fake `(v9, authored): click "OK"` header ahead of the real one.
+  const where = app ? ` in ${JSON.stringify(app)}` : '';
   const requiresReview = acting.some(s => s.uncertain);
   const intent = `Run skill ${quotedCardValue(skill.name, CARD_LABEL_MAX)}${where} (v${skill.version}, ${skill.provenance}): ${shown.join('; ')}${more}${requiresReview ? '. Business effect unknown for some UI steps; review the current screen and the full procedure before approving.' : ''} UI effect labels are hints, not verified business outcomes.`;
   return { category, categories, steps, invalid, intent, requiresReview };

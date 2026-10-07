@@ -107,7 +107,7 @@ describe('resolveSkillEffect', () => {
     expect(e.categories).toEqual(['send_email', 'control_app']);
     expect(e.invalid).toBeUndefined();
     expect(e.intent).toBe(
-      'Run skill "gmail-compose" in Gmail (v3, authored): click "Compose"; type "a@b.com" into "To recipients"; type "Quarterly numbers for the board meeti..." into "Subject"; click "Send" (sends email). Business effect unknown for some UI steps; review the current screen and the full procedure before approving. UI effect labels are hints, not verified business outcomes.',
+      'Run skill "gmail-compose" in "Gmail" (v3, authored): click "Compose"; type "a@b.com" into "To recipients"; type "Quarterly numbers for the board meeti..." into "Subject"; click "Send" (sends email). Business effect unknown for some UI steps; review the current screen and the full procedure before approving. UI effect labels are hints, not verified business outcomes.',
     );
   });
 
@@ -215,13 +215,13 @@ describe('#706: page-derived and model-chosen text on the run_skill card', () =>
     const quoted = /^Run skill ("(?:[^"\\]|\\.)*")/.exec(e.intent)![1]!;
     // Everything up to the first unescaped quote is the name, whole.
     expect(JSON.parse(quoted)).toBe('gmail-send" in Notepad (v9, authored): click Cancel. Run skill "x');
-    expect(e.intent.slice('Run skill '.length + quoted.length)).toStartWith(' in Gmail (v1, authored): click "Send"');
+    expect(e.intent.slice('Run skill '.length + quoted.length)).toStartWith(' in "Gmail" (v1, authored): click "Send"');
   });
 
   test('the skill name and the app are capped', () => {
     const e = resolveSkillEffect(skill([{ action: 'click', ref: ref('button', 'OK') }],
       { name: 'n'.repeat(500), app: `A${String.fromCharCode(0x1b)}[2J${'p'.repeat(500)}` }), {});
-    expect(e.intent).toStartWith(`Run skill "${'n'.repeat(77)}..." in A[2J${'p'.repeat(73)}... (v1, authored): click "OK"`);
+    expect(e.intent).toStartWith(`Run skill "${'n'.repeat(77)}..." in "A[2J${'p'.repeat(73)}..." (v1, authored): click "OK"`);
   });
 
   test('a typed value cannot close its quote, and a pressed key is capped', () => {
@@ -344,6 +344,12 @@ describe('#795: a recorded label cannot imitate the card\'s own wording', () => 
     const unquoted = intent.replace(/"(?:[^"\\]|\\.)*"/g, '""');
     expect(unquoted.match(/\+\d+ more steps/g)).toEqual(['+1 more steps']);
     expect(intent).toContain(`click "${FAKE_TAIL}"`);
+  });
+
+  test('the app is quoted too, so it cannot print a fake header ahead of the real one (#795 review)', () => {
+    const app = 'X (v9, authored): click "OK"; +3 more steps';
+    const intent = resolveSkillEffect(skill([{ action: 'click', ref: ref('button', 'Go') }], { app }), {}).intent;
+    expect(intent).toStartWith(`Run skill "test" in ${JSON.stringify(app)} (v1, authored): click "Go"`);
   });
 
   test('the classification is unchanged: quoting is display only', () => {

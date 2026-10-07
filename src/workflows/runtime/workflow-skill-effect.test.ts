@@ -109,7 +109,7 @@ describe('run_skill as a workflow effect', () => {
     expect(request.action_category).toBe('send_email');
     expect(request.execution_mode).toBe('workflow');
     expect(approvalIntentFromContext(request)).toContain('click "Send" (sends email)');
-    expect(approvalIntentFromContext(request)).toContain('"gmail-send" in Gmail');
+    expect(approvalIntentFromContext(request)).toContain('"gmail-send" in "Gmail"');
     expect(f.delivered).toEqual([request.id]);
 
     const effect = listWorkflowEffects(f.run.id)[0]!;
