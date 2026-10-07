@@ -25,6 +25,13 @@ export interface WorkflowEventBufferOptions {
   capacity?: number;
   maxAgeMs?: number;
   now?: () => number;
+  /**
+   * The id after which this buffer starts numbering. The daemon passes a
+   * boot-unique base (Q-06): an on_event cursor persisted before a crash then
+   * stays below every new id, instead of hiding new events until the counter
+   * passes it, and an id never repeats across restarts.
+   */
+  firstId?: number;
 }
 
 export interface DroppedEventsSignal {
@@ -62,6 +69,7 @@ export class WorkflowEventBuffer {
     this.capacity = opts.capacity ?? 10_000;
     this.maxAgeMs = opts.maxAgeMs ?? 60 * 60_000;
     this.now = opts.now ?? Date.now;
+    this.nextId = opts.firstId ?? 0;
   }
 
   /**

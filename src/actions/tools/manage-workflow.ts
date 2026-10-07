@@ -58,6 +58,8 @@ import {
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
 import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
+import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow } from '../../workflows/db/repos/flow-turn-off';
+import { listFlowFires } from '../../workflows/db/repos/trigger-fire';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
 import {
   createFlowRun,
@@ -879,6 +881,18 @@ function actGet(flow: FlowRow): Record<string, unknown> {
     ...summary,
     latestDraft: draft,
     published,
+    // Q-06: what became of its latest scheduled times, deliveries and events,
+    // so "why didn't it run?" has an answer: missed, blocked, skipped, a
+    // repeat, delayed, or the run's own state.
+    recentDeliveries: listFlowFires(flow.id, { limit: 10 }).map((fire) => ({
+      at: fire.observedAt,
+      source: fire.source,
+      outcome: fire.label,
+      ...(fire.scheduledFor !== null ? { scheduledFor: fire.scheduledFor } : {}),
+      ...(fire.runId ? { runId: fire.runId } : {}),
+      ...(fire.repeats ? { repeats: fire.repeats } : {}),
+      ...(typeof fire.detail?.reason === "string" ? { reason: fire.detail.reason } : {}),
+    })),
   };
 }
 
@@ -929,10 +943,12 @@ function actSetStatus(
   status: "ENABLED" | "DISABLED",
   deps: ManageWorkflowDeps,
 ): Record<string, unknown> {
-  updateFlowStatus(flow.id, status);
+  // Turning a workflow off stops its queued and waiting runs (Q-06).
+  const stoppedRuns = updateFlowStatus(flow.id, status).turnedOff ? stopRunsOfTurnedOffFlow(flow.id) : 0;
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   const updated = getFlow(flow.id);
-  return updated ? summarizeFlow(updated) : { error: "flow vanished after update" };
+  if (!updated) return { error: "flow vanished after update" };
+  return stoppedRuns ? { ...summarizeFlow(updated), stoppedRuns } : summarizeFlow(updated);
 }
 
 function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
@@ -973,6 +989,8 @@ function publishOsWarnings(trigger: unknown, deps: ManageWorkflowDeps): string[]
 }
 
 function actDelete(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
+  // Stop what it still has in flight before the delete removes the runs (Q-06).
+  stopRunsOfDeletedFlow(flow.id);
   deleteFlow(flow.id);
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   return { id: flow.id, deleted: true };

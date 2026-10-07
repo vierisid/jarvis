@@ -21,8 +21,12 @@ export function getRunCancellation(runId: string): RunCancellation | null {
   } : null;
 }
 
-/** Atomically stop the run and ALL its queued attempts, including legacy jobs. */
-export function cancelFlowRun(runId: string): {
+/**
+ * Atomically stop the run and ALL its queued attempts, including legacy jobs.
+ * A `reason` is kept on the stopped run (its failed step), so a run stopped
+ * because its workflow was turned off says so (Q-06).
+ */
+export function cancelFlowRun(runId: string, opts: { reason?: string; reasonLabel?: string } = {}): {
   accepted: boolean; jobCanceled: boolean; cancellation: RunCancellation | null;
 } {
   const db = getWorkflowDb();
@@ -47,6 +51,10 @@ export function cancelFlowRun(runId: string): {
         AND (flow_run_id = ? OR (flow_run_id IS NULL AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.runId') END = ?))`, [ts, runId, runId]);
     db.run("UPDATE flow_run SET status = 'STOPPED', finish_time = ?, updated = ? WHERE id = ?",
       [cancellation.acknowledgedAt, ts, runId]);
+    if (opts.reason) {
+      db.run("UPDATE flow_run SET failed_step = ? WHERE id = ?", [JSON.stringify({
+        name: "<lifecycle>", displayName: opts.reasonLabel ?? "Stopped", errorMessage: opts.reason }), runId]);
+    }
     // A stopped run never resumes a delegated conversation; drop its log.
     deleteDelegations(runId);
     return { accepted: true, jobCanceled: jobs.changes > 0, cancellation };

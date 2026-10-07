@@ -4987,7 +4987,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Recent-events buffer: the daemon mirrors every workflow-bus publish
     // into this so the engine-managed `on_event` polling trigger sees the
     // same stream that legacy direct subscribers do.
-    const workflowEventBuffer = new WorkflowEventBuffer();
+    // Ids start from a boot-unique base, so a trigger cursor saved before a
+    // restart never hides new events and ids never repeat (Q-06).
+    const workflowEventBuffer = new WorkflowEventBuffer({ firstId: Date.now() * 1000 });
     sharedEventBus.setObserver((eventType, payload) => {
       workflowEventBuffer.publish(eventType, payload);
     });

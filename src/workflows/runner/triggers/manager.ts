@@ -33,8 +33,8 @@
  * `WebhookManager` -- that lands in K alongside the daemon-side wiring.
  */
 
-import { CronScheduler } from "./cron";
-import { WebhookManager } from "./webhook";
+import { CronScheduler, CRON_GRACE_MS, getCronTimezone, type CronOccurrence } from "./cron";
+import { WebhookManager, type WebhookDelivery, type WebhookFireResult } from "./webhook";
 import type { WorkflowEventBus } from "../../runtime/event-bus";
 import { getFlow, listFlows, type FlowRow } from "../../db/repos/flow";
 import {
@@ -50,10 +50,15 @@ import { assertVersionReady, WorkflowReadinessError } from '../../db/repos/flow-
 import { ungrantedCodeSteps } from "../../db/repos/flow-code-steps";
 import { createFlowRun, updateRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
+import {
+  claimFire, clearScheduleWatch, DELAYED_AFTER_MS, getScheduleWatch, latestScheduledFire, pruneFires, recordBlocked,
+  recordFire, repeatOf, setScheduleWatch, type FireSource,
+} from "../../db/repos/trigger-fire";
 import { RUN_FLOW } from "../handler";
 import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineRuntime } from "../engine-runtime/engine-runtime";
 import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
+import { graphDigest } from "../../runtime/continuation";
 
 interface TriggerNode {
   type: string;
@@ -83,8 +88,44 @@ type ActiveSub = {
    * until Phase K, so the flow is enabled-but-non-firing).
    */
   warning?: string;
+  /** Digest of the trigger the subscription was registered from; a saved draft that changes it re-registers. */
+  triggerDigest?: string;
   teardown: () => Promise<void> | void;
 };
+
+/** Missed schedule occurrences are listed one by one back this far; older ones are counted. */
+const MISSED_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
+const MISSED_LISTED = 100;
+
+/** Digest of a trigger graph: a saved draft that changes it is a new registration. */
+const triggerDigest = graphDigest;
+
+/** The bundled schedule piece is a schedule, not a poll: its occurrences can be missed. */
+const isSchedulePiece = (pieceName: unknown): boolean =>
+  typeof pieceName === "string" && /(^|\/)piece-schedule$/.test(pieceName);
+
+/** The zone schedules actually run in: Jarvis's configured one, else this machine's. */
+function scheduleZone(): string {
+  return getCronTimezone() ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
+/**
+ * Schedules run in Jarvis's configured time zone (an owner decision, Q-06). A
+ * schedule that states another zone fires at that wall-clock time in Jarvis's
+ * zone instead; say so where the trigger list shows it. Hourly and finer
+ * schedules read the same in every zone and are not flagged.
+ */
+export function scheduleZoneWarning(expression: string, statedZone: unknown): string | undefined {
+  if (typeof statedZone !== "string" || !statedZone.trim()) return undefined;
+  const hourField = expression.trim().split(/\s+/)[1];
+  if (!hourField || hourField === "*" || expression.trim().startsWith("@")) return undefined;
+  let stated: string;
+  try { stated = new Intl.DateTimeFormat("en-US", { timeZone: statedZone.trim() }).resolvedOptions().timeZone; }
+  catch { return `This schedule names an unknown time zone "${statedZone}"; it runs in ${scheduleZone()}.`; }
+  const actual = scheduleZone();
+  return stated === actual ? undefined
+    : `This schedule says ${stated}, but schedules run in Jarvis's time zone (${actual}): "${expression}" fires at that time in ${actual}.`;
+}
 
 export interface TriggerManagerDeps {
   /**
@@ -151,6 +192,14 @@ export class TriggerManager {
   private readonly enableRetryDelaysMs: number[];
   private readonly onRegistrationBlocked: TriggerManagerDeps['onRegistrationBlocked'];
   private readonly registrationFailures = new Map<string, string>();
+  /**
+   * The last live readiness refusal per flow. A schedule tick or a pre-poll
+   * check carries no input of its own, so a repeat of the same refusal is
+   * one failed run plus a counted blocked row, not a failed run per minute.
+   */
+  private readonly liveRefusals = new Map<string, string>();
+  /** Daily prune of the delivery ledger, for a daemon that runs for weeks. */
+  private pruneTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(deps: TriggerManagerDeps) {
     this.bus = deps.eventBus;
@@ -175,9 +224,7 @@ export class TriggerManager {
       5_000, 15_000, 60_000, 300_000, 900_000,
     ];
 
-    this.webhooks.setTriggerCallback((flowId, payload) => {
-      void this.fire(flowId, payload, "webhook");
-    });
+    this.webhooks.setTriggerCallback((flowId, payload, delivery) => this.fire(flowId, payload, "webhook", delivery));
   }
 
   /** Public surface for the webhook ingress route. */
@@ -187,15 +234,27 @@ export class TriggerManager {
 
   /** Scan all ENABLED flows and register their triggers. Idempotent. */
   async start(): Promise<void> {
+    const prune = () => { try { pruneFires(); } catch (e) { this.log(`trigger ledger prune failed: ${(e as Error).message}`); } };
+    prune();
+    if (!this.pruneTimer) {
+      this.pruneTimer = setInterval(prune, 24 * 60 * 60_000);
+      (this.pruneTimer as unknown as { unref?: () => void }).unref?.();
+    }
     const flows = listFlows(undefined, { status: "ENABLED", limit: 1000 });
     for (const flow of flows) {
-      await this.register(flow);
+      // Through the per-flow lock, re-reading the flow: one turned off while
+      // startup worked through the others is not registered again.
+      await this.refresh(flow.id);
     }
     this.log(`started; ${this.subs.size} active subscription(s)`);
   }
 
   /** Tear down all subscriptions. */
   async stop(): Promise<void> {
+    if (this.pruneTimer) {
+      clearInterval(this.pruneTimer);
+      this.pruneTimer = null;
+    }
     for (const flowId of Array.from(this.enableRetries.keys())) {
       this.clearEnableRetry(flowId);
     }
@@ -228,6 +287,7 @@ export class TriggerManager {
       // Flow gone or disabled -> tear down whatever's active.
       if (!flow || flow.status !== "ENABLED") {
         await this.unregister(flowId);
+        clearScheduleWatch(flowId);
         return;
       }
 
@@ -237,7 +297,11 @@ export class TriggerManager {
       // Already registered against the right version -> no-op. This is what
       // makes concurrent refreshes idempotent: the first one through the lock
       // does the work; subsequent calls observe the active sub and skip.
-      if (existing && existing.versionId === desiredVersionId) return;
+      // A saved edit to the live draft keeps its version id: compare what the
+      // trigger says, so an edited schedule replaces the old one.
+      const desiredTrigger = desiredVersionId ? getFlowVersion(desiredVersionId)?.trigger : undefined;
+      if (existing && existing.versionId === desiredVersionId
+        && (!existing.triggerDigest || existing.triggerDigest === triggerDigest(desiredTrigger))) return;
 
       // Either no sub yet, or a stale sub for a previous version. Tear down
       // the old one (clears engine state + ON_DISABLE) before registering
@@ -343,6 +407,7 @@ export class TriggerManager {
     // version.
     this.clearEnableRetry(flowId);
     this.registrationFailures.delete(flowId);
+    this.liveRefusals.delete(flowId);
     const sub = this.subs.get(flowId);
     if (!sub) return;
     try {
@@ -364,16 +429,24 @@ export class TriggerManager {
       this.log(`flow ${flowId}: schedule trigger missing cron expression; skipping`);
       return;
     }
+    const warning = scheduleZoneWarning(expression, input.timezone);
+    if (warning) this.log(`flow ${flowId}: ${warning}`);
     try {
-      this.cron.schedule(`flow:${flowId}`, expression, () => {
-        void this.fire(flowId, { cronExpression: expression, firedAt: Date.now() }, "cron");
-      });
+      this.cron.schedule(
+        `flow:${flowId}`,
+        expression,
+        (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, occurrence, { cronExpression: expression }),
+        { onMissed: (missed) => this.recordMissed(flowId, versionId, missed, "Jarvis was asleep or too busy at that time") },
+      );
       this.subs.set(flowId, {
         flowId,
         versionId,
         kind: "cron",
+        triggerDigest: triggerDigest(trigger),
+        ...(warning ? { warning } : {}),
         teardown: () => this.cron.cancel(`flow:${flowId}`),
       });
+      this.catchUpMissed(flowId, versionId, expression);
     } catch (e) {
       this.log(`flow ${flowId}: failed to schedule cron "${expression}": ${(e as Error).message}`);
     }
@@ -387,6 +460,7 @@ export class TriggerManager {
       flowId,
       versionId,
       kind: "webhook",
+      triggerDigest: triggerDigest(trigger),
       teardown: () => this.webhooks.unregister(flowId),
     });
   }
@@ -411,12 +485,13 @@ export class TriggerManager {
     const matches = makeFilter(filter);
     const unsubscribe = this.bus.subscribe(eventType, (payload) => {
       if (!matches(payload)) return;
-      void this.fire(flowId, payload, "event");
+      this.fire(flowId, payload, "event", { key: eventItemKey(payload) });
     });
     this.subs.set(flowId, {
       flowId,
       versionId,
       kind: "event",
+      triggerDigest: triggerDigest(trigger),
       teardown: unsubscribe,
     });
   }
@@ -486,12 +561,22 @@ export class TriggerManager {
 
     let cronTearDown: (() => void) | null = null;
     let webhookTearDown: (() => void) | null = null;
+    const pureSchedule = isSchedulePiece((version.trigger as unknown as TriggerNode | null)?.settings?.pieceName);
+    const warning = pureSchedule && schedule?.cronExpression ? scheduleZoneWarning(schedule.cronExpression, schedule.timezone) : undefined;
+    if (warning) this.log(`flow ${flow.id}: ${warning}`);
     if (schedule?.cronExpression) {
+      const expression = schedule.cronExpression;
       try {
-        this.cron.schedule(`flow:${flow.id}`, schedule.cronExpression, () => {
-          void this.fireEngineTrigger(flow.id, version.id, "cron");
-        });
+        this.cron.schedule(
+          `flow:${flow.id}`,
+          expression,
+          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", occurrence); },
+          // A missed poll of an event source is not a missed run; a missed
+          // occurrence of the schedule piece is.
+          pureSchedule ? { onMissed: (missed) => this.recordMissed(flow.id, version.id, missed, "Jarvis was asleep or too busy at that time") } : {},
+        );
         cronTearDown = () => this.cron.cancel(`flow:${flow.id}`);
+        if (pureSchedule) this.catchUpMissed(flow.id, version.id, expression);
       } catch (e) {
         this.log(
           `flow ${flow.id}: failed to schedule engine cron "${schedule.cronExpression}": ${(e as Error).message}`,
@@ -517,6 +602,8 @@ export class TriggerManager {
       flowId: flow.id,
       versionId: version.id,
       kind: "engine",
+      triggerDigest: triggerDigest(version.trigger),
+      ...(warning ? { warning } : {}),
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
@@ -608,79 +695,220 @@ export class TriggerManager {
     }
   }
 
-  /** Persist refusals and any already-received input without creating runnable work. */
-  private checkReadiness(flowId: string, versionId: string, kind: SubscriptionKind | 'registration', recovery?: { payload: Record<string, unknown>; executeTrigger: boolean }): boolean {
+  /** A readiness refusal's FAILED run, keeping any input it was handed so nothing is replayed silently. */
+  private refusalRun(flowId: string, versionId: string, kind: SubscriptionKind | 'registration', error: WorkflowReadinessError,
+    recovery?: { payload: Record<string, unknown>; executeTrigger: boolean }) {
+    return getWorkflowDb().transaction(() => {
+      const now = Date.now();
+      const created = createFlowRun({ flowId, flowVersionId: versionId,
+        projectId: getFlow(flowId)?.project_id, triggeredBy: `trigger:${kind}`,
+        status: 'FAILED', startTime: now, tags: ['workflow-readiness'] });
+      return updateRun(created.id, { finishTime: now, stepsCount: 0,
+        failedStep: { name: '<readiness>', displayName: 'Workflow readiness', errorMessage: error.message },
+        steps: { '<readiness>': { status: 'FAILED', output: { code: error.code, phase: kind, readiness: error.readiness,
+          // Polling may already have advanced its cursor while readiness
+          // changed. Keep every returned item, but never replay it silently.
+          ...(recovery ? { recovery: { ...recovery, requiresDecision: true } } : {}),
+        } } } });
+    })();
+  }
+
+  /** Registration-time readiness: one refusal per broken version, a notice, and a retry. */
+  private checkReadiness(flowId: string, versionId: string, kind: 'registration'): boolean {
     try { assertVersionReady(flowId, versionId); return true; }
     catch (error) {
       if (!(error instanceof WorkflowReadinessError)) throw error;
       const signature = JSON.stringify([versionId, error.readiness]);
-      if (kind !== 'registration' || this.registrationFailures.get(flowId) !== signature) {
-        const run = getWorkflowDb().transaction(() => {
-          const now = Date.now();
-          const created = createFlowRun({ flowId, flowVersionId: versionId,
-            projectId: getFlow(flowId)?.project_id, triggeredBy: `trigger:${kind}`,
-            status: 'FAILED', startTime: now, tags: ['workflow-readiness'] });
-          return updateRun(created.id, { finishTime: now, stepsCount: 0,
-            failedStep: { name: '<readiness>', displayName: 'Workflow readiness', errorMessage: error.message },
-            steps: { '<readiness>': { status: 'FAILED', output: { code: error.code, phase: kind, readiness: error.readiness,
-              // Polling may already have advanced its cursor while readiness
-              // changed. Keep every returned item, but never replay it silently.
-              ...(recovery ? { recovery: { ...recovery, requiresDecision: true } } : {}),
-            } } } });
-        })();
-        if (kind === 'registration') {
-          this.registrationFailures.set(flowId, signature);
-          try { this.onRegistrationBlocked?.({ flowId, runId: run.id, message: error.message }); }
-          catch (notifyError) { this.log(`flow ${flowId}: readiness notification failed: ${String(notifyError)}`); }
-        }
+      if (this.registrationFailures.get(flowId) !== signature) {
+        const run = this.refusalRun(flowId, versionId, kind, error);
+        this.registrationFailures.set(flowId, signature);
+        try { this.onRegistrationBlocked?.({ flowId, runId: run.id, message: error.message }); }
+        catch (notifyError) { this.log(`flow ${flowId}: readiness notification failed: ${String(notifyError)}`); }
       }
       this.log(`flow ${flowId}: readiness refused ${kind}: ${error.message}`);
-      if (kind === 'registration') this.scheduleEnableRetry(flowId, error.message, 'readiness');
+      this.scheduleEnableRetry(flowId, error.message, 'readiness');
       return false;
     }
   }
 
   /**
-   * Enqueue a RUN_FLOW. Used by every trigger fire path so `triggeredBy`
-   * follows one convention -- `trigger:<kind>` -- across cron, webhook,
-   * direct event-bus subscribe, and engine-managed sources.
+   * Whether a live delivery may start work: the workflow still exists, is on,
+   * and still runs the version this subscription was registered for. Asked
+   * again inside the transaction that creates the run.
    */
-  private enqueueFlowRun(opts: {
-    flowId: string;
-    versionId: string;
-    kind: SubscriptionKind;
-    payload?: Record<string, unknown>;
-    executeTrigger?: boolean;
-  }): void {
-    if (!this.checkReadiness(opts.flowId, opts.versionId, opts.kind, { payload: opts.payload ?? {}, executeTrigger: opts.executeTrigger ?? false })) return;
-    const run = createFlowRun({
-      flowId: opts.flowId,
-      flowVersionId: opts.versionId,
-      triggeredBy: `trigger:${opts.kind}`,
-      startTime: Date.now(),
+  private notAdmitted(flowId: string, versionId: string): string | null {
+    const flow = getFlow(flowId);
+    if (!flow) return "The workflow no longer exists.";
+    if (flow.status !== "ENABLED") return "The workflow is turned off.";
+    if (this.subs.get(flowId)?.versionId !== versionId) return "The workflow changed; this trigger no longer runs it.";
+    return null;
+  }
+
+  /**
+   * A live readiness refusal. Input-carrying deliveries (webhooks, events, poll
+   * items) keep a FAILED run each, holding their input for a person to decide
+   * on, as before. A schedule tick or a pre-poll check carries nothing: a
+   * repeat of the same refusal is folded into one counted blocked row.
+   */
+  private refuseLive(opts: LiveStart, error: WorkflowReadinessError): WebhookFireResult {
+    const { flowId, versionId, source } = opts;
+    const signature = JSON.stringify([versionId, error.readiness]);
+    const carriesInput = opts.payload !== undefined && source !== "schedule";
+    let runId: string | undefined;
+    if (carriesInput || this.liveRefusals.get(flowId) !== signature) {
+      runId = this.refusalRun(flowId, versionId, opts.kind, error,
+        carriesInput ? { payload: opts.payload ?? {}, executeTrigger: opts.executeTrigger ?? false } : undefined).id;
+      this.liveRefusals.set(flowId, signature);
+    }
+    const detail = { reason: error.message, code: error.code };
+    const fire = carriesInput
+      ? recordFire({ flowId, flowVersionId: versionId, source, dedupeKey: opts.dedupeKey, scheduledFor: opts.scheduledFor,
+          lateMs: opts.lateMs, outcome: "blocked", runId, detail })
+      : recordBlocked({ flowId, flowVersionId: versionId, source, signature, scheduledFor: opts.scheduledFor,
+          lateMs: opts.lateMs, runId, detail });
+    this.log(`flow ${flowId}: readiness refused ${source}: ${error.message}`);
+    return { outcome: "blocked", fireId: fire?.id, reason: error.message };
+  }
+
+  /**
+   * Start one run for one delivery, or say why not. Admission, a repeat of a
+   * delivery already handled, and readiness come first; then the delivery's
+   * key is claimed and the run and its queue job are created in one
+   * transaction, so a crash between them cannot leave a queued run that
+   * nothing will execute. Synchronous throughout: nothing can turn the
+   * workflow off between the admission check and the claim.
+   * `triggeredBy` keeps one convention, `trigger:<kind>`.
+   */
+  private startRun(opts: LiveStart): WebhookFireResult {
+    const { flowId, versionId } = opts;
+    const off = this.notAdmitted(flowId, versionId);
+    if (off) {
+      const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source, scheduledFor: opts.scheduledFor,
+        outcome: "blocked", detail: { reason: off, ...(opts.dedupeKey ? { deliveryKey: opts.dedupeKey } : {}) } });
+      this.log(`flow ${flowId} (${opts.source}) not started: ${off}`);
+      return { outcome: "blocked", fireId: fire?.id, reason: off, disabled: true };
+    }
+    const repeat = opts.dedupeKey ? repeatOf({ flowId, source: opts.source, dedupeKey: opts.dedupeKey, duplicateSince: opts.duplicateSince }) : null;
+    if (repeat) {
+      this.log(`flow ${flowId} (${opts.source}) repeat of ${repeat.id} not run again`);
+      return { outcome: "duplicate", fireId: repeat.id, runId: repeat.runId ?? undefined };
+    }
+    try { assertVersionReady(flowId, versionId); }
+    catch (error) {
+      if (!(error instanceof WorkflowReadinessError)) throw error;
+      return this.refuseLive(opts, error);
+    }
+    this.liveRefusals.delete(flowId);
+    const claimed = claimFire({ flowId, flowVersionId: versionId, source: opts.source, dedupeKey: opts.dedupeKey,
+      duplicateSince: opts.duplicateSince, scheduledFor: opts.scheduledFor, lateMs: opts.lateMs, detail: opts.detail }, () => {
+      const run = createFlowRun({ flowId, flowVersionId: versionId, projectId: getFlow(flowId)!.project_id,
+        triggeredBy: `trigger:${opts.kind}`, startTime: Date.now() });
+      enqueue({
+        jobType: RUN_FLOW,
+        payload: { runId: run.id, payload: opts.payload ?? {}, ...(opts.executeTrigger ? { executeTrigger: true } : {}) },
+        flowRunId: run.id,
+        flowId,
+        flowVersionId: versionId,
+        // No auto-retry: trigger-fired runs often have side effects that
+        // would duplicate on retry (e.g. notify, email, downstream API
+        // calls). Surface the failure once; the trigger's next fire is
+        // the natural "retry" cadence.
+        maxAttempts: 1,
+      });
+      return { runId: run.id };
     });
-    enqueue({
-      jobType: RUN_FLOW,
-      payload: {
-        runId: run.id,
-        payload: opts.payload ?? {},
-        ...(opts.executeTrigger ? { executeTrigger: true } : {}),
-      },
-      flowRunId: run.id,
-      flowId: opts.flowId,
-      flowVersionId: opts.versionId,
-      // No auto-retry: trigger-fired runs often have side effects that
-      // would duplicate on retry (e.g. notify, email, downstream API
-      // calls). Surface the failure once; the trigger's next fire is
-      // the natural "retry" cadence.
-      maxAttempts: 1,
-    });
+    if (claimed.outcome === "started") return { outcome: "started", fireId: claimed.fire.id, runId: claimed.runId };
+    if (claimed.outcome === "duplicate") return { outcome: "duplicate", fireId: claimed.fire.id, runId: claimed.fire.runId ?? undefined };
+    return { outcome: "blocked", fireId: claimed.fire.id, reason: claimed.reason };
+  }
+
+  /** A run from an earlier occurrence has not started yet: piling another behind it would only burst later. */
+  private overlapping(flowId: string, triggeredBy: string): string | null {
+    const queued = getWorkflowDb().query<{ id: string }, [string, string]>(
+      `SELECT id FROM flow_run WHERE flow_id = ? AND status = 'QUEUED' AND triggered_by = ? LIMIT 1`,
+    ).get(flowId, triggeredBy);
+    return queued ? "The run from the previous time had not started yet." : null;
+  }
+
+  /** Scheduled occurrences that came and went: recorded as missed, never run late (an owner decision, Q-06). */
+  private recordMissed(flowId: string, versionId: string, missed: Array<{ at: number; key: string; lateMs?: number }>, reason: string): void {
+    let recorded = 0;
+    for (const occurrence of missed) {
+      try {
+        if (recordFire({ flowId, flowVersionId: versionId, source: "schedule", dedupeKey: occurrence.key,
+          scheduledFor: occurrence.at, lateMs: occurrence.lateMs ?? null, outcome: "missed", detail: { reason } })) recorded++;
+      } catch (e) {
+        this.log(`flow ${flowId}: could not record a missed occurrence: ${(e as Error).message}`);
+      }
+    }
+    if (recorded) this.log(`flow ${flowId}: ${recorded} scheduled time(s) missed (${reason}); not run late`);
+  }
+
+  /**
+   * At registration, the occurrences this schedule was owed while Jarvis was
+   * not running are recorded as missed. A schedule is owed from when it was
+   * last watched (kept across a restart, cleared when the workflow is turned
+   * off), and only for occurrences nothing has handled yet. The newest are
+   * listed one by one; older ones are counted in a single row.
+   */
+  private catchUpMissed(flowId: string, versionId: string, expression: string): void {
+    try {
+      const now = Date.now();
+      const watch = getScheduleWatch(flowId);
+      if (watch && watch.expression === expression) {
+        const since = Math.max(watch.watchedSince, latestScheduledFire(flowId) ?? 0, now - MISSED_LOOKBACK_MS);
+        // Occurrences inside the grace window belong to the live tick.
+        const owed = CronScheduler.occurrencesBetween(expression, since, now - CRON_GRACE_MS, 100_000);
+        const listed = owed.slice(-MISSED_LISTED);
+        const older = owed.slice(0, owed.length - listed.length);
+        if (older.length) {
+          recordFire({ flowId, flowVersionId: versionId, source: "schedule", scheduledFor: older[0]!.at, outcome: "missed",
+            detail: { reason: "Jarvis was not running at those times", count: older.length, through: older[older.length - 1]!.at } });
+        }
+        this.recordMissed(flowId, versionId, listed.map((o) => ({ ...o, lateMs: now - o.at })), "Jarvis was not running at that time");
+      }
+      setScheduleWatch(flowId, expression, now);
+    } catch (e) {
+      this.log(`flow ${flowId}: could not check for missed schedule times: ${(e as Error).message}`);
+    }
+  }
+
+  /**
+   * A built-in schedule's occurrence. Never throws: it runs on the scheduler's
+   * interval. An occurrence the previous run has not started for yet is
+   * skipped, not stacked.
+   */
+  private fireSchedule(flowId: string, versionId: string, occurrence: CronOccurrence | undefined, payload: Record<string, unknown>): void {
+    try {
+      // A job left over from a replaced registration does nothing.
+      if (this.subs.get(flowId)?.versionId !== versionId) return;
+      const at = occurrence?.at ?? Date.now();
+      const skipped = this.overlapping(flowId, "trigger:cron");
+      if (skipped) {
+        recordFire({ flowId, flowVersionId: versionId, source: "schedule", dedupeKey: occurrence?.key, scheduledFor: at,
+          lateMs: occurrence?.lateMs ?? null, outcome: "skipped", detail: { reason: skipped } });
+        this.log(`flow ${flowId}: schedule ${occurrence?.key ?? "tick"} skipped: ${skipped}`);
+        return;
+      }
+      const result = this.startRun({
+        flowId, versionId, kind: "cron", source: "schedule",
+        payload: { ...payload, firedAt: Date.now(), scheduledFor: new Date(at).toISOString() },
+        dedupeKey: occurrence?.key, scheduledFor: at, lateMs: occurrence?.lateMs,
+        ...(occurrence?.shifted ? { detail: { reason: "This time did not exist when clocks moved forward; it ran right after the change." } } : {}),
+      });
+      if (result.outcome === "started" && (occurrence?.lateMs ?? 0) > DELAYED_AFTER_MS) {
+        this.log(`flow ${flowId}: schedule ${occurrence!.key} started ${Math.round(occurrence!.lateMs / 1000)}s late`);
+      }
+    } catch (e) {
+      this.log(`flow ${flowId} (cron) fire failed: ${(e as Error).message}`);
+    }
   }
 
   /**
    * Engine-managed trigger fire (polling sources, e.g. jarvis-trigger
-   * on_event). On each cron tick we run the trigger's RUN hook to POLL for new
-   * events, then enqueue exactly one flow run per returned event.
+   * on_event, and the bundled schedule piece). On each cron tick we run the
+   * trigger's RUN hook to POLL for new events, then start exactly one run per
+   * returned item that has not been handled before.
    *
    * Why not the old way: previously this blindly enqueued a run with
    * `executeTrigger=true` every tick, so a poll that found NO new events still
@@ -694,8 +922,19 @@ export class TriggerManager {
    * as the run's trigger payload (executeTrigger=false) so `{{trigger.payload.*}}`
    * resolves. The trigger's `run()` advances its own `context.store` cursor, so
    * events aren't re-delivered on the next poll.
+   *
+   * Never rejects: it runs as a `void` interval callback, and an escaped
+   * rejection (a workflow deleted mid-poll) used to take the daemon down.
    */
-  private async fireEngineTrigger(flowId: string, versionId: string, source: string): Promise<void> {
+  private async fireEngineTrigger(flowId: string, versionId: string, source: string, occurrence?: CronOccurrence): Promise<void> {
+    try {
+      await this.pollEngineTrigger(flowId, versionId, source, occurrence);
+    } catch (e) {
+      this.log(`flow ${flowId} (engine-${source}) failed: ${(e as Error).message}`);
+    }
+  }
+
+  private async pollEngineTrigger(flowId: string, versionId: string, source: string, occurrence?: CronOccurrence): Promise<void> {
     const engine = this.engineRuntime;
     if (!engine) return;
     // Skip if a prior poll for this flow is still running (slow poll vs. fast
@@ -706,8 +945,23 @@ export class TriggerManager {
       this.log(`flow ${flowId} (engine-${source}): version ${versionId} not found; skipping poll`);
       return;
     }
-
-    if (!this.checkReadiness(flowId, versionId, 'engine')) return;
+    if (this.notAdmitted(flowId, versionId)) return;
+    const pureSchedule = isSchedulePiece((version.trigger as unknown as TriggerNode | null)?.settings?.pieceName);
+    const fireSource: FireSource = pureSchedule ? "schedule" : "poll";
+    if (pureSchedule) {
+      const skipped = this.overlapping(flowId, "trigger:engine");
+      if (skipped) {
+        recordFire({ flowId, flowVersionId: versionId, source: "schedule", dedupeKey: occurrence?.key,
+          scheduledFor: occurrence?.at ?? null, lateMs: occurrence?.lateMs ?? null, outcome: "skipped", detail: { reason: skipped } });
+        return;
+      }
+    }
+    try { assertVersionReady(flowId, versionId); }
+    catch (error) {
+      if (!(error instanceof WorkflowReadinessError)) throw error;
+      this.refuseLive({ flowId, versionId, kind: "engine", source: fireSource, scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs }, error);
+      return;
+    }
     this.pollingInFlight.add(flowId);
     let items: unknown[];
     try {
@@ -734,39 +988,47 @@ export class TriggerManager {
     }
 
     if (items.length === 0) return; // no new events -> no run (the whole point)
+    // The workflow may have been turned off, changed or deleted while the
+    // engine polled: `startRun` refuses each item then, and records it, since
+    // the trigger's cursor has already moved past it.
+    let started = 0;
     for (const item of items) {
-      this.enqueueFlowRun({
-        flowId,
-        versionId,
-        kind: "engine",
-        // Pass the event through verbatim as the trigger payload. Objects are
-        // used as-is; a bare value (rare) is wrapped so the payload stays an
-        // object for the engine's variable resolver.
-        payload:
-          item && typeof item === "object" && !Array.isArray(item)
-            ? (item as Record<string, unknown>)
-            : { value: item },
-        executeTrigger: false,
-      });
+      // Pass the event through verbatim as the trigger payload. Objects are
+      // used as-is; a bare value (rare) is wrapped so the payload stays an
+      // object for the engine's variable resolver.
+      const payload = item && typeof item === "object" && !Array.isArray(item)
+        ? (item as Record<string, unknown>)
+        : { value: item };
+      try {
+        const result = this.startRun({
+          flowId, versionId, kind: "engine", source: fireSource, payload, executeTrigger: false,
+          dedupeKey: pureSchedule ? occurrence?.key : eventItemKey(payload),
+          ...(pureSchedule ? { scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs } : {}),
+        });
+        if (result.outcome === "started") started++;
+      } catch (e) {
+        this.log(`flow ${flowId} (engine-${source}): a polled item could not start: ${(e as Error).message}`);
+      }
     }
-    this.log(`flow ${flowId} (engine-${source}): polled ${items.length} event(s) -> ${items.length} run(s)`);
+    this.log(`flow ${flowId} (engine-${source}): polled ${items.length} event(s) -> ${started} run(s)`);
   }
 
   /**
-   * Trigger fire for cron / webhook / direct event-bus subscribe. The
-   * payload is forwarded as the trigger payload. For engine-managed
-   * subscriptions (`sub.kind === "engine"`) the run is enqueued with
-   * `executeTrigger=true` so the engine's `trigger.run()` consumes the
-   * payload (e.g. webhook body for an engine webhook trigger) to derive the
-   * actual flow-run payload(s); legacy subs run the chain directly with the
-   * payload as initial state.
+   * Trigger fire for webhook / direct event-bus subscribe (cron goes through
+   * `fireSchedule`). The payload is forwarded as the trigger payload. For
+   * engine-managed subscriptions (`sub.kind === "engine"`) the run is
+   * enqueued with `executeTrigger=true` so the engine's `trigger.run()`
+   * consumes the payload (e.g. webhook body for an engine webhook trigger)
+   * to derive the actual flow-run payload(s); legacy subs run the chain
+   * directly with the payload as initial state. Returns what became of the
+   * delivery, for the webhook reply.
    */
-  private fire(flowId: string, payload: Record<string, unknown>, kind: SubscriptionKind): void {
+  private fire(flowId: string, payload: Record<string, unknown>, kind: "webhook" | "event", delivery: WebhookDelivery = {}): WebhookFireResult {
     const sub = this.subs.get(flowId);
     const versionId = sub?.versionId;
-    if (!versionId) {
+    if (!sub || !versionId) {
       this.log(`flow ${flowId} (${kind}) fire skipped: no active subscription`);
-      return;
+      return { outcome: "blocked", reason: "The workflow is not listening for this trigger.", disabled: true };
     }
     // Backlog cap for the public ingress: the webhook route is rate limited
     // per minute, but a worker that is slow or down would still let the
@@ -780,19 +1042,26 @@ export class TriggerManager {
       }
       if (queued >= MAX_QUEUED_WEBHOOK_RUNS) {
         this.log(`flow ${flowId} (webhook) fire dropped: ${queued} jobs already queued`);
-        return;
+        const fire = recordFire({ flowId, flowVersionId: versionId, source: "webhook", outcome: "skipped",
+          detail: { reason: `${queued} jobs were already queued; the sender was asked to retry.` } });
+        return { outcome: "skipped", fireId: fire?.id, reason: "Service busy, retry later", retryAfterSeconds: 30 };
       }
     }
     try {
-      this.enqueueFlowRun({
+      return this.startRun({
         flowId,
         versionId,
         kind: sub.kind,
+        source: kind,
         payload,
         ...(sub.kind === "engine" ? { executeTrigger: true } : {}),
+        dedupeKey: delivery.key,
+        ...(delivery.windowMs ? { duplicateSince: Date.now() - delivery.windowMs } : {}),
+        ...(delivery.label ? { detail: { delivery: delivery.label } } : {}),
       });
     } catch (e) {
       this.log(`flow ${flowId} (${kind}) fire failed: ${(e as Error).message}`);
+      return { outcome: "error", reason: "The delivery could not be recorded; retry later." };
     }
   }
 
@@ -825,4 +1094,32 @@ function makeFilter(filter?: Record<string, unknown>): (payload: Record<string, 
     }
     return true;
   };
+}
+
+/** What `startRun` needs for one live delivery. */
+interface LiveStart {
+  flowId: string;
+  versionId: string;
+  kind: SubscriptionKind;
+  source: FireSource;
+  payload?: Record<string, unknown>;
+  executeTrigger?: boolean;
+  dedupeKey?: string;
+  duplicateSince?: number;
+  scheduledFor?: number;
+  lateMs?: number;
+  detail?: Record<string, unknown>;
+}
+
+/**
+ * An event's delivery key: the stable key its publisher gave it (an email's
+ * message id, a commitment and its due time), else the poll item's own key.
+ * Without one, the event is not deduplicated.
+ */
+function eventItemKey(payload: Record<string, unknown>): string | undefined {
+  const inner = payload.payload && typeof payload.payload === "object" ? (payload.payload as Record<string, unknown>) : undefined;
+  const eventKey = inner?._eventKey ?? payload._eventKey;
+  if (typeof eventKey === "string" && eventKey) return `event:${eventKey}`;
+  const itemKey = payload._dedupe_key;
+  return typeof itemKey === "string" || typeof itemKey === "number" ? `item:${String(itemKey)}` : undefined;
 }
