@@ -8,7 +8,11 @@
  */
 export {
   CronScheduler,
+  CRON_GRACE_MS,
+  getCronTimezone,
   parseEveryExpression,
   type CronJob,
   type CronJobInfo,
+  type CronOccurrence,
+  type CronScheduleOptions,
 } from '../../../lib/cron-scheduler.ts';

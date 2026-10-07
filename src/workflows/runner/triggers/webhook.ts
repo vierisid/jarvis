@@ -16,7 +16,64 @@ export type WebhookRoute = {
   registeredAt: number;
 };
 
-export type WebhookTriggerCallback = (workflowId: string, data: Record<string, unknown>) => void;
+/**
+ * A delivery's identity (Q-06), derived after authentication, so a provider's
+ * retry of the same delivery is recognised and not run twice.
+ */
+export type WebhookDelivery = {
+  /** A provider's delivery id, or for a signed request without one, its signature. */
+  key?: string;
+  /**
+   * Set when the key identifies a delivery only for a while: a sender may
+   * send an identical signed body again later on purpose.
+   */
+  windowMs?: number;
+  /** Where the key came from, for the delivery record. */
+  label?: string;
+};
+
+/** What became of a delivery, so the reply can say so (and a sender knows whether to retry). */
+export type WebhookFireResult =
+  | { outcome: 'started'; fireId: string; runId: string }
+  | { outcome: 'duplicate'; fireId: string; runId?: string }
+  | { outcome: 'blocked'; fireId?: string; reason: string; disabled?: boolean }
+  | { outcome: 'skipped'; fireId?: string; reason: string; retryAfterSeconds?: number }
+  | { outcome: 'error'; reason: string };
+
+/** Returns a `WebhookFireResult`; any other value is answered as accepted. */
+export type WebhookTriggerCallback = (workflowId: string, data: Record<string, unknown>, delivery: WebhookDelivery) => unknown;
+
+/** How long an identical signed request counts as the same delivery. */
+export const SIGNED_REPEAT_WINDOW_MS = 10 * 60_000;
+
+/** Headers providers use to name one delivery across their retries, in order of preference. */
+const DELIVERY_ID_HEADERS = ['idempotency-key', 'x-github-delivery', 'webhook-id', 'svix-id', 'x-shopify-webhook-id'];
+
+/**
+ * The delivery's identity: a provider delivery id header, else an event id a
+ * provider puts in the body (Stripe `evt_...`, Slack `event_id`), else for a
+ * signed request its signature, for `SIGNED_REPEAT_WINDOW_MS`. Without any,
+ * the request is not deduplicated: identical bodies are legitimate (pings,
+ * button presses).
+ */
+export function webhookDelivery(headers: Headers, data: Record<string, unknown>, signature: string | null): WebhookDelivery {
+  for (const name of DELIVERY_ID_HEADERS) {
+    const value = headers.get(name)?.trim();
+    if (value) return { key: `delivery:${name}:${value.slice(0, 200)}`, label: name };
+  }
+  if (data.object === 'event' && typeof data.id === 'string' && data.id.startsWith('evt_')) {
+    return { key: `delivery:stripe:${data.id.slice(0, 200)}`, label: 'stripe event id' };
+  }
+  if (typeof data.event_id === 'string' && data.event_id) {
+    return { key: `delivery:slack:${data.event_id.slice(0, 200)}`, label: 'event_id' };
+  }
+  if (signature) return { key: `signature:${signature.toLowerCase()}`, windowMs: SIGNED_REPEAT_WINDOW_MS, label: 'signature' };
+  return {};
+}
+
+function isFireResult(value: unknown): value is WebhookFireResult {
+  return !!value && typeof value === 'object' && typeof (value as { outcome?: unknown }).outcome === 'string';
+}
 
 // ── Helpers ──
 
@@ -188,6 +245,7 @@ export class WebhookManager {
     }
 
     // Validate HMAC signature if a secret is configured
+    let verifiedSignature: string | null = null;
     if (route.secret) {
       const signature = req.headers.get('x-jarvis-signature') ?? req.headers.get('X-Jarvis-Signature');
 
@@ -209,6 +267,7 @@ export class WebhookManager {
       if (!timingSafeEqual(signature.toLowerCase(), expected.toLowerCase())) {
         return rejectUnsigned('Invalid signature');
       }
+      verifiedSignature = signature;
 
       const limited = this.chargeBudgets(workflowId);
       if (limited) return limited;
@@ -238,21 +297,19 @@ export class WebhookManager {
       headers: Object.fromEntries(req.headers.entries()),
     };
 
-    // Fire callback (non-blocking)
+    // Fire callback. It records the delivery and says what became of it.
+    let result: unknown;
     if (this.triggerCallback) {
       try {
-        this.triggerCallback(workflowId, data);
+        result = this.triggerCallback(workflowId, data, webhookDelivery(req.headers, data, verifiedSignature));
       } catch (err) {
         console.error(`[WebhookManager] Trigger callback threw for workflow "${workflowId}":`, err);
+        result = { outcome: 'error', reason: 'The delivery could not be recorded; retry later.' };
       }
     } else {
       console.warn(`[WebhookManager] No trigger callback set; webhook fired for "${workflowId}" but nothing will execute`);
     }
-
-    return new Response(JSON.stringify({ ok: true, workflowId }), {
-      status: 200,
-      headers: { 'Content-Type': 'application/json' },
-    });
+    return webhookReply(workflowId, result);
   }
 
   /**
@@ -271,6 +328,33 @@ export class WebhookManager {
 }
 
 // ── Utilities ──
+
+/**
+ * The reply for a delivery's outcome. Accepted and repeated deliveries both
+ * answer 200 (a 4xx on a repeat would make providers retry it again), with
+ * fields saying which. A workflow that is not running answers 404, as an
+ * unregistered one does; a full queue 503 and an unrecorded delivery 500, so
+ * the sender retries.
+ */
+function webhookReply(workflowId: string, result: unknown): Response {
+  if (!isFireResult(result)) return json(200, { ok: true, workflowId });
+  switch (result.outcome) {
+    case 'started':
+      return json(200, { ok: true, workflowId, outcome: 'started', fireId: result.fireId, runId: result.runId });
+    case 'duplicate':
+      return json(200, { ok: true, workflowId, outcome: 'duplicate', duplicate: true, fireId: result.fireId,
+        ...(result.runId ? { runId: result.runId } : {}) });
+    case 'blocked':
+      return result.disabled
+        ? json(404, { error: 'Workflow is not active', ...(result.fireId ? { fireId: result.fireId } : {}) })
+        : json(200, { ok: true, workflowId, outcome: 'blocked', reason: result.reason, ...(result.fireId ? { fireId: result.fireId } : {}) });
+    case 'skipped':
+      return json(503, { error: result.reason, ...(result.fireId ? { fireId: result.fireId } : {}) },
+        { 'Retry-After': String(result.retryAfterSeconds ?? 30) });
+    default:
+      return json(500, { error: result.reason });
+  }
+}
 
 /**
  * Constant-time string comparison to prevent timing-based secret leakage.

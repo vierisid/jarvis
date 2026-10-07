@@ -165,6 +165,24 @@ export const AWARENESS_EVENT_TYPE_MAP: Readonly<Record<string, string>> = {
 };
 
 /** O(1) check that a string is a known workflow event type. */
+/**
+ * A stable identity for an event whose publisher may announce the same thing
+ * again (Q-06): email sync starts over after every restart or settings reload,
+ * and the commitment executor re-announces what is still due. An email is
+ * keyed by its message id, a commitment by its id, the event and its due time
+ * (rescheduling it is a new event). Other events carry no key and are not
+ * deduplicated: each publish is its own event.
+ */
+export function eventDeliveryKey(eventType: string, payload: Record<string, unknown>): string | undefined {
+  const id = typeof payload.id === "string" || typeof payload.id === "number" ? String(payload.id) : "";
+  if (!id) return undefined;
+  if (eventType === "observer.email_received") return `email:${id}`;
+  if (eventType === "commitment.overdue" || eventType === "commitment.due_soon") {
+    return `${eventType}:${id}:${String(payload.when_due ?? "")}`;
+  }
+  return undefined;
+}
+
 export function isWorkflowEventType(s: string): boolean {
   if (!_indexBuilt) buildIndex();
   return _index.has(s);

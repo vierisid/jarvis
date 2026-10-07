@@ -78,8 +78,10 @@ import { WorkItemError } from "../../goals/work-items";
 import {
   getWaitpoint,
   listWaitpointsByFlowRun,
-  markWaitpointResumed,
 } from "../db/repos/waitpoint";
+import { fireForRun, listFlowFires } from "../db/repos/trigger-fire";
+import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { claimContinuation } from "../runtime/continuation";
 import {
   deleteConnectionInProject,
   getConnectionInProject,
@@ -1434,21 +1436,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           // Reading a request body yields; cancellation may have won meanwhile.
           if (getFlowRun(wp.flowRunId)?.status !== "PAUSED") return err("run is no longer paused", 409);
-          if (!markWaitpointResumed(id)) return err("waitpoint already resumed", 410);
-          enqueue({
-            jobType: "RUN_FLOW",
-            payload: {
-              runId: wp.flowRunId,
-              executionType: "RESUME",
-              resumePayload,
-            },
-            flowRunId: wp.flowRunId,
-            // RESUME jobs especially shouldn't retry: re-resuming an
-            // already-resumed waitpoint would walk past it with stale
-            // payload state. One shot per webhook hit.
-            maxAttempts: 1,
-          });
-          return ok({ runId: wp.flowRunId, waitpointId: id, resumed: true }, 202);
+          // A workflow turned off since this run began does not continue: the
+          // run is stopped instead (Q-06).
+          if (turnedOffReason(wp.flowRunId)) {
+            stopTurnedOffRun(run.flowId, wp.flowRunId);
+            return err("the workflow was turned off, so this run was stopped", 409);
+          }
+          // Consume, queue the RESUME naming this waitpoint, and record it, in
+          // one transaction (Q-06). One shot per waitpoint: re-resuming would
+          // walk past it with stale payload state.
+          switch (claimContinuation({ runId: wp.flowRunId, waitpoint: wp, kind: "webhook", resumePayload })) {
+            case "resumed": return ok({ runId: wp.flowRunId, waitpointId: id, resumed: true }, 202);
+            case "busy": return err("another continuation of this run is already queued; retry once it has run", 409);
+            case "stale": return err("the step this waitpoint was for has already finished", 410);
+            case "not-paused": return err("run is no longer paused", 409);
+            default: return err("waitpoint already resumed", 410);
+          }
         }),
     },
 
@@ -1573,7 +1576,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
-          if (body.status !== undefined) updateFlowStatus(id, body.status);
+          // Turning a workflow off stops its queued and waiting runs (Q-06).
+          if (body.status !== undefined && updateFlowStatus(id, body.status).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = scopedFlow(req, id);
@@ -1582,12 +1586,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       DELETE: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const project = callerProject(req);
+          if (!getFlowInProject(project, id)) return err("flow not found", 404);
+          stopRunsOfDeletedFlow(id);
           // BEHAVIOUR CHANGE (#729): a flow that does not exist used to answer
           // 200 `{ ok: true }`. It is a 404 now, because a flow in another
           // project must get the same answer as a missing one and must not be
           // reported deleted when it was not -- the shape the connections
           // DELETE has had since #692.
-          if (!deleteFlowInProject(callerProject(req), id)) return err("flow not found", 404);
+          if (!deleteFlowInProject(project, id)) return err("flow not found", 404);
           refreshTrigger(id);
           return ok({ ok: true });
         }),
@@ -1637,6 +1644,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             trigger: body.trigger,
           });
           if (body.uiMeta) upsertFlowVersionUiMeta(version.id, body.uiMeta);
+          // An enabled flow with nothing published runs its latest draft: its
+          // trigger follows the new one (Q-06).
+          refreshTrigger(id);
           return ok(version, 201);
         }),
     },
@@ -1736,6 +1746,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             if (uiMeta) upsertFlowVersionUiMeta(versionId, uiMeta);
             return updated;
           });
+          // An edited live draft's schedule replaces the old one (Q-06).
+          if (versionPatch.trigger !== undefined) refreshTrigger(id);
           return ok(v);
         }),
     },
@@ -2136,7 +2148,27 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
-          return run ? ok(run) : err("run not found", 404);
+          // The delivery that started it (Q-06): which trigger, when it was due, how late.
+          return run ? ok({ ...run, fire: fireForRun(runId) }) : err("run not found", 404);
+        }),
+    },
+
+    // Q-06: what became of each scheduled time, webhook delivery, event and
+    // continuation: started (with its run's state), delayed, missed, blocked,
+    // skipped, a repeat, or stopped when the workflow was turned off. Newest
+    // first; `before` pages back.
+    "/api/workflows/:id/fires": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
+          const params = new URL(req.url).searchParams;
+          const limit = Number(params.get("limit") ?? "50");
+          const before = Number(params.get("before") ?? "");
+          return ok(listFlowFires(id, {
+            limit: Number.isFinite(limit) ? limit : 50,
+            ...(Number.isFinite(before) && before > 0 ? { before } : {}),
+          }));
         }),
     },
 
