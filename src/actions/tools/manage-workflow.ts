@@ -58,6 +58,7 @@ import {
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
 import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
+import { bindingChangesToAccept } from '../../workflows/db/repos/binding-pins';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
 import {
   createFlowRun,
@@ -277,10 +278,26 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
      * Kept total and dependency-free -- it switches on `params.action` and
      * nothing else. A gate that throws is caught at the call site and
      * escalated to confirm: 'always', so a DB read in here would turn a
-     * transient error into a mandatory card.
+     * transient error into a mandatory card. The one exception is `enable`
+     * and `publish` (Q-05): whether they accept a changed connection or
+     * computer is only known from the flow's pins, and there a card on a
+     * failed read is the safe side.
      */
     authorityGate: (params) => {
-      switch (String(params.action ?? "")) {
+      const action = String(params.action ?? "");
+      switch (action) {
+        case "enable":
+        case "publish": {
+          // Q-05: enabling or publishing accepts the connections and computer
+          // the flow runs with now. When that would accept a change since a
+          // person last accepted them (another account under a connection's
+          // name, another computer), a person sees it and approves first: the
+          // model never accepts one on its own. Otherwise both stay at the
+          // floor, for the reasons below.
+          const changes = bindingChangesForGate(params);
+          return changes.length ? { actionCategory: "write_data", confirm: "always",
+            intent: `${action === "enable" ? "Enable" : "Publish"} workflow ${forCard(params.flow)} and accept: ${changes.join(" ")}` } : null;
+        }
         case "run":
           return { actionCategory: "execute_command", confirm: "above_level",
             intent: `Run workflow: ${forCard(params.flow)}` };
@@ -291,7 +308,8 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           // list / get / list_runs / get_run are reads; compose / create /
           // enable / disable / publish are writes the floor already covers.
           //
-          // `publish` and `enable` are the arguable ones: enabling registers
+          // `publish` and `enable` (when they accept no binding change, above)
+          // are the arguable ones: enabling registers
           // the flow's cron/webhook, so they ARM the same execution that
           // `run` is raised for. They stay at the floor because the exposure
           // is bounded twice over -- CODE steps are refused at publish,
@@ -935,14 +953,29 @@ function actSetStatus(
   return updated ? summarizeFlow(updated) : { error: "flow vanished after update" };
 }
 
+/**
+ * What enabling or publishing `params.flow` would accept that a person has not
+ * (Q-05). Empty when it accepts nothing new, or when the flow does not resolve:
+ * the action reports that itself.
+ */
+function bindingChangesForGate(params: Record<string, unknown>): string[] {
+  let flow: FlowRow;
+  try { flow = requireFlowParam(params); } catch { return []; }
+  const versionId = params.action === "publish"
+    ? getLatestDraft(flow.id)?.id ?? flow.published_version_id
+    : flow.published_version_id ?? getLatestDraft(flow.id)?.id;
+  return versionId ? bindingChangesToAccept(flow.id, versionId) : [];
+}
+
 function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
   const target = getLatestDraft(flow.id);
   if (!target) {
-    if (flow.published_version_id) {
-      // Already published, nothing to do.
-      return summarizeFlow(flow);
-    }
-    throw new Error("no draft version to publish");
+    // Nothing new to publish: publishing again is a person accepting the
+    // connections and computer the published version runs with now (Q-05).
+    if (!flow.published_version_id) throw new Error("no draft version to publish");
+    const { flow: updated } = publishFlowVersion(flow.id, flow.published_version_id);
+    void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
+    return summarizeFlow(updated);
   }
   // Publish is the last gate before a flow starts running for real, and it is
   // the ONLY one a hand-built flow passes through -- a flow drawn in the

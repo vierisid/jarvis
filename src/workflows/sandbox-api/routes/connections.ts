@@ -75,7 +75,7 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
     // Every fetch in a run (each step, a retry, a resumed approval) hands out
     // the identity the run started with, and only one its workflow was enabled
     // against. Never another account that now answers to the same name.
-    const refusal = enforceRunConnectionBinding(ctx.claims.runId, projectId, externalId);
+    const refusal = enforceRunConnectionBinding(ctx.claims.runId, projectId, externalId, deps.credentialResolver);
     if (refusal) return err(refusal, 409);
 
     // Ensure value.type is set so the engine's switch() in

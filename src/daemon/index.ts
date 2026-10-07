@@ -5175,8 +5175,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
       // Q-05: the computers a workflow can be pinned to, and whether this one may run local tools.
+      // `--no-local-tools` reaches the tools only later in startup (9b), after
+      // the pin pass below, so the flag is read here as well.
       machines: () => sidecarManager.listSidecars(),
-      localTools: () => !isNoLocalTools(),
+      localTools: () => !config.noLocalTools && !isNoLocalTools(),
     });
     // Q-05: an enabled flow without pins (one enabled before this build) is
     // pinned to the bindings it runs against now, before any trigger fires.

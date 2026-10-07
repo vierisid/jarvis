@@ -117,8 +117,14 @@ export class WorkflowEffectBoundary {
     }
     if (effect?.status === 'succeeded') {
       // A recorded piece authorization is handed out again on the engine's own
-      // retry, and the piece then calls the service again: recheck first.
-      if (input.revalidateOnReplay) input.revalidate?.(effect);
+      // retry, and the piece then calls the service again: recheck first. A
+      // refusal is kept beside the result, which stays what it was.
+      if (input.revalidateOnReplay) {
+        try { input.revalidate?.(effect); } catch (error) {
+          if (error instanceof ActionOutcomeError) { effect.replayRefusal = { outcome: error.outcome, at: Date.now() }; saveWorkflowEffect(effect); }
+          throw error;
+        }
+      }
       return { result: effect.result };
     }
     if (effect?.outcome && effect.outcome.status !== 'succeeded') throw new ActionOutcomeError(effect.outcome);
@@ -190,7 +196,8 @@ export class WorkflowEffectBoundary {
     // Bindings first, so a stale one is refused before anyone is asked to approve it.
     try { input.revalidate?.(record); } catch (error) {
       if (error instanceof ActionOutcomeError) {
-        record.outcome = error.outcome; record.status = 'blocked'; record.error = error.message;
+        // Authority never ran, but nothing ran either: the trail says denied, not allowed.
+        record.outcome = error.outcome; record.status = 'blocked'; record.decision = 'denied'; record.error = error.message;
         record.reason = error.message; record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);
       }
       throw error;

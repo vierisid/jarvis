@@ -21,7 +21,8 @@ export interface FactPin { value: string; factIds: string[] }
 
 /** Input props that address people on a governed action. */
 const ADDRESS_PROPS = ['receiver', 'to', 'cc', 'bcc', 'attendees', 'attendee_email', 'user_email', 'email'];
-const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+/** An address inside a value, so `Ana <ana@example.com>` and `a@x.com, b@y.com` count too. */
+const EMAIL = /[^\s@<>,;:"'()[\]]+@[^\s@<>,;:"'()[\]]+\.[^\s@<>,;:"'()[\]]+/g;
 const EMAIL_PREDICATES = ['email', 'primary_email'];
 
 function listOf(value: unknown): unknown[] {
@@ -32,11 +33,10 @@ function listOf(value: unknown): unknown[] {
   return value === undefined || value === null || value === '' ? [] : [value];
 }
 
-/** The email addresses a governed step's input addresses. */
+/** The email addresses a governed step's input addresses, as bare addresses. */
 export function recipientAddresses(input: Record<string, unknown>): string[] {
   const addresses = ADDRESS_PROPS.flatMap(prop => listOf(input[prop]))
-    .filter((value): value is string => typeof value === 'string' && EMAIL.test(value.trim()))
-    .map(value => value.trim());
+    .flatMap(value => typeof value === 'string' ? [...value.matchAll(EMAIL)].map(([address]) => address.replace(/\.+$/, '')) : []);
   return [...new Set(addresses)];
 }
 
