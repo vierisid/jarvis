@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
+import { ProviderSetupGuideButton } from "../../../ui/ProviderSetupGuide";
 import { Icon } from "../../../ui";
 import {
   KEY_BASED_KINDS,
@@ -467,6 +468,7 @@ function ProviderRow({
 
       {expanded && (
         <div className="v2-set__row-body">
+          <ProviderSetupGuideButton kind={entry.kind} />
           {usesKey && (
             <div className="v2-set__field">
               <label className="v2-set__field-label">
@@ -637,6 +639,7 @@ function NewProviderRow({
   return (
     <div className="v2-set__provider-row v2-set__provider-row--open">
       <div className="v2-set__row-body">
+        <ProviderSetupGuideButton kind={kind} />
         <div className="v2-set__provider-grid">
           <div className="v2-set__field">
             <label className="v2-set__field-label">Provider kind</label>
@@ -746,7 +749,7 @@ function NewProviderRow({
           <button
             type="button"
             className="v2-set__btn"
-            disabled={testing || duplicate || (usesKey && !apiKey) || (usesUrl && !baseUrl) || (customEndpoint && !baseUrl)}
+            disabled={testing || duplicate || (needsKey && !apiKey) || (usesUrl && !baseUrl) || (customEndpoint && !baseUrl)}
             onClick={async () => {
               setTesting(true);
               setTestResult(null);

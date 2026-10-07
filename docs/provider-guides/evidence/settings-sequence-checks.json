@@ -1,0 +1,19 @@
+{
+  "scope": "Real Settings component and testLLMProvider; in-memory settings persistence and simulated HTTP model servers, no live inference",
+  "results": [
+    {
+      "provider": "ollama",
+      "oldSequenceRejected": true,
+      "savedModel": "ollama:llama3.1:8b",
+      "testModel": "llama3.1:8b",
+      "errors": []
+    },
+    {
+      "provider": "litellm",
+      "oldSequenceRejected": true,
+      "savedModel": "litellm:jarvis-local",
+      "testModel": "jarvis-local",
+      "errors": []
+    }
+  ]
+}

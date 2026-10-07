@@ -9,6 +9,7 @@ import {
 } from "./llm-setup";
 import { localSTTSetup, type LocalSTTServerType } from "./stt-setup";
 import { modKey } from "../ui/platform";
+import { ProviderSetupGuideButton } from "../ui/ProviderSetupGuide";
 import { useSystemPermissions } from "./useSystemPermissions";
 import {
   allSettled, displayRows, needsRestartNote, outstandingRequired, unavailableCopy,
@@ -103,8 +104,8 @@ const PROVIDERS: Provider[] = [
   { id: "ollama", name: "Ollama", abbr: "Ol", kind: "local", needsBaseUrl: true, urlLabel: "Ollama base URL", urlPh: "http://localhost:11434", models: ["llama3.1", "llama3.2", "mistral", "qwen2.5"] },
   { id: "openrouter", name: "OpenRouter", abbr: "OR", kind: "API key", needsKey: true, models: ["anthropic/claude-opus-4", "openai/gpt-5.4", "google/gemini-2.5-pro"] },
   { id: "nvidia", name: "NVIDIA NIM", abbr: "N", kind: "API key", needsKey: true, models: [...NVIDIA_FALLBACK_MODELS], hint: "The catalog includes chat, embedding and vision models. Test connection confirms the selected model supports chat." },
-  { id: "openai_compatible", name: "OpenAI-compatible", abbr: "C", kind: "self-hosted", needsBaseUrl: true, freeModel: true, urlLabel: "Base URL", urlPh: "http://localhost:8080/v1", hint: "Any server that speaks /v1/chat/completions: llama.cpp, vLLM, LM Studio, TGI. Include the /v1 suffix." },
-  { id: "litellm", name: "LiteLLM", abbr: "L", kind: "proxy", needsBaseUrl: true, freeModel: true, urlLabel: "LiteLLM proxy URL", urlPh: "http://localhost:4000/v1", hint: "The model below must match an alias defined on your proxy." },
+  { id: "openai_compatible", name: "OpenAI-compatible", abbr: "C", kind: "self-hosted", needsKey: true, keyOptional: true, needsBaseUrl: true, freeModel: true, urlLabel: "Base URL", urlPh: "http://localhost:8080/v1", hint: "Any server that speaks /v1/chat/completions: llama.cpp, vLLM, LM Studio, TGI. Include the /v1 suffix." },
+  { id: "litellm", name: "LiteLLM", abbr: "L", kind: "proxy", needsKey: true, keyOptional: true, needsBaseUrl: true, freeModel: true, urlLabel: "LiteLLM proxy URL", urlPh: "http://localhost:4000/v1", hint: "The model below must match an alias defined on your proxy." },
   { id: "omniroute", name: "OmniRoute", abbr: "Om", kind: "gateway", needsKey: true, keyOptional: true, needsBaseUrl: true, urlLabel: "OmniRoute API URL", urlPh: "http://localhost:20128/v1", models: ["auto"], hint: "Loads every route and combo from your OmniRoute instance. Tool calls and streaming are supported through its OpenAI-compatible API." },
 ];
 
@@ -1148,7 +1149,7 @@ export function OnboardingWizard({
               </button>
             ))}
           </div>
-          <div className="obw-provdetail">{renderProvDetail()}</div>
+          <div className="obw-provdetail"><ProviderSetupGuideButton kind={provId} />{renderProvDetail()}</div>
           <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" disabled={!brainReady} onClick={next}>Continue</button></div>
           {!brainReady && !prov.noConfig && <div className="obw-hint" style={{ marginTop: 8 }}>Test the connection to continue.</div>}
         </div></div>
