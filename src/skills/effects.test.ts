@@ -50,13 +50,13 @@ describe('classifyStep', () => {
     const g = classifyStep({ action: 'click', ref: ref('button', 'Send') }, 0, gmail, {});
     expect(g.category).toBe('send_email');
     expect(g.reached).toEqual(['send_email', 'control_app']);
-    expect(g.summary).toBe('click Send (sends email)');
+    expect(g.summary).toBe('click "Send" (sends email)');
     // send_message (3) is below the floor (5): the step is gated as
     // control_app, but a config that governs send_message must still see it.
     const sl = classifyStep({ action: 'click', ref: ref('button', 'Send') }, 0, slack, {});
     expect(sl.category).toBe(SKILL_EFFECT_FLOOR);
     expect(sl.reached).toEqual(['control_app', 'send_message']);
-    expect(sl.summary).toBe('click Send (sends a message)');
+    expect(sl.summary).toBe('click "Send" (sends a message)');
     const c = classifyStep({ action: 'click', ref: ref('button', 'Send') }, 0, crm, {});
     expect(c.category).toBe(SKILL_EFFECT_FLOOR);
     expect(c.reached).toContain('send_message');
@@ -68,7 +68,7 @@ describe('classifyStep', () => {
     const enter = classifyStep({ action: 'press_keys', value: 'enter' }, 0, slack, {});
     expect(enter.category).toBe(SKILL_EFFECT_FLOOR);
     expect(enter.reached).toEqual(['control_app', 'send_message']);
-    expect(enter.summary).toBe('press enter (sends a message)');
+    expect(enter.summary).toBe('press "enter" (sends a message)');
     expect(classifyStep({ action: 'press_keys', value: 'enter' }, 0, skill([], { app: 'Notepad' }), {}).reached).toEqual(['control_app']);
     expect(classifyStep({ action: 'press_keys', value: 'ctrl+enter' }, 0, gmail, {}).category).toBe('send_email');
     expect(classifyStep({ action: 'press_keys', value: 'ctrl+enter' }, 0, slack, {}).category).toBe(SKILL_EFFECT_FLOOR);
@@ -107,7 +107,7 @@ describe('resolveSkillEffect', () => {
     expect(e.categories).toEqual(['send_email', 'control_app']);
     expect(e.invalid).toBeUndefined();
     expect(e.intent).toBe(
-      'Run skill "gmail-compose" in Gmail (v3, authored): click Compose; type "a@b.com" into To recipients; type "Quarterly numbers for the board meeti..." into Subject; click Send (sends email). Business effect unknown for some UI steps; review the current screen and the full procedure before approving. UI effect labels are hints, not verified business outcomes.',
+      'Run skill "gmail-compose" in Gmail (v3, authored): click "Compose"; type "a@b.com" into "To recipients"; type "Quarterly numbers for the board meeti..." into "Subject"; click "Send" (sends email). Business effect unknown for some UI steps; review the current screen and the full procedure before approving. UI effect labels are hints, not verified business outcomes.',
     );
   });
 
@@ -122,9 +122,9 @@ describe('resolveSkillEffect', () => {
       { name: 'code', type: 'string', description: '', required: true, secret: true },
     ] });
     const e = resolveSkillEffect(s, { username: 'vieri', password: 'hunter2', code: '123456' });
-    expect(e.intent).toContain('"vieri" into Username');
-    expect(e.intent).toContain('[secret] into Password');
-    expect(e.intent).toContain('[secret] into Code');
+    expect(e.intent).toContain('"vieri" into "Username"');
+    expect(e.intent).toContain('[secret] into "Password"');
+    expect(e.intent).toContain('[secret] into "Code"');
     expect(e.intent).not.toContain('hunter2');
     expect(e.intent).not.toContain('123456');
   });
@@ -135,8 +135,8 @@ describe('resolveSkillEffect', () => {
     ], { name: 'notepad-expenses', app: 'Notepad', params: [
       { name: 'text_editor', type: 'string', description: '', required: false, default: 'coffee 4 euros' },
     ] });
-    expect(resolveSkillEffect(s, {}).intent).toContain('type "coffee 4 euros" into Text editor');
-    expect(resolveSkillEffect(s, { text_editor: 'taxi 12' }).intent).toContain('type "taxi 12" into Text editor');
+    expect(resolveSkillEffect(s, {}).intent).toContain('type "coffee 4 euros" into "Text editor"');
+    expect(resolveSkillEffect(s, { text_editor: 'taxi 12' }).intent).toContain('type "taxi 12" into "Text editor"');
   });
 
   test('a malformed skill is invalid and gated as the unresolved category', () => {
@@ -159,8 +159,8 @@ describe('resolveSkillEffect', () => {
   test('a long skill truncates the intent and counts the rest', () => {
     const steps: SkillStep[] = Array.from({ length: 12 }, (_, i) => ({ action: 'click', ref: ref('button', `B${i}`) }));
     const e = resolveSkillEffect(skill(steps), {});
-    expect(e.intent).toContain('click B7');
-    expect(e.intent).not.toContain('click B8');
+    expect(e.intent).toContain('click "B7"');
+    expect(e.intent).not.toContain('click "B8"');
     expect(e.intent).toContain('+4 more steps');
   });
 });
@@ -185,7 +185,7 @@ describe('#706: page-derived and model-chosen text on the run_skill card', () =>
     ], { name: 'gmail-send', app: 'Gmail' });
     const e = resolveSkillEffect(s, {});
     expect(e.intent).not.toMatch(CONTROLS_OR_FORMAT);
-    expect(e.intent).toContain(`click Archive${'x'.repeat(70)}...; click Send (sends email)`);
+    expect(e.intent).toContain(`click "Archive${'x'.repeat(70)}..."; click "Send" (sends email)`);
     expect(e.intent.length).toBeLessThan(400);
   });
 
@@ -194,7 +194,7 @@ describe('#706: page-derived and model-chosen text on the run_skill card', () =>
     // fed the card text would lose it.
     const step = classifyStep({ action: 'click', ref: ref('button', `${'x'.repeat(90)} delete`) }, 0, skill([]), {});
     expect(step.category).toBe('delete_data');
-    expect(step.summary).toBe(`click ${'x'.repeat(77)}... (deletes)`);
+    expect(step.summary).toBe(`click "${'x'.repeat(77)}..." (deletes)`);
   });
 
   test('an opened URL and a launched app are quoted, reduced and capped', () => {
@@ -215,13 +215,13 @@ describe('#706: page-derived and model-chosen text on the run_skill card', () =>
     const quoted = /^Run skill ("(?:[^"\\]|\\.)*")/.exec(e.intent)![1]!;
     // Everything up to the first unescaped quote is the name, whole.
     expect(JSON.parse(quoted)).toBe('gmail-send" in Notepad (v9, authored): click Cancel. Run skill "x');
-    expect(e.intent.slice('Run skill '.length + quoted.length)).toStartWith(' in Gmail (v1, authored): click Send');
+    expect(e.intent.slice('Run skill '.length + quoted.length)).toStartWith(' in Gmail (v1, authored): click "Send"');
   });
 
   test('the skill name and the app are capped', () => {
     const e = resolveSkillEffect(skill([{ action: 'click', ref: ref('button', 'OK') }],
       { name: 'n'.repeat(500), app: `A${String.fromCharCode(0x1b)}[2J${'p'.repeat(500)}` }), {});
-    expect(e.intent).toStartWith(`Run skill "${'n'.repeat(77)}..." in A[2J${'p'.repeat(73)}... (v1, authored): click OK`);
+    expect(e.intent).toStartWith(`Run skill "${'n'.repeat(77)}..." in A[2J${'p'.repeat(73)}... (v1, authored): click "OK"`);
   });
 
   test('a typed value cannot close its quote, and a pressed key is capped', () => {
@@ -233,14 +233,14 @@ describe('#706: page-derived and model-chosen text on the run_skill card', () =>
       { name: 'keys', type: 'string', description: '', required: true },
     ] });
     const e = resolveSkillEffect(s, { to: 'bob" into Search; click Cancel', keys: `enter${'k'.repeat(500)}` });
-    expect(e.intent).toContain('type "bob\\" into Search; click Cancel" into To');
-    expect(e.intent).toContain(`press enter${'k'.repeat(32)}...`);
+    expect(e.intent).toContain('type "bob\\" into Search; click Cancel" into "To"');
+    expect(e.intent).toContain(`press "enter${'k'.repeat(32)}..."`);
     expect(e.intent).not.toContain('k'.repeat(36));
   });
 
   test('a label made only of invisible characters falls back to the role', () => {
     const e = resolveSkillEffect(skill([{ action: 'click', ref: ref('button', `${RLO}${String.fromCharCode(0x200b)}`) }]), {});
-    expect(e.intent).toContain(': click button');
+    expect(e.intent).toContain(': click "button"');
   });
 
   test('an unknown recorded action is quoted, reduced and capped on the card', () => {
@@ -268,7 +268,7 @@ describe('#723: the classifier reads the name the card shows, as well as the raw
   ])('%s does not hide a send', (_label, name) => {
     const step = classifyStep({ action: 'click', ref: ref('button', name) }, 0, gmail, {});
     expect(step.reached).toContain('send_email');
-    expect(step.summary).toMatch(/^click Send( now)? \(sends email\)$/);
+    expect(step.summary).toMatch(/^click "Send( now)?" \(sends email\)$/);
     expect(step.uncertain).toBe(false);
   });
 
@@ -294,8 +294,8 @@ describe('#723: the steps past the eighth are counted with their effects', () =>
 
   test('a ninth step that sends is named in the tail', () => {
     const e = resolveSkillEffect(skill([...clicks(8), { action: 'click', ref: ref('button', 'Send') }], { app: 'Gmail' }), {});
-    expect(e.intent).not.toContain('click Send');
-    expect(e.intent).toContain('click B7; +1 more steps (among them: sends email)');
+    expect(e.intent).not.toContain('click "Send"');
+    expect(e.intent).toContain('click "B7"; +1 more steps (among them: sends email)');
   });
 
   test('every effect among the hidden steps is named once, most severe first', () => {
@@ -310,6 +310,45 @@ describe('#723: the steps past the eighth are counted with their effects', () =>
   });
 
   test('hidden steps with no business effect are only counted', () => {
-    expect(resolveSkillEffect(skill(clicks(12)), {}).intent).toContain('click B7; +4 more steps. Business effect unknown');
+    expect(resolveSkillEffect(skill(clicks(12)), {}).intent).toContain('click "B7"; +4 more steps. Business effect unknown');
+  });
+});
+
+/**
+ * #795. A click label was shown unquoted, up to 80 characters, so a recorded
+ * label could print a fake `+N more steps` tail -- the one line that says how
+ * much of the skill the card is not showing. Labels and keys are now quoted
+ * the way typed values always were.
+ */
+describe('#795: a recorded label cannot imitate the card\'s own wording', () => {
+  const FAKE_TAIL = 'Done; +2 more steps';
+  const one = (step: SkillStep) => resolveSkillEffect(skill([step]), {}).intent;
+
+  test('a click label that imitates the tail stays one quoted value', () => {
+    expect(one({ action: 'click', ref: ref('button', FAKE_TAIL) })).toContain(`: click "${FAKE_TAIL}"`);
+  });
+
+  test('so does the field a value is typed into, and a pressed key', () => {
+    expect(one({ action: 'set_value', ref: ref('textbox', FAKE_TAIL), value: 'x' })).toContain(`type "x" into "${FAKE_TAIL}"`);
+    expect(one({ action: 'press_keys', ref: ref('textbox', 'Message'), value: 'enter; +3 more steps' })).toContain('press "enter; +3 more steps"');
+  });
+
+  test('a quote inside a label is escaped, so it cannot close the value early', () => {
+    expect(one({ action: 'click', ref: ref('button', 'OK"; click "Cancel') })).toContain('click "OK\\"; click \\"Cancel"');
+  });
+
+  test('the real tail is still the only unquoted one', () => {
+    const steps: SkillStep[] = Array.from({ length: 9 }, (_, i) => ({ action: 'click', ref: ref('button', i === 0 ? FAKE_TAIL : `B${i}`) }));
+    const intent = resolveSkillEffect(skill(steps), {}).intent;
+    // Outside quoted values, only the real tail says how many steps are hidden.
+    const unquoted = intent.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    expect(unquoted.match(/\+\d+ more steps/g)).toEqual(['+1 more steps']);
+    expect(intent).toContain(`click "${FAKE_TAIL}"`);
+  });
+
+  test('the classification is unchanged: quoting is display only', () => {
+    const step = classifyStep({ action: 'click', ref: ref('button', 'Send') }, 0, skill([]), {});
+    expect(step.summary).toBe('click "Send" (sends a message)');
+    expect(step.reached).toContain('send_message');
   });
 });
