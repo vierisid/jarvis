@@ -1,22 +1,23 @@
-Full suite on brief/q-06 at baa88303 (local WSL2; load average about 0.7 at start). The final code commit 3ab2954b differs only by one more case in src/lib/cron-occurrence.test.ts.
+Full suite on brief/q-06 at e1b9ab30 (local WSL2, a fresh checkout of the commit; load average about 2.9 at start, just after the revert checks).
 $ bun test --preload ./src/test-preload.ts
- 7772 pass
- 86 skip
+ 7789 pass
+ 88 skip
  9 fail
-Ran 7867 tests across 426 files. [562.80s]
+Ran 7886 tests across 426 files. [608.19s]
 
 Failures:
-(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [67.77ms]
-(fail) page-writable element refs (#592, integration) > (unnamed) [3050.18ms]
-(fail) browser primitives (integration) > (unnamed) [306.43ms]
-(fail) browser local-file lockdown (integration, #521) > (unnamed) [332.24ms]
-(fail) webapp template delivery via browser tools (integration) > (unnamed) [354.79ms]
-(fail) end to end, against a real process > reaps an engine whose owner really did die [29.79ms]
-(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [139.05ms]
-(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [310.15ms]
-(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [218.74ms]
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [62.03ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [3259.78ms]
+(fail) browser primitives (integration) > (unnamed) [310.99ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [322.62ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [346.66ms]
+(fail) end to end, against a real process > reaps an engine whose owner really did die [31.36ms]
+(fail) with the owner's process inspection blocked (#546) > an engine of a hardened owner is left alone while it lives, then reaped once it dies [140.77ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [312.14ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [324.05ms]
 
 All 9 also fail on the base with no Q work applied (below): git config lint, six Chromium launches and two engine-reaper tests on this machine. No other test fails.
+Skips: two more than the first round. The real-engine piece-catalog test and the fixture drift check skip whenever the engine's built pieces are not cached as their file loads. Rerun on their own, the 45 test files that can skip skipped 86 on this commit and 88 on the base, with exactly those two tests as the only difference; on this commit they ran and passed.
 CI on the final head runs the full suite.
 
 Baseline: the same test files on brief/foundations 462d955d with no Q work applied
