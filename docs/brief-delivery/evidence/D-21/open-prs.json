@@ -1,0 +1,242 @@
+[
+  {
+    "headRefName": "brief/d-20",
+    "number": 824,
+    "title": "D-20: Add workflow Context and rules with recorded run evidence"
+  },
+  {
+    "headRefName": "brief/f-17",
+    "number": 823,
+    "title": "F17: add a paginated memory stream query"
+  },
+  {
+    "headRefName": "brief/q-06",
+    "number": 806,
+    "title": "[Q-06] Certify real trigger and continuation delivery"
+  },
+  {
+    "headRefName": "brief/f-16",
+    "number": 805,
+    "title": "F16: project evidence-backed outcomes and time back"
+  },
+  {
+    "headRefName": "brief/d-19",
+    "number": 804,
+    "title": "D-19: Add run history with one inline inspection"
+  },
+  {
+    "headRefName": "brief/f-15",
+    "number": 796,
+    "title": "F15: record explicit goal measurements"
+  },
+  {
+    "headRefName": "brief/d-18",
+    "number": 787,
+    "title": "D-18: Refactor the workflow canvas and inline inspector"
+  },
+  {
+    "headRefName": "brief/f-14",
+    "number": 785,
+    "title": "F14: revise decision documents safely and keep drafts"
+  },
+  {
+    "headRefName": "brief/d-17",
+    "number": 780,
+    "title": "D-17: Add connection and library selection to workflow creation"
+  },
+  {
+    "headRefName": "brief/q-05",
+    "number": 778,
+    "title": "[Q-05] Revalidate bindings before activation and execution"
+  },
+  {
+    "headRefName": "brief/f-13",
+    "number": 777,
+    "title": "F-13: persist recommendations and accept queued work exactly once"
+  },
+  {
+    "headRefName": "brief/d-16",
+    "number": 776,
+    "title": "D-16: workflow creation and recent work with safe draft recovery"
+  },
+  {
+    "headRefName": "brief/f-12",
+    "number": 775,
+    "title": "F-12: unify decision identity, queue placement and guarded actions"
+  },
+  {
+    "headRefName": "brief/d-15",
+    "number": 773,
+    "title": "feat(brief): render readable activity and chat replies (D-15)"
+  },
+  {
+    "headRefName": "brief/f-11",
+    "number": 772,
+    "title": "feat(brief): quiet unsolicited awareness delivery (F-11)"
+  },
+  {
+    "headRefName": "brief/d-14",
+    "number": 771,
+    "title": "feat(brief): add the reversible attachment fan (D-14)"
+  },
+  {
+    "headRefName": "brief/f-10",
+    "number": 770,
+    "title": "feat(brief): approve prepared opportunities exactly once (F-10)"
+  },
+  {
+    "headRefName": "brief/f-09",
+    "number": 766,
+    "title": "feat(brief): prepare durable opportunity workflows (F-09)"
+  },
+  {
+    "headRefName": "brief/q-04",
+    "number": 765,
+    "title": "[Q-04] Check generated workflows against the requested job"
+  },
+  {
+    "headRefName": "brief/d-13",
+    "number": 764,
+    "title": "feat(brief): add the compact composer and send pebble (D-13)"
+  },
+  {
+    "headRefName": "brief/d-12",
+    "number": 757,
+    "title": "D-12: Add predictable conversation tabs to Brief"
+  },
+  {
+    "headRefName": "brief/f-08",
+    "number": 755,
+    "title": "F08: honor selected workflow composition ingredients"
+  },
+  {
+    "headRefName": "brief/d-11",
+    "number": 754,
+    "title": "[D-11] Turn Today opportunities into a prepared-workflow stack"
+  },
+  {
+    "headRefName": "brief/q-03",
+    "number": 753,
+    "title": "[Q-03] Make the planning policy switchable and its promotion a measured decision"
+  },
+  {
+    "headRefName": "brief/d-10",
+    "number": 752,
+    "title": "[D-10] Connect goal recommendations to the Today decision stack"
+  },
+  {
+    "headRefName": "feat/local-provider-guides",
+    "number": 751,
+    "title": "Feat/local provider guides"
+  },
+  {
+    "headRefName": "brief/f-07",
+    "number": 750,
+    "title": "feat(brief): prepare durable workflow drafts from prompts (F-07)"
+  },
+  {
+    "headRefName": "brief/d-09",
+    "number": 749,
+    "title": "[D-09] Render qualified Today outcomes and recent activity"
+  },
+  {
+    "headRefName": "brief/f-06",
+    "number": 745,
+    "title": "F-06: expose safe, typed conversation progress"
+  },
+  {
+    "headRefName": "brief/q-18",
+    "number": 742,
+    "title": "[Q-18] Recommend the next action worth taking, ask, or say nothing new is worth adding"
+  },
+  {
+    "headRefName": "brief/d-08",
+    "number": 741,
+    "title": "[D-08] Confirm and settle Today decisions before advancing the stack"
+  },
+  {
+    "headRefName": "brief/f-05",
+    "number": 740,
+    "title": "F-05: Bind validated attachments to the intended chat turn"
+  },
+  {
+    "headRefName": "brief/d-07",
+    "number": 739,
+    "title": "D-07: Build Today composition and in-place decision review"
+  },
+  {
+    "headRefName": "brief/f-04",
+    "number": 738,
+    "title": "[F-04] Persist conversation client state across tabs and reconnects"
+  },
+  {
+    "headRefName": "brief/q-13",
+    "number": 737,
+    "title": "[Q-13] Qualify a prepared proposal against its exact version before it can say Ready"
+  },
+  {
+    "headRefName": "brief/d-06",
+    "number": 736,
+    "title": "D-06: Unfold Pebble into a persistent workspace panel"
+  },
+  {
+    "headRefName": "fix/router-starts-with",
+    "number": 735,
+    "title": "Make \"starts with\" router conditions match only a prefix, accept the dashboard's spelling, and fail closed on unknown operators"
+  },
+  {
+    "headRefName": "brief/q-02",
+    "number": 734,
+    "title": "[Q-02] Grade composed workflows on founder jobs with sandboxed effects, exact assertions and blind review"
+  },
+  {
+    "headRefName": "brief/d-05",
+    "number": 733,
+    "title": "[D-05] Build the Brief sidebar, header and account menu"
+  },
+  {
+    "headRefName": "brief/f-03",
+    "number": 727,
+    "title": "[F-03] Isolate conversation streams and cancellation"
+  },
+  {
+    "headRefName": "brief/d-04",
+    "number": 726,
+    "title": "D-04: Add shared motion with reliable reversal and reduced motion"
+  },
+  {
+    "headRefName": "brief/q-01",
+    "number": 725,
+    "title": "[Q-01] Gate the hosted workflow baseline on approved spend, profile evidence and a frozen rubric"
+  },
+  {
+    "headRefName": "brief/f-02-1",
+    "number": 717,
+    "title": "[F-02.1] Preserve conversation API CORS headers"
+  },
+  {
+    "headRefName": "brief/d-03",
+    "number": 715,
+    "title": "D-03: Build the shared Brief control family"
+  },
+  {
+    "headRefName": "brief/f-02",
+    "number": 714,
+    "title": "[F-02] Add persistent conversation lifecycle"
+  },
+  {
+    "headRefName": "brief/d-02",
+    "number": 703,
+    "title": "D-02: Apply the approved Brief typography and materials"
+  },
+  {
+    "headRefName": "brief/f-01",
+    "number": 702,
+    "title": "[F-01] Add Brief contracts and default-off capability gates"
+  },
+  {
+    "headRefName": "brief/d-01",
+    "number": 701,
+    "title": "D-01: Add the opt-in Brief dashboard foundation"
+  }
+]

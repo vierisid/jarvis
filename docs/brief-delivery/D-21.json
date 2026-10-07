@@ -1,0 +1,271 @@
+{
+  "task": "D-21",
+  "title": "Build workflow management and local removal",
+  "date": "2026-10-07",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "branch": "brief/d-21",
+  "stack_base": "brief/d-20",
+  "baseline": "9c174b760105b41fecec5df5403f0edb1dad19fd",
+  "inspected_main": "2281a8235d4987af202e3b99f7ea514ac7ed4ff8",
+  "head": {
+    "ref": "brief/d-21",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-21.json"
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-21",
+  "preview": "http://127.0.0.1:4401/?brief=preview&specimen=workflow-manage#/_brief_preview",
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/824"
+  ],
+  "activation_dependencies": [
+    "F-20 authenticated workflowRemoval provider and durable scoped receipt/reconciliation adapter",
+    "Host complete-list/activation mapping, reload receipt recovery and owner lifecycle integration",
+    "D-33 release checks"
+  ],
+  "owns": [
+    "ui/src/brief/workflows/manage-list/**",
+    "Two fixture-only FoundationPreview lines",
+    "docs/brief-delivery/D-21.*",
+    "docs/brief-delivery/evidence/D-21/**"
+  ],
+  "figma": {
+    "task": "D-21",
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "node": "255:3795",
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=255-3795",
+    "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
+    "inspection": "Saved native UI-25 artwork and handoff under the approved UI-35 checkpoint. No fresh editor session claimed.",
+    "source_directory": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-25-workflow-management-2026-10-03",
+    "inspected_exports": [
+      {
+        "file": "255-3795-light.png",
+        "sha256": "be4acee80c3f3699fe970a094e7e08549834e84b101c3f6267a2f25ca4ce2f57"
+      },
+      {
+        "file": "424-29660-dark.png",
+        "sha256": "b7c80abca75ce554fd8fe48d6a350af53374ac36f06d237909b6df8bc7575e8c"
+      },
+      {
+        "file": "dark-inline-confirm.png",
+        "sha256": "7ac76b85fa92734fb2e45ba4b298537d666e704693346792570897c7498aa2d4"
+      },
+      {
+        "file": "final-light-deleted-chat.png",
+        "sha256": "6e2ea862c7041f17b96eac4f651d184a46a35a3ba4fc9f60a43dbbb9b0c951ac"
+      }
+    ],
+    "preserved": [
+      "All workflows heading and Back to workflow creation",
+      "Workflow, Runs when, Status, Latest run and bin columns",
+      "Sharp-edge Enabled/Paused switches; quiet bins and row-local Cancel/Delete",
+      "Light/Dark materials, compact description suppression and in-place shell/chat reflow"
+    ],
+    "bounded_deviations": [
+      "Undo restores DISABLED/Paused as required by the later F-20 implementation card, not the old native prototype prior activation state.",
+      "Publication/readiness are separate secondary facts; Draft never becomes a switch state.",
+      "Long lists scroll with an independent bounded Undo region so feedback covers neither rows nor Pebble. Narrow widths use labeled stacked row cells.",
+      "Refresh, unavailable/stale/blocked/uncertain outcomes and receipt expiry are real UI states absent from four-row Figma fixtures.",
+      "The workflow name cell is the explicit navigation target; switch and bin are sibling targets."
+    ]
+  },
+  "checks": [
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/rooms/workflows ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "result": "pass",
+      "tests": 534,
+      "skipped": 2,
+      "assertions": 4835,
+      "files": 39,
+      "evidence": "evidence/D-21/regression-tests.log",
+      "note": "Two unchanged optional F07/F08 integration skips. Followed by focused checks after final scroll selector repair."
+    },
+    {
+      "command": "bun test ui/src/brief/workflows/manage-list",
+      "result": "pass",
+      "tests": 30,
+      "assertions": 132,
+      "files": 2,
+      "evidence": "evidence/D-21/focused-tests.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-21/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-21/build.log",
+      "warnings": "Existing @theme/@tailwind at-rule warnings"
+    },
+    {
+      "command": "git commit with normal .githooks/pre-commit",
+      "result": "pass",
+      "evidence": "evidence/D-21/hooks.log",
+      "note": "EE boundary, staged-module tests and repository TypeScript check passed. No bypass or coauthor trailer."
+    },
+    {
+      "command": "prettier --check ui/src/brief/workflows/manage-list; git diff --check",
+      "result": "pass",
+      "evidence": "evidence/D-21/format-check.log"
+    }
+  ],
+  "browser": {
+    "result": "pass",
+    "script": "evidence/D-21/browser-check.cjs",
+    "evidence": "evidence/D-21/browser-results.json",
+    "layouts": 8,
+    "cycles": 10,
+    "observed": {
+      "layouts": [
+        {
+          "theme": "light",
+          "rail": false,
+          "chat": false,
+          "activation": true,
+          "confirm": true,
+          "remove": true,
+          "undoPaused": true,
+          "focus": true
+        },
+        {
+          "theme": "light",
+          "rail": false,
+          "chat": true,
+          "activation": true,
+          "confirm": true,
+          "remove": true,
+          "undoPaused": true,
+          "focus": true
+        },
+        {
+          "theme": "light",
+          "rail": true,
+          "chat": false,
+          "activation": true,
+          "confirm": true,
+          "remove": true,
+          "undoPaused": true,
+          "focus": true
+        },
+        {
+          "theme": "light",
+          "rail": true,
+          "chat": true,
+          "activation": true,
+          "confirm": true,
+          "remove": true,
+          "undoPaused": true,
+          "focus": true
+        },
+        {
+          "theme": "dark",
+          "rail": false,
+          "chat": false,
+          "activation": true,
+          "confirm": true,
+          "remove": true,
+          "undoPaused": true,
+          "focus": true
+        },
+        {
+          "theme": "dark",
+          "rail": false,
+          "chat": true,
+          "activation": true,
+          "confirm": true,
+          "remove": true,
+          "undoPaused": true,
+          "focus": true
+        },
+        {
+          "theme": "dark",
+          "rail": true,
+          "chat": false,
+          "activation": true,
+          "confirm": true,
+          "remove": true,
+          "undoPaused": true,
+          "focus": true
+        },
+        {
+          "theme": "dark",
+          "rail": true,
+          "chat": true,
+          "activation": true,
+          "confirm": true,
+          "remove": true,
+          "undoPaused": true,
+          "focus": true
+        }
+      ],
+      "cycles": 10,
+      "inlineCancel": true,
+      "reverseOrderUndo": true,
+      "blockedEnable": true,
+      "uncertainReadOnlyRecovery": true,
+      "expiredReceipt": true,
+      "gapCollapseIntermediate": true,
+      "exactCanvasHandoff": true,
+      "longListUndoReachable": true,
+      "longListReturn": true,
+      "creationReturn": true,
+      "narrow": true,
+      "reducedMotion": true,
+      "errors": [],
+      "mutations": []
+    }
+  },
+  "limitations": [
+    "F-20 missing; no live binding, workflow activation, deletion, account change or effect executed.",
+    "Controller navigation state is in-memory; durable reload recovery/hydration requires F-20/host integration before activation.",
+    "Complete-list adapter is required; no silent paginated first-page projection.",
+    "Existing D-18 meeting canvas fixture demonstrates exact navigation. Other flows are explicit destination handoffs; this does not fabricate their real graphs.",
+    "Shared preview creation is present for return navigation with model composition disabled.",
+    "Chrome keyboard/geometry/reduced-motion checks are not screen-reader or all-browser certification."
+  ],
+  "rollback": "Disable/remove the optional management registration and specimen route; preserve live host pending commands; legacy routes unchanged.",
+  "next": "D-22, not started",
+  "review_corrections": {
+    "reviewed_head": "5fa008e40fe7aec8ad69892346ba7f3e648302e7",
+    "inspected_main": "485bb9b3b70f4d3874798810efc6f06355f86ef6",
+    "findings": {
+      "R1": "fixed: authoritative active records supersede local tombstones in their reserved slots; stale snapshots and still-deleted records retain receipts",
+      "R2": "fixed: fresh snapshots clear obsolete settled action feedback"
+    },
+    "red": {
+      "command": "bun test ui/src/brief/workflows/manage-list",
+      "passed": 31,
+      "failed": 7,
+      "evidence": "evidence/D-21/review-red.log"
+    },
+    "green": {
+      "command": "bun test ui/src/brief/workflows/manage-list",
+      "passed": 38,
+      "failed": 0,
+      "assertions": 172,
+      "new_cases": 8,
+      "evidence": "evidence/D-21/review-green.log"
+    },
+    "typecheck": {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-21/review-typecheck.log"
+    },
+    "build": {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-21/review-build.log",
+      "warnings": "Existing @theme/@tailwind at-rule warnings"
+    },
+    "format": {
+      "command": "prettier --check ui/src/brief/workflows/manage-list; git diff --check",
+      "result": "pass",
+      "evidence": "evidence/D-21/review-format.log"
+    },
+    "coverage_limits": "Controller and rendered-room regressions rerun. Previous broad regression and Chrome matrices retained as initial-delivery evidence, not rerun. F-20/live provider remains gated."
+  }
+}

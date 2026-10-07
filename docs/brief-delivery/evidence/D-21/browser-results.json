@@ -1,0 +1,99 @@
+{
+  "layouts": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "activation": true,
+      "confirm": true,
+      "remove": true,
+      "undoPaused": true,
+      "focus": true
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "activation": true,
+      "confirm": true,
+      "remove": true,
+      "undoPaused": true,
+      "focus": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "activation": true,
+      "confirm": true,
+      "remove": true,
+      "undoPaused": true,
+      "focus": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "activation": true,
+      "confirm": true,
+      "remove": true,
+      "undoPaused": true,
+      "focus": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "activation": true,
+      "confirm": true,
+      "remove": true,
+      "undoPaused": true,
+      "focus": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "activation": true,
+      "confirm": true,
+      "remove": true,
+      "undoPaused": true,
+      "focus": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "activation": true,
+      "confirm": true,
+      "remove": true,
+      "undoPaused": true,
+      "focus": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "activation": true,
+      "confirm": true,
+      "remove": true,
+      "undoPaused": true,
+      "focus": true
+    }
+  ],
+  "cycles": 10,
+  "inlineCancel": true,
+  "reverseOrderUndo": true,
+  "blockedEnable": true,
+  "uncertainReadOnlyRecovery": true,
+  "expiredReceipt": true,
+  "gapCollapseIntermediate": true,
+  "exactCanvasHandoff": true,
+  "longListUndoReachable": true,
+  "longListReturn": true,
+  "creationReturn": true,
+  "narrow": true,
+  "reducedMotion": true,
+  "errors": [],
+  "mutations": []
+}
