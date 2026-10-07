@@ -19,6 +19,7 @@
  * config/store) lives in the daemon bootstrap.
  */
 
+import { createHash } from "node:crypto";
 import type { AppConnectionStatus, AppConnectionType } from "../db/repos/app-connection";
 import { getConnectionByExternalId, getUniqueConnectionByExternalId } from "../db/repos/app-connection";
 
@@ -49,6 +50,19 @@ export interface JarvisConnectionSource {
    * if the source itself errors (network failure refreshing token, etc.).
    */
   resolve(externalId: string): Promise<ResolvedConnection | null>;
+  /**
+   * Q-05: a fingerprint of the credential this source would hand out for
+   * `externalId` right now, or null when it would hand out none (not
+   * connected, revoked, reconnect required). Synchronous and secret-free, so
+   * readiness can compare it with the identity a workflow was enabled against.
+   * A source without it is one fixed identity.
+   */
+  identity?(externalId: string): string | null;
+}
+
+/** A credential fingerprint for binding pins: never the credential itself. */
+export function credentialFingerprint(secret: string): string {
+  return createHash("sha256").update(secret).digest("hex").slice(0, 32);
 }
 
 export interface ResolveInput {

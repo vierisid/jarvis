@@ -48,6 +48,21 @@ function makeFakeAuth(state: FakeAuthState): GoogleAuth {
 }
 
 describe("JarvisGoogleConnectionSource", () => {
+  test("Q-05: a revoked grant is handed out to no one, and reconnecting changes its identity", async () => {
+    const state: FakeAuthState = { authed: true, freshAccessToken: "fresh", tokens: { access_token: "fresh", refresh_token: "grant-one" } };
+    let revoked: string | null = null;
+    const auth = { ...(makeFakeAuth(state) as object), reconnectRequired: () => revoked } as unknown as GoogleAuth;
+    const src = new JarvisGoogleConnectionSource(auth);
+    const first = src.identity(JARVIS_GOOGLE_PREFIX);
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+    expect(first).not.toContain("grant-one");
+    state.tokens!.refresh_token = "grant-two";
+    expect(src.identity(JARVIS_GOOGLE_PREFIX)).not.toBe(first);
+    revoked = "Google revoked access";
+    expect(src.identity(JARVIS_GOOGLE_PREFIX)).toBeNull();
+    expect(await src.resolve(JARVIS_GOOGLE_PREFIX)).toBeNull();
+  });
+
   test("returns null when GoogleAuth is unauthenticated", async () => {
     const auth = makeFakeAuth({
       authed: false,

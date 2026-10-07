@@ -44,7 +44,7 @@ const OPERATORS = new Set([
 // property settings only address top-level dynamic properties.
 const ROW_SCHEMA_TYPES = new Set(['SHORT_TEXT', 'LONG_TEXT', 'NUMBER', 'CHECKBOX', 'DATE_TIME', 'COLOR', 'STATIC_DROPDOWN', 'DROPDOWN', 'STATIC_MULTI_SELECT_DROPDOWN', 'MULTI_SELECT_DROPDOWN', 'JSON', 'OBJECT', 'ARRAY', 'FILE', 'MARKDOWN']);
 const UNKNOWN_INPUT = Symbol('runtime input');
-const CONNECTION_SOURCE = /^connections(?:\.([\w:-]+)|\['([^']+)'\])$/;
+export const CONNECTION_SOURCE = /^connections(?:\.([\w:-]+)|\['([^']+)'\])$/;
 const UNARY = new Set(['BOOLEAN_IS_TRUE', 'BOOLEAN_IS_FALSE', 'LIST_IS_EMPTY', 'LIST_IS_NOT_EMPTY', 'EXISTS', 'DOES_NOT_EXIST']);
 
 /** Constant expressions are known inputs, not runtime unknowns. */

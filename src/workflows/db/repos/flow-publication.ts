@@ -28,7 +28,9 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
     // rather than per execution, where the refusal would land on a cron tick
     // with nobody reading it.
     assertCodeStepsAllowed(flowId, target.id, "publish");
-    assertVersionReady(flowId, target.id);
+    // Publishing is a person accepting this version's bindings (Q-05):
+    // `updateFlowStatus` below pins them, so they are not compared here.
+    assertVersionReady(flowId, target.id, undefined, { acceptBindings: true });
     if (target.state !== "LOCKED") target = lockVersion(target.id);
     setPublishedVersion(flowId, target.id);
     updateFlowStatus(flowId, "ENABLED");

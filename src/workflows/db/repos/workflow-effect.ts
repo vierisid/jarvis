@@ -12,6 +12,13 @@ export interface WorkflowEffect {
   result?: unknown; error?: string; createdAt: number; finishedAt?: number;
   /** Qualified failure receipt; successful returns already have status/result. */
   outcome?: ActionOutcome;
+  /**
+   * Q-05: what the effect was recorded against beyond its arguments and target
+   * (the memory facts a recipient matched), rechecked before approval and
+   * dispatch. Outside the request digest and the target, so it never changes
+   * what an approval was granted for.
+   */
+  bindings?: Record<string, unknown>;
 }
 export function getWorkflowEffect(id: string): WorkflowEffect | null {
   const row = getWorkflowDb().query('SELECT record FROM workflow_effect WHERE id = ?').get(id) as { record: string } | null;

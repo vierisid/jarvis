@@ -38,6 +38,7 @@ export interface AppConnectionRow {
   value: string;
   metadata: string | null;
   pre_select_for_new_projects: number;
+  credential_generation: number;
   created: number;
   updated: number;
 }
@@ -56,6 +57,8 @@ export interface AppConnection {
   value: Record<string, unknown>;
   metadata: Record<string, unknown> | null;
   preSelectForNewProjects: boolean;
+  /** How many times the stored credential has been replaced (Q-05 binding pins). */
+  credentialGeneration: number;
   created: number;
   updated: number;
 }
@@ -112,6 +115,7 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
     value: decryptBoundJson(row.value, bindingFor(row), `app_connection ${row.id}`) as Record<string, unknown>,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     preSelectForNewProjects: row.pre_select_for_new_projects !== 0,
+    credentialGeneration: row.credential_generation,
     created: row.created,
     updated: row.updated,
   };
@@ -120,6 +124,11 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
 /**
  * Upsert by (project_id, piece_name, external_id). Creates if absent, updates
  * value/displayName/status if present. Returns the resulting connection.
+ *
+ * Updating an existing row replaces its credential, so it advances
+ * `credential_generation`: a workflow enabled against the earlier credential
+ * pauses until a person enables it again (repos/binding-pins.ts). Jarvis keeps
+ * no account identity, so a rotated key cannot be told from another account.
  */
 export function upsertConnection(input: UpsertConnectionInput): AppConnection {
   const projectId = input.projectId ?? DEFAULT_IDS.project;
@@ -141,7 +150,7 @@ export function upsertConnection(input: UpsertConnectionInput): AppConnection {
       `UPDATE app_connection
        SET display_name = ?, type = ?, status = ?, value = ?, metadata = ?,
            piece_version = ?, owner_id = ?, scope = ?,
-           pre_select_for_new_projects = ?, updated = ?
+           pre_select_for_new_projects = ?, credential_generation = credential_generation + 1, updated = ?
        WHERE id = ?`,
       [
         input.displayName,
