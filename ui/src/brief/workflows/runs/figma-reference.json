@@ -1,0 +1,33 @@
+{
+  "task": "D-19",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "node": "255:3100",
+  "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=255-3100",
+  "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
+  "inspection": "Saved native UI-24 handoff and Light/Dark exports under approved UI-35. No fresh Figma editor session claimed.",
+  "source_directory": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-24-runs-context-2026-10-03",
+  "inspected_exports": [
+    {
+      "file": "prototype/final-light-runs.png",
+      "sha256": "f76d877380234e26a1977ebc06985dffe1e5707ba80a7627c064fb13219e20f8"
+    },
+    {
+      "file": "renders/expanded-open-runs-dark-012.png",
+      "sha256": "e9d1b35364cec4341c3612050456f1ea6ea62c27245063145b2100bee1a1df24"
+    }
+  ],
+  "preserved": [
+    "Stable workflow name, Run workflow and Canvas/Runs/Context header",
+    "History selection beside one inline detail; no second overlay",
+    "Execution timeline and recorded context, branded corners, Light/Dark and compact rows",
+    "Pebble remains reachable; no removed approval banner or footer"
+  ],
+  "bounded_deviations": [
+    "All seven contract states are distinct instead of compressing partial/uncertain work into a completed label.",
+    "Inspect step discloses only the safe presentation fields supplied by the provider; partial receipts and waitpoints are inline.",
+    "Below 450px available work width the history and detail stack with local scrolling.",
+    "D-20 Context remains an explicit preview handoff, not a second implemented room.",
+    "Shared header retains D-18 editable name and draft tools. Native view transitions move the underline; reduced motion switches immediately."
+  ]
+}

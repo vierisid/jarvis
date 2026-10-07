@@ -1,0 +1,102 @@
+.brief-workflow-view-header .brief-canvas-heading {
+  min-height: 44px;
+}
+.brief-workflow-view-header .brief-canvas-name {
+  view-transition-name: brief-workflow-title;
+}
+.brief-workflow-view-header .wf-editor__title-text {
+  display: block;
+}
+.brief-workflow-view-header h1 {
+  font: 600 30px/1.2 var(--brief-sans);
+  letter-spacing: -0.025em;
+}
+.brief-workflow-view-header .brief-canvas-heading > button {
+  min-width: 144px;
+}
+.brief-workflow-view-tabs {
+  display: grid;
+  grid-template-columns: 80px 80px 140px;
+  position: relative;
+  border-bottom: 1px solid var(--brief-card-edge);
+  margin-top: 12px;
+}
+.brief-workflow-view-tabs button {
+  text-align: left;
+  height: 54px;
+  padding: 0;
+  color: var(--brief-secondary);
+  background: none;
+  border: 0;
+  font: 400 14px var(--brief-sans);
+  cursor: pointer;
+}
+.brief-workflow-view-tabs button:hover {
+  color: var(--brief-ink);
+}
+.brief-workflow-view-tabs button[aria-current] {
+  color: var(--brief-ink);
+  font-weight: 600;
+}
+.brief-workflow-view-tabs button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.brief-workflow-view-tabs button:focus-visible {
+  outline: 2px solid var(--brief-focus);
+  outline-offset: -3px;
+}
+.brief-workflow-view-underline {
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 64px;
+  height: 2px;
+  background: var(--brief-ink);
+  pointer-events: none;
+  view-transition-name: brief-workflow-underline;
+  transition:
+    transform 180ms ease-out,
+    width 180ms ease-out;
+}
+.brief-workflow-view-tabs[data-active="runs"] .brief-workflow-view-underline {
+  transform: translateX(80px);
+}
+.brief-workflow-view-tabs[data-active="context"]
+  .brief-workflow-view-underline {
+  transform: translateX(160px);
+  width: 124px;
+}
+::view-transition-group(brief-workflow-title),
+::view-transition-group(brief-workflow-underline) {
+  animation-duration: 180ms;
+  animation-timing-function: ease-out;
+}
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+@container brief-work (max-width:650px) {
+  .brief-workflow-view-header h1 {
+    font-size: 22px;
+  }
+}
+@container brief-work (max-width:420px) {
+  .brief-workflow-view-tabs {
+    grid-template-columns: 72px 72px minmax(0, 1fr);
+  }
+  .brief-workflow-view-tabs[data-active="runs"] .brief-workflow-view-underline {
+    transform: translateX(72px);
+  }
+  .brief-workflow-view-tabs[data-active="context"]
+    .brief-workflow-view-underline {
+    transform: translateX(144px);
+    width: 116px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .brief-workflow-view-underline {
+    transition: none;
+  }
+}

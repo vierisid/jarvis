@@ -1,0 +1,81 @@
+{
+  "layouts": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "selected": "meeting-run-006",
+      "inlineCards": 1
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "selected": "meeting-run-006",
+      "inlineCards": 1
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "selected": "meeting-run-006",
+      "inlineCards": 1
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "selected": "meeting-run-006",
+      "inlineCards": 1
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "selected": "meeting-run-006",
+      "inlineCards": 1
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "selected": "meeting-run-006",
+      "inlineCards": 1
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "selected": "meeting-run-006",
+      "inlineCards": 1
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "selected": "meeting-run-006",
+      "inlineCards": 1
+    }
+  ],
+  "statuses": {
+    "012": "Paused",
+    "011": "Succeeded",
+    "010": "Running",
+    "009": "Queued",
+    "008": "Failed",
+    "007": "Cancelled",
+    "006": "Uncertain"
+  },
+  "rapidSelectionCycles": 10,
+  "olderVersion": true,
+  "redaction": true,
+  "partialEffects": true,
+  "waitpoints": true,
+  "manualReceipt": true,
+  "uncertainLock": true,
+  "sharedHeader": true,
+  "narrow": true,
+  "reducedMotion": true,
+  "errors": [],
+  "mutations": []
+}

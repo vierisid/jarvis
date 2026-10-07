@@ -14,6 +14,7 @@ import {
 } from "../../../v2/rooms/workflows/WorkflowEditorEnvironment";
 import { versionBoundRequest } from "./request";
 import "./canvas.css";
+import { WorkflowViewHeader } from "../runs/WorkflowViewHeader";
 
 export interface WorkflowCanvasBinding {
   source: "live" | "fixture";
@@ -88,7 +89,12 @@ function BoundCanvas({
     [binding.request, binding.flowId, binding.versionId],
   );
   const environment = useMemo(
-    () => ({ request, portalHost, workspace: true, sampleDrafts:sampleDrafts.current }),
+    () => ({
+      request,
+      portalHost,
+      workspace: true,
+      sampleDrafts: sampleDrafts.current,
+    }),
     [request, portalHost],
   );
   return (
@@ -144,19 +150,24 @@ function CanvasHeader({
     }
   }
   return (
-    <header className="brief-canvas-header">
-      <div className="brief-canvas-heading">
-        <div className="brief-canvas-name">
-          {editor.version ? (
-            <EditableTitle
-              value={editor.version.displayName}
-              disabled={saving || editor.version.state === "LOCKED"}
-              onCommit={editor.setVersionDisplayName}
-            />
-          ) : (
-            <h1 className="brief-type-room-title">Workflow</h1>
-          )}
-        </div>
+    <WorkflowViewHeader
+      shell={shell}
+      flowId={binding.flowId}
+      versionId={binding.versionId}
+      active="canvas"
+      disabled={editor.dirty}
+      title={
+        editor.version ? (
+          <EditableTitle
+            value={editor.version.displayName}
+            disabled={saving || editor.version.state === "LOCKED"}
+            onCommit={editor.setVersionDisplayName}
+          />
+        ) : (
+          <h1 className="brief-type-room-title">Workflow</h1>
+        )
+      }
+      runAction={
         <BriefButton
           variant="primary"
           disabled={
@@ -177,31 +188,8 @@ function CanvasHeader({
         >
           {running ? "Queueing…" : "Run workflow"}
         </BriefButton>
-      </div>
-      <nav className="brief-canvas-tabs" aria-label="Workflow views">
-        <span aria-current="page">Canvas</span>
-        {["Runs", "Context & rules"].map((label, i) => (
-          <button
-            type="button"
-            key={label}
-            disabled={editor.dirty}
-            title={
-              editor.dirty ? "Save or discard your changes first" : undefined
-            }
-            onClick={() =>
-              shell.navigate({
-                room: i === 0 ? "workflow-runs" : "workflow-context",
-                selection: {
-                  flowId: binding.flowId,
-                  versionId: binding.versionId,
-                },
-              })
-            }
-          >
-            {label}
-          </button>
-        ))}
-      </nav>
+      }
+    >
       <div className="brief-canvas-tools" aria-label="Draft tools">
         <BriefButton
           size="sm"
@@ -259,7 +247,7 @@ function CanvasHeader({
                       : "Saved draft")}
         </span>
       </div>
-    </header>
+    </WorkflowViewHeader>
   );
 }
 /** Opt-in only. No change to the production registry or legacy workflow route. */
