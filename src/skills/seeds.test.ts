@@ -46,11 +46,11 @@ describe('seed skills', () => {
     seedSkills();
     const gmail = resolveSkillEffect(getSkillByName('gmail-compose')!, { to: 'a@b.com', subject: 'hi', body: 'x' });
     expect(gmail.category).toBe('send_email');
-    expect(gmail.intent).toContain('click Send (sends email)');
-    expect(gmail.intent).toContain('"a@b.com" into To recipients');
+    expect(gmail.intent).toContain('click "Send" (sends email)');
+    expect(gmail.intent).toContain('"a@b.com" into "To recipients"');
     const slack = resolveSkillEffect(getSkillByName('slack-send-message')!, { text: 'yo' });
     expect(slack.categories).toEqual(['control_app', 'send_message']);
-    expect(slack.intent).toContain('press enter (sends a message)');
+    expect(slack.intent).toContain('press "enter" (sends a message)');
     const sheets = resolveSkillEffect(getSkillByName('sheets-append-row')!, { value: '1' });
     expect(sheets.categories).toEqual(['control_app']);
   });

@@ -2,6 +2,7 @@ import React from "react";
 import { Mic } from "lucide-react";
 import { Button, Icon } from "../ui";
 import type { Impact } from "./types";
+import { ApprovalWhy } from "./ApprovalWhy";
 import "./ApprovalCard.css";
 
 const IMPACT_LABEL: Record<Impact, string> = {
@@ -14,6 +15,8 @@ const IMPACT_LABEL: Record<Impact, string> = {
 export interface ApprovalCardProps {
   /** Imperative sentence. Example: "Delete 14 files in ~/Downloads". */
   intent: string;
+  /** Why approval was needed: shown in its own element, never appended to `intent` (#792). */
+  reason?: string;
   category: string;
   impact: Impact;
   /** Substrings inside `intent` to highlight in accent — matched literally. */
@@ -35,6 +38,7 @@ export interface ApprovalCardProps {
  */
 export function ApprovalCard({
   intent,
+  reason,
   category,
   impact,
   highlights,
@@ -60,6 +64,8 @@ export function ApprovalCard({
       <h3 className="v2-approval__intent">
         {renderWithHighlights(intent, highlights)}
       </h3>
+
+      <ApprovalWhy reason={reason} />
 
       <div className="v2-approval__category">{category}</div>
 

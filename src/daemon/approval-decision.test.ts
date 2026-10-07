@@ -5,7 +5,8 @@ import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import type { ApprovalRequest } from '../authority/approval.ts';
-import { applyApprovalDecision } from './approval-decision.ts';
+import { applyApprovalDecision, channelApprovalReply, CHANNEL_APPROVE_REFUSED, notificationApprovalDecision } from './approval-decision.ts';
+import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, approvalToast } from '../authority/approval-delivery.ts';
 
 function makeRequest(mgr: ApprovalManager, overrides?: { toolName?: string; executionMode?: 'inline' | 'deferred' }) {
   return mgr.createRequest({
@@ -100,5 +101,111 @@ describe('applyApprovalDecision', () => {
     expect(outcome.result).toContain('Error executing');
     expect(mgr.getRequest(req.id)!.status).toBe('executed');
     expect(broadcasts.length).toBe(1);
+  });
+});
+
+/**
+ * #718. A channel card that could not show all of what would happen offers
+ * only `deny`; a typed `approve <id>` must not get past what it withheld.
+ */
+describe('channelApprovalReply', () => {
+  let mgr: ApprovalManager;
+  let executions: number;
+  let deps: Parameters<typeof channelApprovalReply>[3];
+
+  beforeEach(() => {
+    initDatabase(':memory:');
+    mgr = new ApprovalManager();
+    const executor = new DeferredExecutor(mgr, new AuditTrail());
+    executions = 0;
+    executor.setToolRegistry({
+      get: () => undefined,
+      execute: async () => { executions++; return 'ran'; },
+    } as unknown as ToolRegistry);
+    deps = { approvalManager: mgr, deferredExecutor: executor, wsService: null };
+  });
+
+  const create = (intent: string) => mgr.createRequest({
+    agentId: 'a1', agentName: 'PA', toolName: 'site_run_command', toolArguments: { command: 'x' },
+    actionCategory: 'execute_command', urgency: 'normal', reason: 'execute_command requires user approval',
+    context: JSON.stringify({ intent }),
+  });
+
+  test('approve is refused, and nothing runs, when the card had to cut what will happen', async () => {
+    const req = create(`In site project "shop", run: ${'x'.repeat(APPROVAL_LABEL_DELIVERY_MAX_CHARS)}`);
+    expect(await channelApprovalReply('approve', req.id.slice(0, 8), 'telegram', deps)).toBe(CHANNEL_APPROVE_REFUSED);
+    expect(mgr.getRequest(req.id)!.status).toBe('pending');
+    expect(executions).toBe(0);
+  });
+
+  test('deny still works on that card', async () => {
+    const req = create(`In site project "shop", run: ${'x'.repeat(APPROVAL_LABEL_DELIVERY_MAX_CHARS)}`);
+    expect(await channelApprovalReply('deny', req.id.slice(0, 8), 'telegram', deps)).toBe('Denied: site_run_command');
+    expect(mgr.getRequest(req.id)!.status).toBe('denied');
+  });
+
+  test('a card shown whole is approved and run as before', async () => {
+    const req = create('In site project "shop", run: make deploy');
+    expect(await channelApprovalReply('approve', req.id.slice(0, 8), 'telegram', deps)).toBe('Approved and executed. Result: ran');
+    expect(executions).toBe(1);
+  });
+
+  test('an unknown id is reported', async () => {
+    expect(await channelApprovalReply('approve', 'deadbeef', 'discord', deps)).toBe('No pending approval found for ID deadbeef');
+  });
+});
+
+/**
+ * #791. A review-only toast has no Approve or Deny; a click reported for one
+ * anyway must not decide the request.
+ */
+describe('notificationApprovalDecision', () => {
+  let mgr: ApprovalManager;
+  let executions: number;
+  let deps: Parameters<typeof notificationApprovalDecision>[1];
+
+  beforeEach(() => {
+    initDatabase(':memory:');
+    mgr = new ApprovalManager();
+    const executor = new DeferredExecutor(mgr, new AuditTrail());
+    executions = 0;
+    executor.setToolRegistry({
+      get: () => undefined,
+      execute: async () => { executions++; return 'ran'; },
+    } as unknown as ToolRegistry);
+    deps = { approvalManager: mgr, deferredExecutor: executor, wsService: null };
+  });
+
+  const create = (reason: string) => mgr.createRequest({
+    agentId: 'a1', agentName: 'PA', toolName: 'request_approval', toolArguments: {},
+    actionCategory: 'send_email', urgency: 'normal', reason, context: '',
+  });
+  const long = `Send the quarterly numbers to ${'everyone@example.com, '.repeat(10)}`;
+
+  test('an approve for a request whose toast was review-only is ignored', async () => {
+    const req = create(long);
+    expect(approvalToast(req).approvable).toBe(false);
+    expect(await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'approve' }, deps)).toBeNull();
+    expect(await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'deny' }, deps)).toBeNull();
+    expect(mgr.getRequest(req.id)!.status).toBe('pending');
+  });
+
+  test('an approve for a toast that showed everything is applied', async () => {
+    const req = create('Send the weekly update');
+    const outcome = await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'approve' }, deps);
+    expect(outcome?.status).toBe('approved');
+    expect(mgr.getRequest(req.id)!.status).toBe('approved');
+  });
+
+  test('only kind approval decides anything; review and dismiss are not decisions', async () => {
+    const req = create('Send the weekly update');
+    expect(await notificationApprovalDecision({ id: req.id, kind: 'approval_review', action: 'approve' }, deps)).toBeNull();
+    expect(await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'review' }, deps)).toBeNull();
+    expect(await notificationApprovalDecision({ id: req.id, kind: 'done', action: 'approve' }, deps)).toBeNull();
+    expect(await notificationApprovalDecision(undefined, deps)).toBeNull();
+    // An id the daemon cannot read is not approvable either (#791 review).
+    expect(await notificationApprovalDecision({ id: 'no-such-request', kind: 'approval', action: 'approve' }, deps)).toBeNull();
+    expect(mgr.getRequest(req.id)!.status).toBe('pending');
+    expect(executions).toBe(0);
   });
 });

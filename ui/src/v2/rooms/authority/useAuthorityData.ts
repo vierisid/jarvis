@@ -56,6 +56,9 @@ export interface ApprovalRequest {
   // enrichment from server
   execution_state?: string;
   intent?: string;
+  /** #792: the sentence and the reason apart; `intent` joins them. */
+  intent_action?: string;
+  intent_reason?: string;
   impact?: "read" | "write" | "external" | "destructive";
 }
 
