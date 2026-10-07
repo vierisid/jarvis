@@ -24,7 +24,7 @@ import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
-import { GOVERNED_PIECE_ADAPTERS, governedPieceTarget, governedPieceToolName, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
+import { GOVERNED_PIECE_ADAPTERS, governedPieceTarget, governedPieceToolDefinition, governedPieceToolName, RESERVED_TARGET_KEYS, isWellFormedPieceActionName, PIECE_ACTION_NAME_MAX_CHARS, reprojectPieceInput,
   resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { digest } from './effect-context';
@@ -1069,5 +1069,35 @@ describe('#722: a field named like the omitted-fields marker', () => {
     expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input }));
     expect(effect.requestDigest).not.toBe(digest({ piece: GMAIL, action: 'send_email',
       input: { ...input, body: { text: 'hi', omittedFields: 3 } } }));
+  });
+});
+
+/**
+ * #793. `governedPieceTarget` copied every declared target prop from flow
+ * input, so an adapter prop named `intent` would have made flow data the
+ * approval card's headline and the sentence its own tamper check compares.
+ */
+describe('#793: a target prop cannot set a key the boundary or the target owns', () => {
+  const gmail = resolveGovernedPieceAction(GMAIL, 'send_email')!;
+  const hostile = { ...gmail, adapter: { ...gmail.adapter,
+    targetProps: ['intent', 'tool', 'capability', 'sidecarId', 'selection', 'machineBinding', 'piece', 'action', 'unmappedAction', 'receiver'] } };
+  const input = { intent: 'Send a harmless note', tool: 'read_file', capability: 'clipboard', sidecarId: 'sc_other',
+    selection: 'pinned-sidecar', machineBinding: 'forged', piece: 'notion', action: 'read', unmappedAction: false, receiver: 'cfo@example.com' };
+
+  test('reserved and own keys are skipped; an ordinary prop is kept', () => {
+    expect(governedPieceTarget(hostile, input)).toEqual({ piece: 'gmail', action: 'send_email', receiver: 'cfo@example.com' });
+  });
+
+  test('through the tool definition the effect boundary uses, the card gets no intent from flow data', () => {
+    const target = governedPieceToolDefinition(hostile).workflowEffect!.target!(input);
+    expect(target).not.toHaveProperty('intent');
+    expect(target.piece).toBe('gmail');
+  });
+
+  test('no adapter in the table declares one, so no real target changes', () => {
+    const owned = new Set([...RESERVED_TARGET_KEYS, 'piece', 'action', 'unmappedAction']);
+    for (const adapter of GOVERNED_PIECE_ADAPTERS) {
+      expect(adapter.targetProps.filter((prop) => owned.has(prop))).toEqual([]);
+    }
   });
 });

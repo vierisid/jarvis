@@ -640,14 +640,43 @@ export function reprojectPieceInput(input: unknown): Record<string, unknown> {
 }
 
 /**
+ * Target keys the effect boundary owns (`effect-capabilities.ts`): what
+ * `validateTarget` digests, what the machine-binding fence reads, and
+ * `intent`, which `effect-boundary.ts` takes as the approval's gate sentence.
+ * Defined here, the one pure module both sides import, so the engine-bundled
+ * copy and the daemon's cannot drift.
+ */
+export const RESERVED_TARGET_KEYS: ReadonlySet<string> = new Set(['tool', 'capability', 'sidecarId', 'selection', 'machineBinding', 'intent']);
+
+/** The keys `governedPieceTarget` writes itself: which piece and action, and whether it is mapped. */
+const PIECE_TARGET_KEYS: ReadonlySet<string> = new Set(['piece', 'action', 'unmappedAction']);
+
+/**
  * What the step will act on, in terms a person can judge: the piece, the
  * action, and the input props that name the recipient, message, file or
  * endpoint. Never includes the credential.
+ *
+ * A target prop named like a key the boundary owns (`RESERVED_TARGET_KEYS`) or
+ * one this function writes is skipped (#793). The props are copied from flow
+ * input, so an adapter declaring `intent` would have made flow data the
+ * approval card's headline AND the "approved sentence" the deferred executor
+ * compares against -- passing its own tamper check -- and one declaring
+ * `piece` or `action` would have overwritten which piece the card names. No
+ * adapter declares one today (a test pins that); this keeps it so.
+ *
+ * WHAT #793 MOVED. Nothing, for any adapter in the table: none declares a
+ * reserved or own key, so every target, every digest and every pending
+ * approval is byte-exact as before. This file is in `PATCHED_VENDOR_SOURCES`
+ * (`runner/engine-runtime/build.ts`), so the edit still changes the engine
+ * bundle hash and every cached engine bundle and compiled piece is rebuilt on
+ * the next run, on every instance and shared root. The function itself runs
+ * only in the daemon (`governedPieceToolDefinition`), never in the engine.
  */
 export function governedPieceTarget(resolved: ResolvedPieceAction, input: Record<string, unknown>): Record<string, unknown> {
   const target: Record<string, unknown> = { piece: resolved.adapter.catalogId, action: resolved.action };
   if (!resolved.known) target.unmappedAction = true;
   for (const prop of resolved.adapter.targetProps) {
+    if (RESERVED_TARGET_KEYS.has(prop) || PIECE_TARGET_KEYS.has(prop)) continue;
     const value = input[prop];
     if (value === undefined || value === null || value === '') continue;
     // With slack: `input` is the daemon's projection, so a count already in it

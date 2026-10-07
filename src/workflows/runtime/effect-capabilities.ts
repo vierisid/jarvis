@@ -9,6 +9,7 @@ import { resolve } from 'node:path';
 import { policyHome } from '../../actions/tools/file-path-policy';
 import { getMachineScope } from '../../actions/machine-scope';
 import { rawUiGate, REVIEWED_UI_TOOLS } from '../../authority/ui-intent';
+import { RESERVED_TARGET_KEYS } from './piece-effects';
 
 /**
  * Tools whose effect is bounded enough to describe a review target (a sidecar
@@ -48,8 +49,8 @@ const OPAQUE_TOOLS = new Set(['run_command', 'browser_evaluate', 'browser_naviga
  */
 const GATED_TOOLS = new Set(['run_skill']);
 
-/** Target keys the boundary owns; a tool's gate subject cannot set them. */
-const RESERVED_TARGET_KEYS = new Set(['tool', 'capability', 'sidecarId', 'selection', 'machineBinding', 'intent']);
+// Target keys the boundary owns; neither a tool's gate subject nor a governed
+// piece's target props can set them (`piece-effects.ts`, #793).
 
 export const BOUNDED_TOOL_NAMES: ReadonlySet<string> = BOUNDED_TOOLS;
 export const OPAQUE_TOOL_NAMES: ReadonlySet<string> = OPAQUE_TOOLS;
