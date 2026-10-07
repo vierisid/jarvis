@@ -615,6 +615,7 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
   test.each([
     ['a spacing mark, which takes a cell (Tamil U+0BBE)', `Mail x${'\u0bbe'.repeat(120)} then wipe all backups`],
     ['a run of combining marks', `Mail x${'\u0300'.repeat(300)} then wipe`],
+    ['a Cyrillic enclosing mark, inside the Cyrillic block (U+0489)', `Mail x${'\u0489'.repeat(30)} then wipe`],
     ['a variation selector, which makes a one-cell symbol a two-cell emoji', `${'\u2122\ufe0f'.repeat(36)} then wipe`],
     ['a Letterlike Symbol that renders two or three cells wide (U+213B)', `${'\u213b'.repeat(36)} then wipe`],
     ['a per-mille sign (U+2031)', `${'\u2031'.repeat(36)} then wipe`],
