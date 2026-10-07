@@ -1,0 +1,52 @@
+Negative control: remove receipt ingredient matching. Source restored after this test.
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/ingredient-picker/ingredients.test.ts:
+(pass) canonical pins copy only the public union, reject extras, duplicates and stale hash formats [0.80ms]
+22 |  expect(readSelected([{...selected[0],metadata:{secret:"canary"}}])).toEqual([selected[0]!]);
+23 |  expect(ingredientKey(pins[0]!)).not.toBe(ingredientKey({...pins[2]!,id:pins[0]!.id}));
+24 | });
+25 | test("unknown receipts cannot drop, reorder or repin selected ingredients",()=>{
+26 |  const r={requestId:"id",prompt:"build",ingredients:pins};expect(readJob(receipt(r),r).specification.ingredients).toEqual(pins);
+27 |  for(const ingredients of [undefined,[],[...pins].reverse(),pins.map(p=>({...p,pieceVersion:"9.0"}))])expect(()=>readJob({...receipt(r),specification:{name:"New workflow",prompt:"build",ingredients}},r)).toThrow();
+                                                                                                                                                                                                                 ^
+error: expect(received).toThrow()
+
+Received function did not throw
+Received value: {
+  jobId: "j1",
+  requestId: "id",
+  specification: {
+    name: "New workflow",
+    prompt: "build",
+    ingredients: undefined,
+  },
+  state: "draft_ready",
+  progress: {
+    checkedCandidates: 1,
+  },
+  compositionId: "c1",
+  workflow: {
+    flowId: "f1",
+    versionId: "v1",
+  },
+  blocker: null,
+  createdAt: 1,
+  updatedAt: 1,
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-17/ui/src/brief/workflows/ingredient-picker/ingredients.test.ts:27:205)
+(fail) unknown receipts cannot drop, reorder or repin selected ingredients [2.53ms]
+(pass) pinned ingredients persist before POST, retry exact uncertain request and survive remount [3.40ms]
+(pass) clear only a matching prompt AND selection; retain edits during a pending success [4.72ms]
+(pass) legacy saved state without ingredients remains readable, malformed pins cannot replace stored state [0.22ms]
+(pass) F08 gates admission but existing receipts remain recoverable when the picker is disabled [0.84ms]
+(pass) real discovery pins grant selection; package metadata never does; credential fields never copied [0.81ms]
+(pass) disabled discovery performs no network request [0.22ms]
+(pass) duplicate pages and partial failures never masquerade as a complete catalog [0.26ms]
+(pass) retired catalog reads abort without committing partial choices; 100-entry discovery page is valid [1.90ms]
+
+ 9 pass
+ 1 fail
+ 40 expect() calls
+Ran 10 tests across 1 file. [45.00ms]

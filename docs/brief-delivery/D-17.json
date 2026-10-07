@@ -1,0 +1,171 @@
+{
+  "task": "D-17",
+  "title": "Build the connection and library picker",
+  "date": "2026-10-07",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "branch": "brief/d-17",
+  "stack_base": "brief/d-16",
+  "baseline": "20e4d1a30fea4b24a753320dd313fdc680f2f697",
+  "inspected_main": "538179e3a91edfaa435698cac94bc4ca41e6c873",
+  "head": {
+    "ref": "brief/d-17",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-17.json"
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-17",
+  "preview": "http://127.0.0.1:4397/?brief=preview&specimen=ingredient-picker#/_brief_preview",
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/776"
+  ],
+  "activation_dependencies": [
+    "F-07",
+    "F-08",
+    "Authenticated scoped host integration / F-25",
+    "D-33 release verification"
+  ],
+  "owns": [
+    "ui/src/brief/workflows/ingredient-picker/**",
+    "Additive D-16 request/controller/catalog binding",
+    "Optional shared composer ingredient slot and floating placement",
+    "One fixture-only preview registration",
+    "docs/brief-delivery/D-17.*",
+    "docs/brief-delivery/evidence/D-17/**"
+  ],
+  "figma": {
+    "reference": "ui/src/brief/workflows/ingredient-picker/figma-reference.json",
+    "inspection": "Saved native UI-22 handoff and exports under approved UI-35 checkpoint; no fresh editor"
+  },
+  "checks": [
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "tests": 326,
+      "assertions": 4144,
+      "files": 25,
+      "skipped": 2,
+      "result": "pass",
+      "evidence": "evidence/D-17/affected-tests.log",
+      "note": "Two scope/capability regression tests added subsequently and run in focused suite"
+    },
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows",
+      "tests": 56,
+      "assertions": 221,
+      "files": 7,
+      "skipped": 2,
+      "result": "pass",
+      "evidence": "evidence/D-17/focused-tests.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-17/typescript.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-17/build.log",
+      "warnings": "Existing Tailwind at-rule warnings"
+    },
+    {
+      "command": "JARVIS_F08_ROOT=/home/vierisid/.cache/codex/jarvis-f-08 bun test --preload ./src/test-preload.ts ui/src/brief/workflows/ingredient-picker/f08-compatibility.test.ts",
+      "tests": 1,
+      "assertions": 14,
+      "result": "pass",
+      "owner_head": "5d9fafea32f0db1a221121ca90b6b5e4f8492a1d",
+      "evidence": "evidence/D-17/f08-compatibility.log",
+      "scope": "Actual public discovery/provider/routes/temporary SQLite, fake model, chosen account/action pins, one disabled populated draft, dropped-response recovery, one POST/model call and zero runs"
+    },
+    {
+      "command": "Remove exact ingredient matching from readJob",
+      "result": "Unsafe mutation rejected; source restored and focused suite passed",
+      "evidence": "evidence/D-17/mutation.log"
+    }
+  ],
+  "browser": {
+    "script": "evidence/D-17/browser-check.cjs",
+    "evidence": "evidence/D-17/browser-results.json",
+    "layouts": 8,
+    "rapid_picker_reversals": 80,
+    "assertions": [
+      "Light/Dark menu follows owner",
+      "4 wrapping chips including long node without prompt/control overlap",
+      "44px controls retain footprint and local bottom inset",
+      "Query/service/selection retained on reopen",
+      "Removal/Escape/Done focus",
+      "One portal through rapid reversal",
+      "Exact selected receipt navigates once",
+      "Unavailable/uninstalled/missing-account states cannot select",
+      "Lost response recovered with one submission",
+      "390px containment and reduced motion",
+      "No browser errors or external mutations"
+    ]
+  },
+  "limitations": [
+    "Explicit fixture preview; production remains off and no legacy route is replaced",
+    "No paid/live model or hosted auth/OAuth/install/workflow execution",
+    "Live F08 discovery only returns active compatible connections; more granular missing-account rows require a safe host projection",
+    "Public library metadata optional; 100 discovery pages / 10000 rows ceiling and no implicit polling",
+    "Large selections scroll in 112px; long creation groups may grow naturally rather than keep absolute page coordinates",
+    "Catalog search/filter retained across menu close, not promised across full room unmount",
+    "Optional F07 sibling test skipped in ordinary suite; actual F08 compatibility run separately"
+  ],
+  "rollback": "Remove injected catalog binding. Keep backward-compatible controller/receipt validation for stored pinned requests or disable whole room; never drop requirements/replay uncertain requests under new IDs.",
+  "base_ci": "Corrected D-16 Tests, Docker and active platform checks green",
+  "ci": "D-17 CI reported on PR after push; not inferred from base",
+  "next": "D-18; not started",
+  "review_corrections": {
+    "findings": [
+      "R1: public display-label normalization independent of strict pins",
+      "R2: stable service ID filters with ready-snapshot removal reconciliation",
+      "R3: prompt-preserving animated ingredient reveal"
+    ],
+    "red_evidence": [
+      "evidence/D-17/review-red.log",
+      "evidence/D-17/review-browser-red.json"
+    ],
+    "checks": [
+      {
+        "check": "affected tests",
+        "pass": 331,
+        "assertions": 4169,
+        "skip": 2,
+        "evidence": "evidence/D-17/review-affected.log"
+      },
+      {
+        "check": "focused workflow tests",
+        "pass": 59,
+        "assertions": 240,
+        "skip": 2,
+        "evidence": "evidence/D-17/review-focused.log"
+      },
+      {
+        "check": "actual F08 compatibility with whitespace label",
+        "pass": 1,
+        "assertions": 15,
+        "evidence": "evidence/D-17/review-f08.log"
+      },
+      {
+        "check": "TypeScript",
+        "result": "pass",
+        "evidence": "evidence/D-17/review-typescript.log"
+      },
+      {
+        "check": "UI build",
+        "result": "pass",
+        "evidence": "evidence/D-17/review-build.log"
+      }
+    ],
+    "browser": {
+      "script": "evidence/D-17/review-browser.cjs",
+      "evidence": "evidence/D-17/review-browser-results.json",
+      "changes": 80,
+      "sampled_frames": 2538,
+      "configurations": 10,
+      "errors": 0,
+      "original_matrix": "Eight layouts / 80 reversals passed again"
+    },
+    "limitations": "No production activation or live model/account/workflow effects; browser frame sampling does not claim every possible runtime frame."
+  }
+}

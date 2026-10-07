@@ -1,0 +1,489 @@
+{
+  "results": [
+    {
+      "label": "{\"theme\":\"light\",\"rail\":false,\"chat\":false,\"width\":1440,\"reduced\":false} / first chip",
+      "frames": [
+        {
+          "height": 56,
+          "textHeight": 20,
+          "textTop": -12,
+          "textBottom": 8,
+          "chipsTop": 8,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 56,
+          "textHeight": 20,
+          "textTop": -12,
+          "textBottom": 8,
+          "chipsTop": 8,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 59.1875,
+          "textHeight": 20,
+          "textTop": -8.8125,
+          "textBottom": 11.1875,
+          "chipsTop": 11.1875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 62.234375,
+          "textHeight": 20,
+          "textTop": -5.765625,
+          "textBottom": 14.234375,
+          "chipsTop": 14.234375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 65.34375,
+          "textHeight": 20,
+          "textTop": -2.65625,
+          "textBottom": 17.34375,
+          "chipsTop": 17.34375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 68.046875,
+          "textHeight": 20,
+          "textTop": 0.046875,
+          "textBottom": 20.046875,
+          "chipsTop": 20.046875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 70.90625,
+          "textHeight": 20,
+          "textTop": 2.90625,
+          "textBottom": 22.90625,
+          "chipsTop": 22.90625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 73.421875,
+          "textHeight": 20,
+          "textTop": 5.421875,
+          "textBottom": 25.421875,
+          "chipsTop": 25.421875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 76.078125,
+          "textHeight": 22.078125,
+          "textTop": 6,
+          "textBottom": 28.078125,
+          "chipsTop": 28.078125,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 78.515625,
+          "textHeight": 24.515625,
+          "textTop": 6,
+          "textBottom": 30.515625,
+          "chipsTop": 30.515625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 80.78125,
+          "textHeight": 26.78125,
+          "textTop": 6,
+          "textBottom": 32.78125,
+          "chipsTop": 32.78125,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 83.109375,
+          "textHeight": 29.109375,
+          "textTop": 6,
+          "textBottom": 35.109375,
+          "chipsTop": 35.109375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 85.140625,
+          "textHeight": 31.140625,
+          "textTop": 6,
+          "textBottom": 37.140625,
+          "chipsTop": 37.140625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 87.265625,
+          "textHeight": 33.265625,
+          "textTop": 6,
+          "textBottom": 39.265625,
+          "chipsTop": 39.265625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 89.125,
+          "textHeight": 35.125,
+          "textTop": 6,
+          "textBottom": 41.125,
+          "chipsTop": 41.125,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 90.765625,
+          "textHeight": 36.765625,
+          "textTop": 6,
+          "textBottom": 42.765625,
+          "chipsTop": 42.765625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 92.4375,
+          "textHeight": 38.4375,
+          "textTop": 6,
+          "textBottom": 44.4375,
+          "chipsTop": 44.4375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 93.796875,
+          "textHeight": 39.796875,
+          "textTop": 6,
+          "textBottom": 45.796875,
+          "chipsTop": 45.796875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 95.0625,
+          "textHeight": 41.0625,
+          "textTop": 6,
+          "textBottom": 47.0625,
+          "chipsTop": 47.0625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 96.1875,
+          "textHeight": 42.1875,
+          "textTop": 6,
+          "textBottom": 48.1875,
+          "chipsTop": 48.1875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 96.96875,
+          "textHeight": 42.96875,
+          "textTop": 6,
+          "textBottom": 48.96875,
+          "chipsTop": 48.96875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 97.578125,
+          "textHeight": 43.578125,
+          "textTop": 6,
+          "textBottom": 49.578125,
+          "chipsTop": 49.578125,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 97.9375,
+          "textHeight": 43.9375,
+          "textTop": 6,
+          "textBottom": 49.9375,
+          "chipsTop": 49.9375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 98,
+          "textHeight": 44,
+          "textTop": 6,
+          "textBottom": 50,
+          "chipsTop": 50,
+          "sendInset": 6,
+          "sendWidth": 44
+        }
+      ],
+      "invalid": [
+        {
+          "height": 56,
+          "textHeight": 20,
+          "textTop": -12,
+          "textBottom": 8,
+          "chipsTop": 8,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 56,
+          "textHeight": 20,
+          "textTop": -12,
+          "textBottom": 8,
+          "chipsTop": 8,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 59.1875,
+          "textHeight": 20,
+          "textTop": -8.8125,
+          "textBottom": 11.1875,
+          "chipsTop": 11.1875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 62.234375,
+          "textHeight": 20,
+          "textTop": -5.765625,
+          "textBottom": 14.234375,
+          "chipsTop": 14.234375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 65.34375,
+          "textHeight": 20,
+          "textTop": -2.65625,
+          "textBottom": 17.34375,
+          "chipsTop": 17.34375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 68.046875,
+          "textHeight": 20,
+          "textTop": 0.046875,
+          "textBottom": 20.046875,
+          "chipsTop": 20.046875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 70.90625,
+          "textHeight": 20,
+          "textTop": 2.90625,
+          "textBottom": 22.90625,
+          "chipsTop": 22.90625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 73.421875,
+          "textHeight": 20,
+          "textTop": 5.421875,
+          "textBottom": 25.421875,
+          "chipsTop": 25.421875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 76.078125,
+          "textHeight": 22.078125,
+          "textTop": 6,
+          "textBottom": 28.078125,
+          "chipsTop": 28.078125,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 78.515625,
+          "textHeight": 24.515625,
+          "textTop": 6,
+          "textBottom": 30.515625,
+          "chipsTop": 30.515625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 80.78125,
+          "textHeight": 26.78125,
+          "textTop": 6,
+          "textBottom": 32.78125,
+          "chipsTop": 32.78125,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 83.109375,
+          "textHeight": 29.109375,
+          "textTop": 6,
+          "textBottom": 35.109375,
+          "chipsTop": 35.109375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 85.140625,
+          "textHeight": 31.140625,
+          "textTop": 6,
+          "textBottom": 37.140625,
+          "chipsTop": 37.140625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 87.265625,
+          "textHeight": 33.265625,
+          "textTop": 6,
+          "textBottom": 39.265625,
+          "chipsTop": 39.265625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 89.125,
+          "textHeight": 35.125,
+          "textTop": 6,
+          "textBottom": 41.125,
+          "chipsTop": 41.125,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 90.765625,
+          "textHeight": 36.765625,
+          "textTop": 6,
+          "textBottom": 42.765625,
+          "chipsTop": 42.765625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 92.4375,
+          "textHeight": 38.4375,
+          "textTop": 6,
+          "textBottom": 44.4375,
+          "chipsTop": 44.4375,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 93.796875,
+          "textHeight": 39.796875,
+          "textTop": 6,
+          "textBottom": 45.796875,
+          "chipsTop": 45.796875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 95.0625,
+          "textHeight": 41.0625,
+          "textTop": 6,
+          "textBottom": 47.0625,
+          "chipsTop": 47.0625,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 96.1875,
+          "textHeight": 42.1875,
+          "textTop": 6,
+          "textBottom": 48.1875,
+          "chipsTop": 48.1875,
+          "sendInset": 6,
+          "sendWidth": 44
+        },
+        {
+          "height": 96.96875,
+          "textHeight": 42.96875,
+          "textTop": 6,
+          "textBottom": 48.96875,
+          "chipsTop": 48.96875,
+          "sendInset": 6,
+          "sendWidth": 44
+        }
+      ]
+    }
+  ],
+  "errors": []
+}
