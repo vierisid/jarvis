@@ -1,0 +1,92 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2336 files).
+[pre-commit] Running 2 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/decisions/controller.test.ts:
+(pass) selection follows identity through reorder and refresh [8.21ms]
+(pass) approval is acknowledged before next selection, and never claims execution [27.03ms]
+(pass) keep draft remains in the queue and requires reopening, not silent reapproval [47.68ms]
+(pass) rejection has a truthful local receipt and resolves only the chosen item [25.74ms]
+(pass) edit/save carries the complete typed document and uses the new approval revision [28.18ms]
+(pass) stale refresh preserves unsaved content and prevents save or approval [24.97ms]
+(pass) cancel edit writes nothing and restores original document [22.59ms]
+(pass) invalid edits cannot be submitted [2.40ms]
+(pass) stale never offers a mutation [2.14ms]
+(pass) read-only never offers a mutation [1.63ms]
+(pass) unavailable never offers a mutation [1.51ms]
+(pass) empty never offers a mutation [1.64ms]
+(pass) rendered revision must match even when a fresher controller view exists [3.31ms]
+(pass) lost responses stay pinned through empty/reordered reads; recovery never resends [28.83ms]
+(pass) unknown save keeps its draft frozen until receipt and fresh view reconcile [26.57ms]
+(pass) definitive refusal needs explicit refresh, unlike an unknown transport result [4.98ms]
+(pass) all receipt correlations are required; execution is not a document receipt [0.24ms]
+(pass) mismatched receipt cannot advance or unlock a decision [24.93ms]
+(pass) late reads cannot replace a newer refresh [1.21ms]
+(pass) scope revocation and retirement prevent mutation and stale repaint [1.83ms]
+(pass) concurrent press cannot create a second in-flight decision [33.58ms]
+(pass) retained rejected blocker is not fabricated away [23.03ms]
+(pass) calendar changes preserve readonly options and validate timezones [26.97ms]
+
+ui/src/brief/decisions/DecisionsRoom.test.tsx:
+(pass) clean heading, same Today identity, only unresolved text highlighted [116.76ms]
+(pass) selection survives every theme/sidebar/chat combination and routes by approval ID [337.85ms]
+(pass) direct Today review alias opens the matching document [37.03ms]
+(pass) editing keeps the document/actions mounted and blocks selection/approval [97.26ms]
+(pass) unsupported edits stay disabled with a visible reason [35.98ms]
+(pass) uncertainty retains the selected document until read-only recovery [90.58ms]
+(pass) calendar preview includes readonly options, not raw tool arguments [61.69ms]
+(pass) missing live capability, fixture/live mismatch and wrong scope fail closed [56.90ms]
+(pass) ten decisions are real buttons, not truncated previews [63.27ms]
+(pass) empty is not confused with unavailable [62.14ms]
+(pass) keep draft advancement updates the return route instead of reopening the deferred item [169.03ms]
+(pass) room return restores document and selector reading positions from its retained owner [69.18ms]
+
+ 35 pass
+ 0 fail
+ 149 expect() calls
+Ran 35 tests across 2 files. [2.22s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-23 295ca73c] feat(brief): build Needs you decision review room (D-23)
+ 33 files changed, 3721 insertions(+)
+ create mode 100644 docs/brief-delivery/D-23.json
+ create mode 100644 docs/brief-delivery/D-23.md
+ create mode 100644 docs/brief-delivery/evidence/D-23/brief-regression.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/browser-check.cjs
+ create mode 100644 docs/brief-delivery/evidence/D-23/browser-results.json
+ create mode 100644 docs/brief-delivery/evidence/D-23/build.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/calendar-edit.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/dark-expanded-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/dark-expanded-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/dark-rail-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/dark-rail-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/focused-tests.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/format-check.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/kept-draft.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/light-expanded-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/light-expanded-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/light-rail-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/light-rail-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/long-dark-chat.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/narrow-many.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/typecheck.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/uncertain-result.png
+ create mode 100644 docs/brief-delivery/evidence/D-23/validation.png
+ create mode 100644 ui/src/brief/decisions/DecisionsRoom.test.tsx
+ create mode 100644 ui/src/brief/decisions/DecisionsRoom.tsx
+ create mode 100644 ui/src/brief/decisions/DecisionsSpecimen.tsx
+ create mode 100644 ui/src/brief/decisions/controller.test.ts
+ create mode 100644 ui/src/brief/decisions/controller.ts
+ create mode 100644 ui/src/brief/decisions/decisions.css
+ create mode 100644 ui/src/brief/decisions/figma-reference.json
+ create mode 100644 ui/src/brief/decisions/fixtures.ts
+ create mode 100644 ui/src/brief/decisions/model.ts
