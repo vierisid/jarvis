@@ -1,0 +1,74 @@
+{
+  "layouts": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "configured": true,
+      "recorded": "meeting-run-012"
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "configured": true,
+      "recorded": "meeting-run-012"
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "configured": true,
+      "recorded": "meeting-run-012"
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "configured": true,
+      "recorded": "meeting-run-012"
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "configured": true,
+      "recorded": "meeting-run-012"
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "configured": true,
+      "recorded": "meeting-run-012"
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "configured": true,
+      "recorded": "meeting-run-012"
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "configured": true,
+      "recorded": "meeting-run-012"
+    }
+  ],
+  "sourceIdentity": true,
+  "sourceFocusReturn": true,
+  "historicalVersion": true,
+  "headerAligned": true,
+  "canvasInspector": true,
+  "basisCycles": 10,
+  "selectionAndScrollReturn": true,
+  "partial": true,
+  "missing": true,
+  "narrow": true,
+  "reducedMotion": true,
+  "sharedRunReceipt": true,
+  "errors": [],
+  "mutations": []
+}

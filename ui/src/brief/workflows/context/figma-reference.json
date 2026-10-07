@@ -1,0 +1,33 @@
+{
+  "task": "D-20",
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "node": "255:3515",
+  "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=255-3515",
+  "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
+  "inspection": "Saved native UI-24 handoff and Context Light/Dark exports under approved UI-35; no fresh editor session claimed",
+  "source_directory": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-24-runs-context-2026-10-03",
+  "inspected_exports": [
+    {
+      "file": "renders/expanded-closed-context-light-012.png",
+      "sha256": "53112fce4843d7d6ec1b1a962432c2931c79aedc7f830194658cda3839626b13"
+    },
+    {
+      "file": "renders/expanded-open-context-dark-012.png",
+      "sha256": "f9da3483715bd8c9614853b1be06f56d3d4ff4bb7ff1dd7526daf977b49078d7"
+    }
+  ],
+  "preserved": [
+    "Same workflow name, Canvas/Runs/Context tabs and Run workflow geometry",
+    "Linked goal, contextual memory, connections and rules without nested instruction cards",
+    "Approved asymmetric corners, theme materials, single-column chat reflow and scrolling",
+    "No date, subtitle or explanatory footer"
+  ],
+  "bounded_deviations": [
+    "Configured / Used by run distinguishes planned sources from actual captured evidence, as D-20 requires",
+    "Read-only execution target and code-permission source references stay inspectable; this adds no permission editor",
+    "Unknown, missing, removed, stale and redacted states remain distinct",
+    "Typed source callbacks carry exact IDs; fixture dialog demonstrates identity and return focus, not real source-room integration",
+    "Long groups scroll within the work area; header remains fixed"
+  ]
+}
