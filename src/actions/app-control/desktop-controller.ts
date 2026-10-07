@@ -7,7 +7,6 @@
  */
 
 import { createConnection, type Socket } from 'node:net';
-import { writeFileSync } from 'node:fs';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { ElementCache, resolveElement, uiElementPrint } from './element-cache.ts';
 import { launchSidecar, stopSidecar, isSidecarRunning, type RunningSidecar } from './sidecar-launcher.ts';
@@ -284,15 +283,6 @@ export class DesktopController implements AppController {
     const toNum = typeof toId === 'number' ? toId : parseInt(toId.id, 10);
 
     await this.send('dragElement', { fromId: fromNum, toId: toNum });
-  }
-
-  /**
-   * Take a desktop screenshot and save to file.
-   */
-  async screenshotToFile(pid?: number, filePath: string = '/tmp/jarvis-desktop-screenshot.png'): Promise<string> {
-    const buffer = pid ? await this.captureWindow(pid) : await this.captureScreen();
-    writeFileSync(filePath, buffer);
-    return filePath;
   }
 
   /**

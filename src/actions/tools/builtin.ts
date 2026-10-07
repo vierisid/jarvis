@@ -12,7 +12,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
 import { WSLBridge } from '../terminal/wsl-bridge.ts';
@@ -28,6 +28,7 @@ import {
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
+import { captureViaPrivateFile } from '../app-control/capture-file.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
 
@@ -628,23 +629,31 @@ function localClipboardWrite(content: string): void {
   }
 }
 
+/**
+ * Through a private, unpredictable file (#746): the path used to be
+ * `/tmp/jarvis-screenshot-${Date.now()}.png`, which another process could
+ * pre-create as a symlink or plant an image at. See app-control/capture-file.ts.
+ * The tools run without a shell, so the path is an argument, never parsed.
+ * PowerShell's script reads it from its environment rather than from the
+ * command text, so neither cmd.exe (which expands %VAR%) nor PowerShell's
+ * quoting (which also ends a literal at a typographic quote) ever sees it.
+ */
 function localCaptureScreen(): string {
   const os = platform();
-  const tmp = `/tmp/jarvis-screenshot-${Date.now()}.png`;
-  if (os === 'darwin') {
-    execSync(`screencapture -x ${tmp}`);
-  } else if (os === 'win32') {
-    execSync(`powershell -command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save('${tmp}') }"`);
-  } else {
-    try {
-      execSync(`scrot ${tmp}`);
-    } catch {
-      execSync(`import -window root ${tmp}`);
+  return captureViaPrivateFile((file) => {
+    if (os === 'darwin') {
+      execFileSync('screencapture', ['-x', file]);
+    } else if (os === 'win32') {
+      execSync('powershell -command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }"',
+        { env: { ...process.env, JARVIS_CAPTURE_PATH: file } });
+    } else {
+      try {
+        execFileSync('scrot', [file]);
+      } catch {
+        execFileSync('import', ['-window', 'root', file]);
+      }
     }
-  }
-  const data = readFileSync(tmp);
-  unlinkSync(tmp);
-  return data.toString('base64');
+  }).toString('base64');
 }
 
 function localSystemInfo(): Record<string, unknown> {

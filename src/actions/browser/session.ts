@@ -1975,20 +1975,6 @@ export class BrowserController {
   }
 
   /**
-   * Take a screenshot and save to a file.
-   */
-  async screenshot(filePath: string = '/tmp/jarvis-screenshot.png'): Promise<string> {
-    await this.ensureConnected();
-    await this.assertNotLocalContent();
-
-    const result = await this.cdp.send('Page.captureScreenshot', { format: 'png' });
-    const buffer = Buffer.from(result.data, 'base64');
-
-    await Bun.write(filePath, buffer);
-    return filePath;
-  }
-
-  /**
    * Take a screenshot and return raw base64 data (for vision/LLM).
    */
   async screenshotBuffer(): Promise<{ base64: string; mimeType: string }> {
