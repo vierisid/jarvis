@@ -2015,6 +2015,40 @@ describe("#693: writes to a LOCKED version answer 409 and write nothing", () => 
     expect(body.error).toMatch(/LOCKED/);
     expect(await flowVersionRow(versionId)).toEqual(before);
   });
+
+  /**
+   * #732. These bodies carried the repo function that threw --
+   * `updateDraftVersion: cannot modify LOCKED version (id=...)` -- straight to
+   * the HTTP client, before #693 as 500s and since as 409s. Reworded to say
+   * what the client can do, KEEPING the `LOCKED` token the tests above and
+   * clients match on. Pinned whole, so neither half can drift.
+   */
+  test("the 409 says what is locked in client terms, names no repo function, and keeps LOCKED (#732)", async () => {
+    const { flowId, versionId } = await lockedVersion();
+    const params = { id: flowId, versionId, stepName: "step_a" };
+    const url = `http://x/api/workflows/${flowId}/versions/${versionId}`;
+    const answers = [
+      await callJson(routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+        reqWithParams("PATCH", url, params, { displayName: "renamed" })),
+      await callJson(routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.PATCH,
+        reqWithParams("PATCH", `${url}/sample-data/step_a`, params, { output: { x: 1 } })),
+      await callJson(routes["/api/workflows/:id/versions/:versionId/sample-data/:stepName"]?.DELETE,
+        reqWithParams("DELETE", `${url}/sample-data/_all`, params)),
+      await callJson(routes["/api/workflows/:id/versions/:versionId/sample-input/:stepName"]?.PATCH,
+        reqWithParams("PATCH", `${url}/sample-input/step_a`, params, { input: { changed: true } })),
+    ];
+    expect(answers).toEqual([
+      { status: 409, body: { error: `version ${versionId} is LOCKED and cannot be edited; create a new draft to change it` } },
+      { status: 409, body: { error: `version ${versionId} is LOCKED; its sample data cannot be changed` } },
+      { status: 409, body: { error: `version ${versionId} is LOCKED; its sample data cannot be changed` } },
+      { status: 409, body: { error: `version ${versionId} is LOCKED; its sample input cannot be changed` } },
+    ]);
+    // And, independent of the exact wording: no `name:` prefix of the kind a
+    // repo function puts on its throws.
+    for (const { body } of answers) {
+      expect(body.error).not.toMatch(/updateDraftVersion|setSampleDataEntry|setSampleInputEntry|replaceSampleData|^\w+:/);
+    }
+  });
 });
 
 describe("workflow API: pieces library on a MANAGED install", () => {

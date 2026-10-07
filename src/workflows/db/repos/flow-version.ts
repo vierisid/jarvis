@@ -319,7 +319,12 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`updateDraftVersion: not found (id=${id})`);
   if (existing.state === "LOCKED") {
-    throw new FlowVersionRequestError(`updateDraftVersion: cannot modify LOCKED version (id=${id})`, 409);
+    // Client-facing (#732): `trapErrors` answers this message verbatim, so it
+    // says what the client can do rather than which function refused. The
+    // `LOCKED` token stays -- tests and clients match on it. Same for the
+    // three sample-map writers below.
+    throw new FlowVersionRequestError(
+      `version ${id} is LOCKED and cannot be edited; create a new draft to change it`, 409);
   }
   // A draft is mutated in place, so writing a CODE step into the draft an
   // ENABLED flow is already running would deploy it without passing publish.
@@ -525,7 +530,7 @@ export function setSampleDataEntry(
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`setSampleDataEntry: not found (id=${id})`);
   if (existing.state === "LOCKED") {
-    throw new FlowVersionRequestError(`setSampleDataEntry: version ${id} is LOCKED`, 409);
+    throw new FlowVersionRequestError(`version ${id} is LOCKED; its sample data cannot be changed`, 409);
   }
   const current = existing.sample_data
     ? (JSON.parse(existing.sample_data) as Record<string, unknown>)
@@ -570,7 +575,7 @@ export function setSampleInputEntry(
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`setSampleInputEntry: not found (id=${id})`);
   if (existing.state === "LOCKED") {
-    throw new FlowVersionRequestError(`setSampleInputEntry: version ${id} is LOCKED`, 409);
+    throw new FlowVersionRequestError(`version ${id} is LOCKED; its sample input cannot be changed`, 409);
   }
   const current = existing.sample_input
     ? (JSON.parse(existing.sample_input) as Record<string, unknown>)
@@ -739,7 +744,7 @@ export function replaceSampleData(
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`replaceSampleData: not found (id=${id})`);
   if (existing.state === "LOCKED") {
-    throw new FlowVersionRequestError(`replaceSampleData: version ${id} is LOCKED`, 409);
+    throw new FlowVersionRequestError(`version ${id} is LOCKED; its sample data cannot be changed`, 409);
   }
   if (data) {
     const refusal = sampleMapRefusal("sampleData", data, sampleMapCurrent(existing.sample_data));
