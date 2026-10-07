@@ -1,0 +1,148 @@
+{
+  "task": "F-15",
+  "title": "Represent measurable goal counts explicitly",
+  "date": "2026-10-07",
+  "branch": "brief/f-15",
+  "base_branch": "brief/f-14",
+  "baseline": "1d4cf952aa3ade0abb198f4304ab28df80187063",
+  "main_reviewed": "82d7b3815f346d7cb963afbbe16a718fd4a941dd",
+  "head": "Commit containing this receipt; exact published head and normal hook results recorded in PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-15",
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [],
+    "stack": "User-requested F stack on corrected F14, keep PRs open and unmerged."
+  },
+  "baseline_review": {
+    "pinned": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": [
+      "A09 src/goals/application-service.ts",
+      "A18 src/workflows/db/schema.ts"
+    ],
+    "comparison": "Goal application service, types and vault writer match pinned audit and current main. Workflow schema differs only by F08 ingredient pins on the F stack; time_saved_per_run is preserved and not used as a measurement.",
+    "open_prs_reviewed": [
+      786,
+      785,
+      780,
+      778,
+      777,
+      776,
+      775,
+      773,
+      772,
+      771,
+      770,
+      766,
+      765,
+      764,
+      757,
+      755,
+      754,
+      753,
+      752,
+      751,
+      750,
+      749,
+      745,
+      742,
+      741,
+      740,
+      739,
+      738,
+      737,
+      736,
+      735,
+      734,
+      733,
+      727,
+      726,
+      725,
+      717,
+      715,
+      714,
+      703,
+      702,
+      701
+    ],
+    "parent_ci": "Corrected F14 Tests, Docker and active platform checks pass.",
+    "parent_ci_log": "docs/brief-delivery/evidence/F-15/parent-ci.json",
+    "d09_reviewed": "7858a7a7d33b154f44c33591c8601266854f0a7e:ui/src/brief/today/outcomes/model.ts"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:3608",
+    "visual": "Behavior/schema/read adapter only, no presentation activation or screenshot."
+  },
+  "activation": {
+    "capability": "goalMeasurements",
+    "flags": [
+      "JARVIS_BRIEF_GOAL_MEASUREMENTS=1"
+    ],
+    "default": "off",
+    "merged": false,
+    "release_enabled": false
+  },
+  "implementation": [
+    "Additive optional goal measurement snapshots, evidence-version deduplication and immutable command receipts in the existing vault.",
+    "Canonical GoalApplicationService validates and records absolute user-reported measurements with revision checks, source versions and observation times; score, history and durable events commit atomically.",
+    "Legacy 0.6 stays score-only. Unknown and observed zero are distinct; baseline/target mapping supports decreasing targets, overachievement and negative corrections without changing raw counts.",
+    "Parent and child scopes are independent, with no inferred rollup or title parsing. Children never add to an already inclusive parent measurement.",
+    "Authenticated, bounded, default-off reads/writes and receipt recovery; canonical detail/list/root/tree/children reads expose the same stored measurement.",
+    "Configured measured goals reject legacy scores; work results can still be checked without changing goal progress. Canonical goal revisions remain monotonic through health refresh."
+  ],
+  "verification": {
+    "focused": {
+      "passed": 26,
+      "failed": 0,
+      "assertions": 185,
+      "files": 2,
+      "log": "docs/brief-delivery/evidence/F-15/focused.log",
+      "command": "bun test src/goals/measurements.test.ts src/daemon/api-brief-goal-measurements.test.ts"
+    },
+    "affected": {
+      "status": "passed",
+      "command_file": "docs/brief-delivery/evidence/F-15/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-15/affected.log",
+      "passed": 594,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 3827,
+      "files": 41
+    },
+    "typescript": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-15/typescript.log"
+    },
+    "regressions": {
+      "failed_before_fix": 2,
+      "logs": [
+        "docs/brief-delivery/evidence/F-15/work-result-red.log",
+        "docs/brief-delivery/evidence/F-15/revision-clock-red.log"
+      ],
+      "fixes": [
+        "Return actionable 409 for a work-result score that conflicts with a goal measurement.",
+        "Retain monotonic canonical goal updated_at after health refresh."
+      ]
+    },
+    "mutations": {
+      "variants": 4,
+      "expected_failures": 5,
+      "log": "docs/brief-delivery/evidence/F-15/mutations.json",
+      "restored": "Exact source bytes restored in finally; focused suite rerun after all variants."
+    },
+    "guards": "Normal EE, migration, template, package, related tests and TypeScript hooks required before push; exact results in PR description.",
+    "manual": "Authenticated HTTP via temporary Unix socket, real application writer and two independent writer processes. Synthetic owner reports only; no provider/model/production calls."
+  },
+  "limitations": [
+    "All reports are explicitly user_reported. References are not fetched or certified as provider-verified measurements; automatic review scoring remains refused.",
+    "No implicit parent/child rollup. Automatic aggregation requires a separate disjoint-attribution contract.",
+    "D09 accepts the six-of-ten wire shape, but live adapters must use the owner progress value for nonzero baselines/decreasing targets instead of the current preview raw ratio. D09/D10/D25 presentation remains unwired.",
+    "Older servers do not enforce the measurement-backed score rule. Disable the capability on the new runtime for rollback and retain data; do not downgrade active measurement writers.",
+    "F16 outcomes/time-back and F27 reconciliation are not included. Full repository CI reports separately on the PR."
+  ],
+  "rollback": "Unset JARVIS_BRIEF_GOAL_MEASUREMENTS on the new runtime; retain additive measurement, history and receipt tables. Do not reinterpret measurements as inferred counts or downgrade active writers.",
+  "guide": "docs/brief-goal-measurements.md",
+  "next_task": "F-16 not started"
+}

@@ -1,0 +1,63 @@
+bun test v1.4.2 (744846f84)
+
+src/goals/measurements.test.ts:
+109 |   expect(getDb().query('SELECT * FROM goal_measurement WHERE goal_id = ?').all(child.id)).toEqual([]);
+110 |   expect(getDb().query('SELECT * FROM goal_measurement_receipt WHERE goal_id = ?').all(child.id)).toEqual([]);
+111 | });
+112 | test('measurement-backed goals reject legacy manual/tool/work-result scoring, not ordinary goal edits', () => {
+113 |   save();
+114 |   expect(() => getGoalApplication().scoreGoal(id, 0.9, 'Unsupported estimate')).toThrow('new measurement');
+                                                                                      ^
+error: expect(received).toThrow(expected)
+
+Expected substring: "new measurement"
+
+Received function did not throw
+Received value: {
+  id: "bc8f2de0-bd49-473d-872f-bdc01114f411",
+  parent_id: null,
+  level: "objective",
+  title: "Sign ten partners",
+  description: "",
+  success_criteria: "",
+  time_horizon: "quarterly",
+  score: 0.9,
+  score_reason: "Unsupported estimate",
+  status: "active",
+  health: "on_track",
+  deadline: null,
+  started_at: 1791367589051,
+  estimated_hours: null,
+  actual_hours: 0,
+  authority_level: 3,
+  tags: [],
+  dependencies: [],
+  escalation_stage: "none",
+  escalation_started_at: null,
+  sort_order: 0,
+  created_at: 1791367589051,
+  updated_at: 1791367589067,
+  completed_at: null,
+  measurement: {
+    unit: "signed partners",
+    baseline: 0,
+    target: 10,
+    value: 6,
+    measuredAt: 1791367579054,
+    evidence: {
+      id: "owner:partner-ledger",
+      revision: "v1",
+    },
+    revision: 1,
+    qualification: "user_reported",
+  },
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-15/src/goals/measurements.test.ts:114:81)
+(fail) measurement-backed goals reject legacy manual/tool/work-result scoring, not ordinary goal edits [351.64ms]
+
+ 0 pass
+ 19 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [392.00ms]

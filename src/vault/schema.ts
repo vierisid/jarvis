@@ -1,3 +1,4 @@
+import { ensureGoalMeasurementSchema } from './goal-measurement-schema';
 import { ensureDecisionDocumentSchema } from '../authority/decision-document-schema';
 import { Database } from "bun:sqlite";
 import { ensureSuggestionSchema } from './suggestion-schema.ts';
@@ -787,6 +788,7 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_gci_created ON goal_check_ins(created_at)`);
 
   ensureGoalEventSchema(db);
+  ensureGoalMeasurementSchema(db);
 
   // Additive review audit: the exact bounded inputs and rejected score proposals.
   db.run(`CREATE TABLE IF NOT EXISTS goal_review_evidence (

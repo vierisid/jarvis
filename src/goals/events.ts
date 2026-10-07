@@ -8,6 +8,7 @@ export type GoalEventType =
   | 'goal_created'
   | 'goal_updated'
   | 'goal_scored'
+  | 'goal_measurement_recorded'
   | 'goal_activity_recorded'
   | 'goal_status_changed'
   | 'goal_completed'

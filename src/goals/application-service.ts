@@ -1,3 +1,4 @@
+import { GoalMeasurementConflict, validateMeasurementCommand, measurementProgress, type GoalMeasurement, type GoalMeasurementReceipt } from './measurements';
 import type { Database } from 'bun:sqlite';
 import { getDb } from '../vault/schema.ts';
 import * as vault from '../vault/goals.ts';
@@ -89,11 +90,60 @@ export class GoalApplicationService {
     return this.transaction(() => {
       const before = vault.getGoal(id);
       if (!before) return null;
+      if (before.measurement) invalid('score', 'Use a new measurement to update measured goal progress');
       const progress = vault.addProgressEntry(id, 'manual', before.score, score, reason, source);
       this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [score, reason, progress.created_at, id]);
       const goal = vault.getGoal(id)!;
       queueGoalEvent({ type: 'goal_scored', goalId: id, data: { score, reason, source, progressId: progress.id }, timestamp: progress.created_at });
       return { goal: this.refreshHealth(goal), progress };
+    });
+  }
+  /** A confirmed user report, never a model-inferred or provider-verified result. */
+  recordMeasurement(id: string, raw: unknown): GoalMeasurementReceipt {
+    text(id, 'goal_id', true, 512);
+    const command = validateMeasurementCommand(raw), serialized = JSON.stringify(command);
+    return this.transaction(() => {
+      const before = vault.getGoal(id);
+      if (!before) invalid('goal_id', 'goal does not exist');
+      const prior = this.db.query<{ command: string; receipt: string }, [string, string]>(
+        'SELECT command, receipt FROM goal_measurement_receipt WHERE goal_id = ? AND request_id = ?',
+      ).get(id, command.requestId);
+      if (prior) {
+        if (prior.command !== serialized) throw new GoalMeasurementConflict('Request ID already has a different measurement');
+        return JSON.parse(prior.receipt);
+      }
+      if ((before.measurement?.revision ?? 0) !== command.revision) throw new GoalMeasurementConflict('Measurement changed; refresh before saving');
+      const input = command.measurement;
+      const evidenceKey = input.evidence ? JSON.stringify([input.evidence.id, input.evidence.revision]) : null;
+      if (evidenceKey && this.db.query('SELECT 1 FROM goal_measurement_receipt WHERE goal_id = ? AND evidence_key = ?').get(id, evidenceKey))
+        throw new GoalMeasurementConflict('This evidence version already has a measurement');
+      const latest = this.db.query<{ at: number | null }, [string]>(
+        'SELECT MAX(measured_at) AS at FROM goal_measurement_receipt WHERE goal_id = ?',
+      ).get(id)!.at;
+      if (latest !== null && (input.measuredAt === null || input.measuredAt <= latest))
+        throw new GoalMeasurementConflict('A correction needs a later measurement time and fresh evidence version');
+      const measurement: GoalMeasurement = { ...input, revision: command.revision + 1, qualification: input.value === null ? null : 'user_reported' };
+      const score = measurementProgress(input), now = Math.max(Date.now(), before.updated_at + 1);
+      this.db.run(`INSERT INTO goal_measurement VALUES (?, ?, ?) ON CONFLICT(goal_id) DO UPDATE SET revision = excluded.revision, snapshot = excluded.snapshot`,
+        [id, measurement.revision, JSON.stringify(measurement)]);
+      const progress = score === null ? null : vault.addProgressEntry(id, 'manual', before.score, score,
+        'Confirmed goal measurement (user reported)', 'user_measurement');
+      if (score !== null) this.db.run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?',
+        [score, 'Confirmed goal measurement (user reported)', now, id]);
+      else this.db.run('UPDATE goals SET updated_at = ? WHERE id = ?', [now, id]);
+      const receipt: GoalMeasurementReceipt = { goalId: id, requestId: command.requestId, measurement, score: score ?? before.score, progressId: progress?.id ?? null };
+      this.db.run('INSERT INTO goal_measurement_receipt VALUES (?, ?, ?, ?, ?, ?)',
+        [id, command.requestId, serialized, JSON.stringify(receipt), evidenceKey, input.measuredAt]);
+      queueGoalEvent({ type: 'goal_measurement_recorded', goalId: id,
+        data: { requestId: command.requestId, revision: measurement.revision, progressId: progress?.id ?? null, qualification: measurement.qualification }, timestamp: now });
+      if (score !== null) {
+        queueGoalEvent({ type: 'goal_scored', goalId: id, data: { score, source: 'user_measurement', progressId: progress!.id }, timestamp: now });
+        this.refreshHealth(vault.getGoal(id)!);
+        // Health uses the wall clock too; preserve freshness for existing readers
+        // when two writes share a millisecond or the clock moves backwards.
+        this.db.run('UPDATE goals SET updated_at = MAX(updated_at, ?) WHERE id = ?', [now, id]);
+      }
+      return receipt;
     });
   }
   updateStatus(id: string, status: GoalStatus): Goal | null {
