@@ -1,0 +1,94 @@
+{
+  "task": "F-17",
+  "title": "Provide a paginated memory stream query",
+  "date": "2026-10-07",
+  "branch": "brief/f-17",
+  "base_branch": "brief/f-16",
+  "baseline": "1cd3d429b1842a831d20d0a9e2e137f49d914c20",
+  "main_reviewed": "2281a8235d4987af202e3b99f7ea514ac7ed4ff8",
+  "head": "Commit containing this receipt; exact published head and normal hook results recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-17",
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [
+      "F-18"
+    ],
+    "stack": "User-requested F stack on corrected F16; F18 is an optional synchronous read interface, with no unmerged implementation imported."
+  },
+  "baseline_review": {
+    "pinned": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": [
+      "A16 src/vault/facts.ts",
+      "A23 ui/src/v2/rooms/memory/useMemoryData.ts"
+    ],
+    "comparison": "Both source blobs are identical on pinned audit, inspected main and corrected F16. No existing F17 branch or PR at start. F18 card reviewed to define supplied/selected/outcome-verified seam.",
+    "parent_ci": "All active corrected F16 checks pass; conditional jobs skipped.",
+    "parent_ci_log": "docs/brief-delivery/evidence/F-17/parent-ci.json"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:3943",
+    "visual": "Backend read API only. No UI activation or screenshot claimed."
+  },
+  "activation": {
+    "capability": "memoryStream",
+    "flag": "JARVIS_BRIEF_MEMORY_STREAM=1",
+    "default": "off",
+    "dependency": "Exact registered and enabled F18 memoryUsage reader required. No production reader exists on this branch, so the stream flag alone stays unavailable.",
+    "merged": false,
+    "release_enabled": false
+  },
+  "implementation": [
+    "Authenticated read-only collection/detail/history routes preserve canonical IDs, confirmation precedence, status, validity and provenance without changing legacy routes or writers.",
+    "Bounded literal sentence search, exact provenance Source, explicit conversation/run Used in, half-open Updated filters and exact total/matched/returned counts.",
+    "Five-minute signed query-bound cursors freeze membership/counts across same-time and backdated inserts. Canonical changes invalidate with stale/no cached data; refresh sees new facts.",
+    "Default-off registration and optional F18 ledger read seam; missing instrumentation is null, available empty ledger is unused, selected-only records never match Used in.",
+    "Safe local detail/history links follow retained canonical supersession edges only; no quotes, raw source references, arbitrary usage fields, textual attribution or model reliance claim.",
+    "Bounded rows/bytes/snapshots/history with unavailable instead of silent truncation. No schema changes or new truth engine."
+  ],
+  "verification": {
+    "focused": {
+      "passed": 47,
+      "failed": 0,
+      "assertions": 477,
+      "files": 3,
+      "command": "bun test src/brief/memory-stream.test.ts src/daemon/api-brief-memory.test.ts src/util/model-exec-env.test.ts",
+      "log": "docs/brief-delivery/evidence/F-17/focused.log"
+    },
+    "affected": {
+      "status": "passed",
+      "command_file": "docs/brief-delivery/evidence/F-17/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-17/affected.log",
+      "passed": 465,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 4064,
+      "files": 37
+    },
+    "typescript": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-17/typescript.log"
+    },
+    "mutations": {
+      "variants": 3,
+      "expected_failures": 3,
+      "log": "docs/brief-delivery/evidence/F-17/mutations.json",
+      "restoration": "Original bytes restored in finally; fresh focused suite passes afterward."
+    },
+    "manual": "Isolated temporary SQLite vaults plus real authenticated Unix-socket requests. A second SQLite connection inserts between page requests. Restart, stale deletion/correction, exact count combinations, safe lineage, caps and legacy compatibility exercised. No live service, model or desktop effect.",
+    "guards": "Normal commit hooks required before push; final hook result is recorded in the PR."
+  },
+  "limitations": [
+    "No F18 production ledger and no live D20 room adapter. The stream is not release-enabled by this PR.",
+    "Updated uses existing creation/verification/provenance timestamps; revision hashes still detect changes without a timestamp. History is retained supersession lineage, not every in-place edit.",
+    "Search covers subject/predicate/object text, Source is a label and sourceId is unknown. Active/contested time-limited facts remain browsable with explicit validity; this is not recall eligibility.",
+    "At most 10000 facts including history, 50000 evidence and 50000 usage records; separate 16 MiB facts/evidence and usage serialized input caps. Larger vaults fail closed and need a scalable query implementation before activation.",
+    "Sixteen five-minute snapshots per daemon provider; expiry/restart/eviction requires refresh. Original-member changes invalidate the snapshot; unrelated inserts wait for refresh.",
+    "No UI, mutation endpoints, ledger writer, external provider calls or F18 implementation. Full repository CI reports separately on the PR."
+  ],
+  "rollback": "Unset JARVIS_BRIEF_MEMORY_STREAM or disable memoryUsage. No schema migration or canonical data deletion is needed.",
+  "guide": "docs/brief-memory-stream.md",
+  "next_task": "F-18 not started"
+}

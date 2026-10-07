@@ -1,0 +1,23 @@
+{
+  "variants": [
+    {
+      "variant": "stale-protection",
+      "test": "delete invalidates",
+      "exit": 1,
+      "log": "docs/brief-delivery/evidence/F-17/stale-protection-red.log"
+    },
+    {
+      "variant": "frozen-membership",
+      "test": "tied timestamps paginate",
+      "exit": 1,
+      "log": "docs/brief-delivery/evidence/F-17/frozen-membership-red.log"
+    },
+    {
+      "variant": "usage-stage",
+      "test": "search, multi-evidence Source",
+      "exit": 1,
+      "log": "docs/brief-delivery/evidence/F-17/usage-stage-red.log"
+    }
+  ],
+  "restoration": "Exact source restored in finally after every mutation. Final focused and affected runs follow."
+}
