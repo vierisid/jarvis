@@ -1,0 +1,18 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-memory.test.ts:
+(pass) F17 review R1: collection retains canonical scope across independent confirmed preferences and correction [20.72ms]
+(pass) F17 review R1: detail retains canonical scope across independent confirmed preferences and correction [15.84ms]
+(pass) F17 review R1: history retains canonical scope across independent confirmed preferences and correction [14.46ms]
+(pass) F17 review R2: canonical Source with spaces round-trips through exact filters, counts and cursors [19.96ms]
+(pass) F17 review R2: canonical Source with nonbreaking spaces round-trips through exact filters, counts and cursors [16.10ms]
+(pass) F17 review R2: canonical Source with tabs/newlines round-trips through exact filters, counts and cursors [16.73ms]
+(pass) F17 review R2: evidence Source with spaces round-trips through exact filters, counts and cursors [15.23ms]
+(pass) F17 review R2: evidence Source with nonbreaking spaces round-trips through exact filters, counts and cursors [15.85ms]
+(pass) F17 review R2: evidence Source with tabs/newlines round-trips through exact filters, counts and cursors [15.08ms]
+
+ 9 pass
+ 6 filtered out
+ 0 fail
+ 119 expect() calls
+Ran 9 tests across 1 file. [241.00ms]

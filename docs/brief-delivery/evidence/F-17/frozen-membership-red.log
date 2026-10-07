@@ -1,0 +1,30 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/memory-stream.test.ts:
+47 |   try { for (const [id, at] of [['000-insert', now], ['zzz-backdated', now - 1000]] as const)
+48 |     writer.run(insert, columns.map(k => k === 'id' ? id : k === 'created_at' ? at : template[k]));
+49 |   } finally { writer.close(); }
+50 |   let next = first.nextCursor; const seen = first.items.map(f => f.factId);
+51 |   while (next) { const current = await page({ limit: 2, cursor: next });
+52 |     expect(current.count).toMatchObject({ total: 7, matched: 7 }); seen.push(...current.items.map(f => f.factId)); next = current.nextCursor;
+                               ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "matched": 7,
++   "matched": 9,
++   "returned": 2,
+    "total": 7,
+  }
+
+- Expected  - 1
++ Received  + 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-17/src/brief/memory-stream.test.ts:52:27)
+(fail) tied timestamps paginate every fact once with frozen counts despite concurrent same-time/backdated inserts [917.38ms]
+
+ 0 pass
+ 20 filtered out
+ 1 fail
+ 4 expect() calls
+Ran 1 test across 1 file. [994.00ms]
