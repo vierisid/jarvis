@@ -1,0 +1,136 @@
+{
+  "task": "D-19",
+  "title": "Build run history with one inline detail",
+  "date": "2026-10-07",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "branch": "brief/d-19",
+  "stack_base": "brief/d-18",
+  "baseline": "85b3c554d276677b63918d8c9fee22dc4675ad03",
+  "inspected_main": "244658eed294af5d4b51de434d40cfd800adca67",
+  "head": {
+    "ref": "brief/d-19",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-19.json"
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-19",
+  "preview": "http://127.0.0.1:4399/?brief=preview&specimen=workflow-runs#/_brief_preview",
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/787"
+  ],
+  "activation_dependencies": [
+    "F-21 workflowContext and redacted run inspection projection",
+    "Authenticated scoped host with durable manual-input/request reconciliation and one command owner across workflow views",
+    "D-33 release verification"
+  ],
+  "owns": [
+    "ui/src/brief/workflows/runs/**",
+    "Bounded shared header extraction in D-18 WorkflowCanvasRoom",
+    "Fixture-only preview registration",
+    "docs/brief-delivery/D-19.*",
+    "docs/brief-delivery/evidence/D-19/**"
+  ],
+  "figma": {
+    "reference": "ui/src/brief/workflows/runs/figma-reference.json",
+    "inspection": "Saved native UI-24 handoff and exports under approved UI-35; no fresh editor session"
+  },
+  "checks": [
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/rooms/workflows ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "result": "pass",
+      "tests": 480,
+      "skipped": 2,
+      "assertions": 4606,
+      "files": 35,
+      "evidence": "evidence/D-19/review-affected-tests.log",
+      "note": "Existing optional F07/F08 compatibility tests skipped; no live F21 compatibility claim"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-19/review-typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-19/review-build.log",
+      "warnings": "Existing Tailwind at-rule warnings"
+    },
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows/runs",
+      "result": "pass",
+      "tests": 37,
+      "assertions": 138,
+      "files": 3,
+      "evidence": "evidence/D-19/review-focused-tests.log"
+    }
+  ],
+  "browser": {
+    "script": "evidence/D-19/browser-check.cjs",
+    "evidence": "evidence/D-19/review-browser-results.json",
+    "result": "pass",
+    "layouts": 8,
+    "rapidSelectionCycles": 10,
+    "assertions": [
+      "Seven statuses, historical version and removed context",
+      "One inline detail with no dialog or late A under B",
+      "Partial effects, waitpoints and explicit redacted fields",
+      "Manual single-flight acknowledgement selects returned Run 013",
+      "Unconfirmed command locked through refresh/remount",
+      "Actual D18 canvas/header and node inspector still work",
+      "Theme/sidebar/chat preserve selected run",
+      "Keyboard, 390px containment and reduced motion",
+      "No browser errors or non-GET requests"
+    ]
+  },
+  "regressions_fixed": [
+    {
+      "issue": "An in-flight pre-command history result could replace the newly accepted run",
+      "red_evidence": "evidence/D-19/controller-red.log",
+      "fix": "Retire that read before inserting the exact acknowledged receipt"
+    },
+    {
+      "issue": "Canvas inline editable title added a 2px baseline gap to the shared header",
+      "red_evidence": "evidence/D-19/header-before-fix.png",
+      "fix": "Block title geometry matches the shared header; browser bounds assertion passes"
+    },
+    {
+      "issue": "R1: refreshed head reused cached continuation and skipped intervening runs",
+      "fix": "Rebuild contiguous history to prior tail using fresh cursors; bounded partial continuation and failure recovery",
+      "red_evidence": "evidence/D-19/review-refresh-red.log"
+    },
+    {
+      "issue": "R2: polling repeatedly aborted slow history, detail and explicit paging",
+      "fix": "Coalesce refresh and same-run detail; serialize paging/history; retain cancellation on real selection and owner changes",
+      "red_evidence": "evidence/D-19/review-refresh-red.log"
+    },
+    {
+      "issue": "R3: cached history status diverged from selected or older run detail",
+      "fix": "Reconcile fresh summaries by ID; refresh loaded range; preserve newer detail against older list responses",
+      "red_evidence": "evidence/D-19/review-refresh-red.log"
+    }
+  ],
+  "limitations": [
+    "F21 not implemented in this stack; frontend port and representative fixtures only",
+    "Optional module remains unregistered in production; legacy route unchanged",
+    "No live execution, auth, redaction certification or external effects",
+    "Host must retain controller across rooms and persist/reconcile uncertain commands across reloads",
+    "Canvas/Context command owner unification is a live integration requirement; D18 command contract unchanged",
+    "Dense work width stacks history above detail with scrolling",
+    "Context room belongs to D20 and is not implemented",
+    "Refresh capped at 20 pages; a larger changed range is explicitly partial with a usable Load earlier continuation"
+  ],
+  "rollback": "Disable optional registration/capability and retain legacy route. No schema or production activation changes. Retain pending request reconciliation state. Shared header can remain or be reverted with its imports.",
+  "base_ci": "Corrected D18 applicable Tests, Docker and platform checks pass",
+  "ci": "New-head CI will be reported after push; not inferred from base checks",
+  "next": "D-20; not started",
+  "review": {
+    "reviewed_head": "76f71cc97fdc8fa6e25f482c3376d285d7332b69",
+    "status": "R1/R2/R3 fixed and locally verified; no separate independent re-review claimed",
+    "new_regression_tests": 13,
+    "red_tests": 7,
+    "red_evidence": "evidence/D-19/review-refresh-red.log",
+    "latency_verification": "Deferred reads across repeated poll calls; no live latency claim"
+  }
+}

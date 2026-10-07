@@ -1,0 +1,128 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/runs/refresh.test.ts:
+33 | }
+34 | test("R1 refresh bridges new head pages after previously exhausted history", async () => {
+35 |   const h = historyFixture(); await h.store.load(); await h.store.more();
+36 |   h.store.select(h.record(2).runId);
+37 |   h.setIds([6,5,4,3,2,1]); await h.store.refresh();
+38 |   expect(h.rows().items.map(r => r.runId)).toEqual([6,5,4,3,2,1].map(n => h.record(n).runId));
+                                                ^
+error: expect(received).toEqual(expected)
+
+  [
+    "meeting-run-006",
+    "meeting-run-005",
+-   "meeting-run-004",
+    "meeting-run-003",
+    "meeting-run-002",
+    "meeting-run-001",
+  ]
+
+- Expected  - 1
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-19/ui/src/brief/workflows/runs/refresh.test.ts:38:44)
+(fail) R1 refresh bridges new head pages after previously exhausted history [23.83ms]
+41 |   h.store.retire();
+42 | });
+43 | test("R1 refresh keeps the continuation after bridging a partial loaded range", async () => {
+44 |   const h = historyFixture(); h.setIds([6,5,4,3,2,1]); await h.store.load(); await h.store.more();
+45 |   h.setIds([10,9,8,7,6,5,4,3,2,1]); await h.store.refresh(); await h.store.more();
+46 |   expect(h.rows().items.map(r => r.runId)).toEqual([10,9,8,7,6,5,4,3,2,1].map(n => h.record(n).runId));
+                                                ^
+error: expect(received).toEqual(expected)
+
+  [
+    "meeting-run-010",
+    "meeting-run-009",
+-   "meeting-run-008",
+-   "meeting-run-007",
+    "meeting-run-006",
+    "meeting-run-005",
+    "meeting-run-004",
+    "meeting-run-003",
+    "meeting-run-002",
+    "meeting-run-001",
+  ]
+
+- Expected  - 2
++ Received  + 0
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-19/ui/src/brief/workflows/runs/refresh.test.ts:46:44)
+(fail) R1 refresh keeps the continuation after bridging a partial loaded range [5.64ms]
+51 |   let calls = 0; let signal!: AbortSignal;
+52 |   h.port.list = async (_, s) => { calls++; signal = s; return pending.promise; };
+53 |   const a = h.store.refresh(); const b = h.store.refresh(); const c = h.store.refresh();
+54 |   pending.resolve({ status: "ready", data: {items:[h.record(3)], total:1, nextCursor:null} });
+55 |   await Promise.all([a,b,c]);
+56 |   expect(calls).toBe(1); expect(signal.aborted).toBe(false); expect(h.rows().items).toHaveLength(1); h.store.retire();
+                     ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: 3
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-19/ui/src/brief/workflows/runs/refresh.test.ts:56:17)
+(fail) R2 repeated refreshes do not supersede a slow history read [3.72ms]
+62 |   h.store.select(h.record(3).runId);
+63 |   const a = h.store.refresh(); await tick(); const b = h.store.refresh(); await tick();
+64 |   const callsBeforeSelection = calls, abortedBeforeSelection = signals[0]!.aborted;
+65 |   h.store.select(h.record(2).runId); await tick();
+66 |   pending.resolve({status:"ready",data:h.record(3)}); await Promise.all([a,b]);
+67 |   expect(callsBeforeSelection).toBe(1); expect(abortedBeforeSelection).toBe(false);
+                                    ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: 3
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-19/ui/src/brief/workflows/runs/refresh.test.ts:67:32)
+(fail) R2 a selected slow detail survives polling and a genuine selection still cancels it [10.21ms]
+74 |   let signal!:AbortSignal;
+75 |   h.port.list = async (cursor, s) => { if (cursor) {signal=s;return pending.promise;} return original(cursor,s); };
+76 |   const more = h.store.more(), refresh = h.store.refresh();
+77 |   pending.resolve({status:"ready",data:{items:[h.record(1)],total:3,nextCursor:null}});
+78 |   await Promise.all([more,refresh]);
+79 |   expect(signal.aborted).toBe(false); expect(h.rows().items).toHaveLength(3); h.store.retire();
+                              ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-19/ui/src/brief/workflows/runs/refresh.test.ts:79:26)
+(fail) R2 polling cannot cancel an in-flight older page [6.05ms]
+80 | });
+81 | test("R3 selected detail immediately reconciles the matching cached history summary", async () => {
+82 |   const h = historyFixture(); await h.store.load(); await h.store.more();
+83 |   const run=h.f.records.get(h.record(1).runId)!; run.status="failed";
+84 |   h.store.select(run.runId); await tick();
+85 |   expect(h.rows().items.find(r=>r.runId===run.runId)?.status).toBe("failed");
+                                                                   ^
+error: expect(received).toBe(expected)
+
+Expected: "failed"
+Received: "succeeded"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-19/ui/src/brief/workflows/runs/refresh.test.ts:85:63)
+(fail) R3 selected detail immediately reconciles the matching cached history summary [4.36ms]
+86 |   expect(h.store.getSnapshot().detail).toMatchObject({status:"ready",data:{status:"failed"}}); h.store.retire();
+87 | });
+88 | test("R3 refresh also reconciles older unselected nonterminal rows", async () => {
+89 |   const h = historyFixture(); const run=h.f.records.get(h.record(1).runId)!; run.status="paused";
+90 |   await h.store.load(); await h.store.more(); run.status="succeeded"; await h.store.refresh();
+91 |   expect(h.rows().items.find(r=>r.runId===run.runId)?.status).toBe("succeeded");
+                                                                   ^
+error: expect(received).toBe(expected)
+
+Expected: "succeeded"
+Received: "paused"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-19/ui/src/brief/workflows/runs/refresh.test.ts:91:63)
+(fail) R3 refresh also reconciles older unselected nonterminal rows [5.11ms]
+
+ 0 pass
+ 7 fail
+ 7 expect() calls
+Ran 7 tests across 1 file. [695.00ms]
