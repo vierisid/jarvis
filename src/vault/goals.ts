@@ -2,7 +2,6 @@
  * Goal Vault — CRUD operations for M16 Autonomous Goal Pursuit
  */
 
-import { readGoalMeasurement } from '../goals/measurements';
 import type { SQLQueryBindings } from 'bun:sqlite';
 import { getDb, generateId } from './schema.ts';
 import { getGoalReviewRecord } from '../goals/review-evidence.ts';
@@ -15,7 +14,8 @@ import type {
 
 // ── Row types (raw DB) ──────────────────────────────────────────────
 
-type GoalRow = Omit<Goal, 'tags' | 'dependencies'> & {
+type GoalRow = Omit<Goal, 'tags' | 'dependencies' | 'measurement'> & {
+  measurement_snapshot: string | null;
   tags: string | null;
   dependencies: string | null;
 };
@@ -31,9 +31,10 @@ type CheckInRow = Omit<GoalCheckIn, 'goals_reviewed' | 'actions_planned' | 'acti
 // ── Parsers ─────────────────────────────────────────────────────────
 
 function parseGoal(row: GoalRow): Goal {
+  const { measurement_snapshot, ...goal } = row;
   return {
-    ...row,
-    measurement: readGoalMeasurement(getDb(), row.id),
+    ...goal,
+    measurement: measurement_snapshot ? JSON.parse(measurement_snapshot) : null,
     tags: row.tags ? JSON.parse(row.tags) : [],
     dependencies: row.dependencies ? JSON.parse(row.dependencies) : [],
   };
@@ -65,6 +66,11 @@ function assertAncestorDeadline(deadline: number | null | undefined, parentId: s
     parentId = parent.parent_id;
   }
 }
+
+// Read score, health, revision and measurement in one SQLite snapshot. A second
+// measurement query after reading a goal can observe a different writer's commit.
+const SELECT_GOALS = `SELECT goals.*, goal_measurement.snapshot AS measurement_snapshot
+  FROM goals LEFT JOIN goal_measurement ON goal_measurement.goal_id = goals.id`;
 
 // ── Goals CRUD ──────────────────────────────────────────────────────
 
@@ -131,7 +137,7 @@ export function createGoal(
 
 export function getGoal(id: string): Goal | null {
   const db = getDb();
-  const row = db.prepare('SELECT * FROM goals WHERE id = ?').get(id) as GoalRow | null;
+  const row = db.prepare(`${SELECT_GOALS} WHERE goals.id = ?`).get(id) as GoalRow | null;
   return row ? parseGoal(row) : null;
 }
 
@@ -173,7 +179,7 @@ export function findGoals(query: GoalQuery = {}): Goal[] {
   const limit = Math.max(1, Math.min(parseInt(String(query.limit ?? 100), 10) || 100, 1000));
 
   const rows = db.prepare(
-    `SELECT * FROM goals ${where} ORDER BY sort_order ASC, created_at ASC LIMIT ?`
+    `${SELECT_GOALS} ${where} ORDER BY sort_order ASC, created_at ASC LIMIT ?`
   ).all(...(params as SQLQueryBindings[]), limit) as GoalRow[];
 
   return rows.map(parseGoal);
@@ -351,7 +357,7 @@ export function getOverdueGoals(): Goal[] {
   const db = getDb();
   const now = Date.now();
   const rows = db.prepare(
-    `SELECT * FROM goals WHERE status = 'active' AND deadline IS NOT NULL AND deadline < ? ORDER BY deadline ASC`
+    `${SELECT_GOALS} WHERE status = 'active' AND deadline IS NOT NULL AND deadline < ? ORDER BY deadline ASC`
   ).all(now) as GoalRow[];
   return rows.map(parseGoal);
 }
@@ -359,7 +365,7 @@ export function getOverdueGoals(): Goal[] {
 export function getGoalsByDependency(goalId: string): Goal[] {
   const db = getDb();
   const rows = db.prepare(
-    `SELECT * FROM goals WHERE dependencies LIKE ? AND status IN ('draft', 'active', 'paused')`
+    `${SELECT_GOALS} WHERE dependencies LIKE ? AND status IN ('draft', 'active', 'paused')`
   ).all(`%"${goalId}"%`) as GoalRow[];
   return rows.map(parseGoal);
 }
@@ -367,7 +373,7 @@ export function getGoalsByDependency(goalId: string): Goal[] {
 export function getGoalsNeedingEscalation(): Goal[] {
   const db = getDb();
   const rows = db.prepare(
-    `SELECT * FROM goals WHERE status = 'active' AND health IN ('behind', 'critical') ORDER BY deadline ASC`
+    `${SELECT_GOALS} WHERE status = 'active' AND health IN ('behind', 'critical') ORDER BY deadline ASC`
   ).all() as GoalRow[];
   return rows.map(parseGoal);
 }

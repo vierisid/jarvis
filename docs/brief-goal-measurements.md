@@ -59,7 +59,7 @@ For example, using a real goal ID and a measurement time at or before now:
 
 Use a new request ID, the returned measurement revision, a later observation time and a new evidence version to correct it. A receipt records the historical committed value; reload the current view after receipt recovery.
 
-Canonical `/api/goals`, root, tree, children and detail reads add an optional `measurement` field, so existing clients still receive the original score/status/health fields. Legacy records have measurement null. The Brief projection has `measurement: null` when unobserved, and explicit progress basis `legacy_score`, `unknown` or `measurement`. `progress.rollup` is `independent`.
+Canonical `/api/goals`, root, tree, children and detail reads add an optional `measurement` field, so existing clients still receive the original score/status/health fields. Every canonical goal query joins its measurement in the same SQL statement, so another process cannot produce a response mixing an old score/health/revision with a newer measurement. This also applies to overdue, dependency and escalation readers. Each goal is internally consistent; a recursively assembled tree does not promise one snapshot across different goals. Legacy records have measurement null. The Brief projection has `measurement: null` when unobserved, and explicit progress basis `legacy_score`, `unknown` or `measurement`. `progress.rollup` is `independent`.
 
 ## D-track and F16 integration
 
@@ -73,9 +73,9 @@ In WSL:
 
 ```sh
 cd /home/vierisid/.cache/codex/jarvis-f-15
-bun test src/goals/measurements.test.ts src/daemon/api-brief-goal-measurements.test.ts
+bun test src/goals/measurements.test.ts src/daemon/api-brief-goal-measurements.test.ts src/util/model-exec-env.test.ts
 ```
 
-Tests use isolated fixture databases and a local authenticated socket. They exercise the canonical writer, API, receipt recovery, restart, competing processes, negative corrections, independent hierarchy, old-schema migration, malformed requests and transaction failure. No live service, model or external effect is used.
+Tests use isolated fixture databases and a local authenticated socket. They exercise the canonical writer, API, receipt recovery, restart, competing processes, negative corrections, independent hierarchy, old-schema migration, malformed requests and transaction failure. No live service, model or external effect is used. The review regressions commit a correction through the real writer in another process between fetching a goal and projecting it, covering nine canonical/Brief read paths. The environment inventory also verifies that the feature flag is classified as a setting and preserved in model-launched environments. The focused command passes 55 tests after both review corrections; red/green evidence is retained under `docs/brief-delivery/evidence/F-15/review-*.log`.
 
 Disable the feature flag and restart the new runtime to stop Brief reads/writes. Retain additive tables, receipts and existing recorded scores. Do not drop evidence or downgrade to an older writer while measurements are active: an older binary does not enforce the measurement-backed scoring rule. New clients must respect unsupported/unavailable capabilities on an older server. Delivery evidence and baseline details are in `docs/brief-delivery/F-15.json` and its evidence directory. F16 is not implemented here.
