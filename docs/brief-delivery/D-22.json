@@ -69,6 +69,14 @@
       "command": "prettier --check ui/src/brief/opportunities; git diff --check",
       "result": "pass",
       "evidence": "evidence/D-22/format-check.log"
+    },
+    {
+      "command": "git commit with normal .githooks/pre-commit",
+      "result": "pass",
+      "tests": 44,
+      "assertions": 135,
+      "evidence": "evidence/D-22/hooks.log",
+      "note": "EE boundary, migrations, templates, package checks, related tests and TypeScript passed. No bypass or coauthor trailer."
     }
   ],
   "browser": {
@@ -176,5 +184,6 @@
   ],
   "rollback": "Disable optional opportunitiesRegistration and specimen route; preserve host receipts; legacy/default routes unchanged.",
   "quick_verify": "http://127.0.0.1:4402/?brief=preview&specimen=opportunities#/_brief_preview",
-  "next": "D-23, not started"
+  "next": "D-23, not started",
+  "implementation_head": "f4384d1ee003539904926d26c01bef0bce97384d"
 }
