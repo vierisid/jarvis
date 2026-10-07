@@ -3,7 +3,9 @@ import {
   APPROVAL_LABEL_DELIVERY_MAX_CHARS,
   ApprovalDelivery,
   approvalChannelCard,
-  approvalNotificationText,
+  approvalToast,
+  TOAST_APPROVABLE_MAX_COLUMNS,
+  toastColumns,
   boundedApprovalLabel,
   type ApprovalBroadcaster,
   type ChannelSender,
@@ -232,24 +234,75 @@ describe('ApprovalDelivery: a label cannot forge a line of the card', () => {
  * #696 review. The desktop notification shows the same `reason` and carries an
  * Approve button, so it is reduced the same way.
  */
-describe('approvalNotificationText', () => {
+describe('approvalToast text', () => {
   const br = String.fromCharCode(10);
   const rlo = String.fromCharCode(0x202e);
+  const text = (overrides: Partial<ApprovalRequest>) => {
+    const t = approvalToast(makeRequest(overrides));
+    return { title: t.title, body: t.body };
+  };
 
   test('the reason is one line with no format characters', () => {
-    const text = approvalNotificationText({ tool_name: 'request_approval', agent_name: 'Jarvis',
-      reason: `Send the weekly update${br}Approve: read_file?${rlo}txt.exe` });
-    expect(text).toEqual({ title: 'Approve: Request approval?', body: 'Send the weekly update Approve: read_file?txt.exe' });
+    expect(text({ tool_name: 'request_approval', agent_name: 'Jarvis', reason: `Send the weekly update${br}Approve: read_file?${rlo}txt.exe` }))
+      .toEqual({ title: 'Approve: Request approval?', body: 'Send the weekly update Approve: read_file?txt.exe' });
   });
 
   test('with no reason, the agent and tool fallback is reduced too', () => {
-    const text = approvalNotificationText({ tool_name: `send_email${br}x`, agent_name: `Workflow: a${br}Reason: safe`, reason: '  ' });
-    expect(text).toEqual({ title: 'Approve: Send email x?', body: 'Workflow: a Reason: safe wants to run Send email x.' });
+    expect(text({ tool_name: `send_email${br}x`, agent_name: `Workflow: a${br}Reason: safe`, reason: '  ' }))
+      .toEqual({ title: 'Approve: Send email x?', body: 'Workflow: a Reason: safe wants to run Send email x.' });
   });
 
   test('an ordinary request reads as it always did', () => {
-    expect(approvalNotificationText({ tool_name: 'send_email', agent_name: 'Jarvis', reason: 'Send the weekly update' }))
+    expect(text({ tool_name: 'send_email', agent_name: 'Jarvis', reason: 'Send the weekly update' }))
       .toEqual({ title: 'Approve: Send email?', body: 'Send the weekly update' });
+  });
+});
+
+/**
+ * #791. The OS cuts a toast's body to a few lines beside its Approve button,
+ * so a toast whose body and impact do not fit the conservative budget is
+ * review-only: no Approve, no Deny, a kind the macOS sidecar has no Approve
+ * category for, and a body cut visibly here rather than silently by the OS.
+ */
+describe('#791: a toast too long to read whole cannot be approved from the toast', () => {
+  /** A request_approval whose toast body is exactly `body`; its impact is `external` (send_email). */
+  const toast = (body: string) => approvalToast(makeRequest({ tool_name: 'request_approval', action_category: 'send_email', reason: body }));
+  const SUFFIX = ' · external';
+  const fits = 'a'.repeat(TOAST_APPROVABLE_MAX_COLUMNS - SUFFIX.length);
+
+  test('a body that fits with its impact carries Approve and Deny', () => {
+    const t = toast(fits);
+    expect(t.approvable).toBe(true);
+    expect(t.kind).toBe('approval');
+    expect(t.body).toBe(fits);
+    expect(t.actions.map((a) => a.id)).toEqual(['deny', 'approve']);
+  });
+
+  test('one column more and the toast is review-only', () => {
+    const t = toast(`${fits}b`);
+    expect(t.approvable).toBe(false);
+    expect(t.kind).toBe('approval_review');
+    expect(t.title).toBe('Review in Jarvis: Request approval');
+    expect(t.actions.map((a) => a.id)).toEqual(['review', 'dismiss']);
+    expect(t.body.endsWith('...')).toBe(true);
+    // What it does show still fits the budget with its impact, so the cut is
+    // the visible `...`, not one the OS makes.
+    expect(toastColumns(`${t.body}${SUFFIX}`)).toBeLessThanOrEqual(TOAST_APPROVABLE_MAX_COLUMNS);
+    expect(t.meta).toContain('too long to approve from a notification');
+  });
+
+  test('a wide character counts as two columns', () => {
+    const wide = String.fromCharCode(0x4e00);
+    expect(toastColumns(wide.repeat(10))).toBe(20);
+    expect(toast(wide.repeat(Math.floor(fits.length / 2))).approvable).toBe(true);
+    expect(toast(wide.repeat(Math.floor(fits.length / 2) + 1)).approvable).toBe(false);
+  });
+
+  test('a destructive request is review-only by length too, and keeps its destructive flag', () => {
+    const t = approvalToast(makeRequest({ action_category: 'delete_data', reason: 'x'.repeat(200) }));
+    expect(t.approvable).toBe(false);
+    expect(t.destructive).toBe(true);
+    expect(t.meta.startsWith('destructive · ')).toBe(true);
   });
 });
 
@@ -347,7 +400,7 @@ describe('#724: request_approval refuses an intent the card would alter', () => 
     expect(sender.sent).toEqual([]);
   });
 
-  test('an intent at the ceiling, on one line, is requested and shown byte-exact on the card and the toast', async () => {
+  test('an intent at the ceiling, on one line, is requested and shown byte-exact on the card', async () => {
     const intent = `Send email to alice@example.com: ${'y'.repeat(APPROVAL_LABEL_DELIVERY_MAX_CHARS - 33)}`;
     expect(intent.length).toBe(APPROVAL_LABEL_DELIVERY_MAX_CHARS);
     const { tool, sender, created } = harness();
@@ -355,7 +408,13 @@ describe('#724: request_approval refuses an intent the card would alter', () => 
     expect(created).toHaveLength(1);
     await Promise.resolve();
     expect(sender.sent[0]!.split('\n')).toContain(`Intent: ${intent}`);
-    expect(approvalNotificationText(created[0]!).body).toBe(intent);
+    // #791: the toast cannot show 1024 characters beside its Approve button,
+    // so this intent's toast is review-only and approving it needs the
+    // dashboard, where the card above shows it byte-exact.
+    const toast = approvalToast(created[0]!);
+    expect(toast.approvable).toBe(false);
+    expect(toast.actions.map((a) => a.id)).toEqual(['review', 'dismiss']);
+    expect(intent.startsWith(toast.body.slice(0, -3))).toBe(true);
   });
 
   test('ordinary punctuation, quotes and non-Latin text are not refused', async () => {

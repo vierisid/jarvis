@@ -7,6 +7,7 @@ import { approvalIntentFromContext, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
 import { commandForCard } from '../util/card-text.ts';
 import type { SendOptions } from '../comms/channels/telegram.ts';
+import { impactFromCategory } from '../roles/authority.ts';
 
 /**
  * Line breaks, other C0/C1 controls and the two Unicode line separators: every
@@ -92,20 +93,116 @@ export function approvalLabelAlteration(text: string): string | null {
 }
 
 /**
- * The text of the desktop approval notification, which carries Approve and
- * Deny buttons (`notify.show` to every sidecar, daemon/index.ts). It shows the
- * same `reason` the channel card does -- for `request_approval`, the model's
- * own intent -- so it gets the same reduction (#696 review): one line, no
- * format characters, the delivery backstop.
+ * The most text, in display columns, a desktop approval toast may show before
+ * its Approve and Deny buttons (#791).
+ *
+ * The OS cuts a toast's body, not this code: Windows' ToastGeneric template
+ * and macOS banners show a few lines and drop the rest, right beside the
+ * buttons, so a long body was approved with its tail unseen.
+ *
+ * THIS IS NOT A MEASUREMENT. Nothing in the daemon can see how much a given
+ * machine shows -- that depends on the OS version, banner or alert style,
+ * display scaling, font and language -- and it has not been measured on real
+ * Windows 11 or macOS banners either. It is a deliberately conservative
+ * choice: two lines of about forty Latin characters, which is the smallest
+ * layout we design for (a macOS banner shows its body in about two lines;
+ * Windows shows more). A wide character (CJK, most emoji) counts as two
+ * columns (`toastColumns`).
+ *
+ * It is the one dial for how often a toast can be approved directly: above
+ * it the toast is review-only and approving needs the dashboard. To tighten
+ * or loosen it, screenshot real approval toasts on Windows 11 (100% and 150%
+ * scaling) and macOS 14/15 (banner and alert styles) with bodies of known
+ * length, take the longest that every one of them shows whole together with
+ * its ` · <impact>` suffix, and set it at or below that.
  */
-export function approvalNotificationText(request: Pick<ApprovalRequest, 'tool_name' | 'agent_name' | 'reason'>): {
-  title: string; body: string;
-} {
+export const TOAST_APPROVABLE_MAX_COLUMNS = 80;
+
+/** East Asian Wide/Fullwidth ranges and the emoji blocks: two columns each. */
+const WIDE = /[ᄀ-ᅟ⺀-〾ぁ-㏿㐀-䶿一-鿿ꀀ-꓏가-힣豈-﫿︰-﹏＀-｠￠-￦\u{1f300}-\u{1f64f}\u{1f900}-\u{1f9ff}\u{20000}-\u{3fffd}]/u;
+
+/** Display columns, counting a wide character as two. */
+export function toastColumns(text: string): number {
+  let columns = 0;
+  for (const ch of text) columns += WIDE.test(ch) ? 2 : 1;
+  return columns;
+}
+
+/** The longest prefix of `text` that fits `max` columns. */
+function fitColumns(text: string, max: number): string {
+  let columns = 0;
+  let out = '';
+  for (const ch of text) {
+    columns += WIDE.test(ch) ? 2 : 1;
+    if (columns > max) break;
+    out += ch;
+  }
+  return out;
+}
+
+/** A `notify.show` payload for one approval, and whether it offers Approve. */
+export type ApprovalToast = {
+  id: string;
+  /** `approval` carries Approve/Deny; `approval_review` only opens Jarvis. */
+  kind: 'approval' | 'approval_review';
+  title: string;
+  body: string;
+  meta: string;
+  destructive: boolean;
+  actions: Array<{ id: string; label: string; primary?: boolean }>;
+  approvable: boolean;
+};
+
+/**
+ * The desktop approval toast (`notify.show` to every sidecar, daemon/index.ts).
+ *
+ * The sidecar renders `body · meta` as one text under the title, and the OS
+ * cuts it to a few lines (#791). So the part the person decides on -- the body,
+ * then the impact that leads the meta -- must fit `TOAST_APPROVABLE_MAX_COLUMNS`
+ * for the toast to carry Approve and Deny. What follows the impact may be cut
+ * by the OS, and is never what the decision is about.
+ *
+ * Above the budget the toast is review-only: no Approve, no Deny, an "Open
+ * Jarvis" action, the body cut here with a visible `...`, and its own kind,
+ * `approval_review`. The kind matters, not just the action list: the macOS
+ * sidecar takes a notification's buttons from a category registered per kind,
+ * and the `approval` category always has Approve and Deny, whatever actions
+ * the payload lists. An `approval_review` kind is not a registered category on
+ * any sidecar shipped so far, which macOS renders with no buttons (tapping the
+ * banner still opens Jarvis), and the daemon acts on a notification's
+ * approve/deny only for kind `approval` (`notificationApprovalDecision`).
+ *
+ * Every text is reduced like a channel-card label: one line, no format
+ * characters. The body must stay one line for a second reason: the Windows
+ * sidecar embeds it in a PowerShell here-string, where a line starting `'@`
+ * would end the string.
+ */
+export function approvalToast(request: ApprovalRequest): ApprovalToast {
   const label = (text: string) => boundedApprovalLabel(text, APPROVAL_LABEL_DELIVERY_MAX_CHARS);
   const words = label(request.tool_name).replace(/[_-]+/g, ' ').trim();
   const tool = words ? words.charAt(0).toUpperCase() + words.slice(1) : 'Action';
-  const reason = label(request.reason?.trim() ?? '');
-  return { title: `Approve: ${tool}?`, body: reason || `${label(request.agent_name)} wants to run ${tool}.` };
+  const reason = boundedApprovalLabel(request.reason?.trim() ?? '', (request.reason ?? '').length);
+  const body = reason || `${label(request.agent_name)} wants to run ${tool}.`;
+  const impact = impactFromCategory(request.action_category);
+  const toolLabel = label(request.tool_name);
+  const destructive = impact === 'destructive';
+  const approvable = toastColumns(`${body} · ${impact}`) <= TOAST_APPROVABLE_MAX_COLUMNS;
+  if (approvable) {
+    return {
+      id: request.id, kind: 'approval', title: `Approve: ${tool}?`, body, meta: `${impact} · ${toolLabel}`, destructive,
+      actions: [{ id: 'deny', label: 'Deny' }, { id: 'approve', label: 'Approve', primary: true }],
+      approvable,
+    };
+  }
+  // Leave room for the `...` and the ` · <impact>` that follows the body.
+  const room = TOAST_APPROVABLE_MAX_COLUMNS - toastColumns(`... · ${impact}`);
+  return {
+    id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
+    body: `${fitColumns(body, room).trimEnd()}...`,
+    meta: `${impact} · ${toolLabel} · too long to approve from a notification`, destructive,
+    actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+    approvable,
+  };
 }
 
 /**

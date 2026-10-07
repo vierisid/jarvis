@@ -11,7 +11,7 @@
 
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
-import { approvalChannelCard } from '../authority/approval-delivery.ts';
+import { approvalChannelCard, approvalToast } from '../authority/approval-delivery.ts';
 
 export interface ApprovalDecisionDeps {
   approvalManager: ApprovalManager;
@@ -93,6 +93,33 @@ export async function channelApprovalReply(
   if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
   if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
   return 'Approved. The agent will continue and report back in chat.';
+}
+
+/**
+ * The person's choice from a desktop notification (`notify.action`), or null
+ * when it is not an approval decision the daemon acts on.
+ *
+ * Only kind `approval` carries Approve and Deny, and only for a request whose
+ * toast can still show what is being approved (`approvalToast(...).approvable`,
+ * #791): a review-only toast has no such buttons, and a click reported for one
+ * anyway -- an older sidecar, a stale notification, a sidecar that reports the
+ * wrong kind -- is ignored rather than acted on, so the person decides in the
+ * dashboard. Recomputed from the request rather than remembered, so it holds
+ * across a restart.
+ */
+export async function notificationApprovalDecision(
+  payload: unknown,
+  deps: ApprovalDecisionDeps,
+): Promise<ApprovalDecisionOutcome | null> {
+  const p = (payload ?? {}) as { id?: unknown; kind?: unknown; action?: unknown };
+  if (p.kind !== 'approval' || typeof p.id !== 'string' || !p.id) return null;
+  if (p.action !== 'approve' && p.action !== 'deny') return null;
+  const request = deps.approvalManager.getRequest(p.id);
+  if (request && !approvalToast(request).approvable) {
+    console.warn(`[Approval] ignored a notification ${p.action} for ${p.id}: its toast was review-only`);
+    return null;
+  }
+  return applyApprovalDecision(p.action, p.id, 'notification', deps);
 }
 
 export type ExecutionResolutionOutcome =
