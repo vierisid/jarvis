@@ -71,10 +71,28 @@ const PNG_CHANNELS: Record<number, number> = { 0: 1, 2: 3, 3: 1, 4: 2, 6: 4 };
  * even an 8001x4 capture costs, most of it JSC's optimising compilers. The
  * time is synchronous on the daemon's thread; the bounds keep a hostile or
  * broken file from costing more of it. The one shape memory still follows is
- * width, since a row is held whole: see decodeRows.
+ * width, since a row is held whole, and MAX_DECODE_WIDTH bounds that.
  */
 export const MAX_DECODE_PIXELS = 64_000_000;
 export const MAX_DECODE_BYTES = 256_000_000;
+
+/**
+ * The widest image decoded at all (#768). The decode holds a row at a time
+ * (see decodeRows), so its memory follows width, and the two caps above still
+ * admitted 64000000x1 RGBA -- a 256 MB row, +505 MB peak for a ~250 KB PNG,
+ * measured. No display is anywhere near: three 6K panels side by side are
+ * 18048 px, and JPEG, what a compacted capture becomes, cannot pass 65535
+ * either. At this bound a row is at most 512 KB (16-bit RGBA), so a decode's
+ * rows stay around 1.5 MB; 65535x900 RGBA compacted for +18.6 MB, the same as
+ * 65536x900 did before the bound, and 64000000x1 is now refused for +1.4 MB.
+ *
+ * This is a refusal, where the policy for real captures is to shrink rather
+ * than refuse; it only reaches a geometry no screen produces, so what it
+ * catches is a capture tool writing nonsense, and the message says so. Height
+ * is not bounded here: rows are streamed, so a tall image costs time, which
+ * the caps above already bound, not memory.
+ */
+export const MAX_DECODE_WIDTH = 65_535;
 
 /**
  * The longest side an image block may have. Anthropic's API rejects an image
@@ -140,6 +158,9 @@ function readPng(png: Uint8Array): PngLayout {
   }
   const channels = PNG_CHANNELS[colorType];
   if (!width || !height || channels === undefined) throw new Error('PNG has no usable header');
+  if (width > MAX_DECODE_WIDTH) {
+    throw new Error(`a ${width}x${height} image is ${width} px wide, a geometry no screen produces (at most ${MAX_DECODE_WIDTH}), so the capture tool that wrote it is misbehaving`);
+  }
   if (width * height > MAX_DECODE_PIXELS) throw new Error(`a ${width}x${height} image is larger than any screen this decodes`);
   if (interlace !== 0) throw new Error('interlaced PNG is not supported');
   const depthOk = colorType === 0 || colorType === 3 ? [1, 2, 4, 8, 16].includes(depth) && !(colorType === 3 && depth === 16) : depth === 8 || depth === 16;
@@ -306,8 +327,9 @@ export function resetStreamingInflateCheck(pinned?: boolean): void {
  * what is kept). The whole image never exists at once, inflated or decoded --
  * two rows of filtered bytes, one of RGBA and the 64 KB inflate buffer do.
  * Those rows are small for any screen (18048 px of RGBA is 72 KB), but they
- * are a row: an absurd geometry the caps still admit, 64000000x1, makes them
- * the whole image again (+505 MB measured, against +760 MB batch).
+ * are a row, so they follow width: 64000000x1, inside the area caps, made
+ * them the whole image again (+505 MB measured, against +760 MB batch) until
+ * MAX_DECODE_WIDTH refused it (#768). At that bound a row is at most 512 KB.
  *
  * Every colour type, bit depths 1/2/4/8 for grey and palette and 8/16 for the
  * rest (16-bit samples keep their high byte). A palette image's tRNS alpha is

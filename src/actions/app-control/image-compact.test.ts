@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInflate, deflateSync } from 'node:zlib';
-import { decodePng, decodeShrunkPng, downscaleToWidth, encodeJpeg, MAX_DECODE_BYTES, MAX_DECODE_PIXELS, MAX_IMAGE_SIDE, scaledQuantTable, screenshotCaption, screenshotForModel, SCREENSHOT_COMPACT, resetStreamingInflateCheck, streamingInflateWorks, tooBigToSend } from './image-compact.ts';
+import { decodePng, decodeShrunkPng, downscaleToWidth, encodeJpeg, MAX_DECODE_BYTES, MAX_DECODE_PIXELS, MAX_DECODE_WIDTH, MAX_IMAGE_SIDE, scaledQuantTable, screenshotCaption, screenshotForModel, SCREENSHOT_COMPACT, resetStreamingInflateCheck, streamingInflateWorks, tooBigToSend } from './image-compact.ts';
 import { corruptCrc, encodePng, noiseRgbRows, zeroBomb } from './fixtures/png.ts';
 
 describe('decodePng', () => {
@@ -125,6 +125,29 @@ describe('decodePng', () => {
     expect(performance.now() - started).toBeLessThan(50);
     // The same geometry at 8 bits is within both caps: the cap is on bytes, not a ban on size.
     expect(8000 * 4 * 8000).toBeLessThanOrEqual(MAX_DECODE_BYTES);
+  });
+
+  test('a width no screen produces is refused before any row buffer is allocated (#768)', () => {
+    // 64000000x1 RGBA is inside both area caps, but a row of it is 256 MB, and
+    // the decode holds three rows' worth: +505 MB measured for a ~250 KB PNG.
+    expect(64_000_000).toBeLessThanOrEqual(MAX_DECODE_PIXELS);
+    expect(64_000_000 * 4).toBeLessThanOrEqual(MAX_DECODE_BYTES);
+    const wide = encodePng(64_000_000, 1, 6, 8, [], { idat: zeroBomb(BOMB) });
+    const started = performance.now();
+    expect(() => decodePng(wide)).toThrow('a geometry no screen produces');
+    expect(performance.now() - started).toBeLessThan(50);
+    // The message names the capture tool, so a bug there reads as one.
+    expect(() => decodePng(wide)).toThrow('64000000 px wide');
+    expect(() => decodePng(wide)).toThrow('the capture tool');
+    // The bound is exact: one pixel over refuses, the bound itself decodes.
+    expect(() => decodePng(encodePng(MAX_DECODE_WIDTH + 1, 1, 0, 8, [new Uint8Array(MAX_DECODE_WIDTH + 1)]))).toThrow('a geometry no screen produces');
+    const widest = decodePng(encodePng(MAX_DECODE_WIDTH, 1, 0, 8, [new Uint8Array(MAX_DECODE_WIDTH).fill(9)]));
+    expect([widest.width, widest.height, widest.rgba[0], widest.rgba[widest.rgba.length - 1]]).toEqual([MAX_DECODE_WIDTH, 1, 9, 255]);
+    // Far wider than any real display: three 6K panels side by side are 18048.
+    expect(MAX_DECODE_WIDTH).toBeGreaterThan(3 * 6016);
+    // Height is not bounded by it: rows are streamed, so a tall capture costs
+    // a row, not its height (1x64000000 is the case the area caps still bound).
+    expect(() => decodePng(encodePng(1, MAX_DECODE_WIDTH + 1, 0, 8, Array.from({ length: MAX_DECODE_WIDTH + 1 }, () => new Uint8Array(1))))).not.toThrow();
   });
 
   test('image data that inflates past what the header declares is refused, not allocated (zip bomb)', () => {
