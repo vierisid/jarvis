@@ -119,5 +119,45 @@
   ],
   "rollback": "Unset JARVIS_BRIEF_DECISIONS and restart. Preserve additive placement/clock metadata and all canonical approvals, work decisions and effect receipts.",
   "guide": "docs/brief-decisions.md",
-  "next_task": "F-13 not started"
+  "next_task": "F-13 not started",
+  "reviewCorrections": {
+    "date": "2026-10-07",
+    "reviewed_head": "8c3e6663aacfa69a7b7c92025808ad96628d63ff",
+    "R1": "Classified brief/decisions.ts in the existing workflow data-boundary inventory with explicit person-facing projection/revision-hash rationale. Kept the exact inventory assertion. Added hostile source tests for approval, work and effect projections, mutations and restart.",
+    "rejection_followup": "Pinned the existing contract: rejection denies permission without dispatch; canonical scheduler/boundary records a blocked effect. The same approval identity remains inspect-only after restart. Documented this distinction from terminal approvals without unresolved effects; no new dismissal or retry behavior.",
+    "production_behavior_changed": false,
+    "verification": {
+      "original_failure": {
+        "log": "docs/brief-delivery/evidence/F-12/review-inventory-red.log",
+        "passed": 10,
+        "failed": 1
+      },
+      "focused": {
+        "log": "docs/brief-delivery/evidence/F-12/review-focused.log",
+        "passed": 36,
+        "failed": 0,
+        "assertions": 343
+      },
+      "affected": {
+        "command_file": "docs/brief-delivery/evidence/F-12/review-affected-command.txt",
+        "log": "docs/brief-delivery/evidence/F-12/review-affected.log",
+        "passed": 372,
+        "failed": 0,
+        "assertions": 2973,
+        "files": 21
+      },
+      "mutations": {
+        "log": "docs/brief-delivery/evidence/F-12/review-mutations.json",
+        "expected_failures": 6,
+        "restored": true
+      },
+      "typescript": {
+        "command": "bun node_modules/typescript/bin/tsc --noEmit",
+        "status": "passed",
+        "log": "docs/brief-delivery/evidence/F-12/review-typescript.log"
+      },
+      "commit_hooks": "Normal mandatory hooks; final results and exact published head recorded in the PR description.",
+      "remote_ci": "Original-head CI failed the inventory; corrected-head results are tracked on the PR."
+    }
+  }
 }

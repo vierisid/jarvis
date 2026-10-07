@@ -219,6 +219,15 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     capture data to a completed draft and
  *                                     verifies receipt/read/replay and later
  *                                     model prompts never include that data.
+ *   brief/decisions.ts                PERSON-FACING. Reads run/version objects and
+ *                                     WorkItem.run but copies only identity/status
+ *                                     references into the authenticated queue API.
+ *                                     The whole work source contributes only to an
+ *                                     opaque revision hash, never a model prompt.
+ *                                     decisions.test.ts injects hostile steps,
+ *                                     failedStep, samples, inputs and effect results
+ *                                     and checks all three source kinds, mutations
+ *                                     and reopened reads exclude those payloads.
  *   daemon/api-routes.ts               BENIGN. Holds a whole `FlowVersion` but
  *                                     reads only `displayName`/`schemaVersion`
  *                                     off it, and answers HTTP rather than a
@@ -240,6 +249,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'brief/adapters.ts',
   'brief/composition.ts',
   'brief/contracts.ts',
+  'brief/decisions.ts',
   'daemon/api-routes.ts',
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
