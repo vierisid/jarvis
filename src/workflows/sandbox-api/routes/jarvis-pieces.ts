@@ -49,8 +49,10 @@ export function createJarvisPieceAuthorizeRoute(
     if (raw.input !== undefined && (typeof raw.input !== "object" || raw.input === null || Array.isArray(raw.input))) {
       return err("input must be an object", 400);
     }
+    if (raw.documentProtocol !== undefined && raw.documentProtocol !== 1) return err('Unsupported document protocol', 400);
     const reply = await cancellableWorkflowService(deps.pieceAuthorize)(
-      { piece: raw.piece, action: raw.action, input: (raw.input as Record<string, unknown>) ?? {} },
+      { piece: raw.piece, action: raw.action, input: (raw.input as Record<string, unknown>) ?? {},
+        ...(raw.documentProtocol === 1 ? { documentProtocol: 1 as const } : {}) },
       workflowEffectContext(ctx),
     );
     return json(reply);

@@ -1,0 +1,125 @@
+{
+  "task": "F-14",
+  "title": "Support safe decision edits and distinct deferral",
+  "date": "2026-10-07",
+  "branch": "brief/f-14",
+  "base_branch": "brief/f-13",
+  "baseline": "d7e1bde053cc905fb5b02406da021c9f8a290cfb",
+  "main_reviewed": "538179e3a91edfaa435698cac94bc4ca41e6c873",
+  "head": "Commit containing this receipt; exact published head and normal hook results recorded in PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-14",
+  "dependencies": {
+    "compile": [
+      "F-01",
+      "F-12"
+    ],
+    "enable": [
+      "F-12"
+    ],
+    "stack": "User-requested F stack on corrected F13; keep PRs open and unmerged. Optional Q05 fact owner integration."
+  },
+  "baseline_review": {
+    "pinned": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": [
+      "A15 ui/src/v2/rooms/authority/useAuthorityData.ts",
+      "A13 src/workflows/runtime/effect-boundary.ts"
+    ],
+    "comparison": "A15 matches F13 and reviewed main. A13 matches F13; main adds bounded approval labels to preserve when integrating. D08 supplies presentation and confirmation, Q05 supplies recipient/connection/computer binding checks.",
+    "open_prs": [
+      777,
+      775,
+      741,
+      778
+    ],
+    "parent_ci": "Corrected F13 Tests, Docker and active platform checks pass."
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:3271",
+    "visual": "Backend and workflow engine only; no UI activation or screenshot. D07/D08 retain presentation ownership."
+  },
+  "activation": {
+    "capability": "decisionEdits",
+    "flags": [
+      "JARVIS_BRIEF_DECISIONS=1",
+      "JARVIS_BRIEF_DECISION_EDITS=1"
+    ],
+    "default": "off",
+    "merged": false,
+    "release_enabled": false
+  },
+  "implementation": [
+    "Bounded typed plain-text Gmail and Calendar event adapters; unknown, rich and opaque actions remain read-only. No generic argument or auth editor.",
+    "Atomic immutable revision/approval replacement, old approval expiry, stable queue/work identity and placement, generation-fenced effect writes and dispatch claims.",
+    "Durable Keep draft and expiry retention without workflow resume, explicit rejection, fresh review on reopen, idempotent request receipts and authenticated recovery routes.",
+    "Versioned full-document handoff from daemon to engine processed input before action context conversion; cache registration and re-vendoring patch.",
+    "Optional Q05 fact owner recaptures new recipient bindings while retaining original identities for unchanged recipients. Authority, cancellation and binding checks retain their owners."
+  ],
+  "verification": {
+    "affected": {
+      "passed": 733,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 15715,
+      "files": 39,
+      "command_file": "docs/brief-delivery/evidence/F-14/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-14/affected.log",
+      "note": "Includes real engine build and all affected workflow Authority users. Final document status projection also rechecked in focused suite and normal commit hooks."
+    },
+    "focused": {
+      "passed": 24,
+      "skipped": 1,
+      "failed": 0,
+      "log": "docs/brief-delivery/evidence/F-14/focused.log",
+      "includes": "Two independent processes racing save/approve, reload/expiry/deferral, lost responses, typed parameter dispatch, authenticated HTTP, unsupported payloads and status projection.",
+      "assertions": 194
+    },
+    "actual_q05": {
+      "commit": "b523efb76c5cd71df3daa6272b65138991790fc4",
+      "passed": 1,
+      "failed": 0,
+      "assertions": 6,
+      "log": "docs/brief-delivery/evidence/F-14/q05-fact-owner.log",
+      "method": "Temporary overlay of actual fact-bindings.ts, removed in finally. New recipient pins, retained deleted dependency and stale recipient rejection. Not a full F/Q stack merge."
+    },
+    "regressions": {
+      "failed_before_fix": 5,
+      "logs": [
+        "docs/brief-delivery/evidence/F-14/claim-regression-red.log",
+        "docs/brief-delivery/evidence/F-14/blocked-status-red.log"
+      ],
+      "fixes": [
+        "Treat a positive single-ID claim count as success when queue triggers add changed rows.",
+        "Project a blocked effect ahead of the earlier permission grant."
+      ]
+    },
+    "mutations": {
+      "variants": 4,
+      "expected_failures": 6,
+      "log": "docs/brief-delivery/evidence/F-14/mutations.json",
+      "note": "Removing only the scheduler prefilter remains protected by its transactional recheck; removing both fails the deferral and expiry tests."
+    },
+    "vendor_patch": {
+      "status": "passed",
+      "source": "Activepieces d04e6807c485ecd788a72af0d04abffba78563c7",
+      "log": "docs/brief-delivery/evidence/F-14/pinned-vendor-patch.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-14/typescript.log",
+      "note": "Normal commit hook reruns TypeScript after the final edits."
+    },
+    "guards": "Normal EE, migration, template, package, related tests and TypeScript hooks required before push; exact results in PR description.",
+    "live_provider": "Not run. Tests use temporary databases, a Unix socket and the real engine guard with isolated dispatch input; no email/calendar effect or production activation."
+  },
+  "limitations": [
+    "Gmail HTML, attachments, reply threads, custom senders and provider-side draft mutation are read-only. Calendar requires explicit end and timezone; calendar/notification/guest options stay fixed.",
+    "D08 must bind the typed document and correlate receipts before moving the stack; no live UI binding is included.",
+    "Q05 and main overlap the runtime files; preserve their validation and bounded-label changes. The guide records integration details.",
+    "Existing workflow piece retry semantics remain; authorization is not a provider completion or exactly-once delivery receipt.",
+    "Readiness and flag gates keep this default off. Full repository CI reports separately on the PR."
+  ],
+  "rollback": "Unset decision-edits flag on the new runtime and restart; retain schema, revisions, receipts and expired approvals. Do not downgrade the protocol with edited/deferred work pending.",
+  "guide": "docs/brief-decision-documents.md",
+  "next_task": "F-15 not started"
+}

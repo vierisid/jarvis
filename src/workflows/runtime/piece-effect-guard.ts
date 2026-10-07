@@ -18,6 +18,7 @@
  */
 
 import { isGovernedPiece, sanitizePieceInput } from './piece-effects';
+import { documentInput, applyDocument, type DecisionDocument } from './decision-document';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 
@@ -25,6 +26,7 @@ export interface PieceAuthorizeRequest {
   piece: string;
   action: string;
   input: Record<string, unknown>;
+  documentProtocol?: 1;
 }
 
 export interface PieceAuthorizePending {
@@ -37,7 +39,7 @@ export type PieceAuthorizeResponse =
   /** No adapter for this piece: it runs as it always has. */
   | { governed: false }
   /** Authority allowed the dispatch; the effect is recorded and claimed. */
-  | { governed: true; dispatch: 'authorized' }
+  | { governed: true; dispatch: 'authorized'; document?: DecisionDocument }
   /** Authority wants a human; the step parks on this waitpoint. */
   | { governed: true; dispatch: 'approval_required'; approval: PieceAuthorizePending };
 
@@ -58,10 +60,12 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     return { governed: false };
   }
   const url = `${params.apiUrl.replace(/\/+$/u, '')}${PIECE_AUTHORIZE_PATH}`;
+  const editable = documentInput(params.piece, params.action, params.input);
   const body: PieceAuthorizeRequest = {
     piece: params.piece as string,
     action: params.action,
-    input: sanitizePieceInput(params.input),
+    input: editable ?? sanitizePieceInput(params.input),
+    ...(editable ? { documentProtocol: 1 } : {}),
   };
   let response: Response;
   try {
@@ -92,6 +96,15 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     return { governed: false };
   }
   if (reply.dispatch === 'approval_required' && reply.approval?.waitpointId) return reply;
-  if (reply.dispatch === 'authorized') return reply;
+  if (reply.dispatch === 'authorized') {
+    if (reply.document !== undefined) {
+      if (!editable) throw new Error('Document authorization requires a compatible engine input');
+      // The caller constructs its execution context AFTER this await. Apply only
+      // typed editable fields; preserve auth and every original read-only option.
+      const approved = applyDocument(body.piece, body.action, editable, reply.document);
+      Object.assign(params.input as Record<string, unknown>, approved);
+    }
+    return reply;
+  }
   throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: malformed authorization reply`);
 }

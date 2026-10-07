@@ -14,7 +14,7 @@ export function ensureDecisionSchema(db: Database): void {
     // Any writer, including legacy surfaces, invalidates an in-progress pagination
     // traversal. Return a refresh conflict rather than silently skip/repeat a card.
     for (const table of ['approval_requests', 'commitment_work', 'commitments', 'workflow_effect',
-      'flow_run', 'flow', 'flow_version', 'waitpoint', 'workflow_run_cancellation', 'brief_decision_placement']) {
+      'brief_decision_document', 'flow_run', 'flow', 'flow_version', 'waitpoint', 'workflow_run_cancellation', 'brief_decision_placement']) {
       for (const operation of ['INSERT', 'UPDATE', 'DELETE']) {
         db.run(`CREATE TRIGGER IF NOT EXISTS brief_decision_${table}_${operation}
           AFTER ${operation} ON ${table} BEGIN

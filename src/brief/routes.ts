@@ -1,3 +1,5 @@
+import { createDecisionDocumentRoutes } from './decision-document-routes';
+import type { DecisionDocuments } from './decision-documents';
 import { createRecommendationRoutes } from './recommendation-routes';
 import type { Recommendations } from './recommendations';
 import { createDecisionRoutes } from './decision-routes';
@@ -15,8 +17,9 @@ import { createCompositionRoutes } from './composition-routes';
 import type { BriefCompositionProvider } from './composition';
 
 /** Mounted only inside the daemon's existing authenticated API route table. */
-export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations) {
+export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments) {
   return {
+    ...createDecisionDocumentRoutes(capabilities, json, documents),
     ...createRecommendationRoutes(capabilities, json, recommendations),
     ...createDecisionRoutes(capabilities, json, decisions),
     ...createOpportunityActivationRoutes(capabilities, json, activation),

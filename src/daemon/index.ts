@@ -1,3 +1,6 @@
+import { loadDocumentFactBindings } from '../brief/decision-document-bindings';
+import { DecisionDocuments } from '../brief/decision-documents';
+import { registerDecisionEdits } from '../brief/registrations/decision-edits';
 import { Recommendations } from '../brief/recommendations';
 import { loadRecommendationPlanner } from '../brief/recommendation-planner';
 import { registerRecommendations } from '../brief/registrations/recommendations';
@@ -4983,6 +4986,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 9b. Set up API routes + dashboard static files
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService });
+    const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions, approvalManager, id => {
+      const request = approvalManager.getRequest(id);
+      if (request) wsService.broadcastApprovalUpdate(request);
+    }, await loadDocumentFactBindings());
     const briefRecommendations = new Recommendations(getDb(), briefDecisions,
       process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1' ? await loadRecommendationPlanner() : null);
     const briefConversations = new BriefConversationProvider();
@@ -5006,6 +5013,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
+    if (process.env.JARVIS_BRIEF_DECISION_EDITS === '1') briefEnabled.push('decisionEdits');
     if (process.env.JARVIS_BRIEF_DECISIONS === '1') briefEnabled.push('decisions');
     if (awarenessDelivery.quiet) briefEnabled.push('quietAwareness');
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
@@ -5027,12 +5035,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerOpportunityActivation(briefOpportunityActivation),
       ...registerQuietAwareness(awarenessDelivery),
       ...registerDecisions(briefDecisions),
+      ...registerDecisionEdits(briefDecisionDocuments),
       ...registerRecommendations(briefRecommendations),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefDecisions,
+      briefDecisionDocuments,
       briefRecommendations,
       briefConversations,
       briefAttachments,
@@ -5576,6 +5586,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // buildSandboxServiceBackends if any of these are missing.
       const agentSpecialists = agentService.getSpecialists();
       const backends = buildSandboxServiceBackends({
+        decisionDocumentsEnabled: briefCapabilities.snapshot().capabilities.decisionEdits.enabled,
         credentialResolver: workflowSandboxApi.services.credentialResolver,
         llmManager: agentService.getLLMManager(),
         ...(toolRegistry ? { toolRegistry } : {}),

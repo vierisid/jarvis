@@ -18,6 +18,7 @@
  */
 
 import { describe, expect, test } from 'bun:test';
+import { applyPieceApprovalPatch } from '../../../scripts/activepieces-piece-approval-patch';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 
@@ -45,6 +46,9 @@ describe('engine piece-executor admission gate', () => {
     expect(authorizeAt).toBeGreaterThan(-1);
     expect(runAt).toBeGreaterThan(-1);
     expect(authorizeAt).toBeLessThan(runAt);
+    const convertedAt = flat.indexOf('backwardCompatabilityContextUtils.makeActionContextBackwardCompatible({');
+    expect(convertedAt).toBeGreaterThan(authorizeAt);
+    expect(convertedAt).toBeLessThan(runAt);
     // The resolved input is what gets authorized: authorizing the unresolved
     // settings would review `{{ ... }}` sources rather than real recipients.
     expect(flat).toContain('input: processedInput,');
@@ -68,9 +72,25 @@ describe('engine piece-executor admission gate', () => {
     // Paths are relative to VENDOR_PACKAGES; each must resolve to a real file.
     const vendorPackages = resolve(__dirname, '../activepieces/packages');
     for (const rel of ['../../runtime/piece-effects.ts', '../../runtime/piece-effect-guard.ts',
-      'server/engine/src/lib/handler/piece-executor.ts']) {
+      '../../runtime/decision-document.ts', 'server/engine/src/lib/handler/piece-executor.ts']) {
       expect(block![1]!).toContain(`'${rel}'`);
       expect(existsSync(resolve(vendorPackages, rel))).toBe(true);
     }
   });
+});
+
+
+test('the sync patch preserves the document gate and rejects partial upstream drift', () => {
+  const source = readFileSync(PIECE_EXECUTOR, 'utf8');
+  expect(applyPieceApprovalPatch(source)).toBe(source);
+  const start = source.indexOf("        // Jarvis: a verified piece's action");
+  const end = source.indexOf('        const newExecutionContext', start);
+  const conversionStart = source.indexOf('        const backwardCompatibleContext', start);
+  const outputStart = source.indexOf('        const output =', conversionStart);
+  const conversion = source.slice(conversionStart, outputStart);
+  const ungated = source.slice(0, start) + conversion + '        const output = await runMethodToExecute(backwardCompatibleContext)\n' + source.slice(end);
+  const rebuilt = applyPieceApprovalPatch(ungated.replace(/import \{ authorizePieceDispatch \} from '[^']+'\n/u, ''));
+  expect(squash(rebuilt)).toContain(squash(source.slice(start, end)));
+  expect(() => applyPieceApprovalPatch(ungated.replace('const output = await', 'const result = await'))).toThrow(/drift/);
+  expect(readFileSync(resolve(__dirname, '../../../scripts/sync-activepieces.ts'), 'utf8')).toContain('applyPieceApprovalPatch(readFileSync(pieceExecutorPath');
 });

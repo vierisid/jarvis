@@ -250,6 +250,9 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'brief/composition.ts',
   'brief/contracts.ts',
   'brief/decisions.ts',
+  // F-14: person-facing typed document data, never model input. Strict text limits
+  // reject framing delimiters; credentials and raw effect/waitpoint records stay private.
+  'brief/decision-documents.ts',
   'daemon/api-routes.ts',
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',

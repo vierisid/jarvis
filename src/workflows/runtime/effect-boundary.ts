@@ -1,3 +1,4 @@
+import { projectDocument } from './decision-document';
 import { combineDecisions, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
 import type { AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
@@ -42,6 +43,8 @@ export interface EffectInvocation {
    */
   categories?: ActionCategory[];
   request: Record<string, unknown>;
+  /** Only the validated versioned piece document protocol can enroll a review. */
+  documentReview?: boolean;
   /** A reviewed UI capability cannot be auto-allowed by category overrides. */
   confirmation?: { confirm: 'always'; intent: string };
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown> };
@@ -122,7 +125,7 @@ export class WorkflowEffectBoundary {
         decision: 'unresolved', reason: '', status: 'pending', approvalId: null, waitpointId: null, createdAt: Date.now() };
       saveWorkflowEffect(effect!);
     }
-    const record = effect!;
+    let record = effect!;
     // The trail names who was judged: the workflow itself, or the sub-agent a
     // delegated call was judged as.
     const judged = input.principal ? ` / as ${input.principal.agentRoleId} (level ${input.principal.agentAuthorityLevel})` : '';
@@ -203,7 +206,14 @@ export class WorkflowEffectBoundary {
           record.approvalId = request.id;
           record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,
             stepName: record.stepName, type: 'MANUAL' }).id;
-          record.decision = 'approval_required'; saveWorkflowEffect(record); log(false);
+          record.decision = 'approval_required'; saveWorkflowEffect(record);
+          if (input.documentReview) {
+            const db = getWorkflowDb(), decisionId = `approval:${request.id}`;
+            db.run(`INSERT INTO brief_decision_document VALUES (?,?,?,0,'review',?)`, [decisionId, id, request.id, request.created_at]);
+            db.run('INSERT INTO brief_decision_document_revision VALUES (?,0,?,?,?)',
+              [decisionId, request.id, JSON.stringify(projectDocument(input.piece, input.action, record.arguments)), request.created_at]);
+          }
+          log(false);
         })();
         // Delivery is retriable by the existing pending-request surfaces. Do
         // not keep a database transaction open across external notification.
@@ -216,6 +226,7 @@ export class WorkflowEffectBoundary {
         if (latest?.outcome && latest.outcome.status !== 'succeeded') throw new ActionOutcomeError(latest.outcome);
         if (latest?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
         if (!latest || latest.status !== 'pending') throw new Error(latest?.error ?? 'Workflow effect is no longer pending');
+        record = latest;
       }
       const approval = approvals.getRequest(record.approvalId!);
       if (!approval || approval.execution_mode !== 'workflow' || digest(JSON.parse(approval.tool_arguments)) !== digest(record.arguments)) {
@@ -224,7 +235,10 @@ export class WorkflowEffectBoundary {
       if (input.confirmation && !approvalNeedsClick(approval)) {
         throw new Error('Workflow approval predates required UI review; start a new reviewed run');
       }
-      if (approval.status === 'pending') return { approval: { effectId: id, approvalId: approval.id, waitpointId: record.waitpointId! } };
+      // Expired/kept supported documents remain reviewable. Only an explicit
+      // rejection resumes them to a blocked receipt; expiry never destroys a draft.
+      const retained = getWorkflowDb().query('SELECT disposition FROM brief_decision_document WHERE approval_id = ?').get(approval.id) as { disposition: string } | null;
+      if (approval.status === 'pending' || (approval.status === 'expired' && retained && retained.disposition !== 'rejected')) return { approval: { effectId: id, approvalId: approval.id, waitpointId: record.waitpointId! } };
       if (approval.status !== 'approved') {
         record.decision = 'denied';
         record.status = 'blocked'; record.error = `Workflow approval ${approval.status}; effect was not executed`;
