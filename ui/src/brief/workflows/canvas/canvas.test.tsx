@@ -270,3 +270,59 @@ test("discard restores the saved workflow name, not the edited version object", 
   expect(editor.version!.displayName).toBe(original);
   expect(editor.dirty).toBe(false);
 });
+
+for (const kind of ["piece", "control-flow", "error-handler"] as const) {
+  test(`detached descendant names are reserved when creating ${kind}`, async () => {
+    await mount();
+    let inserted: string | null = null, created: string | null = null;
+    await React.act(async () => { inserted = editor.insertStepAfter("orphan_child"); });
+    await React.act(async () => {
+      created = kind === "piece"
+        ? editor.createOrphanStep({ x: 800, y: 900 }, "fixture-tools", "prepare")
+        : kind === "control-flow"
+          ? editor.createOrphanControlFlowStep({ x: 800, y: 900 }, "LOOP_ON_ITEMS")
+          : editor.addErrorHandling("notes");
+    });
+    expect(inserted).not.toBeNull();
+    expect(created).not.toBeNull();
+    expect(created).not.toBe(inserted);
+    await React.act(async () => { expect((await editor.save()).ok).toBe(true); });
+    await React.act(async () => editor.reload());
+    const { flattenSteps } = await import("../../../v2/rooms/workflows/tree");
+    const names = [editor.draftTrigger!, ...editor.draftOrphans.map(o => o.node)]
+      .flatMap(root => flattenSteps(root).map(s => s.step.name));
+    expect(names.filter(n => n === inserted)).toHaveLength(1);
+    expect(names.filter(n => n === created)).toHaveLength(1);
+    expect(new Set(names).size).toBe(names.length);
+  });
+}
+
+test("a positioned detached child keeps its location on promotion, moves, saves and undoes", async () => {
+  await mount();
+  await React.act(async () => editor.setStepPosition("orphan_child", 640, 920));
+  const before = JSON.stringify({ orphans: editor.draftOrphans, positions: editor.stepPositions });
+  await React.act(async () => editor.deleteStep("orphan"));
+  const effectivePosition = () => {
+    const orphan = editor.draftOrphans.find(o => o.node.name === "orphan_child")!;
+    return editor.stepPositions.orphan_child ?? { x: orphan.x, y: orphan.y };
+  };
+  expect(effectivePosition()).toEqual({ x: 640, y: 920 });
+  await React.act(async () => editor.setOrphanPosition("orphan_child", 850, 1020));
+  expect(effectivePosition()).toEqual({ x: 850, y: 1020 });
+  await React.act(async () => editor.undo());
+  expect(JSON.stringify({ orphans: editor.draftOrphans, positions: editor.stepPositions })).toBe(before);
+  await React.act(async () => editor.deleteStep("orphan"));
+  expect(effectivePosition()).toEqual({ x: 640, y: 920 });
+  await React.act(async () => editor.setOrphanPosition("orphan_child", 850, 1020));
+  await React.act(async () => { expect((await editor.save()).ok).toBe(true); });
+  await React.act(async () => editor.reload());
+  expect(effectivePosition()).toEqual({ x: 850, y: 1020 });
+});
+
+test("moving an orphan root retires a stale saved descendant override", async () => {
+  await mount();
+  await React.act(async () => editor.setStepPosition("orphan", 200, 300));
+  await React.act(async () => editor.setOrphanPosition("orphan", 800, 900));
+  expect(editor.stepPositions.orphan).toBeUndefined();
+  expect(editor.draftOrphans[0]).toMatchObject({ x: 800, y: 900 });
+});

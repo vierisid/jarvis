@@ -479,6 +479,14 @@ export function useWorkflowEditor(flowId: string | null) {
    * starts unconfigured (no piece picked); the user picks one in the panel.
    * Returns the new step's name so the caller can select it.
    */
+  // Every creation path shares the same namespace, including descendants of
+  // detached LOOP/ROUTER trees. Looking only at orphan roots can reuse a live ID.
+  const nextEditorStepName = useCallback(() => nextStepName({
+    name: "__editor_roots__",
+    type: "ROUTER",
+    children: [draftTrigger, ...draftOrphans.map(o => o.node)],
+  }), [draftTrigger, draftOrphans]);
+
   // Tree helpers operate on one root. Route to the owning detached chain and
   // reserve names across ALL roots so new orphan nodes cannot collide on reconnect.
   const extendChain = useCallback((ownerName: string | null, edit: (root: FlowStepNode) => {tree:FlowStepNode;newName:string}|null): string|null => {
@@ -487,13 +495,13 @@ export function useWorkflowEditor(flowId: string | null) {
     if (!root) return null;
     const result = edit(root);
     if (!result) return null;
-    const unique = nextStepName({name:"__editor_roots__",type:"ROUTER",children:[draftTrigger,...draftOrphans.map(o=>o.node)]});
+    const unique = nextEditorStepName();
     findStep(result.tree,result.newName)!.name=unique;
     if (orphan) setDraftOrphans(prev=>prev.map(o=>o.node.name===orphan.node.name?{...o,node:result.tree}:o));
     else setDraftTrigger(result.tree);
     setDirty(true);
     return unique;
-  }, [draftTrigger,draftOrphans]);
+  }, [draftTrigger, draftOrphans, nextEditorStepName]);
   const insertStepAfter = useCallback((predecessorName:string) => extendChain(predecessorName, root=>treeInsertStepAfter(root,predecessorName)), [extendChain]);
   const addStepToHead = useCallback((scope:ChainScope) => extendChain(scope.kind==="top"?null:scope.parentName,root=>treeAddStepToHead(root,scope)), [extendChain]);
 
@@ -627,11 +635,23 @@ export function useWorkflowEditor(flowId: string | null) {
     // + orphans, so the same name shouldn't appear in both, but defensive.
     setDraftOrphans((prev) => prev.flatMap(o => {
       if (!containsName(o.node,stepName)) return [o];
-      if (o.node.name === stepName) return o.node.nextAction ? [{...o,node:cloneTrigger(o.node.nextAction)}] : [];
+      if (o.node.name === stepName) {
+        const next = o.node.nextAction;
+        if (!next) return [];
+        const position = stepPositions[next.name];
+        return [{ ...o, ...position, node: cloneTrigger(next) }];
+      }
       return [{...o,node:removeStep(o.node,stepName)}];
     }));
+    const promotedName = draftOrphans.find(o => o.node.name === stepName)?.node.nextAction?.name;
+    setStepPositions(prev => {
+      const next = { ...prev };
+      delete next[stepName];
+      if (promotedName) delete next[promotedName];
+      return next;
+    });
     setDirty(true);
-  }, [snapshotForUndo]);
+  }, [snapshotForUndo, draftOrphans, stepPositions]);
 
   /**
    * Wire `sourceName`'s `sourceHandle` to an orphan HEAD `targetName`,
@@ -760,6 +780,14 @@ export function useWorkflowEditor(flowId: string | null) {
       setDraftOrphans((prev) =>
         prev.map((o) => (o.node.name === stepName ? { ...o, x, y } : o)),
       );
+      // Older saved drafts may still have an overriding descendant position.
+      // A root drag must make its new coordinates authoritative as well.
+      setStepPositions(prev => {
+        if (!prev[stepName]) return prev;
+        const next = { ...prev };
+        delete next[stepName];
+        return next;
+      });
       setDirty(true);
     },
     [],
@@ -817,15 +845,7 @@ export function useWorkflowEditor(flowId: string | null) {
       if (!piece || !action) return null;
       const seed = applySchemaDefaults({}, action.inputSchema ?? null);
 
-      // Generate a unique step_<n> by scanning tree + orphans.
-      const taken = new Set<string>();
-      if (draftTrigger) {
-        for (const fs of flattenSteps(draftTrigger)) taken.add(fs.step.name);
-      }
-      for (const o of draftOrphans) taken.add(o.node.name);
-      let n = 1;
-      while (taken.has(`step_${n}`)) n++;
-      const newName = `step_${n}`;
+      const newName = nextEditorStepName();
 
       const newStep: FlowStepNode = {
         name: newName,
@@ -837,7 +857,7 @@ export function useWorkflowEditor(flowId: string | null) {
       setDirty(true);
       return newName;
     },
-    [catalog, draftTrigger, draftOrphans],
+    [catalog, nextEditorStepName],
   );
 
   /**
@@ -859,14 +879,7 @@ export function useWorkflowEditor(flowId: string | null) {
       flowPos: { x: number; y: number },
       kind: "LOOP_ON_ITEMS" | "IF" | "ROUTER",
     ): string | null => {
-      const taken = new Set<string>();
-      if (draftTrigger) {
-        for (const fs of flattenSteps(draftTrigger)) taken.add(fs.step.name);
-      }
-      for (const o of draftOrphans) taken.add(o.node.name);
-      let n = 1;
-      while (taken.has(`step_${n}`)) n++;
-      const newName = `step_${n}`;
+      const newName = nextEditorStepName();
 
       let newStep: FlowStepNode;
       if (kind === "LOOP_ON_ITEMS") {
@@ -928,7 +941,7 @@ export function useWorkflowEditor(flowId: string | null) {
       setDirty(true);
       return newName;
     },
-    [draftTrigger, draftOrphans],
+    [nextEditorStepName],
   );
 
   /**
@@ -1067,16 +1080,7 @@ export function useWorkflowEditor(flowId: string | null) {
    */
   const addErrorHandling = useCallback(
     (stepName: string): string | null => {
-      // Build the router shell up front so we can pick a unique step name
-      // that considers BOTH the tree and the orphan pool at the same time
-      // -- once we mutate the target, the next call to `nextStepName`
-      // would also see this new router and skip past its number.
-      const taken = new Set<string>();
-      if (draftTrigger) for (const fs of flattenSteps(draftTrigger)) taken.add(fs.step.name);
-      for (const o of draftOrphans) taken.add(o.node.name);
-      let n = 1;
-      while (taken.has(`step_${n}`)) n++;
-      const routerName = `step_${n}`;
+      const routerName = nextEditorStepName();
 
       // We need the target's identity (displayName, existing successor)
       // BEFORE we mutate so we can pre-construct the router. Look it up
@@ -1149,7 +1153,7 @@ export function useWorkflowEditor(flowId: string | null) {
       });
       return routerName;
     },
-    [draftTrigger, draftOrphans, mutateAnyStep],
+    [draftTrigger, draftOrphans, mutateAnyStep, nextEditorStepName],
   );
 
   /** Save the draft trigger back to the server. Returns the new version on success. */

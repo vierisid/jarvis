@@ -1,0 +1,51 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/v2/rooms/workflows/useSampleDraftText.test.tsx:
+39 |     await React.act(async () => draft.markSaved(compact));
+40 |     await render(key, saved);
+41 |     expect(draft.hasUnsavedEdits).toBe(false);
+42 |     await render(`${section}:notes`, "");
+43 |     await render(key, saved);
+44 |     expect(draft.hasUnsavedEdits).toBe(false);
+                                       ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-18/ui/src/v2/rooms/workflows/useSampleDraftText.test.tsx:44:35)
+(fail) input: compact saved JSON stays saved after changing nodes [14.58ms]
+39 |     await React.act(async () => draft.markSaved(compact));
+40 |     await render(key, saved);
+41 |     expect(draft.hasUnsavedEdits).toBe(false);
+42 |     await render(`${section}:notes`, "");
+43 |     await render(key, saved);
+44 |     expect(draft.hasUnsavedEdits).toBe(false);
+                                       ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-18/ui/src/v2/rooms/workflows/useSampleDraftText.test.tsx:44:35)
+(fail) output: compact saved JSON stays saved after changing nodes [8.85ms]
+56 |   await render("output:draft", JSON.stringify({ x: 1 }, null, 2));
+57 |   expect(draft.text).toBe(later);
+58 |   expect(draft.hasUnsavedEdits).toBe(true);
+59 |   // Restoring the acknowledged value does not need another save.
+60 |   await React.act(async () => draft.setText(first));
+61 |   expect(draft.hasUnsavedEdits).toBe(false);
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-18/ui/src/v2/rooms/workflows/useSampleDraftText.test.tsx:61:33)
+(fail) a late save acknowledges only its submitted value after the editor remounts [8.54ms]
+(pass) invalid and distinct input/output drafts survive inspector remounts [2.58ms]
+
+ 1 pass
+ 3 fail
+ 13 expect() calls
+Ran 4 tests across 1 file. [231.00ms]

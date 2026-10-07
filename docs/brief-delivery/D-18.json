@@ -39,29 +39,29 @@
     {
       "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/rooms/workflows ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
       "result": "pass",
-      "tests": 434,
+      "tests": 443,
       "skipped": 2,
-      "assertions": 4426,
-      "files": 31,
-      "evidence": "evidence/D-18/affected-tests.log",
+      "assertions": 4468,
+      "files": 32,
+      "evidence": "evidence/D-18/review-affected-tests.log",
       "note": "Two optional unmerged F07/F08 compatibility tests skipped; no F21 compatibility claim"
     },
     {
-      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows/canvas",
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows/canvas ui/src/v2/rooms/workflows/useSampleDraftText.test.tsx",
       "result": "pass",
-      "tests": 10,
-      "assertions": 47,
-      "evidence": "evidence/D-18/focused-tests.log"
+      "tests": 19,
+      "assertions": 89,
+      "evidence": "evidence/D-18/review-focused.log"
     },
     {
       "command": "bun x tsc --noEmit",
       "result": "pass",
-      "evidence": "evidence/D-18/typescript.log"
+      "evidence": "evidence/D-18/review-typecheck.log"
     },
     {
       "command": "bun run build:ui",
       "result": "pass",
-      "evidence": "evidence/D-18/build.log",
+      "evidence": "evidence/D-18/review-build.log",
       "warnings": "Existing Tailwind at-rule warnings"
     }
   ],
@@ -97,6 +97,21 @@
   ],
   "rollback": "Remove optional registration/disable capability; preserve legacy route and user drafts. No schema or production activation change. Retain bounded editor corrections unless deliberately reverted with tests.",
   "base_ci": "Corrected D17 Tests, Docker and active platform checks pass",
-  "ci": "D18 CI reported after push, not inferred from base",
-  "next": "D-19; not started"
+  "ci": "Reviewed head CI passed; correction-head CI is reported after push, not inferred from previous head.",
+  "next": "D-19; not started",
+  "review_fixes": {
+    "reviewed_head": "4729ad98daeb1f4c7a59ffa2fec72a1815d87993",
+    "R1": "All creation paths allocate names across connected and detached descendants. Three mixed-path regressions fail before the fix and pass after save/reload.",
+    "R2": "Promotion transfers authored coordinates to the new orphan root; root drag removes stale overrides. Promotion, movement, save/reload and Undo are verified.",
+    "R3": "Sample dirty state compares JSON values, not formatting, and acknowledges late confirmed values without replacing newer text. Input/output remount and delayed-save regressions pass.",
+    "red_evidence": [
+      "evidence/D-18/review-graph-red.log",
+      "evidence/D-18/review-samples-red.log"
+    ],
+    "browser_script": "evidence/D-18/review-browser-check.cjs",
+    "browser_evidence": "evidence/D-18/review-browser-results.json",
+    "browser_result": "pass",
+    "browser_scope": "Real compact input/output save, node change, testing enabled; detached-child drag, parent deletion, root drag, acknowledged fixture save and Pebble reflow. No external mutations.",
+    "reverification": "Full 8-layout browser matrix, 80 settled inspector cycles, 10 rapid keyboard cycles, 10 node inspectors, 390px and reduced motion rerun and passed after fixes."
+  }
 }

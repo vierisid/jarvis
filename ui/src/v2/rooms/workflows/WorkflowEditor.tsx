@@ -15,6 +15,7 @@
  */
 
 import React, { createContext, useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useSampleDraftText } from "./useSampleDraftText";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { WorkflowEditorEnvironment, WorkflowPortal, useWorkflowRequest } from "./WorkflowEditorEnvironment";
 const createPortal = (children: React.ReactNode, _target: Element) => <WorkflowPortal>{children}</WorkflowPortal>;
@@ -3738,16 +3739,6 @@ function ErrorHandlingSection({
  * The trigger step also accepts sample data -- that becomes the trigger
  * payload visible to the first action. The button label adapts.
  */
-function useSampleDraftText(key: string, incoming: string): [string, React.Dispatch<React.SetStateAction<string>>] {
-  const { sampleDrafts } = useContext(WorkflowEditorEnvironment);
-  const [text,setText] = useState(() => sampleDrafts?.get(key) ?? incoming);
-  useEffect(() => {
-    if (text === incoming) sampleDrafts?.delete(key);
-    else sampleDrafts?.set(key,text);
-  }, [sampleDrafts,key,text,incoming]);
-  return [text,setText];
-}
-
 function SampleInputSection({
   stepName,
   sampleInput,
@@ -3766,13 +3757,10 @@ function SampleInputSection({
     () => (sampleInput === undefined ? "" : JSON.stringify(sampleInput, null, 2)),
     [sampleInput],
   );
-  const [text, setText] = useSampleDraftText(`input:${stepName}`, incomingText);
-  const [savedText, setSavedText] = useState<string>(incomingText);
+  const { text, setText, hasUnsavedEdits, markSaved } = useSampleDraftText(`input:${stepName}`, incomingText);
   const [parseError, setParseError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [busy, setBusy] = useState<"save" | "clear" | null>(null);
-
-  const hasUnsavedEdits = text !== savedText;
 
   const flash = (tone: "ok" | "warn", t: string): void => {
     setStatus({ tone, text: t });
@@ -3787,7 +3775,7 @@ function SampleInputSection({
       try {
         const r = await onSetSampleInput(null);
         if (r.ok) {
-          setSavedText("");
+          markSaved("");
           setParseError(null);
         }
         flash(r.ok ? "ok" : "warn", r.message);
@@ -3811,7 +3799,7 @@ function SampleInputSection({
     setBusy("save");
     try {
       const r = await onSetSampleInput(parsed as Record<string, unknown>);
-      if (r.ok) setSavedText(text);
+      if (r.ok) markSaved(text);
       flash(r.ok ? "ok" : "warn", r.message);
     } finally {
       setBusy(null);
@@ -3825,7 +3813,7 @@ function SampleInputSection({
       const r = await onSetSampleInput(null);
       if (r.ok) {
         setText("");
-        setSavedText("");
+        markSaved("");
         setParseError(null);
       }
       flash(r.ok ? "ok" : "warn", r.message);
@@ -3919,15 +3907,10 @@ function SampleDataSection({
     () => (sampleData === undefined ? "" : JSON.stringify(sampleData, null, 2)),
     [sampleData],
   );
-  const [text, setText] = useSampleDraftText(`output:${stepName}`, incomingText);
-  const [savedText, setSavedText] = useState<string>(incomingText);
+  const { text, setText, hasUnsavedEdits, markSaved } = useSampleDraftText(`output:${stepName}`, incomingText);
   const [parseError, setParseError] = useState<string | null>(null);
   const [status, setStatus] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [busy, setBusy] = useState<"save" | "test" | "clear" | "reset" | null>(null);
-
-  // Unsaved-edit indicator: local text diverged from the value we last
-  // pushed to the server. Used to nudge the user to save before testing.
-  const hasUnsavedEdits = text !== savedText;
 
   const flash = (tone: "ok" | "warn", t: string): void => {
     setStatus({ tone, text: t });
@@ -3955,11 +3938,9 @@ function SampleDataSection({
     try {
       const r = await onSetSampleData(parsed === undefined ? null : parsed);
       if (r.ok) {
-        // Snapshot what we just saved so `hasUnsavedEdits` resets to false.
-        // We track our own snapshot rather than re-deriving from the prop:
-        // the server might canonicalize whitespace, and the prop sync would
-        // momentarily show "saved" -> "edited" -> "saved" as React re-renders.
-        setSavedText(text);
+        // Acknowledge only the submitted text. Newer typing remains unsaved;
+        // the shared hook ignores JSON formatting when comparing samples.
+        markSaved(text);
       }
       flash(r.ok ? "ok" : "warn", r.message);
     } finally {
@@ -3974,7 +3955,7 @@ function SampleDataSection({
       const r = await onSetSampleData(null);
       if (r.ok) {
         setText("");
-        setSavedText("");
+        markSaved("");
         setParseError(null);
       }
       flash(r.ok ? "ok" : "warn", r.message);
@@ -4004,7 +3985,7 @@ function SampleDataSection({
       const r = await onSetSampleData(null);
       if (r.ok) {
         setText("");
-        setSavedText("");
+        markSaved("");
         setParseError(null);
         flash(
           "ok",

@@ -104,7 +104,5 @@
   "narrow": true,
   "reducedMotion": true,
   "errors": [],
-  "mutations": [],
-  "rapid_keyboard_reversals": 10,
-  "per_node_sample_drafts": true
+  "mutations": []
 }
