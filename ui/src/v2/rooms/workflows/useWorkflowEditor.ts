@@ -1,3 +1,4 @@
+import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 /**
  * Hook for the workflow visual editor.
  *
@@ -29,6 +30,7 @@ import {
   connectSteps as treeConnectSteps,
   disconnectEdge as treeDisconnectEdge,
   findStep,
+  nextStepName,
   flattenSteps,
   insertStepAfter as treeInsertStepAfter,
   isSourceHandleConnected,
@@ -217,6 +219,8 @@ interface ActionResult {
 }
 
 export function useWorkflowEditor(flowId: string | null) {
+  const fetch = useWorkflowRequest();
+  const savedDisplayName = useRef<string | null>(null);
   const [catalog, setCatalog] = useState<PieceCatalogEntry[]>([]);
   const [version, setVersion] = useState<FlowVersion | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -348,8 +352,9 @@ export function useWorkflowEditor(flowId: string | null) {
         // Clone the published version as a new draft so the editor has
         // something writable. The clone is created lazily on first save;
         // until then we surface the published version's contents in the UI.
-        editable = { ...detail.published, state: "DRAFT" };
+        editable = { ...detail.published };
       }
+      savedDisplayName.current = editable?.displayName ?? null;
       setVersion(editable);
       setDraftTrigger(editable ? cloneTrigger(editable.trigger) : null);
       // Hydrate orphans + positions from the editor sidecar. Both default to
@@ -372,7 +377,7 @@ export function useWorkflowEditor(flowId: string | null) {
     } finally {
       setLoading(false);
     }
-  }, [flowId]);
+  }, [flowId, fetch]);
 
   useEffect(() => {
     if (ignoreNextLoadRef.current) {
@@ -412,12 +417,12 @@ export function useWorkflowEditor(flowId: string | null) {
       }
       // Orphan path: rebuild the matching entry with a freshly cloned
       // node so identity changes and React re-renders.
-      if (!draftOrphans.some((o) => o.node.name === stepName)) return;
+      if (!draftOrphans.some((o) => findStep(o.node, stepName))) return;
       setDraftOrphans((prev) =>
         prev.map((o) => {
-          if (o.node.name !== stepName) return o;
+          if (!findStep(o.node, stepName)) return o;
           const cloned = cloneTrigger(o.node);
-          mutate(cloned);
+          mutate(findStep(cloned, stepName)!);
           return { ...o, node: cloned };
         }),
       );
@@ -474,29 +479,23 @@ export function useWorkflowEditor(flowId: string | null) {
    * starts unconfigured (no piece picked); the user picks one in the panel.
    * Returns the new step's name so the caller can select it.
    */
-  const insertStepAfter = useCallback((predecessorName: string): string | null => {
-    // Compute synchronously (see disconnectEdgeByHandle): reading `newName` out
-    // of the deferred setDraftTrigger updater is unreliable -- React may run
-    // the updater later, leaving the return null so the caller can't select
-    // the new step and `setDirty` is skipped. treeInsertStepAfter is pure.
-    if (!draftTrigger) return null;
-    const result = treeInsertStepAfter(draftTrigger, predecessorName);
+  // Tree helpers operate on one root. Route to the owning detached chain and
+  // reserve names across ALL roots so new orphan nodes cannot collide on reconnect.
+  const extendChain = useCallback((ownerName: string | null, edit: (root: FlowStepNode) => {tree:FlowStepNode;newName:string}|null): string|null => {
+    const orphan = ownerName ? draftOrphans.find(o => findStep(o.node, ownerName)) : undefined;
+    const root = orphan?.node ?? draftTrigger;
+    if (!root) return null;
+    const result = edit(root);
     if (!result) return null;
-    setDraftTrigger(result.tree);
+    const unique = nextStepName({name:"__editor_roots__",type:"ROUTER",children:[draftTrigger,...draftOrphans.map(o=>o.node)]});
+    findStep(result.tree,result.newName)!.name=unique;
+    if (orphan) setDraftOrphans(prev=>prev.map(o=>o.node.name===orphan.node.name?{...o,node:result.tree}:o));
+    else setDraftTrigger(result.tree);
     setDirty(true);
-    return result.newName;
-  }, [draftTrigger]);
-
-  /** Seed a new PIECE step at the head of a chain. Used when LOOP body or
-   *  ROUTER branch is empty (no node to insert after). */
-  const addStepToHead = useCallback((scope: ChainScope): string | null => {
-    if (!draftTrigger) return null;
-    const result = treeAddStepToHead(draftTrigger, scope);
-    if (!result) return null;
-    setDraftTrigger(result.tree);
-    setDirty(true);
-    return result.newName;
-  }, [draftTrigger]);
+    return unique;
+  }, [draftTrigger,draftOrphans]);
+  const insertStepAfter = useCallback((predecessorName:string) => extendChain(predecessorName, root=>treeInsertStepAfter(root,predecessorName)), [extendChain]);
+  const addStepToHead = useCallback((scope:ChainScope) => extendChain(scope.kind==="top"?null:scope.parentName,root=>treeAddStepToHead(root,scope)), [extendChain]);
 
   /**
    * Re-link a chain (top-level, LOOP body, or ROUTER branch) so its action
@@ -626,7 +625,11 @@ export function useWorkflowEditor(flowId: string | null) {
     setDraftTrigger((prev) => (prev ? removeStep(prev, stepName) : prev));
     // Also drop any matching orphan -- step names are unique across the tree
     // + orphans, so the same name shouldn't appear in both, but defensive.
-    setDraftOrphans((prev) => prev.filter((o) => !containsName(o.node, stepName)));
+    setDraftOrphans((prev) => prev.flatMap(o => {
+      if (!containsName(o.node,stepName)) return [o];
+      if (o.node.name === stepName) return o.node.nextAction ? [{...o,node:cloneTrigger(o.node.nextAction)}] : [];
+      return [{...o,node:removeStep(o.node,stepName)}];
+    }));
     setDirty(true);
   }, [snapshotForUndo]);
 
@@ -1167,7 +1170,7 @@ export function useWorkflowEditor(flowId: string | null) {
         if (Array.isArray(n.children)) for (const c of n.children) if (c) collect(c);
       };
       collect(draftTrigger);
-      for (const o of draftOrphans) liveNames.add(o.node.name);
+      for (const o of draftOrphans) collect(o.node);
       const positionsScrubbed: Record<string, NodePosition> = {};
       for (const [name, pos] of Object.entries(stepPositions)) {
         if (liveNames.has(name)) positionsScrubbed[name] = pos;
@@ -1209,6 +1212,7 @@ export function useWorkflowEditor(flowId: string | null) {
       }
       const updated = (await res.json()) as FlowVersion;
       ignoreNextLoadRef.current = true;
+      savedDisplayName.current = updated.displayName;
       setVersion(updated);
       setDraftTrigger(cloneTrigger(updated.trigger));
       setStepPositions(positionsScrubbed);
@@ -1225,7 +1229,7 @@ export function useWorkflowEditor(flowId: string | null) {
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }
-  }, [flowId, version, draftTrigger, draftOrphans, stepPositions]);
+  }, [flowId, version, draftTrigger, draftOrphans, stepPositions, fetch]);
 
   const reset = useCallback((): void => {
     if (version) {
@@ -1235,7 +1239,8 @@ export function useWorkflowEditor(flowId: string | null) {
       // user wants those back.
       setDraftOrphans([]);
       setStepPositions({});
-      setDirty(false);
+      if (savedDisplayName.current !== null) setVersion(prev => prev ? {...prev,displayName:savedDisplayName.current!} : prev);
+    setDirty(false);
       setUndoStack([]);
     }
   }, [version]);
@@ -1273,7 +1278,7 @@ export function useWorkflowEditor(flowId: string | null) {
         return { ok: false, message: e instanceof Error ? e.message : String(e) };
       }
     },
-    [flowId, version],
+    [flowId, version, fetch],
   );
 
   /**
@@ -1308,7 +1313,7 @@ export function useWorkflowEditor(flowId: string | null) {
         return { ok: false, message: e instanceof Error ? e.message : String(e) };
       }
     },
-    [flowId, version],
+    [flowId, version, fetch],
   );
 
   /**
@@ -1339,7 +1344,7 @@ export function useWorkflowEditor(flowId: string | null) {
         return { ok: false, message: e instanceof Error ? e.message : String(e) };
       }
     },
-    [flowId],
+    [flowId, fetch],
   );
 
   /** Depth-recursive flatten that includes LOOP body + ROUTER branch children.
