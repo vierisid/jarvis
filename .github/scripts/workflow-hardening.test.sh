@@ -318,7 +318,21 @@ if (rule === "narrow") {
   // The release path: any workflow with a job in the `release` environment
   // (release-exec.yml and sidecar-release.yml). None of their jobs runs git
   // with credentials, so none needs the token left in the repository config.
-  const release = Object.values(jobs).some((j) => (j.environment?.name ?? j.environment) === "release");
+  //
+  // The name may be an expression, because a dry run names a different
+  // environment so a rehearsal is not recorded as a deployment of `release`.
+  // A literal `release` counts, and so does an expression that can evaluate to
+  // it -- matched as the quoted word inside `${{ }}`, not as a bare substring,
+  // so an environment merely CALLED `release-dry-run` does not qualify on its
+  // own. Getting this wrong fails open: every rule below is gated on it, and
+  // five assertions here exist to catch that.
+  const gatedByRelease = (j) => {
+    const n = j.environment?.name ?? j.environment;
+    if (typeof n !== "string") return false;
+    if (n === "release") return true;
+    return n.includes("${{") && /(^|[^-\w])'release'([^-\w]|$)/.test(n);
+  };
+  const release = Object.values(jobs).some(gatedByRelease);
   for (const [name, job] of Object.entries(jobs)) {
     const perm = job.permissions ?? doc.permissions;
     const oidc = writes(perm, "id-token");

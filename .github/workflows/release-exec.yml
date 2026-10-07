@@ -534,9 +534,18 @@ jobs:
     # the OIDC token this job mints must carry the claim or npm refuses the
     # publish (#679). It is also the gate: the environment's required reviewers
     # mean a stolen token or a compromised action cannot publish unattended --
-    # automation cannot click Approve. Removing this line does not loosen a
-    # check, it breaks publishing outright.
-    environment: release
+    # automation cannot click Approve. Changing the real-run name here does not
+    # loosen a check, it breaks publishing outright.
+    #
+    # A dry run uses a DIFFERENT environment, because naming one records a
+    # GitHub deployment against it. Two jobs carry this, so each dry run wrote
+    # two deployments claiming `release` for a version it never published, and
+    # the Deployments page then showed a rehearsal as the live state. Only
+    # `github`, `inputs`, `vars`, `needs`, `strategy` and `matrix` are allowed
+    # in an environment name -- NOT `env`, so this reads `inputs.dry_run`
+    # rather than the DRY_RUN env every other step uses.
+    environment:
+      name: ${{ inputs.dry_run && 'release-dry-run' || 'release' }}
     permissions:
       contents: read
       id-token: write
@@ -693,6 +702,30 @@ jobs:
             release/*.zip
             release/SHA256SUMS
 
+      # `generate_release_notes: true` above means GitHub composes the notes, so
+      # skipping that step on a dry run skipped the notes with it -- the one
+      # human-facing output of a release went unrehearsed. This renders them
+      # through the generate-notes endpoint, which returns a body and creates
+      # NOTHING, and puts them in the job summary to be read.
+      - name: Render the release notes this would publish
+        if: env.DRY_RUN == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate-tag.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          notes=$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$SHA" --jq .body)
+          {
+            echo "## Release notes this run would publish"
+            echo
+            echo "Rendered for \`${TAG}\` at \`${SHA}\`. No release was created."
+            echo
+            echo "$notes"
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$notes"
+
       - name: Dry-run summary
         if: env.DRY_RUN == 'true'
         env:
@@ -788,6 +821,30 @@ jobs:
           build-args: VERSION=${{ needs.validate-tag.outputs.version }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # `generate_release_notes: true` above means GitHub composes the notes, so
+      # skipping that step on a dry run skipped the notes with it -- the one
+      # human-facing output of a release went unrehearsed. This renders them
+      # through the generate-notes endpoint, which returns a body and creates
+      # NOTHING, and puts them in the job summary to be read.
+      - name: Render the release notes this would publish
+        if: env.DRY_RUN == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.validate-tag.outputs.tag }}
+          SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          notes=$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
+            -f tag_name="$TAG" -f target_commitish="$SHA" --jq .body)
+          {
+            echo "## Release notes this run would publish"
+            echo
+            echo "Rendered for \`${TAG}\` at \`${SHA}\`. No release was created."
+            echo
+            echo "$notes"
+          } >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$notes"
 
       - name: Dry-run summary
         if: env.DRY_RUN == 'true'
