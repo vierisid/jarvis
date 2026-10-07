@@ -21,7 +21,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
-import { resolve } from "node:path";
+import { isAbsolute, resolve } from "node:path";
 import type { EngineContract, EngineResponse } from "../../sandbox-api/contracts";
 import type { SandboxApi } from "../../sandbox-api/server";
 import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
@@ -620,6 +620,9 @@ export class EngineRuntime {
     this.bundlePath = opts.bundlePath;
     // Fail at construction, not at the first spawn minutes later: a caller the
     // type system cannot see that left the digest out is a wiring bug (#762).
+    if (!isAbsolute(opts.bundlePath)) {
+      throw new TypeError("EngineRuntime: bundlePath must be absolute, or the bytes checked are not the bytes run");
+    }
     if (opts.expectedDigest === undefined) {
       throw new TypeError("EngineRuntime: expectedDigest is required -- the bundle's verified sha256, or null if nothing verified it");
     }

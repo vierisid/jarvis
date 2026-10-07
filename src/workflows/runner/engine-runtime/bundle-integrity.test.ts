@@ -270,6 +270,12 @@ describe("the verified digest travels with the bundle, and fails closed (#762)",
     expect(liveEngines().length).toBe(before);
   });
 
+  test("a runtime given a relative bundle path fails at construction", () => {
+    const api = { signer: new EngineTokenSigner(), registry: new SandboxRegistry(), sandboxWsPort: 1 } as unknown as SandboxApi;
+    expect(() => new EngineRuntime({ api, bundlePath: "x/main.js", expectedDigest: null }))
+      .toThrow(/bundlePath must be absolute/u);
+  });
+
   test("a runtime built without a digest fails at construction, not at its first spawn", () => {
     const { bundlePath } = verifiedSharedBundle();
     const api = { signer: new EngineTokenSigner(), registry: new SandboxRegistry(), sandboxWsPort: 1 } as unknown as SandboxApi;
