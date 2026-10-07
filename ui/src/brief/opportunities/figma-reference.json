@@ -2,7 +2,7 @@
   "file": "eNfKeirIKLZLlZEasrurZa",
   "page": "81:2",
   "node": "81:2931",
-  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "checkpoint": "UI-35 \u00b7 Dashboard craft pass verified \u00b7 prototype limits recorded",
   "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-2931",
   "saved_native_source": "/home/vierisid/aios/workspace/Jarvis/dashboard-brief-figma-2026-09-14-v6-1/ui-26-opportunities-2026-10-04",
   "inspected_exports": [
@@ -39,6 +39,7 @@
     "Local pending/refused/blocked recovery feedback beneath fixed action targets; refresh is a quiet room utility.",
     "Fluid, scrolling long content and narrow-width stacking replace fixed-height Figma text boxes.",
     "Unknown receipt retains its proposal and does not advance. Registration pending is not Enabled.",
-    "Record count is derived from the same available collection in this isolated preview. No shared Today queue synchronization is claimed."
+    "Record count is derived from the same available collection in this isolated preview. No shared Today queue synchronization is claimed.",
+    "R2: independently bounded selector and brief scrolling; compact selectors use one horizontal row for arbitrary collection size, retaining the approved list-to-brief hierarchy."
   ]
 }

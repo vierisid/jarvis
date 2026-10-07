@@ -23,6 +23,7 @@ export const OPPORTUNITY_EXAMPLES = [
   "unsupported",
   "long content",
   "missing preview",
+  "many proposals",
 ] as const;
 export type OpportunityExample = (typeof OPPORTUNITY_EXAMPLES)[number];
 export function finishedFixtures(): FinishedOpportunity[] {
@@ -131,6 +132,14 @@ export function makeOpportunitiesFixture(
   const records = finishedFixtures(),
     receipts = new Map<string, ActionReceipt>(),
     calls: ActionRequest[] = [];
+  if (example === "many proposals") {
+    for (let i = 2; i < 10; i++) {
+      const item = structuredClone(records[i % 2]!);
+      item.title = `Prepared opportunity ${i + 1}`;
+      item.proposal.proposalId = `fixture-proposal-${i}`;
+      records.push(item);
+    }
+  }
   let reads = 0,
     recoveries = 0,
     reversed = false;

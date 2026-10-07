@@ -17,6 +17,8 @@ import {
 export interface Attempt {
   request: ActionRequest;
   item: FinishedOpportunity;
+  /** Prefer the next surviving identity from the queue the user acted on. */
+  successors: readonly string[];
   state: "sending" | "unknown" | "receipt" | "refused";
   reason?: string;
   receipt?: ActionReceipt;
@@ -52,6 +54,8 @@ export class OpportunitiesController {
   private transitions = new Set<string>();
   private reduced = false;
   scrollTop = 0;
+  listScrollTop = 0;
+  listScrollLeft = 0;
   constructor(
     readonly source: "fixture" | "live",
     readonly scopeId: string,
@@ -116,15 +120,15 @@ export class OpportunitiesController {
           : [];
       const rows = incoming
         .filter((x) => !this.completed.has(x.proposal.proposalId))
-        .map((x) => this.state.attempts.get(x.proposal.proposalId)?.item ?? x);
-      // An uncertain or acknowledged-but-unsettled command stays inspectable even if a read omits it.
-      for (const [id, attempt] of this.state.attempts) {
-        if (
-          !this.completed.has(id) &&
-          !rows.some((x) => x.proposal.proposalId === id)
-        )
-          rows.push(attempt.item);
-      }
+        .filter((x) => !this.state.attempts.has(x.proposal.proposalId));
+      // Reserve pending/acknowledged slots even when the read omits terminal proposals.
+      // Other rows still receive the provider's fresh content and ordering.
+      this.state.rows.forEach((row, index) => {
+        const id = row.proposal.proposalId;
+        const attempt = this.state.attempts.get(id);
+        if (attempt && !this.completed.has(id))
+          rows.splice(Math.min(index, rows.length), 0, attempt.item);
+      });
       const selectedId = rows.some(
         (x) => x.proposal.proposalId === this.state.selectedId,
       )
@@ -179,8 +183,13 @@ export class OpportunitiesController {
   async act(id: string, decision: Decision) {
     if (!this.canAct(id, decision)) return;
     const item = this.state.rows.find((x) => x.proposal.proposalId === id)!;
+    const index = this.state.rows.indexOf(item);
     const attempt: Attempt = {
       item,
+      successors: [
+        ...this.state.rows.slice(index + 1),
+        ...this.state.rows.slice(0, index).reverse(),
+      ].map((row) => row.proposal.proposalId),
       request: {
         proposalId: id,
         revision: item.proposal.revision,
@@ -268,16 +277,16 @@ export class OpportunitiesController {
         if (this.state.selectedId === id) this.publish({ phase: "exit" });
         this.later(() => {
           this.completed.add(id);
-          const index = this.state.rows.findIndex(
-            (x) => x.proposal.proposalId === id,
-          );
           const rows = this.state.rows.filter(
             (x) => x.proposal.proposalId !== id,
           );
           const advancing = this.state.selectedId === id;
           const selectedId = advancing
-            ? (rows[Math.min(Math.max(0, index), rows.length - 1)]?.proposal
-                .proposalId ?? null)
+            ? (attempt.successors.find((candidate) =>
+                rows.some((row) => row.proposal.proposalId === candidate),
+              ) ??
+              rows[0]?.proposal.proposalId ??
+              null)
             : this.state.selectedId;
           this.publish({
             rows,

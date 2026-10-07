@@ -233,6 +233,29 @@ test("room unmount/remount preserves pending decisions and selection in the owne
   );
   expect(button("Approve & enable").disabled).toBe(true);
 });
+test("R2: selector and brief retain independent positions on return; another proposal starts at its heading", async () => {
+  await scenario("many proposals");
+  await click("Prepared opportunity 10");
+  const list = () =>
+    host.querySelector<HTMLElement>(".brief-opportunity-list")!;
+  const detail = () => host.querySelector<HTMLElement>(".brief-finished")!;
+  list().scrollTop = 500;
+  list().scrollLeft = 300;
+  list().dispatchEvent(new Event("scroll"));
+  detail().scrollTop = 180;
+  detail().dispatchEvent(new Event("scroll"));
+  await React.act(async () => root.render(<div>Another room</div>));
+  shell = { ...shell, sidebar: "rail", chatOpen: true, theme: "dark" };
+  await render();
+  expect(detail().getAttribute("data-proposal")).toBe("fixture-proposal-9");
+  expect(list().scrollTop).toBe(500);
+  expect(list().scrollLeft).toBe(300);
+  expect(detail().scrollTop).toBe(180);
+  await click("Competitor watch");
+  expect(detail().scrollTop).toBe(0);
+  expect(f.controller.scrollTop).toBe(0);
+  expect(list().scrollTop).toBe(500);
+});
 
 test("activation capability changes immediately update rendered controls", async () => {
   const c = new OpportunitiesController("live", OPPORTUNITIES_SCOPE, f.port);
