@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -204,3 +204,61 @@ test('health refresh cannot reuse the previous canonical goal revision within on
     expect(goal().score).toBe(0.2); expect(vault.getProgressHistory(id)).toHaveLength(3);
   } finally { Date.now = realNow; }
 });
+
+for (const reader of ['detail', 'list', 'roots', 'tree', 'children', 'overdue', 'dependency', 'escalation', 'brief'] as const) {
+  test(`${reader} read keeps one measurement snapshot when a separate writer commits after the goal query`, async () => {
+    const parentId = id;
+    if (reader === 'children') id = getGoalApplication().createGoal('Measured child', 'key_result', { parent_id: parentId, status: 'active' }).id;
+    const first = command(); save(first);
+    // Ensure the measured goal participates in the filtered canonical readers.
+    getDb().run("UPDATE goals SET deadline = ?, health = 'behind', dependencies = ? WHERE id = ?",
+      [Date.now() - 1000, JSON.stringify(['dependency-fixture']), id]);
+    const before = projectMeasuredGoal(goal());
+    const next = command({ requestId: 'concurrent-correction', revision: 1 });
+    next.measurement = { ...next.measurement, value: 7, measuredAt: first.measurement.measuredAt! + 1,
+      evidence: { id: 'owner:partner-ledger', revision: 'v2' } };
+    const program = `import { initDatabase, closeDb } from './src/vault/schema';
+      import { getGoalApplication } from './src/goals/application-service';
+      initDatabase(process.env.F15_DB!, { quiet: true });
+      try { getGoalApplication().recordMeasurement(process.env.F15_GOAL!, JSON.parse(process.env.F15_COMMAND!)); }
+      finally { closeDb(); }`;
+    const db = getDb(), prepare = db.prepare.bind(db); let committed = false;
+    // Pause at the SQL result boundary, before row projection. The second process
+    // uses the real canonical writer against this WAL database, not a mocked read.
+    const hook = spyOn(db, 'prepare').mockImplementation(((...args: Parameters<typeof db.prepare>) => {
+      const statement = prepare(...args);
+      if (!/^\s*SELECT/i.test(args[0]) || !args[0].includes('FROM goals')) return statement;
+      return new Proxy(statement, { get(target, key) {
+        const method = Reflect.get(target, key);
+        if (key !== 'get' && key !== 'all') return typeof method === 'function' ? method.bind(target) : method;
+        return (...bindings: unknown[]) => {
+          const rows = Reflect.apply(method, target, bindings);
+          if (!committed) {
+            const child = Bun.spawnSync([process.execPath, '-e', program], {
+              cwd: join(import.meta.dir, '../..'), env: { ...process.env, F15_DB: database, F15_GOAL: id, F15_COMMAND: JSON.stringify(next) },
+              stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', timeout: 10_000,
+            });
+            expect(child.exitCode, child.stderr.toString()).toBe(0); committed = true;
+          }
+          return rows;
+        };
+      } });
+    }) as typeof db.prepare);
+    try {
+      const views = reader === 'brief'
+        ? [((await new GoalMeasurements(db).read({ goalId: id })) as { data: ReturnType<typeof projectMeasuredGoal> }).data]
+        : (reader === 'detail' ? [goal()]
+          : reader === 'list' ? vault.findGoals()
+          : reader === 'roots' ? vault.getRootGoals()
+          : reader === 'tree' ? vault.getGoalTree(id)
+          : reader === 'children' ? vault.getGoalChildren(parentId)
+          : reader === 'overdue' ? vault.getOverdueGoals()
+          : reader === 'dependency' ? vault.getGoalsByDependency('dependency-fixture')
+          : vault.getGoalsNeedingEscalation()).map(projectMeasuredGoal);
+      expect(committed).toBe(true);
+      expect(views.find(view => view.goalId === id)).toEqual(before);
+    } finally { hook.mockRestore(); }
+    expect(projectMeasuredGoal(goal())).toMatchObject({ score: 0.7, measurementRevision: 2,
+      measurement: { value: 7 }, progress: { value: 0.7, basis: 'measurement' } });
+  }, 15_000);
+}

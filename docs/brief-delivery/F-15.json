@@ -144,5 +144,44 @@
   ],
   "rollback": "Unset JARVIS_BRIEF_GOAL_MEASUREMENTS on the new runtime; retain additive measurement, history and receipt tables. Do not reinterpret measurements as inferred counts or downgrade active writers.",
   "guide": "docs/brief-goal-measurements.md",
-  "next_task": "F-16 not started"
+  "next_task": "F-16 not started",
+  "review_corrections": {
+    "reviewed_head": "7ba4c47014b3b0a850431c9a6266dc3bca1dffa3",
+    "findings": {
+      "R1": "Register JARVIS_BRIEF_GOAL_MEASUREMENTS in JARVIS_SETTINGS_ENV_NAMES, fixing the required inventory check and preserving the opt-in in model-launched CLI environments.",
+      "R2": "Join every canonical goal row to its measurement in one SQL statement; parsing uses that snapshot rather than a later database read. Covers detail/list/root/tree/children plus overdue, dependency, escalation and Brief projections."
+    },
+    "regressions": {
+      "red": {
+        "failed": 10,
+        "passed": 0,
+        "log": "docs/brief-delivery/evidence/F-15/review-red.log"
+      },
+      "coverage": "Existing environment inventory plus nine deterministic reader/writer races. A separate process runs the real canonical writer after the reader fetches its goal rows, before projection.",
+      "command": "bun test src/goals/measurements.test.ts src/util/model-exec-env.test.ts --test-name-pattern 'read keeps one measurement snapshot|each is either a daemon secret'"
+    },
+    "focused": {
+      "passed": 55,
+      "failed": 0,
+      "assertions": 448,
+      "files": 3,
+      "command": "bun test src/goals/measurements.test.ts src/daemon/api-brief-goal-measurements.test.ts src/util/model-exec-env.test.ts",
+      "log": "docs/brief-delivery/evidence/F-15/review-focused.log"
+    },
+    "affected": {
+      "passed": 631,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 4134,
+      "files": 43,
+      "command_file": "docs/brief-delivery/evidence/F-15/review-affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-15/review-affected.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "log": "docs/brief-delivery/evidence/F-15/review-typescript.log"
+    },
+    "scope": "Each goal is internally consistent. Recursive trees retain their existing behavior across different goals; this does not add a global tree snapshot or hierarchy rollup.",
+    "publication": "Push to the same F15 PR #796; exact commit, normal hook results and current CI status are reported in the PR. Keep open and unmerged."
+  }
 }

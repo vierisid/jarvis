@@ -1,0 +1,1 @@
+bun test src/goals src/brief src/daemon/api-goal-review.test.ts src/daemon/api-goal-validation.test.ts src/daemon/api-brief-goal-measurements.test.ts src/daemon/api-brief.test.ts src/workflows/adapters/untrusted-reach.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts
