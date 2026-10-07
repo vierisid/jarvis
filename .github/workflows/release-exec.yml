@@ -87,7 +87,17 @@ env:
   # `moby/buildkit:buildx-stable-1`, which v0.33.1 is as of 2026-10-06.
   BUILDKIT_IMAGE: moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
   SIDECAR_BIN: jarvis
-  DRY_RUN: ${{ inputs.dry_run || false }}
+  # The one dry-run decision (#685), spelled the same everywhere it has to be
+  # made: here, the sidecar call input, discord-notify's `if:` and
+  # publish-brain's environment name. Those three cannot read this env (a
+  # job-level `if:`, a reusable-workflow `with:` and `environment.name` do not
+  # get the `env` context), so they repeat `inputs.dry_run == true` instead.
+  # On a tag push there are no inputs and it is false. Every step reads
+  # DRY_RUN, only ever compared with 'true'. release-exec.test.sh evaluates
+  # all four under a push, a real dispatch and a dry dispatch and fails unless
+  # they agree: a half-dry release could announce a version it never
+  # published, or publish one it never announced.
+  DRY_RUN: ${{ inputs.dry_run == true }}
   # There is deliberately no RELEASE_TAG here (#644). The raw tag --
   # `inputs.tag || github.ref_name` -- is read through an expression in exactly
   # one place, the validate-tag job below, and every other job takes the
@@ -424,7 +434,7 @@ jobs:
       ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
       ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
     with:
-      dry_run: ${{ inputs.dry_run || false }}
+      dry_run: ${{ inputs.dry_run == true }}
 
   # --- Build the brain tarball (no OIDC) ---
   # Split from publish-brain (#682). Everything that runs repository and
@@ -545,7 +555,7 @@ jobs:
     # in an environment name -- NOT `env`, so this reads `inputs.dry_run`
     # rather than the DRY_RUN env every other step uses.
     environment:
-      name: ${{ inputs.dry_run && 'release-dry-run' || 'release' }}
+      name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
     permissions:
       contents: read
       id-token: write
@@ -834,7 +844,7 @@ jobs:
   # ─── Notify Discord about the new release ──────────────────────
   discord-notify:
     needs: [validate-tag, github-release]
-    if: ${{ !inputs.dry_run }}
+    if: ${{ inputs.dry_run != true }}
     runs-on: ubuntu-latest
     permissions:
       contents: read

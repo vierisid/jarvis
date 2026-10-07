@@ -67,7 +67,10 @@ env:
   # NPM_VERSION in release-exec.yml, which says where the value comes from.
   NPM_VERSION: "12.1.0"
   SIDECAR_BIN: jarvis
-  DRY_RUN: ${{ inputs.dry_run || false }}
+  # Spelled exactly as in release-exec.yml, which passes the input (#685);
+  # publish-sidecar's environment name repeats it because `env` is not
+  # available there. release-exec.test.sh checks that the two agree.
+  DRY_RUN: ${{ inputs.dry_run == true }}
 
 jobs:
   # ─── Resolve version + idempotency gate ────────────────────────
@@ -521,7 +524,7 @@ jobs:
     # the live state of `release`. `env` is not an allowed context in an
     # environment name, so this reads the input directly.
     environment:
-      name: ${{ inputs.dry_run && 'release-dry-run' || 'release' }}
+      name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
     needs: [resolve, build-sidecar, sign-sidecar-windows]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest

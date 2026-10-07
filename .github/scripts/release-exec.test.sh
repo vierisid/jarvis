@@ -25,6 +25,9 @@
 #   3. the structure check run against mutated copies of the workflow, one hole
 #      per copy, each of which must be reported -- so a structure check that
 #      has been neutered fails here instead of passing everything.
+#   Plus (#685) the dry-run decision in release-exec.yml and
+#   sidecar-release.yml: each site that makes it is evaluated under a tag
+#   push, a real dispatch and a dry dispatch, and they must agree.
 #   Plus one sink executed directly -- pack-brain's `npm version` -- with a
 #   hostile value and no validator in front of it, to show the env-quoted form
 #   is safe on its own and not just because the gate stopped the input.
@@ -84,6 +87,126 @@ if (mode === "run-expressions") {
       if (typeof s.with?.script === "string" && s.with.script.includes("${{")) found.push(label + " has a ${{ }} expression inside a script: input");
     }
   if (found.length) console.log(found.join("\n"));
+  process.exit(0);
+}
+if (mode === "dry-run") {
+  // #685: one dry-run decision. Every place that must make it (DRY_RUN, and
+  // where `env` is not available: the sidecar call input, discord-notify,
+  // the environment names) spells it `inputs.dry_run == true`, each is
+  // EVALUATED under every way the workflow starts, and they must agree. No
+  // other expression reads dry_run, nothing redefines DRY_RUN, and every
+  // consumer compares DRY_RUN with true and nothing else (a bare
+  // `if: env.DRY_RUN` is the string "false", which is truthy).
+  const out = [];
+  const file = require("node:path").basename(process.env.WORKFLOW);
+  const ENV_NAME = "${{ inputs.dry_run == true && \x27release-dry-run\x27 || \x27release\x27 }}";
+  const FLAG = "${{ inputs.dry_run == true }}";
+  // [description, getter, canonical text, kind]
+  const sites = [["env.DRY_RUN", (d) => d.env?.DRY_RUN, FLAG, "env"]];
+  if (file === "release-exec.yml") sites.push(
+    ["jobs.sidecar.with.dry_run", (d) => d.jobs?.sidecar?.with?.dry_run, FLAG, "flag"],
+    ["jobs.discord-notify.if", (d) => d.jobs?.["discord-notify"]?.if, "${{ inputs.dry_run != true }}", "notify"],
+    ["jobs.publish-brain.environment.name", (d) => d.jobs?.["publish-brain"]?.environment?.name, ENV_NAME, "environment"]);
+  else if (file === "sidecar-release.yml") sites.push(
+    ["jobs.publish-sidecar.environment.name", (d) => d.jobs?.["publish-sidecar"]?.environment?.name, ENV_NAME, "environment"]);
+  else out.push("no dry-run sites are known for " + file);
+  // A small evaluator for the GitHub expression subset these use: literals,
+  // inputs.dry_run, ! == != && || and parentheses, with GitHub loose
+  // equality (different types compare as numbers, so null == false is true)
+  // and its truthiness. Anything else is reported, never guessed at.
+  const evaluate = (src, value) => {
+    const m = /^\$\{\{([\s\S]*)\}\}$/.exec(String(src).trim());
+    if (!m) throw new Error("not a single ${{ }} expression");
+    const toks = m[1].match(/\s+|\x27(?:[^\x27]|\x27\x27)*\x27|&&|\|\||==|!=|!|\(|\)|[A-Za-z_][\w.-]*|\S/g).filter((t) => !/^\s+$/.test(t));
+    let i = 0;
+    const peek = () => toks[i];
+    const num = (v) => v === null ? 0 : typeof v === "boolean" ? Number(v) : typeof v === "string" ? (v.trim() === "" ? 0 : Number(v)) : v;
+    const eq = (a, b) => typeof a === typeof b && a !== null && b !== null
+      ? (typeof a === "string" ? a.toLowerCase() === b.toLowerCase() : a === b)
+      : (a === null && b === null) || num(a) === num(b);
+    const truthy = (v) => !(v === false || v === null || v === "" || v === 0 || Number.isNaN(v));
+    const primary = () => {
+      const t = toks[i++];
+      if (t === "(") { const v = or(); if (toks[i++] !== ")") throw new Error("unbalanced parentheses"); return v; }
+      if (t === "true") return true;
+      if (t === "false") return false;
+      if (t === "null") return null;
+      if (/^\x27/.test(t ?? "")) return t.slice(1, -1).replace(/\x27\x27/g, "\x27");
+      if (/^inputs\.dry_run$/i.test(t ?? "")) return value;
+      throw new Error("cannot evaluate " + JSON.stringify(t));
+    };
+    // GitHub precedence: ! binds tighter than == and !=, which bind tighter
+    // than &&, then ||. So !a == b is (!a) == b.
+    const not = () => { if (peek() === "!") { i++; return !truthy(not()); } return primary(); };
+    const cmp = () => {
+      const a = not();
+      if (peek() === "==" || peek() === "!=") { const op = toks[i++]; const b = not(); return op === "==" ? eq(a, b) : !eq(a, b); }
+      return a;
+    };
+    const and = () => { let v = cmp(); while (peek() === "&&") { i++; const r = cmp(); v = truthy(v) ? r : v; } return v; };
+    const or = () => { let v = and(); while (peek() === "||") { i++; const r = and(); v = truthy(v) ? v : r; } return v; };
+    const v = or();
+    if (i !== toks.length) throw new Error("trailing " + JSON.stringify(toks.slice(i).join(" ")));
+    return { v, truthy };
+  };
+  // EVAL_EXPR set: evaluate it for EVAL_VALUE (JSON) and print the result,
+  // so the evaluator itself can be checked against known GitHub answers.
+  if (process.env.EVAL_EXPR !== undefined) {
+    try { console.log(JSON.stringify(evaluate(process.env.EVAL_EXPR, JSON.parse(process.env.EVAL_VALUE)).v)); }
+    catch (e) { console.log("error: " + e.message); }
+    process.exit(0);
+  }
+  // A tag push has no inputs; a dispatch or a workflow_call passes a boolean.
+  const starts = [["a tag push", null, false], ["a real dispatch", false, false], ["a dry-run dispatch", true, true]];
+  for (const [what, get, canon, kind] of sites) {
+    const src = get(doc);
+    if (src === undefined) { out.push(what + " is missing"); continue; }
+    if (src !== canon) out.push(what + " is " + JSON.stringify(src) + ", not the one spelling " + JSON.stringify(canon));
+    for (const [how, value, dry] of starts) {
+      let r;
+      try { r = evaluate(src, value); } catch (e) { out.push(what + ": " + e.message); break; }
+      const { v, truthy } = r;
+      // An env value is the expression result as a string; null becomes "".
+      const ok = kind === "env" ? (v === null ? "" : String(v)) === String(dry)
+        : kind === "flag" ? v === dry
+        : kind === "notify" ? truthy(v) === !dry
+        : v === (dry ? "release-dry-run" : "release");
+      if (!ok) out.push(what + " disagrees on " + how + " (dry run " + dry + "): it gives " + JSON.stringify(v));
+    }
+  }
+  // Every other reading of the input is a second decision.
+  const known = new Set(sites.map(([what]) => what));
+  const walk = (o, path) => {
+    if (typeof o === "string") {
+      // An `if:` is an expression with or without the ${{ }} around it.
+      const exprs = /\.if$/.test(path) && !o.includes("${{") ? [o] : o.match(/\$\{\{[\s\S]*?\}\}/g) ?? [];
+      // The input, by dot or bracket (contexts are case-insensitive, and
+      // github.event.inputs.dry_run contains inputs.dry_run), or the whole
+      // inputs context serialised. env.DRY_RUN is the consumer, checked below.
+      const readsInput = /\binputs\s*(?:\.\s*dry_run\b|\[\s*["\x27]?dry_run\b)|\btoJSON\s*\(\s*inputs\s*\)/i;
+      for (const e of exprs)
+        if (readsInput.test(e) && !known.has(path)) out.push(path + " reads dry_run on its own: " + e);
+      return;
+    }
+    if (o && typeof o === "object") for (const [k, v] of Object.entries(o)) walk(v, path + "." + k);
+  };
+  walk(doc.jobs ?? {}, "jobs");
+  walk(doc.concurrency ?? {}, "concurrency");
+  for (const [k, v] of Object.entries(doc.env ?? {})) if (k !== "DRY_RUN") walk(v, "env." + k);
+  const consumerIf = /^(?:\$\{\{\s*)?env\.DRY_RUN\s*(?:==|!=)\s*\x27true\x27(?:\s*\}\})?$/;
+  const consumerRun = /"\$\{?DRY_RUN\}?"\s*!?=\s*"true"/g;
+  for (const [name, job] of Object.entries(doc.jobs ?? {})) {
+    if (job.env && "DRY_RUN" in job.env) out.push(name + ": redefines DRY_RUN");
+    for (const [i, s] of (job.steps ?? []).entries()) {
+      const label = name + ": step " + (s.name ?? s.id ?? s.uses ?? String(i));
+      if (s.env && "DRY_RUN" in s.env) out.push(label + " redefines DRY_RUN");
+      if (/DRY_RUN/.test(String(s.if ?? "")) && !consumerIf.test(String(s.if).trim()))
+        out.push(label + " tests DRY_RUN as " + JSON.stringify(s.if) + ", not env.DRY_RUN == or != \x27true\x27");
+      if (typeof s.run === "string" && /DRY_RUN/.test(s.run.replace(consumerRun, "")))
+        out.push(label + " reads DRY_RUN other than as \"$DRY_RUN\" = or != \"true\"");
+    }
+  }
+  if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
 // mode === "structure": one violation per line, nothing when clean.
@@ -407,9 +530,16 @@ fi
 echo
 echo "the structure check reports each hole (mutated copies of the workflow)"
 # mutant <label> <exact text> <replacement>: the text must occur exactly once.
+# MUTANT_FROM (default the release workflow) and MUTANT_MODE (default
+# structure) pick the file and the check. The copy keeps the basename of the
+# file it mutates, because the dry-run check keys on it: a copy called
+# anything else would be reported for its name, whatever its content.
 mutant() {
-	local label="$1" copy="${WORK}/mutant.yml"
-	if ! FROM="$WORKFLOW" TO="$copy" OLD="$2" NEW="$3" bun -e '
+	local label="$1" from="${MUTANT_FROM:-$WORKFLOW}"
+	mkdir -p "${WORK}/m"
+	local copy
+	copy="${WORK}/m/$(basename "$from")"
+	if ! FROM="$from" TO="$copy" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 const n = s.split(process.env.OLD).length - 1;
 if (n !== 1) { console.error("anchor occurs " + n + " times"); process.exit(2); }
@@ -419,12 +549,16 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 		return
 	fi
 	local found
-	found="$(YQ_FILE="$copy" yq structure)"
+	found="$(YQ_FILE="$copy" yq "${MUTANT_MODE:-structure}")"
 	if [ -n "$found" ]; then
 		ok "reports: ${label}"
+		# MUTANT_VERBOSE=1 shows WHAT was reported, to check it is the hole
+		# the mutant made and not some other complaint.
+		[ -n "${MUTANT_VERBOSE:-}" ] && printf '%s\n' "$found" | sed 's/^/           /'
 	else
 		no "reports: ${label}" "the structure check passed a workflow with this hole"
 	fi
+	return 0
 }
 # shellcheck disable=SC2016 # every mutant is literal workflow text.
 {
@@ -435,7 +569,7 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 	mutant 'a consumer that does not list validate-tag in needs' \
 		'needs: [validate-tag, pack-brain, build-docker, sidecar]' 'needs: [pack-brain, build-docker, sidecar]'
 	mutant 'RELEASE_TAG back in the workflow env' \
-		'  DRY_RUN: ${{ inputs.dry_run || false }}' '  DRY_RUN: ${{ inputs.dry_run || false }}
+		'  DRY_RUN: ${{ inputs.dry_run == true }}' '  DRY_RUN: ${{ inputs.dry_run == true }}
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}'
 	mutant 'a step reading $GITHUB_REF_NAME' \
 		'run: npm version "$VERSION"' 'run: npm version "${GITHUB_REF_NAME#v}"'
@@ -497,6 +631,81 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 	mutant 'a job no longer downstream of the gate' \
 		'  test:
     needs: validate-tag' '  test:'
+}
+
+echo
+echo "one dry-run decision, evaluated, in both release workflows (#685)"
+SIDECAR_WORKFLOW="${SIDECAR_RELEASE_WORKFLOW:-${HERE}/../workflows/sidecar-release.yml}"
+for f in "$WORKFLOW" "$SIDECAR_WORKFLOW"; do
+	found="$(YQ_FILE="$f" yq dry-run)" || {
+		no "$(basename "$f"): dry-run check ran" "the bun helper failed"
+		continue
+	}
+	if [ -z "$found" ]; then
+		ok "$(basename "$f"): every dry-run site reads inputs.dry_run == true and they agree on a push, a real dispatch and a dry dispatch"
+	else
+		no "$(basename "$f"): one dry-run decision" "$found"
+	fi
+done
+# The evaluator against what GitHub gives (expression docs: mixed types
+# compare as numbers, strings case-insensitively, && and || return an
+# operand, ! binds tighter than ==). If it were wrong, the agreement check
+# above could pass sites that disagree on GitHub.
+# shellcheck disable=SC2016 # GitHub expressions, not shell.
+for c in \
+	'${{ inputs.dry_run == true }}@@null@@false' \
+	'${{ inputs.dry_run == false }}@@null@@true' \
+	'${{ inputs.dry_run == true }}@@true@@true' \
+	"\${{ inputs.dry_run == 'true' }}@@true@@false" \
+	"\${{ 'Release' == 'release' }}@@null@@true" \
+	"\${{ inputs.dry_run && 'release-dry-run' || 'release' }}@@null@@\"release\"" \
+	"\${{ inputs.dry_run && 'release-dry-run' || 'release' }}@@true@@\"release-dry-run\"" \
+	'${{ !inputs.dry_run }}@@null@@true' \
+	"\${{ !inputs.dry_run == 'release' }}@@false@@false" \
+	'${{ !(inputs.dry_run == true) }}@@true@@false' \
+	'${{ inputs.dry_run || false }}@@null@@false'; do
+	expr="${c%%@@*}"
+	rest="${c#*@@}"
+	value="${rest%%@@*}"
+	want="${rest#*@@}"
+	got="$(EVAL_EXPR="$expr" EVAL_VALUE="$value" YQ_FILE="$WORKFLOW" yq dry-run)"
+	if [ "$got" = "$want" ]; then
+		ok "evaluator: ${expr} with dry_run=${value} is ${want}"
+	else
+		no "evaluator: ${expr} with dry_run=${value}" "got ${got}, GitHub gives ${want}"
+	fi
+done
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=dry-run
+	mutant 'discord-notify inverted, announcing only dry runs (#685)' \
+		'    if: ${{ inputs.dry_run != true }}' '    if: ${{ inputs.dry_run }}'
+	mutant 'DRY_RUN compared with the string, so a dry dispatch publishes (#685)' \
+		'  DRY_RUN: ${{ inputs.dry_run == true }}' "  DRY_RUN: \${{ inputs.dry_run == 'true' }}"
+	mutant 'the sidecar told a constant instead of the input (#685)' \
+		'      dry_run: ${{ inputs.dry_run == true }}' '      dry_run: ${{ false }}'
+	mutant 'the sidecar dry-run input dropped, so it defaults to a real publish (#685)' \
+		$'    with:\n      dry_run: ${{ inputs.dry_run == true }}\n' ''
+	mutant 'a real-run environment on a dry dispatch (#685)' \
+		"      name: \${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}" "      name: \${{ inputs.dry_run == false && 'release-dry-run' || 'release' }}"
+	mutant 'an equivalent but second spelling of the decision (#685)' \
+		'    if: ${{ inputs.dry_run != true }}' '    if: ${{ !inputs.dry_run }}'
+	mutant 'a step deciding dry run from the event payload (#685)' \
+		$'      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          VERSION:' \
+		$'      - name: Dry-run summary\n        if: github.event.inputs.dry_run == \'true\'\n        env:\n          VERSION:'
+	mutant 'a step testing DRY_RUN for truthiness, which "false" passes (#685)' \
+		$'      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          VERSION:' \
+		$'      - name: Dry-run summary\n        if: env.DRY_RUN\n        env:\n          VERSION:'
+	mutant 'a script testing DRY_RUN some other way (#685)' \
+		'if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' 'if [ "$DRY_RUN" != false ]; then flags+=(--dry-run); fi'
+	mutant 'a job redefining DRY_RUN (#685)' \
+		'      GATE_IMAGE_TAG: jarvis:release-gate-' $'      DRY_RUN: "false"\n      GATE_IMAGE_TAG: jarvis:release-gate-'
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'sidecar-release.yml: the env decision loosened to truthiness (#685)' \
+		'  DRY_RUN: ${{ inputs.dry_run == true }}' '  DRY_RUN: ${{ inputs.dry_run || false }}'
+	mutant 'sidecar-release.yml: the environment name inverted (#685)' \
+		"      name: \${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}" "      name: \${{ inputs.dry_run != true && 'release-dry-run' || 'release' }}"
+	unset MUTANT_MODE MUTANT_FROM
 }
 
 echo

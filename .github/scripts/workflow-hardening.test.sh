@@ -705,8 +705,8 @@ echo "each rule reports the hole it exists for (mutated copies)"
 expect_caught 'a workflow and job with no permissions anywhere' scoped "$WORKFLOWS/test.yml" \
 	$'permissions:\n  contents: read\n' ''
 expect_caught 'a publish job with no permissions of its own' publish-perms "$WORKFLOWS/release-exec.yml" \
-	$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ !inputs.dry_run }}\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-	$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ !inputs.dry_run }}\n    runs-on: ubuntu-latest\n'
+	$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ inputs.dry_run != true }}\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
+	$'  discord-notify:\n    needs: [validate-tag, github-release]\n    if: ${{ inputs.dry_run != true }}\n    runs-on: ubuntu-latest\n'
 expect_caught 'write scopes back at the top of the publish path' publish-perms "$WORKFLOWS/release-exec.yml" \
 	$'permissions: {}\n' $'permissions:\n  contents: write\n'
 expect_caught 'a major tag on the publish path' pinned "$WORKFLOWS/release-exec.yml" \
