@@ -1,0 +1,12 @@
+[
+  {
+    "mutation": "run-payload",
+    "exit": 1,
+    "expected_failure": true
+  },
+  {
+    "mutation": "version-payload",
+    "exit": 1,
+    "expected_failure": true
+  }
+]

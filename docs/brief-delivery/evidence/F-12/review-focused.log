@@ -1,0 +1,83 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+[WebSocketServer] Started on unix:/tmp/jarvis-f12-http-UiUAAq/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+Database initialized at: /tmp/jarvis-f12-Z5CJDI/fixture.db
+Database initialized at: /tmp/jarvis-f12-Z5CJDI/fixture.db
+Database initialized at: /tmp/jarvis-f12-m0V7A6/fixture.db
+Database initialized at: /tmp/jarvis-f12-yT2lCf/fixture.db
+Database initialized at: /tmp/jarvis-f12-v1lbko/fixture.db
+Database initialized at: /tmp/jarvis-f12-WDJGhW/fixture.db
+Database initialized at: /tmp/jarvis-f12-unY1PM/fixture.db
+Database initialized at: /tmp/jarvis-f12-unY1PM/fixture.db
+Database initialized at: /tmp/jarvis-f12-UxqiE8/fixture.db
+Database initialized at: /tmp/jarvis-f12-z5yg1u/fixture.db
+Database initialized at: /tmp/jarvis-f12-tTHAJ4/fixture.db
+Database initialized at: /tmp/jarvis-f12-kLwfoA/fixture.db
+Database initialized at: /tmp/jarvis-f12-kLwfoA/fixture.db
+Database initialized at: /tmp/jarvis-f12-RQxRVt/fixture.db
+Database initialized at: /tmp/jarvis-f12-bknNUH/fixture.db
+Database initialized at: /tmp/jarvis-f12-NimWz1/fixture.db
+Database initialized at: /tmp/jarvis-f12-wgjQEL/fixture.db
+Database initialized at: /tmp/jarvis-f12-Ai4aGm/fixture.db
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-f12-kbLjX8/fixture.db
+Database initialized at: /tmp/jarvis-f12-aaxQd1/fixture.db
+Database initialized at: /tmp/jarvis-f12-1uUzBT/fixture.db
+Database initialized at: /tmp/jarvis-f12-1uUzBT/fixture.db
+Database initialized at: /tmp/jarvis-f12-iBIA0T/fixture.db
+Database initialized at: /tmp/jarvis-f12-iBIA0T/fixture.db
+Database initialized at: /tmp/jarvis-f12-6UQRXp/fixture.db
+Database initialized at: /tmp/jarvis-f12-6UQRXp/fixture.db
+Database initialized at: /tmp/jarvis-f12-CASQ6U/fixture.db
+Database initialized at: /tmp/jarvis-f12-CASQ6U/fixture.db
+
+src/daemon/api-brief-decisions.test.ts:
+(pass) missing, disabled and mismatched providers fail closed for reads, placement and resolution [33.46ms]
+(pass) same canonical state after action and reload, stale action conflicts, no hidden execution [20.45ms]
+(pass) invalid query, placement, actions and oversized bodies cannot write [17.77ms]
+(pass) authenticated HTTP round trip rejects unauthenticated writes and preserves decision identity [37.57ms]
+
+src/brief/decisions.test.ts:
+(pass) prior-day work survives reload; intent acceptance is not permission or verified success [340.71ms]
+(pass) approval, effect detail and run detail share one identity; no duplicate blocked work card [371.84ms]
+(pass) unknown receipt cannot be hidden by a verified work result [355.41ms]
+(pass) blocked receipt cannot be hidden by a verified work result [333.60ms]
+(pass) failed receipt cannot be hidden by a verified work result [421.78ms]
+(pass) concurrent permission submissions call the existing executor only once; lost response reconciles by ID [391.27ms]
+(pass) restart uncertainty can only close; not-started can run once through the existing claim [386.91ms]
+(pass) failed/blocked receipts and legacy executed-without-receipt remain attention items [363.87ms]
+(pass) bounded references still detect unknown beyond the first fifty effects [495.38ms]
+(pass) placement persists, equal-time pagination is bounded and stable across restart [628.30ms]
+(pass) cursor explicitly conflicts after insert instead of skipping or repeating a decision [336.80ms]
+(pass) cursor explicitly conflicts after reorder instead of skipping or repeating a decision [400.82ms]
+(pass) cursor explicitly conflicts after legacy-write instead of skipping or repeating a decision [394.53ms]
+(pass) cursor explicitly conflicts after delete instead of skipping or repeating a decision [329.45ms]
+(pass) query validation, cursor scope, source revisions and replaced database fail closed [348.05ms]
+(pass) approval and execution claim are durable before the tool is dispatched [419.46ms]
+(pass) permission revision is checked again at the actual writer, before any dispatch [374.11ms]
+(pass) approval projection excludes hostile workflow payloads from reads and mutation receipts [475.12ms]
+(pass) work projection excludes hostile workflow payloads from reads and mutation receipts [465.80ms]
+(pass) effect projection excludes hostile workflow payloads from reads and mutation receipts [484.75ms]
+(pass) workflow rejection stays denied, then becomes an inspect-only blocked receipt across restart [446.37ms]
+
+src/workflows/adapters/untrusted-reach.test.ts:
+(pass) #573 premise 1: the reachable tool set is closed and known > the reachable set is exactly the reviewed table [0.07ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing is both reachable and refused as opaque [0.04ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the opaque refusals still include the navigate and shell family [0.06ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > each reachable tool is the untrusted source the table says, by real category [6.36ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > the untrusted-source subset is the eight tools the decision is about [0.06ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > no source file outside the workflow runtime spells a workflowEffect declaration [3.90ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > a bounded tool name cannot be re-registered with different semantics [0.38ms]
+(pass) #573 premise 1: the reachable tool set is closed and known > nothing removes a tool from a registry in production [10.09ms]
+(pass) #573 premise 2: the routes out of the workflow data plane are enumerated > only the reviewed files outside src/workflows hold a run or a version object [6.51ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > an untrusted-source tool's result reaches the step unframed and byte-exact [1.20ms]
+(pass) #573: the adapter does not frame, and that is asserted not assumed > a browser result reaches the step unframed too, matched by category [0.19ms]
+
+ 36 pass
+ 0 fail
+ 343 expect() calls
+Ran 36 tests across 3 files. [8.86s]

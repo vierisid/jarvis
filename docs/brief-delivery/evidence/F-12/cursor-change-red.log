@@ -1,0 +1,69 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decisions.test.ts:
+Database initialized at: /tmp/jarvis-f12-xLjA9z/fixture.db
+169 |   const page = await queue.read({ limit: 1 }); expect(page.data.nextCursor).not.toBeNull();
+170 |   if (mutation === 'insert') createWorkItem({ title: 'New' });
+171 |   if (mutation === 'reorder') { const item = queue.get(`approval:${a.id}`); queue.place(item.decisionId, item.revision, -10); }
+172 |   if (mutation === 'legacy-write') manager.deny(a.id, 'legacy');
+173 |   if (mutation === 'delete') getDb().run('DELETE FROM approval_requests WHERE id = ?', [a.id]);
+174 |   await expect(queue.read({ cursor: page.data.nextCursor! })).rejects.toMatchObject({ status: 409, code: 'queue_changed' });
+                                                                            ^
+error: expect(received).rejects.toMatchObject(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/brief/decisions.test.ts:174:71)
+(fail) cursor explicitly conflicts after insert instead of skipping or repeating a decision [491.61ms]
+Database initialized at: /tmp/jarvis-f12-WTgQqj/fixture.db
+169 |   const page = await queue.read({ limit: 1 }); expect(page.data.nextCursor).not.toBeNull();
+170 |   if (mutation === 'insert') createWorkItem({ title: 'New' });
+171 |   if (mutation === 'reorder') { const item = queue.get(`approval:${a.id}`); queue.place(item.decisionId, item.revision, -10); }
+172 |   if (mutation === 'legacy-write') manager.deny(a.id, 'legacy');
+173 |   if (mutation === 'delete') getDb().run('DELETE FROM approval_requests WHERE id = ?', [a.id]);
+174 |   await expect(queue.read({ cursor: page.data.nextCursor! })).rejects.toMatchObject({ status: 409, code: 'queue_changed' });
+                                                                            ^
+error: expect(received).rejects.toMatchObject(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/brief/decisions.test.ts:174:71)
+(fail) cursor explicitly conflicts after reorder instead of skipping or repeating a decision [377.44ms]
+Database initialized at: /tmp/jarvis-f12-C3eQZB/fixture.db
+169 |   const page = await queue.read({ limit: 1 }); expect(page.data.nextCursor).not.toBeNull();
+170 |   if (mutation === 'insert') createWorkItem({ title: 'New' });
+171 |   if (mutation === 'reorder') { const item = queue.get(`approval:${a.id}`); queue.place(item.decisionId, item.revision, -10); }
+172 |   if (mutation === 'legacy-write') manager.deny(a.id, 'legacy');
+173 |   if (mutation === 'delete') getDb().run('DELETE FROM approval_requests WHERE id = ?', [a.id]);
+174 |   await expect(queue.read({ cursor: page.data.nextCursor! })).rejects.toMatchObject({ status: 409, code: 'queue_changed' });
+                                                                            ^
+error: expect(received).rejects.toMatchObject(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/brief/decisions.test.ts:174:71)
+(fail) cursor explicitly conflicts after legacy-write instead of skipping or repeating a decision [630.05ms]
+Database initialized at: /tmp/jarvis-f12-dHJ7zX/fixture.db
+169 |   const page = await queue.read({ limit: 1 }); expect(page.data.nextCursor).not.toBeNull();
+170 |   if (mutation === 'insert') createWorkItem({ title: 'New' });
+171 |   if (mutation === 'reorder') { const item = queue.get(`approval:${a.id}`); queue.place(item.decisionId, item.revision, -10); }
+172 |   if (mutation === 'legacy-write') manager.deny(a.id, 'legacy');
+173 |   if (mutation === 'delete') getDb().run('DELETE FROM approval_requests WHERE id = ?', [a.id]);
+174 |   await expect(queue.read({ cursor: page.data.nextCursor! })).rejects.toMatchObject({ status: 409, code: 'queue_changed' });
+                                                                            ^
+error: expect(received).rejects.toMatchObject(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-12/src/brief/decisions.test.ts:174:71)
+(fail) cursor explicitly conflicts after delete instead of skipping or repeating a decision [517.16ms]
+
+ 0 pass
+ 13 filtered out
+ 4 fail
+ 4 expect() calls
+Ran 4 tests across 1 file. [2.08s]
