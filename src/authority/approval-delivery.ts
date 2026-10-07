@@ -111,11 +111,13 @@ export function approvalLabelAlteration(text: string): string | null {
  * Windows shows more). Text is measured the way it will wrap (`toastLines`):
  * two lines of `TOAST_APPROVABLE_MAX_COLUMNS / 2` columns, filled word by word,
  * a word longer than a line taking as many lines as it needs. A character
- * counts as one column only in scripts whose glyphs are about one Latin cell
- * wide, as two in East Asian wide text and emoji, and any other character --
- * a ligature like U+FDFD that renders a dozen cells wide, cuneiform, a symbol
- * block we have not sized -- makes the toast review-only: an unknown width
- * fails closed.
+ * counts as one column only if it is a precomposed Latin, Greek or Cyrillic
+ * letter, ASCII, Latin-1 or a common dash or quote; as two in East Asian wide
+ * text and emoji; and any other character -- a ligature like U+FDFD that
+ * renders a dozen cells wide, cuneiform, a Letterlike Symbol, a combining or
+ * spacing mark, a variation selector, a right-to-left letter -- makes the toast
+ * review-only: an unknown width fails closed. Accented Latin text arrives
+ * precomposed (NFC) in practice, so it stays approvable.
  *
  * It is the one dial for how often a toast can be approved directly: above
  * it the toast is review-only and approving needs the dashboard. To tighten
@@ -130,16 +132,13 @@ export const TOAST_APPROVABLE_MAX_COLUMNS = 80;
 const TOAST_APPROVABLE_LINES = 2;
 const TOAST_LINE_COLUMNS = TOAST_APPROVABLE_MAX_COLUMNS / TOAST_APPROVABLE_LINES;
 
-/** Scripts whose glyphs are about one Latin cell wide: Latin, IPA, Greek, Cyrillic, Armenian, Hebrew, Arabic, punctuation, currency. */
-const ONE_COLUMN = /^[ -~\u00a0-\u02ff\u0370-\u058f\u0590-\u06ff\u1e00-\u1fff\u2010-\u2027\u2030-\u205e\u20a0-\u20cf\u2100-\u214f\u2190-\u21ff]$/u;
+/** Precomposed Latin, Greek and Cyrillic letters, ASCII, Latin-1 and the common dashes, quotes and the euro sign: one Latin cell each. Deliberately narrow (#791 review): Letterlike Symbols such as U+213B and per-mille signs render two or three cells wide, and right-to-left letters reorder the runs around them. */
+const ONE_COLUMN = /^[ -~\u00a0-\u024f\u0370-\u03ff\u0400-\u04ff\u1e00-\u1eff\u2010-\u2027\u20ac]$/u;
 /** East Asian Wide/Fullwidth text and the emoji and pictograph blocks: two columns. */
 const TWO_COLUMNS = /^[\u1100-\u115f\u2600-\u27bf\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]$/u;
-/** Combining marks and variation selectors draw on the character before them. */
-const ZERO_COLUMNS = /^[\p{M}]$/u;
 
 /** One character's width in columns, or null when it is not known. */
 function charColumns(ch: string): number | null {
-  if (ZERO_COLUMNS.test(ch)) return 0;
   if (ONE_COLUMN.test(ch)) return 1;
   if (TWO_COLUMNS.test(ch)) return 2;
   return null;

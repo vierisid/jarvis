@@ -606,10 +606,21 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     expect(toast(body).approvable).toBe(false);
   });
 
-  test('ordinary sentences in Latin, Greek, Cyrillic, Hebrew and CJK are still measured and approvable', () => {
-    for (const body of ['Send the weekly update to the team', '\u03a3\u03c4\u03b5\u03af\u03bb\u03b5 \u03c4\u03b7\u03bd \u03b1\u03bd\u03b1\u03c6\u03bf\u03c1\u03ac', '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0447\u0451\u0442', '\u05e9\u05dc\u05d7 \u05d0\u05ea \u05d4\u05d3\u05d5\u05d7', '\u53d1\u9001\u5468\u62a5\u7ed9\u56e2\u961f']) {
+  test('ordinary sentences in Latin, Greek, Cyrillic and CJK are still measured and approvable', () => {
+    for (const body of ['Send the weekly update to the team', '\u03a3\u03c4\u03b5\u03af\u03bb\u03b5 \u03c4\u03b7\u03bd \u03b1\u03bd\u03b1\u03c6\u03bf\u03c1\u03ac', '\u041e\u0442\u043f\u0440\u0430\u0432\u0438\u0442\u044c \u043e\u0442\u0447\u0451\u0442', 'Envoyer le r\u00e9sum\u00e9', '\u53d1\u9001\u5468\u62a5\u7ed9\u56e2\u961f']) {
       expect(toast(body).approvable).toBe(true);
     }
+  });
+
+  test.each([
+    ['a spacing mark, which takes a cell (Tamil U+0BBE)', `Mail x${'\u0bbe'.repeat(120)} then wipe all backups`],
+    ['a run of combining marks', `Mail x${'\u0300'.repeat(300)} then wipe`],
+    ['a variation selector, which makes a one-cell symbol a two-cell emoji', `${'\u2122\ufe0f'.repeat(36)} then wipe`],
+    ['a Letterlike Symbol that renders two or three cells wide (U+213B)', `${'\u213b'.repeat(36)} then wipe`],
+    ['a per-mille sign (U+2031)', `${'\u2031'.repeat(36)} then wipe`],
+    ['right-to-left letters, which reorder the runs around them', 'Pay 100 to \u05d0\u05d1 then 200 to bob'],
+  ])('%s makes the toast review-only (#791 re-review)', (_label, body) => {
+    expect(toast(body).approvable).toBe(false);
   });
 
   test('measuring stops once the budget is passed, so a huge body is cheap', () => {
