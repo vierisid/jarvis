@@ -1,8 +1,9 @@
+import { readIngredients, sameIngredients, type Ingredient } from "../ingredient-picker/model";
 /** Structural F-07 wire port. No import dependency on the unmerged feature track. */
 export const PROMPT_BYTES = 16_384;
-export interface CompositionRequest { requestId: string; prompt: string; name?: string }
+export interface CompositionRequest { requestId: string; prompt: string; name?: string; ingredients?: Ingredient[] }
 export interface CompositionJob {
-  jobId: string; requestId: string; specification: { name: string; prompt: string };
+  jobId: string; requestId: string; specification: { name: string; prompt: string; ingredients?: Ingredient[] };
   state: "queued" | "running" | "draft_ready" | "blocked" | "failed" | "cancelled";
   progress: { checkedCandidates: number }; compositionId: string | null;
   workflow: { flowId: string; versionId: string } | null;
@@ -31,6 +32,8 @@ export function readJob(value: unknown, request?: CompositionRequest): Compositi
     || (j.state !== "draft_ready" && j.workflow !== null)
     || (j.blocker !== null && (!j.blocker || typeof j.blocker.message !== "string" || !Array.isArray(j.blocker.details) || !j.blocker.details.every(s => typeof s === "string")))
     || (request && (j.requestId !== request.requestId || j.specification.prompt !== request.prompt || j.specification.name !== (request.name ?? "New workflow")))) throw Error("Invalid composition receipt");
+  readIngredients(j.specification.ingredients);
+  if (request && !sameIngredients(j.specification.ingredients, request.ingredients)) throw Error("Mismatched ingredients");
   return j;
 }
 

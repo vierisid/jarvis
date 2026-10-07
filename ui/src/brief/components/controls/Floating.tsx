@@ -8,7 +8,7 @@ import { BriefButton } from "./Buttons";
  * The portal explicitly follows the invoking Brief root's chosen appearance. */
 export function FloatingSurface({ anchor, kind, children, onReady, placement, className = "", ...props }:
   HTMLAttributes<HTMLDivElement> & { anchor: RefObject<HTMLElement | null>; kind: "menu" | "tooltip";
-    placement?: "top-start" | "right-end" | "right";
+    placement?: "top-start" | "bottom-start" | "right-end" | "right";
     children: ReactNode; onReady?: (element: HTMLDivElement) => void }) {
   const surface = useRef<HTMLDivElement>(null);
   const [theme, setTheme] = useState("light");
@@ -34,7 +34,7 @@ export function FloatingSurface({ anchor, kind, children, onReady, placement, cl
       const preferAbove = kind === "tooltip";
       const top = preferAbove && above >= padding ? above
         : below + box.height <= window.innerHeight - padding ? below : Math.max(padding, above);
-      const desiredLeft = placement === "top-start" ? rect.left
+      const desiredLeft = (placement === "top-start" || placement === "bottom-start") ? rect.left
         : placement === "right" ? rect.right : placement === "right-end" ? rect.right + 24 : rect.right - box.width;
       const desiredTop = placement === "top-start" ? above
         : placement === "right-end" ? rect.bottom - box.height
@@ -47,6 +47,10 @@ export function FloatingSurface({ anchor, kind, children, onReady, placement, cl
     place();
     const resize = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(place);
     resize?.observe(element); resize?.observe(target);
+    const composer = target.closest(".brief-composer-surface");
+    if (composer) resize?.observe(composer);
+    const workspace = target.closest(".brief-workspace-content");
+    if (composer && workspace) resize?.observe(workspace);
     window.addEventListener("resize", place);
     window.addEventListener("scroll", place, true);
     onReady?.(element);

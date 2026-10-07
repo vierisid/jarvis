@@ -13,6 +13,7 @@ export function createCompositionPort(capabilities: () => unknown, request: (url
   }
   return {
     async submit(spec) {
+      if (spec.ingredients !== undefined && !isBriefCapabilityEnabled(capabilities(), "compositionIngredients")) throw Error("Ingredient selection unavailable");
       const value = await json(base, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(spec) }) as { job?: unknown };
       return readJob(value?.job, spec);
     },
