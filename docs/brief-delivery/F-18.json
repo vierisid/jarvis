@@ -1,0 +1,95 @@
+{
+  "task": "F-18",
+  "title": "Record which memories were actually used",
+  "date": "2026-10-07",
+  "branch": "brief/f-18",
+  "base_branch": "brief/f-17",
+  "baseline": "42e54d637f2b4c0e955bae4bd6183b1373bd7442",
+  "main_reviewed": "2281a8235d4987af202e3b99f7ea514ac7ed4ff8",
+  "head": "Commit containing this receipt; exact published head and normal hook results recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-18",
+  "dependencies": {
+    "compile": [
+      "F-01",
+      "F-03",
+      "F-17"
+    ],
+    "enable": [],
+    "stack": "User-requested F stack on corrected F17. F03 supplies the real conversation identity scope; F17 supplies the reader contract. No unmerged Q provider is imported."
+  },
+  "baseline_review": {
+    "pinned": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": [
+      "A16 src/vault/facts.ts",
+      "A04 src/daemon/ws-service.ts"
+    ],
+    "comparison": "Facts blob unchanged across audit, main and parent. Main WS changes concern approval delivery; F stack adds scoped chat. Instrumentation is below WS in canonical retrieval and provider dispatch. No existing F18 branch/PR; open D/Q work inspected.",
+    "parent_ci": "All active corrected F17 checks pass; conditional jobs skipped.",
+    "parent_ci_log": "docs/brief-delivery/evidence/F-18/parent-ci.json"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:3943",
+    "visual": "Backend provenance only. No UI or screenshot claimed."
+  },
+  "activation": {
+    "capability": "memoryUsage",
+    "flag": "JARVIS_BRIEF_MEMORY_USAGE=1",
+    "default": "off",
+    "merged": false,
+    "release_enabled": false,
+    "memory_stream": "Same ledger instance registered and passed to F17; memoryStream also requires its own flag. Usage activation does not enable chat transport or workflows."
+  },
+  "implementation": [
+    "Additive content-free selected/supplied events preserve canonical fact/revision, time, purpose, conversation/turn/request or workflow/run/call identities; deterministic stage IDs deduplicate retries.",
+    "Packing emits included IDs only when whole qualified facts fit. Exact whole-block validation at provider handoff prevents omitted or discarded context from claiming supply.",
+    "Synchronous canonical revision/eligibility and execution-identity checks refuse stale or cancelled handoffs. History survives correction, deletion and daemon restart without resurrecting recall.",
+    "Governed workflow capture is inside the effect execution boundary. Overrides skip Jarvis retrieval; pending approval and effect replay do not add handoffs.",
+    "Authenticated no-store history by one conversation or run. F17 reader integration carries explicit coverage; selected-only records never qualify Used in.",
+    "90-day logical retention, 50000-row storage bound, startup/write cleanup, 1000-event target summaries fail unavailable when exceeded, 32 transient captures per execution.",
+    "No automatic outcome-verified writer or successful-answer promotion; stage remains distinct for a future explicit evidence producer."
+  ],
+  "verification": {
+    "focused": {
+      "passed": 29,
+      "failed": 0,
+      "assertions": 162,
+      "files": 4,
+      "command": "bun test src/vault/memory-usage.test.ts src/daemon/agent-service-memory.test.ts src/daemon/api-brief-memory-usage.test.ts src/workflows/runtime/memory-usage.test.ts",
+      "log": "docs/brief-delivery/evidence/F-18/focused.log"
+    },
+    "affected": {
+      "passed": 1366,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 10441,
+      "files": 70,
+      "command_file": "docs/brief-delivery/evidence/F-18/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-18/affected.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "command": "bun x tsc --noEmit",
+      "log": "docs/brief-delivery/evidence/F-18/typescript.log"
+    },
+    "mutations": {
+      "variants": 3,
+      "expected_failures": 5,
+      "log": "docs/brief-delivery/evidence/F-18/mutations.json",
+      "restoration": "Original bytes restored in finally, then fresh focused and affected suites passed."
+    },
+    "manual": "Real Brief transport/AgentService in classic and router-first modes; real model-provider handoff with scripted in-process models; governed workflow route/effect; authenticated Unix-socket API. Concurrent chats, replay, corrections/deletion, retention and restart use isolated vaults. No live inference or effects.",
+    "guards": "Normal commit hooks required before push; exact results recorded in the PR description."
+  },
+  "limitations": [
+    "Supply means handoff to a provider adapter, not remote acceptance or reliance. A failed provider call may have received context and keeps supplied evidence.",
+    "Coverage is recorded_events_only, limited to canonical Brief recall and governed workflow ask recall. Unscoped legacy channels, realtime, profile/goal context, tool-return memory and pre-activation/off-period calls are not backfilled.",
+    "No automatic outcome verifier exists; success is never promoted to outcome_verified. No public write/promotion API.",
+    "Reads enforce expiry; physical expired rows are pruned at startup or the next append. No database-file vacuum. Retention can evict old evidence, disclosed through coverage.",
+    "A target above 1000 retained events is unavailable instead of partial. Current stream limits remain those of F17.",
+    "No UI, deployment, activation or F19 forgetting/suppression implementation. Full repository CI reports separately."
+  ],
+  "rollback": "Unset JARVIS_BRIEF_MEMORY_USAGE and restart. Usage and dependent stream gate close; additive tables/history remain. No destructive schema rollback or data cleanup.",
+  "guide": "docs/brief-memory-usage.md",
+  "next_task": "F-19 not started"
+}

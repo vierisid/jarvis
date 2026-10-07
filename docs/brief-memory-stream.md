@@ -1,5 +1,7 @@
 # F17: paginated memory stream
 
+This guide records the F17 delivery. F18 adds the production usage ledger and declares its retention and coverage limits; see [recorded memory use](brief-memory-usage.md) for the integrated activation and provenance contract.
+
 F17 adds a read projection over canonical vault facts and provenance. It changes no fact writer, recall qualification, usage ledger, legacy vault route or UI. The branch is stacked on corrected F16 `1cd3d429b1842a831d20d0a9e2e137f49d914c20` at the owner's request. Main inspected: `2281a8235d4987af202e3b99f7ea514ac7ed4ff8`. Both roadmap source files, `src/vault/facts.ts` and `ui/src/v2/rooms/memory/useMemoryData.ts`, have identical blobs on this stack, inspected main and pinned audit `69211511c95355776c6c319c01e1df5acd3b8f1e`.
 
 ## Activation and F18 seam
