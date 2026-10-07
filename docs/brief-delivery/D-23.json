@@ -190,6 +190,13 @@
   "next": "D-24 Goals, not started",
   "implementation_head": "295ca73cc2264f662f66c20e8c934d73d085f8ea",
   "review_corrections": {
+    "implementation_head": "28164605",
+    "hooks": {
+      "result": "pass",
+      "evidence": "evidence/D-23/review-hooks.log",
+      "tests": 45,
+      "assertions": 207
+    },
     "reviewed_head": "a52eeb5dc53c7bacd5dc3c41d7b411aeba03d280",
     "resolved": [
       "R1: historical receipt recovery cannot clear a newer edit or replay settlement",

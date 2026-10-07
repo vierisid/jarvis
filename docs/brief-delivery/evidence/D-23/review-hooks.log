@@ -1,0 +1,77 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2337 files).
+[pre-commit] Running 2 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/decisions/controller.test.ts:
+(pass) selection follows identity through reorder and refresh [7.59ms]
+(pass) approval is acknowledged before next selection, and never claims execution [25.87ms]
+(pass) keep draft remains in the queue and requires reopening, not silent reapproval [46.85ms]
+(pass) rejection has a truthful local receipt and resolves only the chosen item [24.25ms]
+(pass) edit/save carries the complete typed document and uses the new approval revision [27.19ms]
+(pass) stale refresh preserves unsaved content and prevents save or approval [24.46ms]
+(pass) cancel edit writes nothing and restores original document [22.80ms]
+(pass) invalid edits cannot be submitted [2.79ms]
+(pass) stale never offers a mutation [2.42ms]
+(pass) read-only never offers a mutation [1.73ms]
+(pass) unavailable never offers a mutation [1.47ms]
+(pass) empty never offers a mutation [1.72ms]
+(pass) rendered revision must match even when a fresher controller view exists [3.26ms]
+(pass) lost responses stay pinned through empty/reordered reads; recovery never resends [27.65ms]
+(pass) unknown save keeps its draft frozen until receipt and fresh view reconcile [26.16ms]
+(pass) definitive refusal needs explicit refresh, unlike an unknown transport result [4.87ms]
+(pass) all receipt correlations are required; execution is not a document receipt [0.38ms]
+(pass) mismatched receipt cannot advance or unlock a decision [24.30ms]
+(pass) late reads cannot replace a newer refresh [0.92ms]
+(pass) scope revocation and retirement prevent mutation and stale repaint [1.82ms]
+(pass) concurrent press cannot create a second in-flight decision [32.04ms]
+(pass) retained rejected blocker is not fabricated away [22.08ms]
+(pass) calendar changes preserve readonly options and validate timezones [25.33ms]
+(pass) R1: recovering a settled save cannot discard a later edit or replay acknowledgement [45.96ms]
+(pass) R1: recovering a settled reopen cannot discard a later edit or replay acknowledgement [45.07ms]
+(pass) R2: a second edit remains visible and cancellable after a removed refresh [46.40ms]
+(pass) R2: a second edit remains visible and cancellable after a unavailable refresh [45.09ms]
+(pass) R2: a second edit remains visible and cancellable after a changed refresh [45.66ms]
+(pass) R3: selecting during settlement's delayed refresh wins over automatic advancement [29.58ms]
+(pass) R1: an acknowledged save still recovers after its projection read fails [46.45ms]
+(pass) R1: typing during save reconciliation is not consumed by that earlier save [28.92ms]
+
+ui/src/brief/decisions/DecisionsRoom.test.tsx:
+(pass) clean heading, same Today identity, only unresolved text highlighted [136.74ms]
+(pass) selection survives every theme/sidebar/chat combination and routes by approval ID [341.60ms]
+(pass) direct Today review alias opens the matching document [36.37ms]
+(pass) editing keeps the document/actions mounted and blocks selection/approval [96.97ms]
+(pass) unsupported edits stay disabled with a visible reason [36.60ms]
+(pass) uncertainty retains the selected document until read-only recovery [90.55ms]
+(pass) calendar preview includes readonly options, not raw tool arguments [62.55ms]
+(pass) missing live capability, fixture/live mismatch and wrong scope fail closed [71.14ms]
+(pass) ten decisions are real buttons, not truncated previews [65.29ms]
+(pass) empty is not confused with unavailable [63.53ms]
+(pass) keep draft advancement updates the return route instead of reopening the deferred item [161.37ms]
+(pass) room return restores document and selector reading positions from its retained owner [68.49ms]
+(pass) R1: a settled save removes Check result before the next edit [117.09ms]
+(pass) R2: a remotely removed second edit keeps its text and Cancel reachable through chat reflow [237.34ms]
+
+ 45 pass
+ 0 fail
+ 207 expect() calls
+Ran 45 tests across 2 files. [2.80s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-23 28164605] fix(brief): preserve decision edits and selection through recovery
+ 17 files changed, 1116 insertions(+), 14 deletions(-)
+ create mode 100644 docs/brief-delivery/evidence/D-23/review-browser.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/review-build.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/review-focused.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/review-format.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/review-red.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/review-regression.log
+ create mode 100644 docs/brief-delivery/evidence/D-23/review-typecheck.log
