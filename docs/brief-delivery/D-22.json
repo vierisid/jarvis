@@ -73,8 +73,8 @@
     {
       "command": "git commit with normal .githooks/pre-commit",
       "result": "pass",
-      "tests": 44,
-      "assertions": 135,
+      "tests": 49,
+      "assertions": 155,
       "evidence": "evidence/D-22/hooks.log",
       "note": "EE boundary, migrations, templates, package checks, related tests and TypeScript passed. No bypass or coauthor trailer."
     }
@@ -197,6 +197,7 @@
     "before_fix_evidence": {
       "R1": "evidence/D-22/review-r1-before-fix.log",
       "R2": "Chrome at 1440x1100: selecting proposal 10 left the finished-header y=-1261; after fix it remains visible."
-    }
+    },
+    "implementation_head": "6e0cc7f84c925776c57ae90a99209f2a40c350b0"
   }
 }
