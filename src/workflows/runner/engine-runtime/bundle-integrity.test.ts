@@ -247,6 +247,36 @@ describe("the verified digest travels with the bundle, and fails closed (#762)",
     expect(liveEngines().length).toBe(before);
   });
 
+  test("a relative bundle path is refused: the daemon would hash one file and the engine run another", () => {
+    // The hash resolves a relative path against the daemon's cwd, the child
+    // against its own `cwd`. Two files at the same relative path in the two
+    // directories, with the pin matching the daemon-side one, used to spawn
+    // the OTHER bytes under a passing check.
+    const here = codeDir();
+    const there = codeDir();
+    mkdirSync(resolve(here, "x"));
+    mkdirSync(resolve(there, "x"));
+    writeFileSync(resolve(here, "x", "main.js"), "// verified\n");
+    writeFileSync(resolve(there, "x", "main.js"), "// what would have run\n");
+    const cwd = process.cwd();
+    const before = liveEngines().length;
+    process.chdir(here);
+    try {
+      expect(() => spawnEngine({ ...spawnOpts("x/main.js", sha256("// verified\n")), cwd: there }))
+        .toThrow(/bundlePath must be absolute/u);
+    } finally {
+      process.chdir(cwd);
+    }
+    expect(liveEngines().length).toBe(before);
+  });
+
+  test("a runtime built without a digest fails at construction, not at its first spawn", () => {
+    const { bundlePath } = verifiedSharedBundle();
+    const api = { signer: new EngineTokenSigner(), registry: new SandboxRegistry(), sandboxWsPort: 1 } as unknown as SandboxApi;
+    expect(() => new EngineRuntime({ api, bundlePath } as unknown as ConstructorParameters<typeof EngineRuntime>[0]))
+      .toThrow(/expectedDigest is required/u);
+  });
+
   test("a malformed digest refuses rather than matching nothing", () => {
     const { bundlePath } = verifiedSharedBundle();
     expect(() => spawnEngine(spawnOpts(bundlePath, ""))).toThrow(BundleIntegrityError);

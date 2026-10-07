@@ -98,8 +98,9 @@ export class BundleIntegrityError extends Error {
  * fixture) -- passes untouched. Any other value is compared full-string, so a
  * malformed or empty digest refuses rather than matching nothing.
  *
- * Whatever spelling `bundlePath` has, the bytes hashed are the bytes the
- * engine is about to open from that same spelling.
+ * Whatever spelling an ABSOLUTE `bundlePath` has, the bytes hashed are the
+ * bytes the engine is about to open from that same spelling; `spawnEngine`
+ * refuses a relative one, which the child would resolve against its own cwd.
  *
  * The message names the bundle by its cache directory -- the 16-hex build hash
  * the path ends in -- and not by its full path: the root is operator config,

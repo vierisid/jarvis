@@ -23,7 +23,7 @@
 
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, utimesSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, isAbsolute } from "node:path";
 import { isSecretEnvName } from "../../../util/subprocess-env";
 import { assertBundleUnchanged } from "./bundle-integrity";
 import {
@@ -269,6 +269,13 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // path (#762). Throws BEFORE anything is started, so a refusal leaves no
   // process behind. Per spawn, not per acquire: a warm pooled engine already
   // holds the code.
+  //
+  // ABSOLUTE only: the hash below resolves a relative path against THIS
+  // process's cwd and the child resolves it against `opts.cwd`, so a relative
+  // path would let the daemon verify one file and the engine run another.
+  if (!isAbsolute(opts.bundlePath)) {
+    throw new TypeError("spawnEngine: bundlePath must be absolute, or the bytes checked are not the bytes run");
+  }
   assertBundleUnchanged(opts.bundlePath, opts.expectedDigest);
   const env = engineEnv(opts);
   const runtime = opts.runtime ?? process.execPath;

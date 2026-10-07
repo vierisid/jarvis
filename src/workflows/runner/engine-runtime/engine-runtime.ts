@@ -618,6 +618,11 @@ export class EngineRuntime {
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
     this.bundlePath = opts.bundlePath;
+    // Fail at construction, not at the first spawn minutes later: a caller the
+    // type system cannot see that left the digest out is a wiring bug (#762).
+    if (opts.expectedDigest === undefined) {
+      throw new TypeError("EngineRuntime: expectedDigest is required -- the bundle's verified sha256, or null if nothing verified it");
+    }
     this.expectedDigest = opts.expectedDigest;
     this.poolEnabled = opts.pool ?? false;
     // 5 minutes by default. The engine cold-spawn is ~3s, so an idle TTL
