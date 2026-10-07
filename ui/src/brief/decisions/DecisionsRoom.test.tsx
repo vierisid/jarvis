@@ -213,3 +213,51 @@ test("room return restores document and selector reading positions from its reta
   expect(host.querySelector("article")!.scrollTop).toBe(120);
   expect(host.querySelector("nav")!.scrollLeft).toBe(24);
 });
+
+test("R1: a settled save removes Check result before the next edit", async () => {
+  await render();
+  await click("Edit draft");
+  await click("Save draft");
+  expect(button("Check result")).toBeUndefined();
+  await click("Edit draft");
+  expect(button("Check result")).toBeUndefined();
+  expect(button("Save draft").disabled).toBe(false);
+  expect(button("Cancel edit").disabled).toBe(false);
+});
+
+test("R2: a remotely removed second edit keeps its text and Cancel reachable through chat reflow", async () => {
+  await render();
+  await click("Edit draft");
+  await click("Save draft");
+  await click("Edit draft");
+  await React.act(async () => {
+    const input = host.querySelector<HTMLTextAreaElement>(
+      'textarea[aria-label="Message"]',
+    )!;
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(input, "Keep this unsaved writing");
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  expect(f.controller.snapshot().draft!.document).toMatchObject({
+    body: "Keep this unsaved writing",
+  });
+  f.port.read = async () => ({ status: "ready", data: f.rows().slice(1) });
+  await click("Refresh decisions");
+  for (const chatOpen of [true, false]) {
+    shell = { ...shell, chatOpen };
+    await render();
+    expect(
+      host.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message"]')
+        ?.value,
+    ).toBe("Keep this unsaved writing");
+    expect(button("Cancel edit").disabled).toBe(false);
+    expect(button("Save draft").disabled).toBe(true);
+  }
+  await click("Cancel edit");
+  expect(host.querySelector("article")?.dataset.decision).toBe(
+    "fixture-decision-invitation",
+  );
+  expect(button("Approve & send").disabled).toBe(false);
+});

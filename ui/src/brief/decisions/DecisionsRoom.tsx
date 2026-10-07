@@ -462,6 +462,7 @@ function ConnectedDecisions({
                       : "")}
                 </span>
                 {attempt &&
+                  !attempt.settled &&
                   ["unknown", "confirmed"].includes(attempt.state) &&
                   state.phase === "rest" && (
                     <BriefButton

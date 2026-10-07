@@ -24,9 +24,7 @@
   "activation": {
     "production_registry_changed": false,
     "real_effects_invoked": false,
-    "required_capabilities": [
-      "decisions"
-    ],
+    "required_capabilities": ["decisions"],
     "host_gates": [
       "Authenticated complete F-12 queue plus same-revision F-14 document projection",
       "F-14 typed document actions and read-only original-request recovery",
@@ -190,5 +188,50 @@
   "rollback": "Disable optional decisionsRegistration/specimen; preserve owner request receipts. Default/legacy routes unchanged.",
   "quick_verify": "http://127.0.0.1:4403/?brief=preview&specimen=decisions#/_brief_preview",
   "next": "D-24 Goals, not started",
-  "implementation_head": "295ca73cc2264f662f66c20e8c934d73d085f8ea"
+  "implementation_head": "295ca73cc2264f662f66c20e8c934d73d085f8ea",
+  "review_corrections": {
+    "reviewed_head": "a52eeb5dc53c7bacd5dc3c41d7b411aeba03d280",
+    "resolved": [
+      "R1: historical receipt recovery cannot clear a newer edit or replay settlement",
+      "R2: active drafts stay visible and cancellable through removed, changed and unavailable reads",
+      "R3: explicit selection during settlement refresh supersedes automatic advancement"
+    ],
+    "red_evidence": "evidence/D-23/review-red.log",
+    "reproduced_failures": 6,
+    "added_regressions": 10,
+    "focused": {
+      "tests": 45,
+      "assertions": 207,
+      "result": "pass",
+      "evidence": "evidence/D-23/review-focused.log"
+    },
+    "brief_suite": {
+      "tests": 519,
+      "assertions": 4870,
+      "skips": 2,
+      "result": "pass",
+      "evidence": "evidence/D-23/review-regression.log"
+    },
+    "typecheck": {
+      "result": "pass",
+      "evidence": "evidence/D-23/review-typecheck.log"
+    },
+    "build": { "result": "pass", "evidence": "evidence/D-23/review-build.log" },
+    "format": {
+      "result": "pass",
+      "evidence": "evidence/D-23/review-format.log"
+    },
+    "browser": {
+      "result": "pass",
+      "layouts": 8,
+      "new_check": "Settled save has no Check result; a second edit retains text through Refresh decisions",
+      "script": "evidence/D-23/browser-check.cjs",
+      "evidence": "evidence/D-23/review-browser.log",
+      "screenshots": [
+        "evidence/D-23/validation.png",
+        "evidence/D-23/kept-draft.png"
+      ]
+    },
+    "reviewed_head_ci": "All applicable checks passed; path-gated jobs skipped. Correction-head CI is a separate run."
+  }
 }

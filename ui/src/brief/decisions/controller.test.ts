@@ -341,3 +341,158 @@ test("calendar changes preserve readonly options and validate timezones", async 
   await wait();
   expect(f.c.snapshot().rows[0]!.options.length).toBe(2);
 });
+
+test.each(["save", "reopen"] as const)(
+  "R1: recovering a settled %s cannot discard a later edit or replay acknowledgement",
+  async (action) => {
+    const f = fixture(action === "reopen" ? "deferred" : "ready");
+    await f.c.refresh();
+    if (action === "save") f.c.edit(A);
+    await f.c.act(A, action);
+    await wait();
+    f.c.edit(A);
+    const doc = f.c.snapshot().draft!.document;
+    if (doc.kind !== "email") throw Error("Expected email fixture");
+    f.c.change({ ...doc, body: "A newer unsaved edit" });
+    const draft = f.c.snapshot().draft;
+    await f.c.recover(A);
+    expect(f.c.snapshot().phase).toBe("rest");
+    await wait();
+    expect(f.c.snapshot().draft).toEqual(draft);
+    expect(f.c.canAct(A, "save")).toBe(true);
+    expect(f.calls.length).toBe(1);
+  },
+);
+
+test.each(["removed", "unavailable", "changed"] as const)(
+  "R2: a second edit remains visible and cancellable after a %s refresh",
+  async (result) => {
+    const f = fixture();
+    let changed = false;
+    const c = owner({
+      ...f.port,
+      read: async () => {
+        if (!changed) return f.port.read();
+        if (result === "unavailable")
+          return { status: "unavailable", reason: "Offline" };
+        const rows = f.rows();
+        if (result === "changed") {
+          rows[0]!.paper.decision.revision = "remote-newer-revision";
+          return { status: "ready", data: rows };
+        }
+        return {
+          status: "ready",
+          data: rows.filter((x) => decisionId(x) !== A),
+        };
+      },
+    });
+    await c.refresh();
+    c.edit(A);
+    await c.act(A, "save");
+    await wait();
+    c.edit(A);
+    const draft = c.snapshot().draft!;
+    changed = true;
+    await c.refresh();
+    expect(c.snapshot().selectedId).toBe(A);
+    expect(
+      c.snapshot().rows.find((x) => decisionId(x) === A)?.paper.decision
+        .revision,
+    ).toBe(draft.revision);
+    expect(c.snapshot().draft).toEqual(draft);
+    expect(c.canAct(A, "save")).toBe(false);
+    c.cancelEdit();
+    await wait();
+    expect(c.snapshot().draft).toBeNull();
+    if (result === "removed") {
+      expect(c.snapshot().selectedId).toBe(B);
+      expect(c.canAct(B, "approve")).toBe(true);
+    }
+  },
+);
+
+test("R3: selecting during settlement's delayed refresh wins over automatic advancement", async () => {
+  const f = makeDecisionsFixture("many", 0);
+  let finish!: (read: DecisionCollection) => void;
+  let started!: () => void;
+  const refreshing = new Promise<void>((resolve) => (started = resolve));
+  let reads = 0;
+  const c = owner({
+    ...f.port,
+    read: () => {
+      if (++reads === 1) return f.port.read();
+      return new Promise((resolve) => {
+        finish = resolve;
+        started();
+      });
+    },
+  });
+  await c.refresh();
+  const first = decisionId(c.snapshot().rows[0]!);
+  const chosen = decisionId(c.snapshot().rows[2]!);
+  await c.act(first, "approve");
+  await refreshing;
+  expect(c.select(chosen)).toBe(true);
+  finish(await f.port.read());
+  await wait();
+  expect(c.snapshot().selectedId).toBe(chosen);
+  expect(f.calls.length).toBe(1);
+});
+
+test("R1: an acknowledged save still recovers after its projection read fails", async () => {
+  const f = fixture();
+  let unavailable = false;
+  const c = owner({
+    ...f.port,
+    read: async () =>
+      unavailable
+        ? { status: "unavailable", reason: "Offline" }
+        : f.port.read(),
+  });
+  await c.refresh();
+  c.edit(A);
+  const draft = c.snapshot().draft;
+  unavailable = true;
+  await c.act(A, "save");
+  await wait();
+  expect(c.snapshot().draft).toEqual(draft);
+  expect(c.canAct(A, "save")).toBe(false);
+  unavailable = false;
+  await c.recover(A);
+  await wait();
+  expect(c.snapshot().draft).toBeNull();
+  expect(c.canAct(A, "approve")).toBe(true);
+  expect(f.calls.length).toBe(1);
+});
+
+test("R1: typing during save reconciliation is not consumed by that earlier save", async () => {
+  const f = fixture();
+  let finish!: (read: DecisionCollection) => void;
+  let started!: () => void;
+  const refreshing = new Promise<void>((resolve) => (started = resolve));
+  let reads = 0;
+  const c = owner({
+    ...f.port,
+    read: () => {
+      if (++reads === 1) return f.port.read();
+      return new Promise((resolve) => {
+        finish = resolve;
+        started();
+      });
+    },
+  });
+  await c.refresh();
+  c.edit(A);
+  await c.act(A, "save");
+  await refreshing;
+  const doc = c.snapshot().draft!.document;
+  if (doc.kind !== "email") throw Error("Expected email fixture");
+  c.change({ ...doc, body: "Typed after the request was acknowledged" });
+  const draft = c.snapshot().draft;
+  finish(await f.port.read());
+  await wait();
+  expect(c.snapshot().draft).toEqual(draft);
+  expect(c.snapshot().selectedId).toBe(A);
+  expect(c.canAct(A, "save")).toBe(false);
+  expect(f.calls.length).toBe(1);
+});
