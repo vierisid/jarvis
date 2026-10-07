@@ -44,8 +44,18 @@ export interface EffectInvocation {
   request: Record<string, unknown>;
   /** A reviewed UI capability cannot be auto-allowed by category overrides. */
   confirmation?: { confirm: 'always'; intent: string };
-  prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown> };
+  prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown>; bindings?: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
+  /**
+   * Q-05: recheck what the record was made against beyond its arguments and
+   * target, such as the memory facts a recipient matched. Runs before the
+   * policy and any approval, inside the dispatch checkpoint and, with
+   * `revalidateOnReplay`, before a recorded authorization is handed out again.
+   * Throws an ActionOutcomeError to block; the record keeps the outcome.
+   */
+  revalidate?: (record: WorkflowEffect) => void;
+  /** For routes whose replay re-dispatches (a piece's own retry), recheck before handing out the recorded result. */
+  revalidateOnReplay?: boolean;
   execute: (args: Record<string, unknown>, checkpoint: () => void) => Promise<unknown>;
   principal?: EffectPrincipal;
   /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
@@ -105,7 +115,18 @@ export class WorkflowEffectBoundary {
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
       throw new Error('Workflow effect changed since it was recorded; start a new run for new arguments or version');
     }
-    if (effect?.status === 'succeeded') return { result: effect.result };
+    if (effect?.status === 'succeeded') {
+      // A recorded piece authorization is handed out again on the engine's own
+      // retry, and the piece then calls the service again: recheck first. A
+      // refusal is kept beside the result, which stays what it was.
+      if (input.revalidateOnReplay) {
+        try { input.revalidate?.(effect); } catch (error) {
+          if (error instanceof ActionOutcomeError) { effect.replayRefusal = { outcome: error.outcome, at: Date.now() }; saveWorkflowEffect(effect); }
+          throw error;
+        }
+      }
+      return { result: effect.result };
+    }
     if (effect?.outcome && effect.outcome.status !== 'succeeded') throw new ActionOutcomeError(effect.outcome);
     if (effect?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
     if (effect && effect.status !== 'pending') throw new Error(effect.error ?? `Workflow effect is ${effect.status}`);
@@ -172,6 +193,15 @@ export class WorkflowEffectBoundary {
       }
       return decision;
     };
+    // Bindings first, so a stale one is refused before anyone is asked to approve it.
+    try { input.revalidate?.(record); } catch (error) {
+      if (error instanceof ActionOutcomeError) {
+        // Authority never ran, but nothing ran either: the trail says denied, not allowed.
+        record.outcome = error.outcome; record.status = 'blocked'; record.decision = 'denied'; record.error = error.message;
+        record.reason = error.message; record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);
+      }
+      throw error;
+    }
     let decision;
     try { decision = policy(); } catch (error) {
       record.status = 'blocked'; record.decision = 'denied'; record.error = String((error as Error).message);
@@ -235,6 +265,7 @@ export class WorkflowEffectBoundary {
     // dispatch claim. No await separates this gate from the effect callback.
     const checkpoint = () => {
       input.validateTarget?.(record.arguments, record.target);
+      input.revalidate?.(record);
       const latest = resolveEffectContext(input.context, input.piece, input.action);
       if (latest.versionDigest !== record.versionDigest) throw new Error('Workflow version changed before dispatch');
       const current = policy();

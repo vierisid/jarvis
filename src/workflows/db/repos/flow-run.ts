@@ -10,6 +10,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getRunCancellation, type RunCancellation } from "./run-cancellation";
 import { getRunMachineBinding, type RunMachineBinding } from "./run-machine-binding";
+import { runConnectionBindingViews, type RunConnectionBindingView } from "./binding-pins";
 import { getWorkflowDb, DEFAULT_IDS } from "../index";
 import { apId } from "../ids";
 
@@ -105,6 +106,12 @@ export interface FailedStep {
 
 export interface FlowRun {
   machineBinding: RunMachineBinding | null;
+  /**
+   * Q-05: the connection identity the run used for each connection, and any
+   * fetch it refused. Read for one run (`getFlowRun`), not for every row of a
+   * list or every status update.
+   */
+  connectionBindings?: RunConnectionBindingView[];
   cancellation: RunCancellation | null;
   id: string;
   flowId: string;
@@ -225,7 +232,9 @@ function getFlowRunRow(id: string): FlowRunRow | null {
 
 export function getFlowRun(id: string): FlowRun | null {
   const row = getFlowRunRow(id);
-  return row ? rowToRun(row) : null;
+  if (!row) return null;
+  const bindings = runConnectionBindingViews(row.id);
+  return bindings.length ? { ...rowToRun(row), connectionBindings: bindings } : rowToRun(row);
 }
 
 export function updateRun(id: string, patch: UpdateRunInput): FlowRun {

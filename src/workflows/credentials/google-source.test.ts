@@ -48,6 +48,21 @@ function makeFakeAuth(state: FakeAuthState): GoogleAuth {
 }
 
 describe("JarvisGoogleConnectionSource", () => {
+  test("Q-05: a revoked grant is handed out to no one, and reconnecting changes its identity", async () => {
+    const state: FakeAuthState = { authed: true, freshAccessToken: "fresh", tokens: { access_token: "fresh", refresh_token: "grant-one" } };
+    let revoked: string | null = null;
+    const auth = { ...(makeFakeAuth(state) as object), reconnectRequired: () => revoked } as unknown as GoogleAuth;
+    const src = new JarvisGoogleConnectionSource(auth);
+    const first = src.identity(JARVIS_GOOGLE_PREFIX);
+    expect(first).toMatch(/^[0-9a-f]{32}$/);
+    expect(first).not.toContain("grant-one");
+    state.tokens!.refresh_token = "grant-two";
+    expect(src.identity(JARVIS_GOOGLE_PREFIX)).not.toBe(first);
+    revoked = "Google revoked access";
+    expect(src.identity(JARVIS_GOOGLE_PREFIX)).toBeNull();
+    expect(await src.resolve(JARVIS_GOOGLE_PREFIX)).toBeNull();
+  });
+
   test("returns null when GoogleAuth is unauthenticated", async () => {
     const auth = makeFakeAuth({
       authed: false,
@@ -90,11 +105,13 @@ describe("JarvisGoogleConnectionSource", () => {
     // CRITICAL: the source called getAccessToken (which would have
     // refreshed) instead of reading the cached access_token directly.
     expect(value.access_token).toBe("new-token-after-refresh");
-    expect(value.refresh_token).toBe("rt-abc");
+    // The long-lived grant stays in the daemon; the engine asks again per step.
+    expect(value.refresh_token).toBe("");
+    expect(JSON.stringify(resolved)).not.toContain("rt-abc");
     expect(value.token_type).toBe("Bearer");
   });
 
-  test("surfaces refresh_token + token_type even when expiry_date is missing", async () => {
+  test("keeps token_type and hands out no refresh_token when expiry_date is missing", async () => {
     const state: FakeAuthState = {
       authed: true,
       freshAccessToken: "live",
@@ -102,9 +119,10 @@ describe("JarvisGoogleConnectionSource", () => {
     };
     const src = new JarvisGoogleConnectionSource(makeFakeAuth(state));
     const resolved = await src.resolve(JARVIS_GOOGLE_PREFIX);
-    const value = resolved?.value as { token_type?: string; expiry_date?: number };
+    const value = resolved?.value as { refresh_token?: string; token_type?: string; expiry_date?: number };
     // token_type defaults to "Bearer" per the source's normalization.
     expect(value.token_type).toBe("Bearer");
+    expect(value.refresh_token).toBe("");
     expect(value.expiry_date).toBeUndefined();
   });
 

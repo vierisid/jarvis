@@ -7,6 +7,7 @@
  */
 
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
+import { pinUnpinnedEnabledFlows } from '../workflows/db/repos/binding-pins';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -5173,7 +5174,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })) } : null;
       },
       roles: () => new Set(agentService.getSpecialists().keys()),
+      // Q-05: the computers a workflow can be pinned to, and whether this one may run local tools.
+      // `--no-local-tools` reaches the tools only later in startup (9b), after
+      // the pin pass below, so the flag is read here as well.
+      machines: () => sidecarManager.listSidecars(),
+      localTools: () => !config.noLocalTools && !isNoLocalTools(),
     });
+    // Q-05: an enabled flow without pins (one enabled before this build) is
+    // pinned to the bindings it runs against now, before any trigger fires.
+    try {
+      const pinned = pinUnpinnedEnabledFlows();
+      if (pinned) console.log(`[Daemon] Pinned the connections and computer of ${pinned} enabled workflow(s)`);
+    } catch (error) {
+      console.error('[Daemon] Could not pin enabled workflows:', (error as Error).message);
+    }
     const workflowEngineRuntime = engineBoot?.runtime ?? null;
     const workflowSandboxApi = engineBoot?.api ?? null;
 

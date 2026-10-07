@@ -5,7 +5,8 @@ export interface RunMachineBinding {
   runId: string;
   sidecarId: string | null;
   sessionId: string | null;
-  selectedBy: 'implicit' | 'explicit';
+  /** `pinned`: the computer the workflow was enabled against (Q-05, repos/binding-pins.ts). */
+  selectedBy: 'implicit' | 'explicit' | 'pinned';
   boundAt: number;
 }
 
@@ -15,9 +16,10 @@ export function getRunMachineBinding(runId: string): RunMachineBinding | null {
   return row ? JSON.parse(row.record) : null;
 }
 
-export function machineBindingBlocked(code: string, reason: string): never {
+const START_AGAIN = 'Review the recorded results and start a new run with an explicit target and fresh approvals; do not replay completed work.';
+export function machineBindingBlocked(code: string, reason: string, next = START_AGAIN): never {
   throw new ActionOutcomeError({ status: 'blocked', code, effect: 'not_started',
-    message: `${reason} No action was dispatched. Review the recorded results and start a new run with an explicit target and fresh approvals; do not replay completed work.` });
+    message: `${reason} No action was dispatched. ${next}` });
 }
 
 /** One first writer per run, including across concurrent service instances. */

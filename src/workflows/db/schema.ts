@@ -40,6 +40,15 @@ const STATEMENTS: string[] = [
     run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,
     record TEXT NOT NULL
   )`,
+  // Q-05: the connection identity each run used, one row per connection, first
+  // writer wins. Every later fetch in the run (a resumed approval, a retried
+  // step) must hand out the same identity or the run stops.
+  `CREATE TABLE IF NOT EXISTS workflow_run_connection_binding (
+    run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    external_id TEXT NOT NULL,
+    record TEXT NOT NULL,
+    PRIMARY KEY (run_id, external_id)
+  )`,
   // Cancellation is a durable dispatch fence, separate from effect receipts.
   `CREATE TABLE IF NOT EXISTS workflow_run_cancellation (
     run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,
@@ -75,6 +84,11 @@ const STATEMENTS: string[] = [
     -- and the user can take it back.
     code_steps_grant TEXT,
     code_steps_granted_at INTEGER,
+    -- Q-05: the connections and computer this flow was enabled against
+    -- (repos/binding-pins.ts). Written only when a person publishes or enables
+    -- the flow, never by an unrelated write such as a metadata PATCH; run
+    -- admission and the engine's connection fetch compare against it.
+    binding_pins TEXT,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -183,6 +197,12 @@ const STATEMENTS: string[] = [
     value TEXT NOT NULL,
     metadata TEXT,
     pre_select_for_new_projects INTEGER NOT NULL DEFAULT 0,
+    -- Q-05: counts every replacement of the stored credential. Jarvis keeps no
+    -- account identity, so a rotated key and another account pasted under the
+    -- same name look the same; workflows enabled against an earlier
+    -- generation pause until a person enables them again. Re-encryption
+    -- (key rotation, migration) does not count: it writes the value column directly.
+    credential_generation INTEGER NOT NULL DEFAULT 0,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -325,6 +345,14 @@ function applyAdditiveColumnMigrations(db: Database): void {
     },
     { table: "flow", column: "code_steps_grant", ddl: "ALTER TABLE flow ADD COLUMN code_steps_grant TEXT" },
     { table: "flow", column: "code_steps_granted_at", ddl: "ALTER TABLE flow ADD COLUMN code_steps_granted_at INTEGER" },
+    // Q-05: binding pins and the credential generation they compare against.
+    // NULL pins mean "not pinned yet"; the daemon pins enabled flows at boot.
+    { table: "flow", column: "binding_pins", ddl: "ALTER TABLE flow ADD COLUMN binding_pins TEXT" },
+    {
+      table: "app_connection",
+      column: "credential_generation",
+      ddl: "ALTER TABLE app_connection ADD COLUMN credential_generation INTEGER NOT NULL DEFAULT 0",
+    },
   ];
   // One transaction around the ALTERs AND the backfill they key. SQLite DDL is
   // transactional, and the coupling matters: the backfill is keyed on the

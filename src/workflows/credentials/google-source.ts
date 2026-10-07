@@ -8,11 +8,13 @@
  * workflow piece picker without re-authenticating per piece.
  *
  * The piece sees an `OAUTH2`-shaped value:
- *   { access_token, refresh_token, scope?, token_type, expiry_date? }
+ *   { access_token, refresh_token: "", token_type, expiry_date? }
  *
- * Pieces typically only read `access_token`. We surface the full set so any
- * piece that introspects more (refresh dance, scope checks) sees consistent
- * values.
+ * The refresh token never leaves the daemon, as the engine's credential route
+ * states. The engine asks for the connection at every step and gets an access
+ * token refreshed here, so a piece has nothing to refresh, and a long-lived
+ * grant to the whole Google account never reaches sandboxed piece code. Inside
+ * the daemon it still identifies the grant (`identity`, Q-05).
  */
 
 import type { GoogleAuth } from "../../integrations/google-auth";
@@ -20,6 +22,7 @@ import type {
   JarvisConnectionSource,
   ResolvedConnection,
 } from "./adapter";
+import { credentialFingerprint } from "./adapter";
 
 export const JARVIS_GOOGLE_PREFIX = "jarvis:google";
 
@@ -43,9 +46,23 @@ export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
     return externalId === JARVIS_GOOGLE_PREFIX || externalId.startsWith(`${JARVIS_GOOGLE_PREFIX}:`);
   }
 
+  /**
+   * The grant this source would hand out: a fingerprint of the refresh token,
+   * so reconnecting Google (possibly to another account) changes it. Null while
+   * not connected or while Google has revoked the grant.
+   */
+  identity(_externalId: string): string | null {
+    const auth = this.getAuth();
+    if (!auth || !auth.isAuthenticated() || auth.reconnectRequired?.()) return null;
+    const token = auth.getTokens()?.refresh_token;
+    return token ? credentialFingerprint(token) : null;
+  }
+
   async resolve(_externalId: string): Promise<ResolvedConnection | null> {
     const auth = this.getAuth();
-    if (!auth || !auth.isAuthenticated()) {
+    // A revoked grant is not a credential to hand out, even while its last
+    // access token has not expired yet.
+    if (!auth || !auth.isAuthenticated() || auth.reconnectRequired?.()) {
       // Not configured or not yet authenticated -- piece will see
       // "connection not found". Surface as null (vs throw) so other
       // sources / repo lookups can still run.
@@ -59,7 +76,7 @@ export class JarvisGoogleConnectionSource implements JarvisConnectionSource {
       type: "OAUTH2",
       value: {
         access_token: accessToken,
-        refresh_token: tokens?.refresh_token ?? "",
+        refresh_token: "",
         token_type: tokens?.token_type ?? "Bearer",
         ...(tokens?.expiry_date ? { expiry_date: tokens.expiry_date } : {}),
       },

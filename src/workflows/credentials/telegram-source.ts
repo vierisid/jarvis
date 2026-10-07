@@ -23,6 +23,7 @@ import type {
   JarvisConnectionSource,
   ResolvedConnection,
 } from "./adapter";
+import { credentialFingerprint } from "./adapter";
 
 export const JARVIS_TELEGRAM_PREFIX = "jarvis:telegram";
 
@@ -38,6 +39,12 @@ export class JarvisTelegramConnectionSource implements JarvisConnectionSource {
 
   canResolve(externalId: string): boolean {
     return externalId === JARVIS_TELEGRAM_PREFIX || externalId.startsWith(`${JARVIS_TELEGRAM_PREFIX}:`);
+  }
+
+  /** A fingerprint of the bot token, so a token for another bot pauses the workflows using it. */
+  identity(_externalId: string): string | null {
+    const token = this.getToken();
+    return token ? credentialFingerprint(token) : null;
   }
 
   async resolve(_externalId: string): Promise<ResolvedConnection | null> {
