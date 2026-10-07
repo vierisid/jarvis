@@ -54,8 +54,10 @@ export interface EngineRuntimeOptions {
    * sha256 the bundle's bytes must still have at every spawn -- the
    * `EngineBundle.digest` the lookup or build returned -- or `null` when
    * nothing verified them (an adopted per-user bundle, a test fixture).
+   * REQUIRED so that dropping it is a type error: a verified bundle reaching
+   * spawn without its digest would be spawned unchecked (#762).
    */
-  expectedDigest?: string | null;
+  expectedDigest: string | null;
   /**
    * When true, `release()` returns the engine to a single-slot warm pool
    * instead of killing it. The next `acquire()` reuses the same process,
@@ -568,7 +570,7 @@ export class EngineRuntime {
   private readonly api: SandboxApi;
   private readonly bundlePath: string;
   /** Fixed at construction: a later resolution elsewhere cannot change it (#762). */
-  private readonly expectedDigest: string | null | undefined;
+  private readonly expectedDigest: string | null;
   private readonly baseCodeDir: string;
   private readonly customPiecesPaths: string[];
   private readonly handshakeTimeoutMs: number;

@@ -74,9 +74,9 @@ export interface SpawnEngineOptions {
   bundlePath: string;
   /**
    * sha256 `bundlePath` must hash to, or `null` when nothing verified it. See
-   * `EngineRuntimeOptions.expectedDigest`.
+   * `EngineRuntimeOptions.expectedDigest`; required for the same reason.
    */
-  expectedDigest?: string | null;
+  expectedDigest: string | null;
   sandboxId: string;
   sandboxWsPort: number;
   baseCodeDir: string;

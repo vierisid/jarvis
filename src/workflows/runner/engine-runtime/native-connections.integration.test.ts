@@ -124,7 +124,8 @@ describe("native credential engine integration", () => {
       resolve: async () => ({ type: "OAUTH2", value: { access_token: TOKEN } }) });
     api = new SandboxApi({ services: { credentialResolver: resolver } });
     await api.start({ port: 0 });
-    runtime = new EngineRuntime({ api, bundlePath: (cached ?? await buildEngineBundle()).bundlePath,
+    const bundle = cached ?? await buildEngineBundle();
+    runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest,
       cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, "code") });
     provider = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
       const auth = req.headers.get("authorization") ?? "";

@@ -237,6 +237,16 @@ describe("the verified digest travels with the bundle, and fails closed (#762)",
     await runtime.shutdown();
   });
 
+  test("a caller that leaves the digest out is refused, not spawned unchecked", () => {
+    // `expectedDigest` is required by type, but generated JS and `as` casts do
+    // not see types. Omitting it must not read as "never verified".
+    const { bundlePath } = verifiedSharedBundle();
+    const { expectedDigest: _omitted, ...withoutDigest } = spawnOpts(bundlePath, null);
+    const before = liveEngines().length;
+    expect(() => spawnEngine(withoutDigest as Parameters<typeof spawnEngine>[0])).toThrow(/expectedDigest is required/u);
+    expect(liveEngines().length).toBe(before);
+  });
+
   test("a malformed digest refuses rather than matching nothing", () => {
     const { bundlePath } = verifiedSharedBundle();
     expect(() => spawnEngine(spawnOpts(bundlePath, ""))).toThrow(BundleIntegrityError);

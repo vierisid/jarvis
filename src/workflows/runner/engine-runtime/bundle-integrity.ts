@@ -19,7 +19,10 @@
  * resolution of the same path (an evaluation engine built mid-life, say)
  * silently changed what every existing runtime would accept. Carried
  * explicitly, there is no lookup to miss, and a runtime accepts exactly the
- * bytes it was built for until it is replaced.
+ * bytes it was built for until it is replaced. `expectedDigest` is a REQUIRED
+ * field on both `EngineRuntimeOptions` and `SpawnEngineOptions`, `null` meaning
+ * "nothing verified these bytes", so dropping it is a type error and not a
+ * silent downgrade.
  *
  * Why the pin and not "run the manifest check again": the manifest sits beside
  * the bundle with the same ownership, so whatever can swap `main.js` can swap
@@ -103,9 +106,13 @@ export class BundleIntegrityError extends Error {
  * forwarded into model-directed children, and this message reaches logs a
  * model reads. The digests are hex. Nothing in it is attacker-chosen text.
  */
-export function assertBundleUnchanged(bundlePath: string, expectedDigest: string | null | undefined): void {
-  // Transitional: optional until every caller passes it (#762).
-  if (expectedDigest === null || expectedDigest === undefined) return;
+export function assertBundleUnchanged(bundlePath: string, expectedDigest: string | null): void {
+  // A caller the type system cannot see (generated JS, an `as` cast) that
+  // leaves the field out gets a refusal that says so, never an unchecked spawn.
+  if (expectedDigest === undefined) {
+    throw new TypeError("spawnEngine: expectedDigest is required -- the bundle's verified sha256, or null if nothing verified it");
+  }
+  if (expectedDigest === null) return;
   const want = expectedDigest;
   const label = `${safeLabel(basename(dirname(bundlePath)))}/${safeLabel(basename(bundlePath))}`;
   let got: string;
