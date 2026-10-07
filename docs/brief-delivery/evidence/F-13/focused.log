@@ -1,0 +1,62 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: :memory:
+Database initialized at: :memory:
+Database initialized at: :memory:
+[WebSocketServer] Started on unix:/tmp/jarvis-f12-http-g17gBy/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+Database initialized at: /tmp/jarvis-f13-q18-2xDfo5/fixture.db
+Database initialized at: /tmp/jarvis-f13-koSqhi/fixture.db
+Database initialized at: /tmp/jarvis-f13-koSqhi/fixture.db
+Database initialized at: /tmp/jarvis-f13-VsYHGU/fixture.db
+Database initialized at: /tmp/jarvis-f13-VsYHGU/fixture.db
+Database initialized at: /tmp/jarvis-f13-WeMmEp/fixture.db
+Database initialized at: /tmp/jarvis-f13-BxbdnE/fixture.db
+Database initialized at: /tmp/jarvis-f13-sl7eO9/fixture.db
+Database initialized at: /tmp/jarvis-f13-N9lOo5/fixture.db
+Database initialized at: /tmp/jarvis-f13-N9lOo5/fixture.db
+Database initialized at: /tmp/jarvis-f13-GALGiN/fixture.db
+Database initialized at: /tmp/jarvis-f13-GALGiN/fixture.db
+Database initialized at: /tmp/jarvis-f13-bUn33a/fixture.db
+Database initialized at: /tmp/jarvis-f13-5Kdxqq/fixture.db
+Database initialized at: /tmp/jarvis-f13-E7Bfz2/fixture.db
+Database initialized at: /tmp/jarvis-f13-cOk3RH/fixture.db
+Database initialized at: /tmp/jarvis-f13-ulKFZB/fixture.db
+Database initialized at: :memory:
+Database initialized at: /tmp/jarvis-f13-hNnB6F/fixture.db
+Database initialized at: /tmp/jarvis-f13-zZ8dNl/fixture.db
+Database initialized at: /tmp/jarvis-f13-r3daiw/fixture.db
+Database initialized at: /tmp/jarvis-f13-w7PdAO/fixture.db
+
+src/daemon/api-brief-recommendations.test.ts:
+(pass) missing registration, feature flag and decision dependency all fail closed [23.70ms]
+(pass) return, refresh, dismissal and malformed input preserve the server-owned plan [22.54ms]
+(pass) authenticated HTTP round trip rejects unauthenticated writes and preserves decision identity [34.21ms]
+
+src/brief/recommendations-q18.test.ts:
+(pass) without Q-18, the loader supplies no substitute planner [344.42ms]
+(skip) actual Q-18 recommends a concrete goal, accepts once, then links the existing work
+(skip) actual Q-18 questions, abstention and changed goal state remain non-actions
+
+src/brief/recommendations.test.ts:
+(pass) acceptance appends one canonical item, preserves the front, goal and durable receipt [414.89ms]
+(pass) return, dismissal, explicit refresh and expiry never create work [384.32ms]
+(pass) goal changes invalidate a stored recommendation before acceptance [361.41ms]
+(pass) workload changes invalidate a stored recommendation before acceptance [340.46ms]
+(pass) capability changes invalidate a stored recommendation before acceptance [315.74ms]
+(pass) ask remains an honest non-action across reload [340.06ms]
+(pass) none remains an honest non-action across reload [329.11ms]
+(pass) existing work is linked without duplicating, renaming, accepting its pending intent or moving the front [336.76ms]
+(pass) blocked work links its approval identity rather than creating an invisible work wrapper [362.99ms]
+(pass) queue failure rolls back work creation, intent acceptance and receipt together [471.39ms]
+(pass) acceptance rechecks under the write lock even without an intervening read [348.71ms]
+(pass) missing, failed and replaced dependencies fail closed without saving a recommendation [377.13ms]
+(pass) planner wire projection is bounded and strips unreviewed extra source fields [368.87ms]
+(pass) return uses insertion order even when the wall clock moves backwards [384.70ms]
+(pass) a changed planner choice with the same basis cannot authorize an old action [346.72ms]
+(pass) two independent processes accept the same saved recommendation exactly once [525.37ms]
+
+ 20 pass
+ 2 skip
+ 0 fail
+ 145 expect() calls
+Ran 22 tests across 3 files. [6.53s]

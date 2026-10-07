@@ -24,6 +24,29 @@ const EFFECT_COLUMNS = "id, run_id, approval_id, status, json_extract(record, '$
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const text = (value: unknown, max = 256): value is string => typeof value === 'string' && !!value.trim() && value.length <= max;
 
+const DECISION_CANDIDATES = `
+        WITH candidates AS (
+          SELECT 'approval:' || a.id AS id, a.created_at AS created FROM approval_requests a
+          WHERE (a.status = 'pending' OR (a.status = 'approved' AND a.execution_outcome IN ('unknown','not_started'))
+            OR (a.status = 'executed' AND (a.execution_outcome IS NULL OR a.execution_outcome IN ('failed','blocked','unknown')))
+            OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.status != 'succeeded'))
+            AND (?1 IS NULL OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.run_id = ?1))
+          UNION ALL
+          SELECT 'work:' || w.work_id, c.created_at FROM commitment_work w JOIN commitments c ON c.id = w.work_id
+          LEFT JOIN flow_run r ON r.id = w.run_id
+          WHERE (w.decision IS NULL OR (json_extract(w.decision, '$.outcome') = 'accepted' AND w.result_check IS NULL
+            AND (r.status IS NULL OR r.status NOT IN ('RUNNING','QUEUED'))))
+            AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = w.run_id AND e.status != 'succeeded')
+            AND (?1 IS NULL OR w.run_id = ?1)
+          UNION ALL
+          SELECT 'effect:' || e.id, json_extract(e.record, '$.createdAt') FROM workflow_effect e
+          WHERE e.status != 'succeeded' AND NOT EXISTS (SELECT 1 FROM approval_requests a WHERE a.id = e.approval_id)
+            AND (?1 IS NULL OR e.run_id = ?1)
+        ), ordered AS (
+          SELECT c.*, coalesce(p.position, 0) AS position FROM candidates c
+          LEFT JOIN brief_decision_placement p ON p.decision_id = c.id
+        )`;
+
 /** One authenticated daemon/workspace. No client-supplied tenant or execution registry. */
 export class DecisionQueue implements NonNullable<BriefReadProviders['decisions']> {
   constructor(private readonly db: Database, private readonly authority: ApprovalDecisionDeps) {
@@ -168,27 +191,7 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
       // No day boundary. All unresolved sources remain discoverable. A work card
       // waiting on an effect is represented by that effect/approval, not duplicated.
       const keys = this.db.query<Key, (string | number | null)[]>(`
-        WITH candidates AS (
-          SELECT 'approval:' || a.id AS id, a.created_at AS created FROM approval_requests a
-          WHERE (a.status = 'pending' OR (a.status = 'approved' AND a.execution_outcome IN ('unknown','not_started'))
-            OR (a.status = 'executed' AND (a.execution_outcome IS NULL OR a.execution_outcome IN ('failed','blocked','unknown')))
-            OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.status != 'succeeded'))
-            AND (?1 IS NULL OR EXISTS (SELECT 1 FROM workflow_effect e WHERE e.approval_id = a.id AND e.run_id = ?1))
-          UNION ALL
-          SELECT 'work:' || w.work_id, c.created_at FROM commitment_work w JOIN commitments c ON c.id = w.work_id
-          LEFT JOIN flow_run r ON r.id = w.run_id
-          WHERE (w.decision IS NULL OR (json_extract(w.decision, '$.outcome') = 'accepted' AND w.result_check IS NULL
-            AND (r.status IS NULL OR r.status NOT IN ('RUNNING','QUEUED'))))
-            AND NOT EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id = w.run_id AND e.status != 'succeeded')
-            AND (?1 IS NULL OR w.run_id = ?1)
-          UNION ALL
-          SELECT 'effect:' || e.id, json_extract(e.record, '$.createdAt') FROM workflow_effect e
-          WHERE e.status != 'succeeded' AND NOT EXISTS (SELECT 1 FROM approval_requests a WHERE a.id = e.approval_id)
-            AND (?1 IS NULL OR e.run_id = ?1)
-        ), ordered AS (
-          SELECT c.*, coalesce(p.position, 0) AS position FROM candidates c
-          LEFT JOIN brief_decision_placement p ON p.decision_id = c.id
-        ) SELECT * FROM ordered WHERE ?2 IS NULL OR (position, created, id) > (?3, ?4, ?2)
+        ${DECISION_CANDIDATES} SELECT * FROM ordered WHERE ?2 IS NULL OR (position, created, id) > (?3, ?4, ?2)
           ORDER BY position, created, id LIMIT ?5
       `).all(query.runId ?? null, cursor?.after.id ?? null, cursor?.after.position ?? 0, cursor?.after.created ?? 0, limit + 1);
       const page = keys.slice(0, limit);
@@ -196,6 +199,26 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
         ? Buffer.from(JSON.stringify({ ...clock, after: page.at(-1)!, runId: query.runId ?? null } satisfies Cursor)).toString('base64url') : null;
       return { state: 'ready' as const, asOf: Date.now(), data: { items: page.map(key => this.project(key.id)), nextCursor } };
     })();
+  }
+  /** F-13 links the canonical queue identity; new work goes behind every existing item. */
+  recommendWork(workId: string, created: boolean): QueuedDecision {
+    this.available();
+    return this.db.transaction(() => {
+      const key = this.db.query<Key, [null, string]>(`${DECISION_CANDIDATES}
+        SELECT * FROM ordered WHERE id = 'work:' || ?2 OR EXISTS (
+          SELECT 1 FROM commitment_work w JOIN workflow_effect e ON e.run_id = w.run_id
+          WHERE w.work_id = ?2 AND (ordered.id = 'effect:' || e.id OR ordered.id = 'approval:' || e.approval_id)
+        ) ORDER BY position, created, id LIMIT 1`).get(null, workId);
+      if (!key) throw new DecisionError('Work no longer has an unresolved queue item', 409, 'work_not_queued');
+      if (created) {
+        const tail = this.db.query<{ position: number | null }, [null, string]>(`${DECISION_CANDIDATES}
+          SELECT MAX(position) AS position FROM ordered WHERE id != ?2`).get(null, key.id)!;
+        const position = tail.position === null ? 0 : tail.position + 1;
+        if (!Number.isSafeInteger(position) || position > 1_000_000) throw new DecisionError('Queue placement is full; reorder before adding work', 409, 'placement_full');
+        this.db.run('INSERT INTO brief_decision_placement(decision_id,position) VALUES (?,?)', [key.id, position]);
+      }
+      return this.project(key.id);
+    }).immediate();
   }
   place(id: string, revision: string, position: number): QueuedDecision {
     this.available();

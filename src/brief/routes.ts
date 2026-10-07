@@ -1,3 +1,5 @@
+import { createRecommendationRoutes } from './recommendation-routes';
+import type { Recommendations } from './recommendations';
 import { createDecisionRoutes } from './decision-routes';
 import type { DecisionQueue } from './decisions';
 import { createOpportunityActivationRoutes } from './opportunity-activation-routes';
@@ -13,8 +15,9 @@ import { createCompositionRoutes } from './composition-routes';
 import type { BriefCompositionProvider } from './composition';
 
 /** Mounted only inside the daemon's existing authenticated API route table. */
-export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue) {
+export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations) {
   return {
+    ...createRecommendationRoutes(capabilities, json, recommendations),
     ...createDecisionRoutes(capabilities, json, decisions),
     ...createOpportunityActivationRoutes(capabilities, json, activation),
     ...createPreparedOpportunityRoutes(capabilities, json, prepared),
