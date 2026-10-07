@@ -294,6 +294,7 @@ const STATEMENTS: string[] = [
     outcome TEXT NOT NULL,
     run_id TEXT,
     late_ms INTEGER,
+    started_at INTEGER,
     repeats INTEGER NOT NULL DEFAULT 0,
     last_repeat_at INTEGER,
     detail TEXT,
@@ -367,6 +368,7 @@ function applyAdditiveColumnMigrations(db: Database): void {
     { table: "flow", column: "code_steps_granted_at", ddl: "ALTER TABLE flow ADD COLUMN code_steps_granted_at INTEGER" },
     { table: "flow", column: "disabled_at", ddl: "ALTER TABLE flow ADD COLUMN disabled_at INTEGER" },
     { table: "flow_run", column: "graph_digest", ddl: "ALTER TABLE flow_run ADD COLUMN graph_digest TEXT" },
+    { table: "workflow_trigger_fire", column: "started_at", ddl: "ALTER TABLE workflow_trigger_fire ADD COLUMN started_at INTEGER" },
   ];
   // One transaction around the ALTERs AND the backfill they key. SQLite DDL is
   // transactional, and the coupling matters: the backfill is keyed on the

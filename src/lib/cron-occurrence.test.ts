@@ -3,7 +3,7 @@
  * crons (the morning briefing, goal windows) share it with workflows.
  */
 import { afterEach, describe, expect, setSystemTime, test } from "bun:test";
-import { CronScheduler, setCronTimezone, type CronOccurrence } from "./cron-scheduler";
+import { CronScheduler, setCronTimezone, type CronMissedSummary, type CronOccurrence } from "./cron-scheduler";
 
 const at = (iso: string) => Date.parse(iso);
 let scheduler: CronScheduler | null = null;
@@ -51,6 +51,31 @@ describe("CronScheduler occurrences", () => {
     late.tick("2026-10-07T09:00:20Z");
     expect(late.missed).toHaveLength(1);
     expect(late.fired).toEqual([]);
+  });
+
+  test("a clock corrected far back carries on from the new time, firing nothing twice", () => {
+    setCronTimezone("UTC");
+    const { fired, tick } = job("*/15 * * * *", "2026-10-07T09:59:30Z"); // the host runs an hour fast
+    tick("2026-10-07T10:00:10Z");
+    tick("2026-10-07T10:15:10Z");
+    tick("2026-10-07T09:20:10Z"); // corrected
+    for (const iso of ["09:30:10", "09:45:10", "10:00:10", "10:15:10", "10:30:10"]) tick(`2026-10-07T${iso}Z`);
+    expect(fired.map(o => o.key.slice(11))).toEqual(["10:00", "10:15", "09:30", "09:45", "10:30"]);
+  });
+
+  test("after a long sleep the newest 100 missed times are listed, older ones counted, and the times still due run", () => {
+    setCronTimezone("UTC");
+    setSystemTime(new Date(at("2026-10-07T09:00:00Z")));
+    scheduler = new CronScheduler();
+    const fired: string[] = [];
+    let listed: CronOccurrence[] = [];
+    let older: CronMissedSummary | undefined;
+    scheduler.schedule("j", "* * * * *", (o) => fired.push(o!.key), { onMissed: (m, rest) => { listed = m; older = rest; } });
+    scheduler.runDue("j", at("2026-10-07T09:00:10Z"));
+    scheduler.runDue("j", at("2026-10-08T05:00:30Z")); // asleep for twenty hours
+    expect(fired).toEqual(["2026-10-07T09:00", "2026-10-08T04:59", "2026-10-08T05:00"]);
+    expect([listed.length, listed[0]!.key, listed[99]!.key]).toEqual([100, "2026-10-08T03:19", "2026-10-08T04:58"]);
+    expect(older).toEqual({ count: 1_098, from: at("2026-10-07T09:01:00Z"), through: at("2026-10-08T03:18:00Z") });
   });
 
   test("past the grace window an occurrence is reported missed, never run late", () => {

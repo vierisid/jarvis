@@ -164,7 +164,6 @@ export const AWARENESS_EVENT_TYPE_MAP: Readonly<Record<string, string>> = {
   suggestion_ready: "awareness.suggestion_ready",
 };
 
-/** O(1) check that a string is a known workflow event type. */
 /**
  * A stable identity for an event whose publisher may announce the same thing
  * again (Q-06): email sync starts over after every restart or settings reload,
@@ -183,6 +182,7 @@ export function eventDeliveryKey(eventType: string, payload: Record<string, unkn
   return undefined;
 }
 
+/** O(1) check that a string is a known workflow event type. */
 export function isWorkflowEventType(s: string): boolean {
   if (!_indexBuilt) buildIndex();
   return _index.has(s);

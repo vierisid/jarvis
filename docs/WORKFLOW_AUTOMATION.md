@@ -973,8 +973,13 @@ A **queue job** and a **run** finish on different clocks. A `RUN_FLOW` job cover
 
 Two things produce that resume job, both server-side:
 
-- `POST /api/webhooks/waitpoints/:id` for WEBHOOK/MANUAL waitpoints. It refuses anything but a PAUSED run (409) and an already-resumed waitpoint (410).
-- `TimerWaitpointScheduler` (`src/workflows/timer-scheduler.ts`) for TIMER waitpoints, which have no external trigger. It ticks every 15s plus once at boot, so a delay that elapsed entirely during downtime still fires. Marking the waitpoint resumed and enqueueing the job happen in one transaction, so a crash between them cannot strand the run.
+- `POST /api/webhooks/waitpoints/:id` for WEBHOOK/MANUAL waitpoints. Consuming the waitpoint and queueing the job happen in one transaction (`claimContinuation`, `src/workflows/runtime/continuation.ts`). It refuses:
+  - a run that is not PAUSED (409);
+  - a run whose workflow was turned off since it began (409; the run is stopped);
+  - a run with another continuation already queued or running (409; retry once it has run);
+  - a MANUAL waitpoint whose step already finished (410). A WEBHOOK waitpoint is exempt: the approval piece's Create Approval Links step makes its URL in one step and the run waits for it at a later one;
+  - an already-resumed waitpoint (410).
+- `TimerWaitpointScheduler` (`src/workflows/timer-scheduler.ts`) for TIMER waitpoints, which have no external trigger. It ticks every 15s plus once at boot, so a delay that elapsed entirely during downtime still fires, late, with its lateness recorded. It claims the continuation the same way, so a crash between consuming the waitpoint and queueing the job cannot strand the run. See `docs/workflow-trigger-delivery.md`.
 
 The scheduler's eligibility query (`listDueTimerWaitpoints`) skips waitpoints whose run is still QUEUED or RUNNING, *before* applying its 100-row batch limit. The engine creates the waitpoint row before it publishes PAUSED, so a short delay can come due inside that window; retiring the timer there would strand the run PAUSED with nothing left to wake it. Deferring instead also keeps those rows from filling a scan and starving later PAUSED runs. Missing and terminal runs still get their timers retired.
 

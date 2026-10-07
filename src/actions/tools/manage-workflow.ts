@@ -882,8 +882,8 @@ function actGet(flow: FlowRow): Record<string, unknown> {
     latestDraft: draft,
     published,
     // Q-06: what became of its latest scheduled times, deliveries and events,
-    // so "why didn't it run?" has an answer: missed, blocked, skipped, a
-    // repeat, delayed, or the run's own state.
+    // so "why didn't it run?" has an answer: missed, blocked, skipped,
+    // delayed, or the run's own state, with how many repeats each absorbed.
     recentDeliveries: listFlowFires(flow.id, { limit: 10 }).map((fire) => ({
       at: fire.observedAt,
       source: fire.source,

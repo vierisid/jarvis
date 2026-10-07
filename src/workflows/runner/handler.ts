@@ -28,6 +28,7 @@ import {
 import { workflowFailureMessage } from "../queue/retry-policy";
 import { getWorkflowDb } from "../db/index";
 import { stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { markFireRunStarted } from "../db/repos/trigger-fire";
 import { continuationRefusal, graphDigest } from "../runtime/continuation";
 export { RUN_FLOW } from "../queue/retry-policy";
 
@@ -209,13 +210,14 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     }
 
     // The graph a run began on is the one it continues on. A draft can be
-    // edited while a run of it is paused (a published version cannot); the
+    // edited while a run of it is paused, and then published as it is; the
     // edited steps never ran their checks for this run, so it is not
-    // continued on them (Q-06).
+    // continued on them (Q-06). A run from before graphs were recorded has
+    // no digest and is not compared.
     const digest = graphDigest(version.trigger);
     if (!resuming) {
       getWorkflowDb().run("UPDATE flow_run SET graph_digest = ? WHERE id = ? AND graph_digest IS NULL", [digest, runId]);
-    } else if (version.state !== "LOCKED") {
+    } else {
       const began = getWorkflowDb().query<{ graph_digest: string | null }, [string]>(
         "SELECT graph_digest FROM flow_run WHERE id = ?").get(runId)?.graph_digest;
       if (began && began !== digest) {
@@ -237,6 +239,13 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       // A planned continuation starts from the paused run's durable state.
       failedStep: null,
     });
+    // A run's start time is when it was requested; the delivery that started
+    // it also records when it actually began, so a wait in the queue shows as
+    // delayed (Q-06). Non-fatal: the ledger is a record, not a gate.
+    if (!resuming) {
+      try { markFireRunStarted(runId, now()); }
+      catch (e) { console.warn(`[run-flow ${runId}] could not record when the run began: ${(e as Error).message}`); }
+    }
 
     const cancellation = watchRunCancellation(runId);
     try {
@@ -253,6 +262,12 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         stepsCount: result.stepsCount,
         finishTime: result.status === "PAUSED" ? null : now(),
       });
+      // A run executing when its workflow was turned off is not interrupted,
+      // but once it pauses it is stopped rather than left waiting (Q-06).
+      if (result.status === "PAUSED" && turnedOffReason(runId)) {
+        stopTurnedOffRun(run.flowId, runId);
+        return;
+      }
       // Sample capture belongs to a run that finished on its own terms:
       // skip a planned continuation, and skip a canceled run whose recorded
       // outcome is the fence's, not the flow's.

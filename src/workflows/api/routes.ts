@@ -76,7 +76,7 @@ import {
   getWaitpoint,
   listWaitpointsByFlowRun,
 } from "../db/repos/waitpoint";
-import { fireForRun, listFlowFires } from "../db/repos/trigger-fire";
+import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { claimContinuation } from "../runtime/continuation";
 import {
@@ -1983,19 +1983,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
 
     // Q-06: what became of each scheduled time, webhook delivery, event and
     // continuation: started (with its run's state), delayed, missed, blocked,
-    // skipped, a repeat, or stopped when the workflow was turned off. Newest
-    // first; `before` pages back.
+    // skipped, or stopped when the workflow was turned off, with how many
+    // repeats each absorbed. Newest first; pass `next` back as `cursor` for
+    // the older page.
     "/api/workflows/:id/fires": {
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const params = new URL(req.url).searchParams;
           const limit = Number(params.get("limit") ?? "50");
-          const before = Number(params.get("before") ?? "");
-          return ok(listFlowFires(id, {
-            limit: Number.isFinite(limit) ? limit : 50,
-            ...(Number.isFinite(before) && before > 0 ? { before } : {}),
-          }));
+          return ok(pageFlowFires(id, { limit, cursor: params.get("cursor") }));
         }),
     },
 
