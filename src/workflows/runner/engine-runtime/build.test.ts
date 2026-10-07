@@ -514,9 +514,10 @@ describe("engine bundle build", () => {
      * A staging dir `ensureStagingInstalled` accepts as already installed --
      * its package.json is exactly the one it would write, and node_modules
      * exists -- so no `bun install` runs. Its esbuild writes BUILT to the
-     * outfile and logs the call.
+     * outfile and logs the call, and reports `externals` as names the output
+     * still requires at run time.
      */
-    const seededStaging = (): { stagingDir: string; builds: () => number } => {
+    const seededStaging = (externals: string[] = []): { stagingDir: string; builds: () => number } => {
       const stagingDir = tmp("staging");
       const log = resolve(stagingDir, "builds.log");
       writeFileSync(log, "");
@@ -528,7 +529,8 @@ describe("engine bundle build", () => {
         `exports.build = async (o) => {\n` +
         `  fs.appendFileSync(${JSON.stringify(log)}, o.outfile + "\\n");\n` +
         `  fs.writeFileSync(o.outfile, ${JSON.stringify(BUILT)});\n` +
-        `  return { metafile: { inputs: {}, outputs: { [o.outfile]: { imports: [] } } } };\n` +
+        `  const imports = ${JSON.stringify(externals)}.map((path) => ({ path, kind: "require-call", external: true }));\n` +
+        `  return { metafile: { inputs: {}, outputs: { [o.outfile]: { imports } } } };\n` +
         `};\n`);
       return { stagingDir, builds: () => readFileSync(log, "utf8").split("\n").filter(Boolean).length };
     };
@@ -625,6 +627,20 @@ describe("engine bundle build", () => {
       expect(builds()).toBe(0);
       expect(readFileSync(built.bundlePath, "utf8")).toBe("// built locally, earlier\n");
       expect(warnings).toEqual([]);
+    });
+
+    test("a build that would resolve a module at run time is refused, and leaves nothing to adopt (#759)", async () => {
+      // The guard has to be WIRED, not just defined: a build whose output still
+      // requires a bare package fails, and its main.js is deleted -- otherwise
+      // the very next call would adopt it through the existsSync fast path.
+      const { stagingDir, builds } = seededStaging(["fs", "supports-color"]);
+      const bundleRoot = tmp("user");
+      await expect(buildEngineBundle({ sharedRoot: null, bundleRoot, stagingDir }))
+        .rejects.toThrow(/REFUSED: it would resolve "supports-color" at run time/u);
+      expect(builds()).toBe(1);
+      expect(existsSync(resolve(bundleRoot, bundleHash(), "main.js"))).toBe(false);
+      await expect(buildEngineBundle({ sharedRoot: null, bundleRoot, stagingDir })).rejects.toThrow(/REFUSED/u);
+      expect(builds()).toBe(2);
     });
 
     test("force rebuilds over an existing per-user bundle", async () => {

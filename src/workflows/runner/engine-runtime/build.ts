@@ -26,12 +26,14 @@ import {
   existsSync,
   writeFileSync,
   readFileSync,
+  rmSync,
   utimesSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { builtinModules } from "node:module";
 import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
 import { ENGINE_LIFECYCLE_SHIM } from "./engine-lifecycle";
 import { sanitizedEnv } from "../../../util/subprocess-env";
@@ -324,9 +326,8 @@ export const ENGINE_ESBUILD_CONFIG = {
   minifySyntax: true,
   minifyWhitespace: true,
   metafile: true,
-  // isolated-vm intentionally excluded -- we only run SANDBOX_PROCESS mode
-  // (see SPIKE-SANDBOXING.md). utf-8-validate / bufferutil are optional ws deps.
-  external: ["isolated-vm", "utf-8-validate", "bufferutil"],
+  // Nothing is left external any more (#759): the optional modules that used
+  // to be are compiled in as ABSENT instead -- see ENGINE_ABSENT_MODULES.
   get banner() {
     // Lifecycle shim FIRST: it installs the SIGTERM/SIGINT handlers and the
     // orphan watchdog, and its handler must be registered before upstream's
@@ -352,6 +353,124 @@ export const ENGINE_REQUEST_BASE_SHIM = `(() => {
   });
   globalThis.Request = Request;
 })();`;
+
+/**
+ * Optional modules the engine bundle must never load from OUTSIDE itself
+ * (#759). Each is compiled in as a module that throws MODULE_NOT_FOUND, which
+ * is exactly what the code requiring it already handles: each one that is
+ * reached at all is reached inside a `try`, and the `catch` is the pure-JS
+ * fallback -- the same path a machine without the package takes.
+ *
+ * WHY. A name the bundle leaves to `require()` at run time is resolved from the
+ * `node_modules` directories ABOVE `main.js`, and when there are none -- the
+ * per-user cache, `~/.jarvis/cache/engine/<hash>/`, has none -- Bun AUTO-
+ * INSTALLS it: fetches the latest version from the npm registry into
+ * `~/.bun/install/cache` and runs it. Measured on a real engine spawned
+ * through `spawnEngine`, with an empty scratch HOME: one flow run fetched
+ * `bufferutil@4.1.0`, `node-gyp-build@4.8.4` and `supports-color@11.0.0`, and
+ * `bufferutil` loads a prebuilt native addon. With `node_modules` planted above
+ * a copy of the bundle, the same run loaded the planted `bufferutil` and
+ * `supports-color` instead. Either way it is code that no digest, manifest or
+ * pin ever covered -- they all cover `main.js` alone.
+ *
+ * The four names, and how each is reached:
+ *   - `bufferutil`: `ws`'s buffer-util, at module load, unless
+ *     WS_NO_BUFFER_UTIL is set. Observed loading at every spawn.
+ *   - `supports-color`: `debug`'s node entry, at module load, UNCONDITIONALLY.
+ *     No environment variable turns it off, which is why the environment route
+ *     the issue proposed (spawn.ts sets WS_NO_* too) cannot close this alone,
+ *     and why this list exists. It was never in `external`: esbuild leaves an
+ *     unresolvable `require` inside a `try` external on its own, silently.
+ *   - `utf-8-validate`: unreachable today -- `ws` prefers `buffer.isUtf8`,
+ *     which Bun has, and Bun also shadows the name with a builtin -- but it was
+ *     declared external, so it is held to the same rule rather than to luck.
+ *   - `isolated-vm`: never required, because `v8-isolate-code-sandbox.ts` is
+ *     stubbed by the sync. Listed so a sync that stops stubbing it fails here,
+ *     loudly, instead of reaching for a native addon from beside the bundle.
+ *
+ * `assertSelfContainedBundle` refuses a build that leaves any OTHER bare name to
+ * run-time resolution, so the next optional `require` a dependency grows is
+ * caught at build time rather than found by reading a bundle.
+ *
+ * CACHE INVALIDATION: this list and the stub's source are hashed into
+ * `bundleHash()`, and the change that introduced them also changed
+ * ENGINE_ESBUILD_CONFIG, so every cached engine bundle -- per-user caches and
+ * every shared root -- rebuilds once, and a shared root has to be republished
+ * for the new hash (a host that has not done so sees a MISS and a per-user
+ * build, not a refusal). That is intended: an old bundle still carries the bare
+ * `require`s.
+ */
+export const ENGINE_ABSENT_MODULES = ["bufferutil", "utf-8-validate", "supports-color", "isolated-vm"] as const;
+
+/** The whole body of an absent module: what Node throws for a missing one. */
+export function absentModuleSource(name: string): string {
+  const message = `Cannot find module '${name}' (compiled out of the Jarvis engine bundle, #759)`;
+  return `var e = new Error(${JSON.stringify(message)}); e.code = "MODULE_NOT_FOUND"; throw e;`;
+}
+
+const ABSENT_NAMESPACE = "jarvis-absent-module";
+
+/** esbuild plugin resolving every ENGINE_ABSENT_MODULES name to its stub. */
+function absentModulesPlugin(): { name: string; setup(build: EsbuildPluginBuild): void } {
+  const names = new Set<string>(ENGINE_ABSENT_MODULES);
+  return {
+    name: "jarvis-absent-modules",
+    setup(build) {
+      build.onResolve({ filter: /^[^./]/u }, (args) =>
+        names.has(args.path) ? { path: args.path, namespace: ABSENT_NAMESPACE } : undefined);
+      build.onLoad({ filter: /.*/u, namespace: ABSENT_NAMESPACE }, (args) =>
+        ({ contents: absentModuleSource(args.path), loader: "js" }));
+    },
+  };
+}
+
+/** The slice of esbuild's plugin API `absentModulesPlugin` uses. */
+interface EsbuildPluginBuild {
+  onResolve(
+    opts: { filter: RegExp; namespace?: string },
+    cb: (args: { path: string }) => { path: string; namespace: string } | undefined,
+  ): void;
+  onLoad(
+    opts: { filter: RegExp; namespace?: string },
+    cb: (args: { path: string }) => { contents: string; loader: "js" },
+  ): void;
+}
+
+/** The slice of an esbuild metafile `assertSelfContainedBundle` reads. */
+export interface EngineMetafile {
+  outputs: Record<string, { imports?: Array<{ path: string; kind: string; external?: boolean }> }>;
+}
+
+/**
+ * Every bare module name an esbuild OUTPUT still resolves at run time, other
+ * than Node's builtins. The OUTPUT's imports and not the inputs': an input
+ * lists type-only imports that never reach the bundle.
+ */
+export function runtimeResolvedModules(metafile: EngineMetafile): string[] {
+  const builtins = new Set(builtinModules);
+  const found = new Set<string>();
+  for (const output of Object.values(metafile.outputs)) {
+    for (const imp of output.imports ?? []) {
+      if (!imp.external) continue;
+      const name = imp.path;
+      if (name.startsWith("node:") || builtins.has(name)) continue;
+      found.add(name);
+    }
+  }
+  return [...found].sort();
+}
+
+/** Refuse a bundle that would load anything from beside itself (#759). */
+export function assertSelfContainedBundle(metafile: EngineMetafile): void {
+  const leaked = runtimeResolvedModules(metafile);
+  if (leaked.length > 0) {
+    throw new Error(
+      `engine bundle REFUSED: it would resolve ${leaked.map((n) => JSON.stringify(n)).join(", ")} at run time, ` +
+        `from node_modules beside the bundle or by Bun auto-install -- code no integrity check covers. ` +
+        `Bundle it, or add it to ENGINE_ABSENT_MODULES if the code requiring it has a fallback (#759).`,
+    );
+  }
+}
 
 /**
  * Cache key combines the synthesized package.json (which captures dep versions),
@@ -384,6 +503,10 @@ export function bundleHash(): string {
     .update("esbuild-config")
     .update("\0")
     .update(JSON.stringify(ENGINE_ESBUILD_CONFIG));
+  // The absent-module plugin is a function, which JSON.stringify would drop, so
+  // what it compiles in is hashed here instead (#759).
+  hasher.update("\0").update("absent-modules");
+  for (const name of ENGINE_ABSENT_MODULES) hasher.update("\0").update(absentModuleSource(name));
   return hasher.digest("hex").slice(0, 16);
 }
 
@@ -490,7 +613,7 @@ export async function buildEngineBundle(opts?: {
   // direct dep on it at the project level. Declared locally with the surface
   // we actually use rather than pulling in @types/esbuild.
   const esbuild = (await import(esbuildEntry)) as {
-    build(options: Record<string, unknown>): Promise<{ metafile: unknown }>;
+    build(options: Record<string, unknown>): Promise<{ metafile: EngineMetafile }>;
   };
 
   const result = await esbuild.build({
@@ -506,9 +629,19 @@ export async function buildEngineBundle(opts?: {
       "@activepieces/pieces-common": resolve(VENDOR_PACKAGES, "pieces/common/src"),
     },
     nodePaths: [resolve(stagingDir, "node_modules")],
+    plugins: [absentModulesPlugin()],
     logLevel: "warning",
   });
 
+  // Checked before the metafile is written, and a refusal deletes what esbuild
+  // wrote: a refused bundle left on disk would be ADOPTED by the next call's
+  // existsSync fast path.
+  try {
+    assertSelfContainedBundle(result.metafile);
+  } catch (err) {
+    for (const f of [bundlePath, bundlePath + ".map"]) rmSync(f, { force: true });
+    throw err;
+  }
   writeFileSync(bundlePath + ".meta.json", JSON.stringify(result.metafile));
 
   // Pin what was just built (#761), so every later spawn re-checks these bytes
@@ -656,9 +789,10 @@ function refuseSharedBundle(bundlePath: string, reason: string, detail: string):
  * pins the digest it just computed (`pinVerifiedBundle`), and `spawnEngine`
  * re-hashes the file and refuses bytes that differ -- which narrows the window
  * between check and use from the daemon's lifetime to the spawn itself. It
- * does not close it (the engine opens the file after the check, and modules it
- * leaves external are resolved from beside it -- see bundle-integrity.ts);
- * that is an immutable mount. `piece-catalog`'s cache key also re-hashes this
+ * does not close it (the engine opens the file after the check -- see
+ * bundle-integrity.ts); that is an immutable mount. Nor would it mean much if
+ * the bundle loaded code from beside itself, which is why it no longer does
+ * (ENGINE_ABSENT_MODULES, #759). `piece-catalog`'s cache key also re-hashes this
  * file with no manifest check. That executes nothing: on a cache miss the
  * metadata is extracted by an engine `spawnEngine` checks, and on a hit no
  * engine runs and the key is computed at boot, right after this verification.

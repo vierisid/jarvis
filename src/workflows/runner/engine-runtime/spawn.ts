@@ -246,6 +246,15 @@ export function engineEnv(opts: SpawnEngineOptions): Record<string, string> {
     // Names only: the values are exactly what must not be printed.
     console.warn(`[engine-spawn] dropped non-engine env override(s): ${dropped.join(", ")}`);
   }
+  // `ws`'s own switches for its optional native helpers (#759), so it never
+  // looks `bufferutil` / `utf-8-validate` up at all -- in the bundle, which
+  // compiles both out anyway (ENGINE_ABSENT_MODULES in build.ts), and in any
+  // piece module the engine imports that carries its own copy of `ws`. Set
+  // AFTER the override loop, because that loop can DELETE a name (an
+  // `undefined` value) as well as set one, and these are not the caller's to
+  // remove.
+  env["WS_NO_BUFFER_UTIL"] = "1";
+  env["WS_NO_UTF_8_VALIDATE"] = "1";
   return env;
 }
 
@@ -260,7 +269,17 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // ~100MB under default JSC heap growth; the smaller-heap GC profile is the
   // right trade for a subprocess whose CPU time is dominated by piece I/O.
   // Bun-only flag, so skip it when opts.runtime overrides the binary.
-  const args = opts.runtime ? [opts.bundlePath] : ["--smol", opts.bundlePath];
+  //
+  // --no-install (#759): with no `node_modules` above `main.js` -- the per-user
+  // cache has none -- Bun's default is to AUTO-INSTALL any bare name the code
+  // requires, from the npm registry, at the latest version, and run it. That is
+  // how a real engine fetched and loaded `bufferutil`, `node-gyp-build` and
+  // `supports-color` on every cold cache (measured; see ENGINE_ABSENT_MODULES).
+  // The build now refuses a bundle with a bare run-time name, but a `require`
+  // of a COMPUTED name is invisible to that check, so the engine is also told
+  // never to fetch one. It cannot break a piece: Bun only auto-installs for a
+  // file with no `node_modules` above it, and pieces load from installed trees.
+  const args = opts.runtime ? [opts.bundlePath] : ["--smol", "--no-install", opts.bundlePath];
   const child = spawn(runtime, args, {
     env,
     cwd: opts.cwd,

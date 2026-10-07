@@ -26,12 +26,13 @@
  * have to key on ctime, which is sound against a non-root writer but is one
  * more assumption than hashing the bytes.
  *
- * WHAT THIS STILL IS NOT. It covers `main.js` and nothing the engine loads
- * from beside it: the bundle leaves `bufferutil`, `utf-8-validate` and
- * `isolated-vm` external (ENGINE_ESBUILD_CONFIG), and `ws` resolves the first
- * two through `node_modules` directories above the bundle at load time, so a
- * writer of the bundle tree can run code without touching `main.js` at all.
- * Neither the manifest nor this pin ever covered that. And the check runs
+ * WHAT THIS STILL IS NOT. It covers `main.js` and nothing else, which is only
+ * enough because the bundle no longer loads anything from beside itself
+ * (#759): it used to leave `bufferutil` and `supports-color` to run-time
+ * resolution, from `node_modules` above the bundle or by Bun auto-install, so
+ * a writer of the bundle tree could run code without touching `main.js`.
+ * ENGINE_ABSENT_MODULES and `assertSelfContainedBundle` (build.ts) hold that
+ * shut; this pin depends on them staying so. And the check runs
  * microseconds before `spawn()`, after which the engine opens the file itself,
  * so a writer that wins that race is not caught either: for `main.js` the
  * window is narrowed from the daemon's lifetime to the spawn, not closed.
