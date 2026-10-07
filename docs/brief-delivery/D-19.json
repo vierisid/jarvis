@@ -39,28 +39,36 @@
     {
       "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/rooms/workflows ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
       "result": "pass",
-      "tests": 467,
+      "tests": 480,
       "skipped": 2,
-      "assertions": 4570,
-      "files": 34,
-      "evidence": "evidence/D-19/affected-tests.log",
+      "assertions": 4606,
+      "files": 35,
+      "evidence": "evidence/D-19/review-affected-tests.log",
       "note": "Existing optional F07/F08 compatibility tests skipped; no live F21 compatibility claim"
     },
     {
       "command": "bun x tsc --noEmit",
       "result": "pass",
-      "evidence": "evidence/D-19/typecheck.log"
+      "evidence": "evidence/D-19/review-typecheck.log"
     },
     {
       "command": "bun run build:ui",
       "result": "pass",
-      "evidence": "evidence/D-19/build.log",
+      "evidence": "evidence/D-19/review-build.log",
       "warnings": "Existing Tailwind at-rule warnings"
+    },
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows/runs",
+      "result": "pass",
+      "tests": 37,
+      "assertions": 138,
+      "files": 3,
+      "evidence": "evidence/D-19/review-focused-tests.log"
     }
   ],
   "browser": {
     "script": "evidence/D-19/browser-check.cjs",
-    "evidence": "evidence/D-19/browser-results.json",
+    "evidence": "evidence/D-19/review-browser-results.json",
     "result": "pass",
     "layouts": 8,
     "rapidSelectionCycles": 10,
@@ -86,6 +94,21 @@
       "issue": "Canvas inline editable title added a 2px baseline gap to the shared header",
       "red_evidence": "evidence/D-19/header-before-fix.png",
       "fix": "Block title geometry matches the shared header; browser bounds assertion passes"
+    },
+    {
+      "issue": "R1: refreshed head reused cached continuation and skipped intervening runs",
+      "fix": "Rebuild contiguous history to prior tail using fresh cursors; bounded partial continuation and failure recovery",
+      "red_evidence": "evidence/D-19/review-refresh-red.log"
+    },
+    {
+      "issue": "R2: polling repeatedly aborted slow history, detail and explicit paging",
+      "fix": "Coalesce refresh and same-run detail; serialize paging/history; retain cancellation on real selection and owner changes",
+      "red_evidence": "evidence/D-19/review-refresh-red.log"
+    },
+    {
+      "issue": "R3: cached history status diverged from selected or older run detail",
+      "fix": "Reconcile fresh summaries by ID; refresh loaded range; preserve newer detail against older list responses",
+      "red_evidence": "evidence/D-19/review-refresh-red.log"
     }
   ],
   "limitations": [
@@ -96,10 +119,18 @@
     "Canvas/Context command owner unification is a live integration requirement; D18 command contract unchanged",
     "Dense work width stacks history above detail with scrolling",
     "Context room belongs to D20 and is not implemented",
-    "Independent PR review pending"
+    "Refresh capped at 20 pages; a larger changed range is explicitly partial with a usable Load earlier continuation"
   ],
   "rollback": "Disable optional registration/capability and retain legacy route. No schema or production activation changes. Retain pending request reconciliation state. Shared header can remain or be reverted with its imports.",
   "base_ci": "Corrected D18 applicable Tests, Docker and platform checks pass",
   "ci": "New-head CI will be reported after push; not inferred from base checks",
-  "next": "D-20; not started"
+  "next": "D-20; not started",
+  "review": {
+    "reviewed_head": "76f71cc97fdc8fa6e25f482c3376d285d7332b69",
+    "status": "R1/R2/R3 fixed and locally verified; no separate independent re-review claimed",
+    "new_regression_tests": 13,
+    "red_tests": 7,
+    "red_evidence": "evidence/D-19/review-refresh-red.log",
+    "latency_verification": "Deferred reads across repeated poll calls; no live latency claim"
+  }
 }

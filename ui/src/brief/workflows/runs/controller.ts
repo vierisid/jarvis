@@ -7,6 +7,7 @@ import {
   type RunDetail,
   type RunPage,
   type RunScope,
+  type RunSummary,
   type WorkflowRunsPort,
 } from "./model";
 export interface RunsSnapshot {
@@ -37,6 +38,17 @@ export class WorkflowRunsController {
   private historyAbort?: AbortController;
   private detailAbort?: AbortController;
   private retired = false;
+  private refreshWork?: Promise<void>;
+  private moreWork?: Promise<void>;
+  private historyWork?: Promise<void>;
+  private detailWork?: { id: string; promise: Promise<void> };
+  private summaryRevision = 0;
+  private detailSummaries = new Map<
+    string,
+    { revision: number; summary: RunSummary }
+  >();
+  // A durable receipt may precede its appearance in the history projection.
+  private acknowledged = new Map<string, RunSummary>();
   private preferredId: string | null = null;
   private positions = new Map<string, number>();
   constructor(
@@ -75,18 +87,49 @@ export class WorkflowRunsController {
     }
     await this.refresh();
   }
-  async refresh() {
-    await this.readHistory(false);
-    if (this.state.selectedId)
-      await this.readDetail(this.state.selectedId, true);
-  }
-  more = () => this.readHistory(true);
+  refresh = (): Promise<void> => {
+    if (this.retired) return Promise.resolve();
+    if (this.refreshWork) return this.refreshWork;
+    const work = Promise.resolve().then(async () => {
+      await this.readHistory(false);
+      if (this.state.selectedId)
+        await this.readDetail(this.state.selectedId, true);
+    });
+    this.refreshWork = work;
+    void work.then(() => {
+      if (this.refreshWork === work) this.refreshWork = undefined;
+    });
+    return work;
+  };
+  more = (): Promise<void> => {
+    if (this.retired) return Promise.resolve();
+    if (this.moreWork) return this.moreWork;
+    const work = this.readHistory(true);
+    this.moreWork = work;
+    void work.then(() => {
+      if (this.moreWork === work) this.moreWork = undefined;
+    });
+    return work;
+  };
   private async readHistory(append: boolean) {
-    if (this.retired || (append && this.state.loadingMore)) return;
+    // Paging and refresh share one read lane. Polling must never abort a slow
+    // successful read or an older page the person explicitly requested.
+    while (this.historyWork) await this.historyWork;
+    if (this.retired) return;
+    const work = Promise.resolve().then(() => this.performHistoryRead(append));
+    this.historyWork = work;
+    try {
+      await work;
+    } finally {
+      if (this.historyWork === work) this.historyWork = undefined;
+    }
+  }
+  private async performHistoryRead(append: boolean) {
+    if (this.retired) return;
     const previous = this.page();
     if (append && !previous?.nextCursor) return;
     const epoch = ++this.historyRequest;
-    this.historyAbort?.abort();
+    const revision = this.summaryRevision;
     const abort = (this.historyAbort = new AbortController());
     this.emit({ loadingMore: append });
     try {
@@ -96,33 +139,89 @@ export class WorkflowRunsController {
       );
       if (this.retired || epoch !== this.historyRequest) return;
       if (result.status === "ready" || result.status === "stale") {
-        const page = validatePage(result.data, this.scope);
-        // Retain loaded history when a new head page arrives. The provider must
-        // use stable opaque cursors; run IDs, never row numbers, are identities.
-        const old = previous?.items ?? [];
+        let page = validatePage(result.data, this.scope);
+        const rows = new Map<string, RunSummary>();
+        const observed = new Set<string>();
+        if (append) for (const row of previous!.items) rows.set(row.runId, row);
+        for (const row of page.items) {
+          rows.set(row.runId, row);
+          observed.add(row.runId);
+        }
+        const total = page.total;
+        // Rebuild the contiguous prefix through the last loaded identity, not
+        // merely the old row count. New pages can sit between head and cache.
+        const tail = previous?.items
+          .filter((row) => !this.acknowledged.has(row.runId))
+          .at(-1)?.runId;
+        const cursors = new Set<string>();
+        let pages = 1;
+        while (
+          !append &&
+          result.status === "ready" &&
+          page.nextCursor &&
+          tail &&
+          !rows.has(tail) &&
+          pages < 20
+        ) {
+          const cursor = page.nextCursor;
+          if (cursors.has(cursor)) throw Error("Repeated history cursor");
+          cursors.add(cursor);
+          const next = await this.port.list(cursor, abort.signal);
+          if (this.retired || epoch !== this.historyRequest) return;
+          if (next.status !== "ready")
+            throw Error("Incomplete history refresh");
+          page = validatePage(next.data, this.scope);
+          for (const row of page.items) {
+            rows.set(row.runId, row);
+            observed.add(row.runId);
+          }
+          pages++;
+        }
+        if (page.nextCursor && cursors.has(page.nextCursor))
+          throw Error("Repeated history cursor");
+        if (result.status === "ready")
+          for (const id of observed) this.acknowledged.delete(id);
+        // A detail that completed during this history read is newer evidence.
+        // Do not let the older list snapshot undo that status reconciliation.
+        for (const [id, value] of this.detailSummaries) {
+          if (value.revision > revision && rows.has(id))
+            rows.set(id, value.summary);
+        }
+        const items = [
+          ...this.acknowledged.values(),
+          ...[...rows.values()].filter(
+            (row) => !this.acknowledged.has(row.runId),
+          ),
+        ];
+        const data = {
+          items,
+          total:
+            total === null || total < items.length || this.acknowledged.size > 0
+              ? null
+              : total,
+          nextCursor: page.nextCursor,
+        };
+        const bounded =
+          !append && !!tail && !rows.has(tail) && !!page.nextCursor;
+        result =
+          result.status === "stale" || bounded
+            ? {
+                status: "stale",
+                data,
+                reason:
+                  "History refresh is partial. Load earlier runs to continue.",
+              }
+            : { status: "ready", data };
+      } else if (
+        result.status === "empty" &&
+        (append || this.acknowledged.size)
+      ) {
         const items = append
-          ? [
-              ...old,
-              ...page.items.filter(
-                (r) => !old.some((p) => p.runId === r.runId),
-              ),
-            ]
-          : [
-              ...page.items,
-              ...old.filter(
-                (r) => !page.items.some((p) => p.runId === r.runId),
-              ),
-            ];
+          ? previous!.items
+          : [...this.acknowledged.values()];
         result = {
-          ...result,
-          data: {
-            ...page,
-            items,
-            nextCursor:
-              !append && old.length > page.items.length
-                ? previous!.nextCursor
-                : page.nextCursor,
-          },
+          status: "ready",
+          data: { items, total: null, nextCursor: null },
         };
       }
       this.emit({ history: result });
@@ -136,7 +235,7 @@ export class WorkflowRunsController {
           history: previous
             ? {
                 status: "stale",
-                data: previous,
+                data: this.page() ?? previous,
                 reason: "History could not be refreshed.",
               }
             : { status: "unavailable", reason: "Run history is unavailable." },
@@ -151,7 +250,17 @@ export class WorkflowRunsController {
     this.emit({ selectedId: id, detail: { status: "loading" } });
     void this.readDetail(id, false);
   };
-  private async readDetail(id: string, preserve: boolean) {
+  private readDetail(id: string, preserve: boolean): Promise<void> {
+    if (this.retired) return Promise.resolve();
+    if (this.detailWork?.id === id) return this.detailWork.promise;
+    const promise = this.performDetailRead(id, preserve);
+    this.detailWork = { id, promise };
+    void promise.then(() => {
+      if (this.detailWork?.promise === promise) this.detailWork = undefined;
+    });
+    return promise;
+  }
+  private async performDetailRead(id: string, preserve: boolean) {
     if (this.retired) return;
     const epoch = ++this.detailRequest;
     this.detailAbort?.abort();
@@ -174,6 +283,49 @@ export class WorkflowRunsController {
       if (result.status === "ready" || result.status === "stale") {
         const known = this.page()?.items.find((r) => r.runId === id);
         validateDetail(result.data, this.scope, id, known?.versionId);
+      }
+      if (result.status === "ready") {
+        const {
+          scopeId,
+          flowId,
+          runId,
+          versionId,
+          label,
+          status,
+          startedAt,
+          createdAt,
+        } = result.data;
+        const summary = {
+          scopeId,
+          flowId,
+          runId,
+          versionId,
+          label,
+          status,
+          startedAt,
+          createdAt,
+        };
+        this.detailSummaries.set(id, {
+          revision: ++this.summaryRevision,
+          summary,
+        });
+        if (this.acknowledged.has(id)) this.acknowledged.set(id, summary);
+        const history = this.state.history;
+        if (history.status === "ready" || history.status === "stale") {
+          this.emit({
+            detail: result,
+            history: {
+              ...history,
+              data: {
+                ...history.data,
+                items: history.data.items.map((row) =>
+                  row.runId === id ? summary : row,
+                ),
+              },
+            },
+          });
+          return;
+        }
       }
       this.emit({ detail: result });
     } catch {
@@ -231,6 +383,7 @@ export class WorkflowRunsController {
       // before inserting its receipt; later refreshes merge against this state.
       ++this.historyRequest;
       this.historyAbort?.abort();
+      this.acknowledged.set(result.run.runId, result.run);
       const page = this.page();
       const isNew = !page?.items.some((r) => r.runId === result.run.runId);
       this.emit({
