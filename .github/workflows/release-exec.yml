@@ -822,30 +822,6 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # `generate_release_notes: true` above means GitHub composes the notes, so
-      # skipping that step on a dry run skipped the notes with it -- the one
-      # human-facing output of a release went unrehearsed. This renders them
-      # through the generate-notes endpoint, which returns a body and creates
-      # NOTHING, and puts them in the job summary to be read.
-      - name: Render the release notes this would publish
-        if: env.DRY_RUN == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ needs.validate-tag.outputs.tag }}
-          SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          notes=$(gh api --method POST "repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
-            -f tag_name="$TAG" -f target_commitish="$SHA" --jq .body)
-          {
-            echo "## Release notes this run would publish"
-            echo
-            echo "Rendered for \`${TAG}\` at \`${SHA}\`. No release was created."
-            echo
-            echo "$notes"
-          } >> "$GITHUB_STEP_SUMMARY"
-          printf '%s\n' "$notes"
-
       - name: Dry-run summary
         if: env.DRY_RUN == 'true'
         env:
