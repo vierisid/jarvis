@@ -20,7 +20,7 @@ import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
 import { approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
-import { formatApprovalIntent } from '../authority/approval-delivery.ts';
+import { approvalIntentFields, formatApprovalIntent } from '../authority/approval-delivery.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -627,7 +627,6 @@ export class WebSocketService implements Service {
   broadcastApprovalRequest(request: ApprovalRequest): void {
     const shortId = request.id.slice(0, 8);
     const impact = impactFromCategory(request.action_category);
-    const intent = formatApprovalIntent(request);
     const message: WSMessage = {
       type: 'notification',
       payload: {
@@ -635,7 +634,7 @@ export class WebSocketService implements Service {
         request,
         shortId,
         impact,
-        intent,
+        ...approvalIntentFields(request),
       },
       priority: request.urgency === 'urgent' ? 'urgent' : 'normal',
       timestamp: Date.now(),
@@ -870,7 +869,7 @@ export class WebSocketService implements Service {
         source: 'approval_update',
         request,
         impact: impactFromCategory(request.action_category),
-        intent: formatApprovalIntent(request),
+        ...approvalIntentFields(request),
       },
       timestamp: Date.now(),
     };

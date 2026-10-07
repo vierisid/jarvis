@@ -323,6 +323,7 @@ function ItemRenderer({
       return (
         <ApprovalCard
           intent={item.intent}
+          reason={item.reason}
           category={item.category}
           impact={item.impact}
           highlights={item.highlights}
