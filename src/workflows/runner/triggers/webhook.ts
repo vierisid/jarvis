@@ -50,21 +50,29 @@ export const SIGNED_REPEAT_WINDOW_MS = 10 * 60_000;
 const DELIVERY_ID_HEADERS = ['idempotency-key', 'x-github-delivery', 'webhook-id', 'svix-id', 'x-shopify-webhook-id'];
 
 /**
- * The delivery's identity: a provider delivery id header, else an event id a
- * provider puts in the body (Stripe `evt_...`, Slack `event_id`), else for a
- * signed request its signature, for `SIGNED_REPEAT_WINDOW_MS`. Without any,
- * the request is not deduplicated: identical bodies are legitimate (pings,
- * button presses).
+ * The delivery's identity. An unsigned request is named by a provider
+ * delivery id header, else an event id a provider puts in the body (Stripe
+ * `evt_...`, a Slack Events API callback's `event_id`). A signed request is
+ * named only by what its signature covers: the body's event id, else the
+ * signature itself for `SIGNED_REPEAT_WINDOW_MS`. Headers are not signed, so
+ * trusting one would let a captured request run again under a fresh id.
+ * Without any of these the request is not deduplicated: identical bodies are
+ * legitimate (pings, button presses).
  */
 export function webhookDelivery(headers: Headers, data: Record<string, unknown>, signature: string | null): WebhookDelivery {
-  for (const name of DELIVERY_ID_HEADERS) {
-    const value = headers.get(name)?.trim();
-    if (value) return { key: `delivery:${name}:${value.slice(0, 200)}`, label: name };
+  if (!signature) {
+    for (const name of DELIVERY_ID_HEADERS) {
+      const value = headers.get(name)?.trim();
+      if (value) return { key: `delivery:${name}:${value.slice(0, 200)}`, label: name };
+    }
   }
   if (data.object === 'event' && typeof data.id === 'string' && data.id.startsWith('evt_')) {
     return { key: `delivery:stripe:${data.id.slice(0, 200)}`, label: 'stripe event id' };
   }
-  if (typeof data.event_id === 'string' && data.event_id) {
+  // Only a Slack Events API callback: any other sender's `event_id` field
+  // need not name one delivery.
+  if (data.type === 'event_callback' && typeof data.event_id === 'string' && data.event_id
+    && (typeof data.team_id === 'string' || typeof data.api_app_id === 'string')) {
     return { key: `delivery:slack:${data.event_id.slice(0, 200)}`, label: 'event_id' };
   }
   if (signature) return { key: `signature:${signature.toLowerCase()}`, windowMs: SIGNED_REPEAT_WINDOW_MS, label: 'signature' };

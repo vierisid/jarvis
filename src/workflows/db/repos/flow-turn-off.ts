@@ -13,12 +13,16 @@ import { clearScheduleWatch, recordFire } from "./trigger-fire";
 
 export const TURNED_OFF_REASON = "The workflow was turned off, so this run was stopped.";
 
-/** Why this run must not start or continue, or null: its workflow was turned off after the run was created. */
+/**
+ * Why this run must not start or continue, or null: its workflow was turned
+ * off after the run was created. Turning the workflow back on, or publishing
+ * it, does not revive a run the turn-off stopped or should have stopped.
+ */
 export function turnedOffReason(runId: string): string | null {
-  const row = getWorkflowDb().query<{ status: string; disabled_at: number | null; created: number }, [string]>(
-    `SELECT f.status, f.disabled_at, r.created FROM flow_run r JOIN flow f ON f.id = r.flow_id WHERE r.id = ?`,
+  const row = getWorkflowDb().query<{ disabled_at: number | null; created: number }, [string]>(
+    `SELECT f.disabled_at, r.created FROM flow_run r JOIN flow f ON f.id = r.flow_id WHERE r.id = ?`,
   ).get(runId);
-  return row && row.status === "DISABLED" && row.disabled_at !== null && row.created <= row.disabled_at ? TURNED_OFF_REASON : null;
+  return row && row.disabled_at !== null && row.created <= row.disabled_at ? TURNED_OFF_REASON : null;
 }
 
 /** Stop one run of a turned-off workflow and record it. Call outside any transaction. */
@@ -36,7 +40,7 @@ export function stopRunsOfTurnedOffFlow(flowId: string): number {
   clearScheduleWatch(flowId);
   const rows = getWorkflowDb().query<{ id: string }, [string]>(
     `SELECT r.id FROM flow_run r JOIN flow f ON f.id = r.flow_id
-      WHERE r.flow_id = ? AND f.status = 'DISABLED' AND f.disabled_at IS NOT NULL
+      WHERE r.flow_id = ? AND f.disabled_at IS NOT NULL
         AND r.created <= f.disabled_at AND r.status IN ('QUEUED', 'PAUSED')`,
   ).all(flowId);
   let stopped = 0;

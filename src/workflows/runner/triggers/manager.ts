@@ -33,7 +33,10 @@
  * `WebhookManager` -- that lands in K alongside the daemon-side wiring.
  */
 
-import { CronScheduler, CRON_GRACE_MS, getCronTimezone, type CronOccurrence } from "./cron";
+import {
+  CronScheduler, CRON_GRACE_MS, CRON_MISSED_LISTED, CRON_MISSED_LOOKBACK_MS, getCronTimezone,
+  type CronMissedSummary, type CronOccurrence,
+} from "./cron";
 import { WebhookManager, type WebhookDelivery, type WebhookFireResult } from "./webhook";
 import type { WorkflowEventBus } from "../../runtime/event-bus";
 import { getFlow, listFlows, type FlowRow } from "../../db/repos/flow";
@@ -93,12 +96,16 @@ type ActiveSub = {
   teardown: () => Promise<void> | void;
 };
 
-/** Missed schedule occurrences are listed one by one back this far; older ones are counted. */
-const MISSED_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
-const MISSED_LISTED = 100;
 
-/** Digest of a trigger graph: a saved draft that changes it is a new registration. */
-const triggerDigest = graphDigest;
+/**
+ * Digest of what a subscription is registered from: the trigger node, not the
+ * steps after it. Saving a step of a live draft leaves the registration alone
+ * (re-registering an engine trigger tears down its external subscription and
+ * resets its cursor); changing the schedule or the trigger's settings
+ * re-registers.
+ */
+const triggerDigest = (trigger: unknown): string =>
+  graphDigest(trigger && typeof trigger === "object" ? { ...(trigger as Record<string, unknown>), nextAction: undefined } : trigger);
 
 /** The bundled schedule piece is a schedule, not a poll: its occurrences can be missed. */
 const isSchedulePiece = (pieceName: unknown): boolean =>
@@ -112,19 +119,23 @@ function scheduleZone(): string {
 /**
  * Schedules run in Jarvis's configured time zone (an owner decision, Q-06). A
  * schedule that states another zone fires at that wall-clock time in Jarvis's
- * zone instead; say so where the trigger list shows it. Hourly and finer
- * schedules read the same in every zone and are not flagged.
+ * zone instead; say so where the trigger list shows it, unless it fires at the
+ * same moments in both zones (hourly between whole-hour zones). Its next
+ * firing times, now and half a year on (the other side of daylight saving),
+ * are read in the stated zone: half-hour zones and schedules tied to an hour,
+ * a day or a date differ there.
  */
-export function scheduleZoneWarning(expression: string, statedZone: unknown): string | undefined {
-  if (typeof statedZone !== "string" || !statedZone.trim()) return undefined;
-  const hourField = expression.trim().split(/\s+/)[1];
-  if (!hourField || hourField === "*" || expression.trim().startsWith("@")) return undefined;
+export function scheduleZoneWarning(expression: string, statedZone: unknown, now = Date.now()): string | undefined {
+  if (typeof statedZone !== "string" || !statedZone.trim() || expression.trim().startsWith("@")) return undefined;
   let stated: string;
   try { stated = new Intl.DateTimeFormat("en-US", { timeZone: statedZone.trim() }).resolvedOptions().timeZone; }
   catch { return `This schedule names an unknown time zone "${statedZone}"; it runs in ${scheduleZone()}.`; }
   const actual = scheduleZone();
-  return stated === actual ? undefined
-    : `This schedule says ${stated}, but schedules run in Jarvis's time zone (${actual}): "${expression}" fires at that time in ${actual}.`;
+  if (stated === actual) return undefined;
+  const year = 366 * 24 * 60 * 60_000;
+  const upcoming = [now, now + year / 2].flatMap((from) => CronScheduler.occurrencesBetween(expression, from, from + year, 8));
+  if (upcoming.every((o) => CronScheduler.matchesIn(expression, new Date(o.at), stated))) return undefined;
+  return `This schedule says ${stated}, but schedules run in Jarvis's time zone (${actual}): "${expression}" fires at that time in ${actual}.`;
 }
 
 export interface TriggerManagerDeps {
@@ -362,16 +373,24 @@ export class TriggerManager {
           `${ungranted.map((name) => `"${name}"`).join(", ")} and code steps are not enabled for this flow ` +
           `(POST /api/workflows/${flow.id}/code-steps {"enabled": true})`,
       );
+      // A refused registration owes nothing for the time it stays refused.
+      clearScheduleWatch(flow.id);
       return;
     }
 
-    if (!this.checkReadiness(flow.id, versionId, 'registration')) return;
+    if (!this.checkReadiness(flow.id, versionId, 'registration')) {
+      clearScheduleWatch(flow.id);
+      return;
+    }
     this.registrationFailures.delete(flow.id);
+    const pieceName = trigger.type === "PIECE_TRIGGER" ? trigger.settings?.pieceName : undefined;
+    // Only a schedule is owed its times: a flow switched to another trigger
+    // and back must not have the gap reported as missed.
+    if (pieceName !== "schedule" && !isSchedulePiece(pieceName)) clearScheduleWatch(flow.id);
 
     if (trigger.type === "EMPTY") return; // manual-run only
 
     if (trigger.type === "PIECE_TRIGGER") {
-      const pieceName = trigger.settings?.pieceName;
       if (pieceName === "schedule") return this.registerCron(flow.id, versionId, trigger);
       if (pieceName === "webhook") return this.registerWebhook(flow.id, versionId, trigger);
       if (this.engineRuntime) {
@@ -432,11 +451,12 @@ export class TriggerManager {
     const warning = scheduleZoneWarning(expression, input.timezone);
     if (warning) this.log(`flow ${flowId}: ${warning}`);
     try {
+      const dueAfter = this.catchUpMissed(flowId, versionId, expression);
       this.cron.schedule(
         `flow:${flowId}`,
         expression,
         (occurrence?: CronOccurrence) => this.fireSchedule(flowId, versionId, occurrence, { cronExpression: expression }),
-        { onMissed: (missed) => this.recordMissed(flowId, versionId, missed, "Jarvis was asleep or too busy at that time") },
+        { onMissed: (missed, older) => this.recordMissed(flowId, versionId, missed, "Jarvis was asleep or too busy at that time", older), dueAfter },
       );
       this.subs.set(flowId, {
         flowId,
@@ -446,7 +466,6 @@ export class TriggerManager {
         ...(warning ? { warning } : {}),
         teardown: () => this.cron.cancel(`flow:${flowId}`),
       });
-      this.catchUpMissed(flowId, versionId, expression);
     } catch (e) {
       this.log(`flow ${flowId}: failed to schedule cron "${expression}": ${(e as Error).message}`);
     }
@@ -567,16 +586,18 @@ export class TriggerManager {
     if (schedule?.cronExpression) {
       const expression = schedule.cronExpression;
       try {
+        const dueAfter = pureSchedule ? this.catchUpMissed(flow.id, version.id, expression) : undefined;
         this.cron.schedule(
           `flow:${flow.id}`,
           expression,
-          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", occurrence); },
+          (occurrence?: CronOccurrence) => { void this.fireEngineTrigger(flow.id, version.id, "cron", occurrence, pureSchedule); },
           // A missed poll of an event source is not a missed run; a missed
           // occurrence of the schedule piece is.
-          pureSchedule ? { onMissed: (missed) => this.recordMissed(flow.id, version.id, missed, "Jarvis was asleep or too busy at that time") } : {},
+          pureSchedule
+            ? { onMissed: (missed, older) => this.recordMissed(flow.id, version.id, missed, "Jarvis was asleep or too busy at that time", older), dueAfter }
+            : {},
         );
         cronTearDown = () => this.cron.cancel(`flow:${flow.id}`);
-        if (pureSchedule) this.catchUpMissed(flow.id, version.id, expression);
       } catch (e) {
         this.log(
           `flow ${flow.id}: failed to schedule engine cron "${schedule.cronExpression}": ${(e as Error).message}`,
@@ -732,9 +753,9 @@ export class TriggerManager {
   }
 
   /**
-   * Whether a live delivery may start work: the workflow still exists, is on,
-   * and still runs the version this subscription was registered for. Asked
-   * again inside the transaction that creates the run.
+   * Why a live delivery may not start work, or null: the workflow still
+   * exists, is on, and still runs the version this subscription was
+   * registered for.
    */
   private notAdmitted(flowId: string, versionId: string): string | null {
     const flow = getFlow(flowId);
@@ -830,16 +851,29 @@ export class TriggerManager {
     return queued ? "The run from the previous time had not started yet." : null;
   }
 
-  /** Scheduled occurrences that came and went: recorded as missed, never run late (an owner decision, Q-06). */
-  private recordMissed(flowId: string, versionId: string, missed: Array<{ at: number; key: string; lateMs?: number }>, reason: string): void {
+  /**
+   * Scheduled occurrences that came and went: recorded as missed, never run
+   * late (an owner decision, Q-06). The newest are listed one by one, keyed so
+   * a time is recorded once; older ones are counted in one row. One
+   * transaction for the lot.
+   */
+  private recordMissed(flowId: string, versionId: string, missed: Array<{ at: number; key: string; lateMs?: number }>,
+    reason: string, older?: CronMissedSummary): void {
     let recorded = 0;
-    for (const occurrence of missed) {
-      try {
-        if (recordFire({ flowId, flowVersionId: versionId, source: "schedule", dedupeKey: occurrence.key,
-          scheduledFor: occurrence.at, lateMs: occurrence.lateMs ?? null, outcome: "missed", detail: { reason } })) recorded++;
-      } catch (e) {
-        this.log(`flow ${flowId}: could not record a missed occurrence: ${(e as Error).message}`);
-      }
+    try {
+      getWorkflowDb().transaction(() => {
+        if (older) {
+          recordFire({ flowId, flowVersionId: versionId, source: "schedule", scheduledFor: older.from, outcome: "missed",
+            detail: { reason, count: older.count, through: older.through } });
+          recorded += older.count;
+        }
+        for (const occurrence of missed) {
+          if (recordFire({ flowId, flowVersionId: versionId, source: "schedule", dedupeKey: occurrence.key,
+            scheduledFor: occurrence.at, lateMs: occurrence.lateMs ?? null, outcome: "missed", detail: { reason } })) recorded++;
+        }
+      })();
+    } catch (e) {
+      this.log(`flow ${flowId}: could not record missed schedule times: ${(e as Error).message}`);
     }
     if (recorded) this.log(`flow ${flowId}: ${recorded} scheduled time(s) missed (${reason}); not run late`);
   }
@@ -850,27 +884,32 @@ export class TriggerManager {
    * last watched (kept across a restart, cleared when the workflow is turned
    * off), and only for occurrences nothing has handled yet. The newest are
    * listed one by one; older ones are counted in a single row.
+   *
+   * Returns where the live tick should start: where this check stopped, so a
+   * time inside the grace window is still run, late, rather than lost between
+   * the two. A time the previous process already handled is then a repeat by
+   * its key, never a second run. Undefined for a schedule that was not being
+   * watched: it starts from its registration minute.
    */
-  private catchUpMissed(flowId: string, versionId: string, expression: string): void {
+  private catchUpMissed(flowId: string, versionId: string, expression: string): number | undefined {
+    const now = Date.now();
+    let dueAfter: number | undefined;
     try {
-      const now = Date.now();
       const watch = getScheduleWatch(flowId);
       if (watch && watch.expression === expression) {
-        const since = Math.max(watch.watchedSince, latestScheduledFire(flowId) ?? 0, now - MISSED_LOOKBACK_MS);
-        // Occurrences inside the grace window belong to the live tick.
+        const since = Math.max(watch.watchedSince, latestScheduledFire(flowId) ?? 0, now - CRON_MISSED_LOOKBACK_MS);
+        dueAfter = now - CRON_GRACE_MS;
         const owed = CronScheduler.occurrencesBetween(expression, since, now - CRON_GRACE_MS, 100_000);
-        const listed = owed.slice(-MISSED_LISTED);
+        const listed = owed.slice(-CRON_MISSED_LISTED);
         const older = owed.slice(0, owed.length - listed.length);
-        if (older.length) {
-          recordFire({ flowId, flowVersionId: versionId, source: "schedule", scheduledFor: older[0]!.at, outcome: "missed",
-            detail: { reason: "Jarvis was not running at those times", count: older.length, through: older[older.length - 1]!.at } });
-        }
-        this.recordMissed(flowId, versionId, listed.map((o) => ({ ...o, lateMs: now - o.at })), "Jarvis was not running at that time");
+        this.recordMissed(flowId, versionId, listed.map((o) => ({ ...o, lateMs: now - o.at })), "The schedule was not running at that time",
+          older.length ? { count: older.length, from: older[0]!.at, through: older[older.length - 1]!.at } : undefined);
       }
       setScheduleWatch(flowId, expression, now);
     } catch (e) {
       this.log(`flow ${flowId}: could not check for missed schedule times: ${(e as Error).message}`);
     }
+    return dueAfter;
   }
 
   /**
@@ -893,8 +932,7 @@ export class TriggerManager {
       const result = this.startRun({
         flowId, versionId, kind: "cron", source: "schedule",
         payload: { ...payload, firedAt: Date.now(), scheduledFor: new Date(at).toISOString() },
-        dedupeKey: occurrence?.key, scheduledFor: at, lateMs: occurrence?.lateMs,
-        ...(occurrence?.shifted ? { detail: { reason: "This time did not exist when clocks moved forward; it ran right after the change." } } : {}),
+        dedupeKey: occurrence?.key, scheduledFor: at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence),
       });
       if (result.outcome === "started" && (occurrence?.lateMs ?? 0) > DELAYED_AFTER_MS) {
         this.log(`flow ${flowId}: schedule ${occurrence!.key} started ${Math.round(occurrence!.lateMs / 1000)}s late`);
@@ -926,27 +964,41 @@ export class TriggerManager {
    * Never rejects: it runs as a `void` interval callback, and an escaped
    * rejection (a workflow deleted mid-poll) used to take the daemon down.
    */
-  private async fireEngineTrigger(flowId: string, versionId: string, source: string, occurrence?: CronOccurrence): Promise<void> {
+  private async fireEngineTrigger(flowId: string, versionId: string, source: string, occurrence?: CronOccurrence, pureSchedule = false): Promise<void> {
     try {
-      await this.pollEngineTrigger(flowId, versionId, source, occurrence);
+      await this.pollEngineTrigger(flowId, versionId, source, occurrence, pureSchedule);
     } catch (e) {
       this.log(`flow ${flowId} (engine-${source}) failed: ${(e as Error).message}`);
     }
   }
 
-  private async pollEngineTrigger(flowId: string, versionId: string, source: string, occurrence?: CronOccurrence): Promise<void> {
+  private async pollEngineTrigger(flowId: string, versionId: string, source: string, occurrence: CronOccurrence | undefined,
+    pureSchedule: boolean): Promise<void> {
     const engine = this.engineRuntime;
     if (!engine) return;
+    // A scheduled time that does not run still leaves a row, so the ledger
+    // can tell it from one that was never due.
+    const unrun = (outcome: "blocked" | "skipped", reason: string): void => {
+      if (pureSchedule) recordFire({ flowId, flowVersionId: versionId, source: "schedule", scheduledFor: occurrence?.at ?? null,
+        lateMs: occurrence?.lateMs ?? null, outcome, detail: { reason } });
+    };
     // Skip if a prior poll for this flow is still running (slow poll vs. fast
     // cron); the next tick will pick up anything missed.
-    if (this.pollingInFlight.has(flowId)) return;
+    if (this.pollingInFlight.has(flowId)) {
+      unrun("skipped", "The previous check of this schedule was still running.");
+      return;
+    }
     const version = getFlowVersion(versionId);
     if (!version) {
       this.log(`flow ${flowId} (engine-${source}): version ${versionId} not found; skipping poll`);
+      unrun("blocked", "The workflow version no longer exists.");
       return;
     }
-    if (this.notAdmitted(flowId, versionId)) return;
-    const pureSchedule = isSchedulePiece((version.trigger as unknown as TriggerNode | null)?.settings?.pieceName);
+    const off = this.notAdmitted(flowId, versionId);
+    if (off) {
+      unrun("blocked", off);
+      return;
+    }
     const fireSource: FireSource = pureSchedule ? "schedule" : "poll";
     if (pureSchedule) {
       const skipped = this.overlapping(flowId, "trigger:engine");
@@ -982,6 +1034,7 @@ export class TriggerManager {
       }
     } catch (e) {
       this.log(`flow ${flowId} (engine-${source}) poll failed: ${(e as Error).message}`);
+      unrun("blocked", `The schedule could not run: ${(e as Error).message.slice(0, 300)}`);
       return;
     } finally {
       this.pollingInFlight.delete(flowId);
@@ -1003,7 +1056,7 @@ export class TriggerManager {
         const result = this.startRun({
           flowId, versionId, kind: "engine", source: fireSource, payload, executeTrigger: false,
           dedupeKey: pureSchedule ? occurrence?.key : eventItemKey(payload),
-          ...(pureSchedule ? { scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs } : {}),
+          ...(pureSchedule ? { scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence) } : {}),
         });
         if (result.outcome === "started") started++;
       } catch (e) {
@@ -1109,6 +1162,11 @@ interface LiveStart {
   scheduledFor?: number;
   lateMs?: number;
   detail?: Record<string, unknown>;
+}
+
+/** Why a schedule ran at a time it does not name: the spring-forward jump skipped its own. */
+function shiftedDetail(occurrence: CronOccurrence | undefined): { detail?: Record<string, unknown> } {
+  return occurrence?.shifted ? { detail: { reason: "This time did not exist when clocks moved forward; it ran right after the change." } } : {};
 }
 
 /**

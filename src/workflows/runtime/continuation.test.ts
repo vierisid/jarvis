@@ -4,7 +4,7 @@
  */
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db/index";
-import { createFlow, getFlow, updateFlowStatus } from "../db/repos/flow";
+import { createFlow, getFlow, setPublishedVersion, updateFlowStatus } from "../db/repos/flow";
 import { createDraftVersion, lockVersion, updateDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun, updateRun } from "../db/repos/flow-run";
 import { claimNextJob, enqueue, getJob } from "../db/repos/job-queue";
@@ -159,6 +159,32 @@ describe("a workflow turned off never wakes its runs", () => {
     expect(getFlowRun(queued.id)?.status).toBe("STOPPED");
   });
 
+  test("turning it back on does not revive a run from before the turn-off", () => {
+    const { flowId, runId } = pausedRun();
+    timer(runId, "2026-10-07T09:00:00Z");
+    // Turned off and on again before anything stopped the run (a crash in between).
+    getWorkflowDb().run("UPDATE flow SET status = 'DISABLED', disabled_at = ? WHERE id = ?", [Date.now() + 1, flowId]);
+    updateFlowStatus(flowId, "ENABLED");
+    expect(new TimerWaitpointScheduler().tick(at("2026-10-07T09:01:00Z"))).toBe(0);
+    expect(getFlowRun(runId)).toMatchObject({ status: "STOPPED", failedStep: { errorMessage: TURNED_OFF_REASON } });
+  });
+
+  test("a run executing when its workflow is turned off is not interrupted, and is stopped once it pauses", async () => {
+    const { flowId, versionId } = workflow();
+    const run = createFlowRun({ flowId, flowVersionId: versionId });
+    enqueue({ jobType: RUN_FLOW, flowRunId: run.id, maxAttempts: 1, payload: { runId: run.id } });
+    let statusWhenTurnedOff: string | undefined;
+    const executor: FlowExecutor = { async execute() {
+      await turnOff(flowId);
+      statusWhenTurnedOff = getFlowRun(run.id)?.status;
+      return { status: "PAUSED", steps: {}, stepsCount: 0 };
+    } };
+    await new Worker({ log: silent, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) } }).drain();
+    expect(statusWhenTurnedOff).toBe("RUNNING");
+    expect(getFlowRun(run.id)).toMatchObject({ status: "STOPPED", failedStep: { errorMessage: TURNED_OFF_REASON } });
+    expect(listFlowFires(flowId).map(f => f.label)).toEqual(["stopped"]);
+  });
+
   test("an approval granted after the workflow was turned off does not continue the run", () => {
     const { flowId, runId } = pausedRun(true, { send: { output: { type: "PIECE", status: "PAUSED", input: {}, output: {} } } });
     const approvals = new ApprovalManager();
@@ -210,6 +236,17 @@ describe("a run continues on the graph it began on", () => {
     expect(calls).toEqual(["BEGIN"]);
     expect(getFlowRun(runId)).toMatchObject({ status: "FAILED", failedStep: { name: "<resume>",
       errorMessage: expect.stringContaining("edited while the run was paused") } });
+  });
+
+  test("a draft edited while its run was paused and then published is not continued on the changed steps either", async () => {
+    const { versionId, runId, calls, drain } = await begun(false);
+    updateDraftVersion(versionId, { trigger: { ...EMPTY, displayName: "Edited" } as any });
+    lockVersion(versionId);
+    setPublishedVersion(getFlowRun(runId)!.flowId, versionId);
+    expect((await resume(hook(runId).id)).status).toBe(202);
+    await drain();
+    expect(calls).toEqual(["BEGIN"]);
+    expect(getFlowRun(runId)).toMatchObject({ status: "FAILED", failedStep: { name: "<resume>" } });
   });
 
   test("a published version, which cannot change, continues", async () => {

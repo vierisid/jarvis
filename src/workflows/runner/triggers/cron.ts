@@ -9,10 +9,13 @@
 export {
   CronScheduler,
   CRON_GRACE_MS,
+  CRON_MISSED_LISTED,
+  CRON_MISSED_LOOKBACK_MS,
   getCronTimezone,
   parseEveryExpression,
   type CronJob,
   type CronJobInfo,
+  type CronMissedSummary,
   type CronOccurrence,
   type CronScheduleOptions,
 } from '../../../lib/cron-scheduler.ts';
