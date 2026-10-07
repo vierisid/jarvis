@@ -9,11 +9,11 @@
  * exactly as the resume webhook route does.
  */
 
-import { getWorkflowDb } from './db/index.ts';
-import { enqueue } from './db/repos/job-queue.ts';
 import { getFlowRun } from './db/repos/flow-run.ts';
 import { listDueTimerWaitpoints, markWaitpointResumed } from './db/repos/waitpoint.ts';
+import { stopTurnedOffRun, turnedOffReason } from './db/repos/flow-turn-off.ts';
 import { resumeResolvedWorkflowEffects } from './runtime/effect-approval-scheduler';
+import { claimContinuation } from './runtime/continuation';
 
 export class TimerWaitpointScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -61,21 +61,18 @@ export class TimerWaitpointScheduler {
           markWaitpointResumed(wp.id, now);
           continue;
         }
-        // Mark-resumed + enqueue ATOMICALLY: a crash between the two would
+        // A workflow turned off since this run began does not wake it: the
+        // run is stopped instead (Q-06).
+        if (turnedOffReason(run.id)) {
+          stopTurnedOffRun(run.flowId, run.id);
+          continue;
+        }
+        // Consume + enqueue + record ATOMICALLY: a crash between them would
         // otherwise leave the waitpoint retired with no RESUME job -> run stuck
-        // PAUSED forever. The unique `WHERE resumed_at IS NULL` also stops a
-        // concurrent tick from double-enqueuing.
-        const enqueued = getWorkflowDb().transaction(() => {
-          if (!markWaitpointResumed(wp.id, now)) return false; // lost the race
-          enqueue({
-            jobType: 'RUN_FLOW',
-            payload: { runId: wp.flowRunId, executionType: 'RESUME', resumePayload: {} },
-            flowRunId: wp.flowRunId,
-            maxAttempts: 1, // re-resuming an already-resumed waitpoint would walk past it
-          });
-          return true;
-        })();
-        if (enqueued) resumed++;
+        // PAUSED forever. A continuation already queued for the run keeps this
+        // timer for the next tick; a timer whose step already finished is
+        // retired rather than waking the run's next pause.
+        if (claimContinuation({ runId: run.id, waitpoint: wp, kind: 'timer', resumePayload: {}, now }) === 'resumed') resumed++;
       } catch (e) {
         console.error(`[TimerScheduler] resume failed for waitpoint ${wp.id}:`, e);
       }

@@ -198,6 +198,23 @@ describe("manage_workflow tool", () => {
     expect(st.status).toBe("DISABLED");
   });
 
+  test("turning a workflow off says how many runs it stopped, and get says what became of its deliveries", async () => {
+    const { createFlowRun } = await import("../../workflows/db/repos/flow-run.ts");
+    const { recordFire } = await import("../../workflows/db/repos/trigger-fire.ts");
+    const { TURNED_OFF_REASON } = await import("../../workflows/db/repos/flow-turn-off.ts");
+    const created = (await call("create", { name: "ledger", empty: true })) as { id: string };
+    await call("enable", { flow: "ledger" });
+    const run = createFlowRun({ flowId: created.id, flowVersionId: getLatestDraft(created.id)!.id, status: "PAUSED" });
+    recordFire({ flowId: created.id, source: "schedule", scheduledFor: 1_000, outcome: "missed", detail: { reason: "The schedule was not running at that time" } });
+    expect(await call("disable", { flow: "ledger" })).toMatchObject({ status: "DISABLED", stoppedRuns: 1 });
+    expect(getFlowRun(run.id)?.status).toBe("STOPPED");
+    const { recentDeliveries } = (await call("get", { flow: "ledger" })) as { recentDeliveries: unknown[] };
+    expect(recentDeliveries).toEqual([
+      expect.objectContaining({ source: "lifecycle", outcome: "stopped", runId: run.id, reason: TURNED_OFF_REASON }),
+      expect.objectContaining({ source: "schedule", outcome: "missed", scheduledFor: 1_000, reason: "The schedule was not running at that time" }),
+    ]);
+  });
+
   test("publish locks the latest draft and ENABLES the flow", async () => {
     await call("create", { name: "pubme", empty: true });
     const published = (await call("publish", { flow: "pubme" })) as {

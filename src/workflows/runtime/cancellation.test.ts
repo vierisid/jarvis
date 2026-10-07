@@ -104,8 +104,9 @@ test("deleting a workflow mid-run stops it without a spurious failure or retry",
   proceed.resolve();
   await draining;
   expect(effects).toBe(0);
-  // The queue retires the stale job instead of failing and retrying it.
-  expect(getJob(job.id)?.status).toBe("SUCCEEDED");
+  // Deleting stops the workflow's in-flight runs first (Q-06), so the job is
+  // canceled: never failed, never retried.
+  expect(getJob(job.id)?.status).toBe("CANCELED");
   expect(logs.filter(line => /failed|requeued/.test(line))).toEqual([]);
 });
 

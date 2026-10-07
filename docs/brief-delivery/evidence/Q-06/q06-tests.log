@@ -1,0 +1,13 @@
+Targeted tests on brief/q-06 at e1b9ab30 (local WSL2).
+$ bun test --preload ./src/test-preload.ts src/workflows/runner/triggers/delivery.test.ts src/workflows/runtime/continuation.test.ts src/lib/cron-occurrence.test.ts src/workflows/runner/triggers/manager.test.ts src/workflows/runner/triggers/rate-limiter.test.ts src/workflows/runner/triggers/cron.test.ts src/lib/cron-timezone.test.ts src/lib/cron-validation.test.ts src/workflows/timer-scheduler.test.ts src/workflows/runner/handler.test.ts src/workflows/queue/queue.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/event-buffer.test.ts src/workflows/api/routes.test.ts src/actions/tools/manage-workflow.test.ts src/goals/work-items.test.ts
+ 457 pass
+ 0 fail
+ 13991 expect() calls
+Ran 457 tests across 17 files. [48.02s]
+
+$ bun test --preload ./src/test-preload.ts src/workflows/api/version-ownership.test.ts src/workflows/runner/engine-runtime/cancellation.integration.test.ts src/workflows/runner/engine-runtime/end-to-end-resume.test.ts src/workflows/runner/engine-runtime/end-to-end.test.ts src/workflows/runner/engine-runtime/native-connections.integration.test.ts src/workflows/runner/engine-runtime/outer-worker-delay.test.ts src/workflows/runtime/delegated-approval.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/workflows/runtime/llm-output-outcomes.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/db/encryption-key-path.test.ts
+ 302 pass
+ 1 skip
+ 0 fail
+ 1246 expect() calls
+Ran 303 tests across 12 files. [202.49s]

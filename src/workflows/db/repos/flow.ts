@@ -127,7 +127,12 @@ export function listFlows(
     .all(projectId, limit, offset);
 }
 
-export function updateFlowStatus(id: string, status: FlowStatus): void {
+/**
+ * Set the flow's status. Turning an ENABLED flow off stamps `disabled_at`, and
+ * the caller then stops the runs it had started (repos/flow-turn-off.ts,
+ * Q-06); `turnedOff` says whether this call did that.
+ */
+export function updateFlowStatus(id: string, status: FlowStatus): { turnedOff: boolean } {
   // Enabling is the OTHER way a flow becomes runnable: the trigger manager
   // registers an ENABLED flow's cron / webhook against `published ?? latest
   // draft`, so a flow can start firing on a schedule without ever being
@@ -137,11 +142,16 @@ export function updateFlowStatus(id: string, status: FlowStatus): void {
   // by which point the same version has already cleared the same check.
   if (status === "ENABLED") assertFlowCodeStepsAllowed(id, "enable");
   if (status === 'ENABLED') assertFlowReady(id);
+  const before = db().query<{ status: FlowStatus }, [string]>(`SELECT status FROM flow WHERE id = ?`).get(id);
+  const ts = now();
   const res = db().run(
-    `UPDATE flow SET status = ?, updated = ? WHERE id = ?`,
-    [status, now(), id],
+    `UPDATE flow SET status = ?, updated = ?,
+       disabled_at = CASE WHEN ? = 'DISABLED' AND status = 'ENABLED' THEN ? ELSE disabled_at END
+     WHERE id = ?`,
+    [status, ts, status, ts, id],
   );
   if (res.changes === 0) throw new Error(`updateFlowStatus: flow not found (id=${id})`);
+  return { turnedOff: before?.status === "ENABLED" && status === "DISABLED" };
 }
 
 /**

@@ -1,0 +1,160 @@
+{
+  "task": "Q-06",
+  "title": "Certify real trigger and continuation delivery",
+  "date": "2026-10-07",
+  "branch": "brief/q-06",
+  "worktree": "a checkout of brief/q-06",
+  "baseline": "462d955d54014e15ea003b5908860917642e5b34",
+  "baseline_ref": "brief/foundations (no merge prerequisites)",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-06.json"
+  },
+  "status": {
+    "implementation": "verified locally; review fixes in e1b9ab30",
+    "merge": "not_merged",
+    "capability_ready": "exactly-once delivery of schedules, webhooks, events and continuations, a delivery ledger with missed/blocked/skipped/delayed/completed labels, and turn-off stopping a workflow's runs; active once merged, with no flag",
+    "release_enabled": false,
+    "publication": "PR #806 open against brief/foundations; https://github.com/vierisid/jarvis/pull/806"
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "page": "81:2",
+    "checkpoint": "UI-35; no visual changes in Q-06"
+  },
+  "ownership": {
+    "implementer": "Core-quality line",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [],
+  "enable_after": [],
+  "decisions": [
+    "Turning a workflow off stops what it started (owner decision): its queued runs and the runs waiting on a timer or an approval are stopped, each saying 'The workflow was turned off, so this run was stopped.', and nothing can wake them, also after the workflow is turned back on or published. A run executing at that moment is not interrupted; if it pauses, it is stopped. Runs started by hand afterwards, and test runs of a workflow that was never on, are not affected.",
+    "A missed schedule is skipped and shown (owner decision): a time that came and went while Jarvis was off, asleep or stalled for more than two minutes is recorded as missed and never run late.",
+    "Schedules run in Jarvis's configured time zone (owner decision): a schedule that states another zone fires at that wall-clock time in Jarvis's zone, with a warning on the trigger list whenever it fires at different moments in the two zones.",
+    "Technical defaults: the repeated autumn hour fires once and a minute skipped by spring-forward fires once right after the jump; an identical signed webhook counts as one delivery for ten minutes; a schedule time whose previous run has not started is skipped; a broken schedule's repeated refusals fold into one counted blocked row; missed times are listed back seven days, the newest 100 one by one; a run that waits in the queue more than a minute past its time shows as delayed (review question R9)."
+  ],
+  "behavior": [
+    "Every live delivery goes through one path in the trigger manager: the workflow must still be on and on the same version; a delivery whose key was handled before is a repeat; readiness is checked; then the key is claimed and the run and its queue job are created in one transaction. Keys: a schedule's wall-clock minute in Jarvis's zone; a provider delivery id header (Idempotency-Key, X-GitHub-Delivery, webhook-id, svix-id, X-Shopify-Webhook-Id) or an event id in the body (Stripe evt_, Slack event_id); a signed request's signature for ten minutes; an event's _eventKey.",
+    "The cron scheduler hands each occurrence over with its key and lateness. A tick up to two minutes late fires (shown as delayed past a minute); later occurrences are reported missed: after a long sleep the time still due runs, the newest 100 missed are listed and older ones counted, back seven days. The repeated autumn hour fires once, a minute skipped by spring-forward fires once right after the jump, and a clock stepped back fires nothing again (nor a time it had missed); a correction of more than two minutes back is logged and the schedule carries on from the new time. System crons share these scheduler rules.",
+    "At startup each enabled schedule is checked for the times it was owed since it was last watched: missed times are recorded, never run. The watch is kept across restarts and cleared when the workflow is turned off, switched to another trigger or refused at registration. The live schedule starts where the check stopped, so a time within two minutes of a restart runs late instead of being lost. A schedule time whose previous run has not started is skipped. Readiness refusals of schedule ticks and pre-poll checks fold into one failed run and one counted blocked row; input-carrying deliveries keep a failed run each with their input, and their retries are repeats. Editing the trigger of the draft an enabled, unpublished workflow runs replaces its schedule; saving a step leaves the trigger registered. The dashboard's schedule piece follows the same rules through the engine and leaves a skipped or blocked row for each time it cannot run. A schedule stating another time zone gets a warning on the trigger list when its firing times, now and half a year on, differ in the two zones.",
+    "A delivery's identity: on an unsigned workflow, a provider delivery id header, else an event id in the body (Stripe evt_; Slack event_id only inside an Events API callback); on a signed workflow, only what the signature covers (the body's event id, else the signature for ten minutes), since headers are not signed. The webhook reply says what became of the delivery: 200 started or duplicate (with fireId and runId), 200 blocked with the reason, 404 when the workflow is off or changed, 503 when the queue is full, 500 when the delivery could not be recorded. Identical unsigned bodies without an id are never deduplicated.",
+    "The workflow event bus gives emails (message id) and commitments (id, event, due time) a stable _eventKey, so a workflow runs once for an email or commitment announced again after a restart. The event buffer numbers events from a per-boot base, so a trigger cursor saved before a restart hides nothing.",
+    "A paused run continues once per pause. Timers, approvals and resume URLs claim a continuation the same way: the waitpoint is consumed, the RESUME job queued naming it, and the continuation recorded, in one transaction. While one continuation of a run is queued or running, another is not queued; a timer or approval whose step already finished is retired instead of waking the next pause. The run handler checks the named waitpoint again, stops a run of a workflow turned off since it began, and fails a draft run edited while it was paused, also once that draft is published, saying why. A resume URL may answer a pause at a later step (the approval piece's Create Approval Links), so the finished-step rule applies to timers and approvals only. Timers and approvals that come due while Jarvis is off continue their run late, with the lateness recorded.",
+    "Turning a workflow off (dashboard or chat) stamps flow.disabled_at and stops its queued and waiting runs; every continuation path and the run handler stop a run created before that instead of continuing it, also after the workflow is turned back on or published, and a run that was executing at that moment is stopped once it pauses. Deleting a workflow stops what it has in flight before its runs are removed. A poll racing a delete no longer escapes as an unhandled rejection.",
+    "The delivery ledger (workflow_trigger_fire) keeps one row per delivery with source, due time, handled time, lateness, run, when that run actually began, repeats and reason; a repeat adds no row and is counted on the original; a waitpoint is stored only as a digest; rows are pruned after 30 days and outlive a deleted workflow. GET /api/workflows/:id/fires returns { fires, next } newest first, paged by cursor, each with a label (missed, blocked, skipped, stopped, delayed, or the run's state; delayed when handled or started more than a minute late); GET /api/workflow-runs/:runId includes the fire that started the run; manage_workflow get returns recentDeliveries."
+  ],
+  "acceptance": [
+    {
+      "check": "No duplicate external effect from repeated trigger/resume; old or disabled workflow cannot reactivate itself",
+      "status": "passed",
+      "evidence": "src/workflows/runner/triggers/delivery.test.ts (provider retries, Stripe and Slack ids and a non-Slack event_id, signed repeats within ten minutes and a signed replay under a fresh id header, the repeated autumn hour, a restart inside the firing minute, re-announced emails and commitments through the bus and through the engine: one run each; a workflow turned off starts nothing and answers 404; a step-only draft save keeps its trigger registered), src/workflows/runtime/continuation.test.ts (one continuation per pause and per waitpoint, the resume route atomic under an injected write failure, a stale timer retired; turning off stops waiting and queued runs, and timers, approvals, resume URLs and the handler stop rather than continue them, also after a crash between turning off and stopping and after turning the workflow back on; a run that pauses after the turn-off is stopped; an edited draft is not continued, also once published), src/lib/cron-occurrence.test.ts, src/actions/tools/manage-workflow.test.ts (stoppedRuns); evidence/Q-06/revert-checks.log"
+    },
+    {
+      "check": "Logs distinguish missed, blocked, delayed and completed work, with stable run/trigger IDs",
+      "status": "passed",
+      "evidence": "src/workflows/runner/triggers/delivery.test.ts (missed while off, while asleep and after a long sleep, listed and counted, recorded once; blocked with the reason and a repeat count; delayed within the grace window and after a wait in the queue; completed and completed late; skipped; the dashboard's schedule piece leaving a row for each time it cannot run; every row keyed by its occurrence or delivery and linked to its run; the fires API paged by cursor and the run's fire), src/workflows/runtime/continuation.test.ts (resume rows with lateness, stopped rows, a waitpoint stored only as a digest), src/actions/tools/manage-workflow.test.ts (recentDeliveries); evidence/Q-06/revert-checks.log"
+    },
+    {
+      "check": "Clock, event and webhook entry exercised through the real queue, including daylight-saving transitions and the configured user time zone; restart, duplicate event, late timer, burst and disabled/removed flow cases; explicit missed-run policy; PAUSED stays paused and each allowed continuation is claimed once",
+      "status": "passed",
+      "evidence": "src/workflows/runner/triggers/delivery.test.ts runs the real CronScheduler in America/New_York (both transitions), Europe/Rome and UTC through TriggerManager, the job queue and the ledger, for the built-in schedule and, through a stand-in engine, the dashboard's schedule piece and polled events, as production runs them; src/workflows/runtime/continuation.test.ts runs the timer scheduler, the approval scheduler, the resume route and the RUN_FLOW worker; src/lib/cron-occurrence.test.ts covers clock corrections and long sleeps; src/workflows/runtime/cancellation.test.ts covers a workflow deleted mid-run"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "7,789 pass, 88 skip, 9 fail of 7,886 tests across 426 files (local WSL2, a fresh checkout of e1b9ab30). All 9 also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. The two skips more than the first round are engine tests that skip when the built engine pieces are not cached; rerun, they pass on this commit. CI on the final head runs the full suite.",
+      "log": "evidence/Q-06/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/workflows/runner/triggers/delivery.test.ts src/workflows/runtime/continuation.test.ts src/lib/cron-occurrence.test.ts src/workflows/runner/triggers/manager.test.ts src/workflows/runner/triggers/rate-limiter.test.ts src/workflows/runner/triggers/cron.test.ts src/lib/cron-timezone.test.ts src/lib/cron-validation.test.ts src/workflows/timer-scheduler.test.ts src/workflows/runner/handler.test.ts src/workflows/queue/queue.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/event-buffer.test.ts src/workflows/api/routes.test.ts src/actions/tools/manage-workflow.test.ts src/goals/work-items.test.ts",
+      "result": "457 pass, 0 fail across 17 files at e1b9ab30: the Q-06 tests plus the trigger manager, scheduler, webhook, timer, handler, queue, cancellation, Authority, event buffer, routes, manage_workflow and work-item tests they touch",
+      "log": "evidence/Q-06/q06-tests.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/workflows/api/version-ownership.test.ts src/workflows/runner/engine-runtime/cancellation.integration.test.ts src/workflows/runner/engine-runtime/end-to-end-resume.test.ts src/workflows/runner/engine-runtime/end-to-end.test.ts src/workflows/runner/engine-runtime/native-connections.integration.test.ts src/workflows/runner/engine-runtime/outer-worker-delay.test.ts src/workflows/runtime/delegated-approval.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/workflows/runtime/llm-output-outcomes.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/db/encryption-key-path.test.ts",
+      "result": "302 pass, 1 skip, 0 fail across 12 files at e1b9ab30: version routes, the engine runtime suites, approvals, outcomes, machine binding and readiness, which the review fixes also touch",
+      "log": "evidence/Q-06/q06-tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-06/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-06/guards.log"
+    },
+    {
+      "command": "remove each of 67 guarantees in turn and run its test",
+      "result": "67 of 67 removals fail their tests; source restored. The log lists the file, the exact text removed and its replacement for each.",
+      "log": "evidence/Q-06/revert-checks.log"
+    }
+  ],
+  "manual_checks": [
+    "Not run against a live daemon: no real provider webhook, OAuth grant or desktop effect is needed for these fixtures (delivery contract). The quick path below names the manual checks for a dev daemon."
+  ],
+  "quick_verify": {
+    "cwd": "repository root, on brief/q-06",
+    "command": "bun test --preload ./src/test-preload.ts src/workflows/runner/triggers/delivery.test.ts src/workflows/runtime/continuation.test.ts src/lib/cron-occurrence.test.ts",
+    "expected": "54 pass",
+    "manual": "On a dev daemon: send the same webhook twice with one Idempotency-Key (one run; the second reply says duplicate with the same runId); stop Jarvis across a scheduled time, then start it (GET /api/workflows/:id/fires shows the time as missed and nothing ran late); turn off a workflow with a run waiting on a delay (the run is stopped, saying why, and the delay never wakes it).",
+    "screenshot": "not applicable: no visible UI changes"
+  },
+  "migration": "Additive: tables workflow_trigger_fire and workflow_schedule_watch, columns flow.disabled_at and flow_run.graph_digest. Older binaries ignore them. Schedules start being watched at the first startup of this build, so misses before it are not reconstructed.",
+  "rollback": "Revert the Q-06 commits. The tables and columns are additive and ignored by older builds; deliveries then behave as before.",
+  "limitations": [
+    "Only schedules record misses; a missed poll of an event source is not a missed run.",
+    "A captured signed request replayed after ten minutes runs again; senders needing full replay protection should put a unique id in the signed body (a delivery id header is not signed, so a signed workflow ignores it).",
+    "Events other than emails and commitments carry no key and are not deduplicated.",
+    "An emergency pause does not hold continuations yet (Q-08).",
+    "Engine-managed webhooks still keep only the first item a trigger returns, and deleting a workflow still skips its trigger's ON_DISABLE.",
+    "The dashboard does not show the ledger yet; the API and chat do.",
+    "System crons share the scheduler's new rules: a tick up to two minutes late fires, the repeated autumn hour fires once, a spring-forward minute fires after the jump, and a large backward clock correction is logged and carried on from.",
+    "A spring-forward time slept through (the host asleep across the jump) is neither run nor recorded."
+  ],
+  "found": [
+    "A workflow deleted while its event source was being polled raised an unhandled rejection, which the daemon treats as fatal (exit code 4).",
+    "Nothing identified a trigger fire: provider delivery ids were captured in the payload but never read, event buffer ids restarted at zero each boot (so a cursor saved before a crash hid new events), and email sync and the commitment executor re-announce after every restart.",
+    "The scheduler deduplicated by epoch minute while matching wall-clock time, so the repeated autumn hour fired twice; a spring-forward minute never fired; a restart or re-registration inside the firing minute could fire again; missed times left no trace.",
+    "A run and its queue job were written separately, so a crash between them left a queued run nothing would execute; the resume route consumed its waitpoint and queued the job separately too.",
+    "Readiness refusals at fire time were not deduplicated: an every-minute schedule wrote 1,440 failed runs a day, and webhook senders were told ok.",
+    "Disabling a workflow cancelled nothing: queued runs still ran, and timers, approvals and resume URLs ignored flow status. A resume job named no waitpoint, so a second continuation could wake a run's next pause, and a paused run of a draft could continue on edited steps.",
+    "Each workflow schedule ignores the time zone it states and runs in Jarvis's configured zone, while readiness requires one for the bundled schedule piece.",
+    "Every run's start time is stamped when it is queued, so nothing recorded when queued work actually began: the ledger now records it, and a run that waited in the queue past a minute reads as delayed."
+  ],
+  "integration": [
+    "Q-05 (#778): flow.ts updateFlowStatus keeps assertFlowReady(id, { acceptBindings: true }), Q-06's disabled_at write, then pinFlowBindings before Q-06's return; schema.ts keeps both sets of columns and migrations; manage-workflow.ts keeps both imports.",
+    "Q-04 (#765): manage_workflow actSetStatus returns Q-04's contractReport and Q-06's stoppedRuns together.",
+    "F-10 to F-14 (#770 ... #785): run F-10's engine repair inside Q-06's digest-aware no-op branch of refresh, keyed on its own registration warnings: Q-06's time-zone warning is advisory and must not re-register a subscription on every refresh.",
+    "F-14 (#785): keep F-14's exclusion of expired decision-document approvals in the query and as a re-check before Q-06's claimContinuation, which replaces the hand-written transaction.",
+    "main merges cleanly apart from version-stamp-cache.sh, which already conflicts at brief/foundations 462d955d. Q-03, Q-13, Q-18, F-08, the D stack and #735 merge cleanly."
+  ],
+  "next": "Show the delivery ledger on the dashboard; hold continuations during an emergency pause (Q-08); offer timestamped webhook signatures; keep every item an engine-managed webhook returns; send ON_DISABLE before a delete. Separate cards.",
+  "review": {
+    "first_push": "faa3913f",
+    "result": "An independent code review requested changes: 4 blocking and 12 smaller issues. All are fixed in e1b9ab30; each guarantee has a test that fails when it is removed (67 of 67).",
+    "blocking": [
+      "R1: turning a workflow back on, or publishing it, let a run from before the turn-off continue, and a run that paused after the turn-off waited on",
+      "R2: every save of a live draft re-registered its trigger, so an engine trigger's subscription and cursor were rebuilt on each step edit",
+      "R3: any webhook body with an event_id was taken for a Slack delivery, so a relay posting each change to the same item ran once and then answered duplicate",
+      "R13: the engine paths production uses (polled events, the dashboard's schedule piece) and the new API surfaces had no tests"
+    ],
+    "minor": [
+      "a restart just after a scheduled time lost it with no record (R4); a long sleep listed only the oldest 1,000 times and dropped the one still due (R5); a schedule switched to another trigger, or refused at registration, was later owed the gap as missed (R6)",
+      "an edited draft that was then published continued on its changed steps (R7); the dashboard's schedule piece dropped some times with no row (R8); a wait in the queue never read as delayed (R9, taken as: show it as delayed)",
+      "the fires API skipped rows handled in the same millisecond and failed on a fractional limit (R10); a large backward clock correction silenced every schedule until the clock caught up (R11); the time-zone warning missed half-hour zones and day-restricted schedules (R12)",
+      "on a signed workflow an unsigned delivery-id header overrode the signed material (R14); unused code (R15); five places where the text no longer matched the code, including the resume route's refusals in WORKFLOW_AUTOMATION.md and the resume-URL exemption from the finished-step rule, which is deliberate and now documented (R16)"
+    ],
+    "suggestions_taken": [
+      "the scheduler's look-ahead is capped at the tick window, so a yearly schedule no longer scans a year on every tick",
+      "missed-time rows are written in one transaction",
+      "the docs say that timers and approvals resume late with their lateness recorded, and that a provider's manual redelivery reuses its id and answers duplicate"
+    ],
+    "also_fixed": [
+      "the dashboard's schedule piece now says why it ran right after the spring-forward jump, as the built-in schedule does"
+    ]
+  }
+}

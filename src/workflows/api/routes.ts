@@ -75,8 +75,10 @@ import { WorkItemError } from "../../goals/work-items";
 import {
   getWaitpoint,
   listWaitpointsByFlowRun,
-  markWaitpointResumed,
 } from "../db/repos/waitpoint";
+import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
+import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
+import { claimContinuation } from "../runtime/continuation";
 import {
   deleteConnection,
   getConnection,
@@ -1331,21 +1333,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           // Reading a request body yields; cancellation may have won meanwhile.
           if (getFlowRun(wp.flowRunId)?.status !== "PAUSED") return err("run is no longer paused", 409);
-          if (!markWaitpointResumed(id)) return err("waitpoint already resumed", 410);
-          enqueue({
-            jobType: "RUN_FLOW",
-            payload: {
-              runId: wp.flowRunId,
-              executionType: "RESUME",
-              resumePayload,
-            },
-            flowRunId: wp.flowRunId,
-            // RESUME jobs especially shouldn't retry: re-resuming an
-            // already-resumed waitpoint would walk past it with stale
-            // payload state. One shot per webhook hit.
-            maxAttempts: 1,
-          });
-          return ok({ runId: wp.flowRunId, waitpointId: id, resumed: true }, 202);
+          // A workflow turned off since this run began does not continue: the
+          // run is stopped instead (Q-06).
+          if (turnedOffReason(wp.flowRunId)) {
+            stopTurnedOffRun(run.flowId, wp.flowRunId);
+            return err("the workflow was turned off, so this run was stopped", 409);
+          }
+          // Consume, queue the RESUME naming this waitpoint, and record it, in
+          // one transaction (Q-06). One shot per waitpoint: re-resuming would
+          // walk past it with stale payload state.
+          switch (claimContinuation({ runId: wp.flowRunId, waitpoint: wp, kind: "webhook", resumePayload })) {
+            case "resumed": return ok({ runId: wp.flowRunId, waitpointId: id, resumed: true }, 202);
+            case "busy": return err("another continuation of this run is already queued; retry once it has run", 409);
+            case "stale": return err("the step this waitpoint was for has already finished", 410);
+            case "not-paused": return err("run is no longer paused", 409);
+            default: return err("waitpoint already resumed", 410);
+          }
         }),
     },
 
@@ -1461,7 +1464,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const rejected = metadataRejection(body.metadata);
           if (rejected) return err(rejected.message, rejected.status);
-          if (body.status !== undefined) updateFlowStatus(id, body.status);
+          // Turning a workflow off stops its queued and waiting runs (Q-06).
+          if (body.status !== undefined && updateFlowStatus(id, body.status).turnedOff) stopRunsOfTurnedOffFlow(id);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = getFlow(id);
@@ -1470,6 +1474,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       DELETE: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          // Stop what it still has in flight before the delete removes the runs (Q-06).
+          stopRunsOfDeletedFlow(id);
           deleteFlow(id);
           refreshTrigger(id);
           return ok({ ok: true });
@@ -1520,6 +1526,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             trigger: body.trigger,
           });
           if (body.uiMeta) upsertFlowVersionUiMeta(version.id, body.uiMeta);
+          // An enabled flow with nothing published runs its latest draft: its
+          // trigger follows the new one (Q-06).
+          refreshTrigger(id);
           return ok(version, 201);
         }),
     },
@@ -1602,6 +1611,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             if (uiMeta) upsertFlowVersionUiMeta(versionId, uiMeta);
             return updated;
           });
+          // An edited live draft's schedule replaces the old one (Q-06).
+          if (versionPatch.trigger !== undefined) refreshTrigger(id);
           return ok(v);
         }),
     },
@@ -1965,7 +1976,23 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = getFlowRun(runId);
-          return run ? ok(run) : err("run not found", 404);
+          // The delivery that started it (Q-06): which trigger, when it was due, how late.
+          return run ? ok({ ...run, fire: fireForRun(runId) }) : err("run not found", 404);
+        }),
+    },
+
+    // Q-06: what became of each scheduled time, webhook delivery, event and
+    // continuation: started (with its run's state), delayed, missed, blocked,
+    // skipped, or stopped when the workflow was turned off, with how many
+    // repeats each absorbed. Newest first; pass `next` back as `cursor` for
+    // the older page.
+    "/api/workflows/:id/fires": {
+      GET: (req) =>
+        trapErrors(() => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          const params = new URL(req.url).searchParams;
+          const limit = Number(params.get("limit") ?? "50");
+          return ok(pageFlowFires(id, { limit, cursor: params.get("cursor") }));
         }),
     },
 
