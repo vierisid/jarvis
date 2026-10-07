@@ -114,5 +114,58 @@
   "rollback": "Remove injected catalog binding. Keep backward-compatible controller/receipt validation for stored pinned requests or disable whole room; never drop requirements/replay uncertain requests under new IDs.",
   "base_ci": "Corrected D-16 Tests, Docker and active platform checks green",
   "ci": "D-17 CI reported on PR after push; not inferred from base",
-  "next": "D-18; not started"
+  "next": "D-18; not started",
+  "review_corrections": {
+    "findings": [
+      "R1: public display-label normalization independent of strict pins",
+      "R2: stable service ID filters with ready-snapshot removal reconciliation",
+      "R3: prompt-preserving animated ingredient reveal"
+    ],
+    "red_evidence": [
+      "evidence/D-17/review-red.log",
+      "evidence/D-17/review-browser-red.json"
+    ],
+    "checks": [
+      {
+        "check": "affected tests",
+        "pass": 331,
+        "assertions": 4169,
+        "skip": 2,
+        "evidence": "evidence/D-17/review-affected.log"
+      },
+      {
+        "check": "focused workflow tests",
+        "pass": 59,
+        "assertions": 240,
+        "skip": 2,
+        "evidence": "evidence/D-17/review-focused.log"
+      },
+      {
+        "check": "actual F08 compatibility with whitespace label",
+        "pass": 1,
+        "assertions": 15,
+        "evidence": "evidence/D-17/review-f08.log"
+      },
+      {
+        "check": "TypeScript",
+        "result": "pass",
+        "evidence": "evidence/D-17/review-typescript.log"
+      },
+      {
+        "check": "UI build",
+        "result": "pass",
+        "evidence": "evidence/D-17/review-build.log"
+      }
+    ],
+    "browser": {
+      "script": "evidence/D-17/review-browser.cjs",
+      "evidence": "evidence/D-17/review-browser-results.json",
+      "changes": 80,
+      "sampled_frames": 2538,
+      "configurations": 10,
+      "errors": 0,
+      "original_matrix": "Eight layouts / 80 reversals passed again"
+    },
+    "limitations": "No production activation or live model/account/workflow effects; browser frame sampling does not claim every possible runtime frame."
+  }
 }

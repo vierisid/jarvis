@@ -57,8 +57,16 @@ export function IngredientPicker({ catalog, selected, onChange, enabled, reduced
     if (active && present) panel.current?.querySelector<HTMLInputElement>("input")?.focus({preventScroll:true});
   },[active,present]);
   const ready = enabled && catalog.state === "ready";
-  const groups = [...new Set(catalog.choices.filter(c => c.tab === "library-action").map(c => c.group))].sort();
-  const rows = catalog.choices.filter(c => c.tab === tab && (tab === "connection" || !group || c.group === group)
+  const groups = [...new Map(catalog.choices.filter(c => c.tab === "library-action").map(c => [c.groupId,c.group])).entries()]
+    .sort((a,b)=>a[1].localeCompare(b[1]) || a[0].localeCompare(b[0]));
+  // Metadata can rename a service or disappear independently of F-08 discovery.
+  // Only a complete ready snapshot may clear a genuinely removed package.
+  const missingGroup = catalog.state === "ready" && !!group && !groups.some(([id])=>id===group);
+  const activeGroup = missingGroup ? "" : group;
+  useEffect(() => {
+    if (missingGroup) { setGroup(""); setFeedback("Selected service is no longer available. All services shown."); }
+  },[missingGroup]);
+  const rows = catalog.choices.filter(c => c.tab === tab && (tab === "connection" || !activeGroup || c.groupId === activeGroup)
     && `${c.displayName} ${c.group}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase()));
   return <>
     <button ref={anchor} type="button" className="brief-ingredient-trigger" aria-label="Add connection or library node"
@@ -93,14 +101,14 @@ export function IngredientPicker({ catalog, selected, onChange, enabled, reduced
         <div className="brief-ingredient-search"><Search size={16} aria-hidden="true"/><input aria-label="Search ingredients" type="search" placeholder="Search connections or library"
           value={query} maxLength={128} onChange={e=>setQuery(e.target.value)}/></div>
         <label className="brief-ingredient-category" style={{visibility:tab==="library-action"?"visible":"hidden"}}>Service
-          <select aria-label="Library service" value={group} tabIndex={tab==="library-action"?0:-1} onChange={e=>setGroup(e.target.value)}>
-            <option value="">All services</option>{groups.map(g=><option key={g}>{g}</option>)}
+          <select aria-label="Library service" value={activeGroup} tabIndex={tab==="library-action"?0:-1} onChange={e=>setGroup(e.target.value)}>
+            <option value="">All services</option>{groups.map(([id,name])=><option key={id} value={id}>{name}</option>)}
           </select>
         </label>
         <div id={`${id}-results`} role="tabpanel" aria-labelledby={`${id}-tab-${tab==="connection"?0:1}`} className="brief-ingredient-results">
           {!ready ? <div className="brief-ingredient-empty" role="status">{catalog.state==="loading"?"Loading ingredients…":"Ingredients are unavailable. Your selection is kept."}
             {catalog.refresh && catalog.state!=="loading" && <button type="button" onClick={catalog.refresh}>Try again</button>}</div>
-            : !rows.length ? <p className="brief-ingredient-empty">{query || group ? "No matching ingredients. Try another search or service." : tab==="connection" ? "No available connections. Connect an account in Connected workspace." : "No library nodes are available."}</p>
+            : !rows.length ? <p className="brief-ingredient-empty">{query || (tab==="library-action" && activeGroup) ? "No matching ingredients. Try another search or service." : tab==="connection" ? "No available connections. Connect an account in Connected workspace." : "No library nodes are available."}</p>
             : rows.map(row => {
               const selectedIndex = selected.findIndex(s => ingredientKey(s.selection) === row.key);
               const checked = selectedIndex !== -1;

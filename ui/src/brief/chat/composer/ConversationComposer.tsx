@@ -134,7 +134,7 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
       {suggestions.map(suggestion => <button type="button" key={suggestion.id} aria-disabled={binding.metadataPending}
         onPointerDown={event => event.preventDefault()} onClick={() => suggest(suggestion.text)}>{suggestion.label}</button>)}
     </div>}
-    <div ref={surface} className="brief-composer-surface" data-invalid={!!invalid} style={{"--brief-ingredient-height":`${chipHeight}px`} as React.CSSProperties}>
+    <div ref={surface} className="brief-composer-surface" data-invalid={!!invalid} style={{"--brief-input-height":`${inputHeight}px`} as React.CSSProperties}>
       <div className="brief-composer-attachment">{attachmentControl ?? <BriefTooltip label="Attachments unavailable">
         <button type="button" aria-label="Add attachment" aria-disabled="true"><Plus size={18} aria-hidden="true" /></button>
       </BriefTooltip>}</div>
@@ -146,7 +146,7 @@ function ScopedComposer({ binding, suggestions = [], label = "Message Jarvis", p
           if (event.key !== "Enter" || event.shiftKey || event.altKey || composing.current || event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229 || performance.now() - compositionEnded.current < 32) return;
           event.preventDefault(); if (!event.repeat) void act("send");
         }} />
-      {ingredients && <div ref={chips} className="brief-composer-ingredients">{ingredients}</div>}
+      {ingredients && <div className="brief-composer-ingredient-reveal"><div ref={chips} className="brief-composer-ingredients">{ingredients}</div></div>}
       <div className="brief-composer-send-target"><SendPebble disabled={disabled} stopping={stopping} working={working}
         reducedMotion={reduced} onClick={() => void act(working ? "cancel" : "send")} /></div>
     </div>
