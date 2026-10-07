@@ -1,0 +1,192 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: /tmp/jarvis-f13-ergaKz/fixture.db
+Database initialized at: /tmp/jarvis-f13-PFKZaA/fixture.db
+Database initialized at: /tmp/jarvis-f13-Appvje/fixture.db
+Database initialized at: /tmp/jarvis-f13-znB5RS/fixture.db
+
+src/brief/recommendations.test.ts:
+83 |   if (reason === 'goal') getGoalApplication().updateStatus(goalId, 'paused');
+84 |   else if (reason === 'workload') createWorkItem({ title: 'Someone else added work' });
+85 |   else changed++;
+86 |   const total = count('commitment_work');
+87 |   const stale = provider.get(rec.recommendationId);
+88 |   expect(stale).toMatchObject({ state: 'blocked', reason: expect.stringContaining('changed') });
+                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "reason": StringContaining "changed",
+-   "state": "blocked",
++   "acceptance": null,
++   "plan": {
++     "action": {
++       "evidence": [
++         {
++           "id": "a6355687-dd2b-4309-b1d5-e94aa81f6fc7",
++           "kind": "goal",
++           "revision": null,
++         },
++       ],
++       "goal": {
++         "goalId": "a6355687-dd2b-4309-b1d5-e94aa81f6fc7",
++         "path": [
++           "Partner goal",
++         ],
++         "revision": "1791358111808",
++       },
++       "kind": "start_step",
++       "load": "adds",
++       "rationale": [
++         "The goal has a concrete step and capacity.",
++       ],
++       "title": "Contact the agreed partner",
++       "workItemId": null,
++     },
++     "basis": "14276019762ce8a0c44731cfe3769a1d5ded9a2d7db39f61c1742880a2e2fa29",
++     "expiresAt": 1791361711808,
++     "generatedAt": 1791358111808,
++     "outcome": "recommend",
++     "planner": "next-action-v1",
++   },
++   "reason": null,
++   "recommendationId": "99c34f39-bbc3-4a22-81c2-1019fe9c44c7",
++   "requestId": "goal",
++   "revision": "3852f535bab18c71fd92910c804d774f1c38e5f2f733e3058425a81ebd13e927",
++   "state": "available",
+  }
+
+- Expected  - 2
++ Received  + 36
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:88:17)
+(fail) goal changes invalidate a stored recommendation before acceptance [349.32ms]
+83 |   if (reason === 'goal') getGoalApplication().updateStatus(goalId, 'paused');
+84 |   else if (reason === 'workload') createWorkItem({ title: 'Someone else added work' });
+85 |   else changed++;
+86 |   const total = count('commitment_work');
+87 |   const stale = provider.get(rec.recommendationId);
+88 |   expect(stale).toMatchObject({ state: 'blocked', reason: expect.stringContaining('changed') });
+                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "reason": StringContaining "changed",
+-   "state": "blocked",
++   "acceptance": null,
++   "plan": {
++     "action": {
++       "evidence": [
++         {
++           "id": "f00ae06a-f30c-46a6-a68c-124f99298139",
++           "kind": "goal",
++           "revision": null,
++         },
++       ],
++       "goal": {
++         "goalId": "f00ae06a-f30c-46a6-a68c-124f99298139",
++         "path": [
++           "Partner goal",
++         ],
++         "revision": "1791358112236",
++       },
++       "kind": "start_step",
++       "load": "adds",
++       "rationale": [
++         "The goal has a concrete step and capacity.",
++       ],
++       "title": "Contact the agreed partner",
++       "workItemId": null,
++     },
++     "basis": "2dde078efe1b50bf75f5e5eeb81ab3e2ac7dd341553fde0390c9e9ab4f44ebdd",
++     "expiresAt": 1791361712236,
++     "generatedAt": 1791358112236,
++     "outcome": "recommend",
++     "planner": "next-action-v1",
++   },
++   "reason": null,
++   "recommendationId": "9f135e11-b2fe-437e-b90d-fba4930e278e",
++   "requestId": "workload",
++   "revision": "8fa7cdc3705a9cc9fe1d93f323dd8250d5bb438fe266dda2ab3b4d7b1c7ce40a",
++   "state": "available",
+  }
+
+- Expected  - 2
++ Received  + 36
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:88:17)
+(fail) workload changes invalidate a stored recommendation before acceptance [429.41ms]
+83 |   if (reason === 'goal') getGoalApplication().updateStatus(goalId, 'paused');
+84 |   else if (reason === 'workload') createWorkItem({ title: 'Someone else added work' });
+85 |   else changed++;
+86 |   const total = count('commitment_work');
+87 |   const stale = provider.get(rec.recommendationId);
+88 |   expect(stale).toMatchObject({ state: 'blocked', reason: expect.stringContaining('changed') });
+                     ^
+error: expect(received).toMatchObject(expected)
+
+  {
+-   "reason": StringContaining "changed",
+-   "state": "blocked",
++   "acceptance": null,
++   "plan": {
++     "action": {
++       "evidence": [
++         {
++           "id": "c30747fa-0ff8-406e-ab59-d3ebe838f144",
++           "kind": "goal",
++           "revision": null,
++         },
++       ],
++       "goal": {
++         "goalId": "c30747fa-0ff8-406e-ab59-d3ebe838f144",
++         "path": [
++           "Partner goal",
++         ],
++         "revision": "1791358112640",
++       },
++       "kind": "start_step",
++       "load": "adds",
++       "rationale": [
++         "The goal has a concrete step and capacity.",
++       ],
++       "title": "Contact the agreed partner",
++       "workItemId": null,
++     },
++     "basis": "3c12e68ed355945539d3f741376ce4cf87bafe7728c54db9c279accbf9a5780b",
++     "expiresAt": 1791361712640,
++     "generatedAt": 1791358112640,
++     "outcome": "recommend",
++     "planner": "next-action-v1",
++   },
++   "reason": null,
++   "recommendationId": "f10042ea-5356-42ce-9822-7bbdbe532968",
++   "requestId": "capability",
++   "revision": "51c1c690061bc4451b8037c0398d96c601da946ead0be09a222b197929fed21a",
++   "state": "available",
+  }
+
+- Expected  - 2
++ Received  + 36
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:88:17)
+(fail) capability changes invalidate a stored recommendation before acceptance [399.34ms]
+177 | test('a changed planner choice with the same basis cannot authorize an old action', () => {
+178 |   let reviewed = false;
+179 |   planner = { readiness: () => 'ready', plan: at => { const p = plan(at); if (p.outcome !== 'recommend') throw Error();
+180 |     return { ...p, action: { ...p.action, kind: reviewed ? 'review_goal' : 'start_step' } }; } }; wire();
+181 |   const rec = provider.generate('choice'); reviewed = true;
+182 |   expect(provider.get(rec.recommendationId).state).toBe('blocked');
+                                                         ^
+error: expect(received).toBe(expected)
+
+Expected: "blocked"
+Received: "available"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:182:52)
+(fail) a changed planner choice with the same basis cannot authorize an old action [323.72ms]
+
+ 0 pass
+ 12 filtered out
+ 4 fail
+ 4 expect() calls
+Ran 4 tests across 1 file. [1.54s]

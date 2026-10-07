@@ -1,3 +1,6 @@
+import { Recommendations } from '../brief/recommendations';
+import { loadRecommendationPlanner } from '../brief/recommendation-planner';
+import { registerRecommendations } from '../brief/registrations/recommendations';
 import { DecisionQueue } from '../brief/decisions';
 import { registerDecisions } from '../brief/registrations/decisions';
 import { AwarenessDeliveryPolicy } from './awareness-delivery-policy';
@@ -4843,6 +4846,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 9b. Set up API routes + dashboard static files
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService, auditTrail });
+    const briefRecommendations = new Recommendations(getDb(), briefDecisions,
+      process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1' ? await loadRecommendationPlanner() : null);
     const briefConversations = new BriefConversationProvider();
     const briefChatTransport = new BriefChatTransport({
       db: getDb(),
@@ -4863,6 +4868,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       eventBus: { publish: (type, payload) => sharedEventBus.publish(type, payload) },
     }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
     const briefEnabled: BriefCapabilityId[] = [];
+    if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
     if (process.env.JARVIS_BRIEF_DECISIONS === '1') briefEnabled.push('decisions');
     if (awarenessDelivery.quiet) briefEnabled.push('quietAwareness');
     if (process.env.JARVIS_BRIEF_CONVERSATIONS === '1') briefEnabled.push('conversations');
@@ -4884,11 +4890,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerOpportunityActivation(briefOpportunityActivation),
       ...registerQuietAwareness(awarenessDelivery),
       ...registerDecisions(briefDecisions),
+      ...registerRecommendations(briefRecommendations),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefDecisions,
+      briefRecommendations,
       briefConversations,
       briefAttachments,
       briefWorkflowComposition,

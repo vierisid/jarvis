@@ -1,0 +1,83 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: /tmp/jarvis-f13-G4hH1u/fixture.db
+Database initialized at: /tmp/jarvis-f13-BrDtNw/fixture.db
+
+src/brief/recommendations.test.ts:
+169 | 
+170 | test('return uses insertion order even when the wall clock moves backwards', () => {
+171 |   const first = provider.generate('clock-before'); now -= 1;
+172 |   const latest = provider.generate('clock-after');
+173 |   expect(latest.recommendationId).not.toBe(first.recommendationId);
+174 |   expect(provider.read()).toEqual(latest);
+                                ^
+error: expect(received).toEqual(expected)
+
+  {
+    "acceptance": null,
+    "plan": {
+      "action": {
+        "evidence": [
+          {
+            "id": "8045c6d7-69e3-4ede-8abc-b102603f4f16",
+            "kind": "goal",
+            "revision": null,
+          },
+        ],
+        "goal": {
+          "goalId": "8045c6d7-69e3-4ede-8abc-b102603f4f16",
+          "path": [
+            "Partner goal",
+          ],
+          "revision": "1791357859504",
+        },
+        "kind": "start_step",
+        "load": "adds",
+        "rationale": [
+          "The goal has a concrete step and capacity.",
+        ],
+        "title": "Contact the agreed partner",
+        "workItemId": null,
+      },
+      "basis": "aa4a3570390a8d5f48994f2df869e149585857fc1827f730c982b28f32ef143a",
+-     "expiresAt": 1791361459503,
+-     "generatedAt": 1791357859503,
++     "expiresAt": 1791361459504,
++     "generatedAt": 1791357859504,
+      "outcome": "recommend",
+      "planner": "next-action-v1",
+    },
+    "reason": null,
+-   "recommendationId": "3960b44e-70ef-4298-83f5-c80f4babd91d",
+-   "requestId": "clock-after",
+-   "revision": "2b0a885c30aa15779ff293d39d34bf0bdf574fbe9a27893851ca9a7b6c5f5159",
++   "recommendationId": "942cea0c-99a3-40c6-a6c8-e3f47cba8289",
++   "requestId": "clock-before",
++   "revision": "b6d7731a160b1643c7adb0cbc594448a655baf2dc7d5271ba82c429266fc3ba4",
+    "state": "available",
+  }
+
+- Expected  - 5
++ Received  + 5
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:174:27)
+(fail) return uses insertion order even when the wall clock moves backwards [336.42ms]
+177 | test('a changed planner choice with the same basis cannot authorize an old action', () => {
+178 |   let reviewed = false;
+179 |   planner = { readiness: () => 'ready', plan: at => { const p = plan(at); if (p.outcome !== 'recommend') throw Error();
+180 |     return { ...p, action: { ...p.action, kind: reviewed ? 'review_goal' : 'start_step' } }; } }; wire();
+181 |   const rec = provider.generate('choice'); reviewed = true;
+182 |   expect(provider.get(rec.recommendationId).state).toBe('blocked');
+                                                         ^
+error: expect(received).toBe(expected)
+
+Expected: "blocked"
+Received: "available"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:182:52)
+(fail) a changed planner choice with the same basis cannot authorize an old action [328.04ms]
+
+ 0 pass
+ 13 filtered out
+ 2 fail
+ 3 expect() calls
+Ran 2 tests across 1 file. [701.00ms]

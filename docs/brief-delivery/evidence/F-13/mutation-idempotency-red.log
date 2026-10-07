@@ -1,0 +1,25 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: /tmp/jarvis-f13-RWfodO/fixture.db
+
+src/brief/recommendations.test.ts:
+102 |       if (owner && owner.id !== id) throw new RecommendationError('Request ID belongs to another recommendation', 409, 'request_conflict');
+103 |       if (false && current.acceptance) {
+104 |         if (revision !== current.acceptance.revision && revision !== current.revision) throw new RecommendationError('Recommendation changed; read it again', 409, 'revision_conflict');
+105 |         return { ...current.acceptance, requestId };
+106 |       }
+107 |       if (current.revision !== revision) throw new RecommendationError('Recommendation changed; read it again', 409, 'revision_conflict');
+                                                     ^
+error: Recommendation changed; read it again
+ status: 409,
+   code: "revision_conflict"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.ts:107:48)
+      at transaction (bun:sqlite:400:27)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:57:19)
+(fail) acceptance appends one canonical item, preserves the front, goal and durable receipt [354.16ms]
+
+ 0 pass
+ 15 filtered out
+ 1 fail
+ 7 expect() calls
+Ran 1 test across 1 file. [391.00ms]

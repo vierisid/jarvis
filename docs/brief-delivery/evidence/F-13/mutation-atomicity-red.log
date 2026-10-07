@@ -1,0 +1,24 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: /tmp/jarvis-f13-GJL8gp/fixture.db
+
+src/brief/recommendations.test.ts:
+137 | test('queue failure rolls back work creation, intent acceptance and receipt together', () => {
+138 |   const front = createWorkItem({ title: 'Queue at limit' }); const item = queue.get(`work:${front.id}`);
+139 |   queue.place(item.decisionId, item.revision, 1_000_000);
+140 |   const rec = provider.generate('full');
+141 |   expect(() => provider.accept(rec.recommendationId, 'full', rec.revision)).toThrow('placement is full');
+142 |   expect(count('commitment_work')).toBe(1); expect(count('commitments')).toBe(1);
+                                         ^
+error: expect(received).toBe(expected)
+
+Expected: 1
+Received: 2
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:142:36)
+(fail) queue failure rolls back work creation, intent acceptance and receipt together [389.80ms]
+
+ 0 pass
+ 15 filtered out
+ 1 fail
+ 2 expect() calls
+Ran 1 test across 1 file. [427.00ms]

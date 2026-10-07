@@ -1,0 +1,30 @@
+bun test v1.4.2 (744846f84)
+Database initialized at: /tmp/jarvis-f13-x4uRx7/fixture.db
+
+src/brief/recommendations.test.ts:
+50 |   const rec = provider.generate('generation-1');
+51 |   expect(provider.generate('generation-1')).toEqual(rec); expect(provider.read('generation-1')).toEqual(rec);
+52 |   const receipt = provider.accept(rec.recommendationId, 'accept-1', rec.revision);
+53 |   expect(receipt.created).toBe(true); expect(receipt.destination.title).toBe('Contact the agreed partner');
+54 |   expect(getWorkItem(receipt.destination.workItemId)).toMatchObject({ status: 'ready', goalId, runId: null });
+55 |   expect((await queue.read()).data.items.map(i => i.decisionId)).toEqual([first.decisionId, receipt.destination.decisionId]);
+                                                                      ^
+error: expect(received).toEqual(expected)
+
+  [
+-   "work:49e2c941-92d6-4ef1-aac9-d0f3e0d0c801",
+    "work:0a51006f-c231-4eae-a1c5-167bbb730f57",
++   "work:49e2c941-92d6-4ef1-aac9-d0f3e0d0c801",
+  ]
+
+- Expected  - 1
++ Received  + 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-13/src/brief/recommendations.test.ts:55:66)
+(fail) acceptance appends one canonical item, preserves the front, goal and durable receipt [407.32ms]
+
+ 0 pass
+ 15 filtered out
+ 1 fail
+ 6 expect() calls
+Ran 1 test across 1 file. [442.00ms]
