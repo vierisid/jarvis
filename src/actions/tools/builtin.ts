@@ -30,6 +30,7 @@ import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } f
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
 import { captureViaPrivateFile } from '../app-control/capture-file.ts';
+import { sanitizedEnv } from '../../util/subprocess-env.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
 
@@ -712,7 +713,11 @@ function localCaptureScreen(): string {
       execFileSync('screencapture', ['-x', file]);
     } else if (os === 'win32') {
       execSync('powershell -command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }"',
-        { env: { ...process.env, JARVIS_CAPTURE_PATH: file } });
+        // sanitizedEnv, not a process.env spread: the allowlist keeps
+        // SYSTEMROOT, WINDIR, COMSPEC, PATHEXT, PSMODULEPATH, APPDATA and PATH
+        // (matched case-insensitively on win32), which is everything this
+        // one-liner needs, while dropping the daemon's secrets.
+        { env: sanitizedEnv({ JARVIS_CAPTURE_PATH: file }) });
     } else {
       try {
         execFileSync('scrot', [file]);
