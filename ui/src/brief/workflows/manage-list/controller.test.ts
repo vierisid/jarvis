@@ -365,3 +365,108 @@ test("a loading projection can be refreshed later without a stuck busy state", a
   await f.controller.refresh();
   expect(visible(f.controller)).toHaveLength(4);
 });
+
+for (const activation of ["DISABLED", "ENABLED"] as const)
+  test(`R1: a ready snapshot restores an externally ${activation} workflow to its reserved slot`, async () => {
+    const f = await ready();
+    const original = structuredClone(f.records.get("inbox")!);
+    f.controller.savePosition(840, "competitor");
+    await remove(f.controller, "inbox");
+    // Another client restores the same identity; the provider's list order has
+    // changed, but this controller must recover its original slot and new data.
+    f.tombstones.delete("inbox");
+    f.records.set("inbox", { ...original, revision: "3", activation });
+    const calls = f.stats().calls;
+    await f.controller.refresh();
+    expect(visible(f.controller)).toEqual([
+      "meeting",
+      "inbox",
+      "competitor",
+      "investor",
+    ]);
+    expect(f.controller.getRow("inbox")).toMatchObject({
+      item: { ...original, revision: "3", activation },
+      removed: false,
+      receipt: null,
+      message: null,
+      phase: "idle",
+      command: null,
+    });
+    expect(f.controller.getSnapshot()).toMatchObject({
+      scrollTop: 840,
+      selectedId: "competitor",
+    });
+    expect(f.stats().calls).toBe(calls);
+    expect(f.controller.canChange("inbox")).toBe(true);
+    await f.controller.activate("inbox", activation !== "ENABLED");
+    expect(f.controller.getRow("inbox")!.item.activation).toBe(
+      activation === "ENABLED" ? "DISABLED" : "ENABLED",
+    );
+  });
+
+test("R1: a stale pre-deletion snapshot cannot resurrect a removed workflow or clear its receipt", async () => {
+  const f = await ready();
+  const original = structuredClone(f.records.get("inbox")!);
+  await remove(f.controller, "inbox");
+  const removedRow = structuredClone(f.controller.getRow("inbox"));
+  f.records.set("inbox", original);
+  f.setMode("stale");
+  await f.controller.refresh();
+  expect(f.controller.getRow("inbox")).toEqual(removedRow);
+  expect(visible(f.controller)).toEqual(["meeting", "competitor", "investor"]);
+  expect(f.controller.canChange("inbox")).toBe(false);
+  f.records.delete("inbox");
+  f.setMode("normal");
+  await f.controller.refresh();
+  expect(f.controller.getRow("inbox")).toEqual(removedRow);
+  expect(f.controller.canChange("inbox")).toBe(true);
+});
+
+test("R2: fresh external activation supersedes the previous local status message", async () => {
+  const f = await ready();
+  await f.controller.activate("meeting", false);
+  expect(f.controller.getRow("meeting")!.message).toBe("Workflow paused.");
+  f.records.set("meeting", {
+    ...f.records.get("meeting")!,
+    activation: "ENABLED",
+    revision: "3",
+  });
+  await f.controller.refresh();
+  expect(f.controller.getRow("meeting")).toMatchObject({
+    item: { activation: "ENABLED", revision: "3" },
+    message: null,
+  });
+});
+
+test("R2: a fresh ready snapshot clears a resolved blocker and permits enabling with its new revision", async () => {
+  const f = await ready("blocked enable");
+  await f.controller.activate("investor", true);
+  expect(f.controller.getRow("investor")!.message).toBe(
+    "Connect Notion before enabling.",
+  );
+  f.records.set("investor", {
+    ...f.records.get("investor")!,
+    revision: "2",
+    readiness: { state: "ready", reason: null },
+  });
+  f.setMode("normal");
+  await f.controller.refresh();
+  expect(f.controller.getRow("investor")).toMatchObject({
+    item: { readiness: { state: "ready", reason: null } },
+    message: null,
+  });
+  await f.controller.activate("investor", true);
+  expect(f.controller.getRow("investor")!.item.activation).toBe("ENABLED");
+});
+
+test("R2: unchanged fresh data clears transient command feedback, but a stale response does not", async () => {
+  const f = await ready();
+  await f.controller.activate("meeting", false);
+  f.setMode("stale");
+  await f.controller.refresh();
+  expect(f.controller.getRow("meeting")!.message).toBe("Workflow paused.");
+  f.setMode("normal");
+  await f.controller.refresh();
+  expect(f.controller.getRow("meeting")!.message).toBeNull();
+  expect(f.controller.getRow("meeting")!.item.activation).toBe("DISABLED");
+});

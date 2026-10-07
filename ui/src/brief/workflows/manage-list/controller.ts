@@ -131,13 +131,20 @@ export class WorkflowManagementController {
         // Keep the established order even if an activation updates server sort
         // timestamps. Tombstones reserve their slot across out-of-order Undo.
         const rows = this.state.rows.flatMap((r) => {
-          if (r.removed) {
-            incoming.delete(r.item.flowId);
-            return [r];
-          }
           const item = incoming.get(r.item.flowId);
           incoming.delete(r.item.flowId);
-          return item ? [{ ...r, item, confirming: false }] : [];
+          // Only an authoritative active record can supersede a tombstone.
+          // A stale pre-deletion snapshot must retain the receipt and slot.
+          if (r.removed && (result.status !== "ready" || !item)) return [r];
+          if (!item) return [];
+          // Refresh is blocked while any command is unresolved. Fresh data can
+          // therefore replace settled action feedback, including an obsolete
+          // Undo after restoration elsewhere, without losing a pending command.
+          return [
+            result.status === "ready"
+              ? slot(item)
+              : { ...r, item, confirming: false },
+          ];
         });
         rows.push(...[...incoming.values()].map(slot));
         this.publish({

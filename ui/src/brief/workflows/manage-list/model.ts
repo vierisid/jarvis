@@ -46,6 +46,8 @@ export type ManageResult = Pick<
     | { status: "pending" }
   );
 export interface WorkflowManagementPort {
+  /** Ready is authoritative over settled local commands. Cached snapshots that
+   * may predate acknowledged mutations must be marked stale. */
   read(signal: AbortSignal): Promise<BriefReadState<WorkflowList>>;
   /** Persist command identity before dispatch. Rejection means no mutation was
    * committed; transport errors are uncertain. Server owns authorization, CAS,

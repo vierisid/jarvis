@@ -1,0 +1,48 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/manage-list/controller.test.ts:
+(pass) load/commands are default off and retirement prevents new or late writes [1.50ms]
+(pass) same identity, revision and operation are sent; acknowledgement changes only that row [4.10ms]
+(pass) failed enable keeps paused value and the exact blocker [2.64ms]
+(pass) cancel does not mutate anything or submit; confirmation required [1.53ms]
+(pass) two removals and reverse-order Undo restore exact slots and version/run identity, paused [6.77ms]
+(pass) refresh retains pending Undo and order despite provider timestamp sorting [5.20ms]
+(pass) rejected delete and restore never change visibility [5.13ms]
+(pass) expired receipt never restores locally or dispatches another command [2.68ms]
+(pass) uncertain delete locks row; refresh cannot clear it; reconciliation does not replay [4.22ms]
+(pass) uncertain restore retains receipt and resolves once into paused original identity [5.20ms]
+(pass) concurrent row requests settle independently and repeated actions submit once [2.85ms]
+(pass) access loss blocks new commands while keeping submitted acknowledgement [2.82ms]
+(pass) stale, unavailable, unsupported and empty are distinct; stale actions fail closed [5.11ms]
+(pass) read rejects mismatched owner and duplicate IDs without a partial list [0.38ms]
+(pass) wrong request/owner/flow/action/version or enabled restoration cannot acknowledge [1.41ms]
+(pass) invalid acknowledgement becomes uncertain and cannot unlock a second attempt [2.66ms]
+(pass) newest read wins even when a provider ignores abort [0.22ms]
+(pass) all removed and empty refresh still permit receipt-backed restoration [8.85ms]
+(pass) list position/selection persist independently of row actions [3.94ms]
+(pass) a loading projection can be refreshed later without a stuck busy state [2.64ms]
+(pass) R1: a ready snapshot restores an externally DISABLED workflow to its reserved slot [5.16ms]
+(pass) R1: a ready snapshot restores an externally ENABLED workflow to its reserved slot [4.97ms]
+(pass) R1: a stale pre-deletion snapshot cannot resurrect a removed workflow or clear its receipt [5.41ms]
+(pass) R2: fresh external activation supersedes the previous local status message [4.07ms]
+(pass) R2: a fresh ready snapshot clears a resolved blocker and permits enabling with its new revision [5.42ms]
+(pass) R2: unchanged fresh data clears transient command feedback, but a stale response does not [5.24ms]
+
+ui/src/brief/workflows/manage-list/WorkflowManagementRoom.test.tsx:
+(pass) missing, wrong-source, wrong-owner and capability-off binding fail closed [24.83ms]
+(pass) switch and bin are separate targets; only the name opens the exact workflow [92.70ms]
+(pass) inline confirm is keyboard reachable; Escape restores focus to the same bin [35.47ms]
+(pass) acknowledged deletion hides and inerts only its row, Undo restores it paused [34.59ms]
+(pass) failed enable exposes blocker and leaves Paused, not Draft [27.09ms]
+(pass) uncertain mutation exposes Check result instead of another Delete; matching result resolves once [31.09ms]
+(pass) all eight shell states and unmount/remount retain activation and removed identity [109.35ms]
+(pass) read failures and missing live capability do not invent a zero-count empty list [8.86ms]
+(pass) no removed date, subtitle, footer, global creation control or irreversible route appears [8.92ms]
+(pass) a late row acknowledgement does not steal focus from conversation input [286.90ms]
+(pass) R1: Refresh reveals an externally restored workflow and removes its obsolete Undo [33.50ms]
+(pass) R2: Refresh cannot show an Enabled switch beside obsolete paused feedback [27.98ms]
+
+ 38 pass
+ 0 fail
+ 172 expect() calls
+Ran 38 tests across 2 files. [1036.00ms]
