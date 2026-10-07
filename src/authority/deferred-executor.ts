@@ -12,7 +12,7 @@ import type { AuthorityLearner } from './learning.ts';
 import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
-import { boundedReceiptText, toolReturnText } from '../roles/untrusted.ts';
+import { boundedReceiptText, splitToolReturn } from '../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scope.ts';
 import { runAsReviewed } from '../actions/tools/reviewed-call-scope.ts';
 
@@ -21,6 +21,18 @@ import { runAsReviewed } from '../actions/tools/reviewed-call-scope.ts';
 export { ABOVE_LEVEL_SUBSTITUTION };
 
 export type ExecutionResultCallback = (requestId: string, request: ApprovalRequest, result: string) => void;
+
+/** What `executeApprovedWithReceipt` reports; see its docblock for each field. */
+export type ApprovedReceipt = {
+  claimed: boolean;
+  result: string;
+  failed?: boolean;
+  content?: ContentBlock[];
+  /** The untrusted half of a trailed return (#708); `result` minus `trailer`. */
+  outside?: string;
+  /** Repo-authored text a tool handed over to sit AFTER the frame (#708). */
+  trailer?: string;
+};
 
 /**
  * Budget for what `approval_requests.execution_result` stores. 2000 characters,
@@ -128,8 +140,12 @@ export class DeferredExecutor {
    * the blocks as the tool returned them, for the one caller with a model in
    * front of it (the orchestrator's inline gate). `result` is then the text
    * form every other consumer stores or shows.
+   *
+   * `outside` and `trailer` are set only when the tool returned a trusted
+   * trailer (#708), for that same caller: it frames `outside` and appends
+   * `trailer` after the block. `result` is still their concatenation.
    */
-  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string; failed?: boolean; content?: ContentBlock[] }> {
+  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<ApprovedReceipt> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
       return { claimed: false, result: `Error: Request ${requestId} not found or not in approved state` };
@@ -210,10 +226,12 @@ export class DeferredExecutor {
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
       }
-      // Delivery off for the duration (#586). This path CANNOT place a trusted
-      // trailer outside the untrusted block -- see the collapse below -- and a
-      // delivery is recorded when the tool OFFERS one, not when a consumer
-      // places it. `browser_navigate` always takes a card (authority/
+      // Delivery off for the duration (#586). When #586 was written this path
+      // could not place a trusted trailer outside the untrusted block at all.
+      // Since #708 the INLINE gate can (see the split below), but this
+      // executor also serves deferred approvals, whose receipt only ever
+      // reaches a person or a stored row, and a delivery is recorded when the
+      // tool OFFERS one, not when a consumer places it -- so it stays off here. `browser_navigate` always takes a card (authority/
       // ui-intent.ts) and an inline approval comes through here too
       // (orchestrator.ts), so every approved navigation was recording a playbook
       // it then disclaimed, and the chat model's own snapshot got nothing for
@@ -227,19 +245,28 @@ export class DeferredExecutor {
       // available at all, which is what burning the slot used to cost.
       const raw = await runAsReviewed(uiExecution?.reviewed,
         () => withoutTemplateDelivery(() => registry.execute(request.tool_name, args)));
-      // Collapsed to one string: this path records a DB receipt and returns a
-      // single value, so it cannot carry a trusted trailer separately. The
-      // trailer therefore goes back in band and is framed as data along with the
-      // page when the orchestrator frames this result. That loses a site
-      // playbook on an approved browser call; what it cannot do is put attacker
-      // text OUTSIDE a block, because only trusted code that received a trailer
-      // as a trailer ever places one there (roles/untrusted.ts).
+      // Collapsed to one string for every consumer that stores or shows it --
+      // the row, the notification, the execute route -- with any trusted
+      // trailer back in band, where it is framed as data along with the rest
+      // if anything ever frames it. What that cannot do is put attacker text
+      // OUTSIDE a block, because only trusted code that received a trailer as
+      // a trailer ever places one there (roles/untrusted.ts).
       //
-      // A multi-modal result (a screenshot) is the exception: its text form
-      // names the image instead of carrying it, and the blocks travel back to
-      // the inline gate untouched (#709).
+      // The trailer ALSO travels separately, as `outside` and `trailer`, for
+      // the one consumer that frames this for a model: the orchestrator's
+      // inline gate, which every reviewed UI call goes through (#708). Without
+      // this a repo-authored sentence a tool handed over as a trailer -- the
+      // directive `desktop_launch_app` must not have disclaimed -- reached the
+      // model inside the block that tells it to follow no instruction there.
+      // Only an `instanceof` carrier yields one (`splitToolReturn`), so a
+      // sidecar's JSON cannot.
+      //
+      // A multi-modal result (a screenshot) is the other exception: its text
+      // form names the image instead of carrying it, and the blocks travel back
+      // to the inline gate untouched (#709).
       const content = isToolResult(raw) ? raw.content : undefined;
-      const result = content ? multiModalReceiptText(content) : toolReturnText(raw);
+      const split = content ? null : splitToolReturn(raw);
+      const result = content ? multiModalReceiptText(content) : split!.outside + split!.trailer;
 
       const executionTimeMs = Date.now() - startTime;
 
@@ -296,7 +323,8 @@ export class DeferredExecutor {
       // Notify
       this.onResult?.(requestId, request, result);
 
-      return content ? { claimed: true, result, content } : { claimed: true, result };
+      if (content) return { claimed: true, result, content };
+      return split?.trailer ? { claimed: true, result, outside: split.outside, trailer: split.trailer } : { claimed: true, result };
     } catch (err) {
       // RAW, and framed nowhere in this method (#608). This one string has six
       // consumers and only two of them are a model: the row below, the
