@@ -1,0 +1,325 @@
+Revert checks for Q-05 at 04d5a0c1: each guarantee removed in turn, its test run, the source restored.
+Each entry gives the file, the exact text removed and what replaced it, so any check can be repeated by hand.
+
+[DETECTED] a connection a step names is not pinned
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  9 pass 6 fail
+    remove: "    if ('identity' in current) connections[externalId] = current.identity;"
+    replace with: "    if (false) connections[externalId] = current.identity;"
+    fails: pins are what a person accepted when publishing or enabling > publishing pins each connection the steps name and the computer the flow runs on [17.33ms]
+    fails: pins are what a person accepted when publishing or enabling > a credential replaced under the same connection pauses the flow until it is enabled again [11.39ms]
+    fails: pins are what a person accepted when publishing or enabling > a connection deleted and created again pauses it too, and so does publishing being the only acceptance [12.25ms]
+    fails: pins are what a person accepted when publishing or enabling > a managed connection reconnected pauses the flow; revoked, it is not ready at all [11.77ms]
+    fails: pins are what a person accepted when publishing or enabling > enabling an unpublished flow pins its latest draft, and editing that live draft pins again [10.92ms]
+    fails: a run hands out the connection identity it started with > a run of a pinned flow refuses a connection changed since enabling, even on its first fetch [12.08ms]
+
+[DETECTED] replacing a credential does not count
+    file: src/workflows/db/repos/app-connection.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  11 pass 4 fail
+    remove: "pre_select_for_new_projects = ?, credential_generation = credential_generation + 1, updated = ?"
+    replace with: "pre_select_for_new_projects = ?, updated = ?"
+    fails: pins are what a person accepted when publishing or enabling > a credential replaced under the same connection pauses the flow until it is enabled again [12.25ms]
+    fails: a run hands out the connection identity it started with > the first fetch binds; a credential replaced during the run is refused and stays inspectable [11.12ms]
+    fails: a run hands out the connection identity it started with > a run of a pinned flow refuses a connection changed since enabling, even on its first fetch [10.68ms]
+    fails: a run hands out the connection identity it started with > a run of an unpinned flow binds what it finds; missing connections and non-runs are left to their own paths [10.08ms]
+
+[DETECTED] a replaced credential is not a change
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  11 pass 4 fail
+    remove: "    return before.generation === after.generation ? null : `The credential stored in connection ${externalId} was replaced`;"
+    replace with: "    return null;"
+    fails: pins are what a person accepted when publishing or enabling > a credential replaced under the same connection pauses the flow until it is enabled again [11.52ms]
+    fails: a run hands out the connection identity it started with > the first fetch binds; a credential replaced during the run is refused and stays inspectable [11.19ms]
+    fails: a run hands out the connection identity it started with > a run of a pinned flow refuses a connection changed since enabling, even on its first fetch [10.70ms]
+    fails: a run hands out the connection identity it started with > a run of an unpinned flow binds what it finds; missing connections and non-runs are left to their own paths [10.34ms]
+
+[DETECTED] a connection deleted and created again is not a change
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "    if (before.connectionId !== after.connectionId) return `Connection ${externalId} was deleted and created again`;\n"
+    replace with: ""
+    fails: pins are what a person accepted when publishing or enabling > a connection deleted and created again pauses it too, and so does publishing being the only acceptance [12.16ms]
+
+[DETECTED] a reconnected managed source is not a change
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "    return before.source === after.source && before.grant === after.grant ? null : `Connection ${externalId} was reconnected`;"
+    replace with: "    return null;"
+    fails: pins are what a person accepted when publishing or enabling > a managed connection reconnected pauses the flow; revoked, it is not ready at all [11.39ms]
+
+[DETECTED] admission ignores the pins
+    file: src/workflows/db/repos/flow-readiness.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  11 pass 4 fail
+    remove: "  const stale = bindingPinIssues(flowId, versionId, trigger);"
+    replace with: "  const stale: ReturnType<typeof bindingPinIssues> = [];"
+    fails: pins are what a person accepted when publishing or enabling > a credential replaced under the same connection pauses the flow until it is enabled again [11.80ms]
+    fails: pins are what a person accepted when publishing or enabling > a connection deleted and created again pauses it too, and so does publishing being the only acceptance [11.08ms]
+    fails: pins are what a person accepted when publishing or enabling > a managed connection reconnected pauses the flow; revoked, it is not ready at all [11.09ms]
+    fails: the computer a flow is pinned to > a pinned computer that is no longer enrolled blocks admission [10.21ms]
+
+[DETECTED] pins apply to every version
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "  if (!pins || pins.versionId !== versionId) return [];"
+    replace with: "  if (!pins) return [];"
+    fails: pins are what a person accepted when publishing or enabling > pins belong to the version they were taken from [10.79ms]
+
+[DETECTED] enabling compares instead of accepting
+    file: src/workflows/db/repos/flow.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  12 pass 3 fail
+    remove: "  if (status === 'ENABLED') assertFlowReady(id, { acceptBindings: true });"
+    replace with: "  if (status === 'ENABLED') assertFlowReady(id);"
+    fails: pins are what a person accepted when publishing or enabling > a credential replaced under the same connection pauses the flow until it is enabled again [12.12ms]
+    fails: the computer a flow is pinned to > a pinned computer that is no longer enrolled blocks admission [10.38ms]
+    fails: a run hands out the connection identity it started with > the first fetch binds; a credential replaced during the run is refused and stays inspectable [11.91ms]
+
+[DETECTED] enabling does not pin again
+    file: src/workflows/db/repos/flow.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  5 pass 10 fail
+    remove: "  if (status === 'ENABLED') pinFlowBindings(id);\n}"
+    replace with: "}"
+    fails: pins are what a person accepted when publishing or enabling > publishing pins each connection the steps name and the computer the flow runs on [17.30ms]
+    fails: pins are what a person accepted when publishing or enabling > a credential replaced under the same connection pauses the flow until it is enabled again [11.49ms]
+    fails: pins are what a person accepted when publishing or enabling > a connection deleted and created again pauses it too, and so does publishing being the only acceptance [11.28ms]
+    fails: pins are what a person accepted when publishing or enabling > a managed connection reconnected pauses the flow; revoked, it is not ready at all [16.71ms]
+    fails: pins are what a person accepted when publishing or enabling > enabling an unpublished flow pins its latest draft, and editing that live draft pins again [16.85ms]
+    fails: the computer a flow is pinned to > the most recently enrolled computer that serves the step, preferring a connected one, else this computer [10.51ms]
+    fails: the computer a flow is pinned to > a literal target pins exactly that computer; a partial name or a target from run data stays unpinned [15.74ms]
+    fails: the computer a flow is pinned to > at startup nobody is choosing: a computer is pinned only when the choice does not depend on which one is connected [11.06ms]
+    fails: the computer a flow is pinned to > a pinned computer that is no longer enrolled blocks admission [10.13ms]
+    fails: a run hands out the connection identity it started with > a run of a pinned flow refuses a connection changed since enabling, even on its first fetch [16.58ms]
+
+[DETECTED] publishing compares instead of accepting
+    file: src/workflows/db/repos/flow-publication.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "    assertVersionReady(flowId, target.id, undefined, { acceptBindings: true });"
+    replace with: "    assertVersionReady(flowId, target.id);"
+    fails: pins are what a person accepted when publishing or enabling > a connection deleted and created again pauses it too, and so does publishing being the only acceptance [12.02ms]
+
+[DETECTED] editing the live draft does not pin again
+    file: src/workflows/db/repos/flow-version.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "  touchFlow(next.flow_id);\n  repinLiveDraft(next.flow_id);"
+    replace with: "  touchFlow(next.flow_id);"
+    fails: pins are what a person accepted when publishing or enabling > enabling an unpublished flow pins its latest draft, and editing that live draft pins again [10.84ms]
+
+[DETECTED] startup does not pin enabled flows
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  13 pass 2 fail
+    remove: "    try { if (pinFlowBindings(id, { unattended: true })) pinned++; }"
+    replace with: "    try { if (false) pinned++; }"
+    fails: pins are what a person accepted when publishing or enabling > startup pins enabled flows that have no pins, and leaves the rest alone [11.43ms]
+    fails: the computer a flow is pinned to > at startup nobody is choosing: a computer is pinned only when the choice does not depend on which one is connected [10.72ms]
+
+[DETECTED] startup chooses a computer as if a person were enabling
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "    try { if (pinFlowBindings(id, { unattended: true })) pinned++; }"
+    replace with: "    try { if (pinFlowBindings(id)) pinned++; }"
+    fails: the computer a flow is pinned to > at startup nobody is choosing: a computer is pinned only when the choice does not depend on which one is connected [10.92ms]
+
+[DETECTED] unattended pins guess among several computers
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "  if (unattended && serving.length > 1) return null;\n"
+    replace with: ""
+    fails: the computer a flow is pinned to > at startup nobody is choosing: a computer is pinned only when the choice does not depend on which one is connected [11.19ms]
+
+[DETECTED] startup pins disabled flows too
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "\"SELECT id FROM flow WHERE status = 'ENABLED' AND binding_pins IS NULL\""
+    replace with: "\"SELECT id FROM flow WHERE binding_pins IS NULL\""
+    fails: pins are what a person accepted when publishing or enabling > startup pins enabled flows that have no pins, and leaves the rest alone [12.36ms]
+
+[DETECTED] a revoked managed connection counts as ready
+    file: src/workflows/db/repos/flow-readiness.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "        return source.identity && source.identity(externalId) === null\n          ? 'Managed connection is not connected or was revoked; reconnect it' : null;"
+    replace with: "        return null;"
+    fails: pins are what a person accepted when publishing or enabling > a managed connection reconnected pauses the flow; revoked, it is not ready at all [17.22ms]
+
+[DETECTED] an offline computer is preferred over a connected one
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  13 pass 2 fail
+    remove: "  const chosen = serving.find(s => servesCapability(s, capability)) ?? serving[0];"
+    replace with: "  const chosen = serving[0];"
+    fails: the computer a flow is pinned to > the most recently enrolled computer that serves the step, preferring a connected one, else this computer [12.76ms]
+    fails: the computer a flow is pinned to > at startup nobody is choosing: a computer is pinned only when the choice does not depend on which one is connected [13.64ms]
+
+[DETECTED] a computer asleep at publish is passed over for this one
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  13 pass 2 fail
+    remove: "  const chosen = serving.find(s => servesCapability(s, capability)) ?? serving[0];"
+    replace with: "  const chosen = serving.find(s => servesCapability(s, capability));"
+    fails: the computer a flow is pinned to > the most recently enrolled computer that serves the step, preferring a connected one, else this computer [11.95ms]
+    fails: the computer a flow is pinned to > at startup nobody is choosing: a computer is pinned only when the choice does not depend on which one is connected [11.92ms]
+
+[DETECTED] this computer is pinned with local tools disabled
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "  return services?.localTools?.() === false ? null : { sidecarId: null, name: 'this computer' };"
+    replace with: "  return { sidecarId: null, name: 'this computer' };"
+    fails: the computer a flow is pinned to > the most recently enrolled computer that serves the step, preferring a connected one, else this computer [12.02ms]
+
+[DETECTED] a partial name pins a computer
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "  return named.length === 1 ? named[0]! : null;"
+    replace with: "  return named[0] ?? inventory.find(s => s.name.toLowerCase().includes(selector.toLowerCase())) ?? null;"
+    fails: the computer a flow is pinned to > a literal target pins exactly that computer; a partial name or a target from run data stays unpinned [12.30ms]
+
+[DETECTED] a target from run data is pinned anyway
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "  if (!needs.capability || needs.dynamic) return null;"
+    replace with: "  if (!needs.capability) return null;"
+    fails: the computer a flow is pinned to > a literal target pins exactly that computer; a partial name or a target from run data stays unpinned [12.54ms]
+
+[DETECTED] admission ignores a removed pinned computer
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "  if (machine?.sidecarId && inventory && !inventory.some(s => s.id === machine.sidecarId)) {"
+    replace with: "  if (false) {"
+    fails: the computer a flow is pinned to > a pinned computer that is no longer enrolled blocks admission [10.62ms]
+
+[DETECTED] a pinned run picks the default computer
+    file: src/workflows/runtime/machine-binding.ts  test: src/workflows/runtime/workflow-binding-pins.test.ts  exit: 1  0 pass 4 fail
+    remove: "        const pin = machinePinForRun(ctx.runId);"
+    replace with: "        const pin = undefined as ReturnType<typeof machinePinForRun>;"
+    fails: a computer enrolled after the flow was enabled does not take over its later runs [17.03ms]
+    fails: the pinned computer offline: the run waits on it and dispatch is blocked, no other computer does the work [11.45ms]
+    fails: the pinned computer removed or re-enrolled is a typed blocker naming it, never a replacement [11.18ms]
+    fails: a flow pinned to this computer stays here when a sidecar enrolls later, and stops if local tools are turned off [11.67ms]
+
+[DETECTED] a removed pinned computer is replaced silently
+    file: src/workflows/runtime/machine-binding.ts  test: src/workflows/runtime/workflow-binding-pins.test.ts  exit: 1  3 pass 1 fail
+    remove: "          if (pin.sidecarId !== null && !inventory.some(s => s.id === pin.sidecarId)) {"
+    replace with: "          if (false) {"
+    fails: the pinned computer removed or re-enrolled is a typed blocker naming it, never a replacement [11.18ms]
+
+[DETECTED] a run pinned here runs locally with local tools off
+    file: src/workflows/runtime/machine-binding.ts  test: src/workflows/runtime/workflow-binding-pins.test.ts  exit: 1  3 pass 1 fail
+    remove: "          if (pin.sidecarId === null && isNoLocalTools()) {"
+    replace with: "          if (false) {"
+    fails: a flow pinned to this computer stays here when a sidecar enrolls later, and stops if local tools are turned off [11.73ms]
+
+[DETECTED] the engine route hands out a changed credential
+    file: src/workflows/sandbox-api/routes/connections.ts  test: src/workflows/sandbox-api/native-connections.test.ts  exit: 1  10 pass 1 fail
+    remove: "    const refusal = enforceRunConnectionBinding(ctx.claims.runId, projectId, externalId);\n    if (refusal) return err(refusal, 409);\n"
+    replace with: ""
+    fails: Q-05: a run keeps the connection identity it started with > a credential replaced after the run first fetched it is refused, and the run records why [35.29ms]
+
+[DETECTED] later fetches in a run are not compared
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  13 pass 2 fail
+    remove: "      const change = bound.identity ? describeConnectionChange(externalId, bound.identity, current.identity) : null;"
+    replace with: "      const change = bound.identity ? null : null;"
+    fails: a run hands out the connection identity it started with > the first fetch binds; a credential replaced during the run is refused and stays inspectable [12.27ms]
+    fails: a run hands out the connection identity it started with > a run of an unpinned flow binds what it finds; missing connections and non-runs are left to their own paths [10.37ms]
+
+[DETECTED] a run's first fetch is not compared with the pins
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "    const change = pinned ? describeConnectionChange(externalId, pinned, current.identity) : null;\n    if (change) return refuse("
+    replace with: "    const change = null;\n    if (change) return refuse("
+    fails: a run hands out the connection identity it started with > a run of a pinned flow refuses a connection changed since enabling, even on its first fetch [12.46ms]
+
+[DETECTED] a run's first fetch is not bound
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  13 pass 2 fail
+    remove: "    db.run('INSERT INTO workflow_run_connection_binding (run_id, external_id, record) VALUES (?, ?, ?)',\n      [runId, externalId, JSON.stringify({ externalId, identity: current.identity, boundAt: Date.now() } satisfies RunConnectionBinding)]);\n"
+    replace with: ""
+    fails: a run hands out the connection identity it started with > the first fetch binds; a credential replaced during the run is refused and stays inspectable [12.08ms]
+    fails: a run hands out the connection identity it started with > a run of an unpinned flow binds what it finds; missing connections and non-runs are left to their own paths [11.45ms]
+
+[DETECTED] a refusal is not recorded on the run
+    file: src/workflows/db/repos/binding-pins.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  13 pass 2 fail
+    remove: "      db.run(`INSERT INTO workflow_run_connection_binding (run_id, external_id, record) VALUES (?, ?, ?)\n        ON CONFLICT(run_id, external_id) DO UPDATE SET record = excluded.record`, [runId, externalId, JSON.stringify(record)]);\n"
+    replace with: ""
+    fails: a run hands out the connection identity it started with > the first fetch binds; a credential replaced during the run is refused and stays inspectable [12.28ms]
+    fails: a run hands out the connection identity it started with > a run of a pinned flow refuses a connection changed since enabling, even on its first fetch [11.66ms]
+
+[DETECTED] the run hides its connection bindings
+    file: src/workflows/db/repos/flow-run.ts  test: src/workflows/sandbox-api/native-connections.test.ts  exit: 1  10 pass 1 fail
+    remove: "    connectionBindings: listRunConnectionBindings(row.id),"
+    replace with: "    connectionBindings: [],"
+    fails: Q-05: a run keeps the connection identity it started with > a credential replaced after the run first fetched it is refused, and the run records why [36.22ms]
+
+[DETECTED] get_run hides binding refusals
+    file: src/actions/tools/manage-workflow.ts  test: src/workflows/db/repos/binding-pins.test.ts  exit: 1  14 pass 1 fail
+    remove: "    ...(bindingRefusals.length ? { bindingRefusals } : {}),\n"
+    replace with: ""
+    fails: a run hands out the connection identity it started with > the first fetch binds; a credential replaced during the run is refused and stays inspectable [13.10ms]
+
+[DETECTED] a revoked Google grant is handed out
+    file: src/workflows/credentials/google-source.ts  test: src/workflows/credentials/google-source.test.ts  exit: 1  5 pass 1 fail
+    remove: "    if (!auth || !auth.isAuthenticated() || auth.reconnectRequired?.()) {"
+    replace with: "    if (!auth || !auth.isAuthenticated()) {"
+    fails: JarvisGoogleConnectionSource > Q-05: a revoked grant is handed out to no one, and reconnecting changes its identity [0.88ms]
+
+[DETECTED] a revoked Google grant keeps its identity
+    file: src/workflows/credentials/google-source.ts  test: src/workflows/credentials/google-source.test.ts  exit: 1  5 pass 1 fail
+    remove: "    if (!auth || !auth.isAuthenticated() || auth.reconnectRequired?.()) return null;"
+    replace with: "    if (!auth || !auth.isAuthenticated()) return null;"
+    fails: JarvisGoogleConnectionSource > Q-05: a revoked grant is handed out to no one, and reconnecting changes its identity [0.85ms]
+
+[DETECTED] a superseded fact counts as current
+    file: src/workflows/runtime/fact-bindings.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  3 pass 5 fail
+    remove: "    const current = rows.filter(row => row.status !== 'superseded' && appliesAt(row, at));"
+    replace with: "    const current = rows.filter(row => appliesAt(row, at));"
+    fails: which addresses and facts a step depends on > an address memory knows must still be current; one it does not know is not checked [12.56ms]
+    fails: a governed send checks the facts its recipients matched > a send to an address memory superseded is blocked before anyone is asked to approve it [15.88ms]
+    fails: a governed send checks the facts its recipients matched > a fact superseded while the send waits for approval blocks it at dispatch, with its arguments still frozen [13.15ms]
+    fails: a governed send checks the facts its recipients matched > a fact superseded while the card is delivered blocks the send even when it is approved at once [12.08ms]
+    fails: a governed send checks the facts its recipients matched > the engine's own retry of an authorized send rechecks memory before the service is called again [11.46ms]
+
+[DETECTED] an expired fact counts as current
+    file: src/workflows/runtime/fact-bindings.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  7 pass 1 fail
+    remove: "    const current = rows.filter(row => row.status !== 'superseded' && appliesAt(row, at));"
+    replace with: "    const current = rows.filter(row => row.status !== 'superseded');"
+    fails: which addresses and facts a step depends on > an expired, deleted or contested fact stops the step too [10.55ms]
+
+[DETECTED] a contested fact passes
+    file: src/workflows/runtime/fact-bindings.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  7 pass 1 fail
+    remove: "    if (current.every(row => row.status === 'contested')) {"
+    replace with: "    if (false) {"
+    fails: which addresses and facts a step depends on > an expired, deleted or contested fact stops the step too [11.59ms]
+
+[DETECTED] addresses are matched by exact case
+    file: src/workflows/runtime/fact-bindings.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  7 pass 1 fail
+    remove: "AND lower(value_key) = lower(?) ORDER BY id"
+    replace with: "AND value_key = ? ORDER BY id"
+    fails: which addresses and facts a step depends on > an address memory knows must still be current; one it does not know is not checked [12.03ms]
+
+[DETECTED] any prop counts as an address
+    file: src/workflows/runtime/fact-bindings.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  7 pass 1 fail
+    remove: "  const addresses = ADDRESS_PROPS.flatMap(prop => listOf(input[prop]))"
+    replace with: "  const addresses = Object.values(input).flatMap(value => listOf(value))"
+    fails: which addresses and facts a step depends on > only email addresses in the props that address people [13.32ms]
+
+[DETECTED] the boundary does not recheck before approval
+    file: src/workflows/runtime/effect-boundary.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  7 pass 1 fail
+    remove: "    try { input.revalidate?.(record); } catch (error) {"
+    replace with: "    try { } catch (error) {"
+    fails: a governed send checks the facts its recipients matched > a send to an address memory superseded is blocked before anyone is asked to approve it [15.45ms]
+
+[DETECTED] a blocked binding is not saved on the record
+    file: src/workflows/runtime/effect-boundary.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  6 pass 2 fail
+    remove: "        record.reason = error.message; record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);\n      }\n      throw error;\n    }\n    let decision;"
+    replace with: "      }\n      throw error;\n    }\n    let decision;"
+    fails: a governed send checks the facts its recipients matched > a send to an address memory superseded is blocked before anyone is asked to approve it [14.95ms]
+    fails: a governed send checks the facts its recipients matched > a fact superseded while the send waits for approval blocks it at dispatch, with its arguments still frozen [13.14ms]
+
+[DETECTED] an approval granted during delivery skips the recheck
+    file: src/workflows/runtime/effect-boundary.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  7 pass 1 fail
+    remove: "      input.validateTarget?.(record.arguments, record.target);\n      input.revalidate?.(record);"
+    replace with: "      input.validateTarget?.(record.arguments, record.target);"
+    fails: a governed send checks the facts its recipients matched > a fact superseded while the card is delivered blocks the send even when it is approved at once [12.48ms]
+
+[DETECTED] a replayed authorization is not rechecked
+    file: src/workflows/runtime/effect-boundary.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  7 pass 1 fail
+    remove: "      if (input.revalidateOnReplay) input.revalidate?.(effect);\n"
+    replace with: ""
+    fails: a governed send checks the facts its recipients matched > the engine's own retry of an authorized send rechecks memory before the service is called again [12.52ms]
+
+[DETECTED] the piece route keeps no recipient facts
+    file: src/workflows/runtime/service-backends.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  4 pass 4 fail
+    remove: "    const factPins = addressing ? recipientFactPins(recipientAddresses(input)) : [];"
+    replace with: "    const factPins: FactPin[] = [];"
+    fails: a governed send checks the facts its recipients matched > a send to an address memory superseded is blocked before anyone is asked to approve it [15.41ms]
+    fails: a governed send checks the facts its recipients matched > a fact superseded while the send waits for approval blocks it at dispatch, with its arguments still frozen [13.63ms]
+    fails: a governed send checks the facts its recipients matched > a fact superseded while the card is delivered blocks the send even when it is approved at once [12.15ms]
+    fails: a governed send checks the facts its recipients matched > the engine's own retry of an authorized send rechecks memory before the service is called again [11.75ms]
+
+[DETECTED] reads are checked against recipient facts
+    file: src/workflows/runtime/service-backends.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  7 pass 1 fail
+    remove: "    const addressing = ['send_email', 'send_message', 'write_data', 'modify_settings'].includes(resolved.category);"
+    replace with: "    const addressing = true;"
+    fails: a governed send checks the facts its recipients matched > reading mail is never blocked by a recipient fact [11.99ms]
+
+[DETECTED] the piece route does not recheck facts
+    file: src/workflows/runtime/service-backends.ts  test: src/workflows/runtime/fact-bindings.test.ts  exit: 1  4 pass 4 fail
+    remove: "      revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),"
+    replace with: "      revalidate: () => {},"
+    fails: a governed send checks the facts its recipients matched > a send to an address memory superseded is blocked before anyone is asked to approve it [15.87ms]
+    fails: a governed send checks the facts its recipients matched > a fact superseded while the send waits for approval blocks it at dispatch, with its arguments still frozen [14.07ms]
+    fails: a governed send checks the facts its recipients matched > a fact superseded while the card is delivered blocks the send even when it is approved at once [12.29ms]
+    fails: a governed send checks the facts its recipients matched > the engine's own retry of an authorized send rechecks memory before the service is called again [12.18ms]
+
+46 of 46 removals fail their tests; source restored after each.
