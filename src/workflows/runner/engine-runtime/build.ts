@@ -704,7 +704,14 @@ export function logSafePath(value: string): string {
   // SEPARATOR are line terminators to a JavaScript parser and to several log
   // shippers, and neither is a control or format character, so the first two
   // classes miss exactly the two code points a forger would reach for next.
-  const flat = value.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "?").replaceAll("<<<", "(((").replaceAll(">>>", ")))");
+  //
+  // And every Default_Ignorable_Code_Point (#763), the same widening
+  // `inlineUntrusted` got: `Cf` keeps the combining grapheme joiner, the
+  // variation selectors and the Hangul fillers, all of which render as nothing,
+  // so a path could carry text the operator reading the line cannot see. Mapped
+  // to `?` like the rest, so the line shows that something was there.
+  const flat = value.replace(/[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/gu, "?")
+    .replaceAll("<<<", "(((").replaceAll(">>>", ")))");
   // `.toWellFormed()` AFTER the cut, for the reason `defangDelimiters` repairs
   // ill-formed UTF-16 at all: a fixed-length slice can land between the halves
   // of a surrogate pair, and a lone surrogate is rejected outright by some
