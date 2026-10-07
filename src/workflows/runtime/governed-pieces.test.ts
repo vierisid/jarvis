@@ -989,3 +989,85 @@ describe('#694: an own __proto__ key is projected, not dropped', () => {
       input: { body: { y: 1 }, n: {}, s: {}, subject: 'x' } }));
   });
 });
+
+/**
+ * #722. `omittedFields` was both `bound()`'s count marker and an ordinary key,
+ * so a step input holding its own `omittedFields` read on the card as a count
+ * of dropped fields -- in an object of ANY size, not only a cut one -- and when
+ * the object was also cut with that field among the 40 kept, the count
+ * overwrote the field's value. A field of that spelling is now escaped with a
+ * leading `~`, so the bare key only ever means the count.
+ */
+describe('#722: a field named like the omitted-fields marker', () => {
+  /** An object of `n` ordinary keys that sort AFTER `omittedFields` (`z00`...), plus `extra`. */
+  const wide = (n: number, extra: Record<string, unknown>): Record<string, unknown> => {
+    const o: Record<string, unknown> = { ...extra };
+    for (let i = 0; i < n; i++) o[`z${String(i).padStart(2, '0')}`] = i;
+    return o;
+  };
+
+  test('in a small object it is a field, not a count', () => {
+    const projected = sanitizePieceInput({ subject: 'x', body: { a: 1, omittedFields: 7 } });
+    expect(projected.body).toEqual({ a: 1, '~omittedFields': 7 });
+    expect('omittedFields' in (projected.body as object)).toBe(false);
+  });
+
+  test('in a cut object its value survives, and the count is the real count', () => {
+    // 42 keys: the real field sorts first, so it is among the 40 kept, and
+    // before #722 the count of 2 overwrote its value.
+    const projected = sanitizePieceInput({ body: wide(41, { omittedFields: 'REAL' }) }).body as Record<string, unknown>;
+    expect(projected['~omittedFields']).toBe('REAL');
+    expect(projected.omittedFields).toBe(2);
+    expect(Object.keys(projected)).toHaveLength(41);
+  });
+
+  test('a field that sorts past the cut is counted, as any dropped field is', () => {
+    const projected = sanitizePieceInput({ body: wide(40, { '~omittedFields': 'x' }) }).body as Record<string, unknown>;
+    // `~` sorts after `z`, so it is the 41st key and is dropped and counted.
+    expect(projected.omittedFields).toBe(1);
+    expect('~omittedFields' in projected).toBe(false);
+    expect('~~omittedFields' in projected).toBe(false);
+  });
+
+  test('the escape is injective: each spelling keeps a distinct name', () => {
+    expect(sanitizePieceInput({ omittedFields: 1, '~omittedFields': 2, '~~omittedFields': 3, omittedFieldsX: 4 }))
+      .toEqual({ '~omittedFields': 1, '~~omittedFields': 2, '~~~omittedFields': 3, omittedFieldsX: 4 });
+  });
+
+  test('the daemon pass is still the identity on the engine pass, so nothing is escaped twice', () => {
+    for (const raw of [{ body: { a: 1, omittedFields: 7 } }, { body: wide(41, { omittedFields: 'REAL' }) }, { omittedFields: { omittedFields: 1 } }]) {
+      const once = sanitizePieceInput(raw);
+      expect(reprojectPieceInput(JSON.parse(JSON.stringify(once)))).toEqual(once);
+    }
+  });
+
+  test('an object the engine did not cut has its own keys escaped and cut by the daemon as the first pass would', () => {
+    const raw = { body: wide(45, { omittedFields: 'REAL' }) };
+    expect(reprojectPieceInput(raw)).toEqual(sanitizePieceInput(raw));
+  });
+
+  test('a value inside the envelope is kept as an engine sent it: the daemon cannot tell a marker from a field there', () => {
+    // Pinned so the docblock's limit stays true. Only an engine that skipped
+    // sanitizePieceInput sends this, and such an engine could forge a count anyway.
+    const raw = { body: wide(45, { inner: { omittedFields: 1 } }) };
+    expect((reprojectPieceInput(raw).body as Record<string, unknown>).inner).toEqual({ omittedFields: 1 });
+    expect((sanitizePieceInput(raw).body as Record<string, unknown>).inner).toEqual({ '~omittedFields': 1 });
+  });
+
+  test('the stored effect, the approval row and the digest carry the escaped field', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const pending = await f.authorize(sanitizePieceInput({ ...SEND_INPUT, body: { text: 'hi', omittedFields: 3 } }));
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const shown = JSON.parse(f.approvals.getRequest(approvalId)!.tool_arguments) as { body: Record<string, unknown> };
+    expect(shown.body).toEqual({ text: 'hi', '~omittedFields': 3 });
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    expect((effect.arguments as { body: unknown }).body).toEqual({ text: 'hi', '~omittedFields': 3 });
+    // The fence is over the escaped projection: an approval recorded against
+    // the bare key does not match it.
+    const input = effect.arguments as Record<string, unknown>;
+    expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input }));
+    expect(effect.requestDigest).not.toBe(digest({ piece: GMAIL, action: 'send_email',
+      input: { ...input, body: { text: 'hi', omittedFields: 3 } } }));
+  });
+});

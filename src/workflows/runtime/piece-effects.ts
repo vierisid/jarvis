@@ -492,6 +492,33 @@ const MAX_DEPTH = 5;
  * approve. A new run records the field in `workflow_effect.arguments`, in
  * `approval_requests.tool_arguments` and in the digest. Every other input
  * projects byte-exact as before, so its digest and its approvals are untouched.
+ *
+ * WHAT #722 MOVED, in the same shape. A field spelled like the count marker
+ * (`omittedFields`, or that with any number of leading `~`) gains one more
+ * leading `~` (`escapeMarkerSpelling`). That changes the projection, and so
+ * `requestDigest`, for exactly one class of input: one holding an own key of
+ * that spelling in an object `bound()` walks into -- nested less than five
+ * levels deep and among the first 40 keys of its object in code-unit order --
+ * whatever the object's size. Any governed-piece effect of such an input
+ * RECORDED before the upgrade was recorded against a projection carrying the
+ * bare key (holding the field's value, or, when the object was also cut, the
+ * count that had overwritten it): an approval still pending, one approved whose
+ * run has not resumed yet, or a step an engine retry re-authorizes (even one
+ * that already succeeded -- the fence runs before the succeeded early return).
+ * When it re-authorizes, the rebuilt engine (this file is in
+ * `PATCHED_VENDOR_SOURCES`, so the edit invalidates every cached engine bundle)
+ * sends the escaped key, `effect-boundary.ts` recomputes the digest, it does
+ * not match, and the step fails with "Workflow effect changed since it was
+ * recorded; start a new run for new arguments or version". For a pending
+ * approval that failure comes AFTER the person clicks approve; the new run's
+ * card shows the field as `~omittedFields` with its real value. The daemon's
+ * pass (`slack`) leaves a projection's keys as they stand, so an honest
+ * engine's output is not escaped twice; an object outside the envelope has
+ * its OWN keys escaped and cut as the first pass would, while a value inside
+ * it that fits the envelope is kept as sent. So the bare key means the count
+ * exactly when the engine ran `sanitizePieceInput`; an engine that skipped it
+ * could forge a count anyway. Every other input projects
+ * byte-exact as before, so its digest and its approvals are untouched.
  */
 function bound(value: unknown, depth: number, slack = false): unknown {
   if (typeof value === 'string') {
@@ -513,7 +540,8 @@ function bound(value: unknown, depth: number, slack = false): unknown {
   }
   const out: Record<string, unknown> = {};
   const keys = Object.keys(value as Record<string, unknown>).sort();
-  const keep = slack && keys.length <= MAX_KEYS + 1 ? keys.length : MAX_KEYS;
+  const asProjected = slack && keys.length <= MAX_KEYS + 1;
+  const keep = asProjected ? keys.length : MAX_KEYS;
   for (const key of keys.slice(0, keep)) {
     if (key === PIECE_AUTH_PROPERTY) continue;
     // Defined, not assigned (#694). `JSON.parse` makes `__proto__` an own key,
@@ -521,15 +549,40 @@ function bound(value: unknown, depth: number, slack = false): unknown {
     // field vanished from the card and the digest, with no `omittedFields`,
     // while the piece still received it. A plain prototype is kept, so every
     // other key projects exactly as it did.
-    Object.defineProperty(out, key, {
+    // A field spelled like the marker is escaped (#722) unless this object is
+    // already a projection, whose keys were escaped by the pass that made it.
+    Object.defineProperty(out, asProjected ? key : escapeMarkerSpelling(key), {
       value: bound((value as Record<string, unknown>)[key], depth + 1, slack),
       enumerable: true, writable: true, configurable: true,
     });
   }
   // Never drop fields silently: a reviewer has to see that the card is
   // showing less than the step will send.
-  if (keys.length > keep) out.omittedFields = keys.length - keep;
+  if (keys.length > keep) out[OMITTED_FIELDS] = keys.length - keep;
   return out;
+}
+
+/** The key `bound()` writes the count of an object's dropped fields under. */
+const OMITTED_FIELDS = 'omittedFields';
+const MARKER_SPELLING = /^~*omittedFields$/u;
+
+/**
+ * A real input field named like the marker, made distinguishable from it
+ * (#722). Before, `omittedFields` was an ordinary key as well as the marker:
+ * a step input holding its own `omittedFields` (in any object, of any size)
+ * read on the card as a count of dropped fields, and when the object was also
+ * cut and the field among the 40 kept, the count OVERWROTE the field's value.
+ *
+ * So a field spelled `omittedFields`, `~omittedFields`, `~~omittedFields`, ...
+ * gains one more leading `~`. The map is injective and only the bare spelling
+ * is ever the marker, so after this pass `omittedFields` always means the count
+ * and every field keeps its value under a name that says it is a field. No key
+ * is unavailable to an input -- a JSON key can be any string -- so escaping is
+ * the only way to make the marker unambiguous without moving the count out of
+ * the object.
+ */
+function escapeMarkerSpelling(key: string): string {
+  return MARKER_SPELLING.test(key) ? `~${key}` : key;
 }
 
 function moreCharacters(overflow: number): string {
