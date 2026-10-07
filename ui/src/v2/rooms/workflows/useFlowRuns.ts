@@ -1,3 +1,4 @@
+import { useWorkflowRequest } from "./WorkflowEditorEnvironment";
 /**
  * Scoped runs hook for a single flow -- powers the editor's Run button and
  * the in-editor Runs panel.
@@ -50,6 +51,7 @@ export interface FlowRunsState {
 }
 
 export function useFlowRuns(flowId: string | null): FlowRunsState {
+  const fetch = useWorkflowRequest();
   const [runs, setRuns] = useState<FlowRun[]>([]);
   const [loading, setLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,7 +81,7 @@ export function useFlowRuns(flowId: string | null): FlowRunsState {
       inFlightRef.current = false;
       setLoading(false);
     }
-  }, [flowId]);
+  }, [flowId, fetch]);
 
   // Initial load + adaptive poll.
   useEffect(() => {
@@ -125,7 +127,7 @@ export function useFlowRuns(flowId: string | null): FlowRunsState {
       if (timer) clearTimeout(timer);
       document.removeEventListener("visibilitychange", onVis);
     };
-  }, [flowId, refresh]);
+  }, [flowId, refresh, fetch]);
 
   // Keep a ref of the latest `runs` so the polling closure sees fresh data
   // without re-creating the effect on every state change.
@@ -168,7 +170,7 @@ export function useFlowRuns(flowId: string | null): FlowRunsState {
         setStarting(false);
       }
     },
-    [flowId, refresh],
+    [flowId, refresh, fetch],
   );
 
   const cancel = useCallback<FlowRunsState["cancel"]>(
@@ -185,7 +187,7 @@ export function useFlowRuns(flowId: string | null): FlowRunsState {
         return { ok: false, message: e instanceof Error ? e.message : String(e) };
       }
     },
-    [refresh],
+    [refresh, fetch],
   );
 
   return { runs, loading, error, starting, refresh, start, cancel };

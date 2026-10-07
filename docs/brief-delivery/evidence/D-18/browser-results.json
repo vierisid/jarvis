@@ -1,0 +1,108 @@
+{
+  "results": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "reversals": 10,
+      "view": {
+        "zoom": 0.920807,
+        "x": 130.00009774035163,
+        "y": 360.91417636920653
+      }
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "reversals": 10,
+      "view": {
+        "zoom": 0.920807,
+        "x": 130.00009774035166,
+        "y": 360.91417636920653
+      }
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "reversals": 10,
+      "view": {
+        "zoom": 0.920807,
+        "x": 130.00009774035163,
+        "y": 360.91417636920653
+      }
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "reversals": 10,
+      "view": {
+        "zoom": 0.920807,
+        "x": 130.0000977403517,
+        "y": 360.91417636920653
+      }
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "reversals": 10,
+      "view": {
+        "zoom": 0.920807,
+        "x": 130.00009774035163,
+        "y": 360.91417636920653
+      }
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "reversals": 10,
+      "view": {
+        "zoom": 0.920807,
+        "x": 130.00009774035166,
+        "y": 360.91417636920653
+      }
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "reversals": 10,
+      "view": {
+        "zoom": 0.920807,
+        "x": 130.00009774035163,
+        "y": 360.91417636920653
+      }
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "reversals": 10,
+      "view": {
+        "zoom": 0.920807,
+        "x": 130.0000977403517,
+        "y": 360.91417636920653
+      }
+    }
+  ],
+  "nodes": [
+    "trigger",
+    "notes",
+    "draft",
+    "router",
+    "loop",
+    "nested",
+    "alternative",
+    "unconfigured",
+    "orphan",
+    "orphan_child"
+  ],
+  "narrow": true,
+  "reducedMotion": true,
+  "errors": [],
+  "mutations": []
+}

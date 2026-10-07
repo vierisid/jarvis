@@ -1,0 +1,18 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/canvas/canvas.test.tsx:
+(pass) mount boundary requires capability, exact selected identity and matching source [22.95ms]
+(pass) version pin rejects another latest draft before the hook can edit it [15.55ms]
+(pass) real graph edits serialize branch, loop, nested orphan settings and positions [13.03ms]
+(pass) delete and undo restore one subtree and preserve its settings [6.21ms]
+(pass) actual sample input/output paths remain separate from production configured input [4.90ms]
+(pass) a published version creates a draft on save instead of patching a locked version [5.72ms]
+(pass) discard restores authored settings without losing a different scope [11.04ms]
+(pass) preview rejects execution and installation rather than falling through to network [1.03ms]
+(pass) detached chains extend with global IDs and delete only the chosen step [10.40ms]
+(pass) discard restores the saved workflow name, not the edited version object [9.41ms]
+
+ 10 pass
+ 0 fail
+ 47 expect() calls
+Ran 10 tests across 1 file. [566.00ms]
