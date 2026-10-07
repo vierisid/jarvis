@@ -159,10 +159,8 @@ describe('#794: the skeleton and its data', () => {
     expect(confusableSkeleton('Il1|')).toBe('llll');
   });
 
-  test('the generated table holds exactly what can reach an ASCII match', () => {
-    const hasAscii = (t: string) => [...t.normalize('NFKD')].some((ch) => ch.codePointAt(0)! < 0x80);
-    expect(CONFUSABLE_PROTOTYPES.length).toBe(3007);
-    for (const [source, target] of CONFUSABLE_PROTOTYPES) expect(hasAscii(source) || hasAscii(target)).toBe(true);
+  test('the generated table is the whole MA table', () => {
+    expect(CONFUSABLE_PROTOTYPES.length).toBe(6712);
     const map = new Map(CONFUSABLE_PROTOTYPES);
     expect(map.get(c(0x405))).toBe('S');
     expect(map.get(c(0x131))).toBe('i');
@@ -171,7 +169,7 @@ describe('#794: the skeleton and its data', () => {
     expect(map.get(c(0x147a))).toBe(`${c(0xb7)}d`);
   });
 
-  test('the generator keeps ASCII-reaching MA lines and drops the rest', () => {
+  test('the generator keeps every MA line, sorted by source', () => {
     const sample = [
       '0405 ;\t0053 ;\tMA\t# ( S -> S ) CYRILLIC CAPITAL LETTER DZE',
       '006D ;\t0072 006E ;\tMA\t# ( m -> rn )',
@@ -179,7 +177,7 @@ describe('#794: the skeleton and its data', () => {
       '147A ;\t00B7 0064 ;\tMA\t# a mixed prototype',
       '# a comment',
     ].join('\n');
-    expect(buildTable(sample)).toEqual([['m', 'rn'], [c(0x405), 'S'], [c(0x147a), `${c(0xb7)}d`]]);
+    expect(buildTable(sample)).toEqual([['m', 'rn'], [c(0x405), 'S'], [c(0x5ad), c(0x596)], [c(0x147a), `${c(0xb7)}d`]]);
   });
 });
 
@@ -201,6 +199,10 @@ describe('#794 review: the skeleton reading covers what the first cut missed', (
     ['a prototype with edge punctuation (U+01AC -> apostrophe + T)', `${c(0x1ac)}weet`, 'Slack', 'send_message'],
     ['a prototype with inner punctuation (U+0187 -> C + apostrophe)', `${c(0x187)}heckout`, 'Shop', 'make_payment'],
     ['a prototype with a combining mark (U+0257 -> d + mark)', `Sen${c(0x257)}`, 'Slack', 'send_message'],
+    // Two the subset table missed (#794 re-review): a letter whose prototype
+    // is punctuation at a word edge, and a mark-like prototype inside a word.
+    ['a trailing letter whose prototype is punctuation (U+02D1)', `Send${c(0x2d1)}`, 'Slack', 'send_message'],
+    ['an inner character whose prototype is a combining mark (U+10EF5)', `Se${String.fromCodePoint(0x10ef5)}nd`, 'Slack', 'send_message'],
   ])('%s', (_label, name, context, expected) => {
     expect(uiEffectHints('click', name, context)).toContain(expected as never);
   });

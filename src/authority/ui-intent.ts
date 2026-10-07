@@ -83,14 +83,24 @@ function allReadings(text: string): Reading[] {
     if (!out.has(key)) out.set(key, { text: t, patterns });
   };
   for (const t of plain) add(t, PATTERNS, 'plain');
+  // Each distinct case form is skeletonized and folded once (#794 review: on
+  // a long text the cost is building readings, not matching them).
+  const lowerForms = new Set<string>();
+  const upperForms = new Set<string>();
   for (const t of plain) {
-    for (const s of [confusableSkeleton(t), confusableSkeleton(t.toLowerCase())]) {
-      add(s, SKELETON_PATTERNS, 'lower');
-      add(foldedSkeleton(s), SKELETON_PATTERNS, 'lower');
-    }
-    const upper = confusableSkeleton(t.toUpperCase());
-    add(upper, SKELETON_UPPER_PATTERNS, 'upper');
-    add(foldedSkeleton(upper), SKELETON_UPPER_PATTERNS, 'upper');
+    lowerForms.add(t);
+    lowerForms.add(t.toLowerCase());
+    upperForms.add(t.toUpperCase());
+  }
+  for (const form of lowerForms) {
+    const s = confusableSkeleton(form);
+    add(s, SKELETON_PATTERNS, 'lower');
+    add(foldedSkeleton(s), SKELETON_PATTERNS, 'lower');
+  }
+  for (const form of upperForms) {
+    const s = confusableSkeleton(form);
+    add(s, SKELETON_UPPER_PATTERNS, 'upper');
+    add(foldedSkeleton(s), SKELETON_UPPER_PATTERNS, 'upper');
   }
   return [...out.values()];
 }
@@ -201,9 +211,7 @@ const PROTOTYPE = new Map<string, string>(CONFUSABLE_PROTOTYPES);
 
 /**
  * The UTS #39 skeleton: NFD, each code point replaced by its prototype, NFD
- * again. Only the mappings that can reach an ASCII match are carried
- * (`scripts/gen-confusables.ts` says why that loses no match), so a code point
- * outside them is kept as it is.
+ * again, over the full MA table (`confusables-data.ts`).
  */
 export function confusableSkeleton(text: string): string {
   let out = '';
