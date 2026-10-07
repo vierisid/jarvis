@@ -1,3 +1,4 @@
+import { workflowRemovalState, workflowTriggerCurrent } from '../../db/repos/workflow-removal-state';
 /**
  * `TriggerManager` -- runtime owner of trigger subscriptions for the new
  * workflow system.
@@ -73,6 +74,7 @@ export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
 type SubscriptionKind = "cron" | "webhook" | "event" | "engine";
 type ActiveSub = {
+  generation: number;
   flowId: string;
   versionId: string;
   kind: SubscriptionKind;
@@ -183,7 +185,7 @@ export class TriggerManager {
   /** Exact-version registration receipt; refresh resolving alone is not proof of a subscription. */
   registrationState(flowId: string, versionId: string): 'registered' | 'pending' | 'blocked' | 'changed' {
     const flow = getFlow(flowId), version = getFlowVersion(versionId);
-    if (!flow || flow.status !== 'ENABLED' || flow.published_version_id !== versionId || !version || version.flowId !== flowId) return 'changed';
+    if (!flow || workflowRemovalState(flowId).receipt_id || flow.status !== 'ENABLED' || flow.published_version_id !== versionId || !version || version.flowId !== flowId) return 'changed';
     if (ungrantedCodeSteps(flow, version.trigger)) return 'blocked';
     try { assertVersionReady(flowId, versionId); } catch { return 'blocked'; }
     if (version.trigger.type === 'EMPTY') return 'registered'; // Manual-only: no subscription or run is needed.
@@ -238,7 +240,7 @@ export class TriggerManager {
       const existing = this.subs.get(flowId);
 
       // Flow gone or disabled -> tear down whatever's active.
-      if (!flow || flow.status !== "ENABLED") {
+      if (!flow || flow.status !== "ENABLED" || workflowRemovalState(flowId).receipt_id) {
         await this.unregister(flowId);
         return;
       }
@@ -249,7 +251,7 @@ export class TriggerManager {
       // Already registered against the right version -> no-op. This is what
       // makes concurrent refreshes idempotent: the first one through the lock
       // does the work; subsequent calls observe the active sub and skip.
-      if (existing && existing.versionId === desiredVersionId) {
+      if (existing && existing.versionId === desiredVersionId && existing.generation === workflowRemovalState(flowId).generation) {
         // Repair an incomplete local subscription from the cached engine state.
         // Keep working webhook delivery and avoid ON_DISABLE / ON_ENABLE replay.
         if (existing.kind === 'engine' && existing.warning) await this.register(flow);
@@ -293,6 +295,7 @@ export class TriggerManager {
   // ---------------------------------------------------------------- private
 
   private async register(flow: FlowRow): Promise<void> {
+    if (flow.status !== "ENABLED" || workflowRemovalState(flow.id).receipt_id) return;
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) return;
     const version = getFlowVersion(versionId);
@@ -381,11 +384,13 @@ export class TriggerManager {
       this.log(`flow ${flowId}: schedule trigger missing cron expression; skipping`);
       return;
     }
+    const generation = workflowRemovalState(flowId).generation;
     try {
       this.cron.schedule(`flow:${flowId}`, expression, () => {
-        void this.fire(flowId, { cronExpression: expression, firedAt: Date.now() }, "cron");
+        void this.fire(flowId, { cronExpression: expression, firedAt: Date.now() }, "cron", generation);
       });
       this.subs.set(flowId, {
+        generation: workflowRemovalState(flowId).generation,
         flowId,
         versionId,
         kind: "cron",
@@ -401,6 +406,7 @@ export class TriggerManager {
     const secret = typeof input.secret === "string" && input.secret ? input.secret : undefined;
     this.webhooks.register(flowId, secret);
     this.subs.set(flowId, {
+      generation: workflowRemovalState(flowId).generation,
       flowId,
       versionId,
       kind: "webhook",
@@ -425,12 +431,14 @@ export class TriggerManager {
       input.filter && typeof input.filter === "object" && !Array.isArray(input.filter)
         ? (input.filter as Record<string, unknown>)
         : undefined;
+    const generation = workflowRemovalState(flowId).generation;
     const matches = makeFilter(filter);
     const unsubscribe = this.bus.subscribe(eventType, (payload) => {
       if (!matches(payload)) return;
-      void this.fire(flowId, payload, "event");
+      void this.fire(flowId, payload, "event", generation);
     });
     this.subs.set(flowId, {
+      generation: workflowRemovalState(flowId).generation,
       flowId,
       versionId,
       kind: "event",
@@ -461,6 +469,8 @@ export class TriggerManager {
   ): Promise<void> {
     const engine = this.engineRuntime;
     if (!engine) return;
+    const generation = workflowRemovalState(flow.id).generation;
+    if (!workflowTriggerCurrent(flow.id, version.id, generation)) return;
 
     let schedule: EngineScheduleOptions | null = version.engineSchedule;
     let listeners: AppEventListener[] | null = version.engineListeners;
@@ -472,6 +482,7 @@ export class TriggerManager {
           projectId: flow.project_id,
         });
         try {
+          if (!workflowTriggerCurrent(flow.id, version.id, generation)) return;
           const upstreamVersion = toUpstreamFlowVersion(version);
           const response = (await handle.executeTriggerHook("ON_ENABLE", {
             flowVersion: upstreamVersion,
@@ -489,11 +500,15 @@ export class TriggerManager {
           await handle.release();
         }
       } catch (e) {
-        this.scheduleEnableRetry(flow.id, (e as Error).message);
+        if (workflowTriggerCurrent(flow.id, version.id, generation)) this.scheduleEnableRetry(flow.id, (e as Error).message);
         return;
       }
     }
 
+    if (!workflowTriggerCurrent(flow.id, version.id, generation)) {
+      await this.teardownEngineTrigger(flow.id, version.id, null);
+      return;
+    }
     if (!schedule && (!listeners || listeners.length === 0)) {
       this.log(
         `flow ${flow.id}: engine ON_ENABLE returned neither schedule nor listeners; flow can still be run manually`,
@@ -506,7 +521,7 @@ export class TriggerManager {
     if (schedule?.cronExpression) {
       try {
         this.cron.schedule(`flow:${flow.id}`, schedule.cronExpression, () => {
-          void this.fireEngineTrigger(flow.id, version.id, "cron");
+          void this.fireEngineTrigger(flow.id, version.id, "cron", generation);
         });
         cronTearDown = () => this.cron.cancel(`flow:${flow.id}`);
       } catch (e) {
@@ -534,6 +549,7 @@ export class TriggerManager {
     // ON_ENABLE already owns engine state, even if every local subscription
     // failed. Keep its teardown so pause/stop clears state and runs ON_DISABLE.
     const sub: ActiveSub = {
+      generation,
       ...(noSubscription ? { warning: 'No trigger subscription could be registered; the flow is not firing.' }
         : schedule?.cronExpression && !cronTearDown ? { warning: 'Cron registration failed; only webhook delivery is active.' } : {}),
       flowId: flow.id,
@@ -671,33 +687,37 @@ export class TriggerManager {
   private enqueueFlowRun(opts: {
     flowId: string;
     versionId: string;
+    generation: number;
     kind: SubscriptionKind;
     payload?: Record<string, unknown>;
     executeTrigger?: boolean;
   }): void {
-    if (!this.checkReadiness(opts.flowId, opts.versionId, opts.kind, { payload: opts.payload ?? {}, executeTrigger: opts.executeTrigger ?? false })) return;
-    const run = createFlowRun({
-      flowId: opts.flowId,
-      flowVersionId: opts.versionId,
-      triggeredBy: `trigger:${opts.kind}`,
-      startTime: Date.now(),
-    });
-    enqueue({
-      jobType: RUN_FLOW,
-      payload: {
-        runId: run.id,
-        payload: opts.payload ?? {},
-        ...(opts.executeTrigger ? { executeTrigger: true } : {}),
-      },
-      flowRunId: run.id,
-      flowId: opts.flowId,
-      flowVersionId: opts.versionId,
-      // No auto-retry: trigger-fired runs often have side effects that
-      // would duplicate on retry (e.g. notify, email, downstream API
-      // calls). Surface the failure once; the trigger's next fire is
-      // the natural "retry" cadence.
-      maxAttempts: 1,
-    });
+    getWorkflowDb().transaction(() => {
+      if (!workflowTriggerCurrent(opts.flowId, opts.versionId, opts.generation)) return;
+      if (!this.checkReadiness(opts.flowId, opts.versionId, opts.kind, { payload: opts.payload ?? {}, executeTrigger: opts.executeTrigger ?? false })) return;
+      const run = createFlowRun({
+        flowId: opts.flowId,
+        flowVersionId: opts.versionId,
+        triggeredBy: `trigger:${opts.kind}`,
+        startTime: Date.now(),
+      });
+      enqueue({
+        jobType: RUN_FLOW,
+        payload: {
+          runId: run.id,
+          payload: opts.payload ?? {},
+          ...(opts.executeTrigger ? { executeTrigger: true } : {}),
+        },
+        flowRunId: run.id,
+        flowId: opts.flowId,
+        flowVersionId: opts.versionId,
+        // No auto-retry: trigger-fired runs often have side effects that
+        // would duplicate on retry (e.g. notify, email, downstream API
+        // calls). Surface the failure once; the trigger's next fire is
+        // the natural "retry" cadence.
+        maxAttempts: 1,
+      });
+    }).immediate();
   }
 
   /**
@@ -718,7 +738,8 @@ export class TriggerManager {
    * resolves. The trigger's `run()` advances its own `context.store` cursor, so
    * events aren't re-delivered on the next poll.
    */
-  private async fireEngineTrigger(flowId: string, versionId: string, source: string): Promise<void> {
+  private async fireEngineTrigger(flowId: string, versionId: string, source: string, generation: number): Promise<void> {
+    if (!workflowTriggerCurrent(flowId, versionId, generation)) return;
     const engine = this.engineRuntime;
     if (!engine) return;
     // Skip if a prior poll for this flow is still running (slow poll vs. fast
@@ -739,6 +760,7 @@ export class TriggerManager {
         projectId: getFlow(flowId)?.project_id ?? DEFAULT_IDS.project,
       });
       try {
+        if (!workflowTriggerCurrent(flowId, versionId, generation)) return;
         // RUN hook = "poll the trigger and return its items" without executing
         // the flow. For a POLLING trigger this calls `run()` and hands back
         // whatever it yielded.
@@ -761,6 +783,7 @@ export class TriggerManager {
       this.enqueueFlowRun({
         flowId,
         versionId,
+        generation,
         kind: "engine",
         // Pass the event through verbatim as the trigger payload. Objects are
         // used as-is; a bare value (rare) is wrapped so the payload stays an
@@ -784,9 +807,10 @@ export class TriggerManager {
    * actual flow-run payload(s); legacy subs run the chain directly with the
    * payload as initial state.
    */
-  private fire(flowId: string, payload: Record<string, unknown>, kind: SubscriptionKind): void {
+  private fire(flowId: string, payload: Record<string, unknown>, kind: SubscriptionKind, generation?: number): void {
     const sub = this.subs.get(flowId);
     const versionId = sub?.versionId;
+    if (generation !== undefined && sub?.generation !== generation) return;
     if (!versionId) {
       this.log(`flow ${flowId} (${kind}) fire skipped: no active subscription`);
       return;
@@ -810,6 +834,7 @@ export class TriggerManager {
       this.enqueueFlowRun({
         flowId,
         versionId,
+        generation: sub.generation,
         kind: sub.kind,
         payload,
         ...(sub.kind === "engine" ? { executeTrigger: true } : {}),

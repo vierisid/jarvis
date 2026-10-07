@@ -116,13 +116,13 @@ export function listFlows(
   if (opts.status) {
     return db()
       .query<FlowRow, [string, FlowStatus, number, number]>(
-        `SELECT * FROM flow WHERE project_id = ? AND status = ? ORDER BY updated DESC LIMIT ? OFFSET ?`,
+        `SELECT * FROM flow WHERE project_id = ? AND status = ? AND id NOT IN (SELECT flow_id FROM brief_workflow_slots WHERE receipt_id IS NOT NULL) ORDER BY updated DESC LIMIT ? OFFSET ?`,
       )
       .all(projectId, opts.status, limit, offset);
   }
   return db()
     .query<FlowRow, [string, number, number]>(
-      `SELECT * FROM flow WHERE project_id = ? ORDER BY updated DESC LIMIT ? OFFSET ?`,
+      `SELECT * FROM flow WHERE project_id = ? AND id NOT IN (SELECT flow_id FROM brief_workflow_slots WHERE receipt_id IS NOT NULL) ORDER BY updated DESC LIMIT ? OFFSET ?`,
     )
     .all(projectId, limit, offset);
 }
