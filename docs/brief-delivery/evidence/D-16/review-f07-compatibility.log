@@ -1,0 +1,10 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/create/f07-compatibility.test.ts:
+Database initialized at: /tmp/jarvis-d16-f07-zNaork/fixture.db
+(pass) actual F07 service/routes create one populated disabled draft after a lost POST [571.85ms]
+
+ 1 pass
+ 0 fail
+ 10 expect() calls
+Ran 1 test across 1 file. [604.00ms]
