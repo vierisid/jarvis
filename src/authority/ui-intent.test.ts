@@ -5,7 +5,7 @@
  * and keeps every category any pairing reaches.
  */
 import { describe, expect, test } from 'bun:test';
-import { confusableSkeleton, uiEffectHints, uiEffectHintsWithoutSkeleton } from './ui-intent.ts';
+import { confusableSkeleton, skeletonPattern, uiEffectHints, uiEffectHintsWithoutSkeleton } from './ui-intent.ts';
 import { CONFUSABLE_PROTOTYPES } from './confusables-data.ts';
 import { buildTable } from '../../scripts/gen-confusables.ts';
 
@@ -160,13 +160,15 @@ describe('#794: the skeleton and its data', () => {
   });
 
   test('the generated table holds exactly what can reach an ASCII match', () => {
-    const ascii = (t: string) => [...t].every((ch) => ch.codePointAt(0)! < 0x80);
-    expect(CONFUSABLE_PROTOTYPES.length).toBe(2270);
-    for (const [source, target] of CONFUSABLE_PROTOTYPES) expect(ascii(source) || ascii(target)).toBe(true);
+    const hasAscii = (t: string) => [...t.normalize('NFKD')].some((ch) => ch.codePointAt(0)! < 0x80);
+    expect(CONFUSABLE_PROTOTYPES.length).toBe(3007);
+    for (const [source, target] of CONFUSABLE_PROTOTYPES) expect(hasAscii(source) || hasAscii(target)).toBe(true);
     const map = new Map(CONFUSABLE_PROTOTYPES);
     expect(map.get(c(0x405))).toBe('S');
     expect(map.get(c(0x131))).toBe('i');
     expect(map.get('m')).toBe('rn');
+    // A mixed prototype is kept: its ASCII letter can complete a word (#794 review).
+    expect(map.get(c(0x147a))).toBe(`${c(0xb7)}d`);
   });
 
   test('the generator keeps ASCII-reaching MA lines and drops the rest', () => {
@@ -174,8 +176,63 @@ describe('#794: the skeleton and its data', () => {
       '0405 ;\t0053 ;\tMA\t# ( S -> S ) CYRILLIC CAPITAL LETTER DZE',
       '006D ;\t0072 006E ;\tMA\t# ( m -> rn )',
       '05AD ;\t0596 ;\tMA\t# Hebrew accent to Hebrew accent: no ASCII side',
+      '147A ;\t00B7 0064 ;\tMA\t# a mixed prototype',
       '# a comment',
     ].join('\n');
-    expect(buildTable(sample)).toEqual([['m', 'rn'], [c(0x405), 'S']]);
+    expect(buildTable(sample)).toEqual([['m', 'rn'], [c(0x405), 'S'], [c(0x147a), `${c(0xb7)}d`]]);
+  });
+});
+
+/**
+ * #794 review. The first cut dropped mixed prototypes, missed all-capitals
+ * look-alikes of words with m or i, did not fold a skeleton's edge punctuation
+ * or marks, and paid the full product of readings.
+ */
+describe('#794 review: the skeleton reading covers what the first cut missed', () => {
+  test.each([
+    ['a mixed prototype (U+147A -> middle dot + d)', `${c(0x147a)}elete`, 'Files', 'delete_data'],
+    ['a mixed prototype (U+044A -> macron + b)', `${c(0x44a)}uy`, 'Shop', 'make_payment'],
+    ['a mixed prototype (U+1476 -> middle dot + P)', `${c(0x1476)}ay`, 'Shop', 'make_payment'],
+    ['capitals with a Greek capital Mu', `SUB${c(0x39c)}IT`, 'Gmail', 'send_email'],
+    ['capitals with a Cyrillic capital Em', `SUB${c(0x41c)}IT`, 'Gmail', 'send_email'],
+    ['capitals with a palochka for the I', `SUBM${c(0x4c0)}T`, 'Gmail', 'send_email'],
+    ['capitals with a Greek capital Mu in Remove', `RE${c(0x39c)}OVE`, 'Files', 'delete_data'],
+    ['a prototype with edge punctuation (U+01A4 -> apostrophe + P)', `${c(0x1a4)}ost`, 'Slack', 'send_message'],
+    ['a prototype with edge punctuation (U+01AC -> apostrophe + T)', `${c(0x1ac)}weet`, 'Slack', 'send_message'],
+    ['a prototype with inner punctuation (U+0187 -> C + apostrophe)', `${c(0x187)}heckout`, 'Shop', 'make_payment'],
+    ['a prototype with a combining mark (U+0257 -> d + mark)', `Sen${c(0x257)}`, 'Slack', 'send_message'],
+  ])('%s', (_label, name, context, expected) => {
+    expect(uiEffectHints('click', name, context)).toContain(expected as never);
+  });
+
+  test('an all-capitals look-alike app name is still a mail app, and an all-capitals word is matched case-sensitively', () => {
+    // The plain reading still adds send_message: GMAIL with a Greek Mu is no
+    // mail app as written. The skeleton adds send_email; nothing is removed.
+    expect(uiEffectHints('click', 'Send', `G${c(0x39c)}AIL`)).toContain('send_email');
+    // MALL is not MAIL: the upper-case skeleton of MAIL is MAlL, and it is case-sensitive.
+    expect(uiEffectHints('click', 'Send', 'MALL')).toEqual(['send_message']);
+  });
+
+  test('a large name, title and value together are classified within the bound', () => {
+    // 70k characters whose readings all differ (a soft hyphen in every word).
+    // Measured: 57 ms (click) and 40 ms (press_keys) with the first cut's full
+    // product of readings, 26 and 13 ms now; a click on Send and an Enter
+    // under such a title, which must read it, 40 and 20 ms (3 and 2 ms before
+    // #794). At 350k characters the worst measured was 109 ms: linear.
+    const big = (ch: string) => `${ch}${'Se\u00adnd '.repeat(10_000)}${'-'.repeat(10_000)}`;
+    const t0 = performance.now();
+    uiEffectHints('click', big('A'), big('B'), big('C'));
+    uiEffectHints('press_keys', big('D'), big('E'), big('F'));
+    uiEffectHints('click', 'Send', big('G'));
+    uiEffectHints('press_keys', 'x', big('H'), 'enter');
+    expect(performance.now() - t0).toBeLessThan(250);
+  });
+
+  test('a pattern the skeleton rewrite cannot handle is refused at load, not silently rewritten', () => {
+    expect(() => skeletonPattern(/[m]ail/i, false)).toThrow('cannot handle');
+    expect(() => skeletonPattern(/\p{L}/u, false)).toThrow('cannot handle');
+    expect(() => skeletonPattern(/Mail/, false)).toThrow('upper-case');
+    expect(skeletonPattern(/\bmail\b/i, false).source).toBe('\\brnail\\b');
+    expect(skeletonPattern(/\bmail\b/i, true).source).toBe('\\bMAlL\\b');
   });
 });

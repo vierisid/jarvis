@@ -9,15 +9,21 @@
  * The input is pinned by version and SHA-256, so a regeneration is either the
  * same bytes or a deliberate bump of both constants below.
  *
- * WHAT IS KEPT. `uiEffectHints` matches folded labels against ASCII patterns,
- * so the only mappings that can change a match are those whose prototype is
- * ASCII, plus every mapping FROM an ASCII character (`m` -> `rn`, `I` -> `l`,
- * `0` -> `O`, ...), which the skeleton applies to the patterns and the labels
- * alike. A mapping to a non-ASCII prototype leaves a non-ASCII character in the
- * skeleton either way, which no ASCII pattern can match, so dropping it changes
- * no result. Only the `MA` (mixed-script, any-case) table exists in current
- * releases; every entry is kept as-is, with no iteration (the data is already
- * closed under mapping).
+ * WHAT IS KEPT. `uiEffectHints` matches skeletons against ASCII patterns
+ * (literal ASCII letters, `\b`, `\s`, anchors, groups), so a mapping can change
+ * a match only if its prototype contains an ASCII character, before or after
+ * NFKD (the classifier folds a skeleton), or its source does after NFKD --
+ * including a
+ * mixed one such as U+147A -> `\u00b7d`, whose `d` can complete a word -- or if
+ * it maps FROM an ASCII character (`m` -> `rn`, `I` -> `l`), which the skeleton
+ * applies to the patterns and the labels alike. Every other mapping turns
+ * non-ASCII text into non-ASCII text: no ASCII literal matches either side,
+ * both are non-word characters to `\b`, and the build checks that neither side
+ * is whitespace (`\s` is the one pattern element that matches non-ASCII). So
+ * dropping those mappings changes no result. (The first cut kept only all-ASCII
+ * prototypes and lost the mixed ones: #794 review.) Only the `MA`
+ * (mixed-script, any-case) table exists in current releases; every entry is
+ * kept as-is, with no iteration (the data is already closed under mapping).
  */
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -28,7 +34,7 @@ const URL = `https://www.unicode.org/Public/${VERSION}/security/confusables.txt`
 const SHA256 = '6ed3ee967c9dfdf6677d563c9985182fbc50a2efb7d6059cd57b2e2ce18f5b92';
 const OUT = join(import.meta.dir, '..', 'src', 'authority', 'confusables-data.ts');
 
-const isAscii = (s: string) => [...s].every((ch) => ch.codePointAt(0)! < 0x80);
+const hasAscii = (s: string) => [...s].some((ch) => ch.codePointAt(0)! < 0x80);
 
 /** A JS string literal of `s` using only printable ASCII: everything else as \u escapes. */
 function asciiLiteral(s: string): string {
@@ -48,7 +54,16 @@ export function buildTable(text: string): Array<[string, string]> {
     if (!m) continue;
     const source = String.fromCodePoint(parseInt(m[1]!, 16));
     const target = m[2]!.trim().split(' ').map((h) => String.fromCodePoint(parseInt(h, 16))).join('');
-    if (isAscii(source) || isAscii(target)) entries.push([source, target]);
+    // NFKD too, on both sides: the classifier folds a skeleton (NFKD, marks
+    // dropped), so a mapping is kept when either side decomposes to anything
+    // ASCII (U+FE72 -> space + mark, U+309C -> space + mark).
+    if (hasAscii(source.normalize('NFKD')) || hasAscii(target.normalize('NFKD'))) {
+      entries.push([source, target]);
+    } else if (/\s/u.test(source.normalize('NFKD')) || /\s/u.test(target.normalize('NFKD'))) {
+      // The argument above for dropping a mapping assumes neither side is
+      // whitespace; a release that breaks that must be looked at, not dropped.
+      throw new Error(`confusables.txt: ${m[1]} maps whitespace without ASCII; the kept-subset argument no longer holds`);
+    }
   }
   return entries.sort(([a], [b]) => a.codePointAt(0)! - b.codePointAt(0)!);
 }
@@ -65,7 +80,7 @@ async function main(): Promise<void> {
  *
  * The UTS #39 confusable mappings (Unicode ${VERSION}, confusables.txt sha256
  * ${SHA256}) that can affect an ASCII match: every mapping
- * from an ASCII character, and every mapping to an all-ASCII prototype.
+ * from an ASCII character, and every mapping to a prototype that contains one.
  * ${entries.length} entries. Unicode data, (c) Unicode, Inc., used under the Unicode
  * License v3 (https://www.unicode.org/license.txt).
  */
