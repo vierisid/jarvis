@@ -164,6 +164,7 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
             stepName: action.name,
             executionPath: executionState.currentPath.path,
             input: processedInput,
+            recordedInput: stepOutput.input,
         })
         if (governance.governed && governance.dispatch === 'approval_required') {
             // Same pause the jarvis-tool piece uses: park on the approval

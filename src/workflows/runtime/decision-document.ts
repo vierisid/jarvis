@@ -70,6 +70,11 @@ export function projectDocument(piece: unknown, action: unknown, input: Record<s
 export function applyDocument(piece: unknown, action: unknown, raw: unknown, value: unknown): Record<string, unknown> {
   const input = documentInput(piece, action, raw), doc = validateDecisionDocument(value);
   if (!input || projectDocument(piece, action, input).kind !== doc.kind) throw Error('Document adapter does not match this action');
-  return doc.kind === 'email' ? { ...input, receiver: doc.to, cc: doc.cc, bcc: doc.bcc, subject: doc.subject, body: doc.body }
-    : { ...input, title: doc.title, description: doc.description, start_date_time: doc.start, end_date_time: doc.end, attendees: doc.attendees, location: doc.location };
+  return { ...input, ...documentFields(doc) };
+}
+/** Only editable fields, suitable for overlaying an already-censored run input. */
+export function documentFields(value: unknown): Record<string, unknown> {
+  const doc = validateDecisionDocument(value);
+  return doc.kind === 'email' ? { receiver: doc.to, cc: doc.cc, bcc: doc.bcc, subject: doc.subject, body: doc.body }
+    : { title: doc.title, description: doc.description, start_date_time: doc.start, end_date_time: doc.end, attendees: doc.attendees, location: doc.location };
 }

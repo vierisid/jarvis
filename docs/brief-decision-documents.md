@@ -21,7 +21,11 @@ Email subject/calendar title/location are limited to 512 characters, body/descri
 
 The protocol carries the complete supported input, without auth, instead of the existing 512-character preview. The daemon validates it again. On resume it matches the original invocation digest, checks Authority/cancellation/target, claims the current document generation and returns the approved typed document. The engine validates and applies only those fields to the processed input before constructing the compatible action context. A pre-protocol engine cannot match an edited document's invocation digest. The piece's own retry semantics are unchanged: an authorized step retry receives the same approved document and may repeat its outbound call. F-14 does not promise exactly-once external delivery.
 
-Existing approvals created without this protocol are not upgraded into editable documents. Enabled enrollment applies to new supported workflow approval requests, before notification delivery yields.
+Existing approvals created without this protocol are not upgraded into editable documents. When a new engine resumes an old approval, the daemon reconstructs the F13 projection (bounded once by the engine and again by the daemon) and retains that protocol only if it matches the persisted invocation digest and has no document revision. This preserves pending approvals and recorded retries across an upgrade with either flag setting. Changed targets remain refused. New full-document records, including read-only flag-off records, cannot fall back to a truncated legacy digest. Enabled enrollment applies to new supported workflow approval requests, before notification delivery yields.
+
+Calendar read-only options show effective provider defaults: omitted guest-invite and guest-visibility permissions are true, while guest modification and Meet creation are false. Explicit false values remain false. The original request is preserved; review does not silently change permissions. These defaults follow [Google Calendar events.insert](https://developers.google.com/workspace/calendar/api/v3/reference/events/insert).
+
+The engine overlays approved editable fields into both execution input and its already-censored run input. Stored progress and compressed execution-state backups therefore show the actual approved recipients, content and dates. Credential redaction and unrelated options remain intact.
 
 ## API and recovery
 
@@ -64,10 +68,14 @@ From this worktree in WSL:
 
 ```sh
 cd /home/vierisid/.cache/codex/jarvis-f-14
-bun test src/brief/decision-documents.test.ts src/daemon/api-brief-decision-documents.test.ts
+bun test src/brief/decision-documents.test.ts src/daemon/api-brief-decision-documents.test.ts src/workflows/runtime/decision-document-engine.test.ts
 ```
 
-Expect 25 passing tests and one Q-05 skip on the independent F stack. Tests use temporary databases, a real workflow Authority boundary, the engine authorization helper and an authenticated Unix-socket API. Outbound provider calls are represented by the processed input handed to a piece; no email or calendar event is sent. Coverage includes recipients/body/dates, old IDs/revisions, two competing processes, deferral/expiry/restart, rejected workflow resumption, lost responses, bounds, secrets, work/queue identity and notification failures. The Q-05 case skips on the independent F stack and was also run with its real optional source.
+Expect 37 passing tests and one Q-05 skip on the independent F stack. Tests use temporary databases, a real workflow Authority boundary, the engine authorization helper and an authenticated Unix-socket API. Two real-engine cases load synthetic Gmail/Calendar actions, pause for review, resume after edits, and compare executed parameters with persisted run input and the compressed backup. The provider actions only return their input and use synthetic credentials; no email or calendar event is sent. Coverage includes recipients/body/dates, old IDs/revisions, two competing processes, deferral/expiry/restart, rejected workflow resumption, lost responses, bounds, secrets, work/queue identity and notification failures. The Q-05 case skips on the independent F stack and was also run with its real optional source. Review regressions additionally cover short/long legacy email and Calendar approvals across restart with edits enabled/disabled, rejection of protocol downgrades and changed targets, and omitted/false/true Calendar permissions. Run just the 12 review cases with:
+
+```sh
+bun test src/brief/decision-documents.test.ts src/workflows/runtime/decision-document-engine.test.ts --test-name-pattern "F14 review"
+```
 
 The affected command, fresh test/type-check output, engine build, unsafe-mutation evidence and delivery receipt live in `docs/brief-delivery/`. The real engine bundle build checks vendor resolution and cache invalidation; it does not contact Gmail or Calendar.
 

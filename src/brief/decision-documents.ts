@@ -65,7 +65,9 @@ export class DecisionDocuments {
       reason: editable ? null : 'This document is no longer open for edits. Inspect its current decision and run state.',
       options: document?.kind === 'calendar' && input ? { calendarId: String(input.calendar_id), notifications: String(input.send_notifications),
         createMeetLink: input.create_meet_link === true, guestsCanModify: input.guests_can_modify === true,
-        guestsCanInviteOthers: input.guests_can_invite_others === true, guestsCanSeeOtherGuests: input.guests_can_see_other_guests === true } : null };
+        // The piece omits unspecified guest permissions; Google's defaults for
+        // inviting others and seeing attendees are true (modify defaults false).
+        guestsCanInviteOthers: input.guests_can_invite_others !== false, guestsCanSeeOtherGuests: input.guests_can_see_other_guests !== false } : null };
   }
   get(id: string): DocumentView { this.available(); return this.db.transaction(() => this.project(id))(); }
   receipt(id: string, requestId: string): DocumentReceipt | null {

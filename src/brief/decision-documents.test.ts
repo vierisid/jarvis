@@ -17,6 +17,9 @@ import { CredentialResolver } from '../workflows/credentials/adapter';
 import { WorkflowEventBuffer } from '../workflows/runtime/event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from '../workflows/runtime/service-backends';
 import { authorizePieceDispatch } from '../workflows/runtime/piece-effect-guard';
+import { sanitizePieceInput } from '../workflows/runtime/piece-effects';
+import { defangPieceProjection } from '../workflows/runtime/piece-effect-receipt';
+import { digest } from '../workflows/runtime/effect-context';
 import { documentInput, validateDecisionDocument } from '../workflows/runtime/decision-document';
 import { resumeResolvedWorkflowEffects } from '../workflows/runtime/effect-approval-scheduler';
 import { DecisionQueue } from './decisions';
@@ -317,4 +320,64 @@ test('lost edit responses recover through an approval alias after that revision 
   expect(queue.get(alias).decisionId).toBe(id);
   expect(documents.get(alias).document).toMatchObject({ body: 'Second edit' });
   expect(manager.approve(first.approvalId, 'legacy')).toBeNull();
+});
+
+
+for (const enabled of [false, true]) {
+  for (const [label, piece, action, input] of [
+    ['short email', GMAIL, 'send_email', email],
+    ['long email', GMAIL, 'send_email', { ...email, body: 'Original long body '.repeat(200) }],
+    ['calendar', CAL, 'create_google_calendar_event', event],
+  ] as const) test(`F14 review R1: pre-protocol ${label} resumes after upgrade (edits=${enabled})`, async () => {
+    const f = setup(piece, action, input, { decisionDocumentsEnabled: enabled });
+    // The F13 engine bounded once, then its daemon bounded/defanged again.
+    const oldRequest = { piece, action, input: sanitizePieceInput(input) };
+    const first = await f.backend.pieceAuthorize!(oldRequest, f.context);
+    if (!first.governed || first.dispatch !== 'approval_required') throw Error('Expected legacy approval');
+    const before = listWorkflowEffects(f.run.id)[0]!;
+    expect(before.requestDigest).toBe(digest({ ...oldRequest, input: defangPieceProjection(sanitizePieceInput(oldRequest.input)) }));
+    const id = `approval:${first.approval.approvalId}`;
+    expect(documents.get(id).editable).toBe(false);
+    updateRun(f.run.id, { status: 'PAUSED' });
+    closeDb(); initWorkflowDb(file); wire();
+    manager.approve(first.approval.approvalId, 'after-upgrade');
+    expect(resumeResolvedWorkflowEffects()).toBe(1);
+    updateRun(f.run.id, { status: 'RUNNING' });
+    // A different target must not be grandfathered into the historical approval.
+    const changed = piece === GMAIL ? { ...input, receiver: ['changed@example.test'] } : { ...input, attendees: ['changed@example.test'] };
+    await expect(f.backend.pieceAuthorize!({ ...f.request, input: changed }, f.context)).rejects.toThrow(/changed/);
+    const result = await f.engine();
+    expect(result.reply).toEqual({ governed: true, dispatch: 'authorized' });
+    expect(result.processed).toMatchObject(input);
+    expect(listWorkflowEffects(f.run.id)[0]!.requestDigest).toBe(before.requestDigest);
+    expect(documents.get(id).editable).toBe(false);
+    expect((await f.engine()).processed).toMatchObject(input);
+  });
+}
+
+test('F14 review R1: a new read-only protocol record cannot downgrade to a legacy preview', async () => {
+  const f = setup(GMAIL, 'send_email', { ...email, body: 'Original long body '.repeat(200) }, { decisionDocumentsEnabled: false });
+  const view = await f.pending(); manager.approve(view.decision.approval!.approvalId, 'test');
+  await expect(f.backend.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: sanitizePieceInput(f.request.input) }, f.context)).rejects.toThrow(/changed/);
+  const changed = { ...f.request.input, body: String(f.request.input.body).slice(0, -1) + 'X' };
+  await expect(f.backend.pieceAuthorize!({ ...f.request, input: changed }, f.context)).rejects.toThrow(/changed/);
+  expect((await f.engine()).processed.body).toBe(f.request.input.body);
+});
+
+for (const permissions of [undefined, false, true]) test(`F14 review R2: Calendar review uses effective guest permissions (${permissions})`, async () => {
+  const input = { ...event, ...(permissions === undefined ? {} : {
+    guests_can_invite_others: permissions, guests_can_see_other_guests: permissions,
+  }) };
+  const f = setup(CAL, 'create_google_calendar_event', input), view = await f.pending(), id = view.decision.decisionId;
+  const expected = { guestsCanInviteOthers: permissions ?? true, guestsCanSeeOtherGuests: permissions ?? true,
+    guestsCanModify: false, createMeetLink: false };
+  expect(view.options).toMatchObject(expected);
+  f.command(id, 'save', { ...view.document!, title: 'Revised event' });
+  expect(documents.get(id).options).toMatchObject(expected);
+  f.command(id, 'approve');
+  const { processed } = await f.engine();
+  // Preserve the request: omitted fields keep Google's defaults; explicit false stays false.
+  expect(processed.guests_can_invite_others).toBe(permissions);
+  expect(processed.guests_can_see_other_guests).toBe(permissions);
+  expect(processed.title).toBe('Revised event');
 });

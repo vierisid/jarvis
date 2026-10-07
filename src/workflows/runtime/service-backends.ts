@@ -617,9 +617,21 @@ export function buildSandboxServiceBackends(
     // `piece-effects.ts` stays free of the import the engine bundle would have
     // to start tracking. See `piece-effect-receipt.ts` for the whole argument,
     // including which in-flight approvals a changed projection invalidates.
-    const document = req.documentProtocol === 1 ? documentInput(req.piece, req.action, req.input) : null;
+    let document = req.documentProtocol === 1 ? documentInput(req.piece, req.action, req.input) : null;
     if (req.documentProtocol === 1 && !document) throw new Error('Unsupported document protocol input');
-    const input = document ?? defangPieceProjection(sanitizePieceInput(req.input));
+    let input = document ?? defangPieceProjection(sanitizePieceInput(req.input));
+    if (document) {
+      const context = resolveEffectContext(ctx, req.piece, req.action);
+      const previous = getWorkflowEffect(workflowEffectId(context.run.id, context.stepName, context.executionPath, 'piece'));
+      // F13 engines bounded once before transport, and the daemon bounded again.
+      // Keep only an exact historical invocation on that read-only protocol. New
+      // protocol records (including flag-off ones) can never match this digest.
+      const legacyInput = defangPieceProjection(sanitizePieceInput(sanitizePieceInput(req.input)));
+      if (previous && previous.documentRevision === undefined && previous.requestDigest === digest({ piece: req.piece, action: req.action, input: legacyInput })) {
+        document = null;
+        input = legacyInput;
+      }
+    }
     const tool = governedPieceToolDefinition(resolved);
     const capability = (() => {
       try { return toolEffectCapability(tool); }

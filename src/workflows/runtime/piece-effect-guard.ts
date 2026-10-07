@@ -18,7 +18,7 @@
  */
 
 import { isGovernedPiece, sanitizePieceInput } from './piece-effects';
-import { documentInput, applyDocument, type DecisionDocument } from './decision-document';
+import { documentInput, applyDocument, documentFields, type DecisionDocument } from './decision-document';
 
 export const PIECE_AUTHORIZE_PATH = '/v1/jarvis/pieces/authorize';
 
@@ -51,6 +51,8 @@ export interface AuthorizePieceDispatchParams {
   stepName: string;
   executionPath: Array<[string, number]>;
   input: unknown;
+  /** Already-censored run history. Only approved editable fields may replace it. */
+  recordedInput?: Record<string, unknown>;
   /** Injectable for tests; defaults to the ambient fetch. */
   fetchImpl?: typeof fetch;
 }
@@ -103,6 +105,7 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
       // typed editable fields; preserve auth and every original read-only option.
       const approved = applyDocument(body.piece, body.action, editable, reply.document);
       Object.assign(params.input as Record<string, unknown>, approved);
+      if (params.recordedInput) Object.assign(params.recordedInput, documentFields(reply.document));
     }
     return reply;
   }

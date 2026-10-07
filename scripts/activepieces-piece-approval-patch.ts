@@ -19,6 +19,7 @@ const gate = `        // Jarvis: a verified piece's action passes the daemon's A
             stepName: action.name,
             executionPath: executionState.currentPath.path,
             input: processedInput,
+            recordedInput: stepOutput.input,
         })
         if (governance.governed && governance.dispatch === 'approval_required') {
             // Same pause the jarvis-tool piece uses: park on the approval

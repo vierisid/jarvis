@@ -1,0 +1,49 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-QBVwhk/db.sqlite
+Database initialized at: /tmp/jarvis-f14-QBVwhk/db.sqlite
+(pass) F14 review R1: pre-protocol short email resumes after upgrade (edits=false) [671.46ms]
+Database initialized at: /tmp/jarvis-f14-6qbyCE/db.sqlite
+Database initialized at: /tmp/jarvis-f14-6qbyCE/db.sqlite
+(pass) F14 review R1: pre-protocol long email resumes after upgrade (edits=false) [840.62ms]
+Database initialized at: /tmp/jarvis-f14-JMtnSi/db.sqlite
+Database initialized at: /tmp/jarvis-f14-JMtnSi/db.sqlite
+(pass) F14 review R1: pre-protocol calendar resumes after upgrade (edits=false) [877.83ms]
+Database initialized at: /tmp/jarvis-f14-C5W0tc/db.sqlite
+Database initialized at: /tmp/jarvis-f14-C5W0tc/db.sqlite
+(pass) F14 review R1: pre-protocol short email resumes after upgrade (edits=true) [936.85ms]
+Database initialized at: /tmp/jarvis-f14-fx48NH/db.sqlite
+Database initialized at: /tmp/jarvis-f14-fx48NH/db.sqlite
+(pass) F14 review R1: pre-protocol long email resumes after upgrade (edits=true) [852.13ms]
+Database initialized at: /tmp/jarvis-f14-VG3Cfq/db.sqlite
+Database initialized at: /tmp/jarvis-f14-VG3Cfq/db.sqlite
+(pass) F14 review R1: pre-protocol calendar resumes after upgrade (edits=true) [649.20ms]
+Database initialized at: /tmp/jarvis-f14-cplDO8/db.sqlite
+(pass) F14 review R1: a new read-only protocol record cannot downgrade to a legacy preview [1052.90ms]
+Database initialized at: /tmp/jarvis-f14-FB64L7/db.sqlite
+(pass) F14 review R2: Calendar review uses effective guest permissions (undefined) [705.16ms]
+Database initialized at: /tmp/jarvis-f14-MSe4dX/db.sqlite
+(pass) F14 review R2: Calendar review uses effective guest permissions (false) [618.88ms]
+Database initialized at: /tmp/jarvis-f14-sEMHM5/db.sqlite
+(pass) F14 review R2: Calendar review uses effective guest permissions (true) [817.19ms]
+
+src/workflows/runtime/decision-document-engine.test.ts:
+Database initialized at: /tmp/jarvis-f14-engine-WdyBHR/db.sqlite
+[engine e94b734a stderr] (node:1056124) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 27044730 stderr] (node:1056156) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) F14 review R3: real email engine records the approved input without credentials [5101.33ms]
+Database initialized at: /tmp/jarvis-f14-engine-CNtz6Y/db.sqlite
+[engine b105989c stderr] (node:1056188) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine b6ffa967 stderr] (node:1056222) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) F14 review R3: real calendar engine records the approved input without credentials [4649.22ms]
+
+ 12 pass
+ 22 filtered out
+ 0 fail
+ 106 expect() calls
+Ran 12 tests across 2 files. [17.96s]

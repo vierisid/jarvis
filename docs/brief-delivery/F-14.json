@@ -140,5 +140,60 @@
   ],
   "rollback": "Unset decision-edits flag on the new runtime and restart; retain schema, revisions, receipts and expired approvals. Do not downgrade the protocol with edited/deferred work pending.",
   "guide": "docs/brief-decision-documents.md",
-  "next_task": "F-15 not started"
+  "next_task": "F-15 not started",
+  "review_corrections": {
+    "date": "2026-10-07",
+    "reviewed_head": "4d8bb072e9b9608971af395dc17b2dda6bff6ece",
+    "fixes": [
+      {
+        "id": "R1",
+        "change": "Resume pre-F14 approvals and recorded retries with their exact historical request digest, across restart with either flag setting. Legacy effects remain read-only; changed targets and protocol downgrades remain refused."
+      },
+      {
+        "id": "R2",
+        "change": "Display effective Calendar guest-invite and guest-visibility defaults as true when omitted, preserve explicit false, and leave outgoing permissions unchanged."
+      },
+      {
+        "id": "R3",
+        "change": "Overlay approved editable fields into the censored persisted run input and compressed execution-state backup as well as action input. Preserve auth redaction and fixed options."
+      }
+    ],
+    "verification": {
+      "regressions": {
+        "passed": 12,
+        "failed": 0,
+        "assertions": 106,
+        "failed_without_fixes": 9,
+        "passed_without_fixes": 3,
+        "command": "bun test src/brief/decision-documents.test.ts src/workflows/runtime/decision-document-engine.test.ts --test-name-pattern \"F14 review\"",
+        "red_log": "docs/brief-delivery/evidence/F-14/review-red.log",
+        "log": "docs/brief-delivery/evidence/F-14/review-regressions.log",
+        "method": "Remove the three fixes temporarily, run the unchanged regression suite, restore source bytes in finally, verify restoration, and rerun. Synthetic provider actions only."
+      },
+      "focused": {
+        "passed": 47,
+        "skipped": 1,
+        "failed": 0,
+        "assertions": 347,
+        "files": 5,
+        "log": "docs/brief-delivery/evidence/F-14/review-focused.log"
+      },
+      "affected": {
+        "passed": 746,
+        "skipped": 6,
+        "failed": 0,
+        "assertions": 15828,
+        "files": 40,
+        "command_file": "docs/brief-delivery/evidence/F-14/review-affected-command.txt",
+        "log": "docs/brief-delivery/evidence/F-14/review-affected.log"
+      },
+      "typescript": {
+        "status": "passed",
+        "command": "bun x tsc --noEmit",
+        "log": "docs/brief-delivery/evidence/F-14/review-typescript.log"
+      },
+      "normal_commit_hooks": "Required before push; exact published head and hook results recorded in PR description.",
+      "limitations": "Six affected-suite skips require optional Q-track modules. Synthetic Gmail/Calendar pieces exercise the real engine and persisted backup without live provider calls. No UI activation or screenshot."
+    }
+  }
 }

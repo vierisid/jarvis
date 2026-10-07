@@ -1,0 +1,123 @@
+bun test v1.4.2 (744846f84)
+
+src/daemon/api-brief-decision-documents.test.ts:
+Database initialized at: :memory:
+(pass) optional provider identity, readiness and both capability flags gate every read and write [69.71ms]
+Database initialized at: :memory:
+(pass) save, recover lost response, reject stale controls and reload the same decision [79.50ms]
+Database initialized at: :memory:
+(pass) malformed, unknown, oversized and generic tool argument payloads cannot write [61.89ms]
+Database initialized at: :memory:
+[WebSocketServer] Started on unix:/tmp/jarvis-f14-http-yAeGIc/api.sock (no TCP port bound)
+[WebSocketServer] Stopped
+(pass) authenticated HTTP protects document reads/writes and returns a truthful keep-draft receipt [81.60ms]
+
+src/brief/decision-documents.test.ts:
+Database initialized at: /tmp/jarvis-f14-DMhBm8/db.sqlite
+(pass) email edit saves a new pending revision, retires every old approval control and dispatches edited parameters only [1149.59ms]
+Database initialized at: /tmp/jarvis-f14-BeKkd1/db.sqlite
+(pass) date and attendee edits are frozen, calendar and notification options stay read-only [1116.49ms]
+Database initialized at: /tmp/jarvis-f14-PVe3jB/db.sqlite
+Database initialized at: /tmp/jarvis-f14-PVe3jB/db.sqlite
+(pass) deferral retires permission, survives expiry and restart, stays queued and requires fresh review [1062.17ms]
+Database initialized at: /tmp/jarvis-f14-t5tnJD/db.sqlite
+(pass) an expired review can be edited and approved after reload without silently resuming [1005.56ms]
+Database initialized at: /tmp/jarvis-f14-aljb7P/db.sqlite
+(pass) rejecting review never grants permission and resumes only to a blocked receipt [823.00ms]
+Database initialized at: /tmp/jarvis-f14-6eJRzF/db.sqlite
+(pass) rejecting deferred never grants permission and resumes only to a blocked receipt [736.42ms]
+Database initialized at: /tmp/jarvis-f14-LL2i3b/db.sqlite
+(pass) rejecting expired never grants permission and resumes only to a blocked receipt [1136.47ms]
+Database initialized at: /tmp/jarvis-f14-ATS0On/db.sqlite
+Database initialized at: /tmp/jarvis-f14-ATS0On/db.sqlite
+(pass) lost responses replay exact durable receipts; conflicting reuse and stale edits fail [991.38ms]
+Database initialized at: /tmp/jarvis-f14-XW0iee/db.sqlite
+(pass) legacy approval wins against a subsequent save without changing its reviewed arguments [927.77ms]
+Database initialized at: /tmp/jarvis-f14-m4xhXs/db.sqlite
+(pass) legacy approval wins against a subsequent keep_draft without changing its reviewed arguments [1124.07ms]
+Database initialized at: /tmp/jarvis-f14-JSfkNc/db.sqlite
+(pass) an edit during notification delivery replaces the in-memory approval snapshot without overwriting it [938.05ms]
+Database initialized at: /tmp/jarvis-f14-9Ry92R/db.sqlite
+(pass) old engines, changed workflow input and changed policy cannot dispatch an edited document [830.15ms]
+Database initialized at: /tmp/jarvis-f14-ELHD58/db.sqlite
+(pass) unsupported and pre-protocol actions stay read-only; enabling enrollment is explicit [775.26ms]
+Database initialized at: /tmp/jarvis-f14-AOCMPB/db.sqlite
+(pass) strict edits reject injection, malformed recipients, unknown fields, reversed dates and oversized documents [758.81ms]
+Database initialized at: /tmp/jarvis-f14-h5CXrQ/db.sqlite
+(pass) document views and receipts never expose credentials, raw approval context or waitpoint secrets [749.21ms]
+Database initialized at: /tmp/jarvis-f14-cKhgFW/db.sqlite
+(pass) F-13 links a revised document to the existing work and queue position [726.01ms]
+Database initialized at: /tmp/jarvis-f14-AZPhSD/db.sqlite
+(pass) editing terminal or resumed runs is refused, even when an approval is still pending [778.00ms]
+Database initialized at: /tmp/jarvis-f14-GSvT36/db.sqlite
+(pass) notification failures cannot erase committed document receipts [791.90ms]
+Database initialized at: /tmp/jarvis-f14-MruRKn/db.sqlite
+(pass) a bound effect cannot silently downgrade without its owner binding adapter [975.00ms]
+(skip) actual Q-05 binds edited recipients and retains deleted original facts for unchanged recipients
+Database initialized at: /tmp/jarvis-f14-gIGPUr/db.sqlite
+(pass) two independent processes cannot save and approve the same document revision [1702.60ms]
+Database initialized at: /tmp/jarvis-f14-odOjum/db.sqlite
+(pass) lost edit responses recover through an approval alias after that revision is superseded [907.13ms]
+Database initialized at: /tmp/jarvis-f14-repM5J/db.sqlite
+Database initialized at: /tmp/jarvis-f14-repM5J/db.sqlite
+(pass) F14 review R1: pre-protocol short email resumes after upgrade (edits=false) [909.15ms]
+Database initialized at: /tmp/jarvis-f14-emk4MI/db.sqlite
+Database initialized at: /tmp/jarvis-f14-emk4MI/db.sqlite
+(pass) F14 review R1: pre-protocol long email resumes after upgrade (edits=false) [868.40ms]
+Database initialized at: /tmp/jarvis-f14-bl0HPv/db.sqlite
+Database initialized at: /tmp/jarvis-f14-bl0HPv/db.sqlite
+(pass) F14 review R1: pre-protocol calendar resumes after upgrade (edits=false) [736.94ms]
+Database initialized at: /tmp/jarvis-f14-2USnMb/db.sqlite
+Database initialized at: /tmp/jarvis-f14-2USnMb/db.sqlite
+(pass) F14 review R1: pre-protocol short email resumes after upgrade (edits=true) [951.15ms]
+Database initialized at: /tmp/jarvis-f14-Bio33v/db.sqlite
+Database initialized at: /tmp/jarvis-f14-Bio33v/db.sqlite
+(pass) F14 review R1: pre-protocol long email resumes after upgrade (edits=true) [941.04ms]
+Database initialized at: /tmp/jarvis-f14-ET8q7s/db.sqlite
+Database initialized at: /tmp/jarvis-f14-ET8q7s/db.sqlite
+(pass) F14 review R1: pre-protocol calendar resumes after upgrade (edits=true) [917.39ms]
+Database initialized at: /tmp/jarvis-f14-xnsQHl/db.sqlite
+(pass) F14 review R1: a new read-only protocol record cannot downgrade to a legacy preview [658.75ms]
+Database initialized at: /tmp/jarvis-f14-aPmd40/db.sqlite
+(pass) F14 review R2: Calendar review uses effective guest permissions (undefined) [683.81ms]
+Database initialized at: /tmp/jarvis-f14-RO5Kyz/db.sqlite
+(pass) F14 review R2: Calendar review uses effective guest permissions (false) [758.24ms]
+Database initialized at: /tmp/jarvis-f14-lFzZno/db.sqlite
+(pass) F14 review R2: Calendar review uses effective guest permissions (true) [805.31ms]
+
+src/workflows/runtime/decision-document-engine.test.ts:
+Database initialized at: /tmp/jarvis-f14-engine-jPsQN0/db.sqlite
+[engine 0f3d87c4 stderr] (node:1053155) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine c824c9ea stderr] (node:1053211) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) F14 review R3: real email engine records the approved input without credentials [6116.53ms]
+Database initialized at: /tmp/jarvis-f14-engine-JDhHdx/db.sqlite
+[engine cebd39e8 stderr] (node:1053254) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+[engine 360e5d9b stderr] (node:1053300) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+(Use `bun --trace-warnings ...` to show where the warning was created)
+(pass) F14 review R3: real calendar engine records the approved input without credentials [8929.59ms]
+
+src/workflows/runtime/piece-executor-gate.drift.test.ts:
+(pass) engine piece-executor admission gate > imports the guard from the daemon runtime, by a path that exists [0.15ms]
+(pass) engine piece-executor admission gate > authorizes before the piece action runs, never after [0.23ms]
+(pass) engine piece-executor admission gate > an approval-required verdict parks the step instead of running it [0.09ms]
+(pass) engine piece-executor admission gate > every patched source feeding the gate invalidates the engine bundle [0.31ms]
+(pass) the sync patch preserves the document gate and rejects partial upstream drift [0.51ms]
+
+src/workflows/runtime/engine-bundle-purity.test.ts:
+(pass) #634: the engine bundle's daemon sources stay type-only > piece-effects.ts has no value imports [62.93ms]
+(pass) #634: the engine bundle's daemon sources stay type-only > piece-effect-guard.ts has no value imports [13.42ms]
+(pass) #634: the engine bundle's daemon sources stay type-only > decision-document.ts has no value imports [9.03ms]
+(pass) #634: the engine bundle's daemon sources stay type-only > the guard reports every shape of value import [12.28ms]
+(pass) #634: the engine bundle's daemon sources stay type-only > piece-effect-receipt.ts is not named by either bundled source [0.61ms]
+
+1 tests skipped:
+(skip) actual Q-05 binds edited recipients and retains deleted original facts for unchanged recipients
+
+ 47 pass
+ 1 skip
+ 0 fail
+ 347 expect() calls
+Ran 48 tests across 5 files. [44.41s]
