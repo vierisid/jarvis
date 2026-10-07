@@ -83,14 +83,16 @@
       "method": "Temporary overlay of actual fact-bindings.ts, removed in finally. New recipient pins, retained deleted dependency and stale recipient rejection. Not a full F/Q stack merge."
     },
     "regressions": {
-      "failed_before_fix": 5,
+      "failed_before_fix": 6,
       "logs": [
         "docs/brief-delivery/evidence/F-14/claim-regression-red.log",
-        "docs/brief-delivery/evidence/F-14/blocked-status-red.log"
+        "docs/brief-delivery/evidence/F-14/blocked-status-red.log",
+        "docs/brief-delivery/evidence/F-14/alias-recovery-red.log"
       ],
       "fixes": [
         "Treat a positive single-ID claim count as success when queue triggers add changed rows.",
-        "Project a blocked effect ahead of the earlier permission grant."
+        "Project a blocked effect ahead of the earlier permission grant.",
+        "Resolve historical approval aliases to the stable decision so exact lost-response retries recover the original receipt."
       ]
     },
     "mutations": {
@@ -110,7 +112,24 @@
       "note": "Normal commit hook reruns TypeScript after the final edits."
     },
     "guards": "Normal EE, migration, template, package, related tests and TypeScript hooks required before push; exact results in PR description.",
-    "live_provider": "Not run. Tests use temporary databases, a Unix socket and the real engine guard with isolated dispatch input; no email/calendar effect or production activation."
+    "live_provider": "Not run. Tests use temporary databases, a Unix socket and the real engine guard with isolated dispatch input; no email/calendar effect or production activation.",
+    "final_queue_documents": {
+      "passed": 65,
+      "skipped": 1,
+      "failed": 0,
+      "assertions": 564,
+      "files": 4,
+      "log": "docs/brief-delivery/evidence/F-14/final-queue-documents.log",
+      "command": "bun test src/brief/decision-documents.test.ts src/brief/decisions.test.ts src/brief/recommendations.test.ts src/daemon/api-brief-decision-documents.test.ts"
+    },
+    "initial_hooks": {
+      "passed": 110,
+      "skipped": 2,
+      "failed": 0,
+      "assertions": 806,
+      "files": 8,
+      "guards": "EE, migrations, templates, package and TypeScript all pass. Final alias correction reruns normal hooks; exact result in PR."
+    }
   },
   "limitations": [
     "Gmail HTML, attachments, reply threads, custom senders and provider-side draft mutation are read-only. Calendar requires explicit end and timezone; calendar/notification/guest options stay fixed.",

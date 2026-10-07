@@ -92,8 +92,9 @@ export class DecisionQueue implements NonNullable<BriefReadProviders['decisions'
     let [kind, sourceId] = this.parseId(id);
     let document: DocumentReviewRow | null = null;
     if (kind === 'approval') {
-      document = this.db.query<DocumentReviewRow, [string, string]>(
-        'SELECT * FROM brief_decision_document WHERE decision_id=? OR approval_id=?').get(id, sourceId);
+      document = this.db.query<DocumentReviewRow, [string, string, string]>(
+        `SELECT * FROM brief_decision_document WHERE decision_id=? OR approval_id=?
+          OR decision_id=(SELECT decision_id FROM brief_decision_document_revision WHERE approval_id=?)`).get(id, sourceId, sourceId);
       if (document) { id = document.decision_id; sourceId = document.approval_id; }
     }
     // Effect detail and run detail resolve to the same approval identity as the

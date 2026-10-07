@@ -303,3 +303,18 @@ test('two independent processes cannot save and approve the same document revisi
     expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('pending');
   } finally { for (const child of workers) { child.kill(); await child.exited; } }
 }, 30_000);
+
+
+test('lost edit responses recover through an approval alias after that revision is superseded', async () => {
+  const f = setup(), initial = await f.pending(), id = initial.decision.decisionId;
+  const first = f.command(id, 'save', { ...initial.document!, body: 'First edit' });
+  const alias = `approval:${first.approvalId}`, view = documents.get(alias);
+  expect(view.decision.decisionId).toBe(id);
+  const command: DocumentCommand = { requestId: 'alias-lost', revision: view.decision.revision, action: 'save', document: { ...view.document!, body: 'Second edit' } as any };
+  const saved = documents.act(alias, command);
+  expect(documents.act(alias, command)).toEqual(saved);
+  expect(documents.receipt(alias, command.requestId)).toEqual(saved);
+  expect(queue.get(alias).decisionId).toBe(id);
+  expect(documents.get(alias).document).toMatchObject({ body: 'Second edit' });
+  expect(manager.approve(first.approvalId, 'legacy')).toBeNull();
+});
