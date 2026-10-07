@@ -1,0 +1,47 @@
+const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright');
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const url=process.env.BRIEF_PREVIEW_URL||'http://127.0.0.1:4396/?brief=preview&specimen=workflow-create#/_brief_preview';
+const button=(p,name)=>p.getByRole('button',{name,exact:true}),wait=p=>p.waitForTimeout(400),field=p=>p.getByRole('textbox',{name:'Workflow prompt',exact:true});
+const rect=async el=>{const r=await el.boundingBox();return {x:r.x,y:r.y,width:r.width,height:r.height,bottom:r.y+r.height};};
+const shot=(p,name)=>p.screenshot({path:path.join(__dirname,`${name}.png`)});
+(async()=>{const browser=await chromium.launch({channel:'chrome',headless:true});const errors=[],mutations=[],results=[];
+try{
+ for(const theme of ['light','dark'])for(const rail of [false,true])for(const chat of [false,true]){
+  const context=await browser.newContext({viewport:{width:1440,height:1150}}),p=await context.newPage();p.on('pageerror',e=>errors.push(e.message));p.on('request',r=>{if(r.method()!=='GET')mutations.push(r.url());});
+  await p.goto(url);await field(p).waitFor();if(await p.locator('.brief-today-specimen').getAttribute('data-brief-theme')!==theme)await button(p,`Switch to ${theme}`).click();
+  if(rail)await button(p,'Collapse sidebar').click();if(chat)await button(p,'Open conversation').click();await wait(p);
+  const surface=p.locator('.brief-workflow-create-group .brief-composer-surface'),send=p.locator('.brief-workflow-create-group [aria-label="Send"]');
+  const before=await rect(surface),heading=await rect(p.getByRole('heading',{name:'Create your workflow',exact:true}));assert.equal(before.height,56);assert.ok(Math.abs(heading.x+heading.width/2-(before.x+before.width/2))<1);
+  await button(p,'Follow up after meetings').click();assert.match(await field(p).inputValue(),/^After each meeting/);assert.equal(await p.getByLabel('Composition submissions').textContent(),'0');
+  await field(p).fill('After every meeting, prepare the agreed follow-up with one clear owner and date. Never send without my approval. '.repeat(12));await wait(p);
+  const after=await rect(surface);assert.equal(after.height,104);assert.ok(Math.abs(after.bottom-before.bottom)<1);assert.ok(await field(p).evaluate(e=>e.scrollHeight>e.clientHeight));
+  const fixed=await rect(send);for(let i=0;i<10;i++){await send.hover();await p.waitForTimeout(25);await p.mouse.move(250,160);await p.waitForTimeout(25);}await wait(p);assert.deepEqual(await rect(send),fixed);assert.equal(await send.getAttribute('data-intent'),'false');
+  assert.ok(await p.locator('.brief-workspace-content').evaluate(e=>e.scrollWidth<=e.clientWidth+1));assert.match(await p.locator('[data-run-id="competitor-004"]').innerText(),/Run failed/);assert.doesNotMatch(await p.locator('[data-run-id="competitor-004"]').innerText(),/Completed|Never show/);
+  if(!rail)await shot(p,`${theme}-${chat?'chat':'wide'}-long`);
+  // One target owns the entire recent row; return restores text, identity and scroll.
+  await p.getByLabel('Long rows',{exact:true}).check();const row=p.locator('[data-run-id="long-run-9"]');await row.scrollIntoViewIfNeeded();await p.waitForTimeout(120);const scroll=p.locator('.brief-workspace-content'),top=await scroll.evaluate(e=>e.scrollTop);assert.ok(top>400);const prompt=await field(p).inputValue();
+  await row.click();await p.getByRole('heading',{name:'Selected workflow',exact:true}).waitFor();assert.match(await p.getByLabel('Exact destination IDs').innerText(),/long-run-9/);
+  await button(p,'Back to workflow creation').click();await wait(p);assert.ok(Math.abs(await scroll.evaluate(e=>e.scrollTop)-top)<2);assert.equal(await p.locator('[data-run-id="long-run-9"]').getAttribute('data-selected'),'true');assert.equal(await field(p).inputValue(),prompt);
+  // See all/Back preserves the scroll position at the moment of navigation.
+  await button(p,'See all workflows').scrollIntoViewIfNeeded();const atAll=await scroll.evaluate(e=>e.scrollTop);await button(p,'See all workflows').click();await button(p,'Back to workflow creation').click();await wait(p);assert.ok(Math.abs(await scroll.evaluate(e=>e.scrollTop)-atAll)<2);
+  await p.getByLabel('Long rows',{exact:true}).uncheck();await scroll.evaluate(e=>e.scrollTop=0);await wait(p);
+  // Rapid send is a single composition; the exact receipt opens, not a blank draft.
+  await field(p).fill('Prepare a private report.');await send.evaluate(el=>{el.click();el.click();el.click();});await p.getByRole('heading',{name:'Prepared draft',exact:true}).waitFor();assert.equal(await p.getByLabel('Composition submissions').textContent(),'1');assert.match(await p.getByLabel('Exact destination IDs').innerText(),/prepared-flow-fixture-job-1/);assert.match(await p.getByLabel('Exact destination IDs').innerText(),/prepared-version-fixture-job-1/);
+  await button(p,'Back to workflow creation').click();await wait(p);assert.equal(await field(p).inputValue(),'');await p.waitForTimeout(1100);assert.ok(await field(p).isVisible());
+  results.push({theme,rail,chat,promptHeight:after.height,stableBottom:true,hoverCycles:10,scrollReturn:true,allReturn:true,singleComposition:true,exactDraft:true});await context.close();
+ }
+ const p=await browser.newPage({viewport:{width:1440,height:1150}});p.on('pageerror',e=>errors.push(e.message));await p.goto(url);
+ for(const scenario of ['blocked','failed','lost-response']){
+  await button(p,'Reset example').click();await p.getByLabel('Composition scenario').selectOption(scenario);await field(p).fill(`Keep this ${scenario} prompt`);await p.locator('.brief-workflow-create-group [aria-label="Send"]').click();
+  if(scenario==='lost-response'){await button(p,'Check request').waitFor();assert.equal(await field(p).inputValue(),`Keep this ${scenario} prompt`);await button(p,'Check request').click();await p.getByRole('heading',{name:'Prepared draft',exact:true}).waitFor();assert.equal(await p.getByLabel('Composition submissions').textContent(),'1');await button(p,'Back to workflow creation').click();}
+  else {await p.getByText(scenario==='blocked'?'Choose the destination for this report.':'Preparation timed out. Your prompt is kept.',{exact:true}).waitFor();assert.equal(await field(p).inputValue(),`Keep this ${scenario} prompt`);await shot(p,scenario);await p.getByLabel('Composition scenario').selectOption('ready');await p.locator('.brief-workflow-create-group [aria-label="Send"]').click();await p.getByRole('heading',{name:'Prepared draft',exact:true}).waitFor();assert.equal(await p.getByLabel('Composition submissions').textContent(),'2');await button(p,'Back to workflow creation').click();}
+ }
+ await button(p,'Reset example').click();await p.getByLabel('Composition scenario').selectOption('unavailable');await field(p).fill('Retain while offline');assert.equal(await p.locator('.brief-workflow-create-group [aria-label="Send"]').getAttribute('aria-disabled'),'true');assert.equal(await p.getByLabel('Composition submissions').textContent(),'0');
+ for(const state of ['loading','empty','stale','unavailable']){await p.getByLabel('Recent runs scenario').selectOption(state);assert.ok(await p.locator('.brief-recent-workflows').isVisible());}
+ await p.getByLabel('Recent runs scenario').selectOption('ready');await p.getByLabel('Composition scenario').selectOption('ready');await field(p).fill('😀'.repeat(4097));assert.match(await p.locator('.brief-workflow-create-group').innerText(),/too long/);assert.equal(await p.locator('.brief-workflow-create-group [aria-label="Send"]').getAttribute('aria-disabled'),'true');
+ await field(p).fill('Private workflow prompt');await button(p,'Open conversation').click();await p.getByRole('textbox',{name:'Message Jarvis',exact:true}).fill('Different chat draft');await wait(p);assert.equal(await field(p).inputValue(),'Private workflow prompt');
+ for(let i=0;i<10;i++){await button(p,'Close conversation').click();await p.waitForTimeout(35);await button(p,'Open conversation').click();await p.waitForTimeout(35);}await wait(p);assert.equal(await field(p).inputValue(),'Private workflow prompt');assert.equal(await p.getByRole('textbox',{name:'Message Jarvis',exact:true}).inputValue(),'Different chat draft');await button(p,'Close conversation').click();
+ await p.setViewportSize({width:390,height:844});await p.emulateMedia({reducedMotion:'reduce'});await wait(p);assert.ok(await p.locator('.brief-workspace-content').evaluate(e=>e.scrollWidth<=e.clientWidth+1));assert.ok(await field(p).isVisible());await shot(p,'narrow-light');
+ await button(p,'Switch to dark').click();await button(p,'Open conversation').click();await wait(p);assert.ok(await p.getByRole('textbox',{name:'Message Jarvis',exact:true}).isVisible());await button(p,'Close conversation').click();await wait(p);assert.equal(await field(p).inputValue(),'Private workflow prompt');await shot(p,'narrow-dark');await p.close();
+ assert.deepEqual(errors,[]);assert.deepEqual(mutations,[]);fs.writeFileSync(path.join(__dirname,'browser-results.json'),JSON.stringify({results,failureRetry:true,lostPostRecovery:true,sourceIsolation:true,narrow:true,reducedMotion:true,panelReversals:10,errors,mutations},null,2)+'\n');console.log('PASS eight shell/theme/chat layouts, 80 send hover cycles, stable composer bottom, long rows, selection and scroll return, one-send exact draft, failed/blocked retry, lost POST recovery, 10 panel reversals, separate chat draft and 390px reduced-motion layouts.');
+}finally{await browser.close();}})().catch(e=>{console.error(e);process.exit(1);});

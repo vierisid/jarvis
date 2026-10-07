@@ -1,0 +1,113 @@
+{
+  "task": "D-16",
+  "title": "Build workflow creation and recent work",
+  "date": "2026-10-07",
+  "track": "dashboard",
+  "status": "implemented",
+  "merged": false,
+  "release_enabled": false,
+  "branch": "brief/d-16",
+  "stack_base": "brief/d-15",
+  "baseline": "76fcba48d11cf03507106279e8e05686e171bec9",
+  "inspected_main": "538179e3a91edfaa435698cac94bc4ca41e6c873",
+  "head": {
+    "ref": "brief/d-16",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/D-16.json"
+  },
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-16",
+  "preview": "http://127.0.0.1:4396/?brief=preview&specimen=workflow-create#/_brief_preview",
+  "dependency_prs": [
+    "https://github.com/vierisid/jarvis/pull/773"
+  ],
+  "activation_dependencies": [
+    "F-07",
+    "Authenticated scope-retained host binding / F-25",
+    "Destination room integration D-18 / D-21",
+    "D-33 release verification"
+  ],
+  "owns": [
+    "ui/src/brief/workflows/create/**",
+    "ui/src/brief/workflows/recent-rows/**",
+    "Optional shared composer sending/suggestion labels",
+    "One preview registration",
+    "docs/brief-delivery/D-16.*",
+    "docs/brief-delivery/evidence/D-16/**"
+  ],
+  "figma": {
+    "reference": "ui/src/brief/workflows/create/figma-reference.json",
+    "inspection": "Saved native UI-21 source and Light/Dark exports under approved UI-35 checkpoint; no fresh editor"
+  },
+  "checks": [
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief ui/src/v2/onboarding/useOnboardingStatus.test.tsx ui/src/v2/onboarding/WorkflowActivation.test.tsx ui/src/v2/onboarding/OnboardingWizard.steps.test.ts",
+      "tests": 305,
+      "assertions": 4035,
+      "files": 22,
+      "skipped": 1,
+      "skip_reason": "External F-07 checkout test requires opt-in and was run separately",
+      "result": "pass",
+      "evidence": "evidence/D-16/affected-tests.log"
+    },
+    {
+      "command": "bun test --timeout 15000 --preload ./src/test-preload.ts ui/src/brief/workflows",
+      "tests": 33,
+      "assertions": 106,
+      "skipped": 1,
+      "result": "pass",
+      "evidence": "evidence/D-16/focused-tests.log"
+    },
+    {
+      "command": "bun x tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-16/typescript.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-16/build.log",
+      "warnings": "Existing Tailwind at-rule warnings"
+    },
+    {
+      "command": "JARVIS_F07_ROOT=/home/vierisid/.cache/codex/jarvis-f-07 bun test --preload ./src/test-preload.ts ui/src/brief/workflows/create/f07-compatibility.test.ts",
+      "tests": 1,
+      "assertions": 10,
+      "result": "pass",
+      "owner_head": "b53fb22d53ed1337e4dacafa597e6776fe04c060",
+      "evidence": "evidence/D-16/f07-compatibility.log",
+      "scope": "Real F-07 service/routes/SQLite with fake model response; one populated disabled draft after dropped POST; exact result IDs; one model call and zero runs"
+    },
+    {
+      "command": "Unsafe FAILED-as-completed source mutation",
+      "result": "rejected; source restored and focused tests passed",
+      "evidence": "evidence/D-16/mutation.log"
+    }
+  ],
+  "browser": {
+    "script": "evidence/D-16/browser-check.cjs",
+    "evidence": "evidence/D-16/browser-results.json",
+    "layouts": 8,
+    "send_hover_cycles": 80,
+    "panel_reversals": 10,
+    "assertions": [
+      "56-to-104px composer grows upward with stable bottom",
+      "Suggestions only prefill; long UTF-8 prompt limit",
+      "Recent selection and scroll restored through workflow and list returns",
+      "One composition opens exact returned flow/version",
+      "Blocked and failed drafts retained; explicit retry",
+      "Lost POST recovered with one submission",
+      "Separate retained chat and workflow text",
+      "390px containment and reduced motion",
+      "Zero browser errors or external mutation requests"
+    ]
+  },
+  "limitations": [
+    "Disabled production registry remains unchanged; optional registration requires scoped host wiring",
+    "No real provider/model, paid evaluation or hosted authentication exercise",
+    "No F-08 picker, canvas, full management room or run-detail implementation in this card",
+    "Current recent-read fallback is explicit, max 200 flows / four workers, no implicit polling; incomplete reads disclosed",
+    "Native Figma exports inspected; browser runtime is tested independently"
+  ],
+  "rollback": "Remove injected creation registration/binding and return to legacy route. Retire scope owner; preserve original prompts, uncertain request keys and server drafts. Do not replay under new keys or delete records.",
+  "ci": "Not run before publication; exact pushed-head status recorded in PR after push",
+  "next": "D-17; not started"
+}

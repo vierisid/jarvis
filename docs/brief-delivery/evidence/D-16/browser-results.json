@@ -1,0 +1,108 @@
+{
+  "results": [
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": false,
+      "promptHeight": 104,
+      "stableBottom": true,
+      "hoverCycles": 10,
+      "scrollReturn": true,
+      "allReturn": true,
+      "singleComposition": true,
+      "exactDraft": true
+    },
+    {
+      "theme": "light",
+      "rail": false,
+      "chat": true,
+      "promptHeight": 104,
+      "stableBottom": true,
+      "hoverCycles": 10,
+      "scrollReturn": true,
+      "allReturn": true,
+      "singleComposition": true,
+      "exactDraft": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": false,
+      "promptHeight": 104,
+      "stableBottom": true,
+      "hoverCycles": 10,
+      "scrollReturn": true,
+      "allReturn": true,
+      "singleComposition": true,
+      "exactDraft": true
+    },
+    {
+      "theme": "light",
+      "rail": true,
+      "chat": true,
+      "promptHeight": 104,
+      "stableBottom": true,
+      "hoverCycles": 10,
+      "scrollReturn": true,
+      "allReturn": true,
+      "singleComposition": true,
+      "exactDraft": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": false,
+      "promptHeight": 104,
+      "stableBottom": true,
+      "hoverCycles": 10,
+      "scrollReturn": true,
+      "allReturn": true,
+      "singleComposition": true,
+      "exactDraft": true
+    },
+    {
+      "theme": "dark",
+      "rail": false,
+      "chat": true,
+      "promptHeight": 104,
+      "stableBottom": true,
+      "hoverCycles": 10,
+      "scrollReturn": true,
+      "allReturn": true,
+      "singleComposition": true,
+      "exactDraft": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": false,
+      "promptHeight": 104,
+      "stableBottom": true,
+      "hoverCycles": 10,
+      "scrollReturn": true,
+      "allReturn": true,
+      "singleComposition": true,
+      "exactDraft": true
+    },
+    {
+      "theme": "dark",
+      "rail": true,
+      "chat": true,
+      "promptHeight": 104,
+      "stableBottom": true,
+      "hoverCycles": 10,
+      "scrollReturn": true,
+      "allReturn": true,
+      "singleComposition": true,
+      "exactDraft": true
+    }
+  ],
+  "failureRetry": true,
+  "lostPostRecovery": true,
+  "sourceIsolation": true,
+  "narrow": true,
+  "reducedMotion": true,
+  "panelReversals": 10,
+  "errors": [],
+  "mutations": []
+}
