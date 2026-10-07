@@ -15,6 +15,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   buildEngineBundle,
+  buildStagingPackageJson,
   bundleHash,
   findCachedBundle,
   ENGINE_BUILD_PATHS,
@@ -23,6 +24,8 @@ import {
   PATCHED_VENDOR_SOURCES,
 } from "./build";
 import { ENGINE_LIFECYCLE_SHIM, ENGINE_OWNER_PID_ENV } from "./engine-lifecycle";
+import { BundleIntegrityError, __resetBundlePinsForTest } from "./bundle-integrity";
+import { spawnEngine } from "./spawn";
 
 describe("engine bundle build", () => {
   describe("Request base-URL shim (banner)", () => {
@@ -481,6 +484,157 @@ describe("engine bundle build", () => {
         expect(sharedRuntime).toContain('"main.js.sha256"');
         expect(sharedRuntime).toMatch(/createHash\("sha256"\)/u);
       });
+    });
+  });
+
+  /**
+   * #761. `buildEngineBundle` had no seam -- BUNDLE_ROOT and STAGING_DIR were
+   * module constants -- so none of its own branches could be asserted without
+   * building into the developer's real cache. With `bundleRoot` and a staging
+   * dir seeded with a stand-in esbuild, each branch is held on behaviour: the
+   * stand-in records every build, so "built" and "adopted" are told apart by
+   * whether it ran, not by guessing from file contents.
+   */
+  describe("buildEngineBundle's own branches (#761)", () => {
+    const made: string[] = [];
+    afterEach(() => {
+      __resetBundlePinsForTest();
+      for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true });
+    });
+    const tmp = (tag: string): string => {
+      const d = resolve(tmpdir(), `jarvis-761-${tag}-${process.pid}-${Date.now()}-${made.length}`);
+      mkdirSync(d, { recursive: true });
+      made.push(d);
+      return d;
+    };
+
+    const BUILT = "// built by the stand-in esbuild\n";
+
+    /**
+     * A staging dir `ensureStagingInstalled` accepts as already installed --
+     * its package.json is exactly the one it would write, and node_modules
+     * exists -- so no `bun install` runs. Its esbuild writes BUILT to the
+     * outfile and logs the call.
+     */
+    const seededStaging = (): { stagingDir: string; builds: () => number } => {
+      const stagingDir = tmp("staging");
+      const log = resolve(stagingDir, "builds.log");
+      writeFileSync(log, "");
+      writeFileSync(resolve(stagingDir, "package.json"), buildStagingPackageJson());
+      const lib = resolve(stagingDir, "node_modules", "esbuild", "lib");
+      mkdirSync(lib, { recursive: true });
+      writeFileSync(resolve(lib, "main.js"),
+        `const fs = require("fs");\n` +
+        `exports.build = async (o) => {\n` +
+        `  fs.appendFileSync(${JSON.stringify(log)}, o.outfile + "\\n");\n` +
+        `  fs.writeFileSync(o.outfile, ${JSON.stringify(BUILT)});\n` +
+        `  return { metafile: { inputs: {}, outputs: { [o.outfile]: { imports: [] } } } };\n` +
+        `};\n`);
+      return { stagingDir, builds: () => readFileSync(log, "utf8").split("\n").filter(Boolean).length };
+    };
+
+    /** A shared root whose bundle is REFUSED: main.js with no manifest. */
+    const refusedSharedRoot = (): string => {
+      const root = tmp("shared-refused");
+      mkdirSync(resolve(root, bundleHash()), { recursive: true });
+      writeFileSync(resolve(root, bundleHash(), "main.js"), "// published without its manifest\n");
+      return root;
+    };
+
+    const quietly = async <T,>(body: () => Promise<T>): Promise<{ value: T; warnings: string[] }> => {
+      const warnings: string[] = [];
+      const original = console.warn;
+      console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+      try {
+        return { value: await body(), warnings };
+      } finally {
+        console.warn = original;
+      }
+    };
+
+    /** `/bin/true` as the runtime: a spawn that is real but runs nothing from the bundle. */
+    const spawnOpts = (bundlePath: string) => ({
+      bundlePath,
+      sandboxId: "761-probe",
+      sandboxWsPort: 1,
+      baseCodeDir: tmp("code"),
+      runtime: "/bin/true",
+    });
+
+    test("a bundle the daemon builds itself is pinned: bytes changed afterwards are refused at spawn", async () => {
+      // The path #761 is about: the shared bundle is refused, so the daemon
+      // builds its own into the tenant-writable cache -- and then used to
+      // spawn whatever that file held for the rest of its life.
+      const { stagingDir, builds } = seededStaging();
+      const bundleRoot = tmp("user");
+      const { value: built } = await quietly(() =>
+        buildEngineBundle({ sharedRoot: refusedSharedRoot(), bundleRoot, stagingDir }));
+      expect(builds()).toBe(1);
+      expect(built.bundlePath).toBe(resolve(bundleRoot, bundleHash(), "main.js"));
+
+      writeFileSync(built.bundlePath, "// swapped after the build\n");
+      let thrown: unknown;
+      try {
+        spawnEngine(spawnOpts(built.bundlePath));
+      } catch (err) {
+        thrown = err;
+      }
+      expect(thrown).toBeInstanceOf(BundleIntegrityError);
+      expect((thrown as BundleIntegrityError).reason).toBe("changed_since_verification");
+    });
+
+    test("an unchanged self-built bundle spawns", async () => {
+      const { stagingDir } = seededStaging();
+      const built = await buildEngineBundle({ sharedRoot: null, bundleRoot: tmp("user"), stagingDir });
+      const engine = spawnEngine(spawnOpts(built.bundlePath));
+      engine.stdout?.resume();
+      engine.stderr?.resume();
+      expect((await engine.exited).code).toBe(0);
+    });
+
+    test("a refused shared bundle is answered by a BUILD, never by adopting the per-user copy (#624)", async () => {
+      // The per-user cache already holds a main.js for this hash -- planted,
+      // as `bundleHash()` makes its path predictable. Adopting it would answer
+      // a failed integrity check with a bundle nobody verified.
+      const { stagingDir, builds } = seededStaging();
+      const bundleRoot = tmp("user");
+      mkdirSync(resolve(bundleRoot, bundleHash()), { recursive: true });
+      writeFileSync(resolve(bundleRoot, bundleHash(), "main.js"), "// planted in the per-user cache\n");
+      const { value: built, warnings } = await quietly(() =>
+        buildEngineBundle({ sharedRoot: refusedSharedRoot(), bundleRoot, stagingDir }));
+      expect(builds()).toBe(1);
+      expect(readFileSync(built.bundlePath, "utf8")).toBe(BUILT);
+      expect(warnings.some((w) => w.includes("reason=manifest_absent"))).toBe(true);
+    });
+
+    test("an ordinary per-user bundle is ADOPTED with no manifest beside it, and nothing is built", async () => {
+      // The over-broad-fix hazard #673 was filed about, on the builder's side:
+      // the per-user cache has no manifest by design (same uid, built locally,
+      // and this function writes none). A manifest requirement added to the
+      // adoption branch would turn every warm start into a rebuild -- or, on a
+      // host whose staging install cannot run, into no engine at all.
+      const { stagingDir, builds } = seededStaging();
+      const bundleRoot = tmp("user");
+      const bundleDir = resolve(bundleRoot, bundleHash());
+      mkdirSync(bundleDir, { recursive: true });
+      writeFileSync(resolve(bundleDir, "main.js"), "// built locally, earlier\n");
+      writeFileSync(resolve(bundleDir, "main.js.meta.json"), "{}");
+      const { value: built, warnings } = await quietly(() =>
+        buildEngineBundle({ sharedRoot: null, bundleRoot, stagingDir }));
+      expect(built).toEqual({ bundlePath: resolve(bundleDir, "main.js"), hash: bundleHash(), bundleDir });
+      expect(builds()).toBe(0);
+      expect(readFileSync(built.bundlePath, "utf8")).toBe("// built locally, earlier\n");
+      expect(warnings).toEqual([]);
+    });
+
+    test("force rebuilds over an existing per-user bundle", async () => {
+      const { stagingDir, builds } = seededStaging();
+      const bundleRoot = tmp("user");
+      mkdirSync(resolve(bundleRoot, bundleHash()), { recursive: true });
+      writeFileSync(resolve(bundleRoot, bundleHash(), "main.js"), "// stale\n");
+      const built = await buildEngineBundle({ force: true, sharedRoot: null, bundleRoot, stagingDir });
+      expect(builds()).toBe(1);
+      expect(readFileSync(built.bundlePath, "utf8")).toBe(BUILT);
     });
   });
 

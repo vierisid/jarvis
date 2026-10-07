@@ -153,7 +153,7 @@ function versionMeetsFloor(declared: string, floor: string): boolean {
  * the latest entry wins -- we'd flag in CI if this ever matters, but in
  * practice the workspace pkgs all share pinned versions.
  */
-function buildStagingPackageJson(): string {
+export function buildStagingPackageJson(): string {
   const deps: Record<string, string> = {};
   for (const rel of WORKSPACE_PKG_RELS) {
     const pkg = JSON.parse(
@@ -387,20 +387,25 @@ export function bundleHash(): string {
   return hasher.digest("hex").slice(0, 16);
 }
 
-// Memoized install promise: every caller awaits the SAME pending
-// `bun install` and we never spawn two concurrent installs against the
+// Memoized install promise, one per staging dir: every caller awaits the SAME
+// pending `bun install` and we never spawn two concurrent installs against the
 // same staging dir. Cleared on rejection so a transient failure can be
 // retried by the next caller.
-let stagingInstallInFlight: Promise<void> | null = null;
+const stagingInstallInFlight = new Map<string, Promise<void>>();
 
-export function ensureStagingInstalled(): Promise<void> {
-  if (stagingInstallInFlight) return stagingInstallInFlight;
-  stagingInstallInFlight = (async (): Promise<void> => {
-    mkdirSync(STAGING_DIR, { recursive: true });
-    const pkgPath = resolve(STAGING_DIR, "package.json");
+/**
+ * `stagingDir` defaults to STAGING_DIR; only tests pass another, with a tree
+ * already seeded so the install below is skipped (see `buildEngineBundle`).
+ */
+export function ensureStagingInstalled(stagingDir: string = STAGING_DIR): Promise<void> {
+  const inFlight = stagingInstallInFlight.get(stagingDir);
+  if (inFlight) return inFlight;
+  const install = (async (): Promise<void> => {
+    mkdirSync(stagingDir, { recursive: true });
+    const pkgPath = resolve(stagingDir, "package.json");
     const desired = buildStagingPackageJson();
     const existing = existsSync(pkgPath) ? readFileSync(pkgPath, "utf8") : null;
-    const haveNodeModules = existsSync(resolve(STAGING_DIR, "node_modules"));
+    const haveNodeModules = existsSync(resolve(stagingDir, "node_modules"));
     if (existing === desired && haveNodeModules) return;
 
     writeFileSync(pkgPath, desired);
@@ -410,7 +415,7 @@ export function ensureStagingInstalled(): Promise<void> {
       // allowlist keeps what bun needs (PATH, HOME, proxies, registry and CA
       // settings); lifecycle scripts are skipped -- see BUN_INSTALL_ARGS.
       const child = spawn("bun", [...BUN_INSTALL_ARGS], {
-        cwd: STAGING_DIR,
+        cwd: stagingDir,
         stdio: "inherit",
         env: sanitizedEnv(),
       });
@@ -421,15 +426,28 @@ export function ensureStagingInstalled(): Promise<void> {
       child.on("error", rej);
     });
   })().catch((e) => {
-    stagingInstallInFlight = null;
+    stagingInstallInFlight.delete(stagingDir);
     throw e;
   });
-  return stagingInstallInFlight;
+  stagingInstallInFlight.set(stagingDir, install);
+  return install;
 }
 
+/**
+ * `bundleRoot` and `stagingDir` override the per-user cache root (default
+ * BUNDLE_ROOT) and the staging install (default STAGING_DIR) -- the seam
+ * `findCachedBundle` got in #673, extended to the builder (#761). Production
+ * never passes either. They exist so the builder's own contracts can be held
+ * on behaviour, against a staging dir seeded with a stand-in esbuild, rather
+ * than by building into the developer's real cache: that a self-built bundle
+ * is pinned, that a refused shared root is answered by a build and not by an
+ * adoption, and that an ordinary per-user bundle is adopted with no manifest.
+ */
 export async function buildEngineBundle(opts?: {
   force?: boolean;
   sharedRoot?: string | null;
+  bundleRoot?: string;
+  stagingDir?: string;
 }): Promise<EngineBundle> {
   // A shared prebuilt bundle short-circuits the whole build — including the
   // staging install, which would otherwise cost every tenant a ~47 MB
@@ -437,10 +455,11 @@ export async function buildEngineBundle(opts?: {
   const shared = opts?.force ? { kind: "miss" as const } : findSharedBundle(opts?.sharedRoot);
   if (shared.kind === "hit") return shared.bundle;
 
-  await ensureStagingInstalled();
+  const stagingDir = opts?.stagingDir ?? STAGING_DIR;
+  await ensureStagingInstalled(stagingDir);
 
   const hash = bundleHash();
-  const bundleDir = resolve(BUNDLE_ROOT, hash);
+  const bundleDir = resolve(opts?.bundleRoot ?? BUNDLE_ROOT, hash);
   const bundlePath = resolve(bundleDir, "main.js");
 
   // A REFUSED shared bundle must not be answered by ADOPTING whatever sits in
@@ -461,7 +480,7 @@ export async function buildEngineBundle(opts?: {
 
   mkdirSync(bundleDir, { recursive: true });
 
-  const esbuildEntry = resolve(STAGING_DIR, "node_modules/esbuild/lib/main.js");
+  const esbuildEntry = resolve(stagingDir, "node_modules/esbuild/lib/main.js");
   if (!existsSync(esbuildEntry)) {
     throw new Error(
       `esbuild not found at ${esbuildEntry}. Did the staging install fail?`,
@@ -486,12 +505,20 @@ export async function buildEngineBundle(opts?: {
       "@activepieces/pieces-framework": resolve(VENDOR_PACKAGES, "pieces/framework/src"),
       "@activepieces/pieces-common": resolve(VENDOR_PACKAGES, "pieces/common/src"),
     },
-    nodePaths: [resolve(STAGING_DIR, "node_modules")],
+    nodePaths: [resolve(stagingDir, "node_modules")],
     logLevel: "warning",
   });
 
   writeFileSync(bundlePath + ".meta.json", JSON.stringify(result.metafile));
 
+  // Pin what was just built (#761), so every later spawn re-checks these bytes
+  // exactly as a verified shared bundle's are (#671). This path is the one that
+  // exists FOR safety -- it is how a refused shared root is answered -- and it
+  // writes into BUNDLE_ROOT, the tenant-writable tree that refusal declined to
+  // adopt from; without the pin the bundle it produces was spawned unchecked
+  // for the daemon's lifetime. Hashed from disk rather than from esbuild's
+  // output, so the pin is of the file the engine will actually open.
+  pinVerifiedBundle(bundlePath, sha256OfFile(bundlePath));
   return { bundlePath, hash, bundleDir };
 }
 

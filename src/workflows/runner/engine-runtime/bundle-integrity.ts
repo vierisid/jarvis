@@ -36,9 +36,11 @@
  * so a writer that wins that race is not caught either: for `main.js` the
  * window is narrowed from the daemon's lifetime to the spawn, not closed.
  * Closing both is an immutable mount (or spawning from bytes the daemon holds),
- * which is a deployment change. Finally, only bundles that were VERIFIED are
- * pinned: the per-user cache has no manifest by design, so there is nothing to
- * pin it to, and it spawns as before.
+ * which is a deployment change. Finally, what is pinned is a bundle whose
+ * bytes this daemon has a reason to trust: a shared bundle that verified
+ * against its manifest, and one `buildEngineBundle` has just built itself
+ * (#761). A per-user bundle ADOPTED from the cache has no manifest by design,
+ * so there is nothing to pin it to, and it spawns as before.
  */
 
 import { createHash } from "node:crypto";
