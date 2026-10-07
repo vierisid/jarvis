@@ -29,9 +29,10 @@
 import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import {
   createFlow,
-  deleteFlow,
+  deleteFlowInProject,
   flowCodeStepsEnabled,
   getFlow,
+  getFlowInProject,
   listFlows,
   parseFlowMetadata,
   setFlowCodeStepsEnabled,
@@ -64,6 +65,7 @@ import {
 import {
   createFlowRun,
   getFlowRun,
+  getFlowRunInProject,
   listRuns,
   type FlowRunStatus,
   type RunEnvironment,
@@ -715,10 +717,16 @@ export interface CreateWorkflowRoutesOptions {
    */
   credentialResolver?: CredentialResolver;
   /**
-   * The project a request acts in, for the routes that are project-scoped
-   * (today the connections routes, #692). Every one of them reads its project
+   * The project a request acts in, for the routes that are project-scoped:
+   * the connections routes (#692) and every flow, version and run route an
+   * authenticated caller reaches (#729). Every one of them reads its project
    * from here and nowhere else, so a list and a write-by-id can never disagree
    * about scope.
+   *
+   * Two routes take a flow or run id and are deliberately NOT scoped by it:
+   * `/api/webhooks/:flowId` and `/api/webhooks/waitpoints/:id`. Both are
+   * unauthenticated ingress whose id is the capability, so their caller has
+   * no project to be scoped to.
    *
    * Unset in production, which resolves every request to
    * `DEFAULT_IDS.project`: the workflow store is single-tenant (see
@@ -799,6 +807,23 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
   const managed = piecesManagedByHost(opts.sharedPiecesDir);
   // The project a request acts in. See `callerProjectId`.
   const callerProject = (req: Request): string => opts.callerProjectId?.(req) ?? DEFAULT_IDS.project;
+  // The flow or run an `:id` / `:runId` route acts on, resolved IN the
+  // caller's project (#729). A flow or run in another project is null here,
+  // exactly as one that does not exist, and every route answers both from the
+  // same line -- so a foreign id gets a response byte-identical to a missing
+  // one and the answer does not confirm a guessed id is real elsewhere.
+  //
+  // Checked once, first, before any body is read. That is enough on the
+  // routes that await a body before writing because nothing ever UPDATEs
+  // `flow.project_id`: a flow in the caller's project before the await is in
+  // it after, or deleted, which the repo writes already answer as before.
+  const scopedFlow = (req: Request, id: string) => getFlowInProject(callerProject(req), id);
+  const scopedRun = (req: Request, runId: string) => getFlowRunInProject(callerProject(req), runId);
+  // The version routes' answer for a flow outside the caller's project: the
+  // message the ownership check gives a version that is not in the flow, which
+  // is also what those routes answered for a flow that does not exist before
+  // #729, so a missing flow's response did not change.
+  const versionNotInScope = () => err("version not found in flow", 404);
   // OS-fit warnings for a version being locked -- the last point a
   // hand-drawn flow can be told its command will never run where it lands.
   // Empty whenever the verdict would be a guess (no inventory, or a machine
@@ -1069,11 +1094,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // listeners but route routing is half-set-up). The dashboard's run-history
     // panel surfaces these so users can see which flows are misconfigured
     // even though their status reads ENABLED.
+    //
+    // Only the caller's project's flows (#729). Unfiltered, this listed every
+    // project's flow ids -- and for a webhook flow with no HMAC secret the id
+    // is the whole capability for `/api/webhooks/:flowId`.
     "/api/workflows/triggers": {
-      GET: () =>
+      GET: (req) =>
         trapErrors(() => {
           if (!opts.triggerManager) return ok([]);
-          return ok(opts.triggerManager.list());
+          return ok(opts.triggerManager.list().filter((s) => scopedFlow(req, s.flowId) !== null));
         }),
     },
 
@@ -1424,7 +1453,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) => trapErrors(() => {
         const params = new URL(req.url).searchParams;
         const { limit, offset } = clampPage(params, 100);
-        const flows = listFlows(undefined, { status: 'ENABLED', limit, offset });
+        const flows = listFlows(callerProject(req), { status: 'ENABLED', limit, offset });
         return ok({ items: flows.map(flow => {
           const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
           return { flowId: flow.id, versionId, readiness: versionId ? versionReadiness(flow.id, versionId) : {
@@ -1451,7 +1480,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             if (!isStatus(status)) return err(`status must be ENABLED|DISABLED`, 400);
             opts.status = status;
           }
-          const flows = listFlows(undefined, opts);
+          const flows = listFlows(callerProject(req), opts);
           return ok(flows.map(serializeFlow));
         }),
       POST: (req) =>
@@ -1473,6 +1502,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // guarded by `uq_flow_external` instead. Looked at and left, so the
           // enumeration above is a decision rather than an oversight.
           const flow = createFlow({
+            projectId: callerProject(req),
             externalId: body.externalId,
             metadata: body.metadata ?? null,
           });
@@ -1494,7 +1524,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const flow = getFlow(id);
+          const flow = scopedFlow(req, id);
           if (!flow) return err("flow not found", 404);
           const draft = getLatestDraft(id);
           const published = flow.published_version_id
@@ -1516,6 +1546,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       PATCH: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
           if ("error" in read) return read.error;
           const body = read.body as {
@@ -1534,13 +1565,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (body.status !== undefined) updateFlowStatus(id, body.status);
           if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
           if (body.status !== undefined) refreshTrigger(id);
-          const flow = getFlow(id);
+          const flow = scopedFlow(req, id);
           return flow ? ok(serializeFlow(flow)) : err("flow not found", 404);
         }),
       DELETE: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          deleteFlow(id);
+          // BEHAVIOUR CHANGE (#729): a flow that does not exist used to answer
+          // 200 `{ ok: true }`. It is a 404 now, because a flow in another
+          // project must get the same answer as a missing one and must not be
+          // reported deleted when it was not -- the shape the connections
+          // DELETE has had since #692.
+          if (!deleteFlowInProject(callerProject(req), id)) return err("flow not found", 404);
           refreshTrigger(id);
           return ok({ ok: true });
         }),
@@ -1551,7 +1587,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          if (!getFlow(id)) return err("flow not found", 404);
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           return ok(listVersions(id));
         }),
       POST: (req) =>
@@ -1568,7 +1604,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             trigger?: Record<string, unknown>;
             uiMeta?: FlowVersionUiMeta;
           };
-          if (!getFlow(id)) return err("flow not found", 404);
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           // Used to be a bare truthiness check, so a non-string of any length
           // reached the column that becomes a flow's model-facing `name` (#598).
           const named = validDisplayName(body.displayName);
@@ -1598,6 +1634,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) =>
         trapErrors(() => {
           const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+          if (!scopedFlow(req, id)) return versionNotInScope();
           return ok(withOwnedFlowVersion(id, versionId, () => ({
             ...getFlowVersion(versionId)!, uiMeta: getFlowVersionUiMeta(versionId),
           })));
@@ -1605,6 +1642,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       PATCH: (req) =>
         trapErrors(async () => {
           const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+          if (!scopedFlow(req, id)) return versionNotInScope();
           // Bounded before the parse, same reason as the POST above (#609). This
           // is the route the visual editor saves through, so it is the one that
           // carries a real graph on every keystroke-driven save.
@@ -1694,6 +1732,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/:id/versions/:versionId/readiness": {
       GET: (req) => trapErrors(() => {
         const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+        if (!scopedFlow(req, id)) return versionNotInScope();
         return ok(versionReadiness(id, versionId));
       }),
     },
@@ -1702,6 +1741,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(() => {
           const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+          if (!scopedFlow(req, id)) return versionNotInScope();
           // Lock mutates the same row state DRAFT -> LOCKED, so the sidecar
           // (keyed on versionId) already follows. No copy needed; mentioned
           // here so future readers know that's by design.
@@ -1725,6 +1765,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id, versionId, stepName } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
+          if (!scopedFlow(req, id)) return versionNotInScope();
           const badName = sampleStepNameRefusal(stepName);
           if (badName) return badName;
           // Bounded BEFORE the parse (#635). The per-entry cap below can only
@@ -1775,6 +1816,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id, versionId } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
+          if (!scopedFlow(req, id)) return versionNotInScope();
           const v = withOwnedFlowVersion(id, versionId, () => replaceSampleData(versionId, null));
           return ok({ versionId: v.id, sampleData: v.sampleData });
         }),
@@ -1789,6 +1831,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id, versionId, stepName } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
+          if (!scopedFlow(req, id)) return versionNotInScope();
           const badName = sampleStepNameRefusal(stepName);
           if (badName) return badName;
           // Bounded before the parse, same cap and same behaviour change as
@@ -1837,7 +1880,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          if (!getFlow(id)) return err("flow not found", 404);
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           // An empty body is let through so it gets the `enabled` message
           // below, which says what to send, rather than a bare JSON error.
           const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES, { allowEmpty: true });
@@ -1858,6 +1901,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           // Default semantic: lock the latest draft and set it as published.
           // Body can override with `{ versionId }` for explicit selection.
           const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES, { allowEmpty: true });
@@ -1877,7 +1921,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const flow = getFlow(id);
+          const flow = scopedFlow(req, id);
           if (!flow) return err("flow not found", 404);
           // `payload` is one run's trigger input, JSON.stringify'd into
           // `workflow_job.payload`, so this body was unbounded STORAGE, not
@@ -2000,6 +2044,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          // BEHAVIOUR CHANGE (#729): a flow that does not exist used to answer
+          // 200 with an empty page. It is a 404 now, the answer a flow in
+          // another project gets, which an empty page would have told apart
+          // from the 404 every other flow route gives a foreign id.
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           const params = new URL(req.url).searchParams;
           const status = params.get("status") as FlowRunStatus | null;
           // Clamped the way the two listings above clamp (#609). #598 clamped
@@ -2051,7 +2100,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-runs/:runId/effects": {
       GET: (req) => trapErrors(async () => {
         const { runId } = (req as RequestWithParams<{ runId: string }>).params;
-        if (!getFlowRun(runId)) return err('run not found', 404);
+        if (!scopedRun(req, runId)) return err('run not found', 404);
         const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
         return ok({ runId, effects: listWorkflowEffects(runId) });
       }),
@@ -2061,7 +2110,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) =>
         trapErrors(() => {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
-          const run = getFlowRun(runId);
+          const run = scopedRun(req, runId);
           return run ? ok(run) : err("run not found", 404);
         }),
     },
@@ -2088,7 +2137,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(() => {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
-          const run = getFlowRun(runId);
+          const run = scopedRun(req, runId);
           if (!run) return err("run not found", 404);
           // Acknowledgement closes the durable dispatch fence. It does not
           // claim that an already-dispatched remote effect was rolled back.
@@ -2103,7 +2152,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) =>
         trapErrors(() => {
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
-          const run = getFlowRun(runId);
+          const run = scopedRun(req, runId);
           if (!run) return err("run not found", 404);
           const waitpoints = listWaitpointsByFlowRun(runId, /* resumed */ false).map((wp) => ({
             id: wp.id,

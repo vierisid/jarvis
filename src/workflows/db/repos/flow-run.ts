@@ -228,6 +228,24 @@ export function getFlowRun(id: string): FlowRun | null {
   return row ? rowToRun(row) : null;
 }
 
+/**
+ * The run with this id whose FLOW is in this project, or null (#729).
+ *
+ * Scoped through the flow rather than `flow_run.project_id` on purpose: no
+ * caller of `createFlowRun` passes a project, so that column is always
+ * `DEFAULT_IDS.project`, even for a run of a flow in another project. The
+ * flow's own `project_id` is the one value that is written where the flow is
+ * created and never changes, so it is what a run belongs to.
+ */
+export function getFlowRunInProject(projectId: string, id: string): FlowRun | null {
+  const row = db()
+    .query<FlowRunRow, [string, string]>(
+      `SELECT r.* FROM flow_run r JOIN flow f ON f.id = r.flow_id WHERE r.id = ? AND f.project_id = ?`,
+    )
+    .get(id, projectId);
+  return row ? rowToRun(row) : null;
+}
+
 export function updateRun(id: string, patch: UpdateRunInput): FlowRun {
   const existing = getFlowRunRow(id);
   if (!existing) throw new Error(`updateRun: not found (id=${id})`);
