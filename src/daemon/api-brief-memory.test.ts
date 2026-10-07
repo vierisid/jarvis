@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { initDatabase, closeDb, getDb } from '../vault/schema';
 import { createEntity } from '../vault/entities';
-import { createFact, deleteFact } from '../vault/facts';
+import { createFact, correctFact, deleteFact } from '../vault/facts';
 import { MemoryStream } from '../brief/memory-stream';
 import type { MemoryUsageReader } from '../brief/memory-stream-contracts';
 import { BriefCapabilities, type BriefCapabilityId } from '../brief/capabilities';
@@ -88,3 +88,62 @@ test('real socket authenticates list/detail/history and returns no-store project
     }
   } finally { server.stop(); rmSync(dir, { recursive: true, force: true }); }
 });
+
+for (const view of ['collection', 'detail', 'history'] as const) {
+  test(`F17 review R1: ${view} retains canonical scope across independent confirmed preferences and correction`, async () => {
+    const work = createFact(subject, 'preferred_editor', 'Vim', { confirmed: true, scope: 'work' });
+    const personal = createFact(subject, 'preferred_editor', 'VS Code', { confirmed: true, scope: 'personal' });
+    const unscoped = createFact(subject, 'preferred_editor', 'Other', { confirmed: true });
+    const corrected = correctFact(work.id, 'Emacs', 'Updated work preference');
+    const table = routes(), expected = [
+      { factId: corrected.id, scope: 'work', status: 'active' },
+      { factId: personal.id, scope: 'personal', status: 'active' },
+      { factId: unscoped.id, scope: '', status: 'active' },
+    ];
+    if (view === 'collection') {
+      const response = await call(table); expect(response.status).toBe(200);
+      expect(response.body.data.count).toEqual({ total: 3, matched: 3, returned: 3 });
+      for (const item of expected) expect(response.body.data.items.find((f: any) => f.factId === item.factId)).toMatchObject({ ...item, basis: 'confirmed' });
+    } else if (view === 'detail') {
+      for (const item of [...expected, { factId: work.id, scope: 'work', status: 'superseded' }]) {
+        const response = await call(table, '', `${base}/:id`, item.factId); expect(response.status).toBe(200);
+        expect(response.body.data).toMatchObject({ ...item, basis: 'confirmed' });
+      }
+    } else {
+      const response = await call(table, '', `${base}/:id/history`, corrected.id); expect(response.status).toBe(200);
+      expect(response.body.data).toHaveLength(2);
+      expect(response.body.data.find((f: any) => f.factId === work.id)).toMatchObject({ scope: 'work', status: 'superseded' });
+      expect(response.body.data.find((f: any) => f.factId === corrected.id)).toMatchObject({ scope: 'work', status: 'active' });
+      for (const item of expected.slice(1)) {
+        const own = await call(table, '', `${base}/:id/history`, item.factId); expect(own.body.data).toHaveLength(1);
+        expect(own.body.data[0]).toMatchObject(item);
+      }
+    }
+  });
+}
+for (const kind of ['canonical', 'evidence'] as const) {
+  for (const [name, source] of [['spaces', ' meeting '], ['nonbreaking spaces', '\u00a0meeting\u00a0'], ['tabs/newlines', '\tmeeting\n']] as const) {
+    test(`F17 review R2: ${kind} Source with ${name} round-trips through exact filters, counts and cursors`, async () => {
+      const ids = ['tea', 'coffee'].map(object => {
+        const row = createFact(subject, 'likes', object, { source: kind === 'canonical' ? source : 'import' });
+        if (kind === 'evidence') createFact(subject, 'likes', object, { source });
+        return row.id;
+      });
+      const plain = createFact(subject, 'likes', 'water', { source: 'meeting' }), table = routes();
+      const all = await call(table);
+      const label = all.body.data.items.find((f: any) => f.factId === ids[0]).sourceSummary.labels.find((value: string) => value === source);
+      expect(label).toBe(source);
+      const query = new URLSearchParams({ source: label, limit: '1' });
+      const first = await call(table, `?${query}`); expect(first.status).toBe(200);
+      expect(first.body.data.count).toEqual({ total: 3, matched: 2, returned: 1 });
+      query.set('cursor', first.body.data.nextCursor);
+      const second = await call(table, `?${query}`); expect(second.status).toBe(200);
+      expect(second.body.data.count).toEqual({ total: 3, matched: 2, returned: 1 });
+      expect(second.body.data.nextCursor).toBeNull();
+      expect([first.body.data.items[0].factId, second.body.data.items[0].factId].sort()).toEqual(ids.sort());
+      const plainPage = await call(table, '?source=meeting'); expect(plainPage.status).toBe(200);
+      expect(plainPage.body.data.items.map((f: any) => f.factId)).toEqual([plain.id]);
+      query.set('source', 'meeting'); expect((await call(table, `?${query}`)).status).toBe(400);
+    });
+  }
+}

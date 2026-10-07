@@ -90,5 +90,57 @@
   ],
   "rollback": "Unset JARVIS_BRIEF_MEMORY_STREAM or disable memoryUsage. No schema migration or canonical data deletion is needed.",
   "guide": "docs/brief-memory-stream.md",
-  "next_task": "F-18 not started"
+  "next_task": "F-18 not started",
+  "reviewCorrections": {
+    "date": "2026-10-07",
+    "reviewedHead": "46693c017987620f05f351cfb40949ee0f0efefb",
+    "findings": {
+      "R1": "Add canonical scope to the shared item contract/projection for collection, detail and history. Empty scope remains unspecified; corrected work and independent personal assertions keep their contexts.",
+      "R2": "Preserve Source labels exactly as stored in canonical facts or evidence, including URL-encoded whitespace. Distinct labels retain exact counts and query-bound cursors. Blank/length limits and strict identifier/search validation remain in force."
+    },
+    "verification": {
+      "regressionCommand": "bun test src/daemon/api-brief-memory.test.ts -t 'F17 review'",
+      "red": {
+        "expectedFailures": 9,
+        "passed": 0,
+        "log": "docs/brief-delivery/evidence/F-17/review-red.log",
+        "state": "New tests run against the original reviewed implementation before either fix."
+      },
+      "green": {
+        "passed": 9,
+        "failed": 0,
+        "assertions": 119,
+        "log": "docs/brief-delivery/evidence/F-17/review-green.log"
+      },
+      "focused": {
+        "passed": 56,
+        "failed": 0,
+        "assertions": 596,
+        "files": 3,
+        "command": "bun test src/brief/memory-stream.test.ts src/daemon/api-brief-memory.test.ts src/util/model-exec-env.test.ts",
+        "log": "docs/brief-delivery/evidence/F-17/review-focused.log"
+      },
+      "typescript": {
+        "status": "passed",
+        "command": "bun x tsc --noEmit",
+        "log": "docs/brief-delivery/evidence/F-17/review-typescript.log"
+      },
+      "reviewedHeadCI": {
+        "status": "All active checks passed; conditional jobs skipped. Correction-head CI runs separately after push.",
+        "log": "docs/brief-delivery/evidence/F-17/review-baseline-ci.json"
+      },
+      "guards": "Normal commit hooks required before push; exact hook result and published head recorded in the updated PR description.",
+      "affected": {
+        "status": "passed",
+        "passed": 474,
+        "skipped": 6,
+        "failed": 0,
+        "assertions": 4183,
+        "files": 37,
+        "command_file": "docs/brief-delivery/evidence/F-17/affected-command.txt",
+        "log": "docs/brief-delivery/evidence/F-17/review-affected.log"
+      }
+    },
+    "activation": "Backend corrections only; no UI or rollout change. F18 production integration remains required, and all PRs stay unmerged."
+  }
 }

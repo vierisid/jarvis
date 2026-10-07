@@ -15,6 +15,8 @@ export interface MemoryStreamQuery {
 export interface MemoryStreamItem extends BriefMemory {
   revision: string;
   subjectId: string;
+  /** Canonical assertion context; an empty string means unspecified. */
+  scope: string;
   updatedAt: number;
   validity: { from: number | null; to: number | null };
   sourceSummary: { labels: string[]; evidenceCount: number };
