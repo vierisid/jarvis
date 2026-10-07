@@ -1,3 +1,5 @@
+import { Outcomes } from '../brief/outcomes';
+import { registerOutcomes } from '../brief/registrations/outcomes';
 import { GoalMeasurements } from '../brief/goal-measurements';
 import { registerGoalMeasurements } from '../brief/registrations/goal-measurements';
 import { loadDocumentFactBindings } from '../brief/decision-document-bindings';
@@ -4988,6 +4990,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 9b. Set up API routes + dashboard static files
     const briefGoalMeasurements = new GoalMeasurements(getDb());
+    const briefOutcomes = new Outcomes(getDb());
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService });
     const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions, approvalManager, id => {
       const request = approvalManager.getRequest(id);
@@ -5016,6 +5019,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }, process.env.JARVIS_BRIEF_QUIET_AWARENESS);
     const briefEnabled: BriefCapabilityId[] = [];
     if (process.env.JARVIS_BRIEF_GOAL_MEASUREMENTS === '1') briefEnabled.push('goalMeasurements');
+    if (process.env.JARVIS_BRIEF_OUTCOMES === '1') briefEnabled.push('outcomes');
     if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
     if (process.env.JARVIS_BRIEF_DECISION_EDITS === '1') briefEnabled.push('decisionEdits');
     if (process.env.JARVIS_BRIEF_DECISIONS === '1') briefEnabled.push('decisions');
@@ -5042,12 +5046,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerDecisionEdits(briefDecisionDocuments),
       ...registerRecommendations(briefRecommendations),
       ...registerGoalMeasurements(briefGoalMeasurements),
+      ...registerOutcomes(briefOutcomes),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {
       briefDecisions,
       briefGoalMeasurements,
+      briefOutcomes,
       briefDecisionDocuments,
       briefRecommendations,
       briefConversations,

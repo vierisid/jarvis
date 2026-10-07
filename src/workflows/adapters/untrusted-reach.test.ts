@@ -228,6 +228,13 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  *                                     failedStep, samples, inputs and effect results
  *                                     and checks all three source kinds, mutations
  *                                     and reopened reads exclude those payloads.
+ *   brief/outcomes.ts                 PERSON-FACING. Reads run/effect evidence only
+ *                                     to qualify checked work. The authenticated
+ *                                     projection emits IDs, counts, observation
+ *                                     references and coverage, never step output,
+ *                                     effect arguments/results or a model prompt.
+ *                                     outcomes.test.ts injects hostile run/effect
+ *                                     payloads and checks the projection omits them.
  *   daemon/api-routes.ts               BENIGN. Holds a whole `FlowVersion` but
  *                                     reads only `displayName`/`schemaVersion`
  *                                     off it, and answers HTTP rather than a
@@ -246,6 +253,7 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'awareness/suggestion-composer.ts',
   'awareness/prepared-opportunities.ts',
   'brief/opportunity-activation.ts',
+  'brief/outcomes.ts',
   'brief/adapters.ts',
   'brief/composition.ts',
   'brief/contracts.ts',

@@ -1,0 +1,23 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/outcomes.test.ts:
+147 |   expect((await summary()).week?.value).toBe(25); expect((await summary()).week?.value).toBe(25);
+148 |   getDb().run("UPDATE commitments SET status='failed' WHERE id=?", [w.item.id]); expect((await provider.read(query())).state).toBe('empty');
+149 | });
+150 | test('half-open windows do not repeat work at an exact boundary', async () => {
+151 |   const w = work(), t = w.checked.resultCheck!.checkedAt;
+152 |   expect((await provider.read({ start: t - 1, end: t, timezone: 'UTC' })).state).toBe('empty');
+                                                                                       ^
+error: expect(received).toBe(expected)
+
+Expected: "empty"
+Received: "ready"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:152:82)
+(fail) half-open windows do not repeat work at an exact boundary [523.20ms]
+
+ 0 pass
+ 28 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [577.00ms]
