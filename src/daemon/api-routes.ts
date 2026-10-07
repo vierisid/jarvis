@@ -151,6 +151,7 @@ export type ApiContext = {
   briefGoalMeasurements?: import('../brief/goal-measurements').GoalMeasurements;
   briefMemoryStream?: import('../brief/memory-stream').MemoryStream;
   briefMemoryUsage?: import('../vault/memory-usage').MemoryUsageLedger;
+  briefMemoryForget?: import('../brief/memory-forget').MemoryForget;
   briefOutcomes?: import('../brief/outcomes').Outcomes;
   briefDecisionDocuments?: import('../brief/decision-documents').DecisionDocuments;
   briefRecommendations?: import('../brief/recommendations').Recommendations;
@@ -407,7 +408,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),

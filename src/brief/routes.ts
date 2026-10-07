@@ -1,3 +1,5 @@
+import { createMemoryForgetRoutes } from './memory-forget-routes';
+import type { MemoryForget } from './memory-forget';
 import { createMemoryUsageRoutes } from './memory-usage-routes';
 import type { MemoryUsageLedger } from '../vault/memory-usage';
 import { createMemoryStreamRoutes } from './memory-stream-routes';
@@ -25,10 +27,11 @@ import { createCompositionRoutes } from './composition-routes';
 import type { BriefCompositionProvider } from './composition';
 
 /** Mounted only inside the daemon's existing authenticated API route table. */
-export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments, goals?: GoalMeasurements, outcomes?: Outcomes, memory?: MemoryStream, memoryUsage?: MemoryUsageLedger) {
+export function createBriefRoutes(capabilities: BriefCapabilities, json: (body: unknown, status?: number) => Response, conversations?: BriefConversationProvider, attachments?: BriefAttachmentProvider, composition?: BriefCompositionProvider, prepared?: PreparedOpportunities, activation?: OpportunityActivation, decisions?: DecisionQueue, recommendations?: Recommendations, documents?: DecisionDocuments, goals?: GoalMeasurements, outcomes?: Outcomes, memory?: MemoryStream, memoryUsage?: MemoryUsageLedger, memoryForget?: MemoryForget) {
   return {
     ...createMemoryStreamRoutes(capabilities, json, memory),
     ...createMemoryUsageRoutes(capabilities, json, memoryUsage),
+    ...createMemoryForgetRoutes(capabilities, json, memoryForget),
     ...createOutcomeRoutes(capabilities, json, outcomes),
     ...createGoalMeasurementRoutes(capabilities, json, goals),
     ...createDecisionDocumentRoutes(capabilities, json, documents),

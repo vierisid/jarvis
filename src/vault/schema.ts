@@ -1,3 +1,4 @@
+import { ensureMemoryForgetSchema } from './memory-forget-schema';
 import { ensureMemoryUseSchema } from './memory-use-schema';
 import { ensureOutcomeSchema } from './outcome-schema';
 import { ensureGoalMeasurementSchema } from './goal-measurement-schema';
@@ -159,6 +160,7 @@ function createTables(db: Database): void {
     CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate)
   `);
   ensureFactSchema(db);
+  ensureMemoryForgetSchema(db);
 
   // Relationships table: edges between entities
   db.run(`

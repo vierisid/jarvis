@@ -1,3 +1,4 @@
+import { withMemoryRecall } from '../vault/memory-use-context';
 /**
  * WebSocket Service — The Mouth
  *
@@ -25,7 +26,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
-import { getUserProfile } from '../vault/user-profile.ts';
+import { getUserProfileForPrompt } from '../vault/user-profile.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
 import { routeByConfidence, intentToRoomKey, intentIsBackToThread, type Intent, type RoomKey } from '../voice/intent.ts';
 import { matchWindowControl, type WindowControl } from '../voice/window-control.ts';
@@ -2214,8 +2215,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // (verb=ask, confidence=0.85) on any error so we always land on `act`.
     const llm = this.agentService.getLLMManager();
     const recentTurns = this.recentTurns('websocket');
-    const userProfilePrompt = formatUserProfileForPrompt(getUserProfile());
-    const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom, userProfilePrompt);
+    const intent = await withMemoryRecall(() => {
+      const userProfilePrompt = formatUserProfileForPrompt(getUserProfileForPrompt());
+      return classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom, userProfilePrompt);
+    });
 
     // Safety net: the classifier sometimes flags coherent multi-word
     // English as verb=unknown / low-confidence (especially conversational

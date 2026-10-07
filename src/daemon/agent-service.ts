@@ -6,6 +6,7 @@
  * commitments, and observations.
  */
 
+import { withMemoryRecall, bindMemoryRecallStream } from '../vault/memory-use-context';
 import { join } from 'node:path';
 import type { Service, ServiceStatus } from './services.ts';
 import type { JarvisConfig } from '../config/types.ts';
@@ -68,7 +69,7 @@ import { getRecentObservations, describeObservationForPrompt } from '../vault/ob
 import { extractAndStore } from '../vault/extractor.ts';
 import { getKnowledgeForMessage } from '../vault/retrieval.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
-import { getUserProfile } from '../vault/user-profile.ts';
+import { getUserProfileForPrompt } from '../vault/user-profile.ts';
 import { buildSkillIndex } from '../actions/tools/skills.ts';
 import type { ResearchQueue } from './research-queue.ts';
 import type { IAgentService } from './agent-service-interface.ts';
@@ -307,8 +308,10 @@ export class AgentService implements Service, IAgentService {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     try {
-      const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey, conversation);
-      return { stream: trackTurnStream(inner.stream, endTurn), onComplete: inner.onComplete };
+      return withMemoryRecall(() => {
+        const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey, conversation);
+        return { stream: bindMemoryRecallStream(trackTurnStream(inner.stream, endTurn)), onComplete: inner.onComplete };
+      });
     } catch (err) {
       endTurn();
       throw err;
@@ -498,45 +501,47 @@ export class AgentService implements Service, IAgentService {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     try {
-      const systemPrompt = this.buildFullSystemPromptParts(channel, text);
-      if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
-      if (scope) systemPrompt.dynamic += '\n\n' + scopeSystemNote(scope);
+      return withMemoryRecall(() => {
+        const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+        if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
+        if (scope) systemPrompt.dynamic += '\n\n' + scopeSystemNote(scope);
 
-      const content: import('../llm/provider.ts').ContentBlock[] = [
-        { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
-        { type: 'text', text },
-      ];
-      // This is the one dialogue path that cannot go through the conv
-      // orchestrator — it has no image route — so it runs the classic
-      // orchestrator directly. Without this, a router-first install pays the
-      // task-tier model for every pebble image turn even though the user is
-      // just talking. Route it at the conv tier when one is configured; in
-      // classic mode there is none and 'medium' stays correct. Nothing records
-      // whether a model accepts images and the conv tier has no fallback
-      // chain, so a text-only conv model falls back to the task tier rather
-      // than dead-ending the turn.
-      const useConvTier = this.llmManager.hasConversationTier();
-      const stream = this.orchestrator.streamMessage(
-        systemPrompt,
-        content,
-        useConvTier ? 'conversation' : 'medium',
-        'chat_orchestrator_image',
-        useConvTier ? 'medium' : undefined,
-        scope ?? null,
-      );
+        const content: import('../llm/provider.ts').ContentBlock[] = [
+          { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
+          { type: 'text', text },
+        ];
+        // This is the one dialogue path that cannot go through the conv
+        // orchestrator — it has no image route — so it runs the classic
+        // orchestrator directly. Without this, a router-first install pays the
+        // task-tier model for every pebble image turn even though the user is
+        // just talking. Route it at the conv tier when one is configured; in
+        // classic mode there is none and 'medium' stays correct. Nothing records
+        // whether a model accepts images and the conv tier has no fallback
+        // chain, so a text-only conv model falls back to the task tier rather
+        // than dead-ending the turn.
+        const useConvTier = this.llmManager.hasConversationTier();
+        const stream = this.orchestrator.streamMessage(
+          systemPrompt,
+          content,
+          useConvTier ? 'conversation' : 'medium',
+          'chat_orchestrator_image',
+          useConvTier ? 'medium' : undefined,
+          scope ?? null,
+        );
 
-      const onComplete = async (fullText: string): Promise<void> => {
-        await Promise.allSettled([
-          this.extractKnowledge(text, fullText).catch((err) =>
-            console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
-          ),
-          this.learnFromInteraction(text, fullText, channel).catch((err) =>
-            console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
-          ),
-        ]);
-      };
+        const onComplete = async (fullText: string): Promise<void> => {
+          await Promise.allSettled([
+            this.extractKnowledge(text, fullText).catch((err) =>
+              console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+            ),
+            this.learnFromInteraction(text, fullText, channel).catch((err) =>
+              console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+            ),
+          ]);
+        };
 
-      return { stream: trackTurnStream(stream, endTurn), onComplete };
+        return { stream: bindMemoryRecallStream(trackTurnStream(stream, endTurn)), onComplete };
+      });
     } catch (err) {
       endTurn();
       throw err;
@@ -570,28 +575,30 @@ export class AgentService implements Service, IAgentService {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     try {
-      let response: string;
+      return await withMemoryRecall(async () => {
+        let response: string;
 
-      if (this.convOrchestrator) {
-        response = await this.handleMessageConv(text, channel, scope, siteContext);
-      } else {
-        const systemPrompt = this.buildFullSystemPromptParts(channel, text);
-        if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
-        if (scope) systemPrompt.dynamic += '\n\n' + scopeSystemNote(scope);
-        response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, scope ?? null);
-      }
+        if (this.convOrchestrator) {
+          response = await this.handleMessageConv(text, channel, scope, siteContext);
+        } else {
+          const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+          if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
+          if (scope) systemPrompt.dynamic += '\n\n' + scopeSystemNote(scope);
+          response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, scope ?? null);
+        }
 
-      // Run extraction and learning in parallel (non-blocking but tracked)
-      Promise.allSettled([
-        this.extractKnowledge(text, response).catch((err) =>
-          console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
-        ),
-        this.learnFromInteraction(text, response, channel).catch((err) =>
-          console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
-        ),
-      ]);
+        // Run extraction and learning in parallel (non-blocking but tracked)
+        Promise.allSettled([
+          this.extractKnowledge(text, response).catch((err) =>
+            console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+          ),
+          this.learnFromInteraction(text, response, channel).catch((err) =>
+            console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+          ),
+        ]);
 
-      return response;
+        return response;
+      });
     } finally {
       endTurn();
     }
@@ -676,7 +683,7 @@ export class AgentService implements Service, IAgentService {
    */
   private buildUserProfileBlock(): string | undefined {
     try {
-      const profile = getUserProfile();
+      const profile = getUserProfileForPrompt();
       const profileContext = formatUserProfileForPrompt(profile);
       if (!profileContext) return undefined;
       return `# User Profile\n${profileContext}`;
@@ -904,7 +911,7 @@ export class AgentService implements Service, IAgentService {
    */
   buildRealtimeVoiceInstructions(): string {
     const name = this.config.personality?.assistant_name?.trim() || this.role?.name || 'JARVIS';
-    const userName = this.config.user?.name?.trim() || getUserProfile()?.answers.preferred_name?.trim();
+    const userName = this.config.user?.name?.trim() || getUserProfileForPrompt()?.answers.preferred_name?.trim();
     const traits = (this.config.personality?.core_traits ?? []).slice(0, 6).join(', ');
     return [
       `You are ${name}${userName ? `, ${userName}'s personal AI assistant` : ', a personal AI assistant'}, in a live, real-time voice conversation.`,
@@ -1014,7 +1021,7 @@ export class AgentService implements Service, IAgentService {
     };
 
     try {
-      const profile = getUserProfile();
+      const profile = getUserProfileForPrompt();
       const preferredName = profile?.answers.preferred_name?.trim();
       if (preferredName) {
         context.userName = preferredName;

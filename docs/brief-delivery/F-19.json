@@ -1,0 +1,105 @@
+{
+  "task": "F-19",
+  "title": "Make Forget a complete user-facing operation",
+  "date": "2026-10-07",
+  "branch": "brief/f-19",
+  "base_branch": "brief/f-18",
+  "baseline": "5f83f7876a9bd1ff84e57aa4e00966eb5dc04cb1",
+  "main_reviewed": "485bb9b3b70f4d3874798810efc6f06355f86ef6",
+  "main_rechecked": "16c5eec08d5d3e4250b100b584005561fcfded61",
+  "head": "Commit containing this receipt; exact published head and normal hook results recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-19",
+  "dependencies": {
+    "compile": [
+      "F-01",
+      "F-03",
+      "F-17",
+      "F-18"
+    ],
+    "enable": [],
+    "stack": "User-requested F stack on reviewed F18. Uses the canonical turn identity and existing stream/use projection contracts. No unmerged Q implementation imported."
+  },
+  "baseline_review": {
+    "pinned": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": [
+      "A16 src/vault/facts.ts",
+      "src/vault/extractor.ts"
+    ],
+    "comparison": "Facts and extractor blobs unchanged across audit, initial main and parent. Final main fetch adds no vault/brief/AgentService/WS changes. Parent head unchanged. No F19 branch/PR existed; concurrent F/D/Q work inspected.",
+    "parent_ci": "All active F18 checks pass; conditional jobs skipped. Prior reviewer recommendation: Approve, no findings.",
+    "parent_ci_log": "docs/brief-delivery/evidence/F-19/parent-ci.json"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "382:4043",
+    "visual": "Backend contract only; D track owns confirmation UI. No screenshot claimed."
+  },
+  "activation": {
+    "capability": "memoryForget",
+    "flag": "JARVIS_BRIEF_MEMORY_FORGET=1",
+    "default": "off",
+    "merged": false,
+    "release_enabled": false,
+    "independence": "New Forget requests do not require F18 activation; existing tombstones remain enforced with all Brief flags off."
+  },
+  "implementation": [
+    "Authenticated no-store GET prepares exact source revision and scope or recovers a receipt. Explicit confirmed POST atomically records suppression, deletes selected fact/evidence, and reconciles surviving facts.",
+    "Content-free durable receipts deduplicate retries. Request-identity reuse and concurrent correction return clear conflicts; failures and capacity exhaustion leave the fact intact.",
+    "Database-local HMAC suppression covers extraction, profile synchronization and goal-completion replay. Legacy missing provenance fails conservatively; later canonical user input/manual correction can create a new fact.",
+    "Matching profile source fields are withheld from prompt projections without deleting editable settings. Existing F17 cursors become stale and F18 immutable event history marks forgotten IDs.",
+    "Provider-handoff fences reject prepared forgotten fact/profile context in Brief/workflows and legacy AgentService chat/image/voice-classifier paths, independently of usage logging. Async streams retain capture scope.",
+    "Bounded 10000 durable receipts, 100000 suppression keys and 1000 evidence rows per mutation; no suppression expiry or silent eviction."
+  ],
+  "verification": {
+    "focused": {
+      "passed": 27,
+      "failed": 0,
+      "assertions": 160,
+      "files": 3,
+      "command": "bun test src/brief/memory-forget.test.ts src/daemon/api-brief-memory-forget.test.ts src/daemon/agent-service-forget.test.ts",
+      "log": "docs/brief-delivery/evidence/F-19/focused.log"
+    },
+    "affected": {
+      "passed": 1416,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 10689,
+      "files": 75,
+      "command_file": "docs/brief-delivery/evidence/F-19/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-19/affected.log",
+      "timing": "Before the final realtime-profile accessor cleanup; final focused and affected checks below cover that change."
+    },
+    "final_affected": {
+      "passed": 87,
+      "failed": 0,
+      "assertions": 400,
+      "files": 11,
+      "command_file": "docs/brief-delivery/evidence/F-19/final-affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-19/final-affected.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "command": "bun x tsc --noEmit",
+      "log": "docs/brief-delivery/evidence/F-19/typescript.log"
+    },
+    "mutations": {
+      "variants": 3,
+      "expected_failures": 3,
+      "log": "docs/brief-delivery/evidence/F-19/mutations.json",
+      "restoration": "Original bytes restored in finally and checked exactly; fresh focused and final affected tests pass afterward."
+    },
+    "manual": "Isolated persistent SQLite restart, canonical turn replay, real extractor/AgentService/provider dispatch with scripted local models, and authenticated Unix-socket HTTP. No real user deletion, inference or deployment.",
+    "evidence_policy": "Committed logs contain test verdicts only; raw local output is not published because fixtures can print credentials or prompt data.",
+    "guards": "Normal commit hooks required before push; exact results recorded in PR description."
+  },
+  "limitations": [
+    "Only the chosen assertion and its evidence are deleted. Original messages/summaries/documents, settings/interview sources, entity identity/relationships, independently stored facts and backups remain.",
+    "Suppression matches normalized assertions and known source revisions, not arbitrary semantic paraphrases. Legacy sources without a revision use conservative automatic-writer suppression; new manual input or a later canonical Brief turn can override by creating new information.",
+    "A matching profile source field is withheld as a whole. This may withhold other text in that field until the answer changes; unrelated facts are not erased.",
+    "Already-sent provider context, existing realtime sessions, tool-return copies, backups and SQLite free pages cannot be scrubbed by this operation. No global model unlearning or secure file erasure.",
+    "No Undo, suppression expiry or silent capacity eviction. No UI, deployment, production activation or F20 implementation. Full repository CI reports separately."
+  ],
+  "rollback": "Unset JARVIS_BRIEF_MEMORY_FORGET and restart to disable new requests. Keep durable tombstones and ingestion/handoff checks. A pre-F19 writer can ignore suppression and must not be substituted after using Forget without preserving these checks.",
+  "guide": "docs/brief-memory-forget.md",
+  "next_task": "F-20 not started"
+}

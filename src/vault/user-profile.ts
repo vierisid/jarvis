@@ -1,3 +1,6 @@
+import { captureProfileSources } from './memory-use-context';
+import { predicateKey, valueKey } from './fact-policy';
+import { FactSuppressedError, profileSourceForgotten } from './memory-suppression';
 import { deleteSetting, getSetting, setSetting } from './settings.ts';
 import { createEntity, updateEntity } from './entities.ts';
 import { createFact, findFacts, type Fact } from './facts.ts';
@@ -37,6 +40,18 @@ export function getUserProfile(): UserProfileRecord | null {
   } catch {
     return null;
   }
+}
+
+// Preserve editable source settings, but never re-inject a forgotten source field into model context.
+export function getUserProfileForPrompt(): UserProfileRecord | null {
+  const profile = getUserProfile(); if (!profile) return null;
+  const answers = { ...profile.answers };
+  for (const question of USER_PROFILE_QUESTIONS) {
+    const answer = answers[question.id];
+    if (answer && profileSourceForgotten(getDb(), question.id, answer)) delete answers[question.id];
+  }
+  captureProfileSources(answers);
+  return { ...profile, answers };
 }
 
 export function saveUserProfile(input: Record<string, unknown>): UserProfileRecord {
@@ -180,10 +195,12 @@ function syncUserProfileKnowledge(profile: UserProfileRecord): void {
       return answer ? [{ predicate: question.id, object: answer, confirmed: true,
         sourceRef: `profile:answer:${question.id}`, quote: answer }] : [];
     }).concat(getDerivedUserProfileFacts(profile));
-    const saved = desired.map(fact => createFact(entity.id, fact.predicate, fact.object, {
-      confidence: fact.confirmed ? 1 : 0.5, confirmed: fact.confirmed, source: USER_PROFILE_VAULT_SOURCE,
-      basis: fact.confirmed ? undefined : 'inferred', sourceRef: fact.sourceRef, quote: fact.quote,
-    }));
+    const saved = desired.flatMap(fact => {
+      try { return [createFact(entity.id, fact.predicate, fact.object, {
+        confidence: fact.confirmed ? 1 : 0.5, confirmed: fact.confirmed, source: USER_PROFILE_VAULT_SOURCE,
+        basis: fact.confirmed ? undefined : 'inferred', sourceRef: fact.sourceRef, quote: fact.quote,
+      })]; } catch (error) { if (error instanceof FactSuppressedError) return []; throw error; }
+    });
     for (const old of previous) if (!saved.some(f => f.id === old.id)) {
       const next = saved.find(f => f.predicate_key === old.predicate_key);
       db.run("UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ?", [next?.id ?? null, old.id]);
@@ -243,4 +260,19 @@ function extractAliases(text: string): string[] {
   }
 
   return [...aliases];
+}
+
+/** Recover a current profile source revision for migrated rows that predate provenance. */
+export function profileSourceRevisionsForFact(fact: Fact): { source: string; source_ref: string; quote: string }[] {
+  const profile = getUserProfile();
+  if (!profile) return [];
+  const entity = getDb().query<{ id: string }, []>("SELECT id FROM entities WHERE source = 'user_profile' ORDER BY updated_at DESC LIMIT 1").get();
+  if (entity?.id !== fact.subject_id || fact.scope || fact.valid_from !== null || fact.valid_to !== null) return [];
+  const desired: ProfileKnowledgeFact[] = USER_PROFILE_QUESTIONS.flatMap(question => {
+    const answer = profile.answers[question.id];
+    return answer ? [{ predicate: question.id, object: answer, confirmed: true, sourceRef: `profile:answer:${question.id}`, quote: answer }] : [];
+  });
+  desired.push(...getDerivedUserProfileFacts(profile));
+  return desired.filter(item => predicateKey(item.predicate) === fact.predicate_key && valueKey(item.predicate, item.object) === fact.value_key)
+    .map(item => ({ source: USER_PROFILE_VAULT_SOURCE, source_ref: item.sourceRef, quote: item.quote }));
 }
