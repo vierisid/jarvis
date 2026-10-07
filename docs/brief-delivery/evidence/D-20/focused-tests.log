@@ -1,0 +1,34 @@
+bun test v1.4.2 (744846f84)
+
+ui/src/brief/workflows/context/controller.test.ts:
+(pass) context matches owner, flow, version and configured/recorded identity [4.46ms]
+(pass) invalid and duplicate group entries fail closed; unknown is not empty [1.75ms]
+(pass) redaction strips label, content and source before caching without copying extra fields [1.03ms]
+(pass) configured and recorded context remain independent, including historical versions [2.20ms]
+(pass) parallel reads settle into their own query, never beneath the other basis [1.15ms]
+(pass) repeated refresh coalesces a slow read instead of restarting it [0.59ms]
+(pass) owner retirement aborts reads and rejects late provider results [0.63ms]
+(pass) a failed refresh keeps qualified stale data; retry recovers [0.59ms]
+(pass) missing, removed, stale, partial, unavailable, unsupported and empty retain their meaning [0.83ms]
+(pass) mode and per-query scroll positions survive repeated returns [0.57ms]
+
+ui/src/brief/workflows/context/WorkflowContextRoom.test.tsx:
+(pass) gates reject unsupported/source/scope/flow/version mismatches before any read [38.77ms]
+(pass) configured and used-by-run views show their own goal and exact version [155.09ms]
+(pass) all eight shell states and remount preserve mode and recorded identity [93.81ms]
+(pass) source actions carry exact IDs; missing/removed sources have no false target [32.07ms]
+(pass) no selected run disables the recorded choice without inventing usage [17.97ms]
+(pass) partial context does not replace unknown usage with configured facts [39.89ms]
+(pass) unavailable, unsupported and empty have distinct UI [18.51ms]
+(pass) long arbitrary text renders as text; explicit redaction hides all marked fields [13.02ms]
+(pass) header destinations retain flow/version/run and no removed chrome returns [14.92ms]
+(pass) Run shares the Runs owner and selects its receipt; uncertainty stays locked [803.51ms]
+(pass) a wrong-scope command owner is disabled [11.06ms]
+(pass) returning from another room refreshes configured context without losing the chosen basis [31.41ms]
+(pass) changed source and permission links preserve their separate source identities [24.29ms]
+(pass) late run acknowledgement cannot navigate a replaced command owner [402.22ms]
+
+ 24 pass
+ 0 fail
+ 97 expect() calls
+Ran 24 tests across 2 files. [2.34s]
