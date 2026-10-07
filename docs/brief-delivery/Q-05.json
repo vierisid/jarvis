@@ -1,0 +1,119 @@
+{
+  "task": "Q-05",
+  "title": "Revalidate bindings before activation and execution",
+  "date": "2026-10-07",
+  "branch": "brief/q-05",
+  "worktree": "a checkout of brief/q-05",
+  "baseline": "462d955d54014e15ea003b5908860917642e5b34",
+  "baseline_ref": "brief/foundations (no merge prerequisites)",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-05.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "binding pins for enabled workflows, per-run connection identity, pinned computers and recipient fact checks on governed sends; active once merged, with no flag",
+    "release_enabled": false,
+    "publication": "PR #778 open against brief/foundations; https://github.com/vierisid/jarvis/pull/778"
+  },
+  "design": {
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-3",
+    "page": "81:2",
+    "checkpoint": "UI-35; no visual changes in Q-05"
+  },
+  "ownership": {
+    "implementer": "Core-quality line",
+    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+  },
+  "merge_after": [],
+  "enable_after": [],
+  "decisions": [
+    "Any change to a saved connection's credential pauses the workflows that use it until a person enables or publishes them again. Jarvis keeps no account identity, so a rotated key cannot be told apart from another account pasted under the same name; the product decision for this card is to pause rather than trust a rotation. Several accounts of one service stay several connections with different names.",
+    "Bindings are pinned when a person accepts them (enable, publish, attaching a version to an enabled flow, editing the draft an enabled unpublished flow runs), not at a run, so nothing is accepted with nobody looking.",
+    "A superseded recipient fact stops the send; it never switches to the address memory holds now, which would itself be a silent redirect."
+  ],
+  "behavior": [
+    "Enabling a workflow (publishing enables it) records binding pins for the version it will run: each connection a step's auth names, the trigger included, as the saved connection's row id and credential_generation, or for jarvis:google and jarvis:telegram a sha256-prefix fingerprint of the grant or token, never the secret; and the computer: a literal step target naming exactly one enrolled computer, else the most recently enrolled computer serving the first machine step's capability with connected ones first, else this computer when none serves it and local tools are on. Pins are written again only when a person enables or publishes again, attaches a version to an enabled flow, or edits the draft an enabled unpublished flow runs; a metadata PATCH cannot. At startup the daemon pins enabled flows that have none; nobody is choosing then and computers may not have reconnected, so a computer is pinned at startup only when the choice does not depend on which one is connected (a literal target, the only enrolled computer serving the steps, or this computer when none does), and with several the flow stays unpinned to a computer until a person enables it again.",
+    "Replacing a saved connection's credential through upsertConnection (the create and update routes) advances credential_generation. Re-encryption writes the ciphertext directly and does not.",
+    "Every run admission compares the version's pins with what each connection resolves to now. A replaced credential, a connection deleted and created again, a reconnected managed source, or a pinned computer no longer enrolled is a BINDING_STALE readiness blocker naming it and saying how to accept it. A Google grant that is revoked or waiting for reconnect is not ready (CONNECTION_BINDING) and the source hands out nothing. Trigger fires refused this way are recorded as failed runs with the reason, like other readiness refusals.",
+    "A run keeps the connection identity it started with. The engine's first credential fetch in a run records the identity handed out, checked against the pins; every later fetch, at each step, retry and resumed approval, must resolve to the same identity, or the daemon answers 409, hands out nothing and records the refusal on the run. Re-enabling accepts a change for later runs only. GET /api/workflow-runs/:runId returns connectionBindings and manage_workflow get_run returns bindingRefusals.",
+    "A run of a pinned flow uses the pinned computer: offline is WORKFLOW_MACHINE_OFFLINE at dispatch with no other computer taking over; no longer enrolled is WORKFLOW_MACHINE_REPLACED; pinned to this computer with local tools off is WORKFLOW_MACHINE_UNAVAILABLE. A computer enrolled later does not move the run. The pin uses servesCapability() (#611).",
+    "A governed piece action in a sending or addressing category (send_email, send_message, write_data, modify_settings) matches each recipient address in receiver, to, cc, bcc, attendees, attendee_email, user_email and email against memory's email and primary_email facts, ignoring case, when its effect is recorded, and keeps the matching fact ids on the effect (bindings.facts), outside the request digest and target. The effect boundary rechecks them before the policy and any approval, in the dispatch checkpoint (which also covers an approval granted while its card is delivered), and before a recorded authorization is handed out on the engine's own retry. No current fact (superseded, expired or deleted) is WORKFLOW_FACT_STALE; only contested ones is WORKFLOW_FACT_AMBIGUOUS. The effect is recorded as blocked with that outcome and its frozen arguments unchanged. Reads are never blocked; an address memory does not know is not checked.",
+    "BOUNDED_TOOLS and boundedToolCapability moved to runtime/tool-capability.ts and the readiness services to repos/readiness-services.ts (re-exported from flow-readiness.ts), so the database layer can pin a computer without importing the dispatch machinery."
+  ],
+  "acceptance": [
+    {
+      "check": "Revoked connection, changed default device and superseded fact cannot silently redirect work",
+      "status": "passed",
+      "evidence": "src/workflows/db/repos/binding-pins.test.ts (a replaced credential, a connection deleted and created again, a reconnected or revoked managed grant, a removed pinned computer: blocked at admission until enabled again; a credential replaced during a run is refused at the next fetch), src/workflows/runtime/workflow-binding-pins.test.ts (a computer enrolled later does not take over; offline and removed computers block instead of being replaced), src/workflows/sandbox-api/native-connections.test.ts (the engine route answers 409 and records the refusal), src/workflows/credentials/google-source.test.ts (a revoked grant is handed to no one), src/workflows/runtime/fact-bindings.test.ts (a superseded, expired, deleted or contested recipient fact blocks the send before approval, at dispatch, when approved during delivery and on retry, and never switches address); evidence/Q-05/revert-checks.log"
+    },
+    {
+      "check": "The same frozen approved parameters survive retries; blocked work remains inspectable",
+      "status": "passed",
+      "evidence": "src/workflows/runtime/fact-bindings.test.ts (a blocked send keeps its frozen arguments, its fact ids in bindings.facts and its typed outcome; the engine's retry of an authorized send is rechecked, never re-addressed), src/workflows/db/repos/binding-pins.test.ts (later fetches in a run must match the identity it started with; refusals are kept on the run and shown by get_run bindingRefusals), src/workflows/sandbox-api/native-connections.test.ts (the run's connectionBindings carry the refusal); evidence/Q-05/revert-checks.log"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun test --preload ./src/test-preload.ts",
+      "result": "7,765 pass, 86 skip, 9 fail of 7,860 tests across 426 files (local WSL2, 04d5a0c1). All 9 also fail on brief/foundations 462d955d with no Q work applied: git config lint, six Chromium launches and two engine-reaper tests on this machine. CI on the final head runs the full suite.",
+      "log": "evidence/Q-05/full-suite-summary.log"
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/workflows/db/repos/binding-pins.test.ts src/workflows/runtime/workflow-binding-pins.test.ts src/workflows/runtime/fact-bindings.test.ts src/workflows/sandbox-api/native-connections.test.ts src/workflows/credentials/google-source.test.ts src/workflows/runner/triggers/manager.test.ts src/sidecar/capability-predicate.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/governed-pieces.test.ts",
+      "result": "274 pass, 0 fail across 10 files: the Q-05 tests plus the readiness, machine binding, Authority boundary, governed piece and capability-predicate tests they touch",
+      "log": "evidence/Q-05/q05-tests.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-05/types.log"
+    },
+    {
+      "command": "bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package",
+      "result": "passed, exit 0",
+      "log": "evidence/Q-05/guards.log"
+    },
+    {
+      "command": "remove each of 46 guarantees in turn and run its test",
+      "result": "46 of 46 removals fail their tests; source restored. The log lists the file, the exact text removed and its replacement for each.",
+      "log": "evidence/Q-05/revert-checks.log"
+    }
+  ],
+  "manual_checks": [
+    "Not run against a live daemon: no real OAuth grant, email or desktop effect is needed for these fixtures (delivery contract). The quick path below names the manual check for a dev daemon."
+  ],
+  "quick_verify": {
+    "cwd": "repository root, on brief/q-05",
+    "command": "bun test --preload ./src/test-preload.ts src/workflows/db/repos/binding-pins.test.ts src/workflows/runtime/workflow-binding-pins.test.ts src/workflows/runtime/fact-bindings.test.ts",
+    "expected": "27 pass",
+    "manual": "On a dev daemon, enable a workflow whose step uses a saved connection, save that connection again with a different credential, then run it: the run is refused with BINDING_STALE, 'The credential stored in connection NAME was replaced since this workflow was enabled. It may now act as a different account. Check the connection, then enable or publish the workflow again to accept it.' Enable it again and it runs.",
+    "screenshot": "not applicable: no visible UI changes"
+  },
+  "migration": "Additive: flow.binding_pins TEXT (null until pinned), app_connection.credential_generation INTEGER NOT NULL DEFAULT 0, and table workflow_run_connection_binding (deleted with its run). Older binaries ignore them. Enabled flows are pinned at the first startup of this build against what they resolve to then.",
+  "rollback": "Revert the Q-05 commits. The columns and table are additive and ignored by older builds; pins and run bindings then have no effect and flows run as before. No data needs migrating.",
+  "limitations": [
+    "A flow that picks its computer from run data, names one by a partial name or not at all, or uses only agents, is not pinned to a computer; its runs choose one as before.",
+    "Pins belong to the version a person enabled. A run of a flow never enabled, or of another version such as a draft test run, binds connections per run only.",
+    "Flows enabled before this build are pinned at its first startup against what they resolve to then, so a change made before that is accepted; with several computers that could serve them, they stay unpinned to a computer until enabled again.",
+    "Only email addresses memory already holds are checked, and only on governed piece actions; chat ids, phone numbers and ungoverned pieces are not.",
+    "Google's own refresh-token rotation changes the grant fingerprint and pauses the flow until it is enabled again.",
+    "The engine reports a refused credential fetch as a bare loading error; the reason is on the run and in get_run, not in the step's error text.",
+    "No UI changes: BINDING_STALE travels through the existing readiness issue list."
+  ],
+  "found": [
+    "Before this card, the engine looked up a connection's credential fresh at every step, retry and resumed approval, so a credential replaced under the same name took effect mid-run and in every later run without anyone accepting it.",
+    "The Google source handed out a grant waiting for reconnect, and readiness only checked that the managed source existed.",
+    "Each run chose its computer when it first needed one, so a computer enrolled later, or a change of default, could take over a scheduled workflow's later runs.",
+    "Workflows never read memory facts as data, so a recipient address carries no fact id; the only sound check is by value.",
+    "main's updateConnectionById (#691, #728) replaces credentials from the dashboard's PATCH route without passing through upsertConnection; it must advance credential_generation when brief/foundations meets main."
+  ],
+  "integration": [
+    "main (#691, #728): add credential_generation = credential_generation + 1 to updateConnectionById's patch.value branch, with a test that a PATCH of the value pauses an enabled flow. Text conflicts: app-connection.ts upsertConnection doc comment (keep both paragraphs); service-backends.ts (main's piece-effects imports and reprojectPieceInput, plus the fact-bindings import and the Q-05 lines). version-stamp-cache.sh already conflicts at brief/foundations 462d955d.",
+    "Q-13 (#737) extracts the same boundedToolCapability, with the same body, inside effect-capabilities.ts: keep the one in tool-capability.ts and point prepared-qualification.ts at it.",
+    "F-08 (#755) reshapes versionReadiness: keep both import sets and F-08's effective graph and ingredient checks, then add bindingPinIssues for the stored trigger unless acceptBindings. The F stack up to F-13 conflicts only there.",
+    "Clean merges: #735, Q-04 (#765), Q-03, Q-18 and the D stack."
+  ],
+  "next": "Show BINDING_STALE on the dashboard with the connection or computer to check and a re-accept action; carry the refusal reason into the step's error once the engine can report it; check non-email recipients when memory holds them. All are separate cards; Q-07 owns uncertain execution recovery."
+}
