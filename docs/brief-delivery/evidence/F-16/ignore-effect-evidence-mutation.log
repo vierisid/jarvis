@@ -1,0 +1,434 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/outcomes.test.ts:
+107 |     expect(db.query('SELECT * FROM outcome_time_record').all()).toEqual([]);
+108 |   } finally { db.close(); }
+109 | });
+110 | for (const status of ['pending', 'dispatching', 'failed', 'blocked', 'unknown']) test(`effect ${status} invalidates a checked success`, async () => {
+111 |   const w = work(); provider.recordTime(w.item.id, time(w)); effect(w.run!.id, status);
+112 |   expect(await provider.read(query())).toMatchObject({ state: 'empty', coverage: { eligible: 0, excluded: { uncertain_effect: 1 } } });
+                                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "coverage": {
+-     "eligible": 0,
+-     "excluded": {
+-       "uncertain_effect": 1,
+-     },
++     "candidates": 1,
++     "complete": true,
++     "eligible": 1,
++     "excluded": {},
++     "timed": 1,
++     "untimed": 0,
+    },
+-   "state": "empty",
++   "data": [
++     {
++       "goalIds": [],
++       "outcomeId": "run:VoPg8Y2hKgfPM9Us7YVhM",
++       "result": {
++         "asOf": 1791367200000,
++         "baseline": null,
++         "provenance": [
++           {
++             "id": "work-check:0f46b0ec-fffc-4309-a448-07b5c8b1d227",
++             "kind": "source",
++             "revision": "1",
++           },
++           {
++             "id": "owner:report",
++             "kind": "source",
++             "revision": "user-cited",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "checked work items",
++         "value": 1,
++       },
++       "runId": "VoPg8Y2hKgfPM9Us7YVhM",
++       "timeBack": {
++         "asOf": 1791367200000,
++         "baseline": 30,
++         "provenance": [
++           {
++             "id": "manual-report-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++           {
++             "id": "review-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "minutes",
++         "value": 25,
++       },
++       "window": {
++         "end": 1791763200000,
++         "start": 1791158400000,
++         "timezone": "UTC",
++       },
++       "workItemId": "30d395d8-13ed-44dc-a71e-bce73b250eb0",
++     },
++   ],
++   "state": "ready",
+  }
+
+- Expected  - 5
++ Received  + 61
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:112:40)
+(fail) effect pending invalidates a checked success [485.46ms]
+107 |     expect(db.query('SELECT * FROM outcome_time_record').all()).toEqual([]);
+108 |   } finally { db.close(); }
+109 | });
+110 | for (const status of ['pending', 'dispatching', 'failed', 'blocked', 'unknown']) test(`effect ${status} invalidates a checked success`, async () => {
+111 |   const w = work(); provider.recordTime(w.item.id, time(w)); effect(w.run!.id, status);
+112 |   expect(await provider.read(query())).toMatchObject({ state: 'empty', coverage: { eligible: 0, excluded: { uncertain_effect: 1 } } });
+                                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "coverage": {
+-     "eligible": 0,
+-     "excluded": {
+-       "uncertain_effect": 1,
+-     },
++     "candidates": 1,
++     "complete": true,
++     "eligible": 1,
++     "excluded": {},
++     "timed": 1,
++     "untimed": 0,
+    },
+-   "state": "empty",
++   "data": [
++     {
++       "goalIds": [],
++       "outcomeId": "run:wywtGjiWsRWvm7GuWiEt6",
++       "result": {
++         "asOf": 1791367200000,
++         "baseline": null,
++         "provenance": [
++           {
++             "id": "work-check:ba7a7ccc-3718-4954-8286-3cd7b899069f",
++             "kind": "source",
++             "revision": "1",
++           },
++           {
++             "id": "owner:report",
++             "kind": "source",
++             "revision": "user-cited",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "checked work items",
++         "value": 1,
++       },
++       "runId": "wywtGjiWsRWvm7GuWiEt6",
++       "timeBack": {
++         "asOf": 1791367200000,
++         "baseline": 30,
++         "provenance": [
++           {
++             "id": "manual-report-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++           {
++             "id": "review-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "minutes",
++         "value": 25,
++       },
++       "window": {
++         "end": 1791763200000,
++         "start": 1791158400000,
++         "timezone": "UTC",
++       },
++       "workItemId": "a6f68eba-3ffa-4006-ba55-480463f97a62",
++     },
++   ],
++   "state": "ready",
+  }
+
+- Expected  - 5
++ Received  + 61
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:112:40)
+(fail) effect dispatching invalidates a checked success [489.42ms]
+107 |     expect(db.query('SELECT * FROM outcome_time_record').all()).toEqual([]);
+108 |   } finally { db.close(); }
+109 | });
+110 | for (const status of ['pending', 'dispatching', 'failed', 'blocked', 'unknown']) test(`effect ${status} invalidates a checked success`, async () => {
+111 |   const w = work(); provider.recordTime(w.item.id, time(w)); effect(w.run!.id, status);
+112 |   expect(await provider.read(query())).toMatchObject({ state: 'empty', coverage: { eligible: 0, excluded: { uncertain_effect: 1 } } });
+                                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "coverage": {
+-     "eligible": 0,
+-     "excluded": {
+-       "uncertain_effect": 1,
+-     },
++     "candidates": 1,
++     "complete": true,
++     "eligible": 1,
++     "excluded": {},
++     "timed": 1,
++     "untimed": 0,
+    },
+-   "state": "empty",
++   "data": [
++     {
++       "goalIds": [],
++       "outcomeId": "run:9dMQ9d5JMd0dCP6PZxdm5",
++       "result": {
++         "asOf": 1791367200000,
++         "baseline": null,
++         "provenance": [
++           {
++             "id": "work-check:5eeabc1f-d2d5-42a1-b619-2acd6f67fafa",
++             "kind": "source",
++             "revision": "1",
++           },
++           {
++             "id": "owner:report",
++             "kind": "source",
++             "revision": "user-cited",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "checked work items",
++         "value": 1,
++       },
++       "runId": "9dMQ9d5JMd0dCP6PZxdm5",
++       "timeBack": {
++         "asOf": 1791367200000,
++         "baseline": 30,
++         "provenance": [
++           {
++             "id": "manual-report-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++           {
++             "id": "review-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "minutes",
++         "value": 25,
++       },
++       "window": {
++         "end": 1791763200000,
++         "start": 1791158400000,
++         "timezone": "UTC",
++       },
++       "workItemId": "78a90b8a-7085-491b-8cbd-36a0bd542252",
++     },
++   ],
++   "state": "ready",
+  }
+
+- Expected  - 5
++ Received  + 61
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:112:40)
+(fail) effect failed invalidates a checked success [460.86ms]
+107 |     expect(db.query('SELECT * FROM outcome_time_record').all()).toEqual([]);
+108 |   } finally { db.close(); }
+109 | });
+110 | for (const status of ['pending', 'dispatching', 'failed', 'blocked', 'unknown']) test(`effect ${status} invalidates a checked success`, async () => {
+111 |   const w = work(); provider.recordTime(w.item.id, time(w)); effect(w.run!.id, status);
+112 |   expect(await provider.read(query())).toMatchObject({ state: 'empty', coverage: { eligible: 0, excluded: { uncertain_effect: 1 } } });
+                                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "coverage": {
+-     "eligible": 0,
+-     "excluded": {
+-       "uncertain_effect": 1,
+-     },
++     "candidates": 1,
++     "complete": true,
++     "eligible": 1,
++     "excluded": {},
++     "timed": 1,
++     "untimed": 0,
+    },
+-   "state": "empty",
++   "data": [
++     {
++       "goalIds": [],
++       "outcomeId": "run:UW0eRUp5OFSRs5v6arQIl",
++       "result": {
++         "asOf": 1791367200000,
++         "baseline": null,
++         "provenance": [
++           {
++             "id": "work-check:c0515d82-450f-4f8e-ae28-23c2178b8c4e",
++             "kind": "source",
++             "revision": "1",
++           },
++           {
++             "id": "owner:report",
++             "kind": "source",
++             "revision": "user-cited",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "checked work items",
++         "value": 1,
++       },
++       "runId": "UW0eRUp5OFSRs5v6arQIl",
++       "timeBack": {
++         "asOf": 1791367200000,
++         "baseline": 30,
++         "provenance": [
++           {
++             "id": "manual-report-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++           {
++             "id": "review-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "minutes",
++         "value": 25,
++       },
++       "window": {
++         "end": 1791763200000,
++         "start": 1791158400000,
++         "timezone": "UTC",
++       },
++       "workItemId": "8ff91cda-54b1-4c7e-9584-52a753067e4c",
++     },
++   ],
++   "state": "ready",
+  }
+
+- Expected  - 5
++ Received  + 61
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:112:40)
+(fail) effect blocked invalidates a checked success [446.54ms]
+107 |     expect(db.query('SELECT * FROM outcome_time_record').all()).toEqual([]);
+108 |   } finally { db.close(); }
+109 | });
+110 | for (const status of ['pending', 'dispatching', 'failed', 'blocked', 'unknown']) test(`effect ${status} invalidates a checked success`, async () => {
+111 |   const w = work(); provider.recordTime(w.item.id, time(w)); effect(w.run!.id, status);
+112 |   expect(await provider.read(query())).toMatchObject({ state: 'empty', coverage: { eligible: 0, excluded: { uncertain_effect: 1 } } });
+                                             ^
+error: expect(received).toMatchObject(expected)
+
+  {
++   "asOf": 1791367200000,
+    "coverage": {
+-     "eligible": 0,
+-     "excluded": {
+-       "uncertain_effect": 1,
+-     },
++     "candidates": 1,
++     "complete": true,
++     "eligible": 1,
++     "excluded": {},
++     "timed": 1,
++     "untimed": 0,
+    },
+-   "state": "empty",
++   "data": [
++     {
++       "goalIds": [],
++       "outcomeId": "run:WbijjpuDoq2tgJw7umkf7",
++       "result": {
++         "asOf": 1791367200000,
++         "baseline": null,
++         "provenance": [
++           {
++             "id": "work-check:e5dd1537-084f-4004-9bec-b0b38a249a54",
++             "kind": "source",
++             "revision": "1",
++           },
++           {
++             "id": "owner:report",
++             "kind": "source",
++             "revision": "user-cited",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "checked work items",
++         "value": 1,
++       },
++       "runId": "WbijjpuDoq2tgJw7umkf7",
++       "timeBack": {
++         "asOf": 1791367200000,
++         "baseline": 30,
++         "provenance": [
++           {
++             "id": "manual-report-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++           {
++             "id": "review-stopwatch",
++             "kind": "source",
++             "revision": "v1",
++           },
++         ],
++         "qualification": "user_reported",
++         "target": null,
++         "unit": "minutes",
++         "value": 25,
++       },
++       "window": {
++         "end": 1791763200000,
++         "start": 1791158400000,
++         "timezone": "UTC",
++       },
++       "workItemId": "7ca661e5-880c-4776-bfc4-61ded79d8be7",
++     },
++   ],
++   "state": "ready",
+  }
+
+- Expected  - 5
++ Received  + 61
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:112:40)
+(fail) effect unknown invalidates a checked success [502.82ms]
+
+ 0 pass
+ 24 filtered out
+ 5 fail
+ 5 expect() calls
+Ran 5 tests across 1 file. [2.44s]

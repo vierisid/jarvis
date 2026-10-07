@@ -1,0 +1,66 @@
+bun test v1.4.2 (744846f84)
+
+src/brief/outcomes.test.ts:
+168 |   const parent = getGoalApplication().createGoal('Parent', 'objective'), child = getGoalApplication().createGoal('Child', 'key_result', { parent_id: parent.id });
+169 |   const start = query().start;
+170 |   measurement(parent.id, 5, start - 1, 0); measurement(parent.id, 6, start + 1, 1); measurement(parent.id, 3, start + 2, 2);
+171 |   measurement(child.id, 1, start - 1, 0); measurement(child.id, 2, start + 1, 1);
+172 |   const view = await summary(); expect(view.completedWork).toBeNull(); expect(view.week).toBeNull();
+173 |   expect(view.goalDeltas.find(g => g.goalId === parent.id)).toMatchObject({ change: { value: -2 }, attribution: 'observed_change_only', rollup: 'independent' });
+                                                                  ^
+error: expect(received).toMatchObject(expected)
+
+  {
+    "attribution": "observed_change_only",
+    "change": {
+-     "value": -2,
++     "asOf": 1791158400002,
++     "baseline": 5,
++     "provenance": [
++       {
++         "id": "ledger:cde73b96-4956-443e-9eee-f6bebc1bb662",
++         "kind": "source",
++         "revision": "0",
++       },
++       {
++         "id": "ledger:cde73b96-4956-443e-9eee-f6bebc1bb662",
++         "kind": "source",
++         "revision": "2",
++       },
++     ],
++     "qualification": "user_reported",
++     "target": 10,
++     "unit": "partners",
++     "value": 3,
+    },
++   "goalId": "cde73b96-4956-443e-9eee-f6bebc1bb662",
++   "reason": null,
+    "rollup": "independent",
++   "title": "Parent",
+  }
+
+- Expected  - 1
++ Received  + 21
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:173:61)
+(fail) goal deltas are actual signed observations, independent of work and parent/child totals [476.73ms]
+206 | 
+207 | test('daily and weekly goal deltas have distinct observed openings', async () => {
+208 |   const g = getGoalApplication().createGoal('Daily goal', 'objective');
+209 |   measurement(g.id, 1, query().start - 1, 0); measurement(g.id, 3, query().start + 1, 1);
+210 |   measurement(g.id, 5, Date.UTC(2026, 9, 7, 8), 2);
+211 |   const view = await summary(); expect(view.goalDeltas[0]!.change?.value).toBe(4);
+                                                                                ^
+error: expect(received).toBe(expected)
+
+Expected: 4
+Received: 5
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-f-16/src/brief/outcomes.test.ts:211:75)
+(fail) daily and weekly goal deltas have distinct observed openings [505.92ms]
+
+ 0 pass
+ 27 filtered out
+ 2 fail
+ 6 expect() calls
+Ran 2 tests across 1 file. [1016.00ms]
