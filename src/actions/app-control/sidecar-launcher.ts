@@ -7,7 +7,7 @@
  */
 
 import { spawn, type Subprocess } from 'bun';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createConnection } from 'node:net';
@@ -82,64 +82,40 @@ export function findSidecarExecutable(): string | null {
 }
 
 /**
- * Get the Windows host IP when WSL2 doesn't have mirrored networking.
- * Parses /etc/resolv.conf for the nameserver entry.
+ * The one host the bridge is looked for on (#800): this machine's loopback.
+ *
+ * On WSL this used to fall back to the first nameserver in /etc/resolv.conf,
+ * which is the Windows host only on a default NAT-mode install. With a custom
+ * resolv.conf -- a corporate, public or LAN resolver -- it is another machine,
+ * so the ping went there, a launch adopted whatever answered, and every
+ * typeText and launchApp argument followed it off the box. A probe that
+ * answered there also left the connection aimed at localhost, so the host
+ * that was checked was not the host that was used.
+ *
+ * No other derived address is safe either: the default gateway, the usual
+ * alternative, is the LAN router in WSL's mirrored networking mode. So the
+ * bridge is reached on loopback or not at all, which is how mirrored mode
+ * (where Windows' listeners are this machine's) already worked. NAT-mode WSL,
+ * where a Windows-side listener is not on WSL's loopback, can no longer reach
+ * the legacy bridge; launchSidecar's error says so.
+ *
+ * An address, not the name `localhost` (#800 review): the name is resolved on
+ * every connect, through /etc/hosts and then DNS, and resolves to ::1 first
+ * here, so a listener on [::1]:9224 took the channel even while the real
+ * bridge was running -- which bound IPv4 only (`IPAddress.Any`, Program.cs
+ * before 28e43ed), so the two binds never conflict.
  */
-export function getWSLHostIP(): string {
-  try {
-    const resolv = readFileSync('/etc/resolv.conf', 'utf-8');
-    const match = resolv.match(/nameserver\s+(\d+\.\d+\.\d+\.\d+)/);
-    if (match) {
-      return match[1]!;
-    }
-  } catch {
-    // ignore
-  }
-  return 'localhost';
-}
-
-/**
- * Determine the host to connect to the sidecar.
- * With WSL2 mirrored networking, localhost works.
- * Without it, we use the Windows host IP.
- */
-function getSidecarHost(): string {
-  if (!WSLBridge.isWSL()) {
-    return 'localhost';
-  }
-
-  // Check if mirrored networking is active (localhost works)
-  // WSL2 mirrored mode sets networkingMode in .wslconfig
-  // Simplest check: if localhost resolves to Windows, it's mirrored
-  // For now, try localhost first; the connect logic handles fallback
-  return 'localhost';
-}
+export const BRIDGE_HOST = '127.0.0.1';
 
 /**
  * Check if the sidecar is already running on the given port.
  */
 export async function isSidecarRunning(port: number = DEFAULT_PORT): Promise<boolean> {
-  const host = getSidecarHost();
-  const hosts = [host];
-
-  // If on WSL and host is localhost, also try the WSL host IP as fallback
-  if (WSLBridge.isWSL() && host === 'localhost') {
-    const hostIP = getWSLHostIP();
-    if (hostIP !== 'localhost') {
-      hosts.push(hostIP);
-    }
+  try {
+    return await pingTcp(BRIDGE_HOST, port, 2000);
+  } catch {
+    return false;
   }
-
-  for (const h of hosts) {
-    try {
-      const alive = await pingTcp(h, port, 2000);
-      if (alive) return true;
-    } catch {
-      // Try next host
-    }
-  }
-
-  return false;
 }
 
 /**
@@ -147,7 +123,7 @@ export async function isSidecarRunning(port: number = DEFAULT_PORT): Promise<boo
  * Auto-detects the executable and spawns it. `exeOverride` is a test seam
  * (src/model-exec-env-sites.test.ts).
  */
-export async function launchSidecar(port: number = DEFAULT_PORT, exeOverride?: string): Promise<RunningSidecar> {
+export async function launchSidecar(port: number = DEFAULT_PORT, exeOverride?: string, readyTimeoutMs = 10_000): Promise<RunningSidecar> {
   const exePath = exeOverride ?? findSidecarExecutable();
   if (!exePath) {
     // There is no build command to name any more: the .NET desktop-bridge
@@ -177,38 +153,19 @@ export async function launchSidecar(port: number = DEFAULT_PORT, exeOverride?: s
   });
 
   const startedAt = Date.now();
-  const host = getSidecarHost();
 
-  // Poll TCP for up to 10s
-  const deadline = Date.now() + 10_000;
+  // Poll TCP until the deadline (10s unless a test says otherwise).
+  const deadline = Date.now() + readyTimeoutMs;
   let reachable = false;
-  let connectedHost = host;
 
   while (Date.now() < deadline) {
     try {
-      if (await pingTcp(host, port, 1000)) {
+      if (await pingTcp(BRIDGE_HOST, port, 1000)) {
         reachable = true;
-        connectedHost = host;
         break;
       }
     } catch {
       // Not ready yet
-    }
-
-    // Also try WSL host IP if localhost fails
-    if (WSLBridge.isWSL() && host === 'localhost') {
-      const hostIP = getWSLHostIP();
-      if (hostIP !== 'localhost') {
-        try {
-          if (await pingTcp(hostIP, port, 1000)) {
-            reachable = true;
-            connectedHost = hostIP;
-            break;
-          }
-        } catch {
-          // Not ready
-        }
-      }
     }
 
     await Bun.sleep(300);
@@ -217,14 +174,18 @@ export async function launchSidecar(port: number = DEFAULT_PORT, exeOverride?: s
   if (!reachable) {
     try { proc.kill(); } catch {}
     throw new Error(
-      `Sidecar started but not reachable on port ${port} after 10s.\n` +
-      `Binary: ${exePath}`
+      `Sidecar started but not reachable on ${BRIDGE_HOST}:${port} after ${Math.round(readyTimeoutMs / 1000)}s.\n` +
+      `Binary: ${exePath}` +
+      (WSLBridge.isWSL()
+        ? '\nOn WSL the bridge is only looked for on loopback (127.0.0.1), which reaches Windows only with ' +
+          'networkingMode=mirrored in .wslconfig; NAT mode is not supported.'
+        : '')
     );
   }
 
-  console.log(`[SidecarLauncher] Sidecar ready on ${connectedHost}:${port} (pid ${proc.pid})`);
+  console.log(`[SidecarLauncher] Sidecar ready on ${BRIDGE_HOST}:${port} (pid ${proc.pid})`);
 
-  return { proc, port, host: connectedHost, startedAt, exePath };
+  return { proc, port, host: BRIDGE_HOST, startedAt, exePath };
 }
 
 /**
@@ -258,8 +219,42 @@ export async function stopSidecar(running: RunningSidecar): Promise<void> {
 
 // --- TCP helpers ---
 
+/**
+ * The longest first line a ping reply may take. The bridge's reply was
+ * `{"jsonrpc":"2.0","result":"pong","id":-1}` and a line end (Program.cs
+ * before 28e43ed), about 45 bytes; this leaves room and no more. Without it a
+ * peer could stream into the probe for its whole timeout (#800 review).
+ */
+const MAX_PING_REPLY_CHARS = 4096;
+
+/**
+ * Whether one reply line is the bridge's answer to this ping: its result
+ * `pong`, under the ping's own id. It used to be any reply containing the
+ * text "pong" anywhere. This is not authentication -- anything can send the
+ * exact line -- only an end to accepting what merely mentions the word.
+ */
+// trim() also strips a leading U+FEFF, which a .NET writer can emit.
+function isPongReply(line: string): boolean {
+  try {
+    const reply = JSON.parse(line.trim()) as { result?: unknown; id?: unknown } | null;
+    return reply?.result === 'pong' && reply.id === -1;
+  } catch {
+    return false;
+  }
+}
+
 function pingTcp(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
+    let settled = false;
+    let safety: ReturnType<typeof setTimeout> | undefined;
+    const finish = (alive: boolean): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(safety);
+      socket.destroy();
+      resolve(alive);
+    };
+
     const socket = createConnection({ host, port, timeout: timeoutMs }, () => {
       // Send ping JSON-RPC
       const ping = JSON.stringify({ jsonrpc: '2.0', method: 'ping', params: {}, id: -1 }) + '\n';
@@ -270,27 +265,18 @@ function pingTcp(host: string, port: number, timeoutMs: number): Promise<boolean
 
     socket.on('data', (chunk) => {
       data += chunk.toString();
-      if (data.includes('pong')) {
-        socket.destroy();
-        resolve(true);
-      }
+      const end = data.indexOf('\n');
+      // Only the first line is the reply; past the cap without one, it is not.
+      if (end >= 0) finish(isPongReply(data.slice(0, end)));
+      else if (data.length > MAX_PING_REPLY_CHARS) finish(false);
     });
 
-    socket.on('error', () => {
-      socket.destroy();
-      resolve(false);
-    });
-
-    socket.on('timeout', () => {
-      socket.destroy();
-      resolve(false);
-    });
+    socket.on('error', () => finish(false));
+    socket.on('timeout', () => finish(false));
+    socket.on('close', () => finish(false));
 
     // Safety timeout
-    setTimeout(() => {
-      socket.destroy();
-      resolve(false);
-    }, timeoutMs + 500);
+    safety = setTimeout(() => finish(false), timeoutMs + 500);
   });
 }
 
