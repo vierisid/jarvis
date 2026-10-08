@@ -201,7 +201,8 @@ export class WorkflowEffectBoundary {
     let decision;
     try { decision = policy(); } catch (error) {
       record.status = 'blocked'; record.decision = 'denied'; record.error = String((error as Error).message);
-      record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false); throw error;
+      record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);
+      if (record.approvalId) approvals?.markExecuted(record.approvalId, boundedReceiptText(record.error, RECEIPT_MAX_CHARS), 'blocked'); throw error;
     }
     record.reason = decision.reason;
     if (record.approvalId || decision.requiresApproval) {
@@ -277,6 +278,7 @@ export class WorkflowEffectBoundary {
       if (error instanceof ActionOutcomeError) {
         record.outcome = error.outcome; record.status = 'blocked'; record.error = error.message;
         record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);
+        if (record.approvalId) approvals?.markExecuted(record.approvalId, boundedReceiptText(record.error, RECEIPT_MAX_CHARS), 'blocked');
       }
       throw error;
     }
@@ -331,6 +333,7 @@ export class WorkflowEffectBoundary {
       // Completion was not established. The durable record retains the
       // possibility that a remote effect happened before the failure.
       log(false);
+      if (record.approvalId && record.status === 'blocked') approvals?.markExecuted(record.approvalId, boundedReceiptText(record.error ?? 'Blocked', RECEIPT_MAX_CHARS), 'blocked');
       throw error;
     }
   }

@@ -718,4 +718,35 @@ describe('workflow effect boundary', () => {
       expect(listWorkflowEffects(f.run.id).map(effect => effect.executionPath)).toEqual([[['loop', 0]], [['loop', 1]]]);
     } finally { await runtime.shutdown(); await api.stop(); }
   }, 60_000);
+
+  test('an approved effect that becomes blocked sets execution_outcome to blocked', async () => {
+    const f = fixture();
+    f.registry.get('write_file')!.authorityGate = () => ({ actionCategory: 'write_data', confirm: 'always', intent: 'Review' });
+
+    // Dispatch (requires approval, throws standard unexecuted boundary result)
+    await f.invoke().catch(() => {});
+
+    const requests = f.approvals.getPending();
+    expect(requests).toHaveLength(1);
+    const req = requests[0]!;
+
+    // Approve it
+    f.approvals.approve(req.id, 'Test user');
+    expect(f.approvals.getRequest(req.id)!.status).toBe('approved');
+
+    // Change state to freeze, so boundary policy blocks it
+    f.emergency.pause();
+
+    // Trying again replays the same effect record
+    await f.invoke().catch(() => {});
+
+    // Expect the approval execution_outcome to be updated to 'blocked' (meaning a receipt was logged)
+    const finalised = f.approvals.getRequest(req.id)!;
+    expect(finalised.status).toBe('executed');
+    expect(finalised.execution_outcome).toBe('blocked');
+
+    // Also verify the effect record itself
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    expect(effect.status).toBe('blocked');
+  });
 });
