@@ -85,7 +85,12 @@ export type GoogleConfig = {
  *     `approve <id>` or `deny <id>` reply is refused, and the decision has to
  *     be made in the dashboard. A gated action is the one place "allow all"
  *     is the wrong default.
- * A non-empty list admits only the users it names, for both.
+ *   - notifications: nothing is sent proactively (#852). Approval cards and
+ *     other broadcasts go to the private chat of the last sender the list
+ *     names (never a group or server channel), so an empty list has no
+ *     recipient; a stranger who messages the bot gets replies, never the
+ *     owner's cards.
+ * A non-empty list admits only the users it names, for all three.
  */
 export type ChannelConfig = {
   telegram?: {

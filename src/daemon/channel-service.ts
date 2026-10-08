@@ -26,6 +26,39 @@ import { checkpointExecution } from '../actions/execution-scope.ts';
 /** Settings-table key prefix for persisted per-channel broadcast recipients. */
 const LAST_RECIPIENT_PREFIX = 'channel.lastRecipient.';
 
+/**
+ * Where a channel's broadcasts go, and who put them there (#852): `to` is the
+ * chat the sender wrote from, `userId` the sender. Broadcasts go to `to` only
+ * while the channel's allow-list names `userId` (`getBroadcastRecipient`), so
+ * removing someone from the list stops their copies at once.
+ */
+export type BroadcastRecipient = { to: string; userId: string };
+
+/**
+ * A persisted recipient, or null when it cannot be trusted (#852).
+ *
+ * Current values are JSON `{to, userId}`. Older ones are the bare chat id,
+ * saved for whoever messaged last -- with an empty allow-list that was any
+ * stranger -- and say nothing about who sent it. One case still names its
+ * sender: a Telegram private chat's id IS the user's id (a group's is
+ * negative), so a bare positive Telegram id is kept as that user and is used
+ * only while the list names them. Anything else is dropped, and the owner
+ * seeds it again by messaging the bot once.
+ */
+export function parsePersistedRecipient(channel: string, value: string): BroadcastRecipient | null {
+  try {
+    const parsed = JSON.parse(value) as { to?: unknown; userId?: unknown } | null;
+    if (parsed && typeof parsed === 'object' && typeof parsed.to === 'string' && parsed.to
+      && typeof parsed.userId === 'string' && parsed.userId) {
+      return { to: parsed.to, userId: parsed.userId };
+    }
+  } catch {
+    // not JSON: an older bare chat id, below
+  }
+  if (channel === 'telegram' && /^[1-9][0-9]*$/.test(value)) return { to: value, userId: value };
+  return null;
+}
+
 export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string) => Promise<string>;
 
 export type DeliveryFailureHandler = (failure: { channel: string; attempts: number; error: string }) => void;
@@ -38,12 +71,14 @@ export class ChannelService implements Service {
   private manager: ChannelManager;
   private sttProvider: STTProvider | null = null;
   /**
-   * Track last message sender per channel for proactive broadcasts / notify.
-   * Persisted to the settings table (see {@link LAST_RECIPIENT_PREFIX}) and
-   * reloaded on start, so a daemon restart doesn't drop the recipient and
-   * silently break notifications until the user re-messages the bot.
+   * The last allow-listed sender per channel, for proactive broadcasts and
+   * notify (#852). Persisted to the settings table (see
+   * {@link LAST_RECIPIENT_PREFIX}) and reloaded on start, so a daemon restart
+   * doesn't drop the recipient and silently break notifications until the
+   * user re-messages the bot. Read through `getBroadcastRecipient`, never
+   * directly.
    */
-  private lastRecipients = new Map<string, string>();
+  private lastRecipients = new Map<string, BroadcastRecipient>();
   /** Handler for approval commands (approve/deny) from external channels */
   private approvalHandler: ApprovalCommandHandler | null = null;
   /** Notified when a send has exhausted its retries (e.g. to alert the dashboard). */
@@ -198,9 +233,9 @@ export class ChannelService implements Service {
       const adapter = this.manager.getChannel(name);
       if (!adapter?.isConnected()) continue;
 
-      const lastRecipient = this.lastRecipients.get(name);
+      const lastRecipient = this.getBroadcastRecipient(name);
       if (!lastRecipient) {
-        console.log(`[ChannelService] No known recipient for ${name}, skipping broadcast`);
+        console.log(`[ChannelService] No allow-listed recipient for ${name}, skipping broadcast`);
         continue;
       }
 
@@ -230,13 +265,35 @@ export class ChannelService implements Service {
   ): Promise<{ delivered: string[]; failed: { channel: string; error: string }[] }> {
     return routePerChannel(channels, text, {
       getAdapter: (name) => this.manager.getChannel(name) ?? null,
-      getLastRecipient: (name) => this.lastRecipients.get(name) ?? null,
+      getLastRecipient: (name) => this.getBroadcastRecipient(name),
     });
   }
 
-  /** Resolve once, before workflow approval; never switch to a later sender. */
+  /**
+   * Where this channel's broadcasts go: the chat of the last sender the
+   * allow-list named, and only while it still names them (#852). So a channel
+   * with an empty list has no recipient and gets no approval card or other
+   * broadcast: everyone may chat there, nobody may decide there, and a card
+   * telling a stranger to "Reply with: approve <id>" helped no one. Read
+   * against the live config, so removing a user from the list stops their
+   * copies without a restart.
+   *
+   * Workflows resolve it once, before approval, and never switch to a later
+   * sender.
+   */
   getBroadcastRecipient(channel: string): string | null {
-    return this.lastRecipients.get(channel) ?? null;
+    const recipient = this.lastRecipients.get(channel);
+    return recipient && this.allowListNames(channel, recipient.userId) ? recipient.to : null;
+  }
+
+  /** Whether the channel's allow-list, as configured right now, names this user. Empty names nobody. */
+  private allowListNames(channel: string, userId: unknown): boolean {
+    if ((typeof userId !== 'string' && typeof userId !== 'number') || userId === '') return false;
+    const channels = this.config?.channels;
+    const list: unknown = channel === 'telegram' ? channels?.telegram?.allowed_users
+      : channel === 'discord' ? channels?.discord?.allowed_users
+        : undefined;
+    return Array.isArray(list) && list.some((id) => String(id) === String(userId));
   }
 
   async sendWorkflowNotification(channel: string, recipient: string | null, text: string): Promise<void> {
@@ -259,10 +316,14 @@ export class ChannelService implements Service {
       let restored = 0;
       for (const [key, value] of Object.entries(rows)) {
         const channel = key.slice(LAST_RECIPIENT_PREFIX.length);
-        if (channel && value) {
-          this.lastRecipients.set(channel, value);
-          restored++;
+        if (!channel || !value) continue;
+        const recipient = parsePersistedRecipient(channel, value);
+        if (!recipient) {
+          console.log(`[ChannelService] Not restoring the ${channel} broadcast recipient: it was saved without its sender, so it may not be on the allow-list. Message the bot once from a listed account to set it again.`);
+          continue;
         }
+        this.lastRecipients.set(channel, recipient);
+        restored++;
       }
       if (restored > 0) {
         console.log(`[ChannelService] Restored ${restored} broadcast recipient(s) from settings`);
@@ -275,10 +336,10 @@ export class ChannelService implements Service {
   }
 
   /** Record a channel's broadcast recipient both in memory and on disk. */
-  private recordRecipient(channelTag: string, recipientId: string): void {
-    this.lastRecipients.set(channelTag, recipientId);
+  private recordRecipient(channelTag: string, recipient: BroadcastRecipient): void {
+    this.lastRecipients.set(channelTag, recipient);
     try {
-      setSetting(`${LAST_RECIPIENT_PREFIX}${channelTag}`, recipientId);
+      setSetting(`${LAST_RECIPIENT_PREFIX}${channelTag}`, JSON.stringify(recipient));
     } catch (err) {
       // Persistence is best-effort; the in-memory value still works this run.
       console.error(`[ChannelService] Failed to persist recipient for ${channelTag}:`, err);
@@ -292,9 +353,22 @@ export class ChannelService implements Service {
   private async handleChannelMessage(msg: ChannelMessage): Promise<string> {
     const channelTag = msg.channel; // 'telegram' | 'discord'
 
-    // Track recipient for future broadcasts (in-memory + persisted).
-    const recipientId = String(msg.metadata.chatId ?? msg.metadata.channelId ?? msg.from);
-    this.recordRecipient(channelTag, recipientId);
+    // Track recipient for future broadcasts (in-memory + persisted), but only
+    // a sender the allow-list names (#852). This ran for every sender, so with
+    // an empty list whoever messaged last -- any stranger who found the bot --
+    // became the channel's recipient and received every approval card, and
+    // the owner stopped receiving them.
+    //
+    // And only from a private chat with the bot (#852 review). Where the
+    // message was typed is where the cards go, so a listed user writing in a
+    // Telegram group or a Discord server channel made every member of it a
+    // reader of every approval card. A message there still gets its reply
+    // and leaves the recipient as it was.
+    const userId = msg.metadata.userId;
+    if (msg.senderAllowListed === true && (typeof userId === 'string' || typeof userId === 'number') && isPrivateChat(msg)) {
+      const to = String(msg.metadata.chatId ?? msg.metadata.channelId ?? msg.from);
+      this.recordRecipient(channelTag, { to, userId: String(userId) });
+    }
 
     // Check for approval commands: "approve <id>" or "deny <id>"
     const decision = this.approvalHandler ? channelDecisionCommand(msg.text) : null;
@@ -323,6 +397,18 @@ export class ChannelService implements Service {
 
     return response;
   }
+}
+
+/**
+ * Whether a message was written in a private chat with the bot, the only
+ * place a broadcast recipient is taken from (#852 review). Telegram says so in
+ * `chatType`; a Discord message with no guild is a DM. Any other channel, or
+ * one that does not say, is not private.
+ */
+export function isPrivateChat(msg: Pick<ChannelMessage, 'channel' | 'metadata'>): boolean {
+  if (msg.channel === 'telegram') return msg.metadata.chatType === 'private';
+  if (msg.channel === 'discord') return msg.metadata.isDM === true;
+  return false;
 }
 
 /**
@@ -407,7 +493,7 @@ export async function routePerChannel(
     if (!lastRecipient) {
       failed.push({
         channel: name,
-        error: `no known recipient for "${name}" -- message Jarvis from that channel once to seed it`,
+        error: `no known recipient for "${name}" -- message Jarvis once from an account listed under Allowed user IDs for that channel to seed it`,
       });
       continue;
     }
