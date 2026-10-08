@@ -11,7 +11,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { JarvisWorkflowRunnerAdapter, WorkflowRunnerError } from "./workflow-runner";
-import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db";
+import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../db";
 import { createFlow } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
@@ -71,11 +71,40 @@ describe("JarvisWorkflowRunnerAdapter", () => {
     expect((await adapter.start({ flowId: foreign.id }, undefined, "proj_other_843")).runId).toEqual(expect.any(String));
   });
 
+  test("with NO caller project, the search narrows to the default project rather than widening to every one (#843)", async () => {
+    // The direction an omitted argument moves in. `callerProjectId` is optional
+    // in the signature, so the tempting reading is "unscoped when absent" -- and
+    // that is what it did until this test. It is the wrong default HERE in a way
+    // it is not elsewhere, because `start` runs the target under the TARGET's
+    // project token: an unscoped lookup lets a flow in one project drive another
+    // project's flow with that project's store and connections.
+    //
+    // So an absent value must mean DEFAULT_IDS.project -- the same answer
+    // api/routes.ts and manage-workflow.ts give -- and a flow outside it must be
+    // refused. #762 is the precedent for the failure mode: there a missing
+    // expectation made a per-spawn digest check skip rather than fail.
+    const elsewhere = createFlow({ projectId: "proj_absent_arg_843" });
+    createDraftVersion({ flowId: elsewhere.id, displayName: "theirs", trigger: { name: "trigger", type: "EMPTY" } as any });
+    let caught: unknown;
+    try {
+      await adapter.start({ flowId: elsewhere.id });
+    } catch (e) {
+      caught = e;
+    }
+    expect((caught as WorkflowRunnerError)?.code).toBe("FLOW_NOT_FOUND");
+    expect(getWorkflowDbRuns(elsewhere.id)).toBe(0);
+    // The control: a flow that IS in the default project still starts with the
+    // argument omitted, so this narrows rather than refusing everything.
+    const mine = createFlow({ projectId: DEFAULT_IDS.project });
+    createDraftVersion({ flowId: mine.id, displayName: "mine", trigger: { name: "trigger", type: "EMPTY" } as any });
+    expect((await adapter.start({ flowId: mine.id })).runId).toEqual(expect.any(String));
+  });
+
   test("throws VERSION_MISSING when the flow exists but has no version", async () => {
     const flow = createFlow({ projectId: PROJECT_ID });
     let caught: unknown;
     try {
-      await adapter.start({ flowId: flow.id });
+      await adapter.start({ flowId: flow.id }, undefined, PROJECT_ID);
     } catch (e) {
       caught = e;
     }
@@ -98,7 +127,7 @@ describe("JarvisWorkflowRunnerAdapter", () => {
     });
     let caught: unknown;
     try {
-      await adapter.start({ flowId: flow.id }, callerRun.id);
+      await adapter.start({ flowId: flow.id }, callerRun.id, PROJECT_ID);
     } catch (e) {
       caught = e;
     }
@@ -126,7 +155,7 @@ describe("JarvisWorkflowRunnerAdapter", () => {
       startTime: Date.now(),
     });
     // Should NOT throw; should return a new run id.
-    const out = await adapter.start({ flowId: flowB.id }, callerRun.id);
+    const out = await adapter.start({ flowId: flowB.id }, callerRun.id, PROJECT_ID);
     expect(typeof out.runId).toBe("string");
     expect(out.runId.length).toBeGreaterThan(0);
   });
@@ -162,7 +191,7 @@ describe("JarvisWorkflowRunnerAdapter", () => {
     });
     let caught: unknown;
     try {
-      await adapter.start({ flowId: flowA.id }, bRun.id);
+      await adapter.start({ flowId: flowA.id }, bRun.id, PROJECT_ID);
     } catch (e) {
       caught = e;
     }
@@ -195,7 +224,7 @@ describe("JarvisWorkflowRunnerAdapter", () => {
       triggeredBy: "test",
       startTime: Date.now(),
     });
-    const out = await adapter.start({ flowId: flowB.id }, aRun.id);
+    const out = await adapter.start({ flowId: flowB.id }, aRun.id, PROJECT_ID);
     const child = getFlowRun(out.runId);
     expect(child?.parentRunId).toBe(aRun.id);
   });
@@ -239,7 +268,7 @@ describe("JarvisWorkflowRunnerAdapter", () => {
     getWorkflowDb()
       .query("UPDATE flow_run SET parent_run_id = ? WHERE id = ?")
       .run(xRun.id, yRun.id);
-    const out = await adapter.start({ flowId: targetFlow.id }, xRun.id);
+    const out = await adapter.start({ flowId: targetFlow.id }, xRun.id, PROJECT_ID);
     expect(typeof out.runId).toBe("string");
     expect(out.runId.length).toBeGreaterThan(0);
   });
@@ -271,7 +300,7 @@ describe("JarvisWorkflowRunnerAdapter", () => {
       parentRunId: "run_deleted_long_ago",
     });
     // Should NOT throw; should return a new run id.
-    const out = await adapter.start({ flowId: flowB.id }, orphanCaller.id);
+    const out = await adapter.start({ flowId: flowB.id }, orphanCaller.id, PROJECT_ID);
     expect(typeof out.runId).toBe("string");
     expect(out.runId.length).toBeGreaterThan(0);
   });
