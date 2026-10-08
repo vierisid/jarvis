@@ -55,7 +55,7 @@ import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION 
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
-import { APPROVAL_LABEL_DELIVERY_MAX_CHARS, ApprovalDelivery, approvalToast, boundedApprovalLabel } from "../authority/approval-delivery.ts";
+import { ApprovalDelivery, approvalToast, taskCompleteBody } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
@@ -4790,7 +4790,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             id: `done:${req.id}`,
             kind: 'done',
             title: 'Task complete',
-            body: boundedApprovalLabel(req.reason?.trim() ?? '', APPROVAL_LABEL_DELIVERY_MAX_CHARS) || `${trayHumanizeTool(req.tool_name)} finished.`,
+            // What it did, not why it needed approval (#813).
+            body: taskCompleteBody(req) || `${trayHumanizeTool(req.tool_name)} finished.`,
             actions: [
               { id: 'view', label: 'View', primary: true },
               { id: 'dismiss', label: 'Dismiss' },

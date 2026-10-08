@@ -409,6 +409,32 @@ export function approvalIntentParts(request: ApprovalRequest): { action: string;
 }
 
 /**
+ * The body of the "Task complete" toast for an approval that finished
+ * executing (#813): what it did, the same sentence the approval toast led with
+ * (`approvalIntentParts(...).action`), reduced to one line. It used to be
+ * `request.reason`, the Authority engine's reason for asking, so a finished
+ * command read "execute_command requires user approval" rather than naming
+ * what ran. Empty only when there is no sentence at all; the caller then names
+ * the tool.
+ *
+ * A sentence longer than a toast shows is cut to `TOAST_APPROVABLE_MAX_COLUMNS`
+ * with a visible `...`, measured as the approval toast measures (#813
+ * review): nothing is decided here, so a cut is safe, and a done toast on a
+ * lock screen need not carry a whole command the OS would cut anyway.
+ */
+export function taskCompleteBody(request: ApprovalRequest): string {
+  const body = boundedApprovalLabel(approvalIntentParts(request).action, APPROVAL_LABEL_DELIVERY_MAX_CHARS).trim();
+  if (toastLines(body) <= TOAST_APPROVABLE_LINES) return body;
+  // Unknown widths (right-to-left text, say) fail closed for APPROVING; here
+  // nothing is decided, so they are cut by characters rather than counted four
+  // columns wide, and `...` marks only a cut that removed something (#813
+  // re-review: a short Hebrew sentence came back whole with a false `...`).
+  const room = TOAST_APPROVABLE_MAX_COLUMNS - '...'.length;
+  const cut = (toastColumns(body) === null ? [...body].slice(0, room).join('') : fitColumns(body, room)).trimEnd();
+  return cut.length < body.length ? `${cut}...` : body;
+}
+
+/**
  * The parts as approval payload fields (#792), beside the joined `intent`.
  *
  * `formatApprovalIntent` appends the reason in parentheses, so a plain

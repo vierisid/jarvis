@@ -8,6 +8,7 @@ import {
   TOAST_APPROVABLE_MAX_COLUMNS,
   toastColumns,
   toastLines,
+  taskCompleteBody,
   boundedApprovalLabel,
   type ApprovalBroadcaster,
   type ChannelSender,
@@ -16,6 +17,8 @@ import type { ApprovalRequest } from './approval.ts';
 import { UNTRUSTED_OPEN } from '../roles/untrusted.ts';
 import { createRequestApprovalTool } from '../actions/tools/approval-tool.ts';
 import { confusableSkeleton } from './ui-intent.ts';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { SendOptions } from '../comms/channels/telegram.ts';
 
 function makeRequest(overrides?: Partial<ApprovalRequest>): ApprovalRequest {
@@ -724,5 +727,64 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     const t0 = performance.now();
     expect(toastLines(huge)).toBe(3);
     expect(performance.now() - t0).toBeLessThan(50);
+  });
+});
+
+/**
+ * #813. The "Task complete" toast said why the action needed approval, not
+ * what finished.
+ */
+describe('#813: the task-complete toast names what was done', () => {
+  test('a gated command names the command, not the engine reason', () => {
+    const req = makeRequest({
+      tool_name: 'site_run_command', reason: 'execute_command requires user approval',
+      context: JSON.stringify({ intent: 'In site project "shop", run: make deploy' }),
+    });
+    expect(taskCompleteBody(req)).toBe('In site project "shop", run: make deploy');
+  });
+
+  test('a tool with no gate sentence uses its fallback sentence', () => {
+    const req = makeRequest({
+      tool_name: 'send_email', action_category: 'send_email', reason: 'send_email is a governed action requiring user approval',
+      tool_arguments: JSON.stringify({ to: 'finance@example.test' }),
+    });
+    expect(taskCompleteBody(req)).toBe('Send email to finance@example.test');
+  });
+
+  test('a request_approval names the intent the model declared, as before', () => {
+    expect(taskCompleteBody(makeRequest({ tool_name: 'request_approval', reason: 'Book the 9am train' }))).toBe('Book the 9am train');
+  });
+
+  test('it is the approval toast body, reduced to one line', () => {
+    const req = makeRequest({ tool_name: 'request_approval', reason: 'Book\nthe‮ train' });
+    expect(taskCompleteBody(req)).toBe('Book the train');
+    expect(taskCompleteBody(req)).toBe(approvalToast(req).body);
+  });
+
+  test('a sentence longer than a toast shows is cut to the toast width with a visible ...', () => {
+    const sentence = `Send the quarterly numbers to ${'everyone@example.com, '.repeat(10)}`;
+    const body = taskCompleteBody(makeRequest({ tool_name: 'request_approval', reason: sentence }));
+    expect(body.endsWith('...')).toBe(true);
+    expect(toastColumns(body)).toBeLessThanOrEqual(TOAST_APPROVABLE_MAX_COLUMNS);
+    expect(sentence.startsWith(body.slice(0, -3))).toBe(true);
+  });
+
+  test('short right-to-left text is left whole, and a long one is cut by characters', () => {
+    const hebrew = 'שלח את הדוח';
+    const arabic = 'إرسال التقرير إلى المدير';
+    expect(taskCompleteBody(makeRequest({ tool_name: 'request_approval', reason: hebrew }))).toBe(hebrew);
+    expect(taskCompleteBody(makeRequest({ tool_name: 'request_approval', reason: arabic }))).toBe(arabic);
+    const long = `${arabic} `.repeat(10).trim();
+    const body = taskCompleteBody(makeRequest({ tool_name: 'request_approval', reason: long }));
+    expect(body.endsWith('...')).toBe(true);
+    expect([...body].length).toBeLessThanOrEqual(TOAST_APPROVABLE_MAX_COLUMNS);
+    expect(long.startsWith(body.slice(0, -3))).toBe(true);
+  });
+
+  test('the daemon builds the toast from it', () => {
+    const index = readFileSync(join(import.meta.dir, '../daemon/index.ts'), 'utf8');
+    expect(index).toContain("body: taskCompleteBody(req) || `${trayHumanizeTool(req.tool_name)} finished.`,");
+    // Spans the comment between the title and the body (#813 review: `\s*` alone could never match).
+    expect(index).not.toMatch(/title: 'Task complete',[\s\S]{0,300}?req\.reason/);
   });
 });
