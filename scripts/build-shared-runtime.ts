@@ -158,6 +158,11 @@ const runtime = new EngineRuntime({
   api,
   bundlePath: bundle.bundlePath,
   expectedDigest: bundle.digest,
+  // The warm-up this script's header describes: without it a pinned engine
+  // refuses a cache directory this uid can write (#835), and the directory
+  // being warmed is by definition one the builder can write. This is the host
+  // building the cache it will then serve READ-ONLY.
+  warmTranspilerCache: true,
   pool: false,
   customPiecesPaths: [resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"), piecesDir],
 });

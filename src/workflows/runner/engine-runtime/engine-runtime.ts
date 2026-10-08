@@ -113,6 +113,14 @@ export interface EngineRuntimeOptions {
   poolIdleTtlMs?: number;
   /** Override the runtime binary (default: process.execPath). */
   runtime?: string;
+  /**
+   * BUILD TIME ONLY: let a pinned engine write the transpiler cache that
+   * BUN_RUNTIME_TRANSPILER_CACHE_PATH names, though it is not a root-owned read-only directory.
+   * For scripts/build-shared-runtime.ts, which warms the cache a host then
+   * serves read-only. A tenant-facing runtime never sets it (#835; see
+   * `engineTranspilerCache` in spawn.ts).
+   */
+  warmTranspilerCache?: boolean;
 }
 
 export interface AcquireOptions {
@@ -294,7 +302,7 @@ export class EngineHandle {
     const upstream = isUpstreamFlowVersion(opts.flowVersion)
       ? opts.flowVersion
       : toUpstreamFlowVersion(opts.flowVersion);
-    materializeCodeActions(upstream, this.baseCodeDir);
+    await materializeCodeActions(upstream, this.baseCodeDir);
 
     const baseExecuteFlowOptions: ExecuteFlowOptions = {
       flowVersion: upstream,
@@ -571,6 +579,7 @@ export class EngineRuntime {
   private readonly bundlePath: string;
   /** Fixed at construction: a later resolution elsewhere cannot change it (#762). */
   private readonly expectedDigest: string | null;
+  private readonly warmTranspilerCache: boolean;
   private readonly baseCodeDir: string;
   private readonly customPiecesPaths: string[];
   private readonly handshakeTimeoutMs: number;
@@ -627,6 +636,7 @@ export class EngineRuntime {
       throw new TypeError("EngineRuntime: expectedDigest is required -- the bundle's verified sha256, or null if nothing verified it");
     }
     this.expectedDigest = opts.expectedDigest;
+    this.warmTranspilerCache = opts.warmTranspilerCache === true;
     this.poolEnabled = opts.pool ?? false;
     // 5 minutes by default. The engine cold-spawn is ~3s, so an idle TTL
     // shorter than the gap between cron fires defeats the pool's purpose;
@@ -754,6 +764,7 @@ export class EngineRuntime {
       ownerKillGraceMs: this.killGraceMs,
     };
     if (this.runtime !== undefined) spawnOptions.runtime = this.runtime;
+    if (this.warmTranspilerCache) spawnOptions.warmTranspilerCache = true;
     let proc: SpawnedEngine;
     try {
       proc = spawnEngine(spawnOptions);
