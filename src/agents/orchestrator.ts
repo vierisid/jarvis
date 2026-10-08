@@ -82,6 +82,18 @@ function toSystemMessages(systemPrompt: string | SystemPromptParts): LLMMessage[
 
 const MAX_TOOL_ITERATIONS = 200;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
+
+/**
+ * A tool result's OUTSIDE text cut to MAX_TOOL_RESULT_CHARS, with a note
+ * saying how long it was. Applied to the payload BEFORE it is framed, never to
+ * a framed string: `wrapUntrusted` promises a block is never partially framed,
+ * and a cut made after the frame is drawn would drop its closing line.
+ */
+function capToolResult(text: string): string {
+  return text.length > MAX_TOOL_RESULT_CHARS
+    ? text.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${text.length} chars)`
+    : text;
+}
 // How long the authority gate blocks waiting for the user to approve a
 // gated tool call before falling back to the deferred (fire-and-forget)
 // path. Long enough to click a permission panel, short enough that an
@@ -1735,13 +1747,15 @@ export class AgentOrchestrator {
           // The executor hands a trailer over only when the tool returned a
           // carrier, which no reply from another machine can produce.
           if (receipt.trailer) {
-            let outside = receipt.outside ?? '';
-            if (outside.length > MAX_TOOL_RESULT_CHARS) {
-              outside = outside.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${outside.length} chars)`;
-            }
-            return frame(outside) + receipt.trailer;
+            return frame(capToolResult(receipt.outside ?? '')) + receipt.trailer;
           }
-          return frame(receipt.result);
+          // Capped BEFORE it is framed, as the ungated path caps a plain
+          // result (#828; content blocks are uncapped text on both paths). Uncapped, an approved `browser_navigate` or
+          // `desktop_snapshot` -- page- and screen-sized results, and exactly
+          // the tools that take a card -- reached the model whole; and the
+          // order matters as much as the cap, because a cut made after the
+          // frame is drawn would drop its closing line.
+          return frame(capToolResult(receipt.result));
         };
 
         // Every return below is a single string except one: an approved call
