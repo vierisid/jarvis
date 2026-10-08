@@ -12,7 +12,7 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { execFileSync, execSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
 import { WSLBridge } from '../terminal/wsl-bridge.ts';
@@ -31,7 +31,7 @@ import { getMachineScope } from '../machine-scope.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
-import { captureViaPrivateFile } from '../app-control/capture-file.ts';
+import { awaitCaptureTool, captureViaPrivateFileAsync, CaptureTimeoutError } from '../app-control/capture-file.ts';
 import { sanitizedEnv } from '../../util/subprocess-env.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
@@ -707,27 +707,44 @@ function localClipboardWrite(content: string): void {
  * PowerShell's script reads it from its environment rather than from the
  * command text, so neither cmd.exe (which expands %VAR%) nor PowerShell's
  * quoting (which also ends a literal at a typographic quote) ever sees it.
+ *
+ * Awaited, and bounded (#802): these ran through execFileSync/execSync with
+ * no timeout, so a capture tool that hung held the daemon's event loop for
+ * as long as it hung. See CAPTURE_TIMEOUT_MS for the bound and
+ * awaitCaptureTool for how it is enforced.
  */
-function localCaptureScreen(): string {
+async function localCaptureScreen(): Promise<string> {
   const os = platform();
-  return captureViaPrivateFile((file) => {
+  const tool = { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' } as const;
+  return (await captureViaPrivateFileAsync(async (file) => {
     if (os === 'darwin') {
-      execFileSync('screencapture', ['-x', file]);
+      await awaitCaptureTool(Bun.spawn(['screencapture', '-x', file], tool), 'screencapture');
     } else if (os === 'win32') {
-      execSync('powershell -command "Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }"',
+      // powershell.exe run directly, not through cmd.exe as execSync did: a
+      // timeout kills the process it started, and on Windows killing cmd.exe
+      // leaves its powershell child running. The script has no double quotes
+      // and no %, so neither cmd.exe's parsing nor its expansion had any part
+      // in what it means.
+      await awaitCaptureTool(Bun.spawn(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', 'Add-Type -AssemblyName System.Windows.Forms; [System.Windows.Forms.Screen]::PrimaryScreen | ForEach-Object { $bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); $g = [System.Drawing.Graphics]::FromImage($bmp); $g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); $bmp.Save($env:JARVIS_CAPTURE_PATH) }'], {
+        ...tool,
+        windowsHide: true,
         // sanitizedEnv, not a process.env spread: the allowlist keeps
         // SYSTEMROOT, WINDIR, COMSPEC, PATHEXT, PSMODULEPATH, APPDATA and PATH
         // (matched case-insensitively on win32), which is everything this
         // one-liner needs, while dropping the daemon's secrets.
-        { env: sanitizedEnv({ JARVIS_CAPTURE_PATH: file }) });
+        env: sanitizedEnv({ JARVIS_CAPTURE_PATH: file }),
+      }), 'powershell capture');
     } else {
       try {
-        execFileSync('scrot', [file]);
-      } catch {
-        execFileSync('import', ['-window', 'root', file]);
+        await awaitCaptureTool(Bun.spawn(['scrot', file], tool), 'scrot');
+      } catch (err) {
+        // A scrot that hung says the display is wedged, and import would only
+        // hang on it too; any other failure (scrot not installed) falls back.
+        if (err instanceof CaptureTimeoutError) throw err;
+        await awaitCaptureTool(Bun.spawn(['import', '-window', 'root', file], tool), 'import');
       }
     }
-  }).toString('base64');
+  })).toString('base64');
 }
 
 function localSystemInfo(): Record<string, unknown> {
@@ -821,7 +838,7 @@ export const captureScreenTool: ToolDefinition = {
       // Compacted when the raw PNG is over the image cap (#711), as the
       // routed branch is.
       // Awaited, not returned: a rejection must land in the catch below (#769).
-      return await localScreenshotResult(localCaptureScreen(), 'image/png', 'Screenshot captured', false);
+      return await localScreenshotResult(await localCaptureScreen(), 'image/png', 'Screenshot captured', false);
     } catch (err) {
       return `Error capturing screen: ${err instanceof Error ? err.message : err}`;
     }

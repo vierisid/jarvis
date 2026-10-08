@@ -1,6 +1,6 @@
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
-import { captureViaPrivateFileAsync } from './capture-file.ts';
+import { awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
 import { $ } from 'bun';
 import { modelExecEnv } from '../../util/model-exec-env.ts';
 
@@ -149,6 +149,11 @@ export function toXdotoolKeySequence(keys: string[]): string {
   }
   return sequence;
 }
+
+/** How the capture tools are spawned: see awaitCaptureTool. */
+const CAPTURE_TOOL = { stdin: 'ignore', stdout: 'ignore', stderr: 'pipe' } as const;
+/** And the window lookups that run before a window capture: see awaitCaptureToolOutput. */
+const LOOKUP_TOOL = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const;
 
 export class LinuxAppController implements AppController {
   private async checkTool(tool: string): Promise<boolean> {
@@ -367,11 +372,13 @@ export class LinuxAppController implements AppController {
 
     try {
       // Through a private, unpredictable file (#746): see capture-file.ts.
+      // Bun.spawn rather than `$`, which has no timeout: a hung import or
+      // scrot never settled (#802). See CAPTURE_TIMEOUT_MS.
       return await captureViaPrivateFileAsync(async (file) => {
         if (hasImport) {
-          await $`import -window root ${file}`;
+          await awaitCaptureTool(Bun.spawn(['import', '-window', 'root', file], CAPTURE_TOOL), 'import');
         } else {
-          await $`scrot ${file}`;
+          await awaitCaptureTool(Bun.spawn(['scrot', file], CAPTURE_TOOL), 'scrot');
         }
       });
     } catch (error) {
@@ -394,7 +401,7 @@ export class LinuxAppController implements AppController {
       const windowId = await this.findWindowByPid(pid);
 
       return await captureViaPrivateFileAsync(async (file) => {
-        await $`import -window ${windowId} ${file}`;
+        await awaitCaptureTool(Bun.spawn(['import', '-window', windowId, file], CAPTURE_TOOL), 'import');
       });
     } catch (error) {
       throw new Error(`Failed to capture window: ${error instanceof Error ? error.message : String(error)}`);
@@ -451,7 +458,9 @@ export class LinuxAppController implements AppController {
    * the -window slot rather than passing an empty operand (see typeText).
    */
   private async searchWindowIds(): Promise<string[]> {
-    return (await $`xdotool search --name "."`.text())
+    // Bounded like a capture (#802 review): it talks to the X server, so it
+    // hangs when a capture would, and captureWindow runs it first.
+    return (await awaitCaptureToolOutput(Bun.spawn(['xdotool', 'search', '--name', '.'], LOOKUP_TOOL), 'xdotool search'))
       .split('\n')
       .map(id => id.trim())
       .filter(Boolean);
@@ -462,13 +471,16 @@ export class LinuxAppController implements AppController {
 
     for (const windowId of windowIds) {
       try {
-        const xpropOutput = await $`xprop -id ${windowId}`.text();
+        const xpropOutput = await awaitCaptureToolOutput(Bun.spawn(['xprop', '-id', windowId], LOOKUP_TOOL), 'xprop');
         const windowPid = parseInt(this.extractXpropValue(xpropOutput, '_NET_WM_PID') || '0', 10);
 
         if (windowPid === pid) {
           return windowId;
         }
-      } catch {
+      } catch (error) {
+        // A window that cannot be read is skipped; a hung X server is not a
+        // window to skip, and would cost the bound once per window.
+        if (error instanceof CaptureTimeoutError) throw error;
         continue;
       }
     }
