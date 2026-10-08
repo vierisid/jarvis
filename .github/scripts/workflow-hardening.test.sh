@@ -39,7 +39,11 @@
 #      install or build; on the release path no checkout leaves its token in
 #      the repository config; no registry login happens on a dry run; and
 #      (#781) a privileged job takes an artifact only by a digest another
-#      job reported as an output, checked in the step right after the download.
+#      job reported as an output, checked in the step right after the download,
+#      and (#820) by no other route: not gh run download, the artifacts REST
+#      API, the runtime artifact service (ACTIONS_RESULTS_URL and
+#      ACTIONS_RUNTIME_TOKEN) or any other action named for artifacts,
+#      downloads or the runtime.
 #   7. (#687) "Authority" also counts any use of the `secrets` context other
 #      than secrets.GITHUB_TOKEN (including toJSON(secrets)), and `secrets:
 #      inherit`; and every rule that reads steps descends into local
@@ -498,6 +502,30 @@ if (rule === "narrow") {
       for (const st of steps)
         if (/^actions\/github-script@/i.test(String(st.uses ?? "")) && /artifact/i.test(String(st.with?.script ?? "")))
           out.push(name + ": github-script touching artifacts, which the digest rule cannot check");
+      // #820: the artifact service itself. Its URL and token sit in the
+      // environment of every JavaScript action and can be handed to a run:
+      // step, so reading either one is a download route this rule cannot
+      // follow. Run text without comments, plus every with: and env: value
+      // of the step and the job (a github-script body is a with: value).
+      const runtimeApi = /\bACTIONS_(?:RESULTS_URL|RUNTIME_TOKEN|RUNTIME_URL)\b/;
+      if (runtimeApi.test(JSON.stringify(job.env ?? {})))
+        out.push(name + ": job env reads the Actions runtime artifact API, which the digest rule cannot check");
+      for (const [i, st] of steps.entries()) {
+        const code = typeof st.run === "string" ? st.run.split("\n").map((l) => l.replace(/(^|\s)#(?!\{).*$/, "$1")).join("\n") : "";
+        if (runtimeApi.test(code + JSON.stringify(st.with ?? {}) + JSON.stringify(st.env ?? {})))
+          out.push(name + ": step " + (st.name ?? st.id ?? st.uses ?? String(i)) + " reads the Actions runtime artifact API (ACTIONS_RESULTS_URL, ACTIONS_RUNTIME_TOKEN, ACTIONS_RUNTIME_URL), which the digest rule cannot check");
+      }
+      // ...and every other action that fetches artifacts or hands the runtime
+      // to later steps. Only actions/download-artifact is followed by the
+      // digest check above, so any other action named for artifacts,
+      // downloads or the runtime is one this rule cannot see into. An
+      // unrecognised route is an allowed one, so this is by name and broad.
+      for (const st of steps) {
+        const u = String(st.uses ?? "").toLowerCase().split("@")[0];
+        if (!u || u.startsWith("./") || u === "actions/download-artifact" || u === "actions/upload-artifact") continue;
+        if (/artifact|download|runtime/.test(u))
+          out.push(name + ": fetches artifacts through " + u + ", which the digest rule cannot check");
+      }
     }
     // google-github-actions/auth writes a credentials file by default that
     // can mint further tokens; on the release path only access_token is used.
@@ -1057,6 +1085,26 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'an artifact fetched with gh run download in a signing job (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		'      - name: Install osslsigncode' $'      - run: gh run download "$GITHUB_RUN_ID" -n unsigned-win32-x64\n      - name: Install osslsigncode' \
 		'fetches artifacts outside actions/download-artifact'
+	expect_caught 'the runtime artifact service called directly from a signing job (#820)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Windows signing readiness' $'      - run: |\n          curl -fsS -H "Authorization: Bearer $ACTIONS_RUNTIME_TOKEN" "${ACTIONS_RESULTS_URL}twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts"\n      - name: Windows signing readiness' \
+		'reads the Actions runtime artifact API'
+	expect_caught 'the runtime token handed to a step through env (#820)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n        run: |\n' \
+		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          URL: ${{ env.ACTIONS_RESULTS_URL }}\n        run: |\n' \
+		'reads the Actions runtime artifact API'
+	expect_caught 'the runtime URL in a signing job env (#820)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      # For scripts/sign-windows.sh' \
+		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    env:\n      R: ${{ env.ACTIONS_RUNTIME_URL }}\n    steps:\n      # For scripts/sign-windows.sh' \
+		'job env reads the Actions runtime artifact API'
+	expect_caught 'github-script reading the runtime token, no artifact word in sight (#820)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd\n        with:\n          script: return process.env.ACTIONS_RUNTIME_TOKEN\n      - name: Verify the tarball' \
+		'reads the Actions runtime artifact API'
+	expect_caught 'a third-party artifact download action in the npm publish job (#820)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - uses: dawidd6/action-download-artifact@ac66b43f0e6a346234dd65d4d0c8fbb31cb316e5\n        with:\n          name: brain-tarball\n      - name: Verify the tarball' \
+		'fetches artifacts through dawidd6/action-download-artifact'
+	expect_caught 'an action that exports the runtime token to later steps, in a signing job (#820)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Windows signing readiness' $'      - uses: crazy-max/ghaction-github-runtime@3cb05d89e1f492524af3d41a1c98c83bc3025124\n      - name: Windows signing readiness' \
+		'fetches artifacts through crazy-max/ghaction-github-runtime'
 	expect_caught 'publish-sidecar using the artifacts before checking them (#781)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		'      - name: Verify sidecar artifacts' $'      - run: ls artifacts\n      - name: Verify sidecar artifacts' \
 		'is not followed at once by a sha256sum -c'
