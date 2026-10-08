@@ -3,8 +3,22 @@
   "title": "Goals with the approved path",
   "date": "2026-10-08",
   "status": "implemented_verified_not_activated",
+  "implementation_head": "85b11e98dc30c94246bba57afe0d14f96b48823f",
+  "formatting": {
+    "result": "pass",
+    "evidence": "evidence/D-24/format-check.log",
+    "diff_check": "git diff --cached --check passed"
+  },
+  "commit_hooks": {
+    "result": "pass",
+    "evidence": "evidence/D-24/hooks.log",
+    "tests": 28,
+    "assertions": 116,
+    "note": "Normal license, migration, template, package, related-test and TypeScript checks; no bypass or coauthor trailer."
+  },
   "branch": "brief/d-24",
   "target": "brief/d-23",
+  "compile_context": "Approved D-series stack includes shared controls/motion/shell/outcome values; the fixture journey imports D-23. Not verified as a standalone D-01 cherry-pick. No F-13/F-15 implementation imports.",
   "worktree": "/home/vierisid/.cache/codex/jarvis-d-24",
   "base_sha": "93871db19a75e5c5085451cff50e6d4b75a5042f",
   "main_inspected": "8be4060c591a77bc9f76e569f936d4f573707068",
