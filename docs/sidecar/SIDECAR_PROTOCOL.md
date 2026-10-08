@@ -494,6 +494,15 @@ refuses a mismatch -- or a present-but-malformed value -- with RPC error code
 `BROWSER_SNAPSHOT_SUPERSEDED`, before any CDP command. An absent `elem_gen`
 means the call was not reviewed and is not compared.
 
+The generation names the isolated world's element refs as well as the
+coordinate map, because the sidecar runs one snapshot at a time per browser,
+from its first frame-tree read through the fill, and a reviewed `browser_type`
+excludes snapshots from its generation check through its last use of a ref
+(#826). Without that, two concurrent snapshots could arm the world's refs in
+one order and fill the map in the other, and a snapshot could re-arm the refs
+between a type's check and its focus. A snapshot or type that cannot get its
+turn within ten seconds refuses rather than queueing.
+
 A sidecar older than this ignores the param, so the brain sends a reviewed
 element action only to a sidecar advertising `browser_elem_gen`, and refuses it
 otherwise with a message saying the sidecar must be updated.
