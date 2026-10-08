@@ -208,6 +208,15 @@ if (rule === "untrusted") {
         if (bunInstall.test(bare) && !frozen.test(bare)) out.push(label + via + ": bun install without --frozen-lockfile: " + t);
       }
     }
+    // #821: a job holding a write scope takes what a read-only job produced,
+    // so its checkout leaves no token on disk for anything it then runs to
+    // find. Nothing there needs one: create-pull-request hides any persisted
+    // credential and configures its own from its token input, and gh reads
+    // GH_TOKEN from the step env.
+    if (held)
+      for (const { st: s } of flatSteps(job.steps))
+        if (String(s.uses ?? "").toLowerCase().startsWith("actions/checkout@") && s.with?.["persist-credentials"] !== false)
+          out.push(name + ": checkout leaves the write token in .git/config (persist-credentials is not false)");
   }
 }
 if (rule === "mutable") {
@@ -1101,6 +1110,14 @@ expect_caught 'an install handed to a shell, from the write job' untrusted "$WOR
 	'      - name: Put the generated files in place' $'      - run: bash -c "bun install --frozen-lockfile"\n      - name: Put the generated files in place'
 expect_caught 'an install that turns the frozen lockfile off' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'run: bun install --frozen-lockfile' 'run: bun install --frozen-lockfile=false'
+expect_caught 'the catalog write job leaving its token in .git/config (#821)' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n' \
+	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: true\n' \
+	'publish: checkout leaves the write token in .git/config'
+expect_caught 'the catalog write job checking out with the default, which persists (#821)' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n' \
+	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n' \
+	'publish: checkout leaves the write token in .git/config'
 
 echo
 echo "${pass} passed, ${fail} failed"
