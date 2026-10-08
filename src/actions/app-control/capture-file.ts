@@ -60,9 +60,13 @@ export class CaptureTimeoutError extends Error {}
  *
  * Takes the process rather than spawning it, so each spawn stays at its own
  * call site, where src/spawn-env-guard.test.ts can see what it runs.
+ *
+ * `extraMs` lengthens the bound for one call whose own work grows with its
+ * input, past what any capture takes: `xdotool type` (#895) spends a measured
+ * 12.8 ms per character, so a flat bound would stop a long text part-typed.
  */
-export async function awaitCaptureTool(proc: CaptureProcess, what: string): Promise<void> {
-  await settleCaptureTool(proc, what, null);
+export async function awaitCaptureTool(proc: CaptureProcess, what: string, extraMs = 0): Promise<void> {
+  await settleCaptureTool(proc, what, null, extraMs);
 }
 
 /**
@@ -71,14 +75,14 @@ export async function awaitCaptureTool(proc: CaptureProcess, what: string): Prom
  * X server exactly as the capture would (#802 review).
  */
 export async function awaitCaptureToolOutput(proc: CaptureProcess & { readonly stdout: ReadableStream<Uint8Array> }, what: string): Promise<string> {
-  return settleCaptureTool(proc, what, proc.stdout);
+  return settleCaptureTool(proc, what, proc.stdout, 0);
 }
 
 /** How long a killed tool gets to be reaped before it is given up on regardless. */
 const KILL_GRACE_MS = 1000;
 
-async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStream: ReadableStream<Uint8Array> | null): Promise<string> {
-  const bound = captureTimeoutMs;
+async function settleCaptureTool(proc: CaptureProcess, what: string, stdoutStream: ReadableStream<Uint8Array> | null, extraMs: number): Promise<string> {
+  const bound = captureTimeoutMs + extraMs;
   let timedOut = false;
   let killed!: () => void;
   const wasKilled = new Promise<void>((resolve) => { killed = resolve; });
@@ -120,18 +124,10 @@ function captureDir(): { dir: string; file: string } {
   return { dir, file: join(dir, 'capture.png') };
 }
 
-/** Run `write(path)` with a fresh private path, and return what it wrote there. */
-export function captureViaPrivateFile(write: (path: string) => void): Buffer {
-  const { dir, file } = captureDir();
-  try {
-    write(file);
-    return readFileSync(file);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/** The same, for a capture tool that is awaited. */
+/**
+ * Run `write(path)` with a fresh private path, and return what it wrote
+ * there. (The synchronous twin went with the synchronous native seam, #893.)
+ */
 export async function captureViaPrivateFileAsync(write: (path: string) => Promise<unknown>): Promise<Buffer> {
   const { dir, file } = captureDir();
   try {

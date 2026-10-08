@@ -1,5 +1,6 @@
-import { afterEach, beforeEach, test, expect, describe } from 'bun:test';
-import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
+import { afterEach, beforeEach, test, expect, describe, spyOn } from 'bun:test';
+import { __resetAppControllerForTests, type AppController, type UIElement, type WindowInfo } from '../app-control/interface.ts';
+import { WSLBridge } from '../terminal/wsl-bridge.ts';
 import { setNoLocalTools } from './local-tools-guard.ts';
 import { isUntrustedSourceTool } from '../../roles/untrusted.ts';
 import { guardImageSize } from '../../llm/provider.ts';
@@ -71,59 +72,6 @@ function createFakeController(): FakeController {
     async launchApp(executable: string, args?: string) {
       launches.push({ executable, args });
       return { pid: 9001, executable, args: args ?? '' };
-    },
-  };
-}
-
-function createSnapshotController() {
-  const clickedIds: number[] = [];
-  let lastDepth: number | undefined;
-
-  return {
-    clickedIds,
-    lastDepth: () => lastDepth,
-    async getActiveWindow() {
-      return createFakeWindow();
-    },
-    async getWindowTree() {
-      return [createFakeElement()];
-    },
-    async listWindows() {
-      return [createFakeWindow()];
-    },
-    async clickElement() {},
-    async typeText() {},
-    async pressKeys() {},
-    async captureScreen() {
-      return Buffer.from('png-data');
-    },
-    async captureWindow() {
-      return Buffer.from('png-data');
-    },
-    async focusWindow() {},
-    async snapshot(_pid?: number, depth?: number) {
-      lastDepth = depth;
-      return {
-        window: { pid: 42, title: 'Calculator', className: 'calc' },
-        elements: [
-          {
-            id: 7,
-            role: 'button',
-            name: 'Equals',
-            value: null,
-            depth: 1,
-            properties: {
-              className: 'calc-button',
-              automationId: 'equals-button',
-            },
-          },
-        ],
-        totalElements: 1,
-      };
-    },
-    async clickById(elementId: number) {
-      clickedIds.push(elementId);
-      return `Clicked ${elementId}`;
     },
   };
 }
@@ -258,42 +206,24 @@ describe('DESKTOP_TOOLS', () => {
     expect(controller.clickedActions).toEqual(['double_click', 'right_click', 'focus']);
   });
 
-  test('desktop_click returns unsupported actions for snapshot-based controllers', async () => {
-    const controller = createSnapshotController();
-    __setLocalDesktopControllerFactoryForTests(() => controller);
-    const snapshotTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_snapshot');
-    const clickTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_click');
-
-    await snapshotTool!.execute({});
-    await expect(clickTool!.execute({ element_id: 7, action: 'double_click' })).rejects.toMatchObject({
-      outcome: { status: 'blocked', code: 'DESKTOP_ACTION_UNSUPPORTED', effect: 'not_started' },
-    });
-    expect(controller.clickedIds).toEqual([]);
-  });
-
-  test('desktop_snapshot honors depth and omits unknown bounds for snapshot controllers', async () => {
-    const controller = createSnapshotController();
-    __setLocalDesktopControllerFactoryForTests(() => controller);
-    const snapshotTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_snapshot');
-
-    const result = await snapshotTool!.execute({ depth: 3 });
-
-    expect(controller.lastDepth()).toBe(3);
-    expect(String(result)).toContain('[7] button "Equals" class="calc-button"');
-    expect(String(result)).not.toContain('bounds=');
-  });
-
-  test('desktop_find_element matches snapshot controller properties', async () => {
-    const controller = createSnapshotController();
-    __setLocalDesktopControllerFactoryForTests(() => controller);
+  test('desktop_find_element matches tree element properties', async () => {
+    // Was pinned against the legacy bridge's own snapshot(), which went with
+    // the bridge (#799); the tree walk is the only local path now.
+    const equals: UIElement = {
+      id: 'eq', role: 'button', name: 'Equals', value: null,
+      bounds: { x: 20, y: 30, width: 40, height: 20 }, children: [],
+      properties: { className: 'calc-button', automationId: 'equals-button' },
+    };
+    __setLocalDesktopControllerFactoryForTests(() => ({
+      ...createFakeController(),
+      getWindowTree: async () => [{ ...createFakeElement(), children: [equals] }],
+    }));
     const findTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_find_element');
 
-    const result = await findTool!.execute({
-      automation_id: 'equals-button',
-      class_name: 'calc-button',
-    });
-
-    expect(result).toBe('[7] button "Equals"');
+    expect(await findTool!.execute({ automation_id: 'equals-button', class_name: 'calc-button' }))
+      .toBe('[1000001001] button "Equals"');
+    expect(await findTool!.execute({ automation_id: 'equals-button', class_name: 'other' }))
+      .toBe('No matching elements found.');
   });
 
   test('desktop_launch_app uses local launch support', async () => {
@@ -545,16 +475,46 @@ describe('desktop_screenshot under a canceled run (#803)', () => {
     const { withExecutionScope } = await import('../execution-scope.ts');
     const { WorkflowCancellationError } = await import('../../workflows/runtime/cancellation-error.ts');
     // Wider than MAX_IMAGE_SIDE, so it is compacted, and tiny.
-    const wide = encodePng(8001, 1, 2, 8, [new Uint8Array(8001 * 3)]).toString('base64');
+    const wide = encodePng(8001, 1, 2, 8, [new Uint8Array(8001 * 3)]);
     setNoLocalTools(false);
     __setLocalDesktopControllerFactoryForTests(() => ({
       ...createFakeController(),
-      screenshotBase64: async () => ({ base64: wide, mimeType: 'image/png' }),
-    }) as unknown as AppController);
+      captureScreen: async () => wide,
+    }));
     const tool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_screenshot')!;
     // Not canceled: compacted as usual.
     expect(JSON.stringify(await withExecutionScope(() => {}, () => tool.execute({})))).toContain('image/jpeg');
     const canceled = withExecutionScope(() => { throw new WorkflowCancellationError('run-803'); }, () => tool.execute({}));
     await expect(canceled).rejects.toBeInstanceOf(WorkflowCancellationError);
+  });
+});
+
+/**
+ * #799: under WSL the local controller was the legacy desktop bridge's client.
+ * With it gone a local desktop call is refused before anything runs, and says
+ * so: not_started, never the "may have occurred" a plain throw from the
+ * controller factory would have become in executeLocal.
+ */
+describe.skipIf(process.platform !== 'linux')('local desktop tools under WSL (#799)', () => {
+  afterEach(() => {
+    __resetAppControllerForTests();
+    __setLocalDesktopControllerFactoryForTests(null);
+  });
+
+  test('are refused as not_started and point at the sidecar', async () => {
+    const spy = spyOn(WSLBridge, 'isWSL').mockReturnValue(true);
+    try {
+      __resetAppControllerForTests();
+      __setLocalDesktopControllerFactoryForTests(null);
+      expect(getSidecarManager()).toBeNull();
+      for (const name of ['desktop_list_windows', 'desktop_type', 'desktop_screenshot']) {
+        const tool = DESKTOP_TOOLS.find((entry) => entry.name === name)!;
+        await expect(tool.execute({ text: 'hunter2' })).rejects.toMatchObject({
+          outcome: { status: 'blocked', code: 'LOCAL_DESKTOP_UNAVAILABLE', effect: 'not_started' },
+        });
+      }
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

@@ -58,26 +58,6 @@ type LocalSnapshot = {
   totalElements: number;
 };
 
-type SnapshotCapableController = AppController & {
-  snapshot?: (pid?: number, depth?: number) => Promise<{
-    window: { pid: number; title: string; className: string };
-    elements: Array<{
-      id: number;
-      role: string;
-      name: string;
-      value: string | null;
-      depth: number;
-      isEnabled?: boolean;
-      bounds?: UIElement['bounds'];
-      properties?: Record<string, unknown>;
-    }>;
-    totalElements: number;
-  }>;
-  clickById?: (elementId: number) => Promise<string>;
-  typeById?: (elementId: number | undefined, text: string) => Promise<string>;
-  screenshotBase64?: (pid?: number) => Promise<{ base64: string; mimeType: string }>;
-};
-
 let localControllerFactory: () => AppController = () => getAppController();
 /**
  * The last local tree walk's elements, behind ids that name that walk, and
@@ -88,11 +68,10 @@ let lastLocalSnapshot: LocalSnapshot | null = null;
 
 /**
  * Local element work, one call at a time: a snapshot, a find, and the
- * read-back plus dispatch of a click or a type. A legacy desktop bridge keeps
- * its own per-walk ids, so a walk that lands between an action's read-back and
- * its click would re-point the id the click goes out under. The tools are
- * driven one at a time by a model anyway; this makes it a property of the code
- * rather than of the caller.
+ * read-back plus dispatch of a click or a type, so a walk cannot land between
+ * an action's read-back and its click and refill the cache under it. The tools
+ * are driven one at a time by a model anyway; this makes it a property of the
+ * code rather than of the caller.
  */
 let localElementQueue: Promise<unknown> = Promise.resolve();
 function serializedLocal<T>(fn: () => Promise<T>): Promise<T> {
@@ -118,8 +97,8 @@ function isToolDisabled(): string | null {
   return null;
 }
 
-function getLocalController(): SnapshotCapableController {
-  return localControllerFactory() as SnapshotCapableController;
+function getLocalController(): AppController {
+  return localControllerFactory();
 }
 
 /**
@@ -186,20 +165,20 @@ function flattenElements(
 
 /**
  * One walk of `pid`: the tree, and which window it read when the controller
- * can say (a bridge walks the pid's largest window, which can change).
+ * can say (see AppController.getWindowTreeContext).
  */
-async function readWindowTree(controller: SnapshotCapableController, pid: number): Promise<{ elements: UIElement[]; context?: string }> {
+async function readWindowTree(controller: AppController, pid: number): Promise<{ elements: UIElement[]; context?: string }> {
   if (typeof controller.getWindowTreeContext === 'function') return controller.getWindowTreeContext(pid);
   return { elements: await controller.getWindowTree(pid) };
 }
 
 /** One walk of `pid`, flattened as a snapshot numbers it. */
-async function walkLocalElements(controller: SnapshotCapableController, pid: number, depth: number): Promise<{ elements: UIElement[]; context?: string }> {
+async function walkLocalElements(controller: AppController, pid: number, depth: number): Promise<{ elements: UIElement[]; context?: string }> {
   const tree = await readWindowTree(controller, pid);
   return { elements: flattenElements(tree.elements, depth, 0, []).map((entry) => entry.element), context: tree.context };
 }
 
-async function buildLocalSnapshot(controller: SnapshotCapableController, pid?: number, depth: number = 8): Promise<LocalSnapshot> {
+async function buildLocalSnapshot(controller: AppController, pid?: number, depth: number = 8): Promise<LocalSnapshot> {
   try {
     return await buildLocalSnapshotInner(controller, pid, depth);
   } catch (err) {
@@ -211,27 +190,7 @@ async function buildLocalSnapshot(controller: SnapshotCapableController, pid?: n
   }
 }
 
-async function buildLocalSnapshotInner(controller: SnapshotCapableController, pid: number | undefined, depth: number): Promise<LocalSnapshot> {
-  if (typeof controller.snapshot === 'function') {
-    const snap = await controller.snapshot(pid, depth);
-    lastLocalSnapshot = {
-      window: snap.window,
-      elements: snap.elements.map((element) => ({
-        id: element.id,
-        role: element.role,
-        name: element.name,
-        value: element.value,
-        depth: element.depth,
-        bounds: element.bounds ?? null,
-        properties: {
-          ...(element.properties ?? {}),
-          isEnabled: element.isEnabled ?? true,
-        },
-      })),
-      totalElements: snap.totalElements,
-    };
-    return lastLocalSnapshot;
-  }
+async function buildLocalSnapshotInner(controller: AppController, pid: number | undefined, depth: number): Promise<LocalSnapshot> {
 
   const window = pid !== undefined
     ? (await controller.listWindows()).find((entry) => entry.pid === pid) ?? null
@@ -310,7 +269,7 @@ export function getCachedElementBounds(elementId: number): UIElement['bounds'] |
  * `not_started` refusal (#704). What is clicked is that live element, never
  * the cached copy.
  */
-function confirmedLocalElement(controller: SnapshotCapableController, elementId: number): Promise<UIElement> {
+function confirmedLocalElement(controller: AppController, elementId: number): Promise<UIElement> {
   return resolveElement(localElements, elementId, (pid, depth) => walkLocalElements(controller, pid, depth), uiElementPrint);
 }
 
@@ -333,7 +292,7 @@ function unsupportedAction(action: string): never {
     message: `Error: Local desktop action "${action}" is not supported by this platform controller.` });
 }
 
-async function executeLocal<T>(fn: (controller: SnapshotCapableController) => Promise<T>): Promise<T> {
+async function executeLocal<T>(fn: (controller: AppController) => Promise<T>): Promise<T> {
   const disabled = isToolDisabled();
   if (disabled) {
     throw new ActionOutcomeError({ status: 'blocked', code: 'LOCAL_TOOLS_DISABLED', message: disabled, effect: 'not_started' });
@@ -487,12 +446,6 @@ export const desktopClickTool: ToolDefinition = {
       if (!['click', 'double_click', 'right_click', 'focus'].includes(action)) {
         return unsupportedAction(action);
       }
-      if (typeof controller.clickById === 'function') {
-        if (action !== 'click') {
-          return unsupportedAction(action);
-        }
-        return controller.clickById(params.element_id as number);
-      }
       const element = withAction(await confirmedLocalElement(controller, params.element_id as number), action);
       await controller.clickElement(element);
       return `Clicked element [${params.element_id}] with action "${action}".`;
@@ -576,9 +529,6 @@ export const desktopTypeTool: ToolDefinition = {
     }
     return executeLocal((controller) => serializedLocal(async () => {
       const elementId = params.element_id as number | undefined;
-      if (typeof controller.typeById === 'function') {
-        return controller.typeById(elementId, params.text as string);
-      }
       if (elementId !== undefined) {
         await controller.clickElement(await confirmedLocalElement(controller, elementId));
         await Bun.sleep(100);
@@ -735,22 +685,12 @@ export const desktopScreenshotTool: ToolDefinition = {
       return routeScreenshotToSidecar(target, params, true);
     }
     return executeLocal(async (controller) => {
-      let base64: string;
-      let mimeType = 'image/png';
-
-      if (typeof controller.screenshotBase64 === 'function') {
-        const image = await controller.screenshotBase64(params.pid as number | undefined);
-        base64 = image.base64;
-        mimeType = image.mimeType;
-      } else {
-        const buffer = params.pid !== undefined
-          ? await controller.captureWindow(params.pid as number)
-          : await controller.captureScreen();
-        base64 = buffer.toString('base64');
-      }
+      const buffer = params.pid !== undefined
+        ? await controller.captureWindow(params.pid as number)
+        : await controller.captureScreen();
 
       // Awaited for symmetry with capture_screen; executeLocal awaits it either way.
-      return await localScreenshotResult(base64, mimeType, 'Desktop screenshot captured', true);
+      return await localScreenshotResult(buffer.toString('base64'), 'image/png', 'Desktop screenshot captured', true);
     });
   },
 };
