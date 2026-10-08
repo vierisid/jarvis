@@ -34,7 +34,9 @@ export class EmergencyController {
   }
 
   /**
-   * Kill: terminate all agents, cancel all pending.
+   * Kill: stop everything. The state change is all this does; the daemon's
+   * state callback stops every unfinished workflow run and denies every
+   * pending approval, and tool dispatch stops at its next checkpoint (Q-08).
    * Requires explicit reset() to recover.
    */
   kill(): void {
@@ -63,4 +65,19 @@ export class EmergencyController {
   setStateChangeCallback(cb: (state: EmergencyState) => void): void {
     this.onStateChange = cb;
   }
+}
+
+let active: EmergencyController | null = null;
+
+/**
+ * The daemon's controller, for enforcement points it does not hand one to:
+ * tool dispatch, the workflow worker, triggers and continuations (Q-08).
+ */
+export function setActiveEmergencyController(controller: EmergencyController | null): void {
+  active = controller;
+}
+
+/** The active controller's state; normal when none is wired (tests, tools). */
+export function activeEmergencyState(): EmergencyState {
+  return active?.getState() ?? 'normal';
 }

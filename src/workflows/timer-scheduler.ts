@@ -13,7 +13,8 @@ import { getFlowRun } from './db/repos/flow-run.ts';
 import { listDueTimerWaitpoints, markWaitpointResumed } from './db/repos/waitpoint.ts';
 import { stopTurnedOffRun, turnedOffReason } from './db/repos/flow-turn-off.ts';
 import { resumeResolvedWorkflowEffects } from './runtime/effect-approval-scheduler';
-import { claimContinuation } from './runtime/continuation';
+import { claimContinuation, releaseEmergencyHolds } from './runtime/continuation';
+import { emergencyHold } from './runtime/emergency-hold';
 
 export class TimerWaitpointScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -40,7 +41,12 @@ export class TimerWaitpointScheduler {
    * and skipped.
    */
   tick(now: number = Date.now()): number {
+    // Paused or stopped: no timer, approval or held step wakes anything; they
+    // wait for Resume (Q-08).
+    if (emergencyHold()) return 0;
     let resumed = 0;
+    try { resumed += releaseEmergencyHolds(now); }
+    catch (error) { console.error('[Workflow emergency] releasing held steps failed:', error); }
     try { resumed += resumeResolvedWorkflowEffects(); }
     catch (error) { console.error('[Workflow Authority] approval recovery failed:', error); }
     let due;

@@ -18,6 +18,7 @@ import { EngineFlowExecutor } from '../workflows/runner/engine-runtime/engine-fl
 import type { EngineRuntime } from '../workflows/runner/engine-runtime/engine-runtime.ts';
 import { createWorkflowRoutes } from '../workflows/api/routes.ts';
 import { createApiRoutes, type ApiContext } from '../daemon/api-routes.ts';
+import { EmergencyController, setActiveEmergencyController } from '../authority/emergency.ts';
 import { DailyRhythm } from './rhythm.ts';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, untrustedClose, unsafeUntrustedNoncesForTests } from '../roles/untrusted.ts';
 import { startWorkItemRun } from './workflow-bridge.ts';
@@ -545,5 +546,34 @@ describe('Today work trace', () => {
     restart();
     expect(listWorkItems({ planId: plan.id }).map(w => w.id)).toEqual(recovered.map(w => w.id));
     expect(goals.getTodayCheckIn('morning_plan')?.work_item_ids).toEqual(recovered.map(w => w.id));
+  });
+});
+
+describe('Q-08: a work item starts like any other run', () => {
+  test('a locked version with a CODE step needs the workflow\'s CODE grant', () => {
+    const flow = createFlow();
+    const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Compute', trigger: { name: 'trigger', type: 'EMPTY',
+      nextAction: { name: 'compute_totals', type: 'CODE', displayName: 'Compute totals',
+        settings: { sourceCode: { packageJson: '{}', code: 'export const code = async () => ({});' } } } } as never }).id);
+    const goal = goals.createGoal('Deliver report', 'task', { status: 'active' });
+    const work = createWorkItem({ title: 'Compute totals', goalId: goal.id, mode: 'workflow', workflowId: flow.id, workflowVersionId: version.id, input: {} });
+    accept(work.id);
+    expect(() => startWorkItemRun(work.id, flow.id)).toThrow(/CODE step/);
+    expect(queueStats().queued).toBe(0);
+  });
+
+  test('is refused while Jarvis is paused, and starts after Resume', () => {
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    try {
+      const { flow, work } = configuredWork(); accept(work.id);
+      controller.pause();
+      expect(() => startWorkItemRun(work.id, flow.id)).toThrow(/Jarvis is paused/);
+      expect(queueStats().queued).toBe(0);
+      controller.resume();
+      expect(startWorkItemRun(work.id, flow.id).status).toBe('QUEUED');
+    } finally {
+      setActiveEmergencyController(null);
+    }
   });
 });

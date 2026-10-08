@@ -19,7 +19,8 @@ import type { STTProvider, TTSProvider } from '../comms/voice.ts';
 import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
 import { approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
-import type { EmergencyState } from '../authority/emergency.ts';
+import { activeEmergencyState, type EmergencyState } from '../authority/emergency.ts';
+import { heldApprovalMessage } from './approval-decision.ts';
 import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
@@ -2342,6 +2343,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       if (pending.length > 0) {
         const latest = pending.reduce((a, b) => (a.created_at > b.created_at ? a : b));
         const label = (latest.reason && latest.reason.trim()) || latest.tool_name;
+        // A spoken yes or no names no card. With more than one waiting it
+        // could land on one the person is not looking at -- a background
+        // card that arrived a second earlier -- so it decides nothing (Q-08).
+        if (pending.length > 1) {
+          return { kind: 'gated', label, message: `${pending.length} approvals are waiting. Open the dashboard to choose which one to decide.` };
+        }
 
         // Two-tier safety: destructive impacts never resolve by voice;
         // non-destructive require confidence ≥ 0.85. Gate decision is a
@@ -2371,6 +2378,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         }
 
         if (decision === 'approve') {
+          // Pause holds: approving waits for Resume (Q-08).
+          const emergency = activeEmergencyState();
+          if (emergency !== 'normal') return { kind: 'gated', label, message: heldApprovalMessage(emergency) };
           const approved = this.approvalManager.approve(latest.id, 'voice');
           if (!approved) return null;
           // Audit the voice resolution distinctly from the click path so

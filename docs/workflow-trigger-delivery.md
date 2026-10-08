@@ -124,6 +124,26 @@ A timer or approval that comes due while Jarvis is off continues its run when
 Jarvis is back, late, with the lateness recorded. Unlike a schedule, a
 continuation is never skipped for being late: the run is waiting on it.
 
+## Pause and Kill
+
+Owner decision (Q-08, 7 October): **Pause holds, Kill stops.** The state is the
+daemon's emergency controller; `runtime/emergency-hold.ts` is what workflows
+read.
+
+| While paused | What happens |
+| --- | --- |
+| Queued runs | Wait: the worker claims nothing; a job claimed as the pause began goes back untouched |
+| A scheduled time | Skipped and recorded, keyed, so it is not run late after Resume |
+| A webhook | 503 with `Retry-After`, recorded as skipped; the sender retries |
+| An event source's poll | Not polled; its items are picked up after Resume |
+| Timers, approvals, resume URLs | Wake nothing (a resume URL answers 503); they wait |
+| A run already executing | Parks at its next Jarvis, piece or CODE step on a HOLD waitpoint, which Resume releases |
+| Starting a run by hand | Refused, saying Jarvis is paused |
+
+Kill does all of that and also stops every unfinished run (queued, executing
+or waiting), saying why, and denies every pending approval; tools stop at
+their next dispatch checkpoint. Reset starts nothing again.
+
 ## The ledger
 
 `workflow_trigger_fire` keeps one row per delivery, with its source

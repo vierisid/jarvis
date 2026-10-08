@@ -17,6 +17,7 @@ import { createWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { canonicalJson, digest, resolveEffectContext, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
 import { substituteAboveLevel } from '../../authority/tool-action-map';
+import { holdStep, PAUSED_REASON } from './emergency-hold';
 
 export interface WorkflowAuthorityDependencies {
   authorityEngine?: AuthorityEngine; auditTrail?: AuditTrail; emergencyController?: EmergencyController;
@@ -105,7 +106,21 @@ export class WorkflowEffectBoundary {
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
       throw new Error('Workflow effect changed since it was recorded; start a new run for new arguments or version');
     }
-    if (effect?.status === 'succeeded') return { result: effect.result };
+    if (effect?.status === 'succeeded') {
+      // A piece's or a delegation's recorded DISPATCH AUTHORIZATION is handed
+      // out again when its step re-runs (a governed action that pauses itself
+      // resumes through it). Not while Jarvis is paused or stopped (Q-08):
+      // before, this returned ahead of every check.
+      if (input.route === 'piece' || input.route === 'agent') {
+        const state = emergency.getState();
+        if (state === 'killed') throw new Error('Workflow effect blocked: system killed');
+        if (state === 'paused') {
+          return { approval: { effectId: id, approvalId: '',
+            waitpointId: holdStep({ runId: resolved.run.id, projectId: resolved.run.projectId, stepName: resolved.stepName }).id, hold: PAUSED_REASON } };
+        }
+      }
+      return { result: effect.result };
+    }
     if (effect?.outcome && effect.outcome.status !== 'succeeded') throw new ActionOutcomeError(effect.outcome);
     if (effect?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
     if (effect && effect.status !== 'pending') throw new Error(effect.error ?? `Workflow effect is ${effect.status}`);
@@ -131,10 +146,18 @@ export class WorkflowEffectBoundary {
       tool_name: record.toolName, action_category: input.category,
       authority_decision: record.decision === 'denied' ? 'denied' : record.approvalId ? 'approval_required' : 'allowed',
       approval_id: record.approvalId, executed });
+    // Pause holds (Q-08): a step reached while Jarvis is paused parks on a
+    // HOLD waitpoint instead of being refused for good, and is judged afresh
+    // when Resume releases it. Asked before the decision and again before the
+    // dispatch claim; a step already dispatching is in flight and finishes.
+    const holdIfPaused = (): EffectReply | null => emergency.getState() === 'paused'
+      ? { approval: { effectId: id, approvalId: '', waitpointId: holdStep({ runId: record.runId, projectId: record.projectId, stepName: record.stepName }).id, hold: PAUSED_REASON } }
+      : null;
     const policy = () => {
+      // Kill stops. The controller is the one source of truth: a copy of the
+      // state taken at boot kept workflows blocked after Resume (Q-08).
       const state = emergency.getState();
-      const configuredState = authority.getConfig().emergency_state;
-      if (state !== 'normal' || configuredState !== 'normal') throw new Error(`Workflow effect blocked: system ${state !== 'normal' ? state : configuredState}`);
+      if (state === 'killed') throw new Error('Workflow effect blocked: system killed');
       const run = getFlowRun(record.runId);
       if (!run || run.status !== 'RUNNING') throw new Error(`Workflow effect blocked: run is ${run?.status ?? 'missing'}`);
       // Cancellation has one fence, owned by `runtime/cancellation`. Defer to it
@@ -172,6 +195,8 @@ export class WorkflowEffectBoundary {
       }
       return decision;
     };
+    const held = holdIfPaused();
+    if (held) return held;
     let decision;
     try { decision = policy(); } catch (error) {
       record.status = 'blocked'; record.decision = 'denied'; record.error = String((error as Error).message);
@@ -243,6 +268,8 @@ export class WorkflowEffectBoundary {
       }
       if (current.requiresApproval && !record.approvalId) throw new Error('Workflow Authority now requires approval; effect was not dispatched');
     };
+    const heldBeforeDispatch = holdIfPaused();
+    if (heldBeforeDispatch) return heldBeforeDispatch;
     try { checkpoint(); } catch (error) {
       // A rejected target/session has not reached the dispatch claim. Preserve
       // that fact separately from uncertainty about already-started effects.

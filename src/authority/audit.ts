@@ -9,12 +9,13 @@ export type AuthorityDecisionType = 'allowed' | 'denied' | 'approval_required';
 
 /**
  * The resolution channel for an approval decision. `click` is the
- * dashboard card path; `voice` is the spoken-yes/no path; `system` is for
- * automatic decisions (heartbeat-driven cleanup, expired requests, etc.).
- * `null` is allowed for backward compatibility with rows written before
- * this column existed.
+ * dashboard card path; `voice` is the spoken-yes/no path; `chat` a reply in
+ * Telegram or Discord; `notification` a desktop toast button; `system` is
+ * for automatic decisions (heartbeat-driven cleanup, expired requests, an
+ * emergency Kill, etc.). `null` is allowed for backward compatibility with
+ * rows written before this column existed.
  */
-export type ResolutionChannel = 'click' | 'voice' | 'system';
+export type ResolutionChannel = 'click' | 'voice' | 'chat' | 'notification' | 'system';
 
 export type AuditEntry = {
   id: string;

@@ -49,19 +49,20 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
-import { ApprovalManager } from "../authority/approval.ts";
+import { ApprovalManager, executionState, UNANSWERED_APPROVAL_TTL_MS } from "../authority/approval.ts";
+import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { impactFromCategory } from "../roles/authority.ts";
 import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
 import { isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
-import { EmergencyController } from "../authority/emergency.ts";
+import { EmergencyController, setActiveEmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
-import { applyApprovalDecision } from "./approval-decision.ts";
+import { applyApprovalDecision, channelDecisionReply } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
@@ -4517,6 +4518,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     deferredExecutor.setLearner(learner);
     // Approved actions must respect the kill switch too, not just the gate.
     deferredExecutor.setEmergencyController(emergencyController);
+    // ...and the permissions in force when they run, not when they were asked (Q-08).
+    deferredExecutor.setAuthorityEngine(authorityEngine);
+    // Tool dispatch, the workflow worker, triggers and continuations read the
+    // same controller (Q-08).
+    setActiveEmergencyController(emergencyController);
     // Startup reconciliation. Inline requests are owned by an authority gate
     // blocked in-process; any that survived a restart have no gate anymore,
     // so they go to the deferred path. An approved request that never got a
@@ -4529,6 +4535,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (reconciled.notStarted > 0 || reconciled.interrupted > 0) {
       console.log(`[Daemon] Approved actions left unresolved by the last shutdown: ${reconciled.notStarted} never started, ${reconciled.interrupted} interrupted. Awaiting a decision in Authority.`);
     }
+    // A chat or background card nobody answered stops being approvable after
+    // 24 hours, instead of never (Q-08). Workflow approvals are left alone.
+    const expireUnanswered = () => {
+      try {
+        const expired = approvalManager.expireUnanswered(UNANSWERED_APPROVAL_TTL_MS);
+        if (expired > 0) console.log(`[Daemon] ${expired} unanswered approval request(s) expired after 24 hours`);
+      } catch (err) {
+        console.error('[Daemon] Could not expire unanswered approvals:', err);
+      }
+    };
+    expireUnanswered();
+    setInterval(expireUnanswered, 10 * 60_000).unref?.();
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
     wsService.setDeferredExecutor(deferredExecutor);
@@ -4543,6 +4561,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Persist emergency state changes to the DB settings store
     emergencyController.setStateChangeCallback(async (state) => {
       wsService.broadcastEmergencyState(state);
+      // Pause holds, Kill stops (Q-08): stop runs and deny approvals on Kill,
+      // release held steps on Resume, keep the engine's copy of the state.
+      applyEmergencyState(state, { authorityEngine, approvalManager, auditTrail,
+        onApprovalDenied: (request) => wsService.broadcastApprovalUpdate(request) });
       try {
         const { saveUserSection } = await import('./user-settings.ts');
         if (!jarvisConfig.authority) jarvisConfig.authority = { default_level: 3 } as any;
@@ -4694,7 +4716,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       try {
         return approvalManager
           .getHistory({ limit: 8 })
-          .filter((r) => r.status === 'executed' || r.status === 'approved')
+          // Carried out means a receipt that says so: an approval not yet run,
+          // or one refused, failed or uncertain, is not (Q-08).
+          .filter((r) => r.status === 'executed' && (r.execution_outcome ?? 'committed') === 'committed')
           .slice(0, 3)
           .map((r) => `${trayHumanizeTool(r.tool_name)} · ${trayRelTime(r.executed_at ?? r.decided_at ?? r.created_at)}`);
       } catch {
@@ -4794,6 +4818,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         for (const req of executed) {
           if (notifiedDoneIds.has(req.id)) continue;
           notifiedDoneIds.add(req.id);
+          // Only a run whose receipt says it happened is "complete" (Q-08).
+          if ((req.execution_outcome ?? 'committed') !== 'committed') continue;
           const doneAt = req.executed_at ?? req.decided_at ?? req.created_at;
           if (Date.now() - doneAt > 60_000) continue; // skip the backlog
           notifyAll({
@@ -4899,7 +4925,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const p = (event.payload ?? {}) as { id?: string; kind?: string; action?: string };
       if (p.kind === 'approval' && p.id && (p.action === 'approve' || p.action === 'deny')) {
         const { id, action } = p;
-        void applyApprovalDecision(action, id, 'notification', { approvalManager, deferredExecutor, wsService })
+        void applyApprovalDecision(action, id, 'notification', { approvalManager, deferredExecutor, wsService, auditTrail })
           .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
       }
     });
@@ -4932,16 +4958,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Note: toolRegistry set after startAll() below
 
     // Wire channel approval handler
+    // Who may approve from chat is checked in ChannelService (allowed users);
+    // here the reply must name exactly one pending card (Q-08).
     channelService.setApprovalHandler(async (action, shortId, channel) => {
       const request = approvalManager.findByShortId(shortId);
-      if (!request) return `No pending approval found for ID ${shortId}`;
-
-      const outcome = await applyApprovalDecision(action, request.id, channel, { approvalManager, deferredExecutor, wsService });
-      if (outcome.status === 'already_decided') return 'Request already decided';
-      if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;
-      if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
-      if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
-      return 'Approved. The agent will continue and report back in chat.';
+      if (!request) return `No pending approval found for ID ${shortId}. Use the 8-character id from the card.`;
+      const outcome = await applyApprovalDecision(action, request.id, channel, { approvalManager, deferredExecutor, wsService, auditTrail });
+      return channelDecisionReply(outcome, request);
     });
 
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
@@ -5495,7 +5518,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // notification would duplicate it in the chat.
       if (request.tool_name === 'request_approval') return;
       if (request.execution_mode === 'inline') return;
-      const text = `[EXECUTED] ${request.tool_name}: ${result.slice(0, 200)}`;
+      // Labelled by what the receipt says, not by the fact that it was tried (Q-08).
+      const current = approvalManager.getRequest(requestId);
+      const state = current ? executionState(current) : 'committed';
+      const label = state === 'committed' ? '[EXECUTED]' : state === 'blocked' ? '[NOT RUN]' : state === 'unknown' ? '[UNCERTAIN]' : '[FAILED]';
+      const text = `${label} ${request.tool_name}: ${result.slice(0, 200)}`;
       wsService.broadcastNotification(text, 'normal');
     });
 

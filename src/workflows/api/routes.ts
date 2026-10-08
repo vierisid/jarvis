@@ -79,6 +79,7 @@ import {
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { claimContinuation } from "../runtime/continuation";
+import { manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnection,
   getConnection,
@@ -1285,6 +1286,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const ownedEffect = getWorkflowDb().query('SELECT id FROM workflow_effect WHERE waitpoint_id=?').get(id);
           if (ownedEffect) return err('This waitpoint is owned by Authority; resolve its approval request', 403);
+          // A step parked while Jarvis was paused is released by Jarvis on
+          // Resume, never by a URL (Q-08).
+          if (wp.type === "HOLD") return err("This waitpoint holds a step while Jarvis is paused; Jarvis releases it when resumed", 403);
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
           const run = getFlowRun(wp.flowRunId);
           if (!run) return err("waitpoint references a missing run", 410);
@@ -1347,6 +1351,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             case "busy": return err("another continuation of this run is already queued; retry once it has run", 409);
             case "stale": return err("the step this waitpoint was for has already finished", 410);
             case "not-paused": return err("run is no longer paused", 409);
+            // Paused or stopped: the waitpoint is kept; retry after Resume (Q-08).
+            case "held": return new Response(JSON.stringify({ error: "Jarvis is paused; this run continues once it is resumed. Retry later." }), {
+              status: 503,
+              headers: { "Content-Type": "application/json", "Retry-After": "60" },
+            });
             default: return err("waitpoint already resumed", 410);
           }
         }),
@@ -1805,6 +1814,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const flow = getFlow(id);
           if (!flow) return err("flow not found", 404);
+          // Pause holds and Kill stops: nothing starts, by hand either (Q-08).
+          const held = manualStartRefusal();
+          if (held) return err(held, 409);
           // `payload` is one run's trigger input, JSON.stringify'd into
           // `workflow_job.payload`, so this body was unbounded STORAGE, not
           // just parse cost (#649). It is the same kind of thing a resume

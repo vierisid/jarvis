@@ -28,6 +28,22 @@ const LAST_RECIPIENT_PREFIX = 'channel.lastRecipient.';
 
 export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string) => Promise<string>;
 
+/** What a chat sender who may not approve is told (Q-08). */
+export const CHANNEL_APPROVE_NOT_ALLOWED =
+  'Only someone on this channel\'s allowed users list can approve from chat. Approve it on the Jarvis dashboard, or reply "deny <id>".';
+
+/**
+ * Whether this chat sender may approve (Q-08, owner decision): only a user on
+ * the channel's allowed list. With no list set, anyone the bot hears may deny
+ * a request but not approve one.
+ */
+export function channelSenderMayApprove(config: Pick<JarvisConfig, 'channels'>, channel: string, userId: unknown): boolean {
+  const list: ReadonlyArray<string | number> | undefined = channel === 'telegram' ? config.channels?.telegram?.allowed_users
+    : channel === 'discord' ? config.channels?.discord?.allowed_users : undefined;
+  if (!Array.isArray(list) || list.length === 0 || userId === undefined || userId === null || userId === '') return false;
+  return list.some((allowed) => String(allowed) === String(userId));
+}
+
 export type DeliveryFailureHandler = (failure: { channel: string; attempts: number; error: string }) => void;
 
 export class ChannelService implements Service {
@@ -302,6 +318,9 @@ export class ChannelService implements Service {
     if (this.approvalHandler && (approveMatch || denyMatch)) {
       const action = approveMatch ? 'approve' : 'deny';
       const shortId = (approveMatch ?? denyMatch)![1];
+      if (action === 'approve' && !channelSenderMayApprove(this.config, channelTag, msg.metadata.userId)) {
+        return CHANNEL_APPROVE_NOT_ALLOWED;
+      }
       try {
         return await this.approvalHandler(action as 'approve' | 'deny', shortId!, channelTag);
       } catch (err) {
