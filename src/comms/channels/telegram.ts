@@ -91,12 +91,19 @@ type TelegramUpdate = {
   update_id: number;
   message?: {
     message_id: number;
-    from: {
+    /**
+     * Optional in the Bot API. For a message sent on behalf of a chat it is a
+     * placeholder shared by every such sender (`GroupAnonymousBot`,
+     * `Channel_Bot`), never the person (#885).
+     */
+    from?: {
       id: number;
       first_name: string;
       last_name?: string;
       username?: string;
     };
+    /** Set when the message was sent on behalf of a chat: an anonymous group admin, or a channel (#885). */
+    sender_chat?: { id: number; type: string; title?: string };
     chat: {
       id: number;
       type: string;
@@ -292,11 +299,24 @@ export class TelegramAdapter implements ChannelAdapter {
 
     const { message } = update;
 
+    // A message sent on behalf of a chat -- an anonymous group admin, a
+    // "send as channel" post, a linked channel's automatic forward -- carries
+    // `sender_chat`, and its `from` is a placeholder id that every such sender
+    // shares (#885). Listing that id would list every anonymous admin of every
+    // group, and this list decides who may approve a gated action, so a
+    // message that cannot be traced to one person is not handled at all: it
+    // can neither chat, decide, nor become the broadcast recipient.
+    if (message.sender_chat || !message.from) {
+      console.log(`[TelegramAdapter] Ignoring a message sent on behalf of a chat (${message.sender_chat?.title ?? message.sender_chat?.id ?? 'no sender'}): it cannot be attributed to one person`);
+      return;
+    }
+    const from = message.from;
+
     // Security: check allowed users. Empty admits everyone for chat, but not
     // for deciding an approval (senderAllowListed below, #811). A setting that
     // names nobody (a string, a quoted id) restricts to nobody (#883).
-    if (this.allowList.restricted && !this.allowList.ids.includes(message.from.id)) {
-      console.log(`[TelegramAdapter] Ignoring message from unauthorized user: ${message.from.id} (${message.from.username ?? message.from.first_name})`);
+    if (this.allowList.restricted && !this.allowList.ids.includes(from.id)) {
+      console.log(`[TelegramAdapter] Ignoring message from unauthorized user: ${from.id} (${from.username ?? from.first_name})`);
       return;
     }
 
@@ -331,18 +351,18 @@ export class TelegramAdapter implements ChannelAdapter {
     const channelMessage: ChannelMessage = {
       id: message.message_id.toString(),
       channel: 'telegram',
-      from: message.from.username || message.from.first_name,
+      from: from.username || from.first_name,
       text,
       timestamp: message.date * 1000,
       metadata: {
         chatId: message.chat.id,
-        userId: message.from.id,
+        userId: from.id,
         chatType: message.chat.type,
-        firstName: message.from.first_name,
-        lastName: message.from.last_name,
+        firstName: from.first_name,
+        lastName: from.last_name,
         isVoice: !!voiceFile,
       },
-      senderAllowListed: this.allowList.ids.includes(message.from.id),
+      senderAllowListed: this.allowList.ids.includes(from.id),
     };
 
     console.log('[TelegramAdapter] Message from', channelMessage.from, ':', channelMessage.text.slice(0, 80));
