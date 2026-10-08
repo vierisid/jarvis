@@ -1,0 +1,94 @@
+{
+  "step": "D-24",
+  "title": "Goals with the approved path",
+  "date": "2026-10-08",
+  "status": "implemented_verified_not_activated",
+  "branch": "brief/d-24",
+  "target": "brief/d-23",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-d-24",
+  "base_sha": "93871db19a75e5c5085451cff50e6d4b75a5042f",
+  "main_inspected": "8be4060c591a77bc9f76e569f936d4f573707068",
+  "source_pins": {
+    "F-13": "d7e1bde053cc905fb5b02406da021c9f8a290cfb",
+    "F-15": "bc0fdf9cda343e45ad8081345a77e1814dbe979a"
+  },
+  "ownership": [
+    "ui/src/brief/goals/**",
+    "ui/src/brief/preview/FoundationPreview.tsx: isolated import and specimen dispatch",
+    "ui/src/brief/components/controls/controls.css: constrain tab-only styling to tab-strip buttons",
+    "docs/brief-delivery/D-24.* and evidence/D-24/**"
+  ],
+  "design_reference": "ui/src/brief/goals/figma-reference.json",
+  "activation": {
+    "production_registry_changed": false,
+    "real_effects_invoked": false,
+    "required_capabilities": ["goalMeasurements"],
+    "next_step_capabilities": ["recommendations", "decisions"],
+    "host_gates": [
+      "Authenticated complete F-15 collection and canonical independent progress projection",
+      "Qualified measurement data, never invented counts or parent rollups",
+      "F-13 next decision projected from the same owner as Today and Needs you",
+      "Fresh revision-matched next-step route and cross-room resolution reconciliation",
+      "Existing goal creation flow supplied through optional onCreate, no duplicate writer",
+      "Scope retirement on logout/account replacement"
+    ]
+  },
+  "verification": [
+    {
+      "command": "bun test ui/src/brief/goals",
+      "result": "pass",
+      "tests": 28,
+      "assertions": 116,
+      "evidence": "evidence/D-24/focused-tests.log"
+    },
+    {
+      "command": "bun test ui/src/brief",
+      "result": "pass",
+      "tests": 547,
+      "skipped": 2,
+      "assertions": 4986,
+      "evidence": "evidence/D-24/brief-regression.log"
+    },
+    {
+      "command": "bunx tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-24/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-24/build.log",
+      "warnings": "Existing @theme/@tailwind at-rule warnings"
+    }
+  ],
+  "browser": {
+    "result": "pass",
+    "method": "CUA native browser interaction and read-only DOM inspection",
+    "evidence": "evidence/D-24/browser-checks.json",
+    "layouts": 8,
+    "repeated_pebble_cycles": 10,
+    "observed": [
+      "Active path and completed summaries compared with signed-in Figma prototype",
+      "Selected goal and chat writing retained across shell transitions",
+      "Review follow-up opens existing matching decision and returns to Goals",
+      "Only changed value updates; settled wide card rectangles are identical",
+      "Fifteen goal selectors scroll locally; long titles wrap without overflow",
+      "Keyboard manual tab activation and Data basis disclosure",
+      "Score-only, decreasing and stale-data states"
+    ],
+    "console_errors_or_warnings": []
+  },
+  "limitations": [
+    "No production registration or live F-13/F-15 integration. No domain mutation.",
+    "Goals/Needs you fixtures share decision identities, not synchronized domain storage; host reconciliation remains an activation gate.",
+    "Add a goal requires an existing onCreate host flow and is absent from the isolated specimen.",
+    "Controller retains selection across mounts, not browser restarts.",
+    "At 1024px the existing shell shows chat alone; closing returns to the workspace.",
+    "Earlier compact update was sampled during residual shell reflow under 0.5px; a settled wide update was separately verified with identical rectangles.",
+    "Reduced-motion code uses tested shared primitives; OS reduced-motion browser emulation and screen-reader/all-browser certification were not performed.",
+    "Two optional F07/F08 tests remain skipped."
+  ],
+  "rollback": "Remove optional goalsRegistrations/specimen entry; no backend migration or writer reversal. Default routes unchanged.",
+  "quick_verify": "http://127.0.0.1:4404/?brief=preview&specimen=goals#/_brief_preview",
+  "next": "D-25 Build memory search, filters and stream; not started"
+}

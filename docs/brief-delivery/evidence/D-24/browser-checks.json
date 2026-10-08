@@ -1,0 +1,549 @@
+{
+  "date": "2026-10-08",
+  "method": "CUA browser interaction and read-only DOM inspection",
+  "checks": [
+    {
+      "case": "light-expanded-closed",
+      "passed": true,
+      "card": "rgb(255, 255, 255)",
+      "chat": "false",
+      "overflow": false,
+      "primary": "rgb(19, 22, 26)",
+      "selected": "fixture-design-partners",
+      "stages": [
+        {
+          "w": 248,
+          "x": 270,
+          "y": 542.984375
+        },
+        {
+          "w": 248,
+          "x": 562,
+          "y": 542.984375
+        },
+        {
+          "w": 248,
+          "x": 854,
+          "y": 542.984375
+        },
+        {
+          "w": 248,
+          "x": 1146,
+          "y": 542.984375
+        }
+      ],
+      "theme": "light"
+    },
+    {
+      "case": "light-expanded-chat",
+      "passed": true,
+      "card": "rgb(255, 255, 255)",
+      "chat": "true",
+      "overflow": false,
+      "primary": "rgb(19, 22, 26)",
+      "selected": "fixture-design-partners",
+      "stages": [
+        {
+          "w": 146,
+          "x": 270,
+          "y": 542.984375
+        },
+        {
+          "w": 146,
+          "x": 440.328125,
+          "y": 542.984375
+        },
+        {
+          "w": 146,
+          "x": 610.671875,
+          "y": 542.984375
+        },
+        {
+          "w": 146,
+          "x": 781,
+          "y": 542.984375
+        }
+      ],
+      "theme": "light"
+    },
+    {
+      "case": "light-rail-closed",
+      "passed": true,
+      "card": "rgb(255, 255, 255)",
+      "chat": "false",
+      "overflow": false,
+      "primary": "rgb(19, 22, 26)",
+      "selected": "fixture-design-partners",
+      "stages": [
+        {
+          "w": 288,
+          "x": 110,
+          "y": 542.984375
+        },
+        {
+          "w": 288,
+          "x": 442,
+          "y": 542.984375
+        },
+        {
+          "w": 288,
+          "x": 774,
+          "y": 542.984375
+        },
+        {
+          "w": 288,
+          "x": 1106,
+          "y": 542.984375
+        }
+      ],
+      "theme": "light"
+    },
+    {
+      "case": "light-rail-chat",
+      "passed": true,
+      "card": "rgb(255, 255, 255)",
+      "chat": "true",
+      "overflow": false,
+      "primary": "rgb(19, 22, 26)",
+      "selected": "fixture-design-partners",
+      "stages": [
+        {
+          "w": 185,
+          "x": 110,
+          "y": 542.984375
+        },
+        {
+          "w": 185,
+          "x": 318.75,
+          "y": 542.984375
+        },
+        {
+          "w": 185,
+          "x": 527.5,
+          "y": 542.984375
+        },
+        {
+          "w": 185,
+          "x": 736.25,
+          "y": 542.984375
+        }
+      ],
+      "theme": "light"
+    },
+    {
+      "case": "dark-expanded-closed",
+      "passed": true,
+      "card": "rgb(26, 29, 34)",
+      "chat": "false",
+      "overflow": false,
+      "primary": "rgb(238, 241, 244)",
+      "selected": "fixture-design-partners",
+      "stages": [
+        {
+          "w": 248,
+          "x": 270,
+          "y": 542.984375
+        },
+        {
+          "w": 248,
+          "x": 562,
+          "y": 542.984375
+        },
+        {
+          "w": 248,
+          "x": 854,
+          "y": 542.984375
+        },
+        {
+          "w": 248,
+          "x": 1146,
+          "y": 542.984375
+        }
+      ],
+      "theme": "dark"
+    },
+    {
+      "case": "dark-expanded-chat",
+      "passed": true,
+      "card": "rgb(26, 29, 34)",
+      "chat": "true",
+      "overflow": false,
+      "primary": "rgb(238, 241, 244)",
+      "selected": "fixture-design-partners",
+      "stages": [
+        {
+          "w": 145,
+          "x": 270,
+          "y": 542.984375
+        },
+        {
+          "w": 145,
+          "x": 438.875,
+          "y": 542.984375
+        },
+        {
+          "w": 145,
+          "x": 607.765625,
+          "y": 542.984375
+        },
+        {
+          "w": 145,
+          "x": 776.640625,
+          "y": 542.984375
+        }
+      ],
+      "theme": "dark"
+    },
+    {
+      "case": "dark-rail-closed",
+      "passed": true,
+      "card": "rgb(26, 29, 34)",
+      "chat": "false",
+      "overflow": false,
+      "primary": "rgb(238, 241, 244)",
+      "selected": "fixture-design-partners",
+      "stages": [
+        {
+          "w": 288,
+          "x": 110,
+          "y": 542.984375
+        },
+        {
+          "w": 288,
+          "x": 442,
+          "y": 542.984375
+        },
+        {
+          "w": 288,
+          "x": 774,
+          "y": 542.984375
+        },
+        {
+          "w": 288,
+          "x": 1106,
+          "y": 542.984375
+        }
+      ],
+      "theme": "dark"
+    },
+    {
+      "case": "dark-rail-chat",
+      "passed": true,
+      "card": "rgb(26, 29, 34)",
+      "chat": "true",
+      "overflow": false,
+      "primary": "rgb(238, 241, 244)",
+      "selected": "fixture-design-partners",
+      "stages": [
+        {
+          "w": 186,
+          "x": 110,
+          "y": 542.984375
+        },
+        {
+          "w": 186,
+          "x": 319.671875,
+          "y": 542.984375
+        },
+        {
+          "w": 186,
+          "x": 529.359375,
+          "y": 542.984375
+        },
+        {
+          "w": 186,
+          "x": 739.046875,
+          "y": 542.984375
+        }
+      ],
+      "theme": "dark"
+    },
+    {
+      "case": "completed milestones",
+      "passed": true,
+      "cards": 2,
+      "checks": 7,
+      "first": "44/ 4 pilots ready"
+    },
+    {
+      "case": "goal -> existing follow-up decision",
+      "passed": true
+    },
+    {
+      "case": "10 close/open cycles retain goal and writing",
+      "passed": true,
+      "draft": "Keep the partner goal in view.",
+      "open": "true",
+      "selected": "fixture-design-partners"
+    },
+    {
+      "case": "local value update 6 -> 7",
+      "passed": true,
+      "before": [
+        {
+          "rect": {
+            "bottom": 782.765625,
+            "height": 239.78125,
+            "left": 270,
+            "right": 416.859375,
+            "top": 542.984375,
+            "width": 146.859375,
+            "x": 270,
+            "y": 542.984375
+          },
+          "text": "2424/ 30"
+        },
+        {
+          "rect": {
+            "bottom": 782.765625,
+            "height": 239.78125,
+            "left": 438.859375,
+            "right": 585.734375,
+            "top": 542.984375,
+            "width": 146.875,
+            "x": 438.859375,
+            "y": 542.984375
+          },
+          "text": "1212/ 20"
+        },
+        {
+          "rect": {
+            "bottom": 782.765625,
+            "height": 239.78125,
+            "left": 607.734375,
+            "right": 754.609375,
+            "top": 542.984375,
+            "width": 146.875,
+            "x": 607.734375,
+            "y": 542.984375
+          },
+          "text": "88/ 10"
+        },
+        {
+          "rect": {
+            "bottom": 782.765625,
+            "height": 239.78125,
+            "left": 776.609375,
+            "right": 923.484375,
+            "top": 542.984375,
+            "width": 146.875,
+            "x": 776.609375,
+            "y": 542.984375
+          },
+          "text": "66/ 10"
+        }
+      ],
+      "after": [
+        {
+          "rect": {
+            "bottom": 782.765625,
+            "height": 239.78125,
+            "left": 270,
+            "right": 416.75,
+            "top": 542.984375,
+            "width": 146.75,
+            "x": 270,
+            "y": 542.984375
+          },
+          "text": "2424/ 30"
+        },
+        {
+          "rect": {
+            "bottom": 782.765625,
+            "height": 239.78125,
+            "left": 438.75,
+            "right": 585.5,
+            "top": 542.984375,
+            "width": 146.75,
+            "x": 438.75,
+            "y": 542.984375
+          },
+          "text": "1212/ 20"
+        },
+        {
+          "rect": {
+            "bottom": 782.765625,
+            "height": 239.78125,
+            "left": 607.5,
+            "right": 754.25,
+            "top": 542.984375,
+            "width": 146.75,
+            "x": 607.5,
+            "y": 542.984375
+          },
+          "text": "88/ 10"
+        },
+        {
+          "rect": {
+            "bottom": 782.765625,
+            "height": 239.78125,
+            "left": 776.25,
+            "right": 923,
+            "top": 542.984375,
+            "width": 146.75,
+            "x": 776.25,
+            "y": 542.984375
+          },
+          "text": "77/ 10"
+        }
+      ]
+    },
+    {
+      "case": "1024px shared narrow-shell policy",
+      "passed": true,
+      "note": "The inherited Pebble shell shows conversation alone at this width. Closing chat restores the same workspace; no side-by-side claim."
+    },
+    {
+      "case": "15 selectors use local overflow",
+      "passed": true,
+      "overflow": false,
+      "scrollLeft": 1742,
+      "selected": "fixture-extra-11"
+    },
+    {
+      "case": "1024px long content, workspace visible",
+      "passed": true,
+      "overflow": false,
+      "overflowingCards": 0,
+      "roomWidth": 710,
+      "width": 1024
+    },
+    {
+      "case": "score-only goal has no invented count",
+      "passed": true,
+      "text": "Design partners\n60\n60%\nScore"
+    },
+    {
+      "case": "keyboard manual-activation tabs and Data basis",
+      "passed": true,
+      "note": "ArrowRight focuses Completed without selecting it; Enter activates. Data basis opens with Enter."
+    },
+    {
+      "case": "decreasing target",
+      "passed": true,
+      "note": "400 milliseconds toward target 100 from baseline 1,000; canonical 66.7% progress; user-reported basis disclosed."
+    },
+    {
+      "case": "stale read",
+      "passed": true,
+      "note": "Qualified path retained with stale reason; Review follow-up disabled."
+    },
+    {
+      "case": "settled wide layout update",
+      "passed": true,
+      "before": [
+        {
+          "rect": {
+            "bottom": 790.75,
+            "height": 300.765625,
+            "left": 270,
+            "right": 520,
+            "top": 489.984375,
+            "width": 250,
+            "x": 270,
+            "y": 489.984375
+          },
+          "value": "2424/ 30"
+        },
+        {
+          "rect": {
+            "bottom": 790.75,
+            "height": 300.765625,
+            "left": 562,
+            "right": 812,
+            "top": 489.984375,
+            "width": 250,
+            "x": 562,
+            "y": 489.984375
+          },
+          "value": "1212/ 20"
+        },
+        {
+          "rect": {
+            "bottom": 790.75,
+            "height": 300.765625,
+            "left": 854,
+            "right": 1104,
+            "top": 489.984375,
+            "width": 250,
+            "x": 854,
+            "y": 489.984375
+          },
+          "value": "88/ 10"
+        },
+        {
+          "rect": {
+            "bottom": 790.75,
+            "height": 300.765625,
+            "left": 1146,
+            "right": 1396,
+            "top": 489.984375,
+            "width": 250,
+            "x": 1146,
+            "y": 489.984375
+          },
+          "value": "66/ 10"
+        }
+      ],
+      "after": [
+        {
+          "rect": {
+            "bottom": 790.75,
+            "height": 300.765625,
+            "left": 270,
+            "right": 520,
+            "top": 489.984375,
+            "width": 250,
+            "x": 270,
+            "y": 489.984375
+          },
+          "value": "2424/ 30"
+        },
+        {
+          "rect": {
+            "bottom": 790.75,
+            "height": 300.765625,
+            "left": 562,
+            "right": 812,
+            "top": 489.984375,
+            "width": 250,
+            "x": 562,
+            "y": 489.984375
+          },
+          "value": "1212/ 20"
+        },
+        {
+          "rect": {
+            "bottom": 790.75,
+            "height": 300.765625,
+            "left": 854,
+            "right": 1104,
+            "top": 489.984375,
+            "width": 250,
+            "x": 854,
+            "y": 489.984375
+          },
+          "value": "88/ 10"
+        },
+        {
+          "rect": {
+            "bottom": 790.75,
+            "height": 300.765625,
+            "left": 1146,
+            "right": 1396,
+            "top": 489.984375,
+            "width": 250,
+            "x": 1146,
+            "y": 489.984375
+          },
+          "value": "77/ 10"
+        }
+      ]
+    }
+  ],
+  "limitations": [
+    "Earlier compact update had less than 0.5px residual shared-shell reflow; settled wide geometry checked separately.",
+    "1024px open conversation uses the inherited conversation-only shell.",
+    "No OS reduced-motion browser emulation, live API integration or cross-browser certification."
+  ]
+}
