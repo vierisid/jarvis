@@ -1,0 +1,780 @@
+{
+  "date": "2026-10-08",
+  "scope": "D-24 R1-R4 fixes",
+  "checks": [
+    {
+      "case": "R1 all filter after route selection",
+      "observed": {
+        "filter": "all",
+        "selected": "fixture-story",
+        "selectorCount": 7
+      }
+    },
+    {
+      "case": "R2 Goals breadcrumb from Completed",
+      "observed": {
+        "filter": "all",
+        "selected": "fixture-failed",
+        "tab": "Active · 3"
+      }
+    },
+    {
+      "case": "R3 wide child states",
+      "observed": [
+        {
+          "bounds": {
+            "bottom": 865.734375,
+            "height": 322.75,
+            "left": 270,
+            "right": 520,
+            "top": 542.984375,
+            "width": 250,
+            "x": 270,
+            "y": 542.984375
+          },
+          "captionDisplay": "block",
+          "status": "Paused",
+          "statusDisplay": "block"
+        },
+        {
+          "bounds": {
+            "bottom": 865.734375,
+            "height": 322.75,
+            "left": 562,
+            "right": 812,
+            "top": 542.984375,
+            "width": 250,
+            "x": 562,
+            "y": 542.984375
+          },
+          "captionDisplay": "block",
+          "status": "Failed",
+          "statusDisplay": "block"
+        },
+        {
+          "bounds": {
+            "bottom": 865.734375,
+            "height": 322.75,
+            "left": 854,
+            "right": 1104,
+            "top": 542.984375,
+            "width": 250,
+            "x": 854,
+            "y": 542.984375
+          },
+          "captionDisplay": "block",
+          "status": "Completed",
+          "statusDisplay": "block"
+        },
+        {
+          "bounds": {
+            "bottom": 865.734375,
+            "height": 322.75,
+            "left": 1146,
+            "right": 1396,
+            "top": 542.984375,
+            "width": 250,
+            "x": 1146,
+            "y": 542.984375
+          },
+          "captionDisplay": "block",
+          "status": "Active",
+          "statusDisplay": "block"
+        }
+      ]
+    },
+    {
+      "case": "R3 compact child states",
+      "observed": {
+        "roomWidth": 656.078125,
+        "states": [
+          {
+            "captionDisplay": "none",
+            "status": "Paused",
+            "statusDisplay": "block"
+          },
+          {
+            "captionDisplay": "none",
+            "status": "Failed",
+            "statusDisplay": "block"
+          },
+          {
+            "captionDisplay": "none",
+            "status": "Completed",
+            "statusDisplay": "block"
+          },
+          {
+            "captionDisplay": "none",
+            "status": "Active",
+            "statusDisplay": "block"
+          }
+        ]
+      }
+    },
+    {
+      "case": "R4 theme changes",
+      "cycles": 10,
+      "samples": [
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(34, 40, 49)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(238, 241, 244)",
+              "property": "all",
+              "surface": "rgb(26, 29, 34)",
+              "utility": "rgb(164, 171, 179)"
+            }
+          ],
+          "theme": "dark"
+        },
+        {
+          "draft": "Keep this goal in focus.",
+          "selected": "Win 10 design partners",
+          "selectors": [
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(237, 241, 245)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            },
+            {
+              "duration": "0s",
+              "ink": "rgb(19, 22, 26)",
+              "property": "all",
+              "surface": "rgb(255, 255, 255)",
+              "utility": "rgb(83, 91, 99)"
+            }
+          ],
+          "theme": "light"
+        }
+      ],
+      "minimumMeasuredContrast": 6.077227004829527,
+      "note": "Read-only computed colors sampled immediately after each native click; all selector transitions are 0s. Not a frame-by-frame capture."
+    },
+    {
+      "case": "R3 dark rail after chat closes",
+      "observed": {
+        "selected": "fixture-design-partners",
+        "statuses": [
+          {
+            "display": "block",
+            "text": "Paused"
+          },
+          {
+            "display": "block",
+            "text": "Failed"
+          },
+          {
+            "display": "block",
+            "text": "Completed"
+          },
+          {
+            "display": "block",
+            "text": "Active"
+          }
+        ]
+      }
+    },
+    {
+      "case": "R3 narrow 800px",
+      "observed": {
+        "direction": "column",
+        "roomWidth": 486,
+        "scrollWidth": 800,
+        "statuses": [
+          {
+            "display": "block",
+            "rect": {
+              "bottom": 752.96875,
+              "height": 15.984375,
+              "left": 285,
+              "right": 740.984375,
+              "top": 736.984375,
+              "width": 455.984375,
+              "x": 285,
+              "y": 736.984375
+            },
+            "text": "Paused"
+          },
+          {
+            "display": "block",
+            "rect": {
+              "bottom": 992.9375,
+              "height": 15.984375,
+              "left": 285,
+              "right": 740.984375,
+              "top": 976.953125,
+              "width": 455.984375,
+              "x": 285,
+              "y": 976.953125
+            },
+            "text": "Failed"
+          },
+          {
+            "display": "block",
+            "rect": {
+              "bottom": 1232.90625,
+              "height": 15.984375,
+              "left": 285,
+              "right": 740.984375,
+              "top": 1216.921875,
+              "width": 455.984375,
+              "x": 285,
+              "y": 1216.921875
+            },
+            "text": "Completed"
+          },
+          {
+            "display": "block",
+            "rect": {
+              "bottom": 1472.875,
+              "height": 15.984375,
+              "left": 285,
+              "right": 740.984375,
+              "top": 1456.890625,
+              "width": 455.984375,
+              "x": 285,
+              "y": 1456.890625
+            },
+            "text": "Active"
+          }
+        ],
+        "width": 800
+      }
+    }
+  ],
+  "limitations": [
+    "The preview uses local routes; Back/remount behavior is covered by React route-prop regressions, and the breadcrumb return is exercised in the browser.",
+    "Theme samples are immediate post-click reads plus zero-duration computed transitions, not frame-by-frame capture.",
+    "No live F-13/F-15 data or mutations."
+  ],
+  "consoleErrorsOrWarnings": []
+}

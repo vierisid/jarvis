@@ -64,9 +64,7 @@
   background: var(--brief-card);
   text-align: left;
   cursor: pointer;
-  transition:
-    background 180ms,
-    border-color 180ms;
+  /* Appearance changes must switch ink, surface and edge together. */
   overflow-wrap: anywhere;
 }
 .brief-root .brief-goal-selector:hover {
@@ -173,8 +171,12 @@
 .brief-root .brief-goal-stage .brief-progress {
   margin-top: 24px;
 }
-.brief-root .brief-goal-stage-caption {
+.brief-root .brief-goal-stage-status {
   margin: 18px 0 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-stage-caption {
+  margin: 6px 0 0;
   overflow-wrap: anywhere;
 }
 .brief-root .brief-goal-basis {
@@ -409,6 +411,10 @@
   .brief-root .brief-goal-basis {
     grid-column: 1 / -1;
   }
+  .brief-root .brief-goal-stage-status {
+    grid-column: 1 / -1;
+    margin-top: 0;
+  }
   .brief-root .brief-goal-path-heading {
     align-items: start;
     flex-direction: column;
@@ -419,11 +425,6 @@
   }
   .brief-root .brief-goals-heading .brief-button {
     padding-inline: 12px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .brief-root .brief-goal-selector {
-    transition: none;
   }
 }
 .brief-root .brief-goal-stages[data-long-path="true"] {

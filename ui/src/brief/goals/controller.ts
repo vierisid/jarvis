@@ -129,7 +129,9 @@ export class GoalsController {
     this.publish({
       tab: row.goal.status === "completed" ? "completed" : "active",
       filter:
-        row.goal.status === "completed" ? this.state.filter : row.goal.status,
+        row.goal.status === "completed" || this.state.filter === "all"
+          ? this.state.filter
+          : row.goal.status,
     });
     return this.select(id);
   }

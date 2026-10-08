@@ -56,6 +56,25 @@ test("unknown, failed and completed direct IDs select their real status", async 
   expect(c.snapshot().tab).toBe("completed");
   c.retire();
 });
+test("opening a visible goal retains its filter, including returns from completed", async () => {
+  const c = makeGoalsFixture().controller;
+  c.setAccess(true);
+  await flush();
+  c.setFilter("all");
+  for (const id of ["fixture-story", "fixture-paused", "fixture-failed"]) {
+    expect(c.open(id)).toBe(true);
+    expect(c.snapshot().filter).toBe("all");
+    expect(c.snapshot().selectedId).toBe(id);
+    expect(c.visible()).toHaveLength(7);
+  }
+  c.open("fixture-launch");
+  c.open("fixture-story");
+  expect(c.snapshot().filter).toBe("all");
+  c.setFilter("paused");
+  c.open("fixture-failed");
+  expect(c.snapshot().filter).toBe("failed");
+  c.retire();
+});
 test("late reads cannot overwrite a later selection or refreshed data", async () => {
   const pending: ((value: BriefReadState<GoalCollection>) => void)[] = [];
   const c = new GoalsController({
