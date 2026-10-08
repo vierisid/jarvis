@@ -190,6 +190,11 @@ function rowToRun(row: FlowRunRow): FlowRun {
 export function createFlowRun(input: CreateFlowRunInput): FlowRun {
   const id = apId();
   const ts = now();
+  let resolvedProjectId = input.projectId;
+  if (!resolvedProjectId) {
+    const flowRow = db().query<{ project_id: string }, [string]>(`SELECT project_id FROM flow WHERE id = ?`).get(input.flowId);
+    resolvedProjectId = flowRow?.project_id ?? DEFAULT_IDS.project;
+  }
   db().run(
     `INSERT INTO flow_run (
       id, flow_id, flow_version_id, project_id, parent_run_id, fail_parent_on_failure,
@@ -199,7 +204,7 @@ export function createFlowRun(input: CreateFlowRunInput): FlowRun {
       id,
       input.flowId,
       input.flowVersionId,
-      input.projectId ?? DEFAULT_IDS.project,
+      resolvedProjectId,
       input.parentRunId ?? null,
       input.failParentOnFailure ? 1 : 0,
       input.triggeredBy ?? null,
