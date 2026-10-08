@@ -6,6 +6,8 @@ Captured on 8 October 2026 from the isolated Goals specimen and signed-in native
 - `brief-regression.log`: 547 passing Brief tests, 2 existing optional skips, 4,986 assertions.
 - `typecheck.log`: empty successful TypeScript output.
 - `build.log`: successful UI build; inherited @theme/@tailwind warnings.
+- `format-check.log`: matching source/receipt formatting; staged diff whitespace check also passed.
+- `hooks.log`: normal implementation commit hooks passed, including 28 related tests and TypeScript. No bypass.
 - `browser-checks.json`: observed results, dimensions and limitations. This is an observation record, not a portable browser automation script.
 - `final-active-light.jpg`, `final-active-chat.jpg`: final active composition. The latter shows the simulated seven-partner update.
 - `{light,dark}-{expanded,rail}-{closed,chat}.jpg`: eight shell combinations. All preserve goal identity, readable horizontal path and theme.
