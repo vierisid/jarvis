@@ -1,10 +1,12 @@
-import { describe, expect, test } from 'bun:test';
+import { afterEach, describe, expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createInflate, deflateSync } from 'node:zlib';
-import { decodePng, decodeShrunkPng, downscaleToWidth, encodeJpeg, MAX_DECODE_BYTES, MAX_DECODE_PIXELS, MAX_DECODE_WIDTH, MAX_IMAGE_SIDE, scaledQuantTable, screenshotCaption, screenshotForModel, SCREENSHOT_COMPACT, oneCompactionAtATime, takeCompactionsInFlightPeak, tooBigToSend } from './image-compact.ts';
+import { withExecutionScope } from '../execution-scope.ts';
+import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
+import { __setCompactionTimeoutForTests, CompactionTimeoutError, decodePng, decodeShrunkPng, downscaleToWidth, encodeJpeg, MAX_DECODE_BYTES, MAX_DECODE_PIXELS, MAX_DECODE_WIDTH, MAX_IMAGE_SIDE, scaledQuantTable, screenshotCaption, screenshotForModel, SCREENSHOT_COMPACT, oneCompactionAtATime, takeCompactionsInFlightPeak, tooBigToSend } from './image-compact.ts';
 import { corruptCrc, encodePng, noiseRgbRows, zeroBomb } from './fixtures/png.ts';
 
 describe('decodePng', () => {
@@ -605,5 +607,69 @@ describe('streamed decode and shrink (#748)', () => {
     await expect(failing).rejects.toThrow('boom');
     expect(await next).toBe('b-result');
     expect(order).toEqual(['a', 'b']);
+  });
+});
+
+/** #803: one compaction must not be able to hold the queue, or run for a canceled run. */
+describe('the compaction queue is bounded and cancellable (#803)', () => {
+  afterEach(() => __setCompactionTimeoutForTests(null));
+
+  /**
+   * How `p` settled within `ms`. Not `expect(p).rejects`: on Bun 1.3.8 that,
+   * on a promise that never settles, hangs the whole run past --timeout, so a
+   * regression here would stall CI instead of failing it.
+   */
+  function settled(p: Promise<unknown>, ms = 3000): Promise<unknown> {
+    return Promise.race([p.then((v) => ({ resolved: v }), (e: unknown) => ({ rejected: e })), Bun.sleep(ms).then(() => 'still pending')]);
+  }
+
+  test('a compaction that never finishes is given up on at the bound, and the queue moves on', async () => {
+    __setCompactionTimeoutForTests(100);
+    let signal: AbortSignal | undefined;
+    const hung = oneCompactionAtATime((s) => { signal = s; return new Promise<never>(() => {}); });
+    const next = oneCompactionAtATime(async () => 'next ran');
+    expect(await settled(hung)).toMatchObject({ rejected: expect.any(CompactionTimeoutError) });
+    expect(signal?.aborted).toBe(true);
+    expect(await settled(next)).toEqual({ resolved: 'next ran' });
+  });
+
+  test('a decode past the bound is stopped and reported as a compaction failure', async () => {
+    // Noise, so the inflate has real work to be stopped in the middle of.
+    const png = encodePng(8001, 400, 2, 8, noiseRgbRows(8001, 400)).toString('base64');
+    __setCompactionTimeoutForTests(1);
+    expect(await settled(screenshotForModel(png, 'image/png'))).toEqual({ resolved:
+      { ok: false, reason: 'it could not be compacted (the compaction took longer than 0.001s and was stopped)' } });
+    __setCompactionTimeoutForTests(null);
+    expect(await settled(screenshotForModel(png, 'image/png'))).toMatchObject({ resolved: { ok: true, compacted: true } });
+  });
+
+  test('the decode itself stops when its signal fires, before or during the inflate', async () => {
+    const png = encodePng(8001, 400, 2, 8, noiseRgbRows(8001, 400));
+    const before = AbortSignal.abort(new Error('stopped before'));
+    expect(await settled(decodeShrunkPng(png, 1600, MAX_IMAGE_SIDE, before))).toMatchObject({ rejected: { message: 'stopped before' } });
+    const during = new AbortController();
+    const decoding = decodeShrunkPng(png, 1600, MAX_IMAGE_SIDE, during.signal);
+    await Bun.sleep(0);
+    during.abort(new Error('stopped during'));
+    expect(await settled(decoding)).toMatchObject({ rejected: { message: 'stopped during' } });
+  });
+
+  test('a compaction queued by a run that is canceled while it waits does not run', async () => {
+    let release!: () => void;
+    let started!: () => void;
+    const running = new Promise<void>((r) => { started = r; });
+    const blocker = oneCompactionAtATime(() => new Promise<void>((r) => { release = r; started(); }));
+    let canceled = false;
+    let ran = false;
+    const queued = withExecutionScope(() => { if (canceled) throw new WorkflowCancellationError('run-803'); },
+      () => oneCompactionAtATime(async () => { ran = true; }));
+    await running;
+    canceled = true;
+    release();
+    await blocker;
+    expect(await settled(queued)).toMatchObject({ rejected: expect.any(WorkflowCancellationError) });
+    expect(ran).toBe(false);
+    // And the queue is not left stuck behind it.
+    expect(await settled(oneCompactionAtATime(async () => 'after'))).toEqual({ resolved: 'after' });
   });
 });

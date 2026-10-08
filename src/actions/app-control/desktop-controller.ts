@@ -10,7 +10,7 @@ import { createConnection, type Socket } from 'node:net';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { ElementCache, resolveElement, uiElementPrint } from './element-cache.ts';
 import { MAX_DECODE_BYTES } from './image-compact.ts';
-import { findSidecarExecutable, launchSidecar, stopSidecar, isSidecarRunning, type RunningSidecar } from './sidecar-launcher.ts';
+import { BRIDGE_HOST, findSidecarExecutable, launchSidecar, stopSidecar, isSidecarRunning, type RunningSidecar } from './sidecar-launcher.ts';
 
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
@@ -70,7 +70,8 @@ const MAX_SNAPSHOT_ELEMENTS = 60;
 
 export class DesktopController implements AppController {
   private port: number;
-  private host: string = 'localhost';
+  // Never anything but loopback (#800): the host that was probed is the one used.
+  private readonly host: string = BRIDGE_HOST;
   private socket: Socket | null = null;
   private _connected = false;
   private runningSidecar: RunningSidecar | null = null;
@@ -119,8 +120,7 @@ export class DesktopController implements AppController {
     // Check if sidecar is already running
     if (!(await isSidecarRunning(this.port))) {
       console.log('[DesktopController] Sidecar not running, launching...');
-      this.runningSidecar = await launchSidecar(this.port, exe);
-      this.host = this.runningSidecar.host;
+      this.runningSidecar = await launchSidecar(this.port, exe, this.launchReadyTimeoutMs);
     }
 
     // Open TCP socket
@@ -360,6 +360,9 @@ export class DesktopController implements AppController {
 
     await this.connect();
   }
+
+  /** How long a launched bridge has to answer. A field so a test can shorten it. */
+  protected launchReadyTimeoutMs = 10_000;
 
   /** How long a connect may take before it is abandoned. A field so a test can shorten it. */
   protected connectTimeoutMs = 5000;

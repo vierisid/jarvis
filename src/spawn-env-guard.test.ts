@@ -109,7 +109,10 @@ const EXEMPT: Record<string, Exemption> = {
     // localCaptureScreen's spawns moved into the captureViaPrivateFile callback
     // (#746), hence the `/<anonymous>` key, and dropped from 4 to 3 because the
     // win32 PowerShell one-liner now passes sanitizedEnv({ JARVIS_CAPTURE_PATH })
-    // instead of a process.env spread, so it is no longer unsanitized.
+    // instead of a process.env spread, so it is no longer unsanitized. #802
+    // swapped the three execFileSync calls (screencapture, scrot, import) one
+    // for one for an awaited, bounded Bun.spawn at the same sites, inheriting
+    // the env as before, so the count is unchanged.
     calls: { localClipboardRead: 5, localClipboardWrite: 5, 'localCaptureScreen/<anonymous>': 3 },
   },
   'comms/desktop-notify.ts': {
@@ -125,14 +128,16 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'actions/app-control/linux.ts': {
     reason:
-      'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
+      'xdotool/wmctrl/xprop via Bun `$`, and import/scrot via Bun.spawn (for a timeout, #802): ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
       'argv, escaped by Bun `$` for the shell and placed after `--`, which ends xdotool\'s own option ' +
       'parsing; key chords are checked against keysym names first (#518). ' +
       'launchApp, the model-chosen executable, is in MODEL_EXEC.',
     calls: {
       // Both capture bodies moved into the captureViaPrivateFile callback
       // (#746), hence `/<anonymous>`, and each lost one spawn: the shell no
-      // longer mints the temp path, mkdtemp does.
+      // longer mints the temp path, mkdtemp does. #802 replaced each `$` there
+      // with a Bun.spawn one for one, hence the same counts; so did its review, for
+      // the xdotool search and xprop lookups in searchWindowIds and findWindowByPid.
       'LinuxAppController.captureScreen/<anonymous>': 2,
       'LinuxAppController.captureWindow/<anonymous>': 1,
       'LinuxAppController.checkTool': 1,
@@ -218,7 +223,7 @@ const MODEL_EXEC: Record<string, Exemption> = {
   'actions/app-control/sidecar-launcher.ts': {
     reason:
       'launchSidecar: desktop-bridge, which serves launchApp on Windows and hands the launched app its ' +
-      'own environment. (findSidecarExecutable\'s fixed WSL `cmd.exe /C echo %USERPROFILE%` probe is not ' +
+      'own environment. (sidecarExecutablePath\'s fixed WSL `cmd.exe /C echo %USERPROFILE%` probe is not ' +
       'model-directed and uses sanitizedEnv with the #519 WSL interop extras, like wsl-bridge.ts.)',
     calls: { launchSidecar: 1 },
   },

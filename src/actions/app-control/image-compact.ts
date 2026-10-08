@@ -29,6 +29,7 @@
 
 import { createInflate, crc32 } from 'node:zlib';
 import { guardImageSize, type ContentBlock } from '../../llm/provider.ts';
+import { checkpointExecution } from '../execution-scope.ts';
 
 /** The compact capture's parameters, shared with the routed fallback. */
 export const SCREENSHOT_COMPACT = { maxWidth: 1600, jpegQuality: 80 } as const;
@@ -213,7 +214,7 @@ const INFLATE_CHUNK = 64 * 1024;
  * zlib error is the stream's fault (a bad header, a stream cut short, a bad
  * checksum), and all of them read the same way.
  */
-function inflateStream(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Array) => void): Promise<number> {
+function inflateStream(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Array) => void, signal?: AbortSignal): Promise<number> {
   const inflater = createInflate({ chunkSize: INFLATE_CHUNK });
   let total = 0;
   let failure: Error | null = null;
@@ -221,6 +222,10 @@ function inflateStream(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Ar
     failure ??= err;
     inflater.destroy();
   };
+  // Given up on (#803): stop inflating, the same way a refusal does.
+  const aborted = (): void => refuse(signal?.reason instanceof Error ? signal.reason : new Error('the decode was stopped'));
+  if (signal?.aborted) aborted();
+  else signal?.addEventListener('abort', aborted, { once: true });
   const settled = new Promise<void>((resolve) => {
     inflater.on('data', (piece: Buffer) => {
       if (failure) return;
@@ -262,6 +267,7 @@ function inflateStream(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Ar
     }
     if (!failure && !inflater.destroyed) inflater.end();
     await settled;
+    signal?.removeEventListener('abort', aborted);
     if (failure) throw failure;
     return total;
   })();
@@ -288,7 +294,7 @@ function inflateStream(parts: Uint8Array[], limit: number, sink: (bytes: Uint8Ar
  * come before a broken zlib stream that the batch decode named first. Either
  * way the image is refused, never sent half-decoded.
  */
-async function decodeRows(layout: PngLayout, onRow: (rgba: Uint8Array, y: number) => void): Promise<void> {
+async function decodeRows(layout: PngLayout, onRow: (rgba: Uint8Array, y: number) => void, signal?: AbortSignal): Promise<void> {
   const { width, height, depth, colorType, channels, rowBytes, palette, paletteAlpha } = layout;
   const stride = rowBytes + 1;
   const expected = stride * height;
@@ -387,7 +393,7 @@ async function decodeRows(layout: PngLayout, onRow: (rgba: Uint8Array, y: number
     // bound refuses more.
   };
   // Bounded by what the header declares, plus that slack.
-  const produced = await inflateStream(layout.idat, expected + 64, take);
+  const produced = await inflateStream(layout.idat, expected + 64, take, signal);
   if (produced < expected) throw new Error('PNG image data is shorter than its header says');
 }
 
@@ -412,10 +418,10 @@ export async function decodePng(png: Uint8Array): Promise<DecodedImage> {
  * (within maxWidth and maxHeight) the output is the full-size image, as it
  * always was: for a screenshot, up to 1600x8000, 51 MB.
  */
-export async function decodeShrunkPng(png: Uint8Array, maxWidth: number, maxHeight = Infinity): Promise<DecodedImage & { origWidth: number; origHeight: number }> {
+export async function decodeShrunkPng(png: Uint8Array, maxWidth: number, maxHeight = Infinity, signal?: AbortSignal): Promise<DecodedImage & { origWidth: number; origHeight: number }> {
   const layout = readPng(png);
   const avg = new AreaAverage(layout.width, layout.height, maxWidth, maxHeight);
-  await decodeRows(layout, (row, y) => avg.addRow(row, y));
+  await decodeRows(layout, (row, y) => avg.addRow(row, y), signal);
   return { ...avg.result(), origWidth: layout.width, origHeight: layout.height };
 }
 
@@ -808,13 +814,72 @@ let compactions: Promise<unknown> = Promise.resolve();
 let compactionsInFlight = 0;
 let compactionsInFlightPeak = 0;
 
-/** @internal Exported for its test; screenshotForModel is the one caller. */
-export function oneCompactionAtATime<T>(work: () => Promise<T>): Promise<T> {
+/**
+ * How long one compaction may hold the queue (#803). Nothing is known to hang
+ * one; the bound is there because the queue makes a hang everyone's: every
+ * later screenshot compaction in the process would wait behind it, for ever.
+ *
+ * Measured, worst cases at the decoder's caps (random noise, every row Paeth
+ * filtered, n=3 each): 8000x8000 RGBA 2.3-2.6 s, 8000x8000 RGB 1.8-2.3 s,
+ * 65535x976 RGBA 2.2-2.7 s, 5656x5656 RGBA16 2.3-2.6 s. 30 s is eleven times
+ * the slowest of those -- room for a much slower machine -- and the capture
+ * tools' own bound (CAPTURE_TIMEOUT_MS), so neither half of a screenshot
+ * waits longer than the other.
+ */
+export const COMPACTION_TIMEOUT_MS = 30_000;
+let compactionTimeoutMs = COMPACTION_TIMEOUT_MS;
+
+/** @internal Test only: shorten the bound (null restores it). */
+export function __setCompactionTimeoutForTests(ms: number | null): void {
+  compactionTimeoutMs = ms ?? COMPACTION_TIMEOUT_MS;
+}
+
+/** A compaction that ran past COMPACTION_TIMEOUT_MS and was given up on. */
+export class CompactionTimeoutError extends Error {}
+
+/**
+ * @internal Exported for its test; screenshotForModel is the one caller.
+ *
+ * `work` gets a signal that fires at the bound; the queue moves on then
+ * whether or not `work` honours it, so one that ignores it can only cost its
+ * own memory alongside the next compaction's, never stop the ones after it.
+ * The decode honours it (inflateStream stops), so in practice it ends there.
+ * (The in-flight count used by the serialisation test then drops while such
+ * a `work` may still run; it is test telemetry only.)
+ *
+ * The bound is per compaction, from when it starts: a caller queued behind
+ * N others can still wait up to N bounds, but no one compaction can make
+ * that forever.
+ *
+ * Before starting, a queued compaction runs its caller's execution-scope
+ * fence (checkpointExecution), in the caller's async context, which `.then`
+ * carries. Outside a scope (chat) that is a no-op. In a workflow run it is
+ * the whole composed fence, not only cancellation: a canceled run throws its
+ * WorkflowCancellationError, and inside a governed effect a revoked approval
+ * or an Authority change throws that effect boundary's own error. So a
+ * screenshot whose run stopped being allowed while it waited in the queue is
+ * not finished for it -- deliberately: the fence is the run's single answer
+ * to "may this still go on", and a picture handed to a model is the step
+ * that matters, not the capture.
+ */
+export function oneCompactionAtATime<T>(work: (signal: AbortSignal) => Promise<T>): Promise<T> {
   const counted = async (): Promise<T> => {
+    checkpointExecution();
     compactionsInFlightPeak = Math.max(compactionsInFlightPeak, ++compactionsInFlight);
+    const bound = compactionTimeoutMs;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timedOut = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new CompactionTimeoutError(`the compaction took longer than ${bound / 1000}s and was stopped`);
+        controller.abort(err);
+        reject(err);
+      }, bound);
+    });
     try {
-      return await work();
+      return await Promise.race([work(controller.signal), timedOut]);
     } finally {
+      clearTimeout(timer);
       compactionsInFlight--;
     }
   };
@@ -845,21 +910,28 @@ export async function screenshotForModel(base64: string, mediaType: string): Pro
   const block: ContentBlock = { type: 'image', source: { type: 'base64', media_type: mediaType, data: base64 } };
   if (!tooBigToSend(block) && !(mediaType === 'image/png' && sideTooLong(base64))) return { ok: true, block, compacted: false };
   if (mediaType !== 'image/png') return { ok: false, reason: `the capture is ${mediaType}, which cannot be compacted here` };
-  return oneCompactionAtATime(async (): Promise<ScreenshotForModel> => {
-    const bytes = Buffer.from(base64, 'base64');
-    let jpeg: Uint8Array;
-    let small: Awaited<ReturnType<typeof decodeShrunkPng>>;
-    try {
-      // Straight to the shrunk size, never the full-size image (#748).
-      small = await decodeShrunkPng(bytes, SCREENSHOT_COMPACT.maxWidth, MAX_IMAGE_SIDE);
-      jpeg = encodeJpeg(small, SCREENSHOT_COMPACT.jpegQuality);
-    } catch (err) {
-      return { ok: false, reason: `it could not be compacted (${err instanceof Error ? err.message : String(err)})` };
-    }
-    const compact: ContentBlock = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from(jpeg).toString('base64') } };
-    if (tooBigToSend(compact)) return { ok: false, reason: 'it is too large to send even after compacting it' };
-    return { ok: true, block: compact, compacted: true, width: small.width, height: small.height, origWidth: small.origWidth, origHeight: small.origHeight };
-  });
+  try {
+    return await oneCompactionAtATime(async (signal): Promise<ScreenshotForModel> => {
+      const bytes = Buffer.from(base64, 'base64');
+      let jpeg: Uint8Array;
+      let small: Awaited<ReturnType<typeof decodeShrunkPng>>;
+      try {
+        // Straight to the shrunk size, never the full-size image (#748).
+        small = await decodeShrunkPng(bytes, SCREENSHOT_COMPACT.maxWidth, MAX_IMAGE_SIDE, signal);
+        jpeg = encodeJpeg(small, SCREENSHOT_COMPACT.jpegQuality);
+      } catch (err) {
+        return { ok: false, reason: `it could not be compacted (${err instanceof Error ? err.message : String(err)})` };
+      }
+      const compact: ContentBlock = { type: 'image', source: { type: 'base64', media_type: 'image/jpeg', data: Buffer.from(jpeg).toString('base64') } };
+      if (tooBigToSend(compact)) return { ok: false, reason: 'it is too large to send even after compacting it' };
+      return { ok: true, block: compact, compacted: true, width: small.width, height: small.height, origWidth: small.origWidth, origHeight: small.origHeight };
+    });
+  } catch (err) {
+    // The bound is this compaction's failure, reported like any other; a
+    // cancellation from the caller's scope is not, and goes on up (#803).
+    if (err instanceof CompactionTimeoutError) return { ok: false, reason: `it could not be compacted (${err.message})` };
+    throw err;
+  }
 }
 
 /**

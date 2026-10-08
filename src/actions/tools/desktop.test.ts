@@ -528,3 +528,33 @@ describe('local desktop element ids (#704)', () => {
     expect(s.typed).toEqual([]);
   });
 });
+
+/**
+ * #803: the screenshot compaction queue checks its caller's execution scope
+ * before a queued compaction starts. executeLocal turned anything that was
+ * not an ActionOutcomeError into LOCAL_DESKTOP_OUTCOME_UNKNOWN, which would
+ * have reported a canceled run's stop as "the action may have occurred".
+ */
+describe('desktop_screenshot under a canceled run (#803)', () => {
+  afterEach(() => {
+    setNoLocalTools(false);
+    __setLocalDesktopControllerFactoryForTests(null);
+  });
+
+  test('the cancellation leaves the tool as itself, not as an unknown outcome', async () => {
+    const { withExecutionScope } = await import('../execution-scope.ts');
+    const { WorkflowCancellationError } = await import('../../workflows/runtime/cancellation-error.ts');
+    // Wider than MAX_IMAGE_SIDE, so it is compacted, and tiny.
+    const wide = encodePng(8001, 1, 2, 8, [new Uint8Array(8001 * 3)]).toString('base64');
+    setNoLocalTools(false);
+    __setLocalDesktopControllerFactoryForTests(() => ({
+      ...createFakeController(),
+      screenshotBase64: async () => ({ base64: wide, mimeType: 'image/png' }),
+    }) as unknown as AppController);
+    const tool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_screenshot')!;
+    // Not canceled: compacted as usual.
+    expect(JSON.stringify(await withExecutionScope(() => {}, () => tool.execute({})))).toContain('image/jpeg');
+    const canceled = withExecutionScope(() => { throw new WorkflowCancellationError('run-803'); }, () => tool.execute({}));
+    await expect(canceled).rejects.toBeInstanceOf(WorkflowCancellationError);
+  });
+});
