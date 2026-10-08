@@ -28,7 +28,8 @@
 #      that is a channel or a range, no global npm install without an exact
 #      version, no `@latest`-style run, no `curl | sh`, the QEMU binfmt and
 #      BuildKit images pinned by digest, and no Bun, Go cache or binfmt image
-#      restored from the Actions cache (writable by any run on main). Both
+#      restored from the Actions cache (writable by any run on main), and
+#      (#680) no SBOM generator image by tag. Both
 #      npm publishers pin the same exact npm, and every Dockerfile base image
 #      is pinned by tag and digest, its Bun bases at BUN_VERSION (#783). Not
 #      checked: setup-node's node-version major (runner tool cache).
@@ -39,7 +40,11 @@
 #      install or build; on the release path no checkout leaves its token in
 #      the repository config; no registry login happens on a dry run; and
 #      (#781) a privileged job takes an artifact only by a digest another
-#      job reported as an output, checked in the step right after the download.
+#      job reported as an output, checked in the step right after the download,
+#      and (#820) by no other route: not gh run download, the artifacts REST
+#      API, the runtime artifact service (ACTIONS_RESULTS_URL and
+#      ACTIONS_RUNTIME_TOKEN) or any other action named for artifacts,
+#      downloads or the runtime.
 #   7. (#687) "Authority" also counts any use of the `secrets` context other
 #      than secrets.GITHUB_TOKEN (including toJSON(secrets)), and `secrets:
 #      inherit`; and every rule that reads steps descends into local
@@ -208,6 +213,15 @@ if (rule === "untrusted") {
         if (bunInstall.test(bare) && !frozen.test(bare)) out.push(label + via + ": bun install without --frozen-lockfile: " + t);
       }
     }
+    // #821: a job holding a write scope takes what a read-only job produced,
+    // so its checkout leaves no token on disk for anything it then runs to
+    // find. Nothing there needs one: create-pull-request hides any persisted
+    // credential and configures its own from its token input, and gh reads
+    // GH_TOKEN from the step env.
+    if (held)
+      for (const { st: s } of flatSteps(job.steps))
+        if (String(s.uses ?? "").toLowerCase().startsWith("actions/checkout@") && s.with?.["persist-credentials"] !== false)
+          out.push(name + ": checkout leaves the write token in .git/config (persist-credentials is not false)");
   }
 }
 if (rule === "mutable") {
@@ -311,6 +325,21 @@ if (rule === "mutable") {
         const image = (opts.find((o) => o.startsWith("image=")) ?? "").slice("image=".length);
         if (!digest.test(image)) out.push(label + ": BuildKit image is not pinned by digest (" + JSON.stringify(image || "default buildx-stable-1") + ")");
       }
+      // #680: an SBOM attestation runs a generator IMAGE inside the build,
+      // with the image filesystem mounted, and its default is the tag
+      // docker/buildkit-syft-scanner:stable-1. Both spellings: the sbom
+      // input (true, or generator=...) and an attests entry of type=sbom.
+      if (/^docker\/(build-push-action|bake-action)@/i.test(uses)) {
+        const specs = [];
+        const sbom = resolve(s.with?.sbom, ...scopes).trim();
+        if (sbom && sbom.toLowerCase() !== "false") specs.push(sbom);
+        for (const a of resolve(s.with?.attests, ...scopes).split("\n"))
+          if (/(?:^|,)\s*type\s*=\s*sbom\b/i.test(a)) specs.push(a);
+        for (const spec of specs) {
+          const g = /(?:^|,)\s*generator\s*=\s*([^,\s]+)/i.exec(spec)?.[1] ?? "";
+          if (!digest.test(g)) out.push(label + ": SBOM generator image is not pinned by digest (" + JSON.stringify(g || "default stable-1") + ")");
+        }
+      }
     }
   }
 }
@@ -384,10 +413,24 @@ if (rule === "narrow") {
     // a backtick, after then/do/else, or behind sudo/env/exec/time/command.
     // Also behind if/elif/while/until, VAR=value assignments, timeout N,
     // xargs and nohup, and with a directory in front of the program.
-    const cmd = (w) => new RegExp("(?:^|[;&|(!`]\\s*|\\$\\(\\s*|\\b(?:then|do|else|if|elif|while|until)\\s+)" +
-      "(?:(?:sudo|env|exec|time|command|nice|nohup|xargs)\\s+(?:-\\S+\\s+)*|timeout\\s+(?:-\\S+\\s+)*\\S+\\s+|[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:\\S*/)?" + w);
-    // Comments: a # at line start or after whitespace, outside ${#...}.
-    const lines = runs.split("\n").map((l) => l.replace(/(^|\s)#(?!\{).*$/, "$1").trim());
+    // Also inside a { ...; } group, and behind sudo or env options that take
+    // a value (sudo -u root, env -u VAR) (#817 review).
+    const cmd = (w) => new RegExp("(?:^|[;&|(!`{]\\s*|\\$\\(\\s*|\\b(?:then|do|else|if|elif|while|until)\\s+)" +
+      "(?:(?:sudo|env|exec|time|command|nice|nohup|xargs)\\s+(?:-[ugCDhprtU]\\s+\\S+\\s+|-\\S+\\s+)*|timeout\\s+(?:-\\S+\\s+)*\\S+\\s+|[A-Za-z_][A-Za-z0-9_]*=\\S*\\s+)*(?:\\S*/)?" + w);
+    // Comments: a # at line start or after whitespace, outside ${#...} and
+    // outside quotes, so `echo "step #1"; cmd` keeps its cmd (#817 review).
+    const stripComment = (l) => {
+      let q = "";
+      for (let i = 0; i < l.length; i++) {
+        const c = l[i];
+        if (q) { if (c === q) q = ""; else if (c === "\\" && q === "\"") i++; continue; }
+        if (c === "\"" || c === "\x27") { q = c; continue; }
+        if (c === "\\") { i++; continue; }
+        if (c === "#" && (i === 0 || /\s/.test(l[i - 1])) && l[i + 1] !== "{") return l.slice(0, i);
+      }
+      return l;
+    };
+    const lines = runs.split("\n").map((l) => stripComment(l).trim());
     // npm verbs that run package or repository code, and any global install
     // that is not npm itself pinned to NPM_VERSION.
     const npmRuns = cmd("npm\\s+(?:ci|install|i|add|isntall|in|it|install-test|install-ci-test|run|run-script|rum|urn|exec|x|pack|rebuild|rb|test|t|tst|start|restart|stop|update|up|upgrade|dedupe|link|ln|explore)\\b");
@@ -424,6 +467,29 @@ if (rule === "narrow") {
       for (const st of steps)
         if (typeof st.run === "string" && /\bnpm\s+publish\b/.test(st.run) && !/\bnpm\s+publish\s+"[^"]*\.tgz"/.test(st.run.replace(/\$\{TARBALL\}/g, "x.tgz")))
           out.push(name + ": npm publish is not given a .tgz path (a directory publish runs its lifecycle scripts)");
+    }
+    // #817: a package manager runs maintainer scripts as root, which can read
+    // the worker environment and memory, so on the release path a job that
+    // can mint an OIDC token installs no OS or language packages: a mirror or
+    // archive compromise must not reach the publishing or signing identity.
+    // Whatever needs a package runs in a job without the token (osslsigncode
+    // for post-sign verification moved out for exactly this).
+    if (release && oidc) {
+      for (const line of lines) {
+        if (cmd("(?:apt-get|apt|aptitude|add-apt-repository|dpkg|snap|flatpak|brew|port|yum|dnf|apk|zypper|pacman|pip3?|pipx|uv|conda|mamba|nix|nix-env|gem|cargo|choco|winget|python3?\\s+-m\\s+pip)\\b").test(line))
+          out.push(name + ": installs OS packages in a job holding id-token: " + line);
+        // Text handed to another shell is a command this rule cannot read.
+        if (cmd("(?:(?:ba|z|da)?sh\\s+-\\S*c|eval)\\b").test(line))
+          out.push(name + ": runs shell text in a job holding id-token, which this rule cannot see into: " + line);
+      }
+      // And no action that could install anything: only what these jobs
+      // use. Each one added has to be argued for here.
+      const okUses = ["actions/checkout@", "actions/download-artifact@", "actions/upload-artifact@", "actions/setup-node@", "google-github-actions/auth@"];
+      for (const st of steps) {
+        const u = String(st.uses ?? "");
+        if (u && !u.startsWith("./") && !okUses.some((a) => u.toLowerCase().startsWith(a)))
+          out.push(name + ": uses " + u + " in a job holding id-token (only checkout, artifact transfer, setup-node and google-github-actions/auth)");
+      }
     }
     // On the release path a job that can mint a token builds nothing: the
     // compiler, the module graph and dependency scripts run in a job without
@@ -489,7 +555,50 @@ if (rule === "narrow") {
       for (const st of steps)
         if (/^actions\/github-script@/i.test(String(st.uses ?? "")) && /artifact/i.test(String(st.with?.script ?? "")))
           out.push(name + ": github-script touching artifacts, which the digest rule cannot check");
+      // #820: the artifact service itself. Its URL and token sit in the
+      // environment of every JavaScript action and can be handed to a run:
+      // step, so reading either one is a download route this rule cannot
+      // follow. Run text without comments, plus every with: and env: value
+      // of the step and the job (a github-script body is a with: value).
+      const runtimeApi = /\bACTIONS_(?:RESULTS_URL|RUNTIME_TOKEN|RUNTIME_URL)\b/;
+      if (runtimeApi.test(JSON.stringify(job.env ?? {})))
+        out.push(name + ": job env reads the Actions runtime artifact API, which the digest rule cannot check");
+      for (const [i, st] of steps.entries()) {
+        const code = typeof st.run === "string" ? st.run.split("\n").map((l) => l.replace(/(^|\s)#(?!\{).*$/, "$1")).join("\n") : "";
+        if (runtimeApi.test(code + JSON.stringify(st.with ?? {}) + JSON.stringify(st.env ?? {})))
+          out.push(name + ": step " + (st.name ?? st.id ?? st.uses ?? String(i)) + " reads the Actions runtime artifact API (ACTIONS_RESULTS_URL, ACTIONS_RUNTIME_TOKEN, ACTIONS_RUNTIME_URL), which the digest rule cannot check");
+      }
+      // ...and every other action that fetches artifacts or hands the runtime
+      // to later steps. Only actions/download-artifact is followed by the
+      // digest check above, so any other action named for artifacts,
+      // downloads or the runtime is one this rule cannot see into. An
+      // unrecognised route is an allowed one, so this is by name and broad.
+      for (const st of steps) {
+        const u = String(st.uses ?? "").toLowerCase().split("@")[0];
+        if (!u || u.startsWith("./") || u === "actions/download-artifact" || u === "actions/upload-artifact") continue;
+        if (/artifact|download|runtime/.test(u))
+          out.push(name + ": fetches artifacts through " + u + ", which the digest rule cannot check");
+      }
     }
+    // An artifact is a zip that any job in the run can write, and extraction
+    // overwrites what is already there (#817 review). Downloaded into the
+    // checkout, it can replace a checked-out script before the job runs it:
+    // sign-windows.sh, with the KMS token in its environment. So on the
+    // release path a job with a checkout downloads only into a directory the
+    // repository does not have: under runner.temp, or a name that is not in
+    // the tree. The default path is the workspace itself.
+    if (release && steps.some((st) => String(st.uses ?? "").toLowerCase().startsWith("actions/checkout@")))
+      for (const st of steps) {
+        if (!String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@")) continue;
+        const p = String(st.with?.path ?? "").trim();
+        const inTemp = /^\$\{\{\s*runner\.temp\s*\}\}(\/|$)/.test(p);
+        const first = p.replace(/^\.\//, "").split("/")[0];
+        // No climbing back out of runner.temp, and no home-relative path,
+        // whose target this rule cannot know (#817 review).
+        const climbs = p.split("/").some((seg) => seg.trim() === "..") || /^~/.test(p);
+        if (climbs || (!inTemp && (!p || p === "." || /\$\{\{/.test(p) || fs.existsSync(process.env.REPO + "/" + first))))
+          out.push(name + ": downloads " + JSON.stringify(st.with?.name ?? st.with?.pattern ?? "(all)") + " into " + JSON.stringify(p || "the workspace") + ", over the checkout, where it can replace a checked-out file");
+      }
     // google-github-actions/auth writes a credentials file by default that
     // can mint further tokens; on the release path only access_token is used.
     if (release)
@@ -510,8 +619,9 @@ if (rule === "pushcache") {
   // #782: a job that pushes an image to a registry builds it cold. The GHA
   // cache is writable by any run on main and by every job in the same run, so
   // a job that both restores from it and pushes can ship layers nobody built
-  // in that job. "Pushes": a build-push or bake step whose push is not false,
-  // a registry login, or a `docker push` / `buildx ... --push` command. Every
+  // in that job. "Pushes": a build-push or bake step whose push is not false
+  // or whose outputs push, a registry login, or a `docker push`,
+  // `buildx ... --push` or `imagetools create` command. Every
   // image build in such a job is held to it, dry-run twins included, so a
   // rehearsal builds what the release does.
   for (const [name, job] of Object.entries(jobs)) {
@@ -519,9 +629,12 @@ if (rule === "pushcache") {
     const u = (st) => String(st.uses ?? "").toLowerCase();
     const isBuild = (st) => /^docker\/(build-push-action|bake-action)@/.test(u(st));
     const runs = steps.map((st) => typeof st.run === "string" ? st.run : "").join("\n");
-    const pushes = steps.some((st) => isBuild(st) && String(st.with?.push ?? "false") !== "false") ||
+    // `outputs: type=image,...,push=true` (or type=registry) pushes as surely
+    // as `push: true` does (#680: build-image pushes by digest that way).
+    const pushes = steps.some((st) => isBuild(st) && (String(st.with?.push ?? "false") !== "false" ||
+        /(?:^|[,\s])push\s*=\s*(?:true|1|t)\b|(?:^|[,\s])type\s*=\s*registry\b/i.test(String(st.with?.outputs ?? "")))) ||
       steps.some((st) => /^docker\/login-action@/.test(u(st))) ||
-      /\bdocker\s+(?:image\s+)?push\b|\bbuildx\s+(?:build|bake)\b[^\n]*--push\b/.test(runs);
+      /\bdocker\s+(?:image\s+)?push\b|\bbuildx\s+(?:build|bake)\b[^\n]*--push\b|\bimagetools\s+create\b/.test(runs);
     if (!pushes) continue;
     for (const [i, st] of steps.entries()) {
       const label = name + ": step " + (st.name ?? st.id ?? st.uses ?? String(i));
@@ -799,27 +912,50 @@ done
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'the gha cache back on the build that pushes (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		$'          push: true\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n' \
-		$'          push: true\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n          cache-from: type=gha\n' \
+		$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
+		$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n          cache-from: type=gha\n' \
 		'restores cache-from "type=gha" in a job that pushes'
 	expect_caught 'the gha cache back on the dry-run twin in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		$'          push: false\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n' \
-		$'          push: false\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n          cache-from: type=registry,ref=ghcr.io/x/y:cache\n' \
+		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n' \
+		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n          cache-from: type=registry,ref=ghcr.io/x/y:cache\n' \
 		'in a job that pushes'
 	expect_caught 'a buildx command line restoring a cache in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		'      - name: Build Docker image (dry run)' $'      - run: docker buildx build --cache-from type=gha --push .\n      - name: Build Docker image (dry run)' \
+		'      - name: Build the image into an OCI archive (dry run)' $'      - run: docker buildx build --cache-from type=gha --push .\n      - name: Build the image into an OCI archive (dry run)' \
 		'runs a build with --cache-from'
 	expect_caught 'the push step spelled in another case, with its cache back (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		$'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          push: true\n' \
-		$'        uses: Docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          cache-from: type=gha\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          push: true\n' \
+		$'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n' \
+		$'        uses: Docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          cache-from: type=gha\n          context: .\n' \
 		'restores cache-from'
 }
-# build-docker keeps its cache on purpose: it pushes nothing. If the rule
-# flagged it, the rule would be wrong, not the workflow.
-if [ -z "$(check pushcache "$WORKFLOWS/release-exec.yml" | grep 'build-docker')" ]; then
-	ok "the validate-only build-docker job, which pushes nothing, may keep its cache"
+# A build that pushes through `outputs:` (push=true, as build-image does since
+# #680) is a push whether or not the job also logs in: with the login removed,
+# the cache coming back must still be reported. (This replaces a check that
+# the validate-only build-docker job could keep its cache: #680 removed that
+# job, and nothing in release-exec.yml uses the cache now.)
+copy="${WORK}/pushcache-nologin.yml"
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+if FROM="$WORKFLOWS/release-exec.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const re = /      # Only when something will be pushed \(#682\): a dry run has no use for\n      # a registry credential on disk\.\n      - name: Log in to GitHub Container Registry\n(?:        .*\n|          .*\n)+?(?=\n)/;
+if (!re.test(s)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(re, ""));
+'; then
+	if grep -q 'docker/login-action' <(sed -n '/^  build-image:/,/^  smoke-image:/p' "$copy"); then
+		no "the build-image login could be removed from the copy"
+	else
+		# shellcheck disable=SC2016 # literal workflow text, not shell.
+		expect_caught 'the gha cache back on a build that pushes only through outputs push=true (#680)' pushcache "$copy" \
+			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
+			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n          cache-from: type=gha\n' \
+			'restores cache-from "type=gha" in a job that pushes'
+		# BuildKit parses the value as a Go bool: 1 and t push too (#680 review).
+		expect_caught 'the gha cache back on a build that pushes through outputs push=1 (#680 review)' pushcache "$copy" \
+			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
+			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=1\n          cache-from: type=gha\n' \
+			'restores cache-from "type=gha" in a job that pushes'
+	fi
 else
-	no "the validate-only build-docker job, which pushes nothing, may keep its cache"
+	no "mutant 'build-image without its login' could be applied (the workflow no longer has the text it mutates)"
 fi
 
 echo
@@ -926,6 +1062,18 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'BUILDKIT_IMAGE: moby/buildkit:v0.33.1@sha256:' 'BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1 #'
 	expect_caught 'BuildKit back to its default image' mutable "$WORKFLOWS/release-exec.yml" \
 		$'        with:\n          driver-opts: image=${{ env.BUILDKIT_IMAGE }}\n' ''
+	expect_caught 'the SBOM generator back to its default tag on the build that ships (#680)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          sbom: generator=${{ env.SBOM_GENERATOR }}' '          sbom: true' \
+		'SBOM generator image is not pinned by digest'
+	expect_caught 'the SBOM generator back to its default tag on the dry-run twin (#680)' mutable "$WORKFLOWS/release-exec.yml" \
+		$'          sbom: generator=${{ env.SBOM_GENERATOR }}\n          outputs: type=oci' $'          sbom: true\n          outputs: type=oci' \
+		'SBOM generator image is not pinned by digest'
+	expect_caught 'the SBOM generator pin loosened to its tag (#680)' mutable "$WORKFLOWS/release-exec.yml" \
+		'  SBOM_GENERATOR: docker/buildkit-syft-scanner:1.12.0@sha256:' '  SBOM_GENERATOR: docker/buildkit-syft-scanner:stable-1 #' \
+		'SBOM generator image is not pinned by digest ("docker/buildkit-syft-scanner:stable-1")'
+	expect_caught 'an SBOM requested through attests with no generator (#680)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          sbom: generator=${{ env.SBOM_GENERATOR }}' '          attests: type=sbom' \
+		'SBOM generator image is not pinned by digest ("default stable-1")'
 	expect_caught 'a global npm install with no version' mutable "$WORKFLOWS/sidecar-release.yml" \
 		'npm install -g "npm@${NPM_VERSION}"' 'npm install -g npm'
 	expect_caught 'a global npm install of a range' mutable "$WORKFLOWS/sidecar-release.yml" \
@@ -974,7 +1122,7 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'a directory npm publish (runs lifecycle scripts)' narrow "$WORKFLOWS/release-exec.yml" \
 		'npm publish "${RUNNER_TEMP}/brain-pack/${TARBALL}" --access public' 'npm publish --access public'
 	expect_caught 'the digest check removed before the publish' narrow "$WORKFLOWS/release-exec.yml" \
-		'| sha256sum -c -' '| cat'
+		'brain-pack/${TARBALL}" | sha256sum -c -' 'brain-pack/${TARBALL}" | cat'
 	expect_caught 'another global package installed in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Verify the tarball' $'      - run: npm install -g evil@1.0.0\n      - name: Verify the tarball' \
 		'installs something other than npm'
@@ -982,7 +1130,7 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'      - name: Verify the tarball' $'      - run: node scripts/x.js\n      - name: Verify the tarball' \
 		'publishes with id-token and runs'
 	expect_caught 'the Windows build back in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'      - name: Install osslsigncode' $'      - run: ../.github/scripts/build-sidecar.sh\n      - name: Install osslsigncode'
+		'      - name: Windows signing readiness' $'      - run: ../.github/scripts/build-sidecar.sh\n      - name: Windows signing readiness'
 	expect_caught 'a global install with the flag after the package' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Verify the tarball' $'      - run: npm install evil@1.0.0 -g\n      - name: Verify the tarball' \
 		'installs something other than npm'
@@ -996,9 +1144,9 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'      - name: Verify the tarball' $'      - shell: node {0}\n        run: console.log(1)\n      - name: Verify the tarball' \
 		'step with shell:'
 	expect_caught 'go test in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'      - name: Install osslsigncode' $'      - run: go test ./...\n      - name: Install osslsigncode'
+		'      - name: Windows signing readiness' $'      - run: go test ./...\n      - name: Windows signing readiness'
 	expect_caught 'a local action in the job that signs with id-token' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'      - name: Install osslsigncode' $'      - uses: ./.github/actions/bun-setup\n      - name: Install osslsigncode'
+		'      - name: Windows signing readiness' $'      - uses: ./.github/actions/bun-setup\n      - name: Windows signing readiness'
 	expect_caught 'the Google credentials file left in the workspace' narrow "$WORKFLOWS/sidecar-release.yml" \
 		$'          create_credentials_file: false\n' ''
 	expect_caught 'node behind an if, in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
@@ -1011,43 +1159,111 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		$'      - name: Verify the binary\n' $'      - name: Verify the binary\n        continue-on-error: true\n' \
 		'continue-on-error on "Verify the binary"'
 	expect_caught 'a digest check that hashes the file against itself, the digest left unread (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		$'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-sidecar-windows reported no digest"; exit 1; }\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' \
-		'          sha256sum "${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		$'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-sidecar-windows reported no digest"; exit 1; }\n          in="${RUNNER_TEMP}/unsigned"\n          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/${SIDECAR_BIN}.exe" ] || [ -L "${in}/${SIDECAR_BIN}.exe" ] || [ ! -f "${in}/${SIDECAR_BIN}.exe" ]; then\n            echo "::error::the unsigned-win32-x64 artifact is not exactly one file, ${SIDECAR_BIN}.exe"\n            exit 1\n          fi\n          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		$'          in="${RUNNER_TEMP}/unsigned"\n          sha256sum "${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' \
 		'has a needs.<job>.outputs digest in env that its check never reads'
 	expect_caught 'a digest check whose failure is excused (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' 'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - || true' \
+		'echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' 'echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c - || true' \
 		'failure excused'
 	expect_caught 'a digest check excused with || echo (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' 'echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - || echo ignored' \
+		'echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' 'echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c - || echo ignored' \
 		'failure excused'
 	expect_caught 'a digest check wrapped in if ! (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          if ! echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -; then echo ignored; fi' \
+		'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' '          if ! echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -; then echo ignored; fi' \
 		'failure excused'
 	expect_caught 'a digest check after set +e (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +e\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -\n          true' \
+		'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +e\n          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -\n          true' \
 		'failure excused'
 	expect_caught 'a digest check excused on the next line (#781 re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - ||\n            true' \
+		'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' $'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c - ||\n            true' \
 		'failure excused'
 	expect_caught 'a digest check piped into cat, without pipefail (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - | cat' \
+		'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c - | cat' \
 		'failure excused'
 	expect_caught 'a digest check swallowed by a command substitution (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "$(echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -)"' \
+		'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "$(echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -)"' \
 		'failure excused'
 	expect_caught 'a digest check sent to the background (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c - &' \
+		'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' '          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c - &' \
 		'failure excused'
 	expect_caught 'pipefail switched off before the digest check (#781 second re-review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +o pipefail\n          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -' \
+		'          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' $'          set +o pipefail\n          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -' \
 		'failure excused'
 	expect_caught 'the download action spelled in another case, used before its check (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: sidecar\n' \
-		$'      - uses: Actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: sidecar\n      - run: ls sidecar\n' \
+		$'      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/unsigned\n' \
+		$'      - uses: Actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/unsigned\n      - run: ls sidecar\n' \
 		'is not followed at once by a sha256sum -c'
 	expect_caught 'an artifact fetched with gh run download in a signing job (#781 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'      - name: Install osslsigncode' $'      - run: gh run download "$GITHUB_RUN_ID" -n unsigned-win32-x64\n      - name: Install osslsigncode' \
+		'      - name: Windows signing readiness' $'      - run: gh run download "$GITHUB_RUN_ID" -n unsigned-win32-x64\n      - name: Windows signing readiness' \
 		'fetches artifacts outside actions/download-artifact'
+	expect_caught 'a package install inside a brace group (#817 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Windows signing readiness' $'      - run: |\n          { sudo apt-get install -y osslsigncode; }\n      - name: Windows signing readiness' \
+		'installs OS packages in a job holding id-token'
+	expect_caught 'a package install behind sudo -u (#817 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Windows signing readiness' $'      - run: |\n          sudo -u root apt-get install -y osslsigncode\n      - name: Windows signing readiness' \
+		'installs OS packages in a job holding id-token'
+	expect_caught 'a package install after a quoted hash, which is not a comment (#817 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Windows signing readiness' $'      - run: |\n          echo "step #1"; sudo apt-get install -y osslsigncode\n      - name: Windows signing readiness' \
+		'installs OS packages in a job holding id-token'
+	expect_caught 'pip run as a python module in the npm publish job (#817 review)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Ensure npm supports Trusted Publishing' $'      - run: |\n          python3 -m pip install --user something\n      - name: Ensure npm supports Trusted Publishing' \
+		'installs OS packages in a job holding id-token'
+	expect_caught 'a package install handed to a shell as text (#817 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Ensure npm supports Trusted Publishing' $'      - run: |\n          bash -c "apt-get install -y jq"\n      - name: Ensure npm supports Trusted Publishing' \
+		'runs shell text in a job holding id-token'
+	expect_caught 'a package-install action in a signing job (#817 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Windows signing readiness' $'      - uses: awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17\n        with:\n          packages: osslsigncode\n      - name: Windows signing readiness' \
+		'uses awalsh128/cache-apt-pkgs-action@2c09a5e66da6c8016428a2172bd76e5e4f14bb17 in a job holding id-token'
+	expect_caught 'the sidecar signing input extracted over the checkout again (#817 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/unsigned\n' $'          name: unsigned-win32-x64\n          path: sidecar\n' \
+		'sign-sidecar-windows: downloads "unsigned-win32-x64" into "sidecar", over the checkout'
+	expect_caught 'the installer signing input downloaded to the default path, the workspace (#817 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          name: unsigned-installer-win32-x64\n          path: ${{ runner.temp }}/unsigned\n' $'          name: unsigned-installer-win32-x64\n' \
+		'sign-windows: downloads "unsigned-installer-win32-x64" into "the workspace"'
+	expect_caught 'the installer signature check reading its input from inside the checkout (#817 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          name: installer-win32-x64\n          path: ${{ runner.temp }}/signed\n' $'          name: installer-win32-x64\n          path: ./sidecar/in\n' \
+		'verify-windows: downloads "installer-win32-x64" into "./sidecar/in"'
+	expect_caught 'a download that climbs out of runner.temp back into the checkout (#817 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          name: installer-win32-x64\n          path: ${{ runner.temp }}/signed\n' $'          name: installer-win32-x64\n          path: ${{ runner.temp }}/../work/jarvis/jarvis/sidecar\n' \
+		'verify-windows: downloads "installer-win32-x64" into "${{ runner.temp }}/../work'
+	expect_caught 'a download into the home directory (#817 review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          name: installer-win32-x64\n          path: ${{ runner.temp }}/signed\n' $'          name: installer-win32-x64\n          path: ~/in\n' \
+		'verify-windows: downloads "installer-win32-x64" into "~/in"'
+	expect_caught 'a release-path download into the workspace root (#817 review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'          path: artifacts\n          pattern: sidecar-*\n' $'          path: .\n          pattern: sidecar-*\n' \
+		'github-release: downloads "sidecar-*" into "."'
+	expect_caught 'osslsigncode installed from apt back in the sidecar signing job (#817)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Windows signing readiness' $'      - name: Install osslsigncode\n        run: |\n          sudo apt-get update\n          sudo apt-get install -y osslsigncode\n      - name: Windows signing readiness' \
+		'installs OS packages in a job holding id-token'
+	expect_caught 'osslsigncode installed from apt back in the installer signing job (#817)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Windows signing readiness' $'      - run: sudo apt install -y osslsigncode\n      - name: Windows signing readiness' \
+		'installs OS packages in a job holding id-token'
+	expect_caught 'a package install behind env and an assignment, in the npm publish job (#817)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Ensure npm supports Trusted Publishing' $'      - run: env DEBIAN_FRONTEND=noninteractive dpkg -i x.deb\n      - name: Ensure npm supports Trusted Publishing' \
+		'installs OS packages in a job holding id-token'
+	expect_caught 'a pip install in the brain npm publish job (#817)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Ensure npm supports Trusted Publishing' $'      - run: pip3 install --user something\n      - name: Ensure npm supports Trusted Publishing' \
+		'installs OS packages in a job holding id-token'
+	expect_caught 'the runtime artifact service called directly from a signing job (#820)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Windows signing readiness' $'      - run: |\n          curl -fsS -H "Authorization: Bearer $ACTIONS_RUNTIME_TOKEN" "${ACTIONS_RESULTS_URL}twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts"\n      - name: Windows signing readiness' \
+		'reads the Actions runtime artifact API'
+	expect_caught 'the runtime token handed to a step through env (#820)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n        run: |\n' \
+		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          URL: ${{ env.ACTIONS_RESULTS_URL }}\n        run: |\n' \
+		'reads the Actions runtime artifact API'
+	expect_caught 'the runtime URL in a signing job env (#820)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'    steps:\n      # For scripts/sign-windows.sh and the committed certificate chain.' \
+		$'    env:\n      R: ${{ env.ACTIONS_RUNTIME_URL }}\n    steps:\n      # For scripts/sign-windows.sh and the committed certificate chain.' \
+		'job env reads the Actions runtime artifact API'
+	expect_caught 'github-script reading the runtime token, no artifact word in sight (#820)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd\n        with:\n          script: return process.env.ACTIONS_RUNTIME_TOKEN\n      - name: Verify the tarball' \
+		'reads the Actions runtime artifact API'
+	expect_caught 'a third-party artifact download action in the npm publish job (#820)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Verify the tarball' $'      - uses: dawidd6/action-download-artifact@ac66b43f0e6a346234dd65d4d0c8fbb31cb316e5\n        with:\n          name: brain-tarball\n      - name: Verify the tarball' \
+		'fetches artifacts through dawidd6/action-download-artifact'
+	expect_caught 'an action that exports the runtime token to later steps, in a signing job (#820)' narrow "$WORKFLOWS/installer-release.yml" \
+		'      - name: Windows signing readiness' $'      - uses: crazy-max/ghaction-github-runtime@3cb05d89e1f492524af3d41a1c98c83bc3025124\n      - name: Windows signing readiness' \
+		'fetches artifacts through crazy-max/ghaction-github-runtime'
 	expect_caught 'publish-sidecar using the artifacts before checking them (#781)' narrow "$WORKFLOWS/sidecar-release.yml" \
 		'      - name: Verify sidecar artifacts' $'      - run: ls artifacts\n      - name: Verify sidecar artifacts' \
 		'is not followed at once by a sha256sum -c'
@@ -1061,7 +1277,7 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'      - name: Verify the tarball' $'      - run: ls\n      - name: Verify the tarball' \
 		'is not followed at once by a sha256sum -c'
 	expect_caught 'the installer build back in the job that signs with id-token (#779)' narrow "$WORKFLOWS/installer-release.yml" \
-		'      - name: Install osslsigncode' $'      - run: go build -o Jarvis-Setup.exe ./installer/\n      - name: Install osslsigncode' \
+		'      - name: Windows signing readiness' $'      - run: go build -o Jarvis-Setup.exe ./installer/\n      - name: Windows signing readiness' \
 		'builds in a job holding id-token'
 	expect_caught 'id-token back on the installer build job (#779)' narrow "$WORKFLOWS/installer-release.yml" \
 		$'    permissions:\n      contents: read\n    outputs:' $'    permissions:\n      contents: read\n      id-token: write\n    outputs:' \
@@ -1101,6 +1317,14 @@ expect_caught 'an install handed to a shell, from the write job' untrusted "$WOR
 	'      - name: Put the generated files in place' $'      - run: bash -c "bun install --frozen-lockfile"\n      - name: Put the generated files in place'
 expect_caught 'an install that turns the frozen lockfile off' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'run: bun install --frozen-lockfile' 'run: bun install --frozen-lockfile=false'
+expect_caught 'the catalog write job leaving its token in .git/config (#821)' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n' \
+	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: true\n' \
+	'publish: checkout leaves the write token in .git/config'
+expect_caught 'the catalog write job checking out with the default, which persists (#821)' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n' \
+	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n' \
+	'publish: checkout leaves the write token in .git/config'
 
 echo
 echo "${pass} passed, ${fail} failed"
