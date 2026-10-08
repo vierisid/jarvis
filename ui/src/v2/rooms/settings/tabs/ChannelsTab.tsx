@@ -46,10 +46,11 @@ const SARVAM_SPEAKERS = [
   "hitesh",
 ];
 
-// #811: an empty allow-list means two different things, so say both. The
-// daemon refuses approve/deny replies from a channel whose list is empty.
+// #811, #852: an empty allow-list means different things, so say them. The
+// daemon refuses approve/deny replies from a channel whose list is empty, and
+// sends approval requests and notifications only to a listed user.
 export const ALLOW_LIST_HINT =
-  "Leave empty to let anyone who can message the bot chat with Jarvis. Approving or denying a request from this chat needs your ID listed here.";
+  "Leave empty to let anyone who can message the bot chat with Jarvis. Approval requests and notifications are sent, and can be approved or denied, only for an ID listed here, and are sent to your last direct message with the bot, never a group.";
 
 interface ElevenLabsVoice {
   voice_id: string;
@@ -127,7 +128,7 @@ export function ChannelsTab({
           <div>
             <h3 className="v2-set__section-title">Telegram</h3>
             <div className="v2-set__section-sub">
-              Bot via @BotFather. Restart-required after token changes.
+              Bot via @BotFather. Changes apply when saved.
             </div>
           </div>
           <span className={"v2-set__chip " + (channelStatus?.channels.telegram ? "v2-set__chip--ok" : "")}>
@@ -207,7 +208,7 @@ export function ChannelsTab({
           <div>
             <h3 className="v2-set__section-title">Discord</h3>
             <div className="v2-set__section-sub">
-              Bot via discord.com/developers. Enable Message Content Intent. Restart-required.
+              Bot via discord.com/developers. Enable Message Content Intent. Changes apply when saved.
             </div>
           </div>
           <span className={"v2-set__chip " + (channelStatus?.channels.discord ? "v2-set__chip--ok" : "")}>
@@ -295,7 +296,7 @@ export function ChannelsTab({
           <div>
             <h3 className="v2-set__section-title">Voice Transcription (STT)</h3>
             <div className="v2-set__section-sub">
-              Enables voice messages on Telegram and Discord. Restart-required.
+              Enables voice messages on Telegram and Discord.
             </div>
           </div>
         </div>

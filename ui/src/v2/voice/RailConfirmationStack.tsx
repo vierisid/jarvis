@@ -3,7 +3,7 @@ import { Check, ShieldAlert, MessageSquare, X } from "lucide-react";
 import { Icon } from "../ui";
 import { useLiveData } from "../shell/LiveDataContext";
 import { ApprovalWhy } from "../thread/ApprovalWhy";
-import { newestFirst } from "./shownApproval";
+import { newestFirst, voiceHint } from "./shownApproval";
 import "./RailConfirmationStack.css";
 
 /**
@@ -20,8 +20,9 @@ import "./RailConfirmationStack.css";
  * say "approve" or "cancel" and the daemon resolves the most-recent
  * pending action server-side via `resolveLatestPendingByVoice` -- only when
  * it is still the approval on top of this stack when they started speaking
- * (#809); otherwise the reply says a new request arrived and nothing was
- * decided.
+ * (#809), and only while it is the one approval pending (#855); otherwise the
+ * reply says why nothing was decided. With several approvals up, the hint
+ * below says to decide each on its card instead of offering voice.
  */
 export function RailConfirmationStack() {
   const { approvals, clarifiers, repeatBacks } = useLiveData();
@@ -66,7 +67,11 @@ export function RailConfirmationStack() {
         ))}
       </div>
       <div className="v2-rail-confirm__voice-hint">
-        Or say <em>“approve”</em> / <em>“cancel”</em>
+        {voiceHint(sortedApprovals.length) === "cards" ? (
+          <>Several approvals are waiting: decide each on its card</>
+        ) : (
+          <>Or say <em>“approve”</em> / <em>“cancel”</em></>
+        )}
       </div>
     </div>
   );
