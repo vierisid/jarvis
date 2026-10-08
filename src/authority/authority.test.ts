@@ -399,9 +399,27 @@ describe('ApprovalManager', () => {
       urgency: 'normal', reason: 'test', context: '',
     });
 
+    // #810: the lookup now says why it found nothing, so the hit is a status.
     const found = mgr.findByShortId(req.id.slice(0, 8));
-    expect(found).not.toBeNull();
-    expect(found!.id).toBe(req.id);
+    expect(found.status).toBe('found');
+    if (found.status !== 'found') throw new Error('unreachable');
+    expect(found.request.id).toBe(req.id);
+  });
+
+  test('#810: findByShortId takes only the whole short id, and only one match', () => {
+    const mgr = new ApprovalManager();
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'send_email',
+      toolArguments: {}, actionCategory: 'send_email',
+      urgency: 'normal', reason: 'test', context: '',
+    });
+    expect(mgr.findByShortId(req.id.slice(0, 1)).status).toBe('malformed');
+    expect(mgr.findByShortId(req.id.slice(0, 7)).status).toBe('malformed');
+    expect(mgr.findByShortId(req.id.slice(0, 9)).status).toBe('malformed');
+    expect(mgr.findByShortId(req.id).status).toBe('malformed');
+    // LIKE wildcards are not hex, so they cannot widen the match.
+    expect(mgr.findByShortId('%%%%%%%%').status).toBe('malformed');
+    expect(mgr.findByShortId('________').status).toBe('malformed');
   });
 
   test('execution_mode defaults to deferred and persists when set inline', () => {

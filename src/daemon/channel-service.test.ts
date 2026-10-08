@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { ChannelService, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
+import { ChannelService, channelDecisionCommand, channelDecisionNeedsAllowList, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
 import { initDatabase } from "../vault/schema";
 import { setSetting } from "../vault/settings";
@@ -494,5 +494,90 @@ describe("#718: send options reach the adapter", () => {
     await svc.broadcastToAll("card", { literal: true });
 
     expect(adapter.calls).toEqual([["user-1", "card", { literal: true }]]);
+  });
+});
+
+/**
+ * #811. An empty allow-list lets anyone chat, and nobody decide an approval.
+ */
+describe("#811: an approve or deny needs a sender the allow-list names", () => {
+  const message = (text: string, senderAllowListed?: boolean): ChannelMessage => ({
+    id: "m1", channel: "discord", from: "someone", text, timestamp: 0,
+    metadata: { channelId: "c1" },
+    ...(senderAllowListed === undefined ? {} : { senderAllowListed }),
+  });
+  const setup = () => {
+    initDatabase(":memory:");
+    const decisions: unknown[][] = [];
+    const chats: string[] = [];
+    const agent = { handleMessage: async (text: string) => { chats.push(text); return "chat reply"; } };
+    const svc = new ChannelService({} as never, agent as never);
+    svc.setApprovalHandler(async (...args) => { decisions.push(args); return "decided"; });
+    const handle = (msg: ChannelMessage) =>
+      (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(msg);
+    return { decisions, chats, handle };
+  };
+
+  test("a sender let in by an empty list cannot approve or deny, and the reply says why", async () => {
+    const { decisions, chats, handle } = setup();
+    for (const allowListed of [false, undefined]) {
+      expect(await handle(message("approve 1a2b3c4d", allowListed))).toBe(channelDecisionNeedsAllowList("discord"));
+      expect(await handle(message("deny 1a2b3c4d", allowListed))).toBe(channelDecisionNeedsAllowList("discord"));
+    }
+    expect(decisions).toEqual([]);
+    // Refused outright, not handed to the agent as chat either.
+    expect(chats).toEqual([]);
+  });
+
+  test("a sender the list names decides as before", async () => {
+    const { decisions, handle } = setup();
+    expect(await handle(message("approve 1a2b3c4d", true))).toBe("decided");
+    expect(decisions).toEqual([["approve", "1a2b3c4d", "discord"]]);
+  });
+
+  test("ordinary chat from the same sender still works", async () => {
+    const { decisions, chats, handle } = setup();
+    expect(await handle(message("what is on my calendar", false))).toBe("chat reply");
+    expect(chats).toEqual(["what is on my calendar"]);
+    expect(decisions).toEqual([]);
+  });
+});
+
+/**
+ * #810. The id is the whole word after the verb. It used to be the longest
+ * hex run at the start of it, so ordinary English named an id.
+ */
+describe("#810: channelDecisionCommand", () => {
+  test("ordinary sentences no longer carry a one-letter id", () => {
+    // Each of these used to parse, with the id shown, and decide whichever
+    // pending request first started with it.
+    for (const text of ["approve all of them", "Approve anything you like", "deny deadline extension", "approve everything"]) {
+      expect(channelDecisionCommand(text)).toBeNull();
+    }
+  });
+
+  test("a whole hex word is an id attempt, whatever its length, so a short one is refused rather than chatted", () => {
+    expect(channelDecisionCommand("approve a")).toEqual({ action: "approve", shortId: "a" });
+    expect(channelDecisionCommand("deny add")).toEqual({ action: "deny", shortId: "add" });
+  });
+
+  test("the card's reply still parses, with case, outer space, punctuation and trailing words", () => {
+    expect(channelDecisionCommand("approve 1a2b3c4d")).toEqual({ action: "approve", shortId: "1a2b3c4d" });
+    expect(channelDecisionCommand("  APPROVE 1A2B3C4D.  ")).toEqual({ action: "approve", shortId: "1a2b3c4d" });
+    expect(channelDecisionCommand("deny 1a2b3c4d please")).toEqual({ action: "deny", shortId: "1a2b3c4d" });
+  });
+
+  test("a long run of punctuation costs nothing to parse (#810 review)", () => {
+    // Measured: the old `/[.,;:!?]+$/` took 1851ms on this input, the scan 0.002ms.
+    const t0 = performance.now();
+    expect(channelDecisionCommand(`approve ${".".repeat(65_536)}x`)).toBeNull();
+    expect(performance.now() - t0).toBeLessThan(50);
+  });
+
+  test("anything else is chat", () => {
+    expect(channelDecisionCommand("approve the email")).toBeNull();
+    expect(channelDecisionCommand("approved 1a2b3c4d")).toBeNull();
+    expect(channelDecisionCommand("please approve 1a2b3c4d")).toBeNull();
+    expect(channelDecisionCommand("approve")).toBeNull();
   });
 });

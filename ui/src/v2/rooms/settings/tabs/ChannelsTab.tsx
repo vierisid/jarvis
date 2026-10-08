@@ -46,6 +46,11 @@ const SARVAM_SPEAKERS = [
   "hitesh",
 ];
 
+// #811: an empty allow-list means two different things, so say both. The
+// daemon refuses approve/deny replies from a channel whose list is empty.
+export const ALLOW_LIST_HINT =
+  "Leave empty to let anyone who can message the bot chat with Jarvis. Approving or denying a request from this chat needs your ID listed here.";
+
 interface ElevenLabsVoice {
   voice_id: string;
   name: string;
@@ -170,6 +175,7 @@ export function ChannelsTab({
             value={tgAllowed}
             onChange={(e) => setTgAllowed(e.target.value)}
           />
+          <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
@@ -249,6 +255,7 @@ export function ChannelsTab({
             value={dcAllowed}
             onChange={(e) => setDcAllowed(e.target.value)}
           />
+          <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
         </div>
         <div className="v2-set__field">
           <label className="v2-set__field-label">Guild ID (optional, restrict to one server)</label>

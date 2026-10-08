@@ -1,5 +1,5 @@
 import { test, expect, describe } from 'bun:test';
-import { TelegramAdapter, TelegramSendError, telegramErrorFromResponse, telegramSendBody } from './telegram.ts';
+import { TelegramAdapter, TelegramSendError, telegramErrorFromResponse, telegramSendBody, type ChannelMessage } from './telegram.ts';
 
 describe('telegramErrorFromResponse', () => {
   test('returns null for a successful response', () => {
@@ -162,5 +162,39 @@ describe('#718: literal text is sent without parse_mode', () => {
     } finally {
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+/**
+ * #811. An empty allow-list admits everyone to chat; the message says the
+ * sender was not named by a list, so the channel service refuses a decision.
+ */
+describe('#811: senderAllowListed', () => {
+  const deliver = async (allowedUsers: number[] | undefined, fromId: number) => {
+    const adapter = new TelegramAdapter('test-token', allowedUsers ? { allowedUsers } : undefined);
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    await (adapter as unknown as { processUpdate(u: unknown): Promise<void> }).processUpdate({
+      update_id: 1,
+      message: { message_id: 7, from: { id: fromId, first_name: 'A' }, chat: { id: 99, type: 'private' }, date: 0, text: 'approve 1a2b3c4d' },
+    });
+    return seen;
+  };
+
+  test('is false for every sender while the list is empty', async () => {
+    for (const list of [undefined, []]) {
+      const seen = await deliver(list, 42);
+      expect(seen.length).toBe(1);
+      expect(seen[0]!.senderAllowListed).toBe(false);
+    }
+  });
+
+  test('is true for a sender the list names', async () => {
+    const seen = await deliver([42], 42);
+    expect(seen[0]!.senderAllowListed).toBe(true);
+  });
+
+  test('a sender a non-empty list does not name is still dropped before the handler', async () => {
+    expect(await deliver([42], 43)).toEqual([]);
   });
 });

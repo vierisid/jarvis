@@ -9,6 +9,7 @@ import type { ObjectType, ThreadItem } from "../thread/types";
 import { VoiceRail, type VoiceState } from "./VoiceRail";
 import { useVoice } from "../../hooks/useVoice";
 import { mapVoiceState } from "../voice/stateMapper";
+import { shownApprovalId } from "../voice/shownApproval";
 import { useLLMSuggestions, useSuggestions } from "../voice/useSuggestions";
 import { CommandPalette } from "../palette/CommandPalette";
 import type { PaletteNavEntry, PaletteResult, PaletteResultType } from "../palette/types";
@@ -139,6 +140,16 @@ function AppShellLive() {
     const m = window.location.hash.match(/^#\/?_room_([a-z]+)/);
     return m ? m[1]! : "home";
   }, []);
+  // #809: the approval a spoken "yes" answers is the one on top of the rail
+  // (RailConfirmationStack sorts newest first), while the page is on screen.
+  // Read through a ref so the getter keeps a stable identity, like
+  // getCurrentRoom.
+  const approvalsRef = useRef(live.approvals);
+  approvalsRef.current = live.approvals;
+  const getShownApprovalId = useCallback(
+    (): string | null => shownApprovalId(approvalsRef.current, document.visibilityState),
+    [],
+  );
   const voice = useVoice({
     wsRef: live.wsRef,
     wakeWordEnabled: true,
@@ -155,6 +166,7 @@ function AppShellLive() {
     // device, the sidecar's own speech included.
     nativeWakeActive: true,
     getCurrentRoom,
+    getShownApprovalId,
   });
 
   // Bridge TTS audio + lifecycle from useWebSocket → useVoice (matches the

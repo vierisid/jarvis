@@ -95,7 +95,9 @@ export class ChannelService implements Service {
         }
       }
 
-      // 2. Create & register adapters from config
+      // 2. Create & register adapters from config. An empty allowed_users
+      // lets anyone who can reach the bot chat, but lets nobody approve or
+      // deny from that channel (#811, ChannelConfig, senderAllowListed).
       const channels = this.config.channels;
 
       if (channels?.telegram?.enabled && channels.telegram.bot_token) {
@@ -295,15 +297,15 @@ export class ChannelService implements Service {
     this.recordRecipient(channelTag, recipientId);
 
     // Check for approval commands: "approve <id>" or "deny <id>"
-    const trimmed = msg.text.trim().toLowerCase();
-    const approveMatch = trimmed.match(/^approve\s+([a-f0-9-]+)/i);
-    const denyMatch = trimmed.match(/^deny\s+([a-f0-9-]+)/i);
-
-    if (this.approvalHandler && (approveMatch || denyMatch)) {
-      const action = approveMatch ? 'approve' : 'deny';
-      const shortId = (approveMatch ?? denyMatch)![1];
+    const decision = this.approvalHandler ? channelDecisionCommand(msg.text) : null;
+    if (this.approvalHandler && decision) {
+      // Only someone the allow-list names may decide (#811). An empty list lets
+      // anyone who can reach the bot chat -- any member of the guild on
+      // Discord, anyone on Telegram -- and that must not extend to approving
+      // a gated action.
+      if (msg.senderAllowListed !== true) return channelDecisionNeedsAllowList(channelTag);
       try {
-        return await this.approvalHandler(action as 'approve' | 'deny', shortId!, channelTag);
+        return await this.approvalHandler(decision.action, decision.shortId, channelTag);
       } catch (err) {
         return `Error processing approval: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -321,6 +323,44 @@ export class ChannelService implements Service {
 
     return response;
   }
+}
+
+/**
+ * The answer to an `approve <id>` or `deny <id>` from a sender the channel's
+ * allow-list does not name (#811), which is every sender while the list is
+ * empty. Nothing is decided.
+ */
+export function channelDecisionNeedsAllowList(channel: string): string {
+  return `Approvals can only be decided from ${channel} by a user listed under Allowed user IDs in Jarvis Settings > Channels, and that list is empty or does not include you. Nothing was approved or denied. Open the Jarvis dashboard to decide.`;
+}
+
+/**
+ * A chat message that is an `approve <id>` or `deny <id>` reply, or null for
+ * ordinary chat (#810).
+ *
+ * The id is the whole word after the verb, trailing punctuation dropped, and
+ * it counts as an attempt at an id when it is made only of hex digits and
+ * hyphens. Whether it is the RIGHT length is not decided here:
+ * `channelApprovalReply` answers a wrong one with a refusal, so `approve a`
+ * is told it named nothing rather than handed to the agent as chat.
+ *
+ * This used to take the longest hex run at the start of the word, with no
+ * end, so `approve all of them` sent the id `a` and `deny deadline` sent
+ * `dead`; with a prefix lookup that took the first match, either decided
+ * whichever pending request happened to start that way. A word that is not
+ * hex (`approve the email`) is chat, as it always was.
+ */
+export function channelDecisionCommand(text: string): { action: 'approve' | 'deny'; shortId: string } | null {
+  const m = /^(approve|deny)\s+(\S+)/.exec(text.trim().toLowerCase());
+  if (!m) return null;
+  // Trailing punctuation dropped by a scan from the end, not `/[.,;:!?]+$/`,
+  // which retries from every start and is quadratic on a run of punctuation
+  // from a sender nobody has vetted yet (#810 review).
+  let end = m[2]!.length;
+  while (end > 0 && '.,;:!?'.includes(m[2]![end - 1]!)) end--;
+  const word = m[2]!.slice(0, end);
+  if (!/^[0-9a-f-]+$/.test(word)) return null;
+  return { action: m[1] as 'approve' | 'deny', shortId: word };
 }
 
 /**

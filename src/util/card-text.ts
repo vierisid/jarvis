@@ -17,14 +17,35 @@
  * is being approved. Removed, not escaped: a card is prose for a person, and
  * there is no legitimate path or label that needs a bidi control in it.
  *
- * The set is every Default_Ignorable_Code_Point (#659 review), not the short
- * list it used to be: that list missed the combining grapheme joiner, the
- * variation selectors, the tag characters and the Hangul fillers, so `no\u034Ftes`
- * read as `notes` and a name of fillers rendered blank. It is the same property
- * `roles/untrusted.ts`'s IGNORABLE strips; the cost is cosmetic (a ZWJ emoji
- * sequence shows as its separate glyphs).
+ * The set is the UNION of every format character (`\p{Cf}`) and every
+ * Default_Ignorable_Code_Point, because neither contains the other. #659 review
+ * widened it from a short list to Default_Ignorable: that list missed the
+ * combining grapheme joiner, the variation selectors, the tag characters and
+ * the Hangul fillers, so `no\u034Ftes` read as `notes` and a name of fillers
+ * rendered blank. Default_Ignorable alone still missed 32 format characters
+ * (#838): the Arabic number signs U+0600..U+0605, U+06DD and U+08E2, the
+ * Syriac abbreviation mark U+070F, U+0890..U+0891, the interlinear annotation
+ * controls U+FFF9..U+FFFB, U+110BD, U+110CD and the Egyptian hieroglyph format
+ * controls U+13430..U+1343F. The log helpers (`inlineUntrusted`,
+ * `logSafePath`) strip the union since #763, so the surface a person reads to
+ * decide an approval was sanitising LESS than a log line. It is the same set
+ * `roles/untrusted.ts`'s IGNORABLE looks through, plus its controls below. The
+ * cost is mostly cosmetic (a ZWJ emoji sequence shows as its separate glyphs;
+ * an Arabic number sign no longer spans the digits after it). One part is
+ * not: 13 of the 32 (the prepended concatenation marks, U+0600..U+0605,
+ * U+06DD, U+070F, U+0890..U+0891, U+08E2, U+110BD, U+110CD) draw a visible
+ * sign, so a name holding one now reads the same on a card as the name
+ * without it, as names split by an invisible always did. Flagging any
+ * reduction on the card, rather than only making it, is a separate design
+ * question (#807 left it open).
+ *
+ * WHAT #838 MOVED: a card sentence whose value held one of the 32 now reads
+ * without it. An approval of such a sentence pending across the upgrade is
+ * refused when it runs ("what it would do changed after approval", the
+ * deferred executor's recomputed-sentence check) and has to be asked again.
+ * Text without them is unchanged.
  */
-const INVISIBLE = /\p{Default_Ignorable_Code_Point}/gu;
+const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
 
 /**
  * Control characters, dropped for the same reason (#659): raw C0 (other than
@@ -32,7 +53,7 @@ const INVISIBLE = /\p{Default_Ignorable_Code_Point}/gu;
  * space), DEL and C1. A name of `\u0001\u0001` survived the collapse non-empty
  * and rendered as nothing, and a `\u001b` sequence rendered as terminal junk.
  * With INVISIBLE above, this is exactly the set `roles/untrusted.ts`'s
- * IGNORABLE strips. #656 added it to `ui_act`'s gate alone; every other caller
+ * IGNORABLE looks through (#838 widened both to the same union). #656 added it to `ui_act`'s gate alone; every other caller
  * here had the same hole.
  */
 const CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g;

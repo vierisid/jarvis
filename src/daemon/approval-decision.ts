@@ -9,7 +9,7 @@
  * allowed only when nothing happened; closing it is always allowed.
  */
 
-import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { approvalChannelCard, approvalToast } from '../authority/approval-delivery.ts';
 
@@ -83,8 +83,17 @@ export async function channelApprovalReply(
   channel: string,
   deps: ApprovalDecisionDeps,
 ): Promise<string> {
-  const request = deps.approvalManager.findByShortId(shortId);
-  if (!request) return `No pending approval found for ID ${shortId}`;
+  const match = deps.approvalManager.findByShortId(shortId);
+  const nothing = action === 'approve' ? 'Nothing was approved.' : 'Nothing was denied.';
+  // The id is never echoed when malformed: it is whatever followed the verb.
+  if (match.status === 'malformed') {
+    return `That is not an approval ID. Reply with the ${APPROVAL_SHORT_ID_LENGTH}-character ID shown on the card, like "${action} 1a2b3c4d". ${nothing}`;
+  }
+  if (match.status === 'ambiguous') {
+    return `More than one pending approval has the ID ${shortId}, so it does not say which one you mean. ${nothing} Open the Jarvis dashboard to decide.`;
+  }
+  if (match.status === 'none') return `No pending approval found for ID ${shortId}`;
+  const request = match.request;
   if (action === 'approve' && !approvalChannelCard(request).approvable) return CHANNEL_APPROVE_REFUSED;
 
   const outcome = await applyApprovalDecision(action, request.id, channel, deps);

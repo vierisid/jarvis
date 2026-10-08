@@ -10,7 +10,8 @@ package main
 // safe to keep compiled in.
 //
 // Buttons come from categories registered up front (one per kind): approval →
-// Approve/Deny, done → View/Dismiss, sidecar → Open Jarvis/Dismiss. The user's
+// Approve/Deny, approval_review → Open Jarvis/Dismiss, done → View/Dismiss,
+// sidecar → Open Jarvis/Dismiss. A kind with no category shows no buttons. The user's
 // tap arrives on the delegate and is forwarded to the brain as notify.action.
 // (No jarvis:// protocol hop like Windows — macOS delivers the response into the
 // running process directly.)
@@ -80,6 +81,15 @@ static void jarvisNotifySetup(void) {
         UNNotificationAction* deny    = [UNNotificationAction actionWithIdentifier:@"deny"    title:@"Deny"    options:UNNotificationActionOptionDestructive];
         UNNotificationCategory* approval = [UNNotificationCategory categoryWithIdentifier:@"approval" actions:@[deny, approve] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
 
+        // approval_review: an approval that cannot be decided from a
+        // notification (too long to show whole, or a look-alike), so the brain
+        // sends it under its own kind rather than `approval`, whose category
+        // always carries Approve and Deny whatever the payload lists. Without
+        // a category of its own it showed with no buttons at all (#808).
+        UNNotificationAction* openR     = [UNNotificationAction actionWithIdentifier:@"review"  title:@"Open Jarvis" options:UNNotificationActionOptionForeground];
+        UNNotificationAction* dismissR  = [UNNotificationAction actionWithIdentifier:@"dismiss" title:@"Dismiss"     options:UNNotificationActionOptionNone];
+        UNNotificationCategory* approvalReview = [UNNotificationCategory categoryWithIdentifier:@"approval_review" actions:@[openR, dismissR] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
+
         UNNotificationAction* view      = [UNNotificationAction actionWithIdentifier:@"view"    title:@"View"    options:UNNotificationActionOptionForeground];
         UNNotificationAction* dismissD  = [UNNotificationAction actionWithIdentifier:@"dismiss" title:@"Dismiss" options:UNNotificationActionOptionNone];
         UNNotificationCategory* done = [UNNotificationCategory categoryWithIdentifier:@"done" actions:@[view, dismissD] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
@@ -100,7 +110,7 @@ static void jarvisNotifySetup(void) {
         UNNotificationAction* dismissU  = [UNNotificationAction actionWithIdentifier:@"dismiss" title:@"Dismiss"     options:UNNotificationActionOptionNone];
         UNNotificationCategory* usage   = [UNNotificationCategory categoryWithIdentifier:@"usage" actions:@[viewU, dismissU] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
 
-        [center setNotificationCategories:[NSSet setWithObjects:approval, done, sidecar, update, usage, nil]];
+        [center setNotificationCategories:[NSSet setWithObjects:approval, approvalReview, done, sidecar, update, usage, nil]];
 
         [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
                               completionHandler:^(BOOL granted, NSError* _Nullable error) {
@@ -121,7 +131,7 @@ static void jarvisNotifyShow(const char* cid, const char* ckind, const char* cti
             content.title = title;
             content.body  = body;
             content.sound = [UNNotificationSound defaultSound];
-            content.categoryIdentifier = kind; // approval / done / sidecar / update / usage
+            content.categoryIdentifier = kind; // approval / approval_review / done / sidecar / update / usage
             content.userInfo = @{@"id": nid, @"kind": kind};
             UNNotificationRequest* req = [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString]
                                                                               content:content

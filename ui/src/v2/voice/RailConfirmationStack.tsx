@@ -3,6 +3,7 @@ import { Check, ShieldAlert, MessageSquare, X } from "lucide-react";
 import { Icon } from "../ui";
 import { useLiveData } from "../shell/LiveDataContext";
 import { ApprovalWhy } from "../thread/ApprovalWhy";
+import { newestFirst } from "./shownApproval";
 import "./RailConfirmationStack.css";
 
 /**
@@ -17,14 +18,18 @@ import "./RailConfirmationStack.css";
  *
  * Voice-driven resolution (Phase 6.3.5b daemon-side): the user can also
  * say "approve" or "cancel" and the daemon resolves the most-recent
- * pending action server-side via `resolveLatestPendingByVoice`.
+ * pending action server-side via `resolveLatestPendingByVoice` -- only when
+ * it is still the approval on top of this stack when they started speaking
+ * (#809); otherwise the reply says a new request arrived and nothing was
+ * decided.
  */
 export function RailConfirmationStack() {
   const { approvals, clarifiers, repeatBacks } = useLiveData();
 
   // Sort each kind newest-first; render in priority order: approval >
   // clarifier > repeat-back. Same priority the daemon uses for voice.
-  const sortedApprovals = [...approvals].sort((a, b) => b.timestamp - a.timestamp);
+  // The same order the id sent with a spoken answer uses (#809, shownApproval).
+  const sortedApprovals = newestFirst(approvals);
   const sortedClarifiers = [...clarifiers].sort((a, b) => b.timestamp - a.timestamp);
   const sortedRepeatBacks = [...repeatBacks].sort((a, b) => b.timestamp - a.timestamp);
 

@@ -77,16 +77,26 @@ export type GoogleConfig = {
   instance_id?: string;
 };
 
+/**
+ * `allowed_users` means two different things when it is EMPTY (#811):
+ *   - chat: everyone who can reach the bot may talk to Jarvis (any Telegram
+ *     user who finds it, any member of a Discord guild it is in);
+ *   - approvals: nobody may approve or deny from that channel. An
+ *     `approve <id>` or `deny <id>` reply is refused, and the decision has to
+ *     be made in the dashboard. A gated action is the one place "allow all"
+ *     is the wrong default.
+ * A non-empty list admits only the users it names, for both.
+ */
 export type ChannelConfig = {
   telegram?: {
     enabled: boolean;
     bot_token: string;
-    allowed_users: number[];  // Telegram user IDs
+    allowed_users: number[];  // Telegram user IDs; empty = anyone may chat, nobody may approve
   };
   discord?: {
     enabled: boolean;
     bot_token: string;
-    allowed_users: string[];  // Discord user IDs
+    allowed_users: string[];  // Discord user IDs; empty = anyone may chat, nobody may approve
     guild_id?: string;        // restrict to single guild
   };
 };

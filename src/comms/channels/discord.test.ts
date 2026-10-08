@@ -5,7 +5,8 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { MessageFlags } from 'discord.js';
-import { discordLiteral, discordPayloads, splitLiteral } from './discord.ts';
+import { DiscordAdapter, discordLiteral, discordPayloads, splitLiteral } from './discord.ts';
+import type { ChannelMessage } from './telegram.ts';
 
 /**
  * Discord's escape rule as a model: a backslash before a character that is
@@ -98,5 +99,42 @@ describe('#718: discordPayloads', () => {
 
   test('an ordinary send is unchanged: plain strings, markdown left to render', () => {
     expect(discordPayloads('a **reply**')).toEqual(['a **reply**']);
+  });
+});
+
+/**
+ * #811. With an empty allow-list any member of the guild reaches the handler;
+ * the message must say the sender was not named by a list, so the channel
+ * service refuses an `approve` from them.
+ */
+describe('#811: senderAllowListed', () => {
+  const deliver = async (allowedUsers: string[] | undefined, authorId: string) => {
+    const adapter = new DiscordAdapter('test-token', allowedUsers ? { allowedUsers } : undefined);
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    const message = {
+      id: 'm1', content: 'approve 1a2b3c4d', createdTimestamp: 0, channelId: 'c1', guildId: 'g1',
+      author: { id: authorId, username: 'member', bot: false },
+      attachments: { find: () => undefined },
+      channel: { isSendable: () => false },
+    };
+    await (adapter as unknown as { processMessage(m: unknown): Promise<void> }).processMessage(message);
+    return seen;
+  };
+
+  test('is false for every guild member while the list is empty', async () => {
+    for (const list of [undefined, []]) {
+      const seen = await deliver(list, 'u42');
+      expect(seen.length).toBe(1);
+      expect(seen[0]!.senderAllowListed).toBe(false);
+    }
+  });
+
+  test('is true for a member the list names', async () => {
+    expect((await deliver(['u42'], 'u42'))[0]!.senderAllowListed).toBe(true);
+  });
+
+  test('a member a non-empty list does not name is still dropped before the handler', async () => {
+    expect(await deliver(['u42'], 'u43')).toEqual([]);
   });
 });
