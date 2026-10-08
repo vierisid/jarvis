@@ -3,7 +3,7 @@
  * appropriate channels (WebSocket always, Telegram/Discord too).
  */
 
-import { approvalIntentFromContext, type ApprovalRequest } from './approval.ts';
+import { APPROVAL_SHORT_ID_LENGTH, approvalIntentFromContext, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
 import { commandForCard } from '../util/card-text.ts';
 import type { SendOptions } from '../comms/channels/telegram.ts';
@@ -487,7 +487,7 @@ function cardLine(text: string): { shown: string; cut: boolean } {
  * what is being approved.
  */
 export function approvalChannelCard(request: ApprovalRequest): { text: string; approvable: boolean } {
-  const shortId = request.id.slice(0, 8);
+  const shortId = request.id.slice(0, APPROVAL_SHORT_ID_LENGTH);
   const { action, reason } = approvalIntentParts(request);
   const intent = cardLine(action);
   const tool = cardLine(request.tool_name);

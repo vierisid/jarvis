@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach } from 'bun:test';
-import { initDatabase } from '../vault/schema.ts';
+import { getDb, initDatabase } from '../vault/schema.ts';
 import { ApprovalManager } from '../authority/approval.ts';
 import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
@@ -207,5 +207,82 @@ describe('notificationApprovalDecision', () => {
     expect(await notificationApprovalDecision({ id: 'no-such-request', kind: 'approval', action: 'approve' }, deps)).toBeNull();
     expect(mgr.getRequest(req.id)!.status).toBe('pending');
     expect(executions).toBe(0);
+  });
+});
+
+/**
+ * #810. A reply's id must be the whole short id the card shows and must name
+ * exactly one pending request; a prefix of it, or one two requests share,
+ * decides nothing.
+ */
+describe('#810: channelApprovalReply needs the whole short id, naming one request', () => {
+  let mgr: ApprovalManager;
+  let executions: number;
+  let deps: Parameters<typeof channelApprovalReply>[3];
+
+  beforeEach(() => {
+    initDatabase(':memory:');
+    mgr = new ApprovalManager();
+    const executor = new DeferredExecutor(mgr, new AuditTrail());
+    executions = 0;
+    executor.setToolRegistry({
+      get: () => undefined,
+      execute: async () => { executions++; return 'ran'; },
+    } as unknown as ToolRegistry);
+    deps = { approvalManager: mgr, deferredExecutor: executor, wsService: null };
+  });
+
+  /** A pending request whose id is exactly `id`, so the test controls what a prefix matches. */
+  const createWithId = (id: string) => {
+    const req = makeRequest(mgr);
+    getDb().run('UPDATE approval_requests SET id = ? WHERE id = ?', [id, req.id]);
+    return id;
+  };
+
+  test('a one-character id approves nothing, even when exactly one pending id starts with it', async () => {
+    const id = createWithId('a1b2c3d4-0000-4000-8000-000000000001');
+    const reply = await channelApprovalReply('approve', 'a', 'telegram', deps);
+    expect(reply).toContain('Nothing was approved.');
+    expect(reply).toContain('8-character ID');
+    expect(mgr.getRequest(id)!.status).toBe('pending');
+    expect(executions).toBe(0);
+  });
+
+  test('any id shorter or longer than the card shows approves nothing', async () => {
+    const id = createWithId('a1b2c3d4-0000-4000-8000-000000000001');
+    for (const attempt of ['a1b2c3d', 'a1b2c3d4-', 'a1b2c3d4-0000', 'a1b2c3d4-0000-4000-8000-000000000001']) {
+      expect(await channelApprovalReply('approve', attempt, 'discord', deps)).toContain('Nothing was approved.');
+    }
+    expect(await channelApprovalReply('deny', 'a1b2', 'discord', deps)).toContain('Nothing was denied.');
+    expect(mgr.getRequest(id)!.status).toBe('pending');
+    expect(executions).toBe(0);
+  });
+
+  test('a short id two pending requests share decides neither', async () => {
+    const first = createWithId('a1b2c3d4-0000-4000-8000-000000000001');
+    const second = createWithId('a1b2c3d4-0000-4000-8000-000000000002');
+    const approve = await channelApprovalReply('approve', 'a1b2c3d4', 'telegram', deps);
+    expect(approve).toContain('More than one pending approval');
+    expect(approve).toContain('Nothing was approved.');
+    expect(await channelApprovalReply('deny', 'a1b2c3d4', 'telegram', deps)).toContain('Nothing was denied.');
+    expect(mgr.getRequest(first)!.status).toBe('pending');
+    expect(mgr.getRequest(second)!.status).toBe('pending');
+    expect(executions).toBe(0);
+  });
+
+  test('a shared short id stops being ambiguous once the other request is decided', async () => {
+    const first = createWithId('a1b2c3d4-0000-4000-8000-000000000001');
+    const second = createWithId('a1b2c3d4-0000-4000-8000-000000000002');
+    mgr.deny(first, 'dashboard');
+    expect(await channelApprovalReply('approve', 'a1b2c3d4', 'telegram', deps)).toBe('Approved and executed. Result: ran');
+    expect(mgr.getRequest(second)!.status).toBe('executed');
+  });
+
+  test('the whole short id still approves the one request it names', async () => {
+    const id = createWithId('a1b2c3d4-0000-4000-8000-000000000001');
+    createWithId('a1b2c3d5-0000-4000-8000-000000000002');
+    expect(await channelApprovalReply('approve', 'a1b2c3d4', 'telegram', deps)).toBe('Approved and executed. Result: ran');
+    expect(mgr.getRequest(id)!.status).toBe('executed');
+    expect(executions).toBe(1);
   });
 });

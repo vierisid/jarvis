@@ -140,6 +140,24 @@ export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'contex
   }
 }
 
+/**
+ * How much of a request id a Telegram/Discord card shows and a reply must
+ * name: the first group of the UUID (`approvalChannelCard`).
+ */
+export const APPROVAL_SHORT_ID_LENGTH = 8;
+
+const SHORT_ID = new RegExp(`^[0-9a-f]{${APPROVAL_SHORT_ID_LENGTH}}$`);
+
+/** What a reply's short id names (`ApprovalManager.findByShortId`). */
+export type ShortIdMatch =
+  | { status: 'found'; request: ApprovalRequest }
+  /** No pending request has that short id. */
+  | { status: 'none' }
+  /** More than one pending request has it, so it names none of them. */
+  | { status: 'ambiguous' }
+  /** Not a whole short id: wrong length, or not lower-case hex. */
+  | { status: 'malformed' };
+
 export class ApprovalManager {
   /** Identity of this process. A claim carrying another boot id never got its receipt from us. */
   readonly bootId: string;
@@ -258,13 +276,27 @@ export class ApprovalManager {
   }
 
   /**
-   * Find a request by short ID prefix (for Telegram/Discord commands).
+   * The pending request a Telegram/Discord `approve <id>` or `deny <id>` names
+   * (#810).
+   *
+   * The id must be the whole short id the card shows -- the first
+   * `APPROVAL_SHORT_ID_LENGTH` characters of the request id -- and must name
+   * exactly one pending request. This used to be a prefix match with no
+   * minimum length that took the first row, so `approve a` approved whichever
+   * pending request happened to come first with an id starting `a`: one the
+   * person may never have seen. (Worse, the reply parser matched any hex-
+   * looking word, so `approve all of them` sent `a`.) A shorter or longer id is
+   * `malformed`, and one that matches two pending requests is `ambiguous`;
+   * neither decides anything.
    */
-  findByShortId(shortId: string): ApprovalRequest | null {
+  findByShortId(shortId: string): ShortIdMatch {
+    if (!SHORT_ID.test(shortId)) return { status: 'malformed' };
     const db = getDb();
-    const row = db.query('SELECT * FROM approval_requests WHERE id LIKE ? AND status = ?')
-      .get(`${shortId}%`, 'pending') as ApprovalRequest | null;
-    return row;
+    const rows = db.query('SELECT * FROM approval_requests WHERE substr(id, 1, ?) = ? AND status = ? LIMIT 2')
+      .all(APPROVAL_SHORT_ID_LENGTH, shortId, 'pending') as ApprovalRequest[];
+    if (rows.length === 0) return { status: 'none' };
+    if (rows.length > 1) return { status: 'ambiguous' };
+    return { status: 'found', request: rows[0]! };
   }
 
   /**
