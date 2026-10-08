@@ -80,6 +80,17 @@ export class ChannelService implements Service {
    * directly.
    */
   private lastRecipients = new Map<string, BroadcastRecipient>();
+  /**
+   * The last Telegram update an adapter started handling, kept across the
+   * stop/start a settings save does (#882), per bot token: update ids are
+   * numbered per bot, so another token starts over, and switching back to a
+   * token picks up where that bot left off.
+   *
+   * Never the adapter's poll offset. That also counts updates an old adapter
+   * fetched but left unhandled once it was disconnected (#860), which must
+   * reach the new adapter so they are judged against the new allow-list.
+   */
+  private telegramTaken = new Map<string, number>();
   /** Handler for approval commands (approve/deny) from external channels */
   private approvalHandler: ApprovalCommandHandler | null = null;
   /** Notified when a send has exhausted its retries (e.g. to alert the dashboard). */
@@ -138,9 +149,15 @@ export class ChannelService implements Service {
 
       if (channels?.telegram?.enabled && channels.telegram.bot_token) {
         warnAllowListProblems('telegram', channels.telegram.allowed_users);
-        const telegram = new TelegramAdapter(channels.telegram.bot_token, {
+        const token = channels.telegram.bot_token;
+        const taken = this.telegramTaken.get(token);
+        const telegram = new TelegramAdapter(token, {
           sttProvider: this.sttProvider ?? undefined,
           allowedUsers: channels.telegram.allowed_users,
+          ...(taken !== undefined ? { startOffset: taken + 1 } : {}),
+          onUpdateTaken: (updateId) => {
+            this.telegramTaken.set(token, Math.max(updateId, this.telegramTaken.get(token) ?? 0));
+          },
         });
         this.manager.register(telegram);
       }

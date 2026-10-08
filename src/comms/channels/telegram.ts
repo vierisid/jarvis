@@ -137,18 +137,44 @@ export class TelegramAdapter implements ChannelAdapter {
   private token: string;
   private handler: ChannelHandler | null = null;
   private polling: boolean = false;
+  /**
+   * The next `getUpdates` offset. Telegram confirms an update only when a
+   * later call passes an offset above it, so this is also what decides which
+   * updates are delivered again.
+   */
   private offset: number = 0;
+  /** The long poll in flight, aborted by disconnect() (#882). */
+  private pollAbort: AbortController | null = null;
+  /** Told each update id as this adapter starts handling it (#882). */
+  private onUpdateTaken: ((updateId: number) => void) | null = null;
   private baseUrl: string;
   private pollingInterval: number = 1000;
   private sttProvider: STTProvider | null = null;
   /** Parsed, never the raw setting: a string there was a substring match (#883). */
   private allowList: AllowList<number>;
 
-  constructor(token: string, opts?: { sttProvider?: STTProvider; allowedUsers?: unknown }) {
+  /**
+   * `startOffset` (#882): the first update id this adapter may handle. A new
+   * adapter used to start at 0, and Telegram had not been told the old one
+   * took the update it was in the middle of (that is only said by the NEXT
+   * call), so a settings save re-ran that update: the same message answered,
+   * or the same action requested, twice. The channel service passes one past
+   * the last update an adapter took, reported through `onUpdateTaken`.
+   */
+  constructor(token: string, opts?: {
+    sttProvider?: STTProvider;
+    allowedUsers?: unknown;
+    startOffset?: number;
+    onUpdateTaken?: (updateId: number) => void;
+  }) {
     this.token = token;
     this.baseUrl = `https://api.telegram.org/bot${token}`;
     this.sttProvider = opts?.sttProvider ?? null;
     this.allowList = telegramAllowList(opts?.allowedUsers);
+    if (opts?.startOffset !== undefined && Number.isSafeInteger(opts.startOffset) && opts.startOffset > 0) {
+      this.offset = opts.startOffset;
+    }
+    this.onUpdateTaken = opts?.onUpdateTaken ?? null;
   }
 
   setSTTProvider(provider: STTProvider): void {
@@ -185,6 +211,12 @@ export class TelegramAdapter implements ChannelAdapter {
 
   async disconnect(): Promise<void> {
     this.polling = false;
+    // Abort the long poll rather than leave it running for up to 30s (#882).
+    // Whatever it would have returned is unconfirmed, so Telegram hands it to
+    // the next adapter; left running, it could land after the new adapter's
+    // first poll and be dropped here only by the check in startPolling.
+    this.pollAbort?.abort();
+    this.pollAbort = null;
     console.log('[TelegramAdapter] Disconnected');
   }
 
@@ -256,12 +288,23 @@ export class TelegramAdapter implements ChannelAdapter {
           // Left unhandled it is never confirmed (the offset only advances on
           // the next call), so Telegram hands it to the new adapter instead.
           if (!this.polling) break;
+          // Taken from here on: the next adapter must not handle it again,
+          // even though it is still being answered (#882). Only updates
+          // reached HERE count, never the poll offset, which also covers the
+          // updates the check above just left for the new adapter.
+          try {
+            this.onUpdateTaken?.(update.update_id);
+          } catch (err) {
+            console.error('[TelegramAdapter] onUpdateTaken threw:', err);
+          }
           await this.processUpdate(update);
         }
       } catch (error) {
-        console.error('[TelegramAdapter] Polling error:', error);
+        // An aborted poll is disconnect() doing its job, not an error.
+        if (this.polling) console.error('[TelegramAdapter] Polling error:', error);
       }
 
+      if (!this.polling) break;
       await new Promise(resolve => setTimeout(resolve, this.pollingInterval));
     }
 
@@ -271,17 +314,25 @@ export class TelegramAdapter implements ChannelAdapter {
   private async getUpdates(): Promise<TelegramUpdate[]> {
     // Bound: server long-poll `timeout: 30` + ~5s slack. If the body's
     // `timeout` value changes, raise this bound to match.
-    const response = await fetchWithTimeout(`${this.baseUrl}/getUpdates`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        offset: this.offset,
-        timeout: 30,
-        allowed_updates: ['message'],
-      }),
-    }, 35_000);
-
-    const data: TelegramGetUpdatesResponse = await response.json() as TelegramGetUpdatesResponse;
+    const abort = new AbortController();
+    this.pollAbort = abort;
+    let data: TelegramGetUpdatesResponse;
+    try {
+      // The body is read inside the timeout and the abort too: reading it
+      // outside left a stalled body able to hold the loop forever.
+      data = await fetchWithTimeout(`${this.baseUrl}/getUpdates`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          offset: this.offset,
+          timeout: 30,
+          allowed_updates: ['message'],
+        }),
+        signal: abort.signal,
+      }, 35_000, (r) => r.json() as Promise<TelegramGetUpdatesResponse>);
+    } finally {
+      if (this.pollAbort === abort) this.pollAbort = null;
+    }
 
     if (!data.ok) {
       throw new Error('Failed to get updates');
@@ -409,13 +460,37 @@ export class TelegramAdapter implements ChannelAdapter {
   }
 }
 
-async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response> {
+/**
+ * `fetch` bounded by `ms`, and aborted early when `init.signal` aborts. With
+ * `read`, the body is read inside the same bound, and its result returned.
+ */
+async function fetchWithTimeout(url: string, init: RequestInit, ms: number): Promise<Response>;
+async function fetchWithTimeout<T>(url: string, init: RequestInit, ms: number, read: (r: Response) => Promise<T>): Promise<T>;
+async function fetchWithTimeout<T>(url: string, init: RequestInit, ms: number, read?: (r: Response) => Promise<T>): Promise<Response | T> {
   const controller = new AbortController();
   const t = setTimeout(() => controller.abort(), ms);
+  const outer = init.signal;
+  const onOuterAbort = () => controller.abort();
+  if (outer) {
+    if (outer.aborted) controller.abort();
+    else outer.addEventListener('abort', onOuterAbort, { once: true });
+  }
+  // Settles when either the request or the abort does: a body read does
+  // not always notice its signal, so the abort is raced, not just passed on.
+  const aborted = new Promise<never>((_, reject) => {
+    controller.signal.addEventListener('abort', () => reject(new DOMException('The operation was aborted.', 'AbortError')), { once: true });
+  });
+  aborted.catch(() => {});
   try {
-    return await fetch(url, { ...init, signal: controller.signal });
+    const run = (async () => {
+      const response = await fetch(url, { ...init, signal: controller.signal });
+      return read ? await read(response) : response;
+    })();
+    run.catch(() => {});
+    return await Promise.race([run, aborted]);
   } finally {
     clearTimeout(t);
+    outer?.removeEventListener('abort', onOuterAbort);
   }
 }
 
