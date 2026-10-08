@@ -474,10 +474,11 @@ jobs:
 
   # --- Windows: Authenticode-sign via Cloud KMS ---
   # The only job here besides publish-sidecar that holds id-token. It builds
-  # nothing: it verifies the binary build-sidecar-windows reported, signs it
-  # with scripts/sign-windows.sh (whose jsign download is checksum-pinned),
-  # and uploads the result as sidecar-win32-x64 -- signed, or unsigned when
-  # signing is not configured, exactly as before.
+  # nothing and installs nothing: it verifies the binary build-sidecar-windows
+  # reported, signs it with scripts/sign-windows.sh (whose jsign download is
+  # checksum-pinned), and uploads the result as sidecar-win32-x64 -- signed,
+  # or unsigned when signing is not configured, exactly as before. The
+  # post-sign check runs in verify-sidecar-windows (#817).
   sign-sidecar-windows:
     needs: [resolve, build-sidecar-windows]
     if: needs.resolve.outputs.should_release == 'true'
@@ -496,19 +497,27 @@ jobs:
     # with nothing to check it against.
     outputs:
       sha256: ${{ steps.digest.outputs.sha256 }}
+      # Whether the signing step ran, so verify-sidecar-windows knows whether
+      # there is a signature to check (an unconfigured signer ships unsigned).
+      signed: ${{ steps.winsign.outputs.ready }}
     steps:
       # For scripts/sign-windows.sh and the committed certificate chain.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # Into a directory of its own, never the checkout (#817 review): an
+      # artifact is a zip any job in this run can write -- a Linux or macOS
+      # leg included -- and extracted over sidecar/ it could replace
+      # scripts/sign-windows.sh before that runs with the KMS token.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: unsigned-win32-x64
-          path: sidecar
+          path: ${{ runner.temp }}/unsigned
 
       # The digest travels as a job output, which only build-sidecar-windows
       # can set; the artifact store is writable by every job in this run.
+      # Exactly one regular file, that digest, and only then a copy into place.
       - name: Verify the binary
         working-directory: sidecar
         env:
@@ -516,14 +525,13 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-sidecar-windows reported no digest"; exit 1; }
-          echo "${SHA256}  ${SIDECAR_BIN}.exe" | sha256sum -c -
-
-      # osslsigncode: post-sign verification inside sign-windows.sh
-      - name: Install osslsigncode
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y osslsigncode
+          in="${RUNNER_TEMP}/unsigned"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/${SIDECAR_BIN}.exe" ] || [ -L "${in}/${SIDECAR_BIN}.exe" ] || [ ! -f "${in}/${SIDECAR_BIN}.exe" ]; then
+            echo "::error::the unsigned-win32-x64 artifact is not exactly one file, ${SIDECAR_BIN}.exe"
+            exit 1
+          fi
+          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -
+          install -m 0644 "${in}/${SIDECAR_BIN}.exe" "${SIDECAR_BIN}.exe"
 
       # Windows signing needs BOTH the KMS keyring variable AND the issued
       # certificate chain in the repo. They arrive at DIFFERENT times: the
@@ -568,6 +576,10 @@ jobs:
       # installer-release.yml and runnable locally (see its header), so a local
       # test exercises exactly what CI runs. Gated on GCP_KMS_KEYRING: absent
       # (forks, pre-onboarding) the .exe ships unsigned, exactly as before.
+      # --defer-verify (#817): the check needs osslsigncode, an apt package,
+      # and apt maintainer scripts run as root beside this job's OIDC token.
+      # verify-sidecar-windows runs it instead, and publish-sidecar waits for
+      # it.
       - name: Sign Windows binary (Cloud KMS)
         if: steps.winsign.outputs.ready == 'true'
         working-directory: sidecar
@@ -575,18 +587,7 @@ jobs:
           GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
           GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
           GCP_KMS_KEY_ALIAS: ${{ vars.GCP_KMS_KEY_ALIAS }}
-          # Asserted post-sign: the binary must carry OUR publisher, the same
-          # identity the installer pins at runtime.
-          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
-          # Sectigo's roots are publicly trusted, so demand the FULL
-          # verification (osslsigncode exit 0). This is the script's default
-          # too; stated here so the release posture is visible at the workflow.
-          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
-        run: |
-          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
-            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset — the signature's publisher will not be asserted."
-          fi
-          scripts/sign-windows.sh "${SIDECAR_BIN}.exe"
+        run: scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"
 
       - name: Digest
         id: digest
@@ -600,6 +601,73 @@ jobs:
           path: sidecar/${{ env.SIDECAR_BIN }}.exe
           if-no-files-found: error
 
+  # --- Windows: post-sign verification (no OIDC) ---
+  # #817. The check needs osslsigncode, which comes from apt, and apt runs
+  # package maintainer scripts as root: in sign-sidecar-windows they ran
+  # beside the Workload Identity token, so a mirror or archive compromise
+  # reached the KMS signing identity. Here nothing can mint a token. The
+  # binary is taken by the digest sign-sidecar-windows reported, which is
+  # also what publish-sidecar checks, so what is verified here is what ships;
+  # and publish-sidecar waits for this job. sign-windows.sh --verify-only
+  # fails when osslsigncode is missing, so dropping the install cannot turn
+  # into a skipped check.
+  verify-sidecar-windows:
+    needs: [resolve, sign-sidecar-windows]
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # For scripts/sign-windows.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Outside the checkout, as in sign-sidecar-windows: extracted over
+      # sidecar/, an artifact could replace the script that does the checking.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-win32-x64
+          path: ${{ runner.temp }}/signed
+
+      - name: Verify the signed binary digest
+        env:
+          SHA256: ${{ needs.sign-sidecar-windows.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sign-sidecar-windows reported no digest"; exit 1; }
+          in="${RUNNER_TEMP}/signed"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/${SIDECAR_BIN}.exe" ] || [ -L "${in}/${SIDECAR_BIN}.exe" ] || [ ! -f "${in}/${SIDECAR_BIN}.exe" ]; then
+            echo "::error::the sidecar-win32-x64 artifact is not exactly one file, ${SIDECAR_BIN}.exe"
+            exit 1
+          fi
+          echo "${SHA256}  ${in}/${SIDECAR_BIN}.exe" | sha256sum -c -
+
+      - name: Install osslsigncode
+        if: needs.sign-sidecar-windows.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osslsigncode
+
+      - name: Verify the Authenticode signature
+        if: needs.sign-sidecar-windows.outputs.signed == 'true'
+        working-directory: sidecar
+        env:
+          # The binary must carry OUR publisher, the same identity the
+          # installer pins at runtime.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          # Sectigo's roots are publicly trusted, so demand the FULL
+          # verification (osslsigncode exit 0), and a check that runs at all.
+          # This is the script's default too; stated here so the release
+          # posture is visible at the workflow.
+          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
+        run: |
+          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
+            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset -- the signature's publisher will not be asserted."
+          fi
+          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/${SIDECAR_BIN}.exe"
+
   # ─── Publish sidecar packages to npm ───────────────────────────
   publish-sidecar:
     # Same requirement as publish-brain in release-exec.yml (#679): npm Trusted
@@ -612,7 +680,7 @@ jobs:
     # environment name, so this reads the input directly.
     environment:
       name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
-    needs: [resolve, build-sidecar-linux-x64, build-sidecar-linux-arm64, build-sidecar-darwin-arm64, build-sidecar-darwin-x64, sign-sidecar-windows]
+    needs: [resolve, verify-sidecar-windows, build-sidecar-linux-x64, build-sidecar-linux-arm64, build-sidecar-darwin-arm64, build-sidecar-darwin-x64, sign-sidecar-windows]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:

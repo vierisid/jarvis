@@ -341,6 +341,76 @@ if (mode === "installer-digests") {
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
+if (mode === "postsign") {
+  // #817: the Authenticode check runs in a job that cannot mint a token, on
+  // exactly the bytes that ship, and publishing waits for it. The signer
+  // defers to it, so nothing in the signer needs osslsigncode.
+  const out = [];
+  const file = require("node:path").basename(process.env.WORKFLOW);
+  const T = file === "sidecar-release.yml"
+    ? { sign: "sign-sidecar-windows", verify: "verify-sidecar-windows", publish: "publish-sidecar", artifact: "sidecar-win32-x64" }
+    : file === "installer-release.yml"
+      ? { sign: "sign-windows", verify: "verify-windows", publish: "publish", artifact: "installer-win32-x64" }
+      : null;
+  if (!T) { console.log("no post-sign verification is known for " + file); process.exit(0); }
+  const stepsOf = (j) => jobs[j]?.steps ?? [];
+  const calls = (j) => stepsOf(j).filter((st) => typeof st.run === "string" && /\bsign-windows\.sh\b/.test(st.run));
+  const SIGNED = "needs." + T.sign + ".outputs.signed == \x27true\x27";
+  // The signer: every call defers, under the readiness condition, and the
+  // signer reports whether it signed.
+  if (!jobs[T.sign]) out.push("no " + T.sign + " job");
+  else {
+    const c = calls(T.sign);
+    if (!c.length) out.push(T.sign + ": never calls sign-windows.sh");
+    for (const st of c) {
+      if (!/\bsign-windows\.sh\s+--defer-verify\s/.test(st.run))
+        out.push(T.sign + ": calls sign-windows.sh without --defer-verify, so it would verify, and need osslsigncode, in the job holding id-token");
+      if (st.if !== "steps.winsign.outputs.ready == \x27true\x27")
+        out.push(T.sign + ": signs under " + JSON.stringify(st.if) + ", not the readiness its signed output reports");
+    }
+    if (jobs[T.sign].outputs?.signed !== "${{ steps.winsign.outputs.ready }}")
+      out.push(T.sign + ": output signed must be ${{ steps.winsign.outputs.ready }} (got " + JSON.stringify(jobs[T.sign].outputs?.signed) + "), or the check can be told there is nothing to verify");
+  }
+  const v = jobs[T.verify];
+  if (!v) out.push("no " + T.verify + " job");
+  else {
+    const perm = v.permissions ?? doc.permissions;
+    if (perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((x) => x === "write")))
+      out.push(T.verify + ": holds a write scope or id-token (" + JSON.stringify(perm) + "); it installs a package and needs neither");
+    if (!needsOf(T.verify).includes(T.sign)) out.push(T.verify + ": does not list " + T.sign + " in needs, so its outputs read as empty");
+    const steps = stepsOf(T.verify);
+    const dl = steps.findIndex((st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@"));
+    const chk = steps[dl + 1];
+    if (dl < 0 || steps[dl].with?.name !== T.artifact) out.push(T.verify + ": does not download " + T.artifact + ", the artifact that ships");
+    else if (!chk || typeof chk.run !== "string" || !/\bsha256sum\b[^\n]*\s-c\b/.test(chk.run) || chk.env?.SHA256 !== "${{ needs." + T.sign + ".outputs.sha256 }}")
+      out.push(T.verify + ": the step after the download is not a sha256sum -c against ${{ needs." + T.sign + ".outputs.sha256 }}, the digest of what ships");
+    else if (steps[dl].if !== undefined || chk.if !== undefined || steps[dl]["continue-on-error"] !== undefined || chk["continue-on-error"] !== undefined)
+      out.push(T.verify + ": its download or digest check can be skipped or allowed to fail");
+    const at = steps.findIndex((st) => typeof st.run === "string" && /\bsign-windows\.sh\s+--verify-only\s/.test(st.run));
+    const ver = steps[at];
+    if (at < 0) out.push(T.verify + ": never runs sign-windows.sh --verify-only");
+    else {
+      if (at < dl + 2) out.push(T.verify + ": verifies before the digest check");
+      if (ver.if !== SIGNED) out.push(T.verify + ": verifies under " + JSON.stringify(ver.if) + ", not exactly " + SIGNED);
+      if (ver["continue-on-error"] !== undefined) out.push(T.verify + ": the signature check is allowed to fail");
+      if (String(ver.env?.SIGN_REQUIRE_TRUSTED_CHAIN) !== "1") out.push(T.verify + ": SIGN_REQUIRE_TRUSTED_CHAIN is " + JSON.stringify(ver.env?.SIGN_REQUIRE_TRUSTED_CHAIN) + ", not \"1\"");
+      if (ver.env?.SIGNING_PUBLISHER_CN !== "${{ vars.SIGNING_PUBLISHER_CN }}") out.push(T.verify + ": the publisher is not taken from vars.SIGNING_PUBLISHER_CN");
+      const inst = steps.findIndex((st) => typeof st.run === "string" && /\bapt-get\s+install\b[^\n]*\bosslsigncode\b/.test(st.run));
+      if (inst < 0 || inst > at || steps[inst].if !== SIGNED) out.push(T.verify + ": does not install osslsigncode, under the same condition, before the check");
+    }
+  }
+  if (!needsOf(T.publish).includes(T.verify)) out.push(T.publish + ": does not wait for " + T.verify + ", so it can publish a signature nobody checked");
+  // Job-level bypasses (#817 review): a failed check must fail the job, and
+  // the publisher must not run past a failed or skipped dependency.
+  for (const j of [T.sign, T.verify, T.publish])
+    if (jobs[j]?.["continue-on-error"] !== undefined) out.push(j + ": continue-on-error on the job, so a failure there does not stop the publish");
+  const SHOULD = "needs.resolve.outputs.should_release == \x27true\x27";
+  if (v && v.if !== SHOULD) out.push(T.verify + ": runs under " + JSON.stringify(v.if) + ", not exactly " + SHOULD);
+  if (/\b(?:always|failure|cancelled)\s*\(/.test(String(jobs[T.publish]?.if ?? "")))
+    out.push(T.publish + ": can run after a failed dependency (if: " + jobs[T.publish].if + ")");
+  if (out.length) console.log(out.join("\n"));
+  process.exit(0);
+}
 // mode === "structure": one violation per line, nothing when clean.
 const out = [];
 const EXPECT_OUTPUTS = {
@@ -923,7 +993,7 @@ fi
 	mutant 'the digest taken before the bundle is packaged (#781)' \
 		'      # tar the bundle before upload' $'      - id: digest\n        run: "true"\n      # tar the bundle before upload'
 	mutant 'the signer digest dropped, so the signed binary has none (#781)' \
-		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      # For scripts/sign-windows.sh' $'    steps:\n      # For scripts/sign-windows.sh'
+		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n      # Whether the signing step ran, so verify-sidecar-windows' $'    outputs:\n      # Whether the signing step ran, so verify-sidecar-windows'
 	mutant 'the artifact check switched off on its own (#781)' \
 		$'      - name: Verify sidecar artifacts\n        env:' $'      - name: Verify sidecar artifacts\n        if: false\n        env:'
 	mutant 'the artifact check allowed to fail (#781 review)' \
@@ -1023,19 +1093,44 @@ verbatim_case() {
 		no "$label" "exit ${rc}: $(cat "${WORK}/v.log")"
 	fi
 }
+# inbox_suite <job> <script> <inbox under RUNNER_TEMP> <file> <copies yes|no> [VAR=value ...]
+# The signing inputs arrive in a directory of their own, not the checkout
+# (#817 review): the script must take exactly that one regular file, by its
+# digest, and copy nothing into the working directory when it refuses. An
+# artifact that also carries scripts/sign-windows.sh is the attack this
+# exists for.
+inbox_suite() {
+	local job="$1" script="$2" box="$3" file="$4" copies="$5"
+	shift 5
+	local d="${WORK}/inbox" sum
+	reset_inbox() { rm -rf "$d" && mkdir -p "$d/rt/$box" "$d/cwd" && printf 'payload\n' >"$d/rt/$box/$file"; }
+	reset_inbox
+	sum="$(sha256sum "$d/rt/$box/$file" | cut -d' ' -f1)"
+	verbatim_case "$job accepts the one file it was given the digest of" 0 "$d/cwd" "$script" SHA256="$sum" RUNNER_TEMP="$d/rt" "$@"
+	if [ "$copies" = yes ]; then
+		if cmp -s "$d/rt/$box/$file" "$d/cwd/$file"; then ok "$job copies the checked file into place"; else no "$job copies the checked file into place"; fi
+	fi
+	reset_inbox
+	verbatim_case "$job refuses an empty digest" 1 "$d/cwd" "$script" SHA256= RUNNER_TEMP="$d/rt" "$@"
+	reset_inbox
+	printf 'swapped\n' >"$d/rt/$box/$file"
+	verbatim_case "$job refuses a file replaced after it was hashed" 1 "$d/cwd" "$script" SHA256="$sum" RUNNER_TEMP="$d/rt" "$@"
+	reset_inbox
+	mkdir -p "$d/rt/$box/scripts" && printf 'evil\n' >"$d/rt/$box/scripts/sign-windows.sh"
+	verbatim_case "$job refuses an artifact that also carries a replacement script" 1 "$d/cwd" "$script" SHA256="$sum" RUNNER_TEMP="$d/rt" "$@"
+	if [ -e "$d/cwd/$file" ]; then no "$job copies nothing into place when it refuses"; else ok "$job copies nothing into place when it refuses"; fi
+	reset_inbox
+	mv "$d/rt/$box/$file" "$d/real" && ln -s "$d/real" "$d/rt/$box/$file"
+	verbatim_case "$job refuses a link in place of the file" 1 "$d/cwd" "$script" SHA256="$sum" RUNNER_TEMP="$d/rt" "$@"
+}
 SIGNV="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-windows 'Verify the binary')" || SIGNV=""
 BRAINV="$(yq step publish-brain 'Verify the tarball')" || BRAINV=""
 RELV="$(yq step github-release 'Verify sidecar binaries')" || RELV=""
 if [ -z "$SIGNV" ] || [ -z "$BRAINV" ] || [ -z "$RELV" ]; then
 	no "found the three remaining digest checks (sign-sidecar-windows, publish-brain, github-release)"
 else
-	d="${WORK}/v" && rm -rf "$d" && mkdir -p "$d/sidecar" "$d/tmp/brain-pack" "$d/rel/artifacts/sidecar-linux-x64"
-	printf 'unsigned exe\n' >"$d/sidecar/jarvis.exe"
-	exe_sum="$(sha256sum "$d/sidecar/jarvis.exe" | cut -d' ' -f1)"
-	verbatim_case "sign-sidecar-windows accepts the binary its build hashed" 0 "$d/sidecar" "$SIGNV" SHA256="$exe_sum" SIDECAR_BIN=jarvis
-	verbatim_case "sign-sidecar-windows refuses an empty digest" 1 "$d/sidecar" "$SIGNV" SHA256= SIDECAR_BIN=jarvis
-	printf 'swapped\n' >"$d/sidecar/jarvis.exe"
-	verbatim_case "sign-sidecar-windows refuses a binary replaced after the build" 1 "$d/sidecar" "$SIGNV" SHA256="$exe_sum" SIDECAR_BIN=jarvis
+	inbox_suite sign-sidecar-windows "$SIGNV" unsigned jarvis.exe yes SIDECAR_BIN=jarvis
+	d="${WORK}/v" && rm -rf "$d" && mkdir -p "$d/tmp/brain-pack" "$d/rel/artifacts/sidecar-linux-x64"
 
 	tgz=usejarvis-brain-1.2.3.tgz
 	printf 'tarball\n' >"$d/tmp/brain-pack/$tgz"
@@ -1093,7 +1188,7 @@ fi
 	mutant 'publish checking the Windows installer against the UNSIGNED build digest (#779)' \
 		'          SHA_WIN32_X64: ${{ needs.sign-windows.outputs.sha256 }}' '          SHA_WIN32_X64: ${{ needs.build-windows.outputs.sha256 }}'
 	mutant 'publish not waiting for the signer, so its digest reads empty (#779)' \
-		'    needs: [resolve, sign-windows, build-macos]' '    needs: [resolve, build-windows, build-macos]'
+		'    needs: [resolve, sign-windows, verify-windows, build-macos]' '    needs: [resolve, build-windows, verify-windows, build-macos]'
 	mutant 'the DMG digest dropped from build-macos (#779)' \
 		$'    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}\n    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          # The Actions cache is writable by any run on main, and Go reuses\n          # cached modules and build output without re-verifying them (#681).\n          cache: false\n          go-version-file: sidecar/go.mod\n          cache-dependency-path: sidecar/go.sum\n\n      - name: Build universal' \
 		$'    steps:\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0\n        with:\n          # The Actions cache is writable by any run on main, and Go reuses\n          # cached modules and build output without re-verifying them (#681).\n          cache: false\n          go-version-file: sidecar/go.mod\n          cache-dependency-path: sidecar/go.sum\n\n      - name: Build universal'
@@ -1112,21 +1207,11 @@ PUBCHECK="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step publish 'Verify the installers
 if [ -z "$SIGNCHECK" ]; then
 	no "found installer-release.yml sign-windows step 'Verify the installer'"
 else
-	rm -rf "${WORK}/inst" && mkdir -p "${WORK}/inst/sidecar"
-	printf 'unsigned installer\n' >"${WORK}/inst/sidecar/Jarvis-Setup.exe"
-	good="$(sha256sum "${WORK}/inst/sidecar/Jarvis-Setup.exe" | cut -d' ' -f1)"
-	# sign_check <digest>: sets RC.
-	sign_check() {
-		(cd "${WORK}/inst/sidecar" && env -i PATH="$PATH" SHA256="$1" bash -c "$SIGNCHECK") >"${WORK}/inst.log" 2>&1
-		RC=$?
-	}
-	sign_check "$good"
-	if [ "$RC" -eq 0 ]; then ok "sign-windows accepts the installer build-windows hashed"; else no "sign-windows accepts the installer build-windows hashed" "$(cat "${WORK}/inst.log")"; fi
-	sign_check ""
-	if [ "$RC" -ne 0 ] && grep -qF "::error::build-windows reported no digest" "${WORK}/inst.log"; then ok "sign-windows refuses when build-windows reported no digest"; else no "sign-windows refuses when build-windows reported no digest" "$(cat "${WORK}/inst.log")"; fi
-	printf 'swapped\n' >"${WORK}/inst/sidecar/Jarvis-Setup.exe"
-	sign_check "$good"
-	if [ "$RC" -ne 0 ]; then ok "sign-windows refuses an installer replaced after the build hashed it"; else no "sign-windows refuses an installer replaced after the build hashed it"; fi
+	inbox_suite sign-windows "$SIGNCHECK" unsigned Jarvis-Setup.exe yes
+	# The refusal names what was missing.
+	rm -rf "${WORK}/inst" && mkdir -p "${WORK}/inst/rt/unsigned" "${WORK}/inst/cwd"
+	(cd "${WORK}/inst/cwd" && env -i PATH="$PATH" SHA256= RUNNER_TEMP="${WORK}/inst/rt" bash -c "$SIGNCHECK") >"${WORK}/inst.log" 2>&1
+	if grep -qF "::error::build-windows reported no digest" "${WORK}/inst.log"; then ok "sign-windows names a missing build-windows digest"; else no "sign-windows names a missing build-windows digest" "$(cat "${WORK}/inst.log")"; fi
 fi
 if [ -z "$PUBCHECK" ]; then
 	no "found installer-release.yml publish step 'Verify the installers'"
@@ -1172,6 +1257,75 @@ else
 	inst_fixture
 	tmp="$SUM_WIN"; SUM_WIN="$SUM_DMG"; SUM_DMG="$tmp"
 	pub_refused "the two digests crossed over" "FAILED"
+fi
+
+echo
+echo "post-sign verification runs without id-token, on what ships, before publishing (#817)"
+for f in "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
+	found="$(YQ_FILE="$f" yq postsign)" || {
+		no "$(basename "$f"): post-sign check ran" "the bun helper failed"
+		continue
+	}
+	if [ -z "$found" ]; then
+		ok "$(basename "$f"): the signer defers, the verify job holds no token, checks the shipped digest, and gates the publish"
+	else
+		no "$(basename "$f"): post-sign verification" "$found"
+	fi
+done
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	MUTANT_MODE=postsign
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'publish-sidecar not waiting for the signature check (#817)' \
+		'    needs: [resolve, verify-sidecar-windows, build-sidecar-linux-x64,' '    needs: [resolve, build-sidecar-linux-x64,'
+	mutant 'the sidecar signer verifying in place again, in the job holding id-token (#817)' \
+		'scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' 'scripts/sign-windows.sh "${SIDECAR_BIN}.exe"'
+	mutant 'the sidecar signature check given id-token (#817)' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n'
+	mutant 'the sidecar signer reporting it never signs, so the check always skips (#817)' \
+		'      signed: ${{ steps.winsign.outputs.ready }}' '      signed: "false"'
+	mutant 'the sidecar signature check verifying an artifact other than the one that ships (#817)' \
+		$'          name: sidecar-win32-x64\n          path: ${{ runner.temp }}/signed\n' $'          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/signed\n'
+	mutant 'the sidecar signature check job allowed to fail as a whole (#817 review)' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    continue-on-error: true\n'
+	mutant 'publish-sidecar running past a failed signature check (#817 review)' \
+		$'    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      sums:' \
+		$'    if: ${{ !cancelled() && needs.resolve.outputs.should_release == \'true\' }}\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      sums:'
+	mutant 'the sidecar signature check job run under a condition of its own (#817 review)' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: always()\n'
+	mutant 'the sidecar signature check relaxed to an untrusted chain (#817)' \
+		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "0"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]'
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'the installer publish not waiting for the signature check (#817)' \
+		'    needs: [resolve, sign-windows, verify-windows, build-macos]' '    needs: [resolve, sign-windows, build-macos]'
+	mutant 'the installer signature check against the UNSIGNED build digest (#817)' \
+		'          SHA256: ${{ needs.sign-windows.outputs.sha256 }}' '          SHA256: ${{ needs.build-windows.outputs.sha256 }}'
+	mutant 'the installer signature check switched off on its own (#817)' \
+		$'      - name: Verify the Authenticode signature\n        if: needs.sign-windows.outputs.signed == \'true\'' $'      - name: Verify the Authenticode signature\n        if: false'
+	mutant 'the installer signature check allowed to fail (#817)' \
+		$'      - name: Verify the Authenticode signature\n        if: needs.sign-windows.outputs.signed == \'true\'' $'      - name: Verify the Authenticode signature\n        continue-on-error: true\n        if: needs.sign-windows.outputs.signed == \'true\''
+	mutant 'the installer signature check given a write scope (#817)' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
+		$'  verify-windows:\n    needs: [resolve, sign-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n'
+	mutant 'the installer signature check run without its publisher pin (#817)' \
+		$'          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}\n          # Sectigo' $'          # Sectigo'
+	mutant 'the installer signer allowed to fail as a whole (#817 review)' \
+		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    continue-on-error: true\n'
+	mutant 'the installer publish running after a failure (#817 review)' \
+		$'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: needs.resolve.outputs.should_release == \'true\'' $'    needs: [resolve, sign-windows, verify-windows, build-macos]\n    if: always() && needs.resolve.outputs.should_release == \'true\''
+	mutant 'the installer digest check made skippable (#817)' \
+		$'      - name: Verify the signed installer digest\n' $'      - name: Verify the signed installer digest\n        if: false\n'
+	unset MUTANT_MODE MUTANT_FROM
+}
+# The two digest checks, executed verbatim.
+SIDEV="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step verify-sidecar-windows 'Verify the signed binary digest')" || SIDEV=""
+INSTV="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step verify-windows 'Verify the signed installer digest')" || INSTV=""
+if [ -z "$SIDEV" ] || [ -z "$INSTV" ]; then
+	no "found the two post-sign digest checks (verify-sidecar-windows, verify-windows)"
+else
+	inbox_suite verify-sidecar-windows "$SIDEV" signed jarvis.exe no SIDECAR_BIN=jarvis
+	inbox_suite verify-windows "$INSTV" signed Jarvis-Setup.exe no
 fi
 
 echo

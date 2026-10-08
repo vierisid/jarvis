@@ -193,11 +193,12 @@ jobs:
           retention-days: 1
 
   # ─── Windows: Authenticode via Cloud KMS ────────────────────────
-  # The only job here that holds id-token. It builds nothing: it verifies the
-  # installer build-windows reported, signs it with scripts/sign-windows.sh
-  # (whose jsign download is checksum-pinned), and uploads the result as
-  # installer-win32-x64 -- signed, or unsigned when signing is not
-  # configured, exactly as before.
+  # The only job here that holds id-token. It builds nothing and installs
+  # nothing: it verifies the installer build-windows reported, signs it with
+  # scripts/sign-windows.sh (whose jsign download is checksum-pinned), and
+  # uploads the result as installer-win32-x64 -- signed, or unsigned when
+  # signing is not configured, exactly as before. The post-sign check runs
+  # in verify-windows (#817).
   sign-windows:
     needs: [resolve, build-windows]
     if: needs.resolve.outputs.should_release == 'true'
@@ -210,19 +211,27 @@ jobs:
       id-token: write
     outputs:
       sha256: ${{ steps.digest.outputs.sha256 }}
+      # Whether the signing step ran, so verify-windows knows whether there
+      # is a signature to check (an unconfigured signer ships unsigned).
+      signed: ${{ steps.winsign.outputs.ready }}
     steps:
       # For scripts/sign-windows.sh and the committed certificate chain.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
+      # Into a directory of its own, never the checkout (#817 review): an
+      # artifact is a zip any job in this run can write, and extracted over
+      # sidecar/ it could replace scripts/sign-windows.sh before that runs
+      # with the KMS token.
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: unsigned-installer-win32-x64
-          path: sidecar
+          path: ${{ runner.temp }}/unsigned
 
       # The digest travels as a job output, which only build-windows can set;
-      # the artifact store is writable by every job in this run.
+      # the artifact store is writable by every job in this run. Exactly one
+      # regular file, that digest, and only then a copy into place.
       - name: Verify the installer
         working-directory: sidecar
         env:
@@ -230,14 +239,13 @@ jobs:
         run: |
           set -euo pipefail
           [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-windows reported no digest"; exit 1; }
-          echo "${SHA256}  Jarvis-Setup.exe" | sha256sum -c -
-
-      # osslsigncode: post-sign verification inside sign-windows.sh
-      - name: Install osslsigncode
-        run: |
-          set -euo pipefail
-          sudo apt-get update
-          sudo apt-get install -y osslsigncode
+          in="${RUNNER_TEMP}/unsigned"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/Jarvis-Setup.exe" ] || [ -L "${in}/Jarvis-Setup.exe" ] || [ ! -f "${in}/Jarvis-Setup.exe" ]; then
+            echo "::error::the unsigned-installer-win32-x64 artifact is not exactly one file, Jarvis-Setup.exe"
+            exit 1
+          fi
+          echo "${SHA256}  ${in}/Jarvis-Setup.exe" | sha256sum -c -
+          install -m 0644 "${in}/Jarvis-Setup.exe" Jarvis-Setup.exe
 
       # Windows signing needs BOTH the KMS keyring variable AND the issued
       # certificate chain in the repo. They arrive at DIFFERENT times: the
@@ -275,6 +283,9 @@ jobs:
           # did for the sidecar).
           create_credentials_file: false
 
+      # --defer-verify (#817): the check needs osslsigncode, an apt package,
+      # and apt maintainer scripts run as root beside this job's OIDC token.
+      # verify-windows runs it instead, and publish waits for it.
       - name: Sign installer (Cloud KMS)
         if: steps.winsign.outputs.ready == 'true'
         working-directory: sidecar
@@ -282,14 +293,7 @@ jobs:
           GCP_ACCESS_TOKEN: ${{ steps.gcp-auth.outputs.access_token }}
           GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
           GCP_KMS_KEY_ALIAS: ${{ vars.GCP_KMS_KEY_ALIAS }}
-          # Asserted post-sign: the installer must carry OUR publisher — the
-          # same identity it then pins in the payloads it downloads.
-          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
-          # Sectigo's roots are publicly trusted, so demand the FULL
-          # verification (osslsigncode exit 0). This is the script's default
-          # too; stated here so the release posture is visible at the workflow.
-          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
-        run: scripts/sign-windows.sh Jarvis-Setup.exe
+        run: scripts/sign-windows.sh --defer-verify Jarvis-Setup.exe
 
       # The SIGNED installer's digest: signing changes the bytes, and publish
       # takes the artifact only by this.
@@ -303,6 +307,72 @@ jobs:
           name: installer-win32-x64
           path: sidecar/Jarvis-Setup.exe
           if-no-files-found: error
+
+  # --- Windows: post-sign verification (no OIDC) ---
+  # #817. The check needs osslsigncode, which comes from apt, and apt runs
+  # package maintainer scripts as root: in sign-windows they ran beside the
+  # Workload Identity token, so a mirror or archive compromise reached the
+  # KMS signing identity. Here nothing can mint a token. The installer is
+  # taken by the digest sign-windows reported, which is also what publish
+  # checks, so what is verified here is what ships; and publish waits for
+  # this job. sign-windows.sh --verify-only fails when osslsigncode is
+  # missing, so dropping the install cannot turn into a skipped check.
+  verify-windows:
+    needs: [resolve, sign-windows]
+    if: needs.resolve.outputs.should_release == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # For scripts/sign-windows.sh.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Outside the checkout, as in sign-windows: extracted over sidecar/, an
+      # artifact could replace the script that does the checking.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: installer-win32-x64
+          path: ${{ runner.temp }}/signed
+
+      - name: Verify the signed installer digest
+        env:
+          SHA256: ${{ needs.sign-windows.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::sign-windows reported no digest"; exit 1; }
+          in="${RUNNER_TEMP}/signed"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/Jarvis-Setup.exe" ] || [ -L "${in}/Jarvis-Setup.exe" ] || [ ! -f "${in}/Jarvis-Setup.exe" ]; then
+            echo "::error::the installer-win32-x64 artifact is not exactly one file, Jarvis-Setup.exe"
+            exit 1
+          fi
+          echo "${SHA256}  ${in}/Jarvis-Setup.exe" | sha256sum -c -
+
+      - name: Install osslsigncode
+        if: needs.sign-windows.outputs.signed == 'true'
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y osslsigncode
+
+      - name: Verify the Authenticode signature
+        if: needs.sign-windows.outputs.signed == 'true'
+        working-directory: sidecar
+        env:
+          # The installer must carry OUR publisher: the same identity it then
+          # pins in the payloads it downloads.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          # Sectigo's roots are publicly trusted, so demand the FULL
+          # verification (osslsigncode exit 0), and a check that runs at all.
+          # This is the script's default too; stated here so the release
+          # posture is visible at the workflow.
+          SIGN_REQUIRE_TRUSTED_CHAIN: "1"
+        run: |
+          if [ -z "${SIGNING_PUBLISHER_CN}" ]; then
+            echo "::warning::SIGNING_PUBLISHER_CN repo variable is unset -- the signature's publisher will not be asserted."
+          fi
+          scripts/sign-windows.sh --verify-only "${RUNNER_TEMP}/signed/Jarvis-Setup.exe"
 
   # ─── macOS: universal binary → Install Jarvis.app → signed DMG ──
   build-macos:
@@ -445,7 +515,7 @@ jobs:
 
   # ─── Publish ───────────────────────────────────────────────────
   publish:
-    needs: [resolve, sign-windows, build-macos]
+    needs: [resolve, sign-windows, verify-windows, build-macos]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
     permissions:
