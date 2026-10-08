@@ -9,6 +9,7 @@
  */
 
 import { modelExecEnv } from '../util/model-exec-env.ts';
+import { WSLBridge, windowsSystemExe } from '../actions/terminal/wsl-bridge.ts';
 
 type NotifyMethod = 'notify-send' | 'powershell' | null;
 
@@ -27,10 +28,13 @@ function detectMethod(): NotifyMethod {
     }
   } catch { /* continue */ }
 
-  // Try PowerShell (WSL2 → Windows toast)
+  // Try PowerShell (WSL2 → Windows toast): the System32 one, under WSL only.
+  // It used to be `which powershell.exe`, then a bare `powershell.exe`, so
+  // whichever came first on PATH ran -- and WSL's PATH puts the user's own
+  // bin dirs and third-party Windows dirs ahead of System32 (#896).
   try {
-    const result = Bun.spawnSync(['which', 'powershell.exe']);
-    if (result.exitCode === 0) {
+    if (WSLBridge.isWSL()) {
+      windowsSystemExe('powershell.exe');
       method = 'powershell';
       console.log('[DesktopNotify] Using PowerShell toasts');
       return method;
@@ -128,7 +132,7 @@ export function buildNotifySendArgs(
 }
 
 function sendViaPowerShell(title: string, body: string): Bun.Subprocess<'ignore', 'ignore', 'ignore'> {
-  return Bun.spawn(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', buildPowerShellToastScript(title, body)], {
+  return Bun.spawn([windowsSystemExe('powershell.exe'), '-NoProfile', '-NonInteractive', '-Command', buildPowerShellToastScript(title, body)], {
     stdin: 'ignore',
     stdout: 'ignore',
     stderr: 'ignore',

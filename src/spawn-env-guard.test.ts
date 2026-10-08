@@ -112,7 +112,10 @@ const EXEMPT: Record<string, Exemption> = {
     // instead of a process.env spread, so it is no longer unsanitized. #802
     // swapped the three execFileSync calls (screencapture, scrot, import) one
     // for one for an awaited, bounded Bun.spawn at the same sites, inheriting
-    // the env as before, so the count is unchanged.
+    // the env as before, so the count is unchanged. #896 swapped the WSL
+    // clipboard's execSync('powershell.exe ...') and execSync('clip.exe') for
+    // an execFileSync of the absolute System32 path, one for one, env as
+    // before, so those counts are unchanged too.
     calls: { localClipboardRead: 5, localClipboardWrite: 5, 'localCaptureScreen/<anonymous>': 3 },
   },
   'comms/desktop-notify.ts': {
@@ -120,7 +123,9 @@ const EXEMPT: Record<string, Exemption> = {
       'notify-send and `which`; need the session env (DBUS_SESSION_BUS_ADDRESS). NOT a fixed command ' +
       'line: the title and body can be workflow- or model-authored, and reach notify-send as positional ' +
       'argv after `--` (#515). The PowerShell toast is in MODEL_EXEC.',
-    calls: { detectMethod: 2, sendViaNotifySend: 1 },
+    // detectMethod was 2: its second `which` looked for powershell.exe on
+    // PATH, and #896 replaced it with a System32 lookup that spawns nothing.
+    calls: { detectMethod: 1, sendViaNotifySend: 1 },
   },
   'actions/app-control/native-exec.ts': {
     reason: '`runNative` is the injected exec seam, a name match rather than a real spawn. The real one, defaultExec, is in MODEL_EXEC.',

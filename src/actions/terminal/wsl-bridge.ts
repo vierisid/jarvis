@@ -1,8 +1,123 @@
 import type { CommandResult } from './executor.ts';
-import { readFileSync, existsSync } from 'node:fs';
+import { readFileSync, existsSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { sanitizedEnv, type ExtraEnv } from '../../util/subprocess-env.ts';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
+
+/** The Windows programs the daemon runs from WSL, and where each lives under the Windows directory. */
+const WINDOWS_SYSTEM_EXES = {
+  'cmd.exe': ['System32', 'cmd.exe'],
+  'clip.exe': ['System32', 'clip.exe'],
+  'powershell.exe': ['System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe'],
+} as const;
+export type WindowsSystemExe = keyof typeof WINDOWS_SYSTEM_EXES;
+
+/** /proc/mounts escapes space, tab, newline and backslash in a path as \ooo. */
+function unescapeMountField(field: string): string {
+  return field.replace(/\\([0-7]{3})/g, (_, oct: string) => String.fromCharCode(parseInt(oct, 8)));
+}
+
+/**
+ * Where each whole Windows drive is mounted, read from the kernel's mount
+ * table: a drvfs mount (9p on WSL2, drvfs on WSL1) whose source is a drive
+ * root, `C:\`. Mounts of a folder on a drive (Docker Desktop's
+ * `C:\Program Files\Docker\...`) are not drive roots and are skipped.
+ *
+ * One mount per drive, the first listed (#896 review): the automount happens
+ * as the distro starts, so it is listed before anything mounted later -- and
+ * a mount another distro makes under the shared /mnt/wsl shows up here too,
+ * with whatever source string it was given. Nothing under /mnt/wsl is taken.
+ * C: first, then the rest in drive order.
+ *
+ * @internal Exported for wsl-bridge.test.ts.
+ */
+export function drvfsDriveRoots(mounts: string): Array<{ drive: string; mountPoint: string }> {
+  const roots = new Map<string, string>();
+  for (const line of mounts.split('\n')) {
+    const [source, rawMountPoint, fsType] = line.split(' ');
+    if (!source || !rawMountPoint || !fsType) continue;
+    if (fsType !== '9p' && fsType !== 'drvfs') continue;
+    const drive = /^([A-Za-z]):\\?$/.exec(unescapeMountField(source))?.[1]?.toUpperCase();
+    if (!drive || roots.has(drive)) continue;
+    const mountPoint = unescapeMountField(rawMountPoint);
+    if (mountPoint === '/mnt/wsl' || mountPoint.startsWith('/mnt/wsl/')) continue;
+    roots.set(drive, mountPoint);
+  }
+  const rank = (drive: string) => (drive === 'C' ? 0 : 1);
+  return [...roots].map(([drive, mountPoint]) => ({ drive, mountPoint }))
+    .sort((a, b) => rank(a.drive) - rank(b.drive) || a.drive.localeCompare(b.drive));
+}
+
+let windowsDirForTests: string | null = null;
+let mountTableForTests: string | null = null;
+
+/** @internal Test only: use `dir` as the Windows directory (null restores the mount table). */
+export function __setWindowsDirForTests(dir: string | null): void {
+  windowsDirForTests = dir;
+}
+
+/** @internal Test only: read this text instead of /proc/self/mounts (null restores it). */
+export function __setMountTableForTests(text: string | null): void {
+  mountTableForTests = text;
+}
+
+function isFile(path: string): boolean {
+  try {
+    return statSync(path).isFile();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The absolute path of a Windows system program, found under the Windows
+ * directory of a mounted drive rather than through PATH (#896).
+ *
+ * WSL appends the Windows PATH to the distro's, so a bare `powershell.exe`
+ * runs the first one on that combined list, and System32 is not near the
+ * front of it: measured on a stock WSL2 install, PATH put ~/.local/bin,
+ * ~/.bun/bin, the usual Linux dirs and six third-party Windows dirs (Microsoft
+ * MPI, four Razer SDK dirs, the WSL app package) ahead of
+ * /mnt/c/Windows/system32. A `powershell.exe` or `clip.exe` placed in any of
+ * those would be the one that ran, and saw the clipboard or the script.
+ *
+ * The system drive's own mount is the anchor instead: the mount table comes
+ * from the kernel, and the Windows directory on the system drive is writable
+ * only by an administrator.
+ *
+ * Which drive is the system drive is decided once, by the kernel image
+ * (Windows\System32\ntoskrnl.exe), C: first; the program is then taken from
+ * that drive or not at all (#896 review). Looking for the program itself on
+ * every drive in turn would let a drive where anyone can create folders -- a
+ * second NTFS volume's root, a FAT/exFAT stick -- supply it whenever the
+ * system drive's copy was missing. A non-C system drive is still found when
+ * C: holds no Windows at all; a drive lettered before it that plants a
+ * kernel image could then win, which is a machine whose drive letters an
+ * attacker already chose. Throws when there is no system drive or the program
+ * is not on it, which means interop is not usable and nothing should run.
+ */
+export function windowsSystemExe(name: WindowsSystemExe, mounts?: string): string {
+  const rel = WINDOWS_SYSTEM_EXES[name];
+  if (windowsDirForTests !== null) return join(windowsDirForTests, ...rel);
+  let table = mounts ?? mountTableForTests ?? undefined;
+  if (table === undefined) {
+    try {
+      table = readFileSync('/proc/self/mounts', 'utf-8');
+    } catch {
+      table = '';
+    }
+  }
+  const system = drvfsDriveRoots(table).find(({ mountPoint }) => isFile(join(mountPoint, 'Windows', 'System32', 'ntoskrnl.exe')));
+  if (!system) {
+    throw new Error(`${name} was not run: no mounted drive holds a Windows installation (Windows\\System32\\ntoskrnl.exe)`);
+  }
+  const candidate = join(system.mountPoint, 'Windows', ...rel);
+  if (!isFile(candidate)) {
+    throw new Error(`${name} was not run: it is not in the Windows directory of the system drive ${system.drive}:`);
+  }
+  return candidate;
+}
 
 /**
  * Longest `-Command` argument runPowerShell hands powershell.exe. A Windows
@@ -83,7 +198,7 @@ export class WSLBridge {
     }
 
     try {
-      return await runArgv(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', buildPowerShellCommand(script)]);
+      return await runArgv([windowsSystemExe('powershell.exe'), '-NoProfile', '-NonInteractive', '-Command', buildPowerShellCommand(script)]);
     } catch (error) {
       throw new Error(`Failed to run PowerShell script: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -97,7 +212,8 @@ export class WSLBridge {
     // Separate argv elements with no spaces or quotes, so WSL interop passes
     // them through unquoted and cmd.exe expands %USERPROFILE% itself. /d skips
     // AutoRun commands, which could otherwise print ahead of the echo.
-    runArgv(['cmd.exe', '/d', '/c', 'echo', '%USERPROFILE%']).then(res => {
+    // Resolved inside the chain, so a missing cmd.exe lands in the catch.
+    Promise.resolve().then(() => runArgv([windowsSystemExe('cmd.exe'), '/d', '/c', 'echo', '%USERPROFILE%'])).then(res => {
       const path = res.stdout.trim();
 
       if (path && !path.includes('%')) {

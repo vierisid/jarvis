@@ -22,6 +22,7 @@ import { LinuxAppController } from '../actions/app-control/linux.ts';
 import { defaultExec } from '../actions/app-control/native-exec.ts';
 import { launchChrome, stopChrome } from '../actions/browser/chrome-launcher.ts';
 import { sendDesktopNotificationWithReceipt } from '../comms/desktop-notify.ts';
+import { WSLBridge, __setWindowsDirForTests } from '../actions/terminal/wsl-bridge.ts';
 
 const site = process.argv[2]!;
 const workDir = process.argv[3]!;
@@ -94,10 +95,14 @@ switch (site) {
   }
 
   // desktop-notify.ts: the PowerShell toast, an interpreter run for model- or
-  // workflow-authored text (as base64 data since #515). The test puts a fake `which` (no
-  // notify-send, yes powershell.exe) and a fake powershell.exe first on PATH,
-  // which is how this path is chosen on WSL.
+  // workflow-authored text (as base64 data since #515). The test puts a fake
+  // `which` that finds no notify-send first on PATH, and a fake powershell.exe
+  // in <workDir>/Windows, the Windows directory windowsSystemExe is pointed at
+  // here (#896); this process is made to look like WSL, which is how this
+  // path is chosen.
   case 'desktop-notify': {
+    WSLBridge.isWSL = () => true;
+    __setWindowsDirForTests(join(workDir, 'Windows'));
     if (!await sendDesktopNotificationWithReceipt('model title', 'model body')) throw new Error('toast not accepted');
     break;
   }

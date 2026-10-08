@@ -116,9 +116,14 @@ async function runProbe(site: string, fakesFirstOnPath = false): Promise<ProbeRe
   // launcher's kill reaches it.
   const serve = `exec "${process.execPath}" --no-env-file "${FAKE_SERVER}" "$@"`;
   fake(join(binDir, 'fake-chrome'), [...dumpTo(dumpDir, 'chrome'), serve]);
-  // The toast: WSL's view of the machine, no notify-send and a powershell.exe.
-  fake(join(binDir, 'which'), ['case "$1" in powershell.exe) echo "$0"; exit 0;; *) exit 1;; esac']);
-  fake(join(binDir, 'powershell.exe'), [...dumpTo(dumpDir, 'powershell')]);
+  // The toast: WSL's view of the machine, no notify-send, and a powershell.exe
+  // in the Windows directory the probe points windowsSystemExe at (#896). One
+  // planted first on PATH as well, which must not be the one that runs.
+  fake(join(binDir, 'which'), ['exit 1']);
+  const psDir = join(root, 'Windows', 'System32', 'WindowsPowerShell', 'v1.0');
+  mkdirSync(psDir, { recursive: true });
+  fake(join(psDir, 'powershell.exe'), [...dumpTo(dumpDir, 'powershell')]);
+  fake(join(binDir, 'powershell.exe'), [...dumpTo(dumpDir, 'planted-powershell')]);
   const env = userEnv(root);
   if (fakesFirstOnPath) env.PATH = `${binDir}:${env.PATH}`;
 
@@ -220,6 +225,9 @@ describe('model-directed spawns strip the daemon secrets and keep the user env (
   }, 45_000);
 
   test('the PowerShell toast, an interpreter run for model text: sendViaPowerShell', async () => {
-    expectModelExecEnv(await runProbe('desktop-notify', true), 'powershell');
+    const result = await runProbe('desktop-notify', true);
+    expectModelExecEnv(result, 'powershell');
+    // The System32 one ran, not the one first on PATH (#896).
+    expect(result.dumps.map(d => d.name)).not.toContain('planted-powershell');
   }, 45_000);
 });

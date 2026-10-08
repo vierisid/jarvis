@@ -12,10 +12,10 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
+import { execFileSync, execSync } from 'node:child_process';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
-import { WSLBridge } from '../terminal/wsl-bridge.ts';
+import { WSLBridge, windowsSystemExe } from '../terminal/wsl-bridge.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import { checkNavigationUrl } from '../browser/url-policy.ts';
 import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upload-policy.ts';
@@ -668,8 +668,9 @@ function localClipboardRead(): string {
   } else if (WSLBridge.isWSL()) {
     // On WSL the X clipboard (xclip/xsel via WSLg) is NOT the clipboard the
     // user copies/pastes with -- that's the Windows clipboard. Read it through
-    // Windows interop so workflows see what the user actually copied.
-    return execSync('powershell.exe -NoProfile -Command Get-Clipboard', { encoding: 'utf-8' }).replace(/\r\n/g, '\n').trimEnd();
+    // Windows interop so workflows see what the user actually copied. From
+    // System32 by absolute path, never PATH (#896: see windowsSystemExe).
+    return execFileSync(windowsSystemExe('powershell.exe'), ['-NoProfile', '-Command', 'Get-Clipboard'], { encoding: 'utf-8' }).replace(/\r\n/g, '\n').trimEnd();
   } else {
     try {
       return execSync('xclip -selection clipboard -o', { encoding: 'utf-8' });
@@ -689,8 +690,9 @@ function localClipboardWrite(content: string): void {
     // Write to the Windows clipboard via interop. `clip.exe` is the simplest
     // sink and is always present on WSL; it consumes stdin verbatim. (xclip/
     // xsel would only populate the WSLg X clipboard, which Windows apps and
-    // the desktop sidecar's clipboard observer never see.)
-    execSync('clip.exe', { input: content, encoding: 'utf-8' });
+    // the desktop sidecar's clipboard observer never see.) From System32 by
+    // absolute path, never PATH (#896: see windowsSystemExe).
+    execFileSync(windowsSystemExe('clip.exe'), [], { input: content, encoding: 'utf-8' });
   } else {
     try {
       execSync('xclip -selection clipboard', { input: content, encoding: 'utf-8' });
