@@ -112,7 +112,12 @@ const EXEMPT: Record<string, Exemption> = {
     // instead of a process.env spread, so it is no longer unsanitized. #802
     // swapped the three execFileSync calls (screencapture, scrot, import) one
     // for one for an awaited, bounded Bun.spawn at the same sites, inheriting
-    // the env as before, so the count is unchanged.
+    // the env as before, so the count is unchanged. #896 swapped the WSL
+    // clipboard's execSync('powershell.exe ...') and execSync('clip.exe') for
+    // an execFileSync of the absolute System32 path, one for one, env as
+    // before, so those counts are unchanged too. #894 then swapped all ten
+    // clipboard spawns for an awaited, bounded Bun.spawn at the same sites,
+    // env inherited as before: counts unchanged again.
     calls: { localClipboardRead: 5, localClipboardWrite: 5, 'localCaptureScreen/<anonymous>': 3 },
   },
   'comms/desktop-notify.ts': {
@@ -120,7 +125,9 @@ const EXEMPT: Record<string, Exemption> = {
       'notify-send and `which`; need the session env (DBUS_SESSION_BUS_ADDRESS). NOT a fixed command ' +
       'line: the title and body can be workflow- or model-authored, and reach notify-send as positional ' +
       'argv after `--` (#515). The PowerShell toast is in MODEL_EXEC.',
-    calls: { detectMethod: 2, sendViaNotifySend: 1 },
+    // detectMethod was 2: its second `which` looked for powershell.exe on
+    // PATH, and #896 replaced it with a System32 lookup that spawns nothing.
+    calls: { detectMethod: 1, sendViaNotifySend: 1 },
   },
   'actions/app-control/native-exec.ts': {
     reason: '`runNative` is the injected exec seam, a name match rather than a real spawn. The real one, defaultExec, is in MODEL_EXEC.',
@@ -128,8 +135,8 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'actions/app-control/linux.ts': {
     reason:
-      'xdotool/wmctrl/xprop via Bun `$`, and import/scrot via Bun.spawn (for a timeout, #802): ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
-      'argv, escaped by Bun `$` for the shell and placed after `--`, which ends xdotool\'s own option ' +
+      'xdotool/wmctrl/xprop/import/scrot via Bun.spawn (for a timeout, #802 and #895), and `which` via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
+      'argv, with no shell, placed after `--`, which ends xdotool\'s own option ' +
       'parsing; key chords are checked against keysym names first (#518). ' +
       'launchApp, the model-chosen executable, is in MODEL_EXEC.',
     calls: {
@@ -138,6 +145,9 @@ const EXEMPT: Record<string, Exemption> = {
       // longer mints the temp path, mkdtemp does. #802 replaced each `$` there
       // with a Bun.spawn one for one, hence the same counts; so did its review, for
       // the xdotool search and xprop lookups in searchWindowIds and findWindowByPid.
+      // #895 did the same for every remaining `$` but checkTool's `which`
+      // (getActiveWindow, listWindows, clickElement, typeText, pressKeys,
+      // focusWindow), one for one, env inherited as before: counts unchanged.
       'LinuxAppController.captureScreen/<anonymous>': 2,
       'LinuxAppController.captureWindow/<anonymous>': 1,
       'LinuxAppController.checkTool': 1,
@@ -193,7 +203,7 @@ const EXEMPT: Record<string, Exemption> = {
  * -- a model-authored command line, a model-chosen executable, a browser the
  * model drives, or model text reaching an interpreter -- and would break under
  * the allowlist. Tests below also keep the entry points (TerminalExecutor,
- * defaultExec, launchChrome, launchSidecar) out of src/sites and
+ * defaultExec, launchChrome) out of src/sites and
  * src/workflows, and keep the daemon's own restart spawns out of this table:
  * a restarted daemon needs its secrets.
  */
@@ -219,13 +229,6 @@ const MODEL_EXEC: Record<string, Exemption> = {
       'env and hands it to whatever it spawns or opens. Since #521 it refuses local files, so it cannot open ' +
       'file:///proc/self/environ, and keeps Chrome\'s sandbox on unless it cannot start.',
     calls: { launchChrome: 1 },
-  },
-  'actions/app-control/sidecar-launcher.ts': {
-    reason:
-      'launchSidecar: desktop-bridge, which serves launchApp on Windows and hands the launched app its ' +
-      'own environment. (sidecarExecutablePath\'s fixed WSL `cmd.exe /C echo %USERPROFILE%` probe is not ' +
-      'model-directed and uses sanitizedEnv with the #519 WSL interop extras, like wsl-bridge.ts.)',
-    calls: { launchSidecar: 1 },
   },
   'comms/desktop-notify.ts': {
     reason:

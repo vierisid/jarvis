@@ -2,8 +2,8 @@
  * Element Cache -- what a local desktop element id means, and the check every
  * action on one runs (#704).
  *
- * The local desktop path (`desktop.ts` over any AppController, and
- * `DesktopController`'s own snapshot/clickById for the WSL bridge) had the
+ * The local desktop path (`desktop.ts` over any AppController, and, until
+ * #799 removed it, the legacy WSL bridge's own snapshot/clickById) had the
  * defect #661 fixed in the sidecar: an id was a small integer counted from 1 on
  * every walk, resolved against whatever the cache held at action time with no
  * identity or recency check. So an id from an earlier snapshot -- of another

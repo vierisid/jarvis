@@ -41,32 +41,56 @@ const LINUX_TS = new URL('./linux.ts', import.meta.url).href;
 type Action =
   | { op: 'type'; text: string }
   | { op: 'keys'; keys: string[] }
-  | { op: 'activeWindow' };
-type Outcome = { ok: boolean; error?: string; code?: string; effect?: string };
+  | { op: 'activeWindow' }
+  | { op: 'listWindows' }
+  | { op: 'click'; action?: string }
+  | { op: 'focus'; pid: number };
+type Outcome = { ok: boolean; error?: string; code?: string; effect?: string; ms?: number };
+
+const CAPTURE_FILE_TS = new URL('./capture-file.ts', import.meta.url).href;
 
 /**
  * Run LinuxAppController in a child whose PATH is only `binDir` and which has
  * no DISPLAY, so a tool missing from `binDir` cannot fall through to a real
- * one on the machine running the tests. Bun's `$` resolves commands against
- * the PATH the process started with, which is why this is a child and not an
- * in-process PATH swap.
+ * one on the machine running the tests. A spawn without an env resolves
+ * commands against the PATH the process started with (Bun `$` did the same),
+ * which is why this is a child and not an in-process PATH swap.
+ *
+ * `boundMs` shortens CAPTURE_TIMEOUT_MS in the child, and `timed` adds each
+ * action's duration. The child itself is killed past `deadlineMs`, so a call
+ * that never settles fails the test instead of stalling the run.
  */
-async function runController(binDir: string, actions: Action[], env: Record<string, string> = {}): Promise<Outcome[]> {
+async function runController(
+  binDir: string,
+  actions: Action[],
+  env: Record<string, string> = {},
+  opts: { boundMs?: number; timed?: boolean; deadlineMs?: number } = {},
+): Promise<Outcome[]> {
   const script = `
     import { LinuxAppController } from ${JSON.stringify(LINUX_TS)};
+    import { __setCaptureTimeoutForTests } from ${JSON.stringify(CAPTURE_FILE_TS)};
+    ${opts.boundMs !== undefined ? `__setCaptureTimeoutForTests(${opts.boundMs});` : ''}
     const ctrl = new LinuxAppController();
     const out = [];
+    const element = (action) => ({ id: 'e', role: 'button', name: 'OK', value: null,
+      bounds: { x: 10, y: 20, width: 30, height: 40 }, children: [], properties: action ? { action } : {} });
     for (const a of ${JSON.stringify(actions)}) {
+      const started = performance.now();
+      let o;
       try {
         if (a.op === 'type') await ctrl.typeText(a.text);
         else if (a.op === 'activeWindow') await ctrl.getActiveWindow();
+        else if (a.op === 'listWindows') await ctrl.listWindows();
+        else if (a.op === 'click') await ctrl.clickElement(element(a.action));
+        else if (a.op === 'focus') await ctrl.focusWindow(a.pid);
         else await ctrl.pressKeys(a.keys);
-        out.push({ ok: true });
+        o = { ok: true };
       } catch (e) {
-        const o = { ok: false, error: e instanceof Error ? e.message : String(e) };
+        o = { ok: false, error: e instanceof Error ? e.message : String(e) };
         if (e && e.outcome) Object.assign(o, { code: e.outcome.code, effect: e.outcome.effect });
-        out.push(o);
       }
+      ${opts.timed ? 'o.ms = Math.round(performance.now() - started);' : ''}
+      out.push(o);
     }
     console.log('RESULT:' + JSON.stringify(out));
   `;
@@ -76,11 +100,14 @@ async function runController(binDir: string, actions: Action[], env: Record<stri
     stdout: 'pipe',
     stderr: 'pipe',
   });
+  let deadlineHit = false;
+  const deadline = setTimeout(() => { deadlineHit = true; child.kill('SIGKILL'); }, opts.deadlineMs ?? 60_000);
   const [stdout, stderr, exit] = await Promise.all([
     new Response(child.stdout).text(),
     new Response(child.stderr).text(),
     child.exited,
-  ]);
+  ]).finally(() => clearTimeout(deadline));
+  if (deadlineHit) throw new Error(`controller child was still running after ${opts.deadlineMs ?? 60_000}ms and was killed`);
   expect({ exit, stderr: exit === 0 ? '' : stderr }).toEqual({ exit: 0, stderr: '' });
   const line = stdout.split('\n').find((l) => l.startsWith('RESULT:'));
   if (!line) throw new Error(`controller child printed no result:\n${stdout}\n${stderr}`);
@@ -430,6 +457,122 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
     }
     expect(readCalls(binDir)).toEqual([]);
   });
+});
+
+/**
+ * #895: the input and window calls went through Bun `$`, which has no
+ * timeout, so on a wedged X server they never settled. Each now gives up at
+ * the bound, the same SIGKILL-backed one as the captures (#802).
+ *
+ * The fake xdotool answers `search` at once with one window, and otherwise
+ * hangs, as every X request does on a wedged server; xprop answers at once,
+ * so focusWindow gets as far as `windowactivate`. Each call is one the
+ * capture-path fix of #802 did not reach.
+ */
+describe('X calls on a wedged X server give up at the bound (#895)', () => {
+  let dir: string;
+  const BOUND_MS = 300;
+  // By absolute path: the controller child's PATH is only the fakes' dir.
+  const SLEEP = Bun.which('sleep') ?? '/bin/sleep';
+
+  beforeAll(() => {
+    dir = mkdtempSync(join(tmpdir(), 'jarvis-wedged-x-'));
+    const script = (body: string[]) => ['#!/bin/sh', ...body, ''].join('\n');
+    writeFileSync(join(dir, 'xdotool'), script([
+      `printf '%s\\n' "$*" >> '${join(dir, 'calls')}'`,
+      'if [ "$1" = search ]; then echo 4242; exit 0; fi',
+      // Longer than any bound here, short enough not to linger if the
+      // controller under test never kills it.
+      `exec '${SLEEP}' 5`,
+    ]));
+    writeFileSync(join(dir, 'xprop'), script(["echo '_NET_WM_PID(CARDINAL) = 42'"]));
+    for (const tool of ['xdotool', 'xprop']) chmodSync(join(dir, tool), 0o755);
+  });
+
+  afterAll(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  test('getActiveWindow, listWindows, clickElement, typeText, pressKeys and focusWindow each fail at the bound', async () => {
+    rmSync(join(dir, 'calls'), { force: true });
+    const actions: Action[] = [
+      { op: 'activeWindow' },
+      { op: 'listWindows' },
+      { op: 'click' },
+      { op: 'click', action: 'double_click' },
+      { op: 'type', text: 'abc' },
+      { op: 'keys', keys: ['ctrl', 's'] },
+      { op: 'focus', pid: 42 },
+    ];
+    const outcomes = await runController(dir, actions, {}, { boundMs: BOUND_MS, timed: true, deadlineMs: 30_000 });
+
+    expect(outcomes).toHaveLength(actions.length);
+    for (const [i, o] of outcomes.entries()) {
+      expect({ i, ok: o.ok }).toEqual({ i, ok: false });
+      expect(o.error).toMatch(/did not finish within [\d.]+s and was stopped/);
+      // At the bound, not long after it: the hung child is killed, not waited for.
+      expect(o.ms!).toBeGreaterThanOrEqual(BOUND_MS - 50);
+      expect(o.ms!).toBeLessThan(BOUND_MS + 2_500);
+    }
+    // A stopped type or key press says what it may have left behind (#895 review).
+    const midInput = /Some of the input may already have been sent, and a key may still be held down\.$/;
+    expect(outcomes.map((o) => midInput.test(o.error!))).toEqual([false, false, false, false, true, true, false]);
+    // Each hung on the X call it was meant to, not on something before it.
+    const calls = readFileSync(join(dir, 'calls'), 'utf-8').trim().split('\n');
+    expect(calls).toEqual([
+      'getactivewindow',
+      'search --name .', 'getactivewindow',
+      'mousemove 25 40',
+      'mousemove 25 40',
+      'type --clearmodifiers -- abc',
+      'key --clearmodifiers -- ctrl+s+',
+      'search --name .', 'windowactivate 4242',
+    ]);
+  }, 40_000);
+
+  test('listWindows gives up on a hung per-window lookup at once, instead of once per window', async () => {
+    // Pinned against dropping the CaptureTimeoutError rethrow in listWindows's
+    // per-window catch (#895 review): every other X call here answers, xprop
+    // hangs, and there are three windows. Skipping the hung one and moving on
+    // would cost the bound three times and make three xprop calls.
+    const perWindow = mkdtempSync(join(tmpdir(), 'jarvis-wedged-xprop-'));
+    try {
+      const log = join(perWindow, 'calls');
+      writeFileSync(join(perWindow, 'xdotool'), ['#!/bin/sh',
+        `printf 'xdotool %s\\n' "$*" >> '${log}'`,
+        'case "$1" in search) printf "1\\n2\\n3\\n";; getactivewindow) echo 1;; *) echo "Position: 0,0";; esac', ''].join('\n'));
+      writeFileSync(join(perWindow, 'xprop'), ['#!/bin/sh', `printf 'xprop %s\\n' "$*" >> '${log}'`, `exec '${SLEEP}' 5`, ''].join('\n'));
+      for (const tool of ['xdotool', 'xprop']) chmodSync(join(perWindow, tool), 0o755);
+
+      const [outcome] = await runController(perWindow, [{ op: 'listWindows' }], {}, { boundMs: BOUND_MS, timed: true, deadlineMs: 30_000 });
+
+      expect(outcome).toMatchObject({ ok: false });
+      expect(outcome!.error).toMatch(/xprop did not finish within 0\.3s and was stopped/);
+      expect(outcome!.ms!).toBeLessThan(BOUND_MS + 2_500);
+      expect(readFileSync(log, 'utf-8').trim().split('\n').filter((l) => l.startsWith('xprop'))).toEqual(['xprop -id 1']);
+    } finally {
+      rmSync(perWindow, { recursive: true, force: true });
+    }
+  }, 40_000);
+
+  test('typing gets more time per character, so a long text is not cut off at the base bound', async () => {
+    // TYPE_MS_PER_CHAR (26) on top of the bound: 100 characters may run
+    // 300 + 2600 ms. A fake that types for 1.5 s must finish, not be stopped.
+    const slow = mkdtempSync(join(tmpdir(), 'jarvis-slow-type-'));
+    try {
+      writeFileSync(join(slow, 'xdotool'), ['#!/bin/sh', `exec '${SLEEP}' 1.5`, ''].join('\n'));
+      chmodSync(join(slow, 'xdotool'), 0o755);
+      const [long, short] = await runController(slow, [{ op: 'type', text: 'x'.repeat(100) }, { op: 'type', text: 'x' }], {},
+        { boundMs: BOUND_MS, timed: true, deadlineMs: 30_000 });
+      expect(long).toMatchObject({ ok: true });
+      // The same fake, with one character's allowance, is stopped: the extra
+      // time is what let the long one through.
+      expect(short).toMatchObject({ ok: false });
+      expect(short!.error).toMatch(/did not finish within 0\.326s and was stopped/);
+    } finally {
+      rmSync(slow, { recursive: true, force: true });
+    }
+  }, 40_000);
 });
 
 describe('an id that xdotool did not give us is never interpolated', () => {
