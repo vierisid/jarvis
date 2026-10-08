@@ -260,6 +260,15 @@ export type UseVoiceOptions = {
    */
   getCurrentRoom?: () => string | null;
   /**
+   * The id of the approval a spoken "yes" or "no" would answer: the newest
+   * pending approval the dashboard is showing, or null when it shows none
+   * (#809). Read when recording STARTS, which is when the person has just read
+   * the card, and sent with the finished utterance as `shownApprovalId`; the
+   * daemon decides nothing unless that is still the newest pending approval,
+   * so a request arriving while they speak is not the one approved.
+   */
+  getShownApprovalId?: () => string | null;
+  /**
    * Trailing cooldown (ms) applied after a `containsWake` speaking turn
    * exits, before the wake recognizer is allowed to re-arm. Prevents
    * trailing TTS speaker audio from self-triggering. Hardware echo on
@@ -309,7 +318,7 @@ export type UseVoiceReturn = {
   forceIdle: () => void;
 };
 
-export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = false, wakeEngine = "openwakeword", getCurrentRoom, speakingTailCooldownMs = 700, errorFlashMs = 3000 }: UseVoiceOptions): UseVoiceReturn {
+export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = false, wakeEngine = "openwakeword", getCurrentRoom, getShownApprovalId, speakingTailCooldownMs = 700, errorFlashMs = 3000 }: UseVoiceOptions): UseVoiceReturn {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [isMicAvailable, setIsMicAvailable] = useState(false);
   const [isWakeWordReady, setIsWakeWordReady] = useState(false);
@@ -325,6 +334,12 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   // current recording. When present, we prefer this over uploading WAV for
   // daemon Whisper because it's typically more accurate for short utterances.
   const finalBrowserTranscriptRef = useRef("");
+  // #809: the approval on screen when this recording started (see
+  // getShownApprovalId). undefined when the caller cannot say, which the
+  // daemon treats differently from null ("none shown").
+  const getShownApprovalIdRef = useRef(getShownApprovalId);
+  getShownApprovalIdRef.current = getShownApprovalId;
+  const shownApprovalIdRef = useRef<string | null | undefined>(undefined);
 
   const recordingContextRef = useRef<AudioContext | null>(null);
   const recordingSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -1237,12 +1252,14 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // daemon's classifier can disambiguate utterances that read both as
     // chat questions and as room actions ("show me active tasks").
     const currentRoom = getCurrentRoom?.() ?? "home";
+    // #809: captured when this recording started; undefined is left out.
+    const shownApprovalId = shownApprovalIdRef.current;
 
     if (browserText) {
       const requestId = uuid();
       ws.send(JSON.stringify({
         type: "voice_text",
-        payload: { requestId, text: browserText, currentRoom },
+        payload: { requestId, text: browserText, currentRoom, shownApprovalId },
         timestamp: Date.now(),
       }));
       pcmChunksRef.current = [];
@@ -1265,7 +1282,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // hosted plan excludes realtime) — the standard STT pipeline handles it.
     ws.send(JSON.stringify({
       type: "voice_start",
-      payload: { requestId, currentRoom, mode: "wav" },
+      payload: { requestId, currentRoom, mode: "wav", shownApprovalId },
       timestamp: Date.now(),
     }));
 
@@ -1319,6 +1336,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   const startRecordingInternal = useCallback(async (autoStop = false) => {
     if (voiceStateRef.current === "recording") return;
     autoStopRef.current = autoStop;
+    // #809: what the person just read, before they say anything.
+    shownApprovalIdRef.current = getShownApprovalIdRef.current?.();
 
     // Premium realtime path: stream continuous 24kHz PCM instead of buffering
     // a WAV. No client-side silence auto-stop — the server's VAD handles

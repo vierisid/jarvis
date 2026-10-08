@@ -20,7 +20,7 @@ import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
 import { approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
-import { approvalIntentFields, formatApprovalIntent } from '../authority/approval-delivery.ts';
+import { approvalIntentFields, approvalIntentParts, boundedApprovalLabel, formatApprovalIntent } from '../authority/approval-delivery.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -61,7 +61,80 @@ type VoiceSession = {
   startedAt: number;
   /** Phase 6.7.C — current Room key (or "home") at utterance start. */
   currentRoom?: string;
+  /** The approval the dashboard showed when the person started speaking (#809, `shownApprovalIdFrom`). */
+  shownApprovalId?: string | null;
 };
+
+/**
+ * The approval a voice utterance answers (#809): the id of the newest pending
+ * approval the dashboard was showing when the person started speaking, as the
+ * client sends it on `voice_start` / `voice_text`. `null` means it showed none;
+ * `undefined` means the client did not say (an older dashboard), which is not
+ * the same thing and is refused for a decision, since nothing tells us which
+ * request the person read.
+ */
+export function shownApprovalIdFrom(payload: unknown): string | null | undefined {
+  const value = (payload as { shownApprovalId?: unknown } | null | undefined)?.shownApprovalId;
+  if (value === null) return null;
+  return typeof value === 'string' && value.length > 0 ? value : undefined;
+}
+
+/** How much of an approval's sentence a spoken-approval reply quotes; nothing is decided on this text. */
+const VOICE_APPROVAL_LABEL_MAX_CHARS = 160;
+
+/**
+ * What will happen, as a voice reply names it: the card's sentence, never the
+ * engine's reason (#809). The reply is an assistant message the dashboard
+ * renders as markdown, and the sentence carries values a model or a workflow
+ * chose, so it is quoted as an inline code span (#809 review), where markdown
+ * interprets nothing: `![](https://x/p.png)` must read as those characters,
+ * not load an image beside text Jarvis is saying, `**safe, say yes**` must not
+ * turn bold, and a bare URL must not become a link. Backslash-escaping was
+ * tried first and is not enough: GFM still autolinks an escaped URL. The fence
+ * is one backtick longer than any run inside, and the one space padding each
+ * side is what CommonMark strips, so the span shows the sentence exactly.
+ */
+function voiceApprovalLabel(request: ApprovalRequest): string {
+  const label = boundedApprovalLabel(approvalIntentParts(request).action, VOICE_APPROVAL_LABEL_MAX_CHARS) || request.tool_name;
+  const longestRun = Math.max(0, ...(label.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = '`'.repeat(longestRun + 1);
+  return `${fence} ${label} ${fence}`;
+}
+
+/**
+ * Why a spoken yes or no decided nothing (#809), or null when it may go ahead:
+ * the newest pending approval must be the one the dashboard showed when the
+ * person started speaking. Otherwise a request that arrived while they were
+ * answering would be the one decided -- "yes" bound by position, not by what
+ * they read.
+ *
+ * Every message says that nothing was decided, names what is now newest, and,
+ * where it is still waiting, the one they were answering, so a refusal reads
+ * as "a different request arrived" and not as a failure. None of them says
+ * "say yes again": the dashboard now shows the new request on top, so a second
+ * yes would answer THAT one.
+ */
+export function voiceApprovalMismatch(
+  decision: 'approve' | 'cancel',
+  newest: ApprovalRequest,
+  shownApprovalId: string | null | undefined,
+  shown: ApprovalRequest | null,
+): string | null {
+  if (shownApprovalId === newest.id) return null;
+  const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
+  const latest = voiceApprovalLabel(newest);
+  if (shownApprovalId === undefined) {
+    return `I couldn't tell which request was on your screen when you started speaking, so ${nothing}. Waiting for you: ${latest}. Decide it on its card.`;
+  }
+  if (shownApprovalId === null) {
+    // Nothing on screen: none had arrived yet, or the dashboard was hidden.
+    return `No approval was on your screen when you started speaking, so ${nothing}. Waiting for you: ${latest}. Decide it on its card.`;
+  }
+  if (shown && shown.status === 'pending') {
+    return `A new request arrived while you were answering, so ${nothing}. The one you were looking at is still waiting: ${voiceApprovalLabel(shown)}. The new one: ${latest}. Decide each on its card.`;
+  }
+  return `The request you were looking at has already been decided or has expired, so ${nothing}. Another one is waiting: ${latest}. Decide it on its card.`;
+}
 
 /**
  * A voice utterance that's been STT'd but is held pending user confirmation
@@ -968,11 +1041,12 @@ export class WebSocketService implements Service {
         // that case the utterance is complete and processing starts now.
         const buffered = this.pendingVoiceFrames.get(ws);
         this.pendingVoiceFrames.delete(ws);
-        const session = {
+        const session: VoiceSession = {
           requestId,
           chunks: buffered?.chunks ?? [],
           startedAt: Date.now(),
           currentRoom,
+          shownApprovalId: shownApprovalIdFrom(msg.payload),
         };
         if (buffered?.ended) {
           this.handleVoiceSession(session, ws).catch(err =>
@@ -1013,7 +1087,7 @@ export class WebSocketService implements Service {
         // we don't double-process the same utterance.
         this.voiceSessions.delete(ws);
         if (!text) return undefined;
-        this.processVoiceTranscript(text, requestId, ws, currentRoom).catch(err =>
+        this.processVoiceTranscript(text, requestId, ws, currentRoom, shownApprovalIdFrom(payload)).catch(err =>
           console.error('[WSService] voice_text pipeline error:', err)
         );
         return undefined;
@@ -2011,7 +2085,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     try {
       const transcript = await this.sttProvider.transcribe(audioBuffer);
       if (!transcript.trim()) return;
-      await this.processVoiceTranscript(transcript, session.requestId, ws, session.currentRoom);
+      await this.processVoiceTranscript(transcript, session.requestId, ws, session.currentRoom, session.shownApprovalId);
     } catch (err) {
       console.error('[WSService] Voice session error:', err);
       const message = err instanceof Error ? err.message : 'Voice processing failed';
@@ -2087,9 +2161,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     requestId: string,
     ws: ServerWebSocket<unknown>,
     currentRoom?: string,
+    shownApprovalId?: string | null,
   ): Promise<void> {
     // The person speaking: the intent classifier and any turn it hands to chat.
-    return runWithOrigin('user', () => this.processVoiceTranscriptTurn(transcript, requestId, ws, currentRoom));
+    return runWithOrigin('user', () => this.processVoiceTranscriptTurn(transcript, requestId, ws, currentRoom, shownApprovalId));
   }
 
   private async processVoiceTranscriptTurn(
@@ -2097,6 +2172,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     requestId: string,
     ws: ServerWebSocket<unknown>,
     currentRoom?: string,
+    shownApprovalId?: string | null,
   ): Promise<void> {
     const trimmed = transcript.trim();
     if (!trimmed) return;
@@ -2250,9 +2326,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (route === 'act' && intent.confirmation_response) {
       const decision = intent.confirmation_response;
       try {
-        const resolved = await this.resolveLatestPendingByVoice(decision, intent.confidence);
+        const resolved = await this.resolveLatestPendingByVoice(decision, intent.confidence, shownApprovalId);
         if (resolved) {
-          if (resolved.kind === 'gated') {
+          if (resolved.kind === 'refused') {
+            // In the thread, where the person reads replies: nothing was
+            // decided, and which request is waiting (#809).
+            this.broadcastAssistantAck(resolved.message, requestId);
+          } else if (resolved.kind === 'gated') {
             this.broadcastVoiceApprovalGated(resolved.label, resolved.message, requestId);
           } else {
             const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
@@ -2326,13 +2406,30 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    *
    * Returns null when nothing is pending so the caller can fall through to
    * the chat agent (so "yes" still means "yes, I agree" in conversation).
+   *
+   * An approval is decided only when it is the one the person was answering
+   * (#809): `shownApprovalId` is the newest pending approval the dashboard
+   * showed when they started speaking (`shownApprovalIdFrom`), and the newest
+   * pending approval now must be that one. This used to resolve whatever was
+   * newest at the moment the transcript arrived, so a request that came in
+   * while the person was saying "yes" was the one approved, and the reply
+   * named it by the engine's reason ("execute_command requires user
+   * approval"), so nothing told them it was not what they had read. A
+   * mismatch is `refused`, with a message saying nothing was decided and what
+   * is waiting (`voiceApprovalMismatch`).
+   *
+   * The same holds when the approval they were answering has gone and nothing
+   * else is pending: their "yes" was not about a clarifier or a repeat-back,
+   * so it confirms neither.
    */
   async resolveLatestPendingByVoice(
     decision: 'approve' | 'cancel',
     confidence = 1,
+    shownApprovalId?: string | null,
   ): Promise<
     | { kind: 'approval' | 'clarifier' | 'repeat_back'; label: string }
     | { kind: 'gated'; label: string; message: string }
+    | { kind: 'refused'; message: string }
     | null
   > {
     // 1. Pending approvals — newest first.
@@ -2340,7 +2437,26 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       const pending = this.approvalManager.getPending();
       if (pending.length > 0) {
         const latest = pending.reduce((a, b) => (a.created_at > b.created_at ? a : b));
-        const label = (latest.reason && latest.reason.trim()) || latest.tool_name;
+        const label = voiceApprovalLabel(latest);
+
+        const shown = typeof shownApprovalId === 'string' ? this.approvalManager.getRequest(shownApprovalId) : null;
+        const mismatch = voiceApprovalMismatch(decision, latest, shownApprovalId, shown);
+        if (mismatch) {
+          // Nothing decided; logged like a gated reply so a refused voice
+          // decision is forensically visible against the request it did not
+          // touch.
+          this.auditTrail?.log({
+            agent_id: latest.agent_id,
+            agent_name: latest.agent_name,
+            tool_name: latest.tool_name,
+            action_category: latest.action_category as ActionCategory,
+            authority_decision: 'approval_required',
+            approval_id: latest.id,
+            executed: false,
+            channel: 'voice',
+          });
+          return { kind: 'refused', message: mismatch };
+        }
 
         // Two-tier safety: destructive impacts never resolve by voice;
         // non-destructive require confidence ≥ 0.85. Gate decision is a
@@ -2416,6 +2532,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         const updated = this.approvalManager.getRequest(latest.id);
         if (updated) this.broadcastApprovalUpdate(updated);
         return { kind: 'approval', label };
+      }
+      if (typeof shownApprovalId === 'string') {
+        // They were answering an approval that is no longer pending: decided
+        // on another surface, or expired. Their "yes" was about that card.
+        const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
+        return { kind: 'refused', message: `The request you were looking at has already been decided or has expired, so ${nothing}. Nothing else is waiting for approval.` };
       }
     }
 

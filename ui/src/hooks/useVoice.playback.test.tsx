@@ -70,6 +70,8 @@ class AudioDevice {
     return source;
   }
   createMediaStreamSource() { return new AudioSource(); }
+  // The standard (non-realtime) recording path's silence detector.
+  createAnalyser() { return { fftSize: 0, frequencyBinCount: 4, connect() {}, getByteFrequencyData() {} }; }
   createOscillator() {
     return Object.assign(new AudioSource(), { frequency: { value: 0 } });
   }
@@ -135,7 +137,7 @@ afterAll(() => {
   GlobalRegistrator.unregister();
 });
 
-async function mount(options: { errorFlashMs?: number } = {}) {
+async function mount(options: { errorFlashMs?: number; getShownApprovalId?: () => string | null } = {}) {
   const wsRef = { current: socket(sent) as WebSocket | null };
   function Harness() {
     voice = useVoice({ wsRef, nativeWakeActive: true, ...options });
@@ -462,5 +464,77 @@ describe("session scope", () => {
     const before = fetches;
     await act(async () => { voice.handleRealtimeClosed("unavailable"); });
     expect(fetches).toBe(before + 1);
+  });
+});
+
+/**
+ * #809. A spoken "yes" answers the approval that was on screen when the
+ * person started speaking, so the id is read at recording START and sent with
+ * the finished utterance; an approval that arrives while they speak does not
+ * change it.
+ */
+describe("the approval a spoken answer is about", () => {
+  const nodes: Array<{ port: { onmessage: ((e: { data: Float32Array }) => void) | null } }> = [];
+  beforeEach(() => {
+    available = false; // the standard path, which is where approvals are answered
+    nodes.length = 0;
+    globals.AudioWorkletNode = class extends AudioSource {
+      port = { onmessage: null };
+      constructor() { super(); nodes.push(this as never); }
+    };
+  });
+  afterEach(() => { delete globals.SpeechRecognition; });
+
+  // The WAV itself goes through the same socket as a binary frame; skip it.
+  const payloadOf = (type: string) => messages(sent.filter(d => typeof d === "string"))
+    .find(m => m.type === type)?.payload as Record<string, unknown> | undefined;
+
+  async function recordAndStop(shown: { current: string | null }, next: string | null) {
+    await act(async () => { voice.startRecording(); });
+    expect(voice.voiceState).toBe("recording");
+    // A new approval arrives while the person is speaking.
+    shown.current = next;
+    await act(async () => { nodes.at(-1)!.port.onmessage?.({ data: new Float32Array([0, 0.1, -0.1]) }); });
+    await act(async () => { voice.stopRecording(); });
+  }
+
+  test("a WAV utterance carries the id shown when recording started", async () => {
+    const shown = { current: "approval-a" as string | null };
+    await mount({ getShownApprovalId: () => shown.current });
+    await recordAndStop(shown, "approval-b");
+    expect(payloadOf("voice_start")).toMatchObject({ mode: "wav", shownApprovalId: "approval-a" });
+  });
+
+  test("none shown is sent as null, not left out", async () => {
+    const shown = { current: null as string | null };
+    await mount({ getShownApprovalId: () => shown.current });
+    await recordAndStop(shown, "approval-b");
+    const payload = payloadOf("voice_start")!;
+    expect("shownApprovalId" in payload).toBe(true);
+    expect(payload.shownApprovalId).toBeNull();
+  });
+
+  test("a caller that cannot say leaves the field out", async () => {
+    await mount();
+    await recordAndStop({ current: null }, null);
+    expect("shownApprovalId" in payloadOf("voice_start")!).toBe(false);
+  });
+
+  test("a browser-transcribed utterance carries it too", async () => {
+    let recognizer: { onresult: ((e: unknown) => void) | null } | null = null;
+    globals.SpeechRecognition = class {
+      onresult: ((e: unknown) => void) | null = null;
+      constructor() { recognizer = this; }
+      start() {}
+      stop() {}
+    };
+    const shown = { current: "approval-a" as string | null };
+    await mount({ getShownApprovalId: () => shown.current });
+    await act(async () => { voice.startRecording(); });
+    shown.current = "approval-b";
+    const final = Object.assign([{ transcript: "yes" }], { isFinal: true });
+    await act(async () => { recognizer!.onresult?.({ resultIndex: 0, results: [final] }); });
+    await act(async () => { voice.stopRecording(); });
+    expect(payloadOf("voice_text")).toMatchObject({ text: "yes", shownApprovalId: "approval-a" });
   });
 });
