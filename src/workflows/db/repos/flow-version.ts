@@ -300,7 +300,7 @@ export function getFlowVersion(id: string): FlowVersion | null {
 export function getLatestDraft(flowId: string): FlowVersion | null {
   const row = db()
     .query<FlowVersionRow, [string]>(
-      `SELECT * FROM flow_version WHERE flow_id = ? AND state = 'DRAFT' ORDER BY updated DESC LIMIT 1`,
+      `SELECT * FROM flow_version WHERE id = (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = ?)`,
     )
     .get(flowId);
   return row ? rowToFlowVersion(row) : null;

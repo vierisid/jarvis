@@ -1,7 +1,7 @@
 {
   "task": "F-20",
   "title": "Make workflow removal reversible",
-  "date": "2026-10-07",
+  "date": "2026-10-08",
   "branch": "brief/f-20",
   "base_branch": "brief/f-19",
   "baseline": "4d48f4982e0c5f158e4a59415424299bf32a7020",
@@ -48,7 +48,29 @@
     "Previously accepted queued/running/paused work continues under existing authority and cancellation. Undo does not queue work or replay effects.",
     "Durable pending trigger reconciliation survives restart and runtime replacement; external unsubscribe remains best effort."
   ],
-  "verification": {
+  "limits": {
+    "undo_ms": 30000,
+    "collection_flows_including_removed": 1000,
+    "nonterminal_runs_per_removed_flow": 1000,
+    "snapshot_bytes": 16777216,
+    "command_body_bytes": 4096,
+    "durable_receipts": 10000,
+    "overflow": "Explicit refusal; no partial collection or silent eviction.",
+    "ordinary_command_outcomes": 10000,
+    "reserved_successful_undo_outcomes": 10000,
+    "maximum_total_command_outcomes": 20000
+  },
+  "limitations": [
+    "Removal does not cancel previously accepted queued/running/paused work or undo external effects. Cancellation and effect authority remain separate.",
+    "Local refresh completion does not certify remote unsubscribe; existing trigger manager remote cleanup is best effort.",
+    "No hard purge or restore after expiry. Legacy hard delete for workflows never removed is unchanged.",
+    "D21 production host adapter, receipt hydration and browser integration remain a release gate. Q06 shared-file integration requires both suites.",
+    "No deployment, production activation or F21 implementation. Full repository CI reports separately."
+  ],
+  "rollback": "Unset the flag and restart. Retain schema, draft pins and shared selection view, tombstones, list filtering, SQLite fences and generation checks. A pre-F20 binary must not replace these protections after Remove has been used.",
+  "guide": "docs/brief-workflow-removal.md",
+  "next_task": "F-21 not started",
+  "prior_implementation_verification": {
     "affected": {
       "passed": 1010,
       "skipped": 6,
@@ -96,24 +118,53 @@
       "log": "docs/brief-delivery/evidence/F-20/typescript.log"
     }
   },
-  "limits": {
-    "undo_ms": 30000,
-    "collection_flows_including_removed": 1000,
-    "nonterminal_runs_per_removed_flow": 1000,
-    "snapshot_bytes": 16777216,
-    "command_body_bytes": 4096,
-    "durable_commands": 10000,
-    "durable_receipts": 10000,
-    "overflow": "Explicit refusal; no partial collection or silent eviction."
+  "review_fixes": {
+    "reviewed_head": "45fb513bcb8fa4f596fa6b38ba002cdc064c1053",
+    "pull_request": "https://github.com/vierisid/jarvis/pull/848",
+    "R1": "Inventory the authenticated management reader and prove raw trigger inputs, sample data, private metadata and run outputs stay out of its projections.",
+    "R2": "Reserve one successful Undo outcome per durable receipt outside the ordinary command budget. Receipt consumption and outcome recording are atomic; invalid/reused receipts cannot claim the reservation.",
+    "R3": "Capture webhook registration identity and generation before body/HMAC awaits. Replaced registrations return 409; callbacks carry the captured generation.",
+    "R4": "Pin the selected unpublished draft through removal, Undo and late run bookkeeping. Share its selector across reads, readiness/CODE gates and trigger eligibility. Explicit authoring/publication clears the pin.",
+    "schema": "Additive nullable pinned_draft_id, active-receipt backfill, shared selection view and authoring/publication triggers; old F20 schema upgrade covered.",
+    "new_regression_tests": 11,
+    "baseline_reproduction": "Six new behavioral regressions plus the existing CI reader-inventory check failed on the reviewed code before fixes.",
+    "default_off": true,
+    "merged": false
   },
-  "limitations": [
-    "Removal does not cancel previously accepted queued/running/paused work or undo external effects. Cancellation and effect authority remain separate.",
-    "Local refresh completion does not certify remote unsubscribe; existing trigger manager remote cleanup is best effort.",
-    "No hard purge or restore after expiry. Legacy hard delete for workflows never removed is unchanged.",
-    "D21 production host adapter, receipt hydration and browser integration remain a release gate. Q06 shared-file integration requires both suites.",
-    "No deployment, production activation or F21 implementation. Full repository CI reports separately."
-  ],
-  "rollback": "Unset the flag and restart. Retain schema, tombstones, list filtering, SQLite fences and generation checks. A pre-F20 binary must not replace these protections after Remove has been used.",
-  "guide": "docs/brief-workflow-removal.md",
-  "next_task": "F-21 not started"
+  "verification": {
+    "red": {
+      "passed": 0,
+      "failed": 7,
+      "assertions": 10,
+      "files": 3,
+      "expected": "Reviewed-code failures before fixes",
+      "command_file": "docs/brief-delivery/evidence/F-20/review-red-command.txt",
+      "log": "docs/brief-delivery/evidence/F-20/review-red.log"
+    },
+    "focused": {
+      "passed": 46,
+      "failed": 0,
+      "assertions": 235,
+      "files": 4,
+      "command_file": "docs/brief-delivery/evidence/F-20/review-focused-command.txt",
+      "log": "docs/brief-delivery/evidence/F-20/review-focused.log"
+    },
+    "affected": {
+      "passed": 1123,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 18926,
+      "files": 64,
+      "command_file": "docs/brief-delivery/evidence/F-20/review-affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-20/review-affected.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "command": "bun x tsc --noEmit",
+      "log": "docs/brief-delivery/evidence/F-20/review-typescript.log"
+    },
+    "guards": "Normal commit hooks required before push; exact results and published head recorded in the PR description.",
+    "evidence_policy": "Committed logs include test verdicts only; raw fixture payloads remain local.",
+    "ci": "Full repository CI reports separately on the pushed head; local affected-suite success is not a full-CI claim."
+  }
 }

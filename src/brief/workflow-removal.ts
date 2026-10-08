@@ -112,8 +112,6 @@ export class WorkflowRemoval {
         return JSON.parse(existing.result) as WorkflowManageResult;
       }
       this.flow(c.flowId); // Scope lookup before any mutation or durable rejection.
-      const n = (this.db.query('SELECT COUNT(*) AS n FROM brief_workflow_commands').get() as { n: number }).n;
-      if (n >= WORKFLOW_REMOVAL_LIMITS.commands) throw new WorkflowRemovalError('capacity_exceeded', 503);
       const identity = { scopeId: this.projectId, flowId: c.flowId, requestId: c.requestId, action: c.action };
       let result: WorkflowManageResult;
       try { result = this.db.transaction(() => this.apply(c)).immediate(); }
@@ -123,6 +121,16 @@ export class WorkflowRemoval {
         } else if (error instanceof WorkflowReadinessError || error instanceof CodeStepsRefusedError) {
           result = { ...identity, status: 'rejected', code: 'not_ready', message: 'Workflow setup or permission needs review before enabling' };
         } else throw error;
+      }
+      // Every removal receipt reserves exactly one successful Undo outcome, even
+      // when ordinary commands are full. apply() consumes the receipt atomically;
+      // rejected/fabricated/reused Undo requests cannot claim this reserved slot.
+      // Total storage is bounded by commands + receipts; neither is evicted.
+      if (!(c.action === 'restore' && result.status === 'accepted')) {
+        const n = (this.db.query(`SELECT COUNT(*) AS n FROM brief_workflow_commands
+          WHERE json_extract(result, '$.action') IS NOT 'restore'
+             OR json_extract(result, '$.status') IS NOT 'accepted'`).get() as { n: number }).n;
+        if (n >= WORKFLOW_REMOVAL_LIMITS.commands) throw new WorkflowRemovalError('capacity_exceeded', 503);
       }
       this.db.run('INSERT INTO brief_workflow_commands VALUES (?, ?, ?, ?, ?, ?)',
         [this.projectId, c.requestId, c.flowId, digest, JSON.stringify(result), this.now()]);
@@ -167,7 +175,8 @@ export class WorkflowRemoval {
         this.db.run('INSERT INTO brief_workflow_removals VALUES (?, ?, ?, ?, ?, ?, ?, NULL)',
           [r.receipt_id, f.id, this.projectId, r.version_id, r.before_revision, r.removed_at, r.expires_at]);
         this.db.run('UPDATE flow SET status = ?, updated = ? WHERE id = ?', ['DISABLED', this.now(), f.id]);
-        this.db.run('UPDATE brief_workflow_slots SET receipt_id = ?, generation = generation + 1 WHERE flow_id = ?', [r.receipt_id, f.id]);
+        this.db.run('UPDATE brief_workflow_slots SET receipt_id = ?, generation = generation + 1, pinned_draft_id = ? WHERE flow_id = ?',
+          [r.receipt_id, f.published_version_id ? null : r.version_id, f.id]);
         this.markRegistration(f.id);
         return { ...base, receipt: receipt(r) };
       }

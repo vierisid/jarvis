@@ -6,8 +6,8 @@ import { Database } from 'bun:sqlite';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../workflows/db';
 import { createSchema } from '../workflows/db/schema';
 import { createFlow, getFlow, listFlows, updateFlowStatus, setPublishedVersion, deleteFlow } from '../workflows/db/repos/flow';
-import { createDraftVersion, getFlowVersion, updateDraftVersion, lockVersion } from '../workflows/db/repos/flow-version';
-import { createFlowRun, getFlowRun } from '../workflows/db/repos/flow-run';
+import { createDraftVersion, getFlowVersion, getLatestDraft, mergeRunOutputsIntoSampleData, updateDraftVersion, lockVersion } from '../workflows/db/repos/flow-version';
+import { createFlowRun, getFlowRun, updateRun } from '../workflows/db/repos/flow-run';
 import { enqueue, queueStats } from '../workflows/db/repos/job-queue';
 import { createRunFlowHandler, RUN_FLOW } from '../workflows/runner/handler';
 import { Worker } from '../workflows/queue/worker';
@@ -200,4 +200,107 @@ test('management readiness reports missing CODE permission before explicit Enabl
   getWorkflowDb().run('UPDATE flow SET code_steps_enabled = 1 WHERE id = ?', [flow.id]);
   expect(service.read().data.items[0]!.readiness.state).toBe('ready');
   expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' }))).toMatchObject({ status: 'accepted' });
+});
+
+function fillCommands(count: number, flowId: string) {
+  getWorkflowDb().transaction(() => { for (let i = 0; i < count; i++) getWorkflowDb().run(
+    'INSERT INTO brief_workflow_commands VALUES (?, ?, ?, ?, ?, ?)', [DEFAULT_IDS.project, `filler-${i}`, flowId, 'digest', '{}', clock]); })();
+}
+test('R2: the last ordinary command can remove and still Undo once at capacity after restart', () => {
+  const { flow } = fixture(); fillCommands(WORKFLOW_REMOVAL_LIMITS.commands - 1, flow.id);
+  const r = remove(flow.id); restart();
+  const restored = service.change(r.restore);
+  expect(restored).toMatchObject({ status: 'accepted', item: { activation: 'DISABLED' } });
+  expect(service.change(r.restore)).toEqual(restored);
+  expect(service.request(r.restore.requestId)).toEqual(restored);
+  expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM brief_workflow_commands').get()).toEqual({ n: WORKFLOW_REMOVAL_LIMITS.commands + 1 });
+  expect(() => service.change(command(flow.id))).toThrow('capacity_exceeded');
+  expect(service.read().data.items).toHaveLength(1);
+  expect(() => service.change({ ...r.restore, requestId: 'second-restore' })).toThrow('capacity_exceeded');
+});
+test('R2: invalid Undo cannot use receipt-reserved capacity or mutate the removal', () => {
+  const { flow } = fixture(); fillCommands(WORKFLOW_REMOVAL_LIMITS.commands - 1, flow.id);
+  const r = remove(flow.id);
+  expect(() => service.change({ ...r.restore, receiptId: 'wrong-receipt' })).toThrow('capacity_exceeded');
+  expect(service.read().data.removals).toHaveLength(1);
+  expect(service.change(r.restore)).toMatchObject({ status: 'accepted' });
+});
+function twoDrafts() {
+  const { flow, version: old } = fixture('Older');
+  getWorkflowDb().run('UPDATE flow_version SET updated = 1 WHERE id = ?', [old.id]);
+  const selected = createDraftVersion({ flowId: flow.id, displayName: 'Selected', trigger: { name: 'trigger', type: 'EMPTY', settings: {} } });
+  getWorkflowDb().run('UPDATE flow_version SET updated = 2 WHERE id = ?', [selected.id]);
+  return { flow, old, selected };
+}
+test('R4: a real older draft run finishing while removed cannot change the receipt version', async () => {
+  const { flow, old, selected } = twoDrafts();
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: old.id });
+  enqueue({ jobType: RUN_FLOW, payload: { runId: run.id }, flowId: flow.id, flowVersionId: old.id, flowRunId: run.id });
+  const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+  const worker = new Worker({ log: () => {}, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: { async execute() {
+    entered.resolve(); await release.promise; return { steps: { action: { output: { captured: true } } }, stepsCount: 1 };
+  } } }) } });
+  const drain = worker.drain(); await entered.promise;
+  const r = remove(flow.id); expect(r.result.receipt!.versionId).toBe(selected.id);
+  release.resolve(); await drain; expect(getFlowRun(run.id)?.status).toBe('SUCCEEDED');
+  expect(getFlowVersion(old.id)?.sampleData).toEqual({ action: { captured: true } });
+  restart(); expect(service.read().data.removals[0]?.item.versionId).toBe(selected.id);
+  expect(service.change(r.restore)).toMatchObject({ status: 'accepted', item: { versionId: selected.id, activation: 'DISABLED' } });
+  expect(getLatestDraft(flow.id)?.id).toBe(selected.id);
+});
+test('R4: late bookkeeping after Undo keeps the selected draft; explicit authoring selects a new draft', () => {
+  const { flow, old, selected } = twoDrafts(), r = remove(flow.id); service.change(r.restore);
+  mergeRunOutputsIntoSampleData(old.id, { action: { output: { late: true } } });
+  expect(getLatestDraft(flow.id)?.id).toBe(selected.id);
+  expect(service.read().data.items[0]?.versionId).toBe(selected.id);
+  updateDraftVersion(old.id, { displayName: 'Explicit edit' });
+  expect(getLatestDraft(flow.id)?.id).toBe(old.id);
+  const next = createDraftVersion({ flowId: flow.id, displayName: 'New draft', trigger: { name: 'trigger', type: 'EMPTY', settings: {} } });
+  getWorkflowDb().run('UPDATE flow_version SET updated = updated + 1 WHERE id = ?', [next.id]);
+  expect(getLatestDraft(flow.id)?.id).toBe(next.id);
+});
+
+test('R1: management projections never expose trigger inputs, sample data or run outputs', () => {
+  const secret = 'private-fixture-payload-<<<UNTRUSTED_CONTENT>>>', flow = createFlow({ metadata: { private: secret } });
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Public name', trigger: {
+    name: 'trigger', type: 'EMPTY', settings: { input: { credential: secret } },
+  } });
+  mergeRunOutputsIntoSampleData(version.id, { action: { output: { body: secret } } });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'SUCCEEDED' });
+  updateRun(run.id, { steps: { action: { output: secret } } });
+  expect(service.read().data.items[0]?.latestRun).toEqual({ runId: run.id, label: 'SUCCEEDED' });
+  const before = service.read(), r = remove(flow.id), removed = service.read();
+  const restored = service.change(r.restore);
+  for (const projection of [before, r.result, removed, restored, service.request(r.restore.requestId)]) {
+    expect(JSON.stringify(projection)).not.toContain(secret);
+    expect(JSON.stringify(projection)).not.toContain('sampleData');
+  }
+});
+test('R4: an existing F20 database upgrades its active receipt to a durable draft pin', () => {
+  const { flow, old, selected } = twoDrafts(), r = remove(flow.id), db = getWorkflowDb();
+  for (const name of ['brief_draft_pin_insert', 'brief_draft_pin_edit', 'brief_draft_pin_publish']) db.run(`DROP TRIGGER ${name}`);
+  db.run('DROP VIEW brief_workflow_draft_selection'); db.run('ALTER TABLE brief_workflow_slots DROP COLUMN pinned_draft_id');
+  mergeRunOutputsIntoSampleData(old.id, { action: { output: { old: true } } });
+  createSchema(db);
+  expect(service.change(r.restore)).toMatchObject({ status: 'accepted', item: { versionId: selected.id } });
+  expect(getLatestDraft(flow.id)?.id).toBe(selected.id); expect(getFlowVersion(old.id)?.sampleData).not.toBeNull();
+});
+test('R4: explicit Enable checks CODE permission against the pinned draft', () => {
+  const { flow, old, selected } = twoDrafts();
+  updateDraftVersion(old.id, { trigger: { name: 'trigger', type: 'EMPTY', settings: {}, nextAction: {
+    name: 'compute', type: 'CODE', settings: { sourceCode: { packageJson: '{}', code: 'export const code = async () => ({});' } },
+  } } });
+  getWorkflowDb().run('UPDATE flow_version SET updated = 1 WHERE id = ?', [old.id]);
+  const r = remove(flow.id); service.change(r.restore);
+  mergeRunOutputsIntoSampleData(old.id, { action: { output: { captured: true } } });
+  expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' })))
+    .toMatchObject({ status: 'accepted', item: { versionId: selected.id, activation: 'ENABLED' } });
+});
+test('R4: an invalid pinned draft cannot borrow readiness from an older runnable version', () => {
+  const { flow, old, selected } = twoDrafts(); updateDraftVersion(selected.id, { trigger: {} });
+  const r = remove(flow.id); service.change(r.restore);
+  mergeRunOutputsIntoSampleData(old.id, { action: { output: { captured: true } } });
+  expect(service.change(command(flow.id, 'activation', { activation: 'ENABLED' })))
+    .toMatchObject({ status: 'rejected', code: 'not_ready' });
+  expect(getFlow(flow.id)?.status).toBe('DISABLED');
 });

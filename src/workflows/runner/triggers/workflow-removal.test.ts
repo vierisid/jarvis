@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../../db';
 import { createFlow, updateFlowStatus, setPublishedVersion } from '../../db/repos/flow';
-import { createDraftVersion, lockVersion } from '../../db/repos/flow-version';
+import { createDraftVersion, lockVersion, mergeRunOutputsIntoSampleData } from '../../db/repos/flow-version';
 import { queueStats } from '../../db/repos/job-queue';
 import { configureWorkflowReadiness } from '../../db/repos/flow-readiness';
 import { PieceCatalog } from '../../runtime/piece-catalog';
@@ -88,4 +88,45 @@ test('removal during ON_ENABLE prevents a late subscription and reconciles the c
   service.change(command(f)); release.resolve({ scheduleOptions: { cronExpression: '* * * * *' }, listeners: [] });
   await registering; await service.reconcileFlow(f);
   expect(cron.callbacks.size).toBe(0); expect(tm.list()).toEqual([]); expect(disables).toBe(1); expect(queueStats().queued).toBe(0);
+});
+
+for (const secret of [undefined, 'fixture-webhook-secret']) test(`R3: pending ${secret ? 'signed' : 'unsigned'} webhook cannot cross Remove/Undo/Enable`, async () => {
+  const f = flow({ name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'webhook', input: { ...(secret ? { secret } : {}) } } });
+  tm = new TriggerManager({ eventBus: new WorkflowEventBus(), log: () => {} }); await tm.start(); service.start(tm);
+  const payload = JSON.stringify({ stale: true }), headers: Record<string, string> = {};
+  if (secret) {
+    const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+    headers['x-jarvis-signature'] = Buffer.from(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(payload))).toString('hex');
+  }
+  let body!: ReadableStreamDefaultController<Uint8Array>;
+  const request = new Request(`http://localhost/webhooks/${f}`, { method: 'POST', headers,
+    body: new ReadableStream<Uint8Array>({ start(controller) { body = controller; } }) });
+  const pending = tm.webhookManager().handleRequest(f, request); await settle();
+  const c = command(f), removed = service.change(c); if (removed.status !== 'accepted' || !removed.receipt) throw Error('not removed');
+  await service.reconcileFlow(f);
+  service.change({ ...c, action: 'restore', requestId: 'restore', receiptId: removed.receipt.receiptId }); await service.reconcileFlow(f);
+  service.change(command(f, 'activation', { activation: 'ENABLED' })); await service.reconcileFlow(f);
+  body.enqueue(new TextEncoder().encode(payload)); body.close(); const response = await pending;
+  expect(queueStats().queued).toBe(0); expect(response.status).toBe(409);
+  const fresh = await tm.webhookManager().handleRequest(f, new Request(`http://localhost/webhooks/${f}`, { method: 'POST', headers, body: payload }));
+  expect(fresh.status).toBe(200); expect(queueStats().queued).toBe(1);
+});
+
+test('R4: trigger dispatch uses the restored draft even after older run bookkeeping', async () => {
+  const f = createFlow(), old = createDraftVersion({ flowId: f.id, displayName: 'Old', trigger: { name: 'trigger', type: 'EMPTY', settings: {} } });
+  const selected = createDraftVersion({ flowId: f.id, displayName: 'Selected schedule', trigger: {
+    name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cronExpression: '* * * * *' } },
+  } });
+  getWorkflowDb().run('UPDATE flow_version SET updated = 1 WHERE id = ?', [old.id]);
+  getWorkflowDb().run('UPDATE flow_version SET updated = 2 WHERE id = ?', [selected.id]);
+  updateFlowStatus(f.id, 'ENABLED'); const cron = new Cron();
+  tm = new TriggerManager({ eventBus: new WorkflowEventBus(), cronScheduler: cron as unknown as CronScheduler, log: () => {} });
+  await tm.start(); service.start(tm);
+  const c = command(f.id), removed = service.change(c); if (removed.status !== 'accepted' || !removed.receipt) throw Error('not removed');
+  await service.reconcileFlow(f.id);
+  service.change({ ...c, action: 'restore', requestId: 'restore', receiptId: removed.receipt.receiptId }); await service.reconcileFlow(f.id);
+  mergeRunOutputsIntoSampleData(old.id, { action: { output: { late: true } } });
+  service.change(command(f.id, 'activation', { activation: 'ENABLED' })); await service.reconcileFlow(f.id);
+  expect(cron.callbacks.size).toBe(1); cron.callbacks.get(`flow:${f.id}`)!();
+  expect(getWorkflowDb().query('SELECT flow_version_id FROM flow_run WHERE flow_id = ?').all(f.id)).toEqual([{ flow_version_id: selected.id }]);
 });

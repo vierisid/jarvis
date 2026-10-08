@@ -10,6 +10,6 @@ export function workflowTriggerCurrent(flowId: string, versionId: string, genera
   const db = getWorkflowDb();
   return !!db.query(`SELECT 1 FROM flow f JOIN brief_workflow_slots s ON s.flow_id = f.id
     WHERE f.id = ? AND f.status = 'ENABLED' AND s.receipt_id IS NULL AND s.generation = ?
-      AND COALESCE(f.published_version_id, (SELECT id FROM flow_version WHERE flow_id = f.id AND state = 'DRAFT' ORDER BY updated DESC LIMIT 1)) = ?`
+      AND COALESCE(f.published_version_id, (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = f.id)) = ?`
   ).get(flowId, generation, versionId);
 }

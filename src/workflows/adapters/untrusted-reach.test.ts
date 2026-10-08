@@ -256,6 +256,11 @@ const REVIEWED_STEP_OUTPUT_READERS = [
   'awareness/prepared-opportunities.ts',
   'brief/opportunity-activation.ts',
   'brief/outcomes.ts',
+  // F20: authenticated human-facing management projection. Only bounded names,
+  // description/type, IDs, status/readiness and an opaque revision leave this reader.
+  // No trigger inputs, samples, credentials or step outputs reach a model/prompt.
+  // workflow-removal.test.ts checks hostile sample/trigger/run payloads stay private.
+  'brief/workflow-removal.ts',
   'brief/adapters.ts',
   'brief/composition.ts',
   'brief/contracts.ts',

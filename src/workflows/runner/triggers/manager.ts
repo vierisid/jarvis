@@ -177,8 +177,8 @@ export class TriggerManager {
       5_000, 15_000, 60_000, 300_000, 900_000,
     ];
 
-    this.webhooks.setTriggerCallback((flowId, payload) => {
-      void this.fire(flowId, payload, "webhook");
+    this.webhooks.setTriggerCallback((flowId, payload, generation) => {
+      void this.fire(flowId, payload, "webhook", generation);
     });
   }
 
@@ -404,9 +404,10 @@ export class TriggerManager {
   private registerWebhook(flowId: string, versionId: string, trigger: TriggerNode): void {
     const input = (trigger.settings?.input ?? {}) as Record<string, unknown>;
     const secret = typeof input.secret === "string" && input.secret ? input.secret : undefined;
-    this.webhooks.register(flowId, secret);
+    const generation = workflowRemovalState(flowId).generation;
+    this.webhooks.register(flowId, secret, generation);
     this.subs.set(flowId, {
-      generation: workflowRemovalState(flowId).generation,
+      generation,
       flowId,
       versionId,
       kind: "webhook",
@@ -538,7 +539,7 @@ export class TriggerManager {
       // Multiple listeners (e.g. Gmail watch + identifier) share one webhook
       // endpoint per flow; the engine's onEnable already encoded what to
       // listen for via its external API (Gmail watch, etc.).
-      this.webhooks.register(flow.id);
+      this.webhooks.register(flow.id, undefined, generation);
       webhookTearDown = () => this.webhooks.unregister(flow.id);
       this.log(
         `flow ${flow.id}: engine registered ${listeners.length} listener(s); webhook route /webhooks/${flow.id} active`,

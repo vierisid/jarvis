@@ -5,8 +5,12 @@ export function ensureWorkflowRemovalSchema(db: Database): void {
   db.transaction(() => {
     db.run(`CREATE TABLE IF NOT EXISTS brief_workflow_slots (
       position INTEGER PRIMARY KEY AUTOINCREMENT, flow_id TEXT NOT NULL UNIQUE REFERENCES flow(id) ON DELETE CASCADE,
-      generation INTEGER NOT NULL DEFAULT 0, receipt_id TEXT, reconcile_pending INTEGER NOT NULL DEFAULT 0, reconcile_revision INTEGER NOT NULL DEFAULT 0
+      generation INTEGER NOT NULL DEFAULT 0, receipt_id TEXT, reconcile_pending INTEGER NOT NULL DEFAULT 0, reconcile_revision INTEGER NOT NULL DEFAULT 0, pinned_draft_id TEXT
     )`);
+    // Upgrade databases that already installed F20 before the draft pin existed.
+    if (!(db.query('PRAGMA table_info(brief_workflow_slots)').all() as Array<{ name: string }>).some(c => c.name === 'pinned_draft_id')) {
+      db.run('ALTER TABLE brief_workflow_slots ADD COLUMN pinned_draft_id TEXT');
+    }
     db.run(`INSERT INTO brief_workflow_slots (flow_id) SELECT id FROM flow
       WHERE id NOT IN (SELECT flow_id FROM brief_workflow_slots) ORDER BY updated, id`);
     db.run(`CREATE TRIGGER IF NOT EXISTS brief_workflow_slot_insert AFTER INSERT ON flow
@@ -22,6 +26,29 @@ export function ensureWorkflowRemovalSchema(db: Database): void {
       command_digest TEXT NOT NULL, result TEXT NOT NULL, recorded_at INTEGER NOT NULL,
       PRIMARY KEY(project_id, request_id)
     )`);
+    // Bookkeeping may update an older draft's timestamp while a run finishes.
+    // Preserve the removed draft through Undo, without changing DRAFT/LOCKED.
+    db.run(`UPDATE brief_workflow_slots SET pinned_draft_id = (
+      SELECT r.version_id FROM brief_workflow_removals r JOIN flow_version v ON v.id = r.version_id
+      JOIN flow f ON f.id = r.flow_id
+      WHERE r.receipt_id = brief_workflow_slots.receipt_id AND v.flow_id = f.id
+        AND v.state = 'DRAFT' AND f.published_version_id IS NULL
+    ) WHERE receipt_id IS NOT NULL AND pinned_draft_id IS NULL`);
+    // One selector shared by reads, CODE/readiness gates and trigger dispatch.
+    // Other workflows retain the existing updated-time selection rule.
+    db.run(`CREATE VIEW IF NOT EXISTS brief_workflow_draft_selection AS
+      SELECT f.id AS flow_id, COALESCE(
+        (SELECT v.id FROM flow_version v WHERE v.id = s.pinned_draft_id AND v.flow_id = f.id AND v.state = 'DRAFT'),
+        (SELECT v.id FROM flow_version v WHERE v.flow_id = f.id AND v.state = 'DRAFT' ORDER BY v.updated DESC LIMIT 1)
+      ) AS version_id FROM flow f LEFT JOIN brief_workflow_slots s ON s.flow_id = f.id`);
+    // Explicit authoring/publication ends the pin. Runtime/sample writes do not.
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_draft_pin_insert AFTER INSERT ON flow_version
+      BEGIN UPDATE brief_workflow_slots SET pinned_draft_id = NULL WHERE flow_id = NEW.flow_id; END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_draft_pin_edit AFTER UPDATE OF
+      flow_id, display_name, trigger, state, valid, schema_version, agent_ids, connection_ids, notes, backup_files ON flow_version
+      BEGIN UPDATE brief_workflow_slots SET pinned_draft_id = NULL WHERE flow_id IN (OLD.flow_id, NEW.flow_id); END`);
+    db.run(`CREATE TRIGGER IF NOT EXISTS brief_draft_pin_publish AFTER UPDATE OF published_version_id ON flow
+      BEGIN UPDATE brief_workflow_slots SET pinned_draft_id = NULL WHERE flow_id = NEW.id; END`);
     // These fences survive flag rollback and cover legacy writers and another DB connection.
     db.run(`CREATE TRIGGER IF NOT EXISTS brief_removed_enable BEFORE UPDATE OF status ON flow
       WHEN NEW.status = 'ENABLED' AND EXISTS(SELECT 1 FROM brief_workflow_slots WHERE flow_id = NEW.id AND receipt_id IS NOT NULL)

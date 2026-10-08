@@ -14,9 +14,11 @@ export type WebhookRoute = {
   path: string;
   secret: string | null;
   registeredAt: number;
+  /** Captured by the runtime at registration, never taken from the HTTP payload. */
+  generation?: number;
 };
 
-export type WebhookTriggerCallback = (workflowId: string, data: Record<string, unknown>) => void;
+export type WebhookTriggerCallback = (workflowId: string, data: Record<string, unknown>, generation?: number) => void;
 
 // ── Helpers ──
 
@@ -104,7 +106,7 @@ export class WebhookManager {
    * Register a workflow webhook.
    * @returns the webhook path (e.g. "/webhooks/wf_abc123")
    */
-  register(workflowId: string, secret?: string): string {
+  register(workflowId: string, secret?: string, generation?: number): string {
     const path = `/webhooks/${workflowId}`;
 
     this.routes.set(workflowId, {
@@ -112,6 +114,7 @@ export class WebhookManager {
       path,
       secret: secret ?? null,
       registeredAt: Date.now(),
+      ...(generation === undefined ? {} : { generation }),
     });
 
     console.log(`[WebhookManager] Registered webhook for workflow "${workflowId}" at ${path}`);
@@ -214,6 +217,12 @@ export class WebhookManager {
       if (limited) return limited;
     }
 
+    // Body/HMAC awaits can outlive Remove/Undo/re-enable (or secret rotation).
+    // Never deliver a request authorized for a replaced registration.
+    if (this.routes.get(workflowId) !== route) {
+      return json(409, { error: 'Webhook registration changed' });
+    }
+
     // Parse body
     let data: Record<string, unknown> = {};
     if (rawBody.trim()) {
@@ -241,7 +250,7 @@ export class WebhookManager {
     // Fire callback (non-blocking)
     if (this.triggerCallback) {
       try {
-        this.triggerCallback(workflowId, data);
+        this.triggerCallback(workflowId, data, route.generation);
       } catch (err) {
         console.error(`[WebhookManager] Trigger callback threw for workflow "${workflowId}":`, err);
       }
