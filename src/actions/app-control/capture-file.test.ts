@@ -3,6 +3,7 @@ import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync, sym
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { __setCaptureTimeoutForTests, awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFile, captureViaPrivateFileAsync } from './capture-file.ts';
+import { encodePng } from './fixtures/png.ts';
 import { MacAppController } from './macos.ts';
 import { __setNativeExecTimeoutForTests, defaultExec, runNative, type NativeExec } from './native-exec.ts';
 
@@ -225,6 +226,32 @@ describe('local captures do not use a predictable path (#746)', () => {
       expect(out.argsLog).not.toContain('import ');
     }, 30_000);
   }
+
+  // #803: the compaction queue raises a canceled run's fence, and capture_screen
+  // used to turn every throw into an "Error capturing screen" string.
+  test.skipIf(process.platform !== 'linux')('#803 capture_screen: a canceled run\'s fence leaves the tool as the cancellation itself', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-803-'));
+    try {
+      // Wider than MAX_IMAGE_SIDE, so it goes through the compaction queue.
+      const wide = join(dir, 'wide.png');
+      writeFileSync(wide, encodePng(8001, 1, 2, 8, [new Uint8Array(8001 * 3)]));
+      const builtin = join(import.meta.dir, '..', 'tools', 'builtin.ts');
+      const scope = join(import.meta.dir, '..', 'execution-scope.ts');
+      const errors = join(import.meta.dir, '..', '..', 'workflows', 'runtime', 'cancellation-error.ts');
+      const out = runChild({ scrot: `for last; do :; done\ncp '${wide}' "$last"` }, `
+        const { captureScreenTool } = await import(${JSON.stringify(builtin)});
+        const { withExecutionScope } = await import(${JSON.stringify(scope)});
+        const { WorkflowCancellationError } = await import(${JSON.stringify(errors)});
+        const ok = await withExecutionScope(() => {}, () => captureScreenTool.execute({}));
+        const canceled = await withExecutionScope(() => { throw new WorkflowCancellationError('run-803'); },
+          () => captureScreenTool.execute({})).then((r) => ({ returned: r }), (e) => ({ threw: e?.constructor?.name }));
+        process.stdout.write(JSON.stringify({ ok: JSON.stringify(ok).includes('image/jpeg'), canceled }));`);
+      expect({ exitCode: out.exitCode, stderr: out.stderr }).toMatchObject({ exitCode: 0 });
+      expect(JSON.parse(out.stdout)).toEqual({ ok: true, canceled: { threw: 'WorkflowCancellationError' } });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });
 
 describe('capture tool bounds (#802)', () => {

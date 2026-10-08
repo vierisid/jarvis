@@ -15,6 +15,7 @@ import type { ToolDefinition, ToolResult } from './registry.ts';
 import { routeToSidecarAction as routeToSidecar, routeToSidecarActionReply, routeScreenshotToSidecar, resolveToolTarget } from './sidecar-route.ts';
 import { withTrustedTrailer } from '../../roles/untrusted.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
+import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import type { SidecarCapability } from '../../sidecar/types.ts';
 import { screenshotCaption, screenshotForModel } from '../app-control/image-compact.ts';
 import { ElementCache, resolveElement, uiElementPrint } from '../app-control/element-cache.ts';
@@ -342,6 +343,10 @@ async function executeLocal<T>(fn: (controller: SnapshotCapableController) => Pr
     return await fn(getLocalController());
   } catch (error) {
     if (error instanceof ActionOutcomeError) throw error;
+    // A canceled run's fence, raised inside (the screenshot compaction queue
+    // checks it, #803): a stop, not an unknown outcome, and ToolRegistry
+    // passes it on by type -- so it must leave here unwrapped too.
+    if (error instanceof WorkflowCancellationError) throw error;
     // A local controller can throw after a partial action. Without a receipt
     // it is unsafe to turn this into success or claim that retry is safe.
     throw new ActionOutcomeError({ status: 'unknown', code: 'LOCAL_DESKTOP_OUTCOME_UNKNOWN',

@@ -33,6 +33,7 @@ import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
 import { awaitCaptureTool, captureViaPrivateFileAsync, CaptureTimeoutError } from '../app-control/capture-file.ts';
 import { sanitizedEnv } from '../../util/subprocess-env.ts';
+import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { UI_TOOLS } from './ui.ts';
 import { SKILL_TOOLS } from './skills.ts';
 
@@ -840,6 +841,9 @@ export const captureScreenTool: ToolDefinition = {
       // Awaited, not returned: a rejection must land in the catch below (#769).
       return await localScreenshotResult(await localCaptureScreen(), 'image/png', 'Screenshot captured', false);
     } catch (err) {
+      // A canceled run's fence (#803) is a stop, not a capture error: as in
+      // desktop.ts's executeLocal, it goes on up for ToolRegistry to pass on.
+      if (err instanceof WorkflowCancellationError) throw err;
       return `Error capturing screen: ${err instanceof Error ? err.message : err}`;
     }
   },
