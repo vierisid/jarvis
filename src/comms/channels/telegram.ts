@@ -7,6 +7,14 @@ export type ChannelMessage = {
   text: string;
   timestamp: number;
   metadata: Record<string, unknown>;
+  /**
+   * True only when the channel's `allowed_users` list is non-empty and names
+   * this sender (#811). An empty list admits everyone, which is a convenience
+   * for chatting and the wrong default for deciding an approval, so
+   * `approve <id>` and `deny <id>` replies are refused unless this is true.
+   * Absent means false: an adapter that does not say is not trusted to decide.
+   */
+  senderAllowListed?: boolean;
 };
 
 export type ChannelHandler = (message: ChannelMessage) => Promise<string>;
@@ -274,7 +282,8 @@ export class TelegramAdapter implements ChannelAdapter {
 
     const { message } = update;
 
-    // Security: check allowed users
+    // Security: check allowed users. Empty admits everyone for chat, but not
+    // for deciding an approval (senderAllowListed below, #811).
     if (this.allowedUsers.length > 0 && !this.allowedUsers.includes(message.from.id)) {
       console.log(`[TelegramAdapter] Ignoring message from unauthorized user: ${message.from.id} (${message.from.username ?? message.from.first_name})`);
       return;
@@ -322,6 +331,7 @@ export class TelegramAdapter implements ChannelAdapter {
         lastName: message.from.last_name,
         isVoice: !!voiceFile,
       },
+      senderAllowListed: this.allowedUsers.includes(message.from.id),
     };
 
     console.log('[TelegramAdapter] Message from', channelMessage.from, ':', channelMessage.text.slice(0, 80));

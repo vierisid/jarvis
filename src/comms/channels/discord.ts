@@ -123,7 +123,8 @@ export class DiscordAdapter implements ChannelAdapter {
     if (message.author.bot) return;
     if (!this.handler) return;
 
-    // Security: check allowed users (empty = allow all)
+    // Security: check allowed users. Empty admits everyone for chat, but not
+    // for deciding an approval (senderAllowListed below, #811).
     if (this.allowedUsers.length > 0 && !this.allowedUsers.includes(message.author.id)) {
       return;
     }
@@ -173,6 +174,7 @@ export class DiscordAdapter implements ChannelAdapter {
         isDM: !message.guildId,
         isVoice: !!audioAttachment,
       },
+      senderAllowListed: this.allowedUsers.includes(message.author.id),
     };
 
     console.log('[DiscordAdapter] Message from', channelMessage.from, ':', text.slice(0, 80));

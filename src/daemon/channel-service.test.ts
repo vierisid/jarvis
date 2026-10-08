@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { ChannelService, channelDecisionCommand, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
+import { ChannelService, channelDecisionCommand, channelDecisionNeedsAllowList, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
 import { initDatabase } from "../vault/schema";
 import { setSetting } from "../vault/settings";
@@ -494,6 +494,52 @@ describe("#718: send options reach the adapter", () => {
     await svc.broadcastToAll("card", { literal: true });
 
     expect(adapter.calls).toEqual([["user-1", "card", { literal: true }]]);
+  });
+});
+
+/**
+ * #811. An empty allow-list lets anyone chat, and nobody decide an approval.
+ */
+describe("#811: an approve or deny needs a sender the allow-list names", () => {
+  const message = (text: string, senderAllowListed?: boolean): ChannelMessage => ({
+    id: "m1", channel: "discord", from: "someone", text, timestamp: 0,
+    metadata: { channelId: "c1" },
+    ...(senderAllowListed === undefined ? {} : { senderAllowListed }),
+  });
+  const setup = () => {
+    initDatabase(":memory:");
+    const decisions: unknown[][] = [];
+    const chats: string[] = [];
+    const agent = { handleMessage: async (text: string) => { chats.push(text); return "chat reply"; } };
+    const svc = new ChannelService({} as never, agent as never);
+    svc.setApprovalHandler(async (...args) => { decisions.push(args); return "decided"; });
+    const handle = (msg: ChannelMessage) =>
+      (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(msg);
+    return { decisions, chats, handle };
+  };
+
+  test("a sender let in by an empty list cannot approve or deny, and the reply says why", async () => {
+    const { decisions, chats, handle } = setup();
+    for (const allowListed of [false, undefined]) {
+      expect(await handle(message("approve 1a2b3c4d", allowListed))).toBe(channelDecisionNeedsAllowList("discord"));
+      expect(await handle(message("deny 1a2b3c4d", allowListed))).toBe(channelDecisionNeedsAllowList("discord"));
+    }
+    expect(decisions).toEqual([]);
+    // Refused outright, not handed to the agent as chat either.
+    expect(chats).toEqual([]);
+  });
+
+  test("a sender the list names decides as before", async () => {
+    const { decisions, handle } = setup();
+    expect(await handle(message("approve 1a2b3c4d", true))).toBe("decided");
+    expect(decisions).toEqual([["approve", "1a2b3c4d", "discord"]]);
+  });
+
+  test("ordinary chat from the same sender still works", async () => {
+    const { decisions, chats, handle } = setup();
+    expect(await handle(message("what is on my calendar", false))).toBe("chat reply");
+    expect(chats).toEqual(["what is on my calendar"]);
+    expect(decisions).toEqual([]);
   });
 });
 

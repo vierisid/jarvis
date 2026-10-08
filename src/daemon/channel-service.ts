@@ -95,7 +95,9 @@ export class ChannelService implements Service {
         }
       }
 
-      // 2. Create & register adapters from config
+      // 2. Create & register adapters from config. An empty allowed_users
+      // lets anyone who can reach the bot chat, but lets nobody approve or
+      // deny from that channel (#811, ChannelConfig, senderAllowListed).
       const channels = this.config.channels;
 
       if (channels?.telegram?.enabled && channels.telegram.bot_token) {
@@ -297,6 +299,11 @@ export class ChannelService implements Service {
     // Check for approval commands: "approve <id>" or "deny <id>"
     const decision = this.approvalHandler ? channelDecisionCommand(msg.text) : null;
     if (this.approvalHandler && decision) {
+      // Only someone the allow-list names may decide (#811). An empty list lets
+      // anyone who can reach the bot chat -- any member of the guild on
+      // Discord, anyone on Telegram -- and that must not extend to approving
+      // a gated action.
+      if (msg.senderAllowListed !== true) return channelDecisionNeedsAllowList(channelTag);
       try {
         return await this.approvalHandler(decision.action, decision.shortId, channelTag);
       } catch (err) {
@@ -316,6 +323,15 @@ export class ChannelService implements Service {
 
     return response;
   }
+}
+
+/**
+ * The answer to an `approve <id>` or `deny <id>` from a sender the channel's
+ * allow-list does not name (#811), which is every sender while the list is
+ * empty. Nothing is decided.
+ */
+export function channelDecisionNeedsAllowList(channel: string): string {
+  return `Approvals can only be decided from ${channel} by a user listed under Allowed user IDs in Jarvis Settings > Channels, and that list is empty or does not include you. Nothing was approved or denied. Open the Jarvis dashboard to decide.`;
 }
 
 /**
