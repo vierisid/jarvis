@@ -1,0 +1,474 @@
+Revert checks for Q-08 at 4cc84f2c: each guarantee removed in turn, its test run, the source restored.
+Each entry gives the file, the exact text removed and what replaced it, so any check can be repeated by hand.
+
+[DETECTED] an approved call runs under the permissions it was asked under
+    test: src/authority/entry-matrix.test.ts  exit: 1  21 pass 3 fail
+    file: src/authority/deferred-executor.ts
+    remove: "      const permissions = this.permissionsRefusal(request, registry.get(request.tool_name), args);"
+    replace with: "      const permissions = null as string | null;"
+    fails: an approved call is judged again when it runs > a permission revoked after approval stops it, as the agent it was asked for [35.23ms]
+    fails: an approved call is judged again when it runs > unchanged permissions let it run once; a level lowered below a gate it cannot substitute stops it [27.16ms]
+    fails: an approved call is judged again when it runs > a request that recorded no one is asked for again [22.66ms]
+
+[DETECTED] a request that recorded no one runs without a recheck
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/deferred-executor.ts
+    remove: "    if (!principal) return 'it was approved before each request recorded whom it was asked for, so its permissions cannot be checked again. Ask for it again.';"
+    replace with: "    if (!principal) return null;"
+    fails: an approved call is judged again when it runs > a request that recorded no one is asked for again [22.55ms]
+
+[DETECTED] a chat card records no one to judge it as
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/agents/orchestrator.ts
+    remove: "          // Who it is asked for: the executor judges the approved call again\n          // as this agent, under the permissions in force when it runs (Q-08).\n          principal: {"
+    replace with: "          // Who it is asked for: the executor judges the approved call again\n          // as this agent, under the permissions in force when it runs (Q-08).\n          xprincipal: {"
+    fails: chat turns > a card raised in chat records whom it was asked for, and runs once approved [24.81ms]
+
+[DETECTED] the executor runs a click-only card approved off the dashboard
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/deferred-executor.ts
+    remove: "      if (approvalNeedsClick(request) && request.decided_by !== DASHBOARD_DECIDER) {"
+    replace with: "      if (false) {"
+    fails: a card that must be reviewed on screen > approved anywhere else, the executor refuses it [25.69ms]
+
+[DETECTED] a chat reply or a toast approves a click-only card
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/approval-decision.ts
+    remove: "    if (pending?.status === 'pending' && decidedBy !== DASHBOARD_DECIDER && approvalNeedsClick(pending)) {"
+    replace with: "    if (false) {"
+    fails: a card that must be reviewed on screen > is approved on the dashboard only; a chat reply or a toast is refused and the card stays pending [33.93ms]
+
+[DETECTED] approving while paused does not wait for Resume
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/approval-decision.ts
+    remove: "    if (pending?.status === 'pending' && emergency !== 'normal') {"
+    replace with: "    if (false) {"
+    fails: Pause and Kill below every decision surface > approving waits while Jarvis is paused; denying still works [26.15ms]
+
+[DETECTED] decisions leave no audit row
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/approval-decision.ts
+    remove: "    auditDecision(deps, approved, 'approve', decidedBy);\n"
+    replace with: ""
+    fails: two surfaces deciding one request > every decision and every receipt is audited with the surface it came from [23.86ms]
+
+[DETECTED] an uncertain outcome reads as failed and can be run again
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/deferred-executor.ts
+    remove: "      } else if (outcome?.status === 'unknown') {"
+    replace with: "      } else if (false) {"
+    fails: what a receipt says > a tool that cannot say whether it ran leaves the request unresolved, never run again [31.16ms]
+
+[DETECTED] nothing started reads as failed
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/deferred-executor.ts
+    remove: "      if (outcome?.effect === 'not_started') {"
+    replace with: "      if (false) {"
+    fails: what a receipt says > nothing started is blocked, not failed; a plain error is failed [22.39ms]
+
+[DETECTED] a chat reply says executed for a refused run
+    test: src/authority/entry-matrix.test.ts  exit: 1  22 pass 2 fail
+    file: src/daemon/approval-decision.ts
+    remove: "  switch (executionState(outcome.request)) {"
+    replace with: "  switch ('committed' as string) {"
+    fails: what a receipt says > a tool that cannot say whether it ran leaves the request unresolved, never run again [22.13ms]
+    fails: what a receipt says > nothing started is blocked, not failed; a plain error is failed [21.12ms]
+
+[DETECTED] anyone the bot hears can approve
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/channel-service.ts
+    remove: "      if (action === 'approve' && !channelSenderMayApprove(this.config, channelTag, msg.metadata.userId)) {"
+    replace with: "      if (false) {"
+    fails: approving from chat > a sender not on the list can deny but not approve [25.53ms]
+
+[DETECTED] an empty allowed list lets anyone approve
+    test: src/authority/entry-matrix.test.ts  exit: 1  22 pass 2 fail
+    file: src/daemon/channel-service.ts
+    remove: "  if (!Array.isArray(list) || list.length === 0 || userId === undefined || userId === null || userId === '') return false;"
+    replace with: "  if (!Array.isArray(list) || list.length === 0) return true;\n  if (userId === undefined || userId === null || userId === '') return false;"
+    fails: approving from chat > needs a sender on the channel's allowed users list [23.11ms]
+    fails: approving from chat > a sender not on the list can deny but not approve [22.39ms]
+
+[DETECTED] a few characters name a card
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/approval.ts
+    remove: "    if (!/^[a-f0-9-]{8,}$/i.test(shortId)) return null;\n"
+    replace with: ""
+    fails: approving from chat > names exactly one card, by at least the 8 characters the card shows [23.95ms]
+
+[DETECTED] a prefix two cards share approves one of them
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/approval.ts
+    remove: "    return rows.length === 1 ? rows[0]! : null;"
+    replace with: "    return rows[0] ?? null;"
+    fails: approving from chat > names exactly one card, by at least the 8 characters the card shows [22.95ms]
+
+[DETECTED] a spoken yes picks the newest of several cards
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/ws-service.ts
+    remove: "        if (pending.length > 1) {"
+    replace with: "        if (false) {"
+    fails: a spoken yes or no > decides nothing while more than one card waits [25.10ms]
+
+[DETECTED] a spoken yes approves while paused
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/ws-service.ts
+    remove: "          if (emergency !== 'normal') return { kind: 'gated', label, message: heldApprovalMessage(emergency) };\n"
+    replace with: ""
+    fails: a spoken yes or no > approves the one card waiting, and waits while Jarvis is paused [27.77ms]
+
+[DETECTED] realtime voice runs an action that needs approval
+    test: src/agents/orchestrator-realtime.test.ts  exit: 1  5 pass 2 fail
+    file: src/agents/orchestrator.ts
+    remove: "      if (decision.requiresApproval) {\n        if (!this.approvalManager) {"
+    replace with: "      if (false) {\n        if (!this.approvalManager) {"
+    fails: orchestrator.executeRealtimeToolCall (voice tool bridge) > a call that needs approval is not run: it leaves an approval card, and the model is told to say so (Q-08) [26.14ms]
+    fails: orchestrator.executeRealtimeToolCall (voice tool bridge) > with no approval channel, a call that needs approval is refused, not run [27.80ms]
+
+[DETECTED] a voice card records no one to judge it as
+    test: src/agents/orchestrator-realtime.test.ts  exit: 1  6 pass 1 fail
+    file: src/agents/orchestrator.ts
+    remove: "          toolRegistry: this.toolRegistry,\n          principal: {"
+    replace with: "          toolRegistry: this.toolRegistry,\n          xprincipal: {"
+    fails: orchestrator.executeRealtimeToolCall (voice tool bridge) > a call that needs approval is not run: it leaves an approval card, and the model is told to say so (Q-08) [27.06ms]
+
+[DETECTED] realtime runs ungated with no primary agent
+    test: src/agents/orchestrator-realtime.test.ts  exit: 1  6 pass 1 fail
+    file: src/agents/orchestrator.ts
+    remove: "    if (this.authorityEngine && !primary) {\n      return `[AUTHORITY DENIED] Cannot execute ${name}: no primary agent is active.`;"
+    replace with: "    if (false) {\n      return `[AUTHORITY DENIED] Cannot execute ${name}: no primary agent is active.`;"
+    fails: orchestrator.executeRealtimeToolCall (voice tool bridge) > with no primary agent the gate fails closed instead of running the call ungated [21.08ms]
+
+[DETECTED] a denied intent can be carried out through another tool in the same turn
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/agents/orchestrator.ts
+    remove: "          this.noteDeclinedIntent(toolCall.arguments.action_category);\n"
+    replace with: ""
+    fails: chat turns > an intent the person denied cannot be carried out through a tool the level allows, in that turn [30.20ms]
+
+[DETECTED] a cancelled task's card is handed on
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/agents/orchestrator.ts
+    remove: "            if (signal?.aborted && this.approvalManager.deny(request.id, 'task-cancelled')) {"
+    replace with: "            if (false) {"
+    fails: chat turns > a task cancelled while its card waits withdraws the card instead of handing it on [287.06ms]
+
+[DETECTED] Kill lets a tool in flight finish
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/actions/tools/registry.ts
+    remove: "      return await withExecutionScope(killFence, () => tool.execute(params));"
+    replace with: "      return await tool.execute(params);"
+    fails: Pause and Kill below every decision surface > Kill stops a tool in flight at its next checkpoint; Pause lets it finish [28.19ms]
+
+[DETECTED] a workflow approval expires with chat cards
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/approval.ts
+    remove: "`UPDATE approval_requests SET status = 'expired' WHERE status = 'pending' AND execution_mode != 'workflow' AND created_at < ?`"
+    replace with: "`UPDATE approval_requests SET status = 'expired' WHERE status = 'pending' AND created_at < ?`"
+    fails: a card nobody answers > stops being approvable after 24 hours; a workflow approval keeps its own lifecycle [28.10ms]
+
+[DETECTED] Kill leaves workflow approvals pending
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/approval.ts
+    remove: "    const ids = (db.query(`SELECT id FROM approval_requests WHERE status = 'pending'`).all()"
+    replace with: "    const ids = (db.query(`SELECT id FROM approval_requests WHERE status = 'pending' AND execution_mode != 'workflow'`).all()"
+    fails: Pause and Kill below every decision surface > Kill denies every pending request, workflow ones included [24.34ms]
+
+[DETECTED] a level that is not a number passes every level check
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/authority/engine.ts
+    remove: "    const levels = [agentAuthorityLevel, this.config.default_level].filter((level) => Number.isFinite(level));\n    const effectiveLevel = levels.length ? Math.max(...levels) : 0;\n    const requiredLevel = AUTHORITY_REQUIREMENTS[actionCategory];\n    if (!(effectiveLevel >= requiredLevel)) {"
+    replace with: "    const effectiveLevel = Math.max(agentAuthorityLevel, this.config.default_level);\n    const requiredLevel = AUTHORITY_REQUIREMENTS[actionCategory];\n    if (effectiveLevel < requiredLevel) {"
+    fails: permission settings > a level that is not a number counts for nothing [24.67ms]
+
+[DETECTED] a bad config is applied
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/api-routes.ts
+    remove: "          const invalid = authorityConfigPatchError(body);\n          if (invalid) return error(invalid);\n"
+    replace with: ""
+    fails: permission settings > the routes refuse a bad config, and a learning accept keeps a Kill [41.80ms]
+
+[DETECTED] a learning accept writes the engine state back
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/api-routes.ts
+    remove: "            overrides: ctx.authorityEngine.getConfig().overrides,\n          } as typeof freshConfig.authority;"
+    replace with: "            ...ctx.authorityEngine.getConfig(),\n          } as typeof freshConfig.authority;"
+    fails: permission settings > the routes refuse a bad config, and a learning accept keeps a Kill [33.88ms]
+
+[DETECTED] any action can be accepted as learned
+    test: src/authority/entry-matrix.test.ts  exit: 1  23 pass 1 fail
+    file: src/daemon/api-routes.ts
+    remove: "          if (!ctx.learner.getSuggestions().some((s) => s.actionCategory === body.action)) {\n            return error('There is no learning suggestion for that action');\n          }\n"
+    replace with: ""
+    fails: permission settings > the routes refuse a bad config, and a learning accept keeps a Kill [27.97ms]
+
+[DETECTED] Kill stops no workflow run
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/daemon/emergency-state.ts
+    remove: "    try { stoppedRuns = stopUnfinishedRunsForKill(); }"
+    replace with: "    try { stoppedRuns = 0; }"
+    fails: the daemon's Kill and Resume (daemon/emergency-state.ts) > Kill stops every unfinished run and denies every pending approval; the engine's copy of the state follows [43.99ms]
+
+[DETECTED] Kill denies no pending approval
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/daemon/emergency-state.ts
+    remove: "      const denied = deps.approvalManager.denyAllPending('emergency-kill');"
+    replace with: "      const denied = [] as ApprovalRequest[];"
+    fails: the daemon's Kill and Resume (daemon/emergency-state.ts) > Kill stops every unfinished run and denies every pending approval; the engine's copy of the state follows [30.51ms]
+
+[DETECTED] the engine's copy of the state is the boot snapshot
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/daemon/emergency-state.ts
+    remove: "  deps.authorityEngine.updateConfig({ ...deps.authorityEngine.getConfig(), emergency_state: state });\n"
+    replace with: ""
+    fails: the daemon's Kill and Resume (daemon/emergency-state.ts) > Kill stops every unfinished run and denies every pending approval; the engine's copy of the state follows [39.96ms]
+
+[DETECTED] Resume releases no held step
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/daemon/emergency-state.ts
+    remove: "    try { releasedHolds = releaseEmergencyHolds(); }"
+    replace with: "    try { releasedHolds = 0; }"
+    fails: the daemon's Kill and Resume (daemon/emergency-state.ts) > Resume releases the steps held while paused [35.61ms]
+
+[DETECTED] the worker claims jobs while paused
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/queue/worker.ts
+    remove: "      if (emergencyHold()) return processed;\n"
+    replace with: ""
+    fails: Pause holds queued work > the worker claims nothing while paused, and runs it after Resume [5036.68ms]
+
+[DETECTED] a job claimed as Jarvis paused runs anyway
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/runner/handler.ts
+    remove: "    if (emergency === \"paused\") {\n      releaseJob(job.id);\n      return;\n    }\n"
+    replace with: ""
+    fails: Pause holds queued work > a job claimed just as Jarvis was paused goes back untouched, and is not taken for a replay [43.60ms]
+
+[DETECTED] a released job is taken for a replay
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/db/repos/job-queue.ts
+    remove: "SET status = 'QUEUED', attempt = MAX(attempt - 1, 0), locked_until = NULL"
+    replace with: "SET status = 'QUEUED', attempt = attempt, locked_until = NULL"
+    fails: Pause holds queued work > a job claimed just as Jarvis was paused goes back untouched, and is not taken for a replay [35.32ms]
+
+[DETECTED] a job claimed as Kill was pressed starts its run
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/runner/handler.ts
+    remove: "    if (emergency === \"killed\") {"
+    replace with: "    if (false) {"
+    fails: Kill stops every unfinished run > a job claimed as Kill was pressed stops its run instead of starting it [38.34ms]
+
+[DETECTED] Kill leaves executing and waiting runs
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/runtime/emergency-hold.ts
+    remove: "`SELECT id, flow_id FROM flow_run WHERE status IN ('QUEUED', 'RUNNING', 'PAUSED')`"
+    replace with: "`SELECT id, flow_id FROM flow_run WHERE status IN ('QUEUED')`"
+    fails: Kill stops every unfinished run > queued, executing and waiting runs are stopped, saying why; finished ones are left alone [42.07ms]
+
+[DETECTED] a continuation wakes a run while paused
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/runtime/continuation.ts
+    remove: "  if (emergencyHold()) return \"held\";\n"
+    replace with: ""
+    fails: Pause holds what would wake a waiting run > a resume URL answers 503 while paused and keeps its waitpoint [35.28ms]
+
+[DETECTED] a due timer wakes a run while paused
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  9 pass 2 fail
+    file: src/workflows/runtime/continuation.ts
+    remove: "  if (emergencyHold()) return \"held\";\n"
+    replace with: ""
+    file: src/workflows/timer-scheduler.ts
+    remove: "    if (emergencyHold()) return 0;\n    let resumed = 0;"
+    replace with: "    let resumed = 0;"
+    fails: Pause holds what would wake a waiting run > a due timer wakes nothing while paused, and continues the run after Resume [39.61ms]
+    fails: Pause holds what would wake a waiting run > a resume URL answers 503 while paused and keeps its waitpoint [32.14ms]
+
+[DETECTED] a held step is never released
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  8 pass 3 fail
+    file: src/workflows/runtime/continuation.ts
+    remove: "    if (waitpoint && claimContinuation({ runId: row.flow_run_id, waitpoint, kind: \"hold\", resumePayload: {}, now }) === \"resumed\") released++;"
+    replace with: "    if (false) released++;"
+    fails: Pause holds what would wake a waiting run > a step parked on a hold is released by Resume, never by a URL [29.22ms]
+    fails: Pause holds what would wake a waiting run > the timer tick releases a hold left by a restart while paused [30.16ms]
+    fails: the daemon's Kill and Resume (daemon/emergency-state.ts) > Resume releases the steps held while paused [35.09ms]
+
+[DETECTED] a resume URL releases a held step
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/api/routes.ts
+    remove: "          if (wp.type === \"HOLD\") return err(\"This waitpoint holds a step while Jarvis is paused; Jarvis releases it when resumed\", 403);\n"
+    replace with: ""
+    fails: Pause holds what would wake a waiting run > a step parked on a hold is released by Resume, never by a URL [35.66ms]
+
+[DETECTED] a restart while paused leaves its holds for good
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/timer-scheduler.ts
+    remove: "    try { resumed += releaseEmergencyHolds(now); }"
+    replace with: "    try { resumed += 0; }"
+    fails: Pause holds what would wake a waiting run > the timer tick releases a hold left by a restart while paused [28.07ms]
+
+[DETECTED] a run starts by hand while paused
+    test: src/workflows/runtime/emergency-hold.test.ts  exit: 1  10 pass 1 fail
+    file: src/workflows/api/routes.ts
+    remove: "          const held = manualStartRefusal();\n          if (held) return err(held, 409);\n"
+    replace with: ""
+    fails: starting a run by hand > is refused while paused or stopped, saying why [35.07ms]
+
+[DETECTED] chat starts a run while paused
+    test: src/actions/tools/manage-workflow.test.ts  exit: 1  46 pass 1 fail
+    file: src/actions/tools/manage-workflow.ts
+    remove: "  const held = manualStartRefusal();\n  if (held) throw new Error(held);\n"
+    replace with: ""
+    fails: manage_workflow tool > a run asked for in chat while Jarvis is paused is refused, saying why (Q-08) [41.49ms]
+
+[DETECTED] a work item starts while paused
+    test: src/goals/work-items.test.ts  exit: 1  24 pass 1 fail
+    file: src/goals/workflow-bridge.ts
+    remove: "    const held = manualStartRefusal();\n    if (held) throw new WorkItemError(held, 409);\n"
+    replace with: ""
+    fails: Q-08: a work item starts like any other run > is refused while Jarvis is paused, and starts after Resume [1071.90ms]
+
+[DETECTED] a work item skips the CODE grant
+    test: src/goals/work-items.test.ts  exit: 1  24 pass 1 fail
+    file: src/goals/workflow-bridge.ts
+    remove: "    assertCodeStepsAllowed(workflowId, version.id, 'run');\n"
+    replace with: ""
+    fails: Q-08: a work item starts like any other run > a locked version with a CODE step needs the workflow's CODE grant [963.84ms]
+
+[DETECTED] a scheduled time while paused starts a run
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  34 pass 3 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "    const held = emergencyHold();\n    if (held) {\n      const reason = held === PAUSED_REASON ? \"Jarvis was paused, so this did not run.\""
+    replace with: "    const held = null as string | null;\n    if (held) {\n      const reason = held === PAUSED_REASON ? \"Jarvis was paused, so this did not run.\""
+    fails: Pause and Kill (Q-08) > a scheduled time while paused is skipped and shown, and not run late after Resume [37.35ms]
+    fails: Pause and Kill (Q-08) > a webhook while paused is told to retry later, and its retry after Resume runs [33.40ms]
+    fails: Pause and Kill (Q-08) > after Kill nothing starts either, saying so [34.37ms]
+
+[DETECTED] a time skipped while paused runs late after Resume
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  36 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "        dedupeKey: opts.source === \"schedule\" ? opts.dedupeKey : null, scheduledFor: opts.scheduledFor,"
+    replace with: "        dedupeKey: null, scheduledFor: opts.scheduledFor,"
+    fails: Pause and Kill (Q-08) > a scheduled time while paused is skipped and shown, and not run late after Resume [32.87ms]
+
+[DETECTED] a webhook while paused is not told when to retry
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  36 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "      return opts.source === \"webhook\"\n        ? { outcome: \"skipped\", fireId: fire?.id, reason: held, retryAfterSeconds: 60 }\n        : { outcome: \"skipped\", fireId: fire?.id, reason };"
+    replace with: "      return { outcome: \"skipped\", fireId: fire?.id, reason };"
+    fails: Pause and Kill (Q-08) > a webhook while paused is told to retry later, and its retry after Resume runs [29.68ms]
+
+[DETECTED] an event source is polled while paused
+    test: src/workflows/runner/triggers/delivery.test.ts  exit: 1  36 pass 1 fail
+    file: src/workflows/runner/triggers/manager.ts
+    remove: "    const held = emergencyHold();\n    if (held) {\n      unrun(\"skipped\""
+    replace with: "    const held = null as string | null;\n    if (held) {\n      unrun(\"skipped\""
+    fails: Pause and Kill (Q-08) > an event source is not polled while paused, so its items wait for Resume; a schedule piece time is skipped [59.36ms]
+
+[DETECTED] a governed step reached while paused runs
+    test: src/workflows/runtime/workflow-authority.test.ts  exit: 1  64 pass 1 fail
+    file: src/workflows/runtime/effect-boundary.ts
+    remove: "    const held = holdIfPaused();\n    if (held) return held;\n"
+    replace with: ""
+    fails: workflow effect boundary > a step that needs approval, reached while paused, raises no card until Resume (Q-08) [36.32ms]
+
+[DETECTED] an approved step reached while paused is dispatched
+    test: src/workflows/runtime/workflow-authority.test.ts  exit: 1  64 pass 1 fail
+    file: src/workflows/runtime/effect-boundary.ts
+    remove: "    const heldBeforeDispatch = holdIfPaused();\n    if (heldBeforeDispatch) return heldBeforeDispatch;\n"
+    replace with: ""
+    fails: workflow effect boundary > a Pause pressed while a card is delivered holds the step, even approved meanwhile (Q-08) [42.99ms]
+
+[DETECTED] Kill lets a governed step run
+    test: src/workflows/runtime/workflow-authority.test.ts  exit: 1  58 pass 7 fail
+    file: src/workflows/runtime/effect-boundary.ts
+    remove: "      // state taken at boot kept workflows blocked after Resume (Q-08).\n      const state = emergency.getState();\n      if (state === 'killed') throw new Error('Workflow effect blocked: system killed');"
+    replace with: "      // state taken at boot kept workflows blocked after Resume (Q-08).\n      const state = emergency.getState();"
+    fails: workflow effect boundary > tool: kill prevents the effect [44.49ms]
+    fails: workflow effect boundary > notify: kill prevents the effect [29.38ms]
+    fails: workflow effect boundary > context: kill prevents the effect [31.48ms]
+    fails: workflow effect boundary > llm: kill prevents the effect [34.46ms]
+    fails: workflow effect boundary > approved effect rechecks kill before dispatch [31.93ms]
+    fails: workflow effect boundary > a Kill during notification fan-out blocks later channels and records partial delivery [36.73ms]
+    fails: workflow effect boundary > the ambient execution scope carries Authority state, not just cancellation [30.77ms]
+
+[DETECTED] the boundary still reads the engine's boot-time copy of the state
+    test: src/workflows/runtime/workflow-authority.test.ts  exit: 1  64 pass 1 fail
+    file: src/workflows/runtime/effect-boundary.ts
+    remove: "      // state taken at boot kept workflows blocked after Resume (Q-08).\n      const state = emergency.getState();\n      if (state === 'killed') throw new Error('Workflow effect blocked: system killed');"
+    replace with: "      // state taken at boot kept workflows blocked after Resume (Q-08).\n      const state = emergency.getState();\n      const configuredState = authority.getConfig().emergency_state;\n      if (state === 'killed' || configuredState !== 'normal') throw new Error('Workflow effect blocked: system killed');"
+    fails: workflow effect boundary > a stale copy of the state in the engine config does not keep workflows blocked after Resume (Q-08) [37.50ms]
+
+[DETECTED] a recorded piece authorization is handed out while paused
+    test: src/workflows/runtime/governed-pieces.test.ts  exit: 1  87 pass 1 fail
+    file: src/workflows/runtime/effect-boundary.ts
+    remove: "      if (input.route === 'piece' || input.route === 'agent') {"
+    replace with: "      if (false) {"
+    fails: Q-08: every piece step obeys Pause and Kill > a recorded piece authorization is not handed out again while paused [39.75ms]
+
+[DETECTED] a community piece ignores Pause and Kill
+    test: src/workflows/runtime/governed-pieces.test.ts  exit: 1  86 pass 2 fail
+    file: src/workflows/runtime/service-backends.ts
+    remove: "    if (!resolved) return admitUngovernedStep(req, ctx);"
+    replace with: "    if (!resolved) return { governed: false };"
+    fails: Q-08: every piece step obeys Pause and Kill > a community piece runs as before and is audited; paused it parks on a hold; after Kill it does not run [39.02ms]
+    fails: Q-08: every piece step obeys Pause and Kill > a CODE step is admitted the same way and audited as a code step [32.70ms]
+
+[DETECTED] a community step leaves no audit row
+    test: src/workflows/runtime/governed-pieces.test.ts  exit: 1  86 pass 2 fail
+    file: src/workflows/runtime/service-backends.ts
+    remove: "      opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,"
+    replace with: "      void ({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,"
+    fails: Q-08: every piece step obeys Pause and Kill > a community piece runs as before and is audited; paused it parks on a hold; after Kill it does not run [35.64ms]
+    fails: Q-08: every piece step obeys Pause and Kill > a CODE step is admitted the same way and audited as a code step [34.12ms]
+
+[DETECTED] the engine never asks about a community piece
+    test: src/workflows/runtime/governed-pieces.test.ts  exit: 1  86 pass 2 fail
+    file: src/workflows/runtime/piece-effect-guard.ts
+    remove: "  const governed = isGovernedPiece(params.piece) && typeof params.action === 'string' && params.action.length > 0;"
+    replace with: "  if (!isGovernedPiece(params.piece)) return { governed: false };\n  const governed = typeof params.action === 'string' && params.action.length > 0;"
+    fails: governed piece adapters: the catalogue stays open > the engine asks the daemon about every piece, but only a governed one's input leaves it (Q-08) [38.07ms]
+    fails: Q-08: every piece step obeys Pause and Kill > the engine parks a step the daemon holds, and refuses a malformed hold [28.90ms]
+
+[DETECTED] a community piece's input leaves the engine
+    test: src/workflows/runtime/governed-pieces.test.ts  exit: 1  87 pass 1 fail
+    file: src/workflows/runtime/piece-effect-guard.ts
+    remove: "    input: governed ? sanitizePieceInput(params.input) : {},"
+    replace with: "    input: sanitizePieceInput(params.input),"
+    fails: governed piece adapters: the catalogue stays open > the engine asks the daemon about every piece, but only a governed one's input leaves it (Q-08) [36.35ms]
+
+[DETECTED] the engine sends no digest of the whole input
+    test: src/workflows/runtime/governed-pieces.test.ts  exit: 1  87 pass 1 fail
+    file: src/workflows/runtime/piece-effect-guard.ts
+    remove: "    ...(governed ? { inputDigest: await pieceInputDigest(params.input) } : {}),\n"
+    replace with: ""
+    fails: governed piece adapters: the catalogue stays open > the engine asks the daemon about every piece, but only a governed one's input leaves it (Q-08) [32.93ms]
+
+[DETECTED] a piece approval covers only its card's copy
+    test: src/workflows/runtime/governed-pieces.test.ts  exit: 1  87 pass 1 fail
+    file: src/workflows/runtime/service-backends.ts
+    remove: "      request: { piece: req.piece, action: req.action, input, ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}) },"
+    replace with: "      request: { piece: req.piece, action: req.action, input },"
+    fails: Q-08: every piece step obeys Pause and Kill > a piece approval covers the whole input, not the shortened copy its card shows [26.63ms]
+
+[DETECTED] the engine runs a piece step the daemon held
+    test: src/workflows/runtime/piece-executor-gate.drift.test.ts  exit: 1  5 pass 1 fail
+    file: src/workflows/activepieces/packages/server/engine/src/lib/handler/piece-executor.ts
+    remove: "        const parked = 'dispatch' in governance && (governance.dispatch === 'approval_required' || governance.dispatch === 'held')"
+    replace with: "        const parked = 'dispatch' in governance && governance.dispatch === 'approval_required'"
+    fails: engine piece-executor admission gate > an approval-required verdict parks the step instead of running it [0.91ms]
+
+[DETECTED] a CODE step does not ask about Pause and Kill
+    test: src/workflows/runtime/piece-executor-gate.drift.test.ts  exit: 1  5 pass 1 fail
+    file: src/workflows/activepieces/packages/server/engine/src/lib/handler/code-executor.ts
+    remove: "        const admission = await authorizePieceDispatch({"
+    replace with: "        const admission = { governed: false } as const; void ({"
+    fails: engine code-executor admission (Q-08) > a CODE step asks the daemon about Pause and Kill before its code runs [0.89ms]
+
+[DETECTED] a CODE step change does not invalidate the engine bundle
+    test: src/workflows/runtime/piece-executor-gate.drift.test.ts  exit: 1  5 pass 1 fail
+    file: src/workflows/runner/engine-runtime/build.ts
+    remove: "  'server/engine/src/lib/handler/code-executor.ts',\n"
+    replace with: ""
+    fails: engine piece-executor admission gate > every patched source feeding the gate invalidates the engine bundle [1.26ms]
+
+64 of 64 removals fail their tests; source restored after each.
