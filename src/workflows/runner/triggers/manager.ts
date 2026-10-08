@@ -618,7 +618,7 @@ export class TriggerManager {
         const run = getWorkflowDb().transaction(() => {
           const now = Date.now();
           const created = createFlowRun({ flowId, flowVersionId: versionId,
-            projectId: getFlow(flowId)?.project_id, triggeredBy: `trigger:${kind}`,
+            triggeredBy: `trigger:${kind}`,
             status: 'FAILED', startTime: now, tags: ['workflow-readiness'] });
           return updateRun(created.id, { finishTime: now, stepsCount: 0,
             failedStep: { name: '<readiness>', displayName: 'Workflow readiness', errorMessage: error.message },

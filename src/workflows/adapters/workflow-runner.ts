@@ -21,7 +21,7 @@ import type {
   PieceWorkflowStartInput,
   PieceWorkflowStartResult,
 } from "../jarvis-pieces/types";
-import { getFlow } from "../db/repos/flow";
+import { getFlow, getFlowInProject } from "../db/repos/flow";
 import { getFlowVersion, getLatestDraft } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
@@ -64,12 +64,18 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
   async start(
     input: PieceWorkflowStartInput,
     callerRunId?: string,
+    /**
+     * The caller's project. When given, the target is found in that project
+     * only, and a flow in another one answers exactly as a missing one does.
+     * The workflow backend always passes it; see `childVersion` there.
+     */
+    callerProjectId?: string,
   ): Promise<PieceWorkflowStartResult> {
     if (callerRunId) assertRunNotCanceled(callerRunId);
     if (!input.flowId) {
       throw new WorkflowRunnerError("MISSING_REF", "flowId is required");
     }
-    const flow = getFlow(input.flowId);
+    const flow = callerProjectId !== undefined ? getFlowInProject(callerProjectId, input.flowId) : getFlow(input.flowId);
     if (!flow) {
       throw new WorkflowRunnerError("FLOW_NOT_FOUND", `flow not found: ${input.flowId}`);
     }

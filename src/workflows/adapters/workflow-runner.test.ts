@@ -11,12 +11,16 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { JarvisWorkflowRunnerAdapter, WorkflowRunnerError } from "./workflow-runner";
-import { closeWorkflowDb, initWorkflowDb } from "../db";
+import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db";
 import { createFlow } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 
 const PROJECT_ID = "proj_x";
+
+function getWorkflowDbRuns(flowId: string): number {
+  return (getWorkflowDb().query("SELECT COUNT(*) AS n FROM flow_run WHERE flow_id = ?").get(flowId) as { n: number }).n;
+}
 
 describe("JarvisWorkflowRunnerAdapter", () => {
   let adapter: JarvisWorkflowRunnerAdapter;
@@ -49,6 +53,22 @@ describe("JarvisWorkflowRunnerAdapter", () => {
       caught = e;
     }
     expect((caught as WorkflowRunnerError).code).toBe("FLOW_NOT_FOUND");
+  });
+
+  test("with a caller project, a flow in another project is FLOW_NOT_FOUND, exactly as a missing one (#843)", async () => {
+    // Defence in depth behind the workflow backend's own scoped lookup: the
+    // adapter is the code that creates and enqueues the child run.
+    const foreign = createFlow({ projectId: "proj_other_843" });
+    createDraftVersion({ flowId: foreign.id, displayName: "theirs", trigger: { name: "trigger", type: "EMPTY" } as any });
+    const failure = async (flowId: string) => {
+      try { await adapter.start({ flowId }, undefined, PROJECT_ID); return null; }
+      catch (e) { return { code: (e as WorkflowRunnerError).code, message: (e as Error).message.split(flowId).join("<id>") }; }
+    };
+    expect(await failure("flow_nonexistent")).toEqual({ code: "FLOW_NOT_FOUND", message: "flow not found: <id>" });
+    expect(await failure(foreign.id)).toEqual(await failure("flow_nonexistent"));
+    expect(getWorkflowDbRuns(foreign.id)).toBe(0);
+    // The control: in its own project the same flow starts.
+    expect((await adapter.start({ flowId: foreign.id }, undefined, "proj_other_843")).runId).toEqual(expect.any(String));
   });
 
   test("throws VERSION_MISSING when the flow exists but has no version", async () => {

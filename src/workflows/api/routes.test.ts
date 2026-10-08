@@ -1752,18 +1752,36 @@ describe("#729: the flow, version and run routes share one project scope", () =>
   });
 
   test("a run is scoped by its flow's project, not by flow_run.project_id", async () => {
-    // No caller of `createFlowRun` passes a project, so every run row says
-    // `DEFAULT_IDS.project` whatever its flow's project is. A scope read off
-    // that column would show the default caller every foreign run.
+    // Before #843 no caller of `createFlowRun` passed a project, so every run
+    // row said `DEFAULT_IDS.project` whatever its flow's project was. #843
+    // fixes the writer and backfills old rows at boot, but the scope is kept
+    // on the flow so it does not depend on the column being right. A
+    // mismatched row is made here directly, and the test asserts that it was,
+    // so it cannot pass vacuously against a column that happens to be right.
     const { DEFAULT_IDS } = await import("../db/schema");
     const foreign = await seedForeign();
     const { getWorkflowDb } = await import("../db/index");
+    getWorkflowDb().run("UPDATE flow_run SET project_id = ? WHERE id = ?", [DEFAULT_IDS.project, foreign.runId]);
     const row = getWorkflowDb().query<{ project_id: string }, [string]>("SELECT project_id FROM flow_run WHERE id = ?").get(foreign.runId);
     expect(row?.project_id).toBe(DEFAULT_IDS.project);
     const call = CALLS.find((c) => c.name === "run GET")!;
     expect((await rawCall(routes, call, foreign)).status).toBe(404);
     const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
     expect((await rawCall(scoped, call, foreign)).status).toBe(200);
+  });
+
+  test("a run started from the route is in its flow's project (#843)", async () => {
+    // The column the engine token's projectId is minted from, and that every
+    // effect record copies. Before #843 it was DEFAULT_IDS.project here.
+    const own = await seedForeign();
+    const scoped = createWorkflowRoutes({ callerProjectId: () => OTHER_PROJECT });
+    const started = await callJson(scoped["/api/workflows/:id/run"]?.POST,
+      reqWithParams("POST", "http://x/", { id: own.flowId }, {}));
+    expect(started.status).toBe(202);
+    expect(started.body.projectId).toBe(OTHER_PROJECT);
+    const { getWorkflowDb } = await import("../db/index");
+    const row = getWorkflowDb().query<{ project_id: string }, [string]>("SELECT project_id FROM flow_run WHERE id = ?").get(started.body.id);
+    expect(row?.project_id).toBe(OTHER_PROJECT);
   });
 });
 

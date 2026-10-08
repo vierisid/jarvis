@@ -48,8 +48,8 @@ const PIECE_FOR_ROUTE = { tool: 'tool', notify: 'notify', agent: 'agent', workfl
 const ACTION_FOR_ROUTE = { tool: 'invoke', notify: 'notify', agent: 'delegate', workflow: 'run_workflow',
   context: 'vault_search', llm: 'ask' } as const;
 
-function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | 'llm' = 'tool') {
-  const flow = createFlow({});
+function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | 'llm' = 'tool', projectId: string = DEFAULT_IDS.project) {
+  const flow = createFlow({ projectId });
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Governed routine', trigger: {
     name: 'trigger', type: 'EMPTY', nextAction: { name: 'action', type: 'PIECE', settings: {
       pieceName: `@jarvispieces/piece-jarvis-${PIECE_FOR_ROUTE[route]}`, pieceVersion: '0.0.1',
@@ -79,7 +79,7 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | '
     wsService: { broadcastNotificationToDashboard: (...args: unknown[]) => { calls.push(args); } } as any,
   };
   const backends = buildSandboxServiceBackends(options);
-  const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName: 'action', executionPath: [] };
+  const context = { runId: run.id, projectId, stepName: 'action', executionPath: [] };
   const invoke = (): Promise<any> => {
     if (route === 'context') return backends.contextProvider!.vaultSearch({ query: 'alice' }, context) as Promise<any>;
     if (route === 'llm') return backends.llmChat!({ prompt: 'summarise the vault' }, context) as Promise<any>;
@@ -92,6 +92,23 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | '
 }
 
 describe('workflow effect boundary', () => {
+  /**
+   * #843. The effect context's projectId is the engine token's, which is
+   * minted from the run row, and the effect record copies the run's project.
+   * Before #843 that row always said DEFAULT_IDS.project, so a run of another
+   * project's flow had an engine token, and effect records, in the default
+   * project. With a token honestly carrying the flow's project the boundary
+   * refused the effect as an identity mismatch.
+   */
+  test("an effect of another project's flow is recorded in that project (#843)", async () => {
+    const other = 'proj_other_843';
+    const f = fixture('tool', other);
+    expect(f.run.projectId).toBe(other);
+    expect((await f.invoke()).result).toBe('saved');
+    const effects = listWorkflowEffects(f.run.id);
+    expect(effects.map(e => e.projectId)).toEqual([other]);
+  });
+
   test('a per-call UI review survives allowed policy and resumes exactly once', async () => {
     const f = fixture();
     f.registry.get('write_file')!.authorityGate = () => ({ actionCategory: 'write_data', confirm: 'always',
@@ -548,6 +565,33 @@ describe('workflow effect boundary', () => {
     expect(reply.status).toBe('completed');
     expect(reply.toolCalls[0]!.result).toContain('AUTHORITY DENIED');
     expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ route: 'agent', target: { role: 'workflow-default' } });
+  });
+
+  /**
+   * #843 review. `run_workflow` looked its target up by bare id. Since #843 a
+   * child run is put in its OWN flow's project, so its engine token carries
+   * that project's store and connections -- and a flow in one project could
+   * start another project's flow with input it chose. The target is now found
+   * in the caller's project only.
+   */
+  test("a run_workflow step cannot start another project's flow, and is told what a missing id is told (#843)", async () => {
+    const f = fixture('workflow');
+    const foreign = createFlow({ projectId: 'proj_other_843' });
+    createDraftVersion({ flowId: foreign.id, displayName: 'theirs', trigger: { name: 'trigger', type: 'EMPTY' } });
+    const refusal = async (flowId: string) => {
+      try { await f.backends.workflowsStart!({ flowId }, f.context); return '<started>'; }
+      catch (e) { return (e as Error).message.split(flowId).join('<id>'); }
+    };
+    const fromForeign = await refusal(foreign.id);
+    const fromMissing = await refusal('flow_does_not_exist_843');
+    expect(fromMissing).toBe('Target workflow version is unavailable');
+    expect(fromForeign).toBe(fromMissing);
+    expect(getWorkflowDb().query('SELECT id FROM workflow_job').all()).toHaveLength(0);
+    expect(getWorkflowDb().query('SELECT id FROM flow_run WHERE flow_id = ?').all(foreign.id)).toHaveLength(0);
+    // The control: the same call for a flow in the caller's own project starts it.
+    const own = createFlow({});
+    createDraftVersion({ flowId: own.id, displayName: 'ours', trigger: { name: 'trigger', type: 'EMPTY' } });
+    expect(await f.backends.workflowsStart!({ flowId: own.id }, f.context)).toMatchObject({ runId: expect.any(String) });
   });
 
   test('a child workflow start obeys emergency and Authority before enqueue', async () => {
