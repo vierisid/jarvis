@@ -1,21 +1,20 @@
 import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
-import type { DesktopController } from './desktop-controller.ts';
 import { captureViaPrivateFile } from './capture-file.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
-import { SidecarProbe } from './sidecar-probe.ts';
 
 /**
  * macOS App Controller.
  *
- * Two-layer implementation:
- *   1. Desktop sidecar via TCP JSON-RPC — full Accessibility (AXUIElement)
- *      support when a sidecar speaking the desktop-bridge protocol is running.
- *   2. AppleScript / screencapture fallback — window listing, focus,
- *      screenshots, and input simulation through a fixed helper script
- *      (scripts/desktop.applescript).
+ * AppleScript / screencapture: window listing, focus, screenshots, and input
+ * simulation through a fixed helper script (scripts/desktop.applescript).
+ * There is no local element tree; the Go sidecar provides one (Accessibility)
+ * when it is connected, and desktop.ts routes there. The probe for a legacy
+ * desktop-bridge.exe that used to sit in front of this went in #799: it looked
+ * for a Windows executable that cannot run on macOS, so all it ever did was
+ * offer an unauthenticated localhost port a chance to answer.
  *
- * The fallback never assembles AppleScript source from user input: the helper
+ * This never assembles AppleScript source from user input: the helper
  * script ships as an asset with an `on run argv` dispatcher, and all dynamic
  * values travel as osascript arguments, so arbitrary text cannot escape into
  * script code. The fallback paths require the Accessibility and Screen
@@ -126,17 +125,15 @@ function parseWindowLine(line: string): WindowInfo | null {
   };
 }
 
+/** What a macOS caller is told to use for what only the Go sidecar can do. */
+const MAC_SIDECAR_HINT =
+  'Run the JARVIS sidecar on this Mac and enroll it; desktop tools route to it automatically.';
+
 export class MacAppController implements AppController {
   private exec: NativeExec;
-  private sidecarProbe: SidecarProbe;
 
-  constructor(opts: { exec?: NativeExec; useSidecar?: boolean } = {}) {
+  constructor(opts: { exec?: NativeExec } = {}) {
     this.exec = opts.exec ?? defaultExec;
-    this.sidecarProbe = new SidecarProbe(opts.useSidecar ?? true);
-  }
-
-  private getSidecar(): Promise<DesktopController | null> {
-    return this.sidecarProbe.get();
   }
 
   /**
@@ -154,32 +151,17 @@ export class MacAppController implements AppController {
   }
 
   async getActiveWindow(): Promise<WindowInfo> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.getActiveWindow();
     const line = this.runScript('get-active-window');
     const info = parseWindowLine(line);
     if (!info) throw new Error(`Could not parse active window info: ${line.slice(0, 200)}`);
     return info;
   }
 
-  async getWindowTree(pid: number): Promise<UIElement[]> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.getWindowTree(pid);
-    throw new Error(
-      'UI element traversal on macOS requires the desktop-bridge sidecar. ' +
-      'Build the sidecar and ensure it is running.',
-    );
-  }
-
-  async getWindowTreeContext(pid: number): Promise<{ elements: UIElement[]; context?: string }> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.getWindowTreeContext(pid);
-    return { elements: await this.getWindowTree(pid) };
+  async getWindowTree(_pid: number): Promise<UIElement[]> {
+    throw new Error(`UI element traversal is not available locally on macOS. ${MAC_SIDECAR_HINT}`);
   }
 
   async listWindows(): Promise<WindowInfo[]> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.listWindows();
     const out = this.runScript('list-windows');
     const windows: WindowInfo[] = [];
     for (const line of out.split('\n')) {
@@ -191,35 +173,25 @@ export class MacAppController implements AppController {
   }
 
   async clickElement(element: UIElement): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.clickElement(element);
     const x = Math.round(element.bounds.x + element.bounds.width / 2);
     const y = Math.round(element.bounds.y + element.bounds.height / 2);
     this.runScript('click-at', [String(x), String(y)]);
   }
 
   async typeText(text: string): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.typeText(text);
     this.runScript('type-text', [text]);
   }
 
   async pressKeys(keys: string[]): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.pressKeys(keys);
     const chord = mapMacKeys(keys);
     this.runScript('press-keys', [chord.modifiers.join(',') || '-', chord.kind, chord.value]);
   }
 
   async captureScreen(): Promise<Buffer> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.captureScreen();
     return this.captureToBuffer(['-x', '-t', 'png']);
   }
 
   async captureWindow(pid: number): Promise<Buffer> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.captureWindow(pid);
     const windows = await this.listWindows();
     const win = windows.find((w) => w.pid === pid);
     if (!win) throw new Error(`No window found for PID ${pid}`);
@@ -235,15 +207,11 @@ export class MacAppController implements AppController {
   }
 
   async focusWindow(pid: number): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.focusWindow(pid);
     this.runScript('focus-window', [String(pid)]);
   }
 
   async launchApp(executable: string, args?: string): Promise<object> {
     if (!executable.trim()) throw new Error('Executable is required');
-    const sc = await this.getSidecar();
-    if (sc) return sc.launchApp(executable, args);
 
     // `open -a` resolves app names and .app bundles; fall back to opening the
     // argument as a path. Arguments are passed as an argv array — no shell —
@@ -262,12 +230,10 @@ export class MacAppController implements AppController {
     return { executable, args: args ?? '' };
   }
 
-  async closeWindow(pid: number): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.closeWindow(pid);
+  async closeWindow(_pid: number): Promise<void> {
     throw new Error(
-      'closeWindow on macOS requires the desktop-bridge sidecar. ' +
-      'Use focusWindow + pressKeys(["Command", "W"]) as a fallback.',
+      'closeWindow is not available locally on macOS. ' +
+      'Use focusWindow + pressKeys(["Command", "W"]) instead.',
     );
   }
 }

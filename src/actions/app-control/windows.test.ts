@@ -21,7 +21,7 @@ function fakeExec(handler: (cmd: string[], input: string) => Partial<NativeExecR
 
 function controller(handler: (cmd: string[], input: string) => Partial<NativeExecResult>) {
   const { exec, calls } = fakeExec(handler);
-  return { ctrl: new WindowsAppController({ exec, useSidecar: false }), calls };
+  return { ctrl: new WindowsAppController({ exec }), calls };
 }
 
 describe('escapeSendKeysText', () => {
@@ -182,9 +182,9 @@ describe('WindowsAppController fallback', () => {
     expect(result).toEqual({ pid: 555, executable: `C:\\Program Files\\O'Brien\\app.exe`, args: '--flag "a b"' });
   });
 
-  test('getWindowTree without sidecar throws instead of pretending', async () => {
+  test('getWindowTree throws instead of pretending, and names the sidecar', async () => {
     const { ctrl } = controller(() => ({}));
-    expect(ctrl.getWindowTree(1)).rejects.toThrow(/sidecar/);
+    await expect(ctrl.getWindowTree(1)).rejects.toThrow(/JARVIS sidecar/);
   });
 });
 

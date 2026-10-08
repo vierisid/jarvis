@@ -1,3 +1,5 @@
+import { ActionOutcomeError } from '../action-outcome.ts';
+
 export type WindowInfo = {
   pid: number;
   title: string;
@@ -33,8 +35,10 @@ export interface AppController {
   /**
    * getWindowTree plus which window it read, for a controller that can say
    * (#704 review): an element id is re-checked against a fresh walk of the
-   * same pid, and a desktop bridge picks the pid's largest window, which can
-   * be a different one by then. Controllers that cannot say omit it.
+   * same pid, and a walk that can land on a different window of that pid (as
+   * the legacy desktop bridge's "largest window" walk could, before #799
+   * removed it) has to say which one it read. Controllers that cannot say
+   * omit it.
    */
   getWindowTreeContext?(pid: number): Promise<{ elements: UIElement[]; context?: string }>;
 
@@ -44,9 +48,28 @@ export interface AppController {
   dragElement?(from: UIElement, to: UIElement): Promise<void>;
 }
 
-// Cached per process: the Windows/macOS controllers keep sidecar probe
-// backoff state and a live sidecar TCP connection on the instance, so a
-// fresh controller per tool call would re-probe every time and leak sockets.
+/**
+ * Why there is no local controller under WSL (#799). The legacy
+ * desktop-bridge.exe that filled this slot is no longer built anywhere, so it
+ * already failed on a stock install, and its unauthenticated port was the
+ * hole #747 and #799 were about.
+ *
+ * Not LinuxAppController for WSLg either: WSLg's X server holds only the
+ * distro's own GUI windows, never the Windows desktop the user is looking at
+ * (measured under WSLg 1.0.73: with Windows apps open, `xprop -root` reports
+ * `_NET_ACTIVE_WINDOW` 0x0 and no `_NET_CLIENT_LIST`). The X11 tools would
+ * list, click, type into and capture an empty Linux display, and say they
+ * had. The working path is the Go sidecar on Windows, which desktop.ts routes
+ * to whenever one with the `desktop` capability is connected.
+ */
+export const WSL_NO_LOCAL_DESKTOP =
+  'Local desktop control is not available under WSL: the Windows desktop cannot be reached from inside ' +
+  'the distro. Run the JARVIS sidecar on Windows and enroll it; desktop tools then route to it ' +
+  'automatically, or pass its name as "target". Nothing was done.';
+
+// Cached per process. Nothing on the controllers needs it any more (the
+// sidecar probe that kept a connection here went in #799); it saves building
+// one per tool call.
 let cachedController: AppController | null = null;
 
 export function getAppController(): AppController {
@@ -55,16 +78,24 @@ export function getAppController(): AppController {
   return cachedController;
 }
 
+/** @internal Test only: forget the cached controller. */
+export function __resetAppControllerForTests(): void {
+  cachedController = null;
+}
+
 function createAppController(): AppController {
   const platform = process.platform;
 
   switch (platform) {
     case 'linux': {
-      // In WSL2, use DesktopController to control Windows desktop via sidecar
       const { WSLBridge } = require('../terminal/wsl-bridge.ts');
       if (WSLBridge.isWSL()) {
-        const { DesktopController } = require('./desktop-controller.ts');
-        return new DesktopController();
+        // Typed as not_started: nothing was attempted, so the caller must not
+        // report an action that may have happened.
+        throw new ActionOutcomeError({
+          status: 'blocked', code: 'LOCAL_DESKTOP_UNAVAILABLE', effect: 'not_started',
+          message: `Error: ${WSL_NO_LOCAL_DESKTOP}`,
+        });
       }
       const { LinuxAppController } = require('./linux.ts');
       return new LinuxAppController();

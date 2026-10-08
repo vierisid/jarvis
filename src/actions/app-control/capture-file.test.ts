@@ -68,7 +68,7 @@ describe('local captures do not use a predictable path (#746)', () => {
         writeFileSync(target, 'what screencapture wrote');
         return { status: 0, stdout: '', stderr: '' };
       };
-      const ctrl = new MacAppController({ exec, useSidecar: false });
+      const ctrl = new MacAppController({ exec });
       const shot = await ctrl.captureScreen();
       expect(shot.toString()).toBe('what screencapture wrote');
       expect(readFileSync(victim, 'utf8')).toBe('untouched');

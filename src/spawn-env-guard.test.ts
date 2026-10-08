@@ -193,7 +193,7 @@ const EXEMPT: Record<string, Exemption> = {
  * -- a model-authored command line, a model-chosen executable, a browser the
  * model drives, or model text reaching an interpreter -- and would break under
  * the allowlist. Tests below also keep the entry points (TerminalExecutor,
- * defaultExec, launchChrome, launchSidecar) out of src/sites and
+ * defaultExec, launchChrome) out of src/sites and
  * src/workflows, and keep the daemon's own restart spawns out of this table:
  * a restarted daemon needs its secrets.
  */
@@ -219,13 +219,6 @@ const MODEL_EXEC: Record<string, Exemption> = {
       'env and hands it to whatever it spawns or opens. Since #521 it refuses local files, so it cannot open ' +
       'file:///proc/self/environ, and keeps Chrome\'s sandbox on unless it cannot start.',
     calls: { launchChrome: 1 },
-  },
-  'actions/app-control/sidecar-launcher.ts': {
-    reason:
-      'launchSidecar: desktop-bridge, which serves launchApp on Windows and hands the launched app its ' +
-      'own environment. (sidecarExecutablePath\'s fixed WSL `cmd.exe /C echo %USERPROFILE%` probe is not ' +
-      'model-directed and uses sanitizedEnv with the #519 WSL interop extras, like wsl-bridge.ts.)',
-    calls: { launchSidecar: 1 },
   },
   'comms/desktop-notify.ts': {
     reason:

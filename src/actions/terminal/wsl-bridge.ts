@@ -202,8 +202,7 @@ async function runWslpath(flag: '-w' | '-u', path: string): Promise<string> {
 /**
  * The sanitizedEnv extras a spawn needs to launch a Windows program from WSL
  * (#519): WSL_INTEROP, the socket interop launches it through on WSL2;
- * WSL_DISTRO_NAME; and WSLENV. Shared with the desktop-bridge probe in
- * actions/app-control/sidecar-launcher.ts.
+ * WSL_DISTRO_NAME; and WSLENV.
  */
 export function wslInteropExtras(): Pick<ExtraEnv, 'WSL_INTEROP' | 'WSL_DISTRO_NAME' | 'WSLENV'> {
   return {

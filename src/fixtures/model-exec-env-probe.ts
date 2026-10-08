@@ -9,9 +9,9 @@
  * variables already in its real startup environment.
  *
  * Each site is pointed at a fake executable the test wrote into `<workDir>/bin`
- * that dumps the environment it received. The fake browser and fake sidecar
- * then hand over to model-exec-fake-server.ts, so that launchChrome and
- * launchSidecar see the port they poll for and return normally.
+ * that dumps the environment it received. The fake browser then hands over to
+ * model-exec-fake-server.ts, so that launchChrome sees the port it polls for
+ * and returns normally.
  *
  * argv: <site> <workDir>
  */
@@ -21,7 +21,6 @@ import { TerminalExecutor } from '../actions/terminal/executor.ts';
 import { LinuxAppController } from '../actions/app-control/linux.ts';
 import { defaultExec } from '../actions/app-control/native-exec.ts';
 import { launchChrome, stopChrome } from '../actions/browser/chrome-launcher.ts';
-import { launchSidecar, stopSidecar } from '../actions/app-control/sidecar-launcher.ts';
 import { sendDesktopNotificationWithReceipt } from '../comms/desktop-notify.ts';
 
 const site = process.argv[2]!;
@@ -39,7 +38,7 @@ async function waitForDump(prefix: string): Promise<void> {
   throw new Error(`no ${prefix} dump within 10s`);
 }
 
-/** A port nothing is listening on, for the fake browser and sidecar to take. */
+/** A port nothing is listening on, for the fake browser to take. */
 function freePort(): number {
   const s = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
   const { port } = s;
@@ -91,14 +90,6 @@ switch (site) {
   case 'chrome': {
     const running = await launchChrome(freePort(), join(workDir, 'profile'), { kind: 'chromium', path: bin('fake-chrome') });
     await stopChrome(running);
-    break;
-  }
-
-  // sidecar-launcher.ts: desktop-bridge, which launches apps for the model
-  // on Windows and hands them its own environment.
-  case 'sidecar': {
-    const running = await launchSidecar(freePort(), bin('fake-sidecar'));
-    await stopSidecar(running);
     break;
   }
 
