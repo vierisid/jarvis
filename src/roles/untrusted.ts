@@ -280,12 +280,9 @@ const UNTRUSTED_TOOL_NAMES: ReadonlySet<string> = new Set([
   //                      (sidecar/uia_actions_windows.go). Windows only; Linux
   //                      and macOS refuse the action. The tool advertises it in
   //                      its own parameter enum, so it is a route the tool
-  //                      guide hands the model, not an edge case. The LOCAL
-  //                      controller path leaks a name on every platform it
-  //                      serves, separately: `clickById` replies `Clicked
-  //                      [role] "name" (id: n)` with the element's accessible
-  //                      name in it (actions/app-control/desktop-controller.ts).
-  //                      Framing by name covers both.
+  //                      guide hands the model, not an edge case. (The local
+  //                      legacy bridge's `clickById`, which echoed the
+  //                      element's accessible name, went in #799.)
   //   desktop_launch_app `window_title` on a found window (xdotool
   //                      getwindowname on Linux, the Win32 title on Windows) --
   //                      and for a BROWSER that is the page's own

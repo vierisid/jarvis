@@ -1,19 +1,18 @@
 import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
-import type { DesktopController } from './desktop-controller.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
-import { SidecarProbe } from './sidecar-probe.ts';
 
 /**
  * Windows App Controller.
  *
- * Two-layer implementation:
- *   1. Desktop sidecar (desktop-bridge.exe) via TCP JSON-RPC — full Win32/UI
- *      Automation support when the sidecar is built and running.
- *   2. PowerShell fallback — window listing, focus, screenshots, and input
- *      simulation through a fixed helper script (scripts/desktop.ps1).
+ * PowerShell: window listing, focus, screenshots, and input simulation
+ * through a fixed helper script (scripts/desktop.ps1). There is no local
+ * element tree; the Go sidecar reads one through UI Automation when it is
+ * connected, and desktop.ts routes there. The legacy desktop-bridge.exe that
+ * used to sit in front of this went in #799: nothing has built it since its
+ * source was deleted (28e43ed), and it answered on an unauthenticated port.
  *
- * The fallback never assembles PowerShell source from user input: the helper
+ * This never assembles PowerShell source from user input: the helper
  * script ships as an asset and all dynamic values travel as a JSON payload on
  * stdin, so arbitrary text cannot escape into script code.
  */
@@ -161,15 +160,9 @@ export function toAsciiJson(payload: Record<string, unknown>): string {
 
 export class WindowsAppController implements AppController {
   private exec: NativeExec;
-  private sidecarProbe: SidecarProbe;
 
-  constructor(opts: { exec?: NativeExec; useSidecar?: boolean } = {}) {
+  constructor(opts: { exec?: NativeExec } = {}) {
     this.exec = opts.exec ?? defaultExec;
-    this.sidecarProbe = new SidecarProbe(opts.useSidecar ?? true);
-  }
-
-  private getSidecar(): Promise<DesktopController | null> {
-    return this.sidecarProbe.get();
   }
 
   /**
@@ -177,8 +170,8 @@ export class WindowsAppController implements AppController {
    * as ASCII-safe JSON — never on the command line, never interpolated into
    * script text.
    */
-  private runScript(command: string, payload?: Record<string, unknown>): string {
-    const stdout = runNative(
+  private async runScript(command: string, payload?: Record<string, unknown>): Promise<string> {
+    const stdout = await runNative(
       this.exec,
       ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH, command],
       payload === undefined ? '' : toAsciiJson(payload),
@@ -187,8 +180,8 @@ export class WindowsAppController implements AppController {
     return stdout.trim();
   }
 
-  private runScriptJson<T>(command: string, payload?: Record<string, unknown>): T {
-    const out = this.runScript(command, payload);
+  private async runScriptJson<T>(command: string, payload?: Record<string, unknown>): Promise<T> {
+    const out = await this.runScript(command, payload);
     if (!out) throw new Error(`desktop.ps1 ${command} produced no output`);
     try {
       return JSON.parse(out) as T;
@@ -198,90 +191,60 @@ export class WindowsAppController implements AppController {
   }
 
   async getActiveWindow(): Promise<WindowInfo> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.getActiveWindow();
-    return toWindowInfo(this.runScriptJson<ScriptWindow>('get-active-window'));
+    return toWindowInfo(await this.runScriptJson<ScriptWindow>('get-active-window'));
   }
 
-  async getWindowTree(pid: number): Promise<UIElement[]> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.getWindowTree(pid);
+  async getWindowTree(_pid: number): Promise<UIElement[]> {
     throw new Error(
-      'UI element traversal on Windows requires the desktop-bridge sidecar, ' +
-      'which is not reachable. Expected desktop-bridge.exe at ' +
-      '%USERPROFILE%\\.jarvis\\sidecar\\desktop-bridge.exe (port 9224 is only ' +
-      'contacted when that file exists); this repo no longer builds it.',
+      'UI element traversal is not available locally on Windows. Run the JARVIS sidecar on this machine ' +
+      'and enroll it; desktop tools route to it automatically (it reads the tree through UI Automation).',
     );
   }
 
-  async getWindowTreeContext(pid: number): Promise<{ elements: UIElement[]; context?: string }> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.getWindowTreeContext(pid);
-    return { elements: await this.getWindowTree(pid) };
-  }
-
   async listWindows(): Promise<WindowInfo[]> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.listWindows();
-    const result = this.runScriptJson<ScriptWindow[] | ScriptWindow>('list-windows');
+    const result = await this.runScriptJson<ScriptWindow[] | ScriptWindow>('list-windows');
     const windows = Array.isArray(result) ? result : [result];
     return windows.map(toWindowInfo);
   }
 
   async clickElement(element: UIElement): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.clickElement(element);
     const x = Math.round(element.bounds.x + element.bounds.width / 2);
     const y = Math.round(element.bounds.y + element.bounds.height / 2);
-    this.runScript('click-at', { x, y });
+    await this.runScript('click-at', { x, y });
   }
 
   async typeText(text: string): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.typeText(text);
-    this.runScript('send-keys', { keys: escapeSendKeysText(text) });
+    await this.runScript('send-keys', { keys: escapeSendKeysText(text) });
   }
 
   async pressKeys(keys: string[]): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.pressKeys(keys);
-    this.runScript('send-keys', { keys: mapKeysToSendKeys(keys) });
+    await this.runScript('send-keys', { keys: mapKeysToSendKeys(keys) });
   }
 
   async captureScreen(): Promise<Buffer> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.captureScreen();
-    const base64 = this.runScript('capture-screen');
+    const base64 = await this.runScript('capture-screen');
     if (!base64) throw new Error('capture-screen produced no image data');
     return Buffer.from(base64, 'base64');
   }
 
   async captureWindow(pid: number): Promise<Buffer> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.captureWindow(pid);
-    const base64 = this.runScript('capture-window', { pid });
+    const base64 = await this.runScript('capture-window', { pid });
     if (!base64) throw new Error(`capture-window produced no image data for PID ${pid}`);
     return Buffer.from(base64, 'base64');
   }
 
   async focusWindow(pid: number): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.focusWindow(pid);
-    this.runScript('focus-window', { pid });
+    await this.runScript('focus-window', { pid });
   }
 
   async launchApp(executable: string, args?: string): Promise<object> {
     if (!executable.trim()) throw new Error('Executable is required');
-    const sc = await this.getSidecar();
-    if (sc) return sc.launchApp(executable, args);
     // pid is null when the shell reuses an existing process (documents, URLs).
-    const result = this.runScriptJson<{ pid: number | null }>('launch-app', { executable, args: args ?? '' });
+    const result = await this.runScriptJson<{ pid: number | null }>('launch-app', { executable, args: args ?? '' });
     return { pid: result.pid ?? null, executable, args: args ?? '' };
   }
 
   async closeWindow(pid: number): Promise<void> {
-    const sc = await this.getSidecar();
-    if (sc) return sc.closeWindow(pid);
-    this.runScript('close-window', { pid });
+    await this.runScript('close-window', { pid });
   }
 }
