@@ -1,6 +1,8 @@
 import { test, expect, describe, spyOn, afterEach } from 'bun:test';
 import * as fs from 'node:fs';
 import { createServer, type Server, type Socket } from 'node:net';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { findSidecarExecutable, isSidecarRunning } from './sidecar-launcher.ts';
 import { DesktopController } from './desktop-controller.ts';
 import { WSLBridge } from '../terminal/wsl-bridge.ts';
@@ -9,6 +11,96 @@ describe('sidecar-launcher', () => {
   test('findSidecarExecutable returns string or null', () => {
     const result = findSidecarExecutable();
     expect(result === null || typeof result === 'string').toBe(true);
+  });
+});
+
+/**
+ * #801: the exe's existence is what lets the port be contacted (#747), and
+ * the exe is run, so only the path Windows names as the user's own profile
+ * may count. Here the Windows profile is `winuser` and the Linux user
+ * `linuxuser`, as on a box where the two differ.
+ */
+describe('findSidecarExecutable trusts only %USERPROFILE% (#801)', () => {
+  const OWN = '/mnt/c/Users/winuser/.jarvis/sidecar/desktop-bridge.exe';
+  const OTHER_PROFILE = '/mnt/c/Users/linuxuser/.jarvis/sidecar/desktop-bridge.exe';
+  // The package's legacy build output, relative to this directory.
+  const REPO_BUILD = join(import.meta.dir, '../../../sidecar/desktop-bridge/bin/publish/desktop-bridge.exe');
+  const REPO_RELEASE = join(import.meta.dir, '../../../sidecar/desktop-bridge/bin/Release/net8.0-windows/win-x64/publish/desktop-bridge.exe');
+
+  let savedUser: string | undefined;
+  afterEach(() => {
+    if (savedUser === undefined) delete process.env.USER; else process.env.USER = savedUser;
+  });
+
+  /** WSL, where cmd.exe reports `profile` (or fails), and exactly `present` exist on disk. */
+  function world(opts: { wsl: boolean; profile: string | null; present: string[] | 'everything'; exitCode?: number }): void {
+    savedUser = process.env.USER;
+    process.env.USER = 'linuxuser';
+    spies.push(spyOn(WSLBridge, 'isWSL').mockReturnValue(opts.wsl));
+    spies.push(spyOn(Bun, 'spawnSync').mockImplementation(((cmd: string[]) => {
+      if (cmd[0] !== 'cmd.exe') throw new Error(`unexpected spawn ${cmd.join(' ')}`);
+      if (opts.profile === null) throw new Error('cmd.exe: not found (interop disabled)');
+      const exitCode = opts.exitCode ?? 0;
+      return { stdout: Buffer.from(`${opts.profile}\r\n`), stderr: Buffer.from(''), exitCode, success: exitCode === 0 };
+    }) as unknown as typeof Bun.spawnSync));
+    const present = opts.present === 'everything' ? null : new Set(opts.present);
+    spies.push(spyOn(fs, 'existsSync').mockImplementation(((p: fs.PathLike) => present === null || present.has(String(p))) as typeof fs.existsSync));
+  }
+
+  // With every path "present", only the parse decides: each of these used to
+  // be turned into a path by position (drive = first character, the rest
+  // after two), and that path was trusted (#801 review).
+  for (const [label, profile, exitCode] of [
+    ['a UNC profile', '\\\\server\\share\\winuser', 0],
+    ['a profile path with a .. segment', 'C:\\Users\\winuser\\..\\Public', 0],
+    ['a .. segment behind forward slashes', 'C:\\Users\\winuser/../Public', 0],
+    ['a NUL in the profile', 'C:\\Users\\win\u0000user', 0],
+    ['a warning line ahead of the profile', 'warning: UNC paths are not supported\r\nC:\\Users\\winuser', 0],
+    ['a cmd.exe that failed', 'C:\\Users\\winuser', 1],
+    ['no drive letter', 'Users\\winuser', 0],
+  ] as const) {
+    test(`trusts no path from ${label}`, () => {
+      world({ wsl: true, profile, present: 'everything', exitCode });
+      expect(findSidecarExecutable()).toBeNull();
+    });
+  }
+
+  test('a profile at a drive root still maps to one clean path', () => {
+    world({ wsl: true, profile: 'D:\\', present: ['/mnt/d/.jarvis/sidecar/desktop-bridge.exe'] });
+    expect(findSidecarExecutable()).toBe('/mnt/d/.jarvis/sidecar/desktop-bridge.exe');
+  });
+
+  test('finds the exe in the Windows profile', () => {
+    world({ wsl: true, profile: 'C:\\Users\\winuser', present: [OWN, OTHER_PROFILE, REPO_BUILD] });
+    expect(findSidecarExecutable()).toBe(OWN);
+  });
+
+  test('does not run an exe from the profile the Linux username names', () => {
+    world({ wsl: true, profile: 'C:\\Users\\winuser', present: [OTHER_PROFILE] });
+    expect(findSidecarExecutable()).toBeNull();
+  });
+
+  test('does not guess a profile from the Linux username when cmd.exe cannot say', () => {
+    world({ wsl: true, profile: null, present: [OTHER_PROFILE] });
+    expect(findSidecarExecutable()).toBeNull();
+  });
+
+  test('does not guess when %USERPROFILE% is unset (cmd.exe echoes the name back)', () => {
+    world({ wsl: true, profile: '%USERPROFILE%', present: [OTHER_PROFILE] });
+    expect(findSidecarExecutable()).toBeNull();
+  });
+
+  for (const wsl of [true, false]) {
+    test(`does not run the package's legacy build output (${wsl ? 'WSL' : 'native'})`, () => {
+      world({ wsl, profile: 'C:\\Users\\winuser', present: [REPO_BUILD, REPO_RELEASE] });
+      expect(findSidecarExecutable()).toBeNull();
+    });
+  }
+
+  test('natively, finds the exe under the home directory', () => {
+    const own = join(homedir(), '.jarvis', 'sidecar', 'desktop-bridge.exe');
+    world({ wsl: false, profile: null, present: [own] });
+    expect(findSidecarExecutable()).toBe(own);
   });
 });
 

@@ -218,7 +218,7 @@ const MODEL_EXEC: Record<string, Exemption> = {
   'actions/app-control/sidecar-launcher.ts': {
     reason:
       'launchSidecar: desktop-bridge, which serves launchApp on Windows and hands the launched app its ' +
-      'own environment. (findSidecarExecutable\'s fixed WSL `cmd.exe /C echo %USERPROFILE%` probe is not ' +
+      'own environment. (sidecarExecutablePath\'s fixed WSL `cmd.exe /C echo %USERPROFILE%` probe is not ' +
       'model-directed and uses sanitizedEnv with the #519 WSL interop extras, like wsl-bridge.ts.)',
     calls: { launchSidecar: 1 },
   },
