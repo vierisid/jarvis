@@ -533,7 +533,7 @@ describe("#811: an approve or deny needs a sender the allow-list names", () => {
     initDatabase(":memory:");
     const decisions: unknown[][] = [];
     const chats: string[] = [];
-    const agent = { handleMessage: async (text: string) => { chats.push(text); return "chat reply"; } };
+    const agent = { handleThreadMessage: async (text: string) => { chats.push(text); return "chat reply"; } };
     // Since #860 the configured list must name the sender as well as the
     // adapter saying so; U1 is that sender.
     const svc = new ChannelService(allowListConfig({ discord: [U1] }), agent as never);
@@ -623,7 +623,7 @@ describe("#852: only a sender the allow-list names becomes the broadcast recipie
   type LiveConfig = { channels: { telegram: { allowed_users: number[] }; discord: { allowed_users: string[] } } };
   const setup = async (lists: { telegram?: number[]; discord?: string[] }) => {
     const config = allowListConfig(lists) as unknown as LiveConfig;
-    const agent = { handleMessage: async () => "chat reply" };
+    const agent = { handleThreadMessage: async () => "chat reply" };
     const svc = new ChannelService(config as never, agent as never);
     await svc.start();
     const telegram = new FakeAdapter({ connected: true, name: "telegram" });
@@ -849,7 +849,7 @@ describe("#860 review: a workflow notification checks its recipient again when i
   const setupWorkflow = async () => {
     initDatabase(":memory:");
     const config = allowListConfig({ telegram: [42] }) as unknown as { channels: { telegram: { allowed_users: number[] } } };
-    const svc = new ChannelService(config as never, { handleMessage: async () => "ok" } as never);
+    const svc = new ChannelService(config as never, { handleThreadMessage: async () => "ok" } as never);
     await svc.start();
     const telegram = new FakeAdapter({ connected: true, name: "telegram" });
     svc.getManager().register(telegram);

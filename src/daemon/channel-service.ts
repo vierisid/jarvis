@@ -3,8 +3,8 @@
  *
  * Manages Telegram, Discord (and future) channel adapters.
  * Routes all external messages through the same AgentService (same brain),
- * persists conversations to the vault (unified history), and handles
- * proactive broadcasts to all connected channels.
+ * persists conversations to the vault, one per sender and chat (#884), and
+ * handles proactive broadcasts to all connected channels.
  */
 
 import type { Service, ServiceStatus } from './services.ts';
@@ -413,12 +413,22 @@ export class ChannelService implements Service {
       }
     }
 
-    // 1. Persist inbound user message to vault
-    const conversation = getOrCreateConversation(channelTag);
+    // 1. Persist inbound user message to vault, in this sender's own
+    //    conversation (#884). Every sender used to share the channel's one
+    //    conversation, so on a channel anyone may message (an empty list,
+    //    #811) a stranger could ask about the owner's earlier turns.
+    const sender = conversationSender(msg);
+    if (!sender) return "Sorry, I can't tell who sent this message, so I can't answer it.";
+    const conversation = getOrCreateConversation(channelTag, { sender });
     addMessage(conversation.id, { role: 'user', content: msg.text });
 
-    // 2. Route to AgentService (non-streaming — external channels are request/response)
-    const response = await runWithOrigin('user', () => this.agentService.handleMessage(msg.text, channelTag));
+    // 2. Route to AgentService (non-streaming — external channels are
+    //    request/response), on that conversation's history alone. A sender the
+    //    list does not name does not teach the agent anything either: what it
+    //    learns goes into every later turn's prompt, the owner's included.
+    const response = await runWithOrigin('user', () => this.agentService.handleThreadMessage(
+      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, learn: allowListed },
+    ));
 
     // 3. Persist assistant response to vault
     addMessage(conversation.id, { role: 'assistant', content: response });
@@ -441,6 +451,21 @@ function warnAllowListProblems(channel: string, raw: unknown): void {
   if (list && list.restricted && list.ids.length === 0) {
     console.warn(`[ChannelService] ${channel} allowed_users names nobody, so nobody can message the bot. Fix it in Settings > Channels.`);
   }
+}
+
+/**
+ * Whose conversation a channel message belongs to (#884): the sender, in the
+ * chat they wrote from. Keyed by the chat too, so what someone said in a
+ * private chat is not the history of a reply the bot posts in a group, where
+ * every member reads it. Null when the adapter did not say who sent it, which
+ * is answered without the agent rather than filed under a shared key.
+ */
+export function conversationSender(msg: Pick<ChannelMessage, 'metadata'>): string | null {
+  const userId = msg.metadata.userId;
+  const chat = msg.metadata.chatId ?? msg.metadata.channelId;
+  const id = (v: unknown) => (typeof v === 'string' && v !== '') || (typeof v === 'number' && Number.isFinite(v));
+  if (!id(userId) || !id(chat)) return null;
+  return `user:${String(userId)}/chat:${String(chat)}`;
 }
 
 /**

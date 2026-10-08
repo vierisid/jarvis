@@ -49,9 +49,12 @@ const SARVAM_SPEAKERS = [
 
 // #811, #852: an empty allow-list means different things, so say them. The
 // daemon refuses approve/deny replies from a channel whose list is empty, and
-// sends approval requests and notifications only to a listed user.
+// sends approval requests and notifications only to a listed user. #884: each
+// sender has their own conversation, but the agent still answers them with
+// the owner's tools and profile, which an owner leaving the list empty should
+// know.
 export const ALLOW_LIST_HINT =
-  "Leave empty to let anyone who can message the bot chat with Jarvis. Approval requests and notifications are sent, and can be approved or denied, only for an ID listed here, and are sent to your last direct message with the bot, never a group.";
+  "Leave empty to let anyone who can message the bot chat with Jarvis. Each person gets their own conversation, but Jarvis answers them with your tools and what it knows about you. Approval requests and notifications are sent, and can be approved or denied, only for an ID listed here, and are sent to your last direct message with the bot, never a group.";
 
 /**
  * Entries of the saved allow-list the daemon ignores, and why (#883). A
