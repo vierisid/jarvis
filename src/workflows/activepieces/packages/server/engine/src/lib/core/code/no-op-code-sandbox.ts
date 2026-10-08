@@ -47,12 +47,24 @@ process.once('message', async function(msg) {
 // error is kept either way.
 function undeclaredPackageError(e) {
     if (!e || (e.code !== 'MODULE_NOT_FOUND' && e.code !== 'ERR_MODULE_NOT_FOUND')) return e
-    const m = /Cannot find (?:package|module) '([^']+)'(?: from '([^']*)')?/.exec(String(e.message))
+    const text = String(e.message)
+    const m = /Cannot find (?:package|module) '([^']+)'(?: from '([^']*)')?/.exec(text)
     if (!m || m[1].startsWith('.') || m[1].startsWith('/')) return e
-    if (m[2] && /[\\\\/]node_modules[\\\\/]/.test(m[2])) return e
+    // The requiring file, which decides whether this is really a missing
+    // DECLARATION or just a missing file inside a package that IS installed.
+    // Two message shapes, and which one you get depends on the runtime: Bun
+    // 1.3.x writes "from '<path>'", while Bun 1.4.x and Node write a
+    // "Require stack:" block whose first entry is the requiring file. Reading
+    // only the first shape made every 1.4.x error look like a missing
+    // declaration, because the path was never recovered and both exemptions
+    // below are conditional on having it. CI caught this on the first run
+    // after the image and CI converged on Bun 1.4.2.
+    const stack = /(?:^|\\n)Require stack:\\n[ \\t]*-[ \\t]*(.+)/.exec(text)
+    const from = m[2] || (stack ? stack[1].trim() : '')
+    if (from && /[\\\\/]node_modules[\\\\/]/.test(from)) return e
     const parts = m[1].split('/')
     const name = m[1].startsWith('@') ? parts.slice(0, 2).join('/') : parts[0]
-    if (m[2] && isInstalledAbove(require('path').dirname(m[2]), name)) return e
+    if (from && isInstalledAbove(require('path').dirname(from), name)) return e
     const err = new Error('CODE step requires package "' + name + '", which its package.json does not declare. ' +
         'Add it to "dependencies" in the package.json of the step; packages are never fetched from the registry at run time. (' +
         String(e.message) + ')')

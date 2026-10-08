@@ -107,6 +107,51 @@ describe("the CODE sandbox never fetches a package (#837)", () => {
     expect(err).not.toContain("does not declare");
   }, 60_000);
 
+  /**
+   * Both shapes a MODULE_NOT_FOUND message comes in, pinned directly rather
+   * than through a child process -- because WHICH shape you get depends on the
+   * runtime, so a test that spawns a child only ever covers the shape that
+   * runtime emits. Bun 1.3.x writes "from '<path>'"; Bun 1.4.x and Node write a
+   * "Require stack:" block. Reading only the first made every 1.4.x error look
+   * like a missing declaration, since both exemptions need the requiring file.
+   * CI found it on the first run after the image and CI converged on 1.4.2,
+   * while the child-process tests above passed locally on 1.3.8.
+   */
+  test("the requiring file is recovered from either message shape", () => {
+    const src = readFileSync(
+      resolve(import.meta.dir, "../../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox.ts"),
+      "utf8",
+    );
+    const raw = /const CODE_RUNNER_SCRIPT = `([\s\S]*?)`\n/.exec(src)?.[1];
+    // Not an assertion for its own sake: if the constant is ever renamed or
+    // reshaped, this test would silently classify nothing.
+    if (raw === undefined) throw new Error("could not find CODE_RUNNER_SCRIPT in no-op-code-sandbox.ts");
+    // Apply template-literal escape semantics, as loading the module does.
+    const js = eval("`" + raw.replace(/\$\{/g, "\\${") + "`") as string;
+    const classify = new Function(
+      "require",
+      js.slice(js.indexOf("function undeclaredPackageError")) + "; return undeclaredPackageError;",
+    )(require) as (e: unknown) => Error;
+
+    const root = scratch();
+    const step = join(root, "step");
+    mkdirSync(join(step, "node_modules", "local-dep"), { recursive: true });
+    const idx = join(step, "index.js");
+    const inside = join(step, "node_modules", "local-dep", "index.js");
+    const notFound = (message: string) => Object.assign(new Error(message), { code: "MODULE_NOT_FOUND" });
+    const rewritten = (message: string) => classify(notFound(message)).message.includes("does not declare");
+
+    // A missing subpath of a package that IS installed is not a missing
+    // declaration, in either shape.
+    expect(rewritten(`Cannot find module 'local-dep/nope' from '${idx}'`)).toBe(false);
+    expect(rewritten(`Cannot find module 'local-dep/nope'\nRequire stack:\n- ${idx}`)).toBe(false);
+    // A require made from inside an installed package is not the step's fault.
+    expect(rewritten(`Cannot find module 'x'\nRequire stack:\n- ${inside}`)).toBe(false);
+    // A genuinely undeclared package still gets the rewrite, in either shape.
+    expect(rewritten(`Cannot find module 'totally-absent' from '${idx}'`)).toBe(true);
+    expect(rewritten(`Cannot find module 'totally-absent'\nRequire stack:\n- ${idx}`)).toBe(true);
+  });
+
   test("a scoped undeclared package is named by its scope and name, with the original error kept", async () => {
     const root = scratch();
     writeFileSync(join(root, "index.js"), `exports.code = async () => require("@scope/pkg/sub");`);
