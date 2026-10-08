@@ -115,7 +115,9 @@ const EXEMPT: Record<string, Exemption> = {
     // the env as before, so the count is unchanged. #896 swapped the WSL
     // clipboard's execSync('powershell.exe ...') and execSync('clip.exe') for
     // an execFileSync of the absolute System32 path, one for one, env as
-    // before, so those counts are unchanged too.
+    // before, so those counts are unchanged too. #894 then swapped all ten
+    // clipboard spawns for an awaited, bounded Bun.spawn at the same sites,
+    // env inherited as before: counts unchanged again.
     calls: { localClipboardRead: 5, localClipboardWrite: 5, 'localCaptureScreen/<anonymous>': 3 },
   },
   'comms/desktop-notify.ts': {

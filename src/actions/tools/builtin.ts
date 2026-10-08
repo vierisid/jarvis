@@ -12,7 +12,6 @@ import {
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
-import { execFileSync, execSync } from 'node:child_process';
 import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
 import { WSLBridge, windowsSystemExe } from '../terminal/wsl-bridge.ts';
@@ -31,7 +30,7 @@ import { getMachineScope } from '../machine-scope.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS, localScreenshotResult } from './desktop.ts';
-import { awaitCaptureTool, captureViaPrivateFileAsync, CaptureTimeoutError } from '../app-control/capture-file.ts';
+import { awaitCaptureTool, awaitCaptureToolOutput, captureViaPrivateFileAsync, CaptureTimeoutError } from '../app-control/capture-file.ts';
 import { sanitizedEnv } from '../../util/subprocess-env.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { UI_TOOLS } from './ui.ts';
@@ -659,45 +658,68 @@ export const listDirectoryTool: ToolDefinition = {
 
 // --- Clipboard / Screenshot / System Info helpers ---
 
-function localClipboardRead(): string {
+/**
+ * The clipboard tools, awaited and bounded (#894). They ran through execSync
+ * with no timeout, so a clipboard tool that hung held the daemon's event loop
+ * for as long as it hung -- and that is an ordinary condition, not an attack:
+ * `xclip -o` waits on the selection's owner, and an owner that stops
+ * answering leaves it waiting. Measured here with a SIGSTOPped xclip owning
+ * the selection: `xclip -o` and `xsel --output` both still waiting at 12 s.
+ *
+ * The bound is CAPTURE_TIMEOUT_MS (30 s, SIGKILL; see capture-file.ts). A
+ * clipboard call is far quicker than a capture -- measured, n=30 each: xclip
+ * read median 2.7 ms (max 3.3), write 2.1 (max 5.1); xsel read 2.5, write 2.2;
+ * WSL's Get-Clipboard through interop median 203 ms (max 244, n=10) -- so
+ * only a call that is not coming back meets it. A timed-out xclip does not
+ * fall back to xsel, which waits on the same owner (measured above).
+ */
+const CLIPBOARD_READ = { stdin: 'ignore', stdout: 'pipe', stderr: 'pipe' } as const;
+const clipboardWrite = (content: string) => ({ stdin: Buffer.from(content, 'utf-8'), stdout: 'ignore', stderr: 'pipe' } as const);
+
+async function localClipboardRead(): Promise<string> {
   const os = platform();
   if (os === 'darwin') {
-    return execSync('pbpaste', { encoding: 'utf-8' });
+    return awaitCaptureToolOutput(Bun.spawn(['pbpaste'], CLIPBOARD_READ), 'pbpaste');
   } else if (os === 'win32') {
-    return execSync('powershell -command Get-Clipboard', { encoding: 'utf-8' }).trimEnd();
+    // powershell run directly, not through cmd.exe as execSync did, so the
+    // bound's kill reaches the process doing the work.
+    return (await awaitCaptureToolOutput(Bun.spawn(['powershell', '-command', 'Get-Clipboard'], { ...CLIPBOARD_READ, windowsHide: true }), 'Get-Clipboard')).trimEnd();
   } else if (WSLBridge.isWSL()) {
     // On WSL the X clipboard (xclip/xsel via WSLg) is NOT the clipboard the
     // user copies/pastes with -- that's the Windows clipboard. Read it through
     // Windows interop so workflows see what the user actually copied. From
     // System32 by absolute path, never PATH (#896: see windowsSystemExe).
-    return execFileSync(windowsSystemExe('powershell.exe'), ['-NoProfile', '-Command', 'Get-Clipboard'], { encoding: 'utf-8' }).replace(/\r\n/g, '\n').trimEnd();
+    return (await awaitCaptureToolOutput(Bun.spawn([windowsSystemExe('powershell.exe'), '-NoProfile', '-Command', 'Get-Clipboard'], CLIPBOARD_READ), 'Get-Clipboard'))
+      .replace(/\r\n/g, '\n').trimEnd();
   } else {
     try {
-      return execSync('xclip -selection clipboard -o', { encoding: 'utf-8' });
-    } catch {
-      return execSync('xsel --clipboard --output', { encoding: 'utf-8' });
+      return await awaitCaptureToolOutput(Bun.spawn(['xclip', '-selection', 'clipboard', '-o'], CLIPBOARD_READ), 'xclip');
+    } catch (err) {
+      if (err instanceof CaptureTimeoutError) throw err;
+      return awaitCaptureToolOutput(Bun.spawn(['xsel', '--clipboard', '--output'], CLIPBOARD_READ), 'xsel');
     }
   }
 }
 
-function localClipboardWrite(content: string): void {
+async function localClipboardWrite(content: string): Promise<void> {
   const os = platform();
   if (os === 'darwin') {
-    execSync('pbcopy', { input: content, encoding: 'utf-8' });
+    await awaitCaptureTool(Bun.spawn(['pbcopy'], clipboardWrite(content)), 'pbcopy');
   } else if (os === 'win32') {
-    execSync('powershell -command Set-Clipboard', { input: content, encoding: 'utf-8' });
+    await awaitCaptureTool(Bun.spawn(['powershell', '-command', 'Set-Clipboard'], { ...clipboardWrite(content), windowsHide: true }), 'Set-Clipboard');
   } else if (WSLBridge.isWSL()) {
     // Write to the Windows clipboard via interop. `clip.exe` is the simplest
     // sink and is always present on WSL; it consumes stdin verbatim. (xclip/
     // xsel would only populate the WSLg X clipboard, which Windows apps and
     // the desktop sidecar's clipboard observer never see.) From System32 by
     // absolute path, never PATH (#896: see windowsSystemExe).
-    execFileSync(windowsSystemExe('clip.exe'), [], { input: content, encoding: 'utf-8' });
+    await awaitCaptureTool(Bun.spawn([windowsSystemExe('clip.exe')], clipboardWrite(content)), 'clip.exe');
   } else {
     try {
-      execSync('xclip -selection clipboard', { input: content, encoding: 'utf-8' });
-    } catch {
-      execSync('xsel --clipboard --input', { input: content, encoding: 'utf-8' });
+      await awaitCaptureTool(Bun.spawn(['xclip', '-selection', 'clipboard'], clipboardWrite(content)), 'xclip');
+    } catch (err) {
+      if (err instanceof CaptureTimeoutError) throw err;
+      await awaitCaptureTool(Bun.spawn(['xsel', '--clipboard', '--input'], clipboardWrite(content)), 'xsel');
     }
   }
 }
@@ -779,7 +801,7 @@ export const getClipboardTool: ToolDefinition = {
     if (auto) return routeToSidecar(auto, 'get_clipboard', {}, 'clipboard');
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
-      const content = localClipboardRead();
+      const content = await localClipboardRead();
       return content || '[clipboard is empty]';
     } catch (err) {
       return `Error reading clipboard: ${err instanceof Error ? err.message : err}`;
@@ -809,7 +831,7 @@ export const setClipboardTool: ToolDefinition = {
     if (auto) return routeToSidecar(auto, 'set_clipboard', { content: params.content }, 'clipboard');
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
-      localClipboardWrite(params.content as string);
+      await localClipboardWrite(params.content as string);
       return 'Clipboard updated.';
     } catch (err) {
       return `Error writing clipboard: ${err instanceof Error ? err.message : err}`;
