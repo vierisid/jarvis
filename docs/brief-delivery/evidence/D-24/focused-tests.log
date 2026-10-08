@@ -1,0 +1,40 @@
+bun test v1.3.6 (d530ed99)
+
+ui/src/brief/goals/GoalsRoom.test.tsx:
+(pass) approved path, shared segments, and absence of removed headings [106.53ms]
+(pass) selection remains across all eight layouts and returns from completed [293.13ms]
+(pass) next action opens exactly the shared Today work and approval [71.95ms]
+(pass) score-only and unknown goals never invent measured counts [51.07ms]
+(pass) decreasing targets retain units, baseline, source and canonical progress [31.51ms]
+(pass) filter changes expose real paused and failed statuses without an archive [56.64ms]
+(pass) refresh changes only the existing value nodes, without replacing unrelated stages [43.05ms]
+(pass) stale evidence leaves the path readable but blocks next-step navigation [36.93ms]
+(pass) source, scope and capability mismatches fail closed [27.77ms]
+(pass) direct completed route selects the canonical goal and keeps long facts readable [42.01ms]
+(pass) completed visits remain settled and show real milestones [228.19ms]
+(pass) a value change animates only the changed glyph, never the entire goal path [41.22ms]
+
+ui/src/brief/goals/model.test.ts:
+(pass) zero-baseline counts use the same normalized band as Today [0.26ms]
+(pass) score-only titles never supply a numerator [0.13ms]
+(pass) unknown and observed zero remain different [0.11ms]
+(pass) nonzero and decreasing targets use canonical progress, with unmodified measurements [0.12ms]
+(pass) missing provenance, invalid time or invalid fraction never render an evidenced count [0.14ms]
+(pass) completion status never forces score or measurement to 100 percent [0.14ms]
+(pass) canonical statuses remain reachable, with no archive reinterpretation [0.11ms]
+(pass) next action is the existing Today decision and only available on a current active goal [0.09ms]
+(pass) duplicate roots and duplicate path stages are rejected [0.21ms]
+
+ui/src/brief/goals/controller.test.ts:
+(pass) access gates reads; revocation clears private rows and selection [1.43ms]
+(pass) selection survives reorder, tab returns, filter returns and refreshed values [1.70ms]
+(pass) unknown, failed and completed direct IDs select their real status [3.27ms]
+(pass) late reads cannot overwrite a later selection or refreshed data [1.55ms]
+(pass) failed refresh retains a stale read; duplicate projections fail closed [1.49ms]
+(pass) retired or revoked pending reads cannot repopulate a scope [2.41ms]
+(pass) read-state families remain distinct [5.96ms]
+
+ 28 pass
+ 0 fail
+ 116 expect() calls
+Ran 28 tests across 3 files. [1383.00ms]
