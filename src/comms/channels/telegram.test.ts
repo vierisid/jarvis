@@ -239,3 +239,37 @@ describe('#860: a batch that lands after disconnect is not handled', () => {
     }
   });
 });
+
+/**
+ * #883. The gate was `allowedUsers.includes(id)` on whatever the setting held,
+ * and a string's `.includes` is a substring test.
+ */
+describe('#883: an allowed_users value that is not a list of ids', () => {
+  const reaches = async (allowedUsers: unknown, fromId: number) => {
+    const adapter = new TelegramAdapter('test-token', { allowedUsers });
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    await (adapter as unknown as { processUpdate(u: unknown): Promise<void> }).processUpdate({
+      update_id: 1,
+      message: { message_id: 7, from: { id: fromId, first_name: 'A' }, chat: { id: fromId, type: 'private' }, date: 0, text: 'hello' },
+    });
+    return seen;
+  };
+
+  test('a string is not a substring match: "12345" lets in neither 123 nor 234 nor 12345', async () => {
+    for (const id of [123, 234, 1234, 12345]) {
+      expect(await reaches('12345', id)).toEqual([]);
+    }
+  });
+
+  test('a list of entries that name nobody lets nobody in, rather than everyone', async () => {
+    expect(await reaches(['042'], 42)).toEqual([]);
+    expect(await reaches([1.5], 1)).toEqual([]);
+  });
+
+  test('the valid entries of a mixed list still work, and only they are allow-listed', async () => {
+    const seen = await reaches(['042', 42], 42);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.senderAllowListed).toBe(true);
+  });
+});

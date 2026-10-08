@@ -1,4 +1,5 @@
 import type { STTProvider } from '../voice.ts';
+import { telegramAllowList, type AllowList } from './allow-list.ts';
 
 export type ChannelMessage = {
   id: string;
@@ -133,13 +134,14 @@ export class TelegramAdapter implements ChannelAdapter {
   private baseUrl: string;
   private pollingInterval: number = 1000;
   private sttProvider: STTProvider | null = null;
-  private allowedUsers: number[];
+  /** Parsed, never the raw setting: a string there was a substring match (#883). */
+  private allowList: AllowList<number>;
 
-  constructor(token: string, opts?: { sttProvider?: STTProvider; allowedUsers?: number[] }) {
+  constructor(token: string, opts?: { sttProvider?: STTProvider; allowedUsers?: unknown }) {
     this.token = token;
     this.baseUrl = `https://api.telegram.org/bot${token}`;
     this.sttProvider = opts?.sttProvider ?? null;
-    this.allowedUsers = opts?.allowedUsers ?? [];
+    this.allowList = telegramAllowList(opts?.allowedUsers);
   }
 
   setSTTProvider(provider: STTProvider): void {
@@ -291,8 +293,9 @@ export class TelegramAdapter implements ChannelAdapter {
     const { message } = update;
 
     // Security: check allowed users. Empty admits everyone for chat, but not
-    // for deciding an approval (senderAllowListed below, #811).
-    if (this.allowedUsers.length > 0 && !this.allowedUsers.includes(message.from.id)) {
+    // for deciding an approval (senderAllowListed below, #811). A setting that
+    // names nobody (a string, a quoted id) restricts to nobody (#883).
+    if (this.allowList.restricted && !this.allowList.ids.includes(message.from.id)) {
       console.log(`[TelegramAdapter] Ignoring message from unauthorized user: ${message.from.id} (${message.from.username ?? message.from.first_name})`);
       return;
     }
@@ -339,7 +342,7 @@ export class TelegramAdapter implements ChannelAdapter {
         lastName: message.from.last_name,
         isVoice: !!voiceFile,
       },
-      senderAllowListed: this.allowedUsers.includes(message.from.id),
+      senderAllowListed: this.allowList.ids.includes(message.from.id),
     };
 
     console.log('[TelegramAdapter] Message from', channelMessage.from, ':', channelMessage.text.slice(0, 80));

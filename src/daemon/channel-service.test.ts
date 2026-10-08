@@ -10,6 +10,12 @@ import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram"
 import { initDatabase } from "../vault/schema";
 import { getSetting, setSetting } from "../vault/settings";
 
+// Discord user ids are snowflakes, and since #883 an allow-list entry that is
+// not one names nobody.
+const U1 = "100000000000000001";
+const OWNER = "100000000000000002";
+const STRANGER = "100000000000000003";
+
 class FakeAdapter implements ChannelAdapter {
   name: string;
   private connected: boolean;
@@ -412,8 +418,8 @@ describe("delivery failure handler", () => {
     // the settings table during start() — seed it through an in-memory vault.
     // Since #852 it must also be a user the channel's allow-list names.
     initDatabase(":memory:");
-    setSetting("channel.lastRecipient.discord", JSON.stringify({ to: "c1", userId: "u1" }));
-    const svc = new ChannelService(allowListConfig({ discord: ["u1"] }), {} as never);
+    setSetting("channel.lastRecipient.discord", JSON.stringify({ to: "c1", userId: U1 }));
+    const svc = new ChannelService(allowListConfig({ discord: [U1] }), {} as never);
     await svc.start();
     const failing = new FakeAdapter({
       connected: true,
@@ -502,8 +508,8 @@ describe("#718: send options reach the adapter", () => {
 
   test("broadcastToAll hands them to each channel", async () => {
     initDatabase(":memory:");
-    setSetting("channel.lastRecipient.discord", JSON.stringify({ to: "user-1", userId: "u1" }));
-    const svc = new ChannelService(allowListConfig({ discord: ["u1"] }), {} as never);
+    setSetting("channel.lastRecipient.discord", JSON.stringify({ to: "user-1", userId: U1 }));
+    const svc = new ChannelService(allowListConfig({ discord: [U1] }), {} as never);
     await svc.start();
     const adapter = new OptionsAdapter(0);
     svc.getManager().register(adapter as unknown as ChannelAdapter);
@@ -520,7 +526,7 @@ describe("#718: send options reach the adapter", () => {
 describe("#811: an approve or deny needs a sender the allow-list names", () => {
   const message = (text: string, senderAllowListed?: boolean): ChannelMessage => ({
     id: "m1", channel: "discord", from: "someone", text, timestamp: 0,
-    metadata: { channelId: "c1", userId: "u1" },
+    metadata: { channelId: "c1", userId: U1 },
     ...(senderAllowListed === undefined ? {} : { senderAllowListed }),
   });
   const setup = () => {
@@ -529,8 +535,8 @@ describe("#811: an approve or deny needs a sender the allow-list names", () => {
     const chats: string[] = [];
     const agent = { handleMessage: async (text: string) => { chats.push(text); return "chat reply"; } };
     // Since #860 the configured list must name the sender as well as the
-    // adapter saying so; "u1" is that sender.
-    const svc = new ChannelService(allowListConfig({ discord: ["u1"] }), agent as never);
+    // adapter saying so; U1 is that sender.
+    const svc = new ChannelService(allowListConfig({ discord: [U1] }), agent as never);
     svc.setApprovalHandler(async (...args) => { decisions.push(args); return "decided"; });
     const handle = (msg: ChannelMessage) =>
       (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(msg);
@@ -633,7 +639,7 @@ describe("#852: only a sender the allow-list names becomes the broadcast recipie
     initDatabase(":memory:");
     const { svc, telegram, discord, handle } = await setup({});
     expect(await handle(msg("telegram", 999, "999", false))).toBe("chat reply");
-    expect(await handle(msg("discord", "stranger", "guild-channel", false))).toBe("chat reply");
+    expect(await handle(msg("discord", STRANGER, "guild-channel", false))).toBe("chat reply");
 
     await svc.broadcastToAll("approval card", { literal: true });
 
@@ -647,14 +653,14 @@ describe("#852: only a sender the allow-list names becomes the broadcast recipie
 
   test("a listed sender becomes the recipient, and an unlisted one after them does not take it over", async () => {
     initDatabase(":memory:");
-    const { svc, discord, handle } = await setup({ discord: ["owner"] });
-    await handle(msg("discord", "owner", "owner-dm", true));
-    await handle(msg("discord", "stranger", "stranger-dm", false));
+    const { svc, discord, handle } = await setup({ discord: [OWNER] });
+    await handle(msg("discord", OWNER, "owner-dm", true));
+    await handle(msg("discord", STRANGER, "stranger-dm", false));
 
     await svc.broadcastToAll("approval card");
 
     expect(discord.sent).toEqual([{ to: "owner-dm", text: "approval card" }]);
-    expect(JSON.parse(getSetting("channel.lastRecipient.discord")!)).toEqual({ to: "owner-dm", userId: "owner" });
+    expect(JSON.parse(getSetting("channel.lastRecipient.discord")!)).toEqual({ to: "owner-dm", userId: OWNER });
   });
 
   test("removing the recipient from the list stops their copies at once, with no restart", async () => {
@@ -675,12 +681,12 @@ describe("#852: only a sender the allow-list names becomes the broadcast recipie
 
   test("#852 review: a listed user writing in a group or server channel does not send the cards there", async () => {
     initDatabase(":memory:");
-    const { svc, telegram, discord, handle } = await setup({ telegram: [42], discord: ["owner"] });
+    const { svc, telegram, discord, handle } = await setup({ telegram: [42], discord: [OWNER] });
     await handle(msg("telegram", 42, "42", true));
-    await handle(msg("discord", "owner", "owner-dm", true));
+    await handle(msg("discord", OWNER, "owner-dm", true));
     // Then the same users write in a group and a guild channel.
     expect(await handle(msg("telegram", 42, "-100123", true, false))).toBe("chat reply");
-    expect(await handle(msg("discord", "owner", "guild-channel", true, false))).toBe("chat reply");
+    expect(await handle(msg("discord", OWNER, "guild-channel", true, false))).toBe("chat reply");
 
     await svc.broadcastToAll("approval card");
 
@@ -725,7 +731,7 @@ describe("#852: only a sender the allow-list names becomes the broadcast recipie
     setSetting("channel.lastRecipient.telegram", "42");
     // A Discord channel id names no user, so it cannot be checked and is dropped.
     setSetting("channel.lastRecipient.discord", "owner-dm");
-    const { svc, telegram, discord } = await setup({ telegram: [42], discord: ["owner"] });
+    const { svc, telegram, discord } = await setup({ telegram: [42], discord: [OWNER] });
 
     await svc.broadcastToAll("approval card");
 
@@ -876,5 +882,63 @@ describe("#860 review: a workflow notification checks its recipient again when i
     await expect(svc.sendWorkflowNotification("telegram", "999", "workflow done"))
       .rejects.toThrow("no longer an allow-listed recipient");
     expect(telegram.sent).toEqual([]);
+  });
+});
+
+/**
+ * #883. The live-list check compared `String(id) === String(userId)`, so a
+ * quoted Telegram id or an unquoted Discord one named a user here that the
+ * adapter turned away, and a recipient could be kept for someone who could not
+ * even message the bot. One parser now gives both the same answer.
+ */
+describe("#883: the live allow-list check reads the list the way the adapters do", () => {
+  const approve = (channel: "telegram" | "discord", userId: string | number): ChannelMessage => ({
+    id: "m", channel, from: "someone", text: "approve 1a2b3c4d", timestamp: 0,
+    metadata: channel === "telegram" ? { chatId: String(userId), userId, chatType: "private" } : { channelId: "dm", userId, isDM: true },
+    senderAllowListed: true,
+  });
+
+  test("an entry that is not a valid id for the channel names nobody", async () => {
+    initDatabase(":memory:");
+    const config = { channels: {
+      telegram: { enabled: false, bot_token: "", allowed_users: ["42"] },
+      discord: { enabled: false, bot_token: "", allowed_users: [123456789012345678] },
+    } };
+    const decisions: unknown[][] = [];
+    const svc = new ChannelService(config as never, {} as never);
+    svc.setApprovalHandler(async (...args) => { decisions.push(args); return "decided"; });
+    const handle = (m: ChannelMessage) =>
+      (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(m);
+
+    expect(await handle(approve("telegram", 42))).toBe(channelDecisionNeedsAllowList("telegram"));
+    expect(await handle(approve("discord", "123456789012345680"))).toBe(channelDecisionNeedsAllowList("discord"));
+    expect(decisions).toEqual([]);
+    expect(svc.getBroadcastRecipient("telegram")).toBeNull();
+    expect(svc.getBroadcastRecipient("discord")).toBeNull();
+  });
+
+  test("start() says which entries name nobody, and that a list of only those locks the channel", async () => {
+    initDatabase(":memory:");
+    const originalFetch = globalThis.fetch;
+    const originalWarn = console.warn;
+    const warnings: string[] = [];
+    globalThis.fetch = (async (url: string) => {
+      if (url.endsWith("/getMe")) return Response.json({ ok: true, result: { username: "bot" } });
+      await Bun.sleep(5);
+      return Response.json({ ok: true, result: [] });
+    }) as typeof fetch;
+    console.warn = (...args: unknown[]) => { warnings.push(args.map(String).join(" ")); };
+    const svc = new ChannelService({ channels: { telegram: { enabled: true, bot_token: "t", allowed_users: "12345" } } } as never, {} as never);
+    try {
+      await svc.start();
+      expect(warnings).toEqual([
+        '[ChannelService] telegram allowed_users: allowed_users must be a list of IDs, but it is "12345". Nobody may use the channel until it is fixed.',
+        "[ChannelService] telegram allowed_users names nobody, so nobody can message the bot. Fix it in Settings > Channels.",
+      ]);
+    } finally {
+      await svc.stop();
+      console.warn = originalWarn;
+      globalThis.fetch = originalFetch;
+    }
   });
 });

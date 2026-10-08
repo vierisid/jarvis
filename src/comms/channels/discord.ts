@@ -1,6 +1,7 @@
 import { Client, GatewayIntentBits, MessageFlags, Partials, type Message } from 'discord.js';
 import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 import type { STTProvider } from '../voice.ts';
+import { discordAllowList, type AllowList } from './allow-list.ts';
 
 export class DiscordAdapter implements ChannelAdapter {
   name = 'discord';
@@ -8,17 +9,18 @@ export class DiscordAdapter implements ChannelAdapter {
   private handler: ChannelHandler | null = null;
   private connected: boolean = false;
   private client: Client | null = null;
-  private allowedUsers: string[];
+  /** Parsed, never the raw setting: a string there was a substring match (#883). */
+  private allowList: AllowList<string>;
   private guildId: string | null;
   private sttProvider: STTProvider | null;
 
   constructor(token: string, opts?: {
-    allowedUsers?: string[];
+    allowedUsers?: unknown;
     guildId?: string;
     sttProvider?: STTProvider;
   }) {
     this.token = token;
-    this.allowedUsers = opts?.allowedUsers ?? [];
+    this.allowList = discordAllowList(opts?.allowedUsers);
     this.guildId = opts?.guildId ?? null;
     this.sttProvider = opts?.sttProvider ?? null;
   }
@@ -124,8 +126,9 @@ export class DiscordAdapter implements ChannelAdapter {
     if (!this.handler) return;
 
     // Security: check allowed users. Empty admits everyone for chat, but not
-    // for deciding an approval (senderAllowListed below, #811).
-    if (this.allowedUsers.length > 0 && !this.allowedUsers.includes(message.author.id)) {
+    // for deciding an approval (senderAllowListed below, #811). A setting that
+    // names nobody (a string, a number) restricts to nobody (#883).
+    if (this.allowList.restricted && !this.allowList.ids.includes(message.author.id)) {
       return;
     }
 
@@ -174,7 +177,7 @@ export class DiscordAdapter implements ChannelAdapter {
         isDM: !message.guildId,
         isVoice: !!audioAttachment,
       },
-      senderAllowListed: this.allowedUsers.includes(message.author.id),
+      senderAllowListed: this.allowList.ids.includes(message.author.id),
     };
 
     console.log('[DiscordAdapter] Message from', channelMessage.from, ':', text.slice(0, 80));

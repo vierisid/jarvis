@@ -416,6 +416,17 @@
 
 .v2-set__hint a { color: var(--accent); }
 
+.v2-set__hint--warn {
+  padding: var(--s-2) var(--s-3);
+  border: 1px solid var(--warn);
+  border-left-width: 3px;
+  border-radius: var(--r-2);
+  background: color-mix(in srgb, var(--warn) 10%, var(--paper));
+  color: var(--ink);
+}
+
+.v2-set__hint--warn ul { margin: var(--s-1) 0 0; padding-left: var(--s-4); }
+
 .v2-set__hint code,
 .v2-set__code {
   display: inline-block;

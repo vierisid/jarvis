@@ -195,12 +195,26 @@ export interface ChannelStatus {
   stt: string | null;
 }
 
+/**
+ * `allowed_users` is what the daemon reads the saved list as (#883): the ids
+ * that name someone. `allowed_users_rejected` is what it ignored, as text, and
+ * `allowed_users_problems` says why, so a hand-edited value that names nobody
+ * is visible here. Both are absent from an older daemon.
+ */
 export interface ChannelConfig {
-  telegram: { enabled: boolean; has_token: boolean; allowed_users: number[] };
+  telegram: {
+    enabled: boolean;
+    has_token: boolean;
+    allowed_users: number[];
+    allowed_users_rejected?: string[];
+    allowed_users_problems?: string[];
+  };
   discord: {
     enabled: boolean;
     has_token: boolean;
     allowed_users: string[];
+    allowed_users_rejected?: string[];
+    allowed_users_problems?: string[];
     guild_id: string | null;
   };
 }

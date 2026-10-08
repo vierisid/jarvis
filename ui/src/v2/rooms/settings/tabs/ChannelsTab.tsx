@@ -5,6 +5,7 @@ import type {
   SettingsHook,
   TTSProvider,
 } from "../useSettingsData";
+import { allowedFieldText, parseDiscordIds, parseTelegramIds } from "./channel-ids";
 
 // OpenAI-style voices the hosted Usejarvis TTS accepts (see createTTSProvider:
 // Edge neural names are rejected there, so this list is the whole picker).
@@ -52,6 +53,25 @@ const SARVAM_SPEAKERS = [
 export const ALLOW_LIST_HINT =
   "Leave empty to let anyone who can message the bot chat with Jarvis. Approval requests and notifications are sent, and can be approved or denied, only for an ID listed here, and are sent to your last direct message with the bot, never a group.";
 
+/**
+ * Entries of the saved allow-list the daemon ignores, and why (#883). A
+ * hand-edited value that names nobody otherwise shows only as a bot that never
+ * answers.
+ */
+function AllowListProblems({ problems }: { problems?: string[] }) {
+  if (!problems || problems.length === 0) return null;
+  return (
+    <div className="v2-set__hint v2-set__hint--warn" role="status">
+      Some saved IDs are ignored:
+      <ul>
+        {problems.map((p) => (
+          <li key={p}>{p}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 interface ElevenLabsVoice {
   voice_id: string;
   name: string;
@@ -92,8 +112,8 @@ export function ChannelsTab({
   // reference on every 10s settings poll, so depending on the object would
   // re-seed (and clobber in-progress typing) on each poll. Value deps only
   // re-fire when the server value actually changes (e.g. after a save).
-  const tgAllowedServer = channelCfg?.telegram.allowed_users.join(", ") ?? "";
-  const dcAllowedServer = channelCfg?.discord.allowed_users.join(", ") ?? "";
+  const tgAllowedServer = allowedFieldText(channelCfg?.telegram);
+  const dcAllowedServer = allowedFieldText(channelCfg?.discord);
   const dcGuildServer = channelCfg?.discord.guild_id ?? "";
 
   useEffect(() => {
@@ -177,21 +197,21 @@ export function ChannelsTab({
             onChange={(e) => setTgAllowed(e.target.value)}
           />
           <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
+          <AllowListProblems problems={channelCfg?.telegram.allowed_users_problems} />
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
             type="button"
             className="v2-set__btn v2-set__btn--primary"
             onClick={async () => {
-              const allowed = tgAllowed
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean)
-                .map(Number)
-                .filter((n) => Number.isFinite(n));
+              const allowed = parseTelegramIds(tgAllowed);
+              if (!allowed.ok) {
+                onToast(allowed.message, "warn");
+                return;
+              }
               const r = await data.setTelegram({
                 bot_token: tgToken || undefined,
-                allowed_users: allowed,
+                allowed_users: allowed.ids,
               });
               if (r.ok) setTgToken("");
               onToast(r.message, r.ok ? "ok" : "warn");
@@ -257,6 +277,7 @@ export function ChannelsTab({
             onChange={(e) => setDcAllowed(e.target.value)}
           />
           <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
+          <AllowListProblems problems={channelCfg?.discord.allowed_users_problems} />
         </div>
         <div className="v2-set__field">
           <label className="v2-set__field-label">Guild ID (optional, restrict to one server)</label>
@@ -272,13 +293,14 @@ export function ChannelsTab({
             type="button"
             className="v2-set__btn v2-set__btn--primary"
             onClick={async () => {
-              const allowed = dcAllowed
-                .split(",")
-                .map((s) => s.trim())
-                .filter(Boolean);
+              const allowed = parseDiscordIds(dcAllowed);
+              if (!allowed.ok) {
+                onToast(allowed.message, "warn");
+                return;
+              }
               const r = await data.setDiscord({
                 bot_token: dcToken || undefined,
-                allowed_users: allowed,
+                allowed_users: allowed.ids,
                 guild_id: dcGuild || undefined,
               });
               if (r.ok) setDcToken("");

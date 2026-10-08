@@ -15,6 +15,7 @@ import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
 import { TelegramAdapter } from '../comms/channels/telegram.ts';
+import { channelAllowList } from '../comms/channels/allow-list.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
@@ -136,6 +137,7 @@ export class ChannelService implements Service {
       const channels = this.config.channels;
 
       if (channels?.telegram?.enabled && channels.telegram.bot_token) {
+        warnAllowListProblems('telegram', channels.telegram.allowed_users);
         const telegram = new TelegramAdapter(channels.telegram.bot_token, {
           sttProvider: this.sttProvider ?? undefined,
           allowedUsers: channels.telegram.allowed_users,
@@ -146,6 +148,7 @@ export class ChannelService implements Service {
       if (channels?.discord?.enabled && channels.discord.bot_token) {
         // Lazy-loaded: discord.js costs ~38MB RSS, only pay it when the
         // Discord channel is actually enabled.
+        warnAllowListProblems('discord', channels.discord.allowed_users);
         const { DiscordAdapter } = await import('../comms/channels/discord.ts');
         const discord = new DiscordAdapter(channels.discord.bot_token, {
           sttProvider: this.sttProvider ?? undefined,
@@ -286,14 +289,20 @@ export class ChannelService implements Service {
     return recipient && this.allowListNames(channel, recipient.userId) ? recipient.to : null;
   }
 
-  /** Whether the channel's allow-list, as configured right now, names this user. Empty names nobody. */
+  /**
+   * Whether the channel's allow-list, as configured right now, names this
+   * user. Empty names nobody, and so does an entry that is not a valid id for
+   * the channel (#883): the adapters ignore those entries, and a list must not
+   * name someone here whom the adapter would turn away.
+   */
   private allowListNames(channel: string, userId: unknown): boolean {
     if ((typeof userId !== 'string' && typeof userId !== 'number') || userId === '') return false;
     const channels = this.config?.channels;
-    const list: unknown = channel === 'telegram' ? channels?.telegram?.allowed_users
+    const raw: unknown = channel === 'telegram' ? channels?.telegram?.allowed_users
       : channel === 'discord' ? channels?.discord?.allowed_users
         : undefined;
-    return Array.isArray(list) && list.some((id) => String(id) === String(userId));
+    const list = channelAllowList(channel, raw);
+    return !!list && list.ids.some((id) => String(id) === String(userId));
   }
 
   /**
@@ -415,6 +424,22 @@ export class ChannelService implements Service {
     addMessage(conversation.id, { role: 'assistant', content: response });
 
     return response;
+  }
+}
+
+/**
+ * Say, at startup and after every settings save, which `allowed_users`
+ * entries name nobody (#883). They are ignored, and a list made only of them
+ * lets nobody in, which an owner would otherwise discover only as a bot that
+ * never answers.
+ */
+function warnAllowListProblems(channel: string, raw: unknown): void {
+  const list = channelAllowList(channel, raw);
+  for (const problem of list?.problems ?? []) {
+    console.warn(`[ChannelService] ${channel} allowed_users: ${problem}`);
+  }
+  if (list && list.restricted && list.ids.length === 0) {
+    console.warn(`[ChannelService] ${channel} allowed_users names nobody, so nobody can message the bot. Fix it in Settings > Channels.`);
   }
 }
 
