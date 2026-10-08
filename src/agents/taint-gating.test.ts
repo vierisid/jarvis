@@ -268,13 +268,15 @@ describe('orchestrator taint gating', () => {
     expect(calls).toEqual(['browser_snapshot', 'run_command']);
   });
 
-  test('realtime voice refuses a taint-gated call instead of auto-approving it', async () => {
-    const { orch, calls } = build();
+  test('realtime voice leaves a card for a taint-gated call instead of running it (Q-08)', async () => {
+    const { orch, calls, approvals } = build();
     // No turn object in voice: the session taint is used.
     expect(String(await orch.executeRealtimeToolCall('browser_snapshot', {}))).toContain('Page: evil');
     const out = await orch.executeRealtimeToolCall('run_command', {});
-    expect(out).toContain('[BLOCKED]');
+    expect(out).toContain('[AWAITING_APPROVAL]');
     expect(calls).not.toContain('run_command');
+    // The card is judged again, when it runs, under the same taint profile.
+    expect(JSON.parse(approvals.getPending()[0]!.principal!).profile.governed_categories).toContain('execute_command');
     // A fresh user utterance clears it.
     orch.resetRealtimeTaint();
     expect(await orch.executeRealtimeToolCall('run_command', {})).toBe('ok');

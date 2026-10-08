@@ -3,6 +3,7 @@ import { AgentOrchestrator } from './orchestrator.ts';
 import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
 import { AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
 import { AuditTrail } from '../authority/audit.ts';
+import { ApprovalManager, approvalPrincipal } from '../authority/approval.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 
@@ -40,17 +41,18 @@ function makeRegistry(): ToolRegistry {
   return reg;
 }
 
-function makeOrchestrator(authConfig: AuthorityConfig): { orch: AgentOrchestrator; audit: AuditTrail } {
+function makeOrchestrator(authConfig: AuthorityConfig, opts: { approvals?: ApprovalManager; primary?: boolean } = {}): { orch: AgentOrchestrator; audit: AuditTrail } {
   const orch = new AgentOrchestrator();
   orch.setToolRegistry(makeRegistry());
   orch.setAuthorityEngine(new AuthorityEngine(authConfig));
   const audit = new AuditTrail();
   orch.setAuditTrail(audit);
-  orch.createPrimary(ROLE);
+  if (opts.approvals) orch.setApprovalManager(opts.approvals);
+  if (opts.primary !== false) orch.createPrimary(ROLE);
   return { orch, audit };
 }
 
-describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
+describe('orchestrator.executeRealtimeToolCall (voice tool bridge)', () => {
   beforeEach(() => { initDatabase(':memory:'); executed = []; });
   afterEach(() => { closeDb(); });
 
@@ -67,16 +69,33 @@ describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
     expect(log[0]!.executed).toBe(1);
   });
 
-  test('requiresApproval is AUTO-APPROVED (executes) and audited as approval_required', async () => {
+  test('a call that needs approval is not run: it leaves an approval card, and the model is told to say so (Q-08)', async () => {
     // Force read_data to require approval via an override.
     const cfg = authorityConfig({ overrides: [{ action: 'read_data', allowed: true, requires_approval: true }] });
-    const { orch, audit } = makeOrchestrator(cfg);
+    const approvals = new ApprovalManager();
+    const { orch, audit } = makeOrchestrator(cfg, { approvals });
     const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' });
-    expect(out).toContain('contents of /x');      // executed despite needing approval
-    expect(executed).toEqual(['read_file:/x']);
+    expect(out).toContain('[AWAITING_APPROVAL]');
+    expect(executed).toEqual([]);
+    const [card] = approvals.getPending();
+    expect(card).toMatchObject({ tool_name: 'read_file', execution_mode: 'deferred', tool_arguments: JSON.stringify({ path: '/x' }) });
+    expect(approvalPrincipal(card!)).toMatchObject({ agentRoleId: 'personal-assistant', agentAuthorityLevel: 5 });
     const log = audit.query({ limit: 10 });
     expect(log[0]!.authority_decision).toBe('approval_required');
-    expect(log[0]!.executed).toBe(1);             // auto-approved
+    expect(log[0]!.executed).toBe(0);
+  });
+
+  test('with no approval channel, a call that needs approval is refused, not run', async () => {
+    const cfg = authorityConfig({ overrides: [{ action: 'read_data', allowed: true, requires_approval: true }] });
+    const { orch } = makeOrchestrator(cfg);
+    expect(await orch.executeRealtimeToolCall('read_file', { path: '/x' })).toContain('[APPROVAL UNAVAILABLE]');
+    expect(executed).toEqual([]);
+  });
+
+  test('with no primary agent the gate fails closed instead of running the call ungated', async () => {
+    const { orch } = makeOrchestrator(authorityConfig(), { primary: false });
+    expect(await orch.executeRealtimeToolCall('read_file', { path: '/x' })).toContain('[AUTHORITY DENIED]');
+    expect(executed).toEqual([]);
   });
 
   test('hard deny is enforced — tool does NOT execute', async () => {
@@ -87,7 +106,7 @@ describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
     expect(executed).toEqual([]);
   });
 
-  test('blocked_categories backstop blocks even under auto-approve', async () => {
+  test('blocked_categories backstop blocks the call', async () => {
     const { orch } = makeOrchestrator(authorityConfig());
     const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' }, { blockedCategories: ['read_data'] });
     expect(out).toContain('[BLOCKED]');

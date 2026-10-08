@@ -42,6 +42,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool, resolveToolGate, gateContext, freezeToolArguments, substituteAboveLevel } from '../authority/tool-action-map.ts';
+import { isActionCategory } from '../authority/config-validation.ts';
 import { decideTools, realtimeToolDecision } from '../actions/tools/tool-relevance/filter.ts';
 import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
 import {
@@ -194,6 +195,9 @@ const MAX_NO_WORK_NUDGES = 2;
 export type TaskCallResult =
   | { kind: 'completed'; text: string; conversation: LLMMessage[] }
   | { kind: 'paused'; question: string; conversation: LLMMessage[] };
+
+/** Prefix of a turn mark recording an intent the person did not approve (Q-08). */
+const DECLINED_INTENT = 'declined-intent:';
 
 export class AgentOrchestrator {
   private hierarchy: AgentHierarchy;
@@ -363,7 +367,18 @@ export class AgentOrchestrator {
 
   /** Sources of outside content read so far in the calling turn (or voice session). */
   getTurnTaint(): ReadonlySet<string> {
-    return this.currentTaint();
+    return new Set([...this.currentTaint()].filter((mark) => !mark.startsWith(DECLINED_INTENT)));
+  }
+
+  /**
+   * An intent the person did not approve (`request_approval` denied, expired
+   * or unanswered) governs its category for the rest of the turn: a later
+   * call in it needs its own approval, so a denial cannot be walked around
+   * through a tool the level allows (Q-08). Kept in the turn's taint set
+   * under a prefix, which gives it exactly the turn's lifetime.
+   */
+  private noteDeclinedIntent(category: unknown): void {
+    if (isActionCategory(category)) this.currentTaint().add(`${DECLINED_INTENT}${category}`);
   }
 
   /** Voice sessions have no turn objects: the WS layer calls this on each final user transcript. */
@@ -382,7 +397,14 @@ export class AgentOrchestrator {
    * restrictions the parent is under.
    */
   getEffectiveProfile(): AuthorityProfile | null {
-    return mergeProfiles(this.authorityProfile, taintProfile(this.taintGating, this.currentTaint()));
+    const marks = [...this.currentTaint()];
+    const sources = new Set(marks.filter((mark) => !mark.startsWith(DECLINED_INTENT)));
+    const declined = marks.filter((mark) => mark.startsWith(DECLINED_INTENT))
+      .map((mark) => mark.slice(DECLINED_INTENT.length) as ActionCategory);
+    const declinedProfile: AuthorityProfile | null = declined.length
+      ? { label: 'an intent the user did not approve this turn', governed_categories: declined }
+      : null;
+    return mergeProfiles(mergeProfiles(this.authorityProfile, taintProfile(this.taintGating, sources)), declinedProfile);
   }
 
   // --- Accessors for tools that run sub-agents ---
@@ -1740,6 +1762,12 @@ export class AgentOrchestrator {
     if (toolCall.name === 'request_approval') {
       try {
         const raw = await this.toolRegistry.execute(toolCall.name, toolCall.arguments);
+        // Not approved -- denied, expired or not answered in time: the
+        // category needs its own approval for the rest of the turn (Q-08).
+        const verdict = isToolResult(raw) ? '' : toolReturnText(raw);
+        if (!verdict.startsWith('[APPROVED]') && !verdict.startsWith('[ERROR]')) {
+          this.noteDeclinedIntent(toolCall.arguments.action_category);
+        }
         if (isToolResult(raw)) return raw.content.map(guardImageSize);
         // `toolReturnText`, not `JSON.stringify`: request_approval cannot return
         // a trusted-trailer carrier today, and this is the one dispatch that
@@ -1900,6 +1928,13 @@ export class AgentOrchestrator {
           context: gateContext(gate, toolCall.name, toolCall.arguments),
           executionMode: inline ? 'inline' : 'deferred',
           toolRegistry: this.toolRegistry,
+          // Who it is asked for: the executor judges the approved call again
+          // as this agent, under the permissions in force when it runs (Q-08).
+          principal: {
+            agentRoleId: primary.agent.role.id,
+            agentAuthorityLevel: primary.agent.authority.max_authority_level,
+            profile: this.getEffectiveProfile(),
+          },
         });
 
         // Emit approval request event
@@ -2001,12 +2036,18 @@ export class AgentOrchestrator {
                    `Ask the user whether they still want this done.`;
           case 'pending':
           default: {
-            // Timed out waiting (or the task was cancelled mid-wait). Hand
-            // the request to the deferred path so a late click still
-            // executes it. demoteToDeferred only succeeds while the request
-            // is still pending, so it cannot race an approve into a double
-            // execution: if the user approved in the meantime, the demotion
-            // fails and we execute inline after all.
+            // The task was cancelled while it waited: its card is withdrawn,
+            // not handed on, so a later click cannot run the action of a task
+            // the person stopped (Q-08). A deny only lands while the request
+            // is still pending; an approve that won the race runs below.
+            if (signal?.aborted && this.approvalManager.deny(request.id, 'task-cancelled')) {
+              return `[APPROVAL WITHDRAWN] The task was cancelled, so the approval request for ${toolCall.name} was withdrawn and nothing was run.`;
+            }
+            // Timed out waiting. Hand the request to the deferred path so a
+            // late click still executes it. demoteToDeferred only succeeds
+            // while the request is still pending, so it cannot race an approve
+            // into a double execution: if the user approved in the meantime,
+            // the demotion fails and we execute inline after all.
             if (!this.approvalManager.demoteToDeferred(request.id)) {
               const recheck = this.approvalManager.getRequest(request.id);
               if (recheck?.status === 'approved') {
@@ -2110,14 +2151,16 @@ export class AgentOrchestrator {
 
   /**
    * Execute a tool call originating from a premium realtime (gpt-realtime-2)
-   * voice session. Mirrors `executeTool`'s authority gate BUT auto-approves:
-   * a `requiresApproval` decision is treated as granted so the audio loop is
-   * never blocked (decision #2, see docs/GPT_REALTIME_2_INTEGRATION.md §4 Phase 3).
+   * voice session. Mirrors `executeTool`'s authority gate, without blocking
+   * the audio loop on a decision: a call that needs approval is not run, and
+   * leaves an approval card instead -- on the dashboard and in chat, like any
+   * other request -- which the model tells the user about (Q-08, owner
+   * decision, 7 October; until then voice auto-approved such calls, decision
+   * #2 in docs/GPT_REALTIME_2_INTEGRATION.md).
    *
-   * Still enforced: emergency state, explicit hard denies, and the
+   * Also enforced: emergency state, explicit hard denies, and the
    * user-configured `blockedCategories` backstop. Every call is written to the
-   * audit trail tagged `channel:'voice'`; an auto-approved call is recorded as
-   * `approval_required` + `executed:true` so the trail shows no human confirmed it.
+   * audit trail tagged `channel:'voice'`.
    *
    * Always returns a string (the tool result or an error/denial marker) — the
    * realtime session feeds this straight back to the model as function output.
@@ -2152,6 +2195,11 @@ export class AgentOrchestrator {
     }
 
     const primary = this.getPrimary();
+    // Fail closed, as on the task path: a wired gate with nobody to judge for
+    // must not run the tool ungated and unaudited (Q-08).
+    if (this.authorityEngine && !primary) {
+      return `[AUTHORITY DENIED] Cannot execute ${name}: no primary agent is active.`;
+    }
     const tool = this.toolRegistry.get(name);
     // As on the task path: pin a relative file path before it is judged (#522).
     args = freezeToolArguments(tool, args);
