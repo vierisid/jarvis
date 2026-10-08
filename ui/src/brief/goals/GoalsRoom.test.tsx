@@ -69,9 +69,9 @@ const binding = (): GoalsBinding => ({
   scopeId: GOALS_SCOPE,
   controller: f.controller,
 });
-async function render(b: GoalsBinding | undefined = binding()) {
+async function render(b: GoalsBinding | undefined = binding(), key?: string) {
   await React.act(async () => {
-    root.render(<Room shell={shell} binding={b} />);
+    root.render(<Room key={key} shell={shell} binding={b} />);
     await wait();
   });
 }
@@ -178,6 +178,69 @@ test("filter changes expose real paused and failed statuses without an archive",
     expect(
       host.querySelector(".brief-goal-path")?.getAttribute("data-goal-id"),
     ).toBe(`fixture-${status}`);
+  }
+});
+test("selecting under All non-completed preserves the list through route synchronization", async () => {
+  await render();
+  await React.act(async () => f.controller.setFilter("all"));
+  for (const title of [
+    "Sharpen the product story",
+    "Finish the autumn launch",
+  ]) {
+    await click(title);
+    expect(f.controller.snapshot().filter).toBe("all");
+    expect(host.querySelector("select")?.value).toBe("all");
+    expect(host.querySelectorAll(".brief-goal-selector")).toHaveLength(7);
+    expect(shell.route.selection.goalId).toBe(
+      f.controller.snapshot().selectedId!,
+    );
+  }
+});
+test("route-driven return restores Active and its retained filter with or without a room remount", async () => {
+  for (const remount of [false, true]) {
+    shell = { ...shell, route: { room: "goals", selection: {} } };
+    const draw = () =>
+      render(binding(), remount ? shell.route.room : undefined);
+    await draw();
+    await React.act(async () => {
+      f.controller.setFilter("all");
+      f.controller.select("fixture-paused");
+    });
+    const activeRoute = shell.route;
+    shell = { ...shell, route: { room: "completed-goals", selection: {} } };
+    await draw();
+    expect(f.controller.snapshot().tab).toBe("completed");
+    shell = { ...shell, route: activeRoute };
+    await draw();
+    expect(
+      host.querySelector('[role="tab"][aria-selected="true"]')?.textContent,
+    ).toBe("Active · 3");
+    expect(f.controller.snapshot().filter).toBe("all");
+    expect(
+      host.querySelector(".brief-goal-path")?.getAttribute("data-goal-id"),
+    ).toBe("fixture-paused");
+  }
+});
+test("child status remains explicit beside a descriptive caption in both chat states", async () => {
+  await scenario("mixed-status");
+  for (const chatOpen of [false, true]) {
+    shell = { ...shell, chatOpen };
+    await render();
+    for (const [index, label] of [
+      "Paused",
+      "Failed",
+      "Completed",
+      "Active",
+    ].entries()) {
+      const stage = host.querySelectorAll(".brief-goal-stage")[index]!;
+      expect(stage.querySelector(".brief-goal-stage-status")?.textContent).toBe(
+        label,
+      );
+      expect(
+        stage.querySelector(".brief-goal-stage-caption")?.textContent,
+      ).toBeTruthy();
+      expect(stage.querySelector(".brief-progress")).toBeTruthy();
+    }
   }
 });
 test("refresh changes only the existing value nodes, without replacing unrelated stages", async () => {

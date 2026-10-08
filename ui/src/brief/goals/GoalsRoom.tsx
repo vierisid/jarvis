@@ -100,6 +100,7 @@ function ConnectedGoals({
       if (!controller.open(shell.route.selection.goalId)) return;
     } else if (shell.route.room === "completed-goals")
       controller.setTab("completed");
+    else if (shell.route.room === "goals") controller.setTab("active");
     routeKey.current = key;
   }, [shell.route, controller, state.read]);
   useLayoutEffect(() => {
@@ -537,9 +538,14 @@ function PathCard({
           reducedMotion={reduced}
         />
       )}
-      <p className="brief-goal-stage-caption brief-type-utility brief-secondary">
-        {goal.caption || statusLabel(goal.status)}
+      <p className="brief-goal-stage-status brief-type-utility brief-secondary">
+        {statusLabel(goal.status)}
       </p>
+      {goal.caption && goal.caption !== statusLabel(goal.status) && (
+        <p className="brief-goal-stage-caption brief-type-utility brief-secondary">
+          {goal.caption}
+        </p>
+      )}
       {value.kind === "measurement" && (
         <details className="brief-goal-basis brief-type-utility brief-secondary">
           <summary>Data basis</summary>

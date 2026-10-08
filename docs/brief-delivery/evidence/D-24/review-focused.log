@@ -1,0 +1,44 @@
+bun test v1.3.6 (d530ed99)
+
+ui/src/brief/goals/GoalsRoom.test.tsx:
+(pass) approved path, shared segments, and absence of removed headings [94.19ms]
+(pass) selection remains across all eight layouts and returns from completed [267.75ms]
+(pass) next action opens exactly the shared Today work and approval [76.21ms]
+(pass) score-only and unknown goals never invent measured counts [48.55ms]
+(pass) decreasing targets retain units, baseline, source and canonical progress [24.52ms]
+(pass) filter changes expose real paused and failed statuses without an archive [47.23ms]
+(pass) selecting under All non-completed preserves the list through route synchronization [99.87ms]
+(pass) route-driven return restores Active and its retained filter with or without a room remount [169.20ms]
+(pass) child status remains explicit beside a descriptive caption in both chat states [65.12ms]
+(pass) refresh changes only the existing value nodes, without replacing unrelated stages [37.37ms]
+(pass) stale evidence leaves the path readable but blocks next-step navigation [32.95ms]
+(pass) source, scope and capability mismatches fail closed [25.82ms]
+(pass) direct completed route selects the canonical goal and keeps long facts readable [35.33ms]
+(pass) completed visits remain settled and show real milestones [210.24ms]
+(pass) a value change animates only the changed glyph, never the entire goal path [34.88ms]
+
+ui/src/brief/goals/model.test.ts:
+(pass) zero-baseline counts use the same normalized band as Today [0.25ms]
+(pass) score-only titles never supply a numerator [0.09ms]
+(pass) unknown and observed zero remain different [0.09ms]
+(pass) nonzero and decreasing targets use canonical progress, with unmodified measurements [0.11ms]
+(pass) missing provenance, invalid time or invalid fraction never render an evidenced count [0.12ms]
+(pass) completion status never forces score or measurement to 100 percent [0.07ms]
+(pass) canonical statuses remain reachable, with no archive reinterpretation [0.16ms]
+(pass) next action is the existing Today decision and only available on a current active goal [0.09ms]
+(pass) duplicate roots and duplicate path stages are rejected [0.17ms]
+
+ui/src/brief/goals/controller.test.ts:
+(pass) access gates reads; revocation clears private rows and selection [1.32ms]
+(pass) selection survives reorder, tab returns, filter returns and refreshed values [3.22ms]
+(pass) unknown, failed and completed direct IDs select their real status [1.33ms]
+(pass) opening a visible goal retains its filter, including returns from completed [1.44ms]
+(pass) late reads cannot overwrite a later selection or refreshed data [1.44ms]
+(pass) failed refresh retains a stale read; duplicate projections fail closed [1.51ms]
+(pass) retired or revoked pending reads cannot repopulate a scope [2.41ms]
+(pass) read-state families remain distinct [7.89ms]
+
+ 32 pass
+ 0 fail
+ 172 expect() calls
+Ran 32 tests across 3 files. [1.59s]

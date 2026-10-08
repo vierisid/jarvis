@@ -4,6 +4,40 @@
   "date": "2026-10-08",
   "status": "implemented_verified_not_activated",
   "implementation_head": "85b11e98dc30c94246bba57afe0d14f96b48823f",
+  "review_corrections": {
+    "reviewed_head": "af50f29624155fdd7f7c9da0bf6c84d3cb10520b",
+    "result": "R1-R4 fixed and verified",
+    "findings": {
+      "R1": "Preserve All non-completed during route selection and completed return",
+      "R2": "Synchronize both goal destinations, including ID-free Active return and room remount",
+      "R3": "Expose child statuses independently of optional compact captions",
+      "R4": "Switch selector material and ink together without color interpolation"
+    },
+    "red_green": {
+      "new_cases_failed_before_fix": 4,
+      "red_evidence": "evidence/D-24/review-red.log",
+      "focused": { "passed": 32, "failed": 0, "assertions": 172 },
+      "focused_evidence": "evidence/D-24/review-focused.log"
+    },
+    "brief_regression": {
+      "passed": 551,
+      "failed": 0,
+      "skipped": 2,
+      "assertions": 5042
+    },
+    "regression_evidence": "evidence/D-24/review-brief-regression.log",
+    "typecheck": "pass; evidence/D-24/review-typecheck.log",
+    "build": "pass; existing at-rule warnings; evidence/D-24/review-build.log",
+    "browser_evidence": "evidence/D-24/review-browser-checks.json",
+    "theme_changes": 20,
+    "selector_transition_duration": "0s",
+    "minimum_sampled_selector_text_contrast": 6.0772,
+    "limitations": [
+      "Local preview route state: breadcrumb verified in browser; Back-style route return and host remount covered by React tests, not a live host history test",
+      "Theme values sampled immediately after native clicks plus computed transition duration; not frame-by-frame capture",
+      "Existing production activation gates and fixture limitations unchanged"
+    ]
+  },
   "formatting": {
     "result": "pass",
     "evidence": "evidence/D-24/format-check.log",

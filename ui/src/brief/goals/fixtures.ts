@@ -6,6 +6,7 @@ import type { GoalCollection, GoalDatum, GoalPath } from "./model";
 export const GOALS_SCOPE = "fixture-d24-goals";
 export const GOAL_EXAMPLES = [
   "ready",
+  "mixed-status",
   "score-only",
   "decreasing",
   "unknown",
@@ -241,6 +242,12 @@ export function goalPaths(): GoalPath[] {
 }
 export function makeGoalsFixture(example: GoalExample = "ready") {
   let rows = goalPaths();
+  if (example === "mixed-status") {
+    const statuses = ["paused", "failed", "completed", "active"] as const;
+    rows[0]!.stages.forEach((stage, index) => {
+      stage.status = statuses[index]!;
+    });
+  }
   if (example === "score-only") {
     const goal = rows[0]!.goal;
     goal.measurement = null;

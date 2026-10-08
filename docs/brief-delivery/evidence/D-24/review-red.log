@@ -1,0 +1,102 @@
+bun test v1.3.6 (d530ed99)
+
+ui/src/brief/goals/GoalsRoom.test.tsx:
+(pass) approved path, shared segments, and absence of removed headings [101.48ms]
+(pass) selection remains across all eight layouts and returns from completed [283.62ms]
+(pass) next action opens exactly the shared Today work and approval [70.19ms]
+(pass) score-only and unknown goals never invent measured counts [47.01ms]
+(pass) decreasing targets retain units, baseline, source and canonical progress [27.06ms]
+(pass) filter changes expose real paused and failed statuses without an archive [56.19ms]
+183 | test("selecting under All non-completed preserves the list through route synchronization", async () => {
+184 |   await render();
+185 |   await React.act(async () => f.controller.setFilter("all"));
+186 |   for (const title of ["Sharpen the product story", "Finish the autumn launch"]) {
+187 |     await click(title);
+188 |     expect(f.controller.snapshot().filter).toBe("all");
+                                                 ^
+error: expect(received).toBe(expected)
+
+Expected: "all"
+Received: "active"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-24/ui/src/brief/goals/GoalsRoom.test.tsx:188:44)
+(fail) selecting under All non-completed preserves the list through route synchronization [70.49ms]
+204 |     shell = { ...shell, route: { room: "completed-goals", selection: {} } };
+205 |     await draw();
+206 |     expect(f.controller.snapshot().tab).toBe("completed");
+207 |     shell = { ...shell, route: activeRoute };
+208 |     await draw();
+209 |     expect(host.querySelector('[role="tab"][aria-selected="true"]')?.textContent).toBe("Active · 3");
+                                                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "Active · 3"
+Received: "Completed · 2"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-24/ui/src/brief/goals/GoalsRoom.test.tsx:209:83)
+(fail) route-driven return restores Active and its retained filter with or without a room remount [82.15ms]
+216 |   for (const chatOpen of [false, true]) {
+217 |     shell = { ...shell, chatOpen };
+218 |     await render();
+219 |     for (const [index, label] of ["Paused", "Failed", "Completed", "Active"].entries()) {
+220 |       const stage = host.querySelectorAll(".brief-goal-stage")[index]!;
+221 |       expect(stage.querySelector(".brief-goal-stage-status")?.textContent).toBe(label);
+                                                                                 ^
+error: expect(received).toBe(expected)
+
+Expected: "Paused"
+Received: undefined
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-24/ui/src/brief/goals/GoalsRoom.test.tsx:221:76)
+(fail) child status remains explicit beside a descriptive caption in both chat states [58.87ms]
+(pass) refresh changes only the existing value nodes, without replacing unrelated stages [45.46ms]
+(pass) stale evidence leaves the path readable but blocks next-step navigation [30.54ms]
+(pass) source, scope and capability mismatches fail closed [28.85ms]
+(pass) direct completed route selects the canonical goal and keeps long facts readable [33.23ms]
+(pass) completed visits remain settled and show real milestones [214.23ms]
+(pass) a value change animates only the changed glyph, never the entire goal path [37.48ms]
+
+ui/src/brief/goals/model.test.ts:
+(pass) zero-baseline counts use the same normalized band as Today [3.39ms]
+(pass) score-only titles never supply a numerator [0.21ms]
+(pass) unknown and observed zero remain different [1.21ms]
+(pass) nonzero and decreasing targets use canonical progress, with unmodified measurements [0.39ms]
+(pass) missing provenance, invalid time or invalid fraction never render an evidenced count [0.29ms]
+(pass) completion status never forces score or measurement to 100 percent [0.13ms]
+(pass) canonical statuses remain reachable, with no archive reinterpretation [0.34ms]
+(pass) next action is the existing Today decision and only available on a current active goal [0.14ms]
+(pass) duplicate roots and duplicate path stages are rejected [0.28ms]
+
+ui/src/brief/goals/controller.test.ts:
+(pass) access gates reads; revocation clears private rows and selection [1.38ms]
+(pass) selection survives reorder, tab returns, filter returns and refreshed values [1.61ms]
+(pass) unknown, failed and completed direct IDs select their real status [1.33ms]
+61 |   c.setAccess(true);
+62 |   await flush();
+63 |   c.setFilter("all");
+64 |   for (const id of ["fixture-story", "fixture-paused", "fixture-failed"]) {
+65 |     expect(c.open(id)).toBe(true);
+66 |     expect(c.snapshot().filter).toBe("all");
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "all"
+Received: "active"
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-d-24/ui/src/brief/goals/controller.test.ts:66:33)
+(fail) opening a visible goal retains its filter, including returns from completed [1.57ms]
+(pass) late reads cannot overwrite a later selection or refreshed data [4.51ms]
+(pass) failed refresh retains a stale read; duplicate projections fail closed [2.50ms]
+(pass) retired or revoked pending reads cannot repopulate a scope [2.59ms]
+(pass) read-state families remain distinct [6.04ms]
+
+4 tests failed:
+(fail) selecting under All non-completed preserves the list through route synchronization [70.49ms]
+(fail) route-driven return restores Active and its retained filter with or without a room remount [82.15ms]
+(fail) child status remains explicit beside a descriptive caption in both chat states [58.87ms]
+(fail) opening a visible goal retains its filter, including returns from completed [1.57ms]
+
+ 28 pass
+ 4 fail
+ 123 expect() calls
+Ran 32 tests across 3 files. [1.54s]
