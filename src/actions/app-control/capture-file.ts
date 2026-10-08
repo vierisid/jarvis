@@ -124,18 +124,10 @@ function captureDir(): { dir: string; file: string } {
   return { dir, file: join(dir, 'capture.png') };
 }
 
-/** Run `write(path)` with a fresh private path, and return what it wrote there. */
-export function captureViaPrivateFile(write: (path: string) => void): Buffer {
-  const { dir, file } = captureDir();
-  try {
-    write(file);
-    return readFileSync(file);
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
-  }
-}
-
-/** The same, for a capture tool that is awaited. */
+/**
+ * Run `write(path)` with a fresh private path, and return what it wrote
+ * there. (The synchronous twin went with the synchronous native seam, #893.)
+ */
 export async function captureViaPrivateFileAsync(write: (path: string) => Promise<unknown>): Promise<Buffer> {
   const { dir, file } = captureDir();
   try {

@@ -170,8 +170,8 @@ export class WindowsAppController implements AppController {
    * as ASCII-safe JSON — never on the command line, never interpolated into
    * script text.
    */
-  private runScript(command: string, payload?: Record<string, unknown>): string {
-    const stdout = runNative(
+  private async runScript(command: string, payload?: Record<string, unknown>): Promise<string> {
+    const stdout = await runNative(
       this.exec,
       ['powershell.exe', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', SCRIPT_PATH, command],
       payload === undefined ? '' : toAsciiJson(payload),
@@ -180,8 +180,8 @@ export class WindowsAppController implements AppController {
     return stdout.trim();
   }
 
-  private runScriptJson<T>(command: string, payload?: Record<string, unknown>): T {
-    const out = this.runScript(command, payload);
+  private async runScriptJson<T>(command: string, payload?: Record<string, unknown>): Promise<T> {
+    const out = await this.runScript(command, payload);
     if (!out) throw new Error(`desktop.ps1 ${command} produced no output`);
     try {
       return JSON.parse(out) as T;
@@ -191,7 +191,7 @@ export class WindowsAppController implements AppController {
   }
 
   async getActiveWindow(): Promise<WindowInfo> {
-    return toWindowInfo(this.runScriptJson<ScriptWindow>('get-active-window'));
+    return toWindowInfo(await this.runScriptJson<ScriptWindow>('get-active-window'));
   }
 
   async getWindowTree(_pid: number): Promise<UIElement[]> {
@@ -202,7 +202,7 @@ export class WindowsAppController implements AppController {
   }
 
   async listWindows(): Promise<WindowInfo[]> {
-    const result = this.runScriptJson<ScriptWindow[] | ScriptWindow>('list-windows');
+    const result = await this.runScriptJson<ScriptWindow[] | ScriptWindow>('list-windows');
     const windows = Array.isArray(result) ? result : [result];
     return windows.map(toWindowInfo);
   }
@@ -210,41 +210,41 @@ export class WindowsAppController implements AppController {
   async clickElement(element: UIElement): Promise<void> {
     const x = Math.round(element.bounds.x + element.bounds.width / 2);
     const y = Math.round(element.bounds.y + element.bounds.height / 2);
-    this.runScript('click-at', { x, y });
+    await this.runScript('click-at', { x, y });
   }
 
   async typeText(text: string): Promise<void> {
-    this.runScript('send-keys', { keys: escapeSendKeysText(text) });
+    await this.runScript('send-keys', { keys: escapeSendKeysText(text) });
   }
 
   async pressKeys(keys: string[]): Promise<void> {
-    this.runScript('send-keys', { keys: mapKeysToSendKeys(keys) });
+    await this.runScript('send-keys', { keys: mapKeysToSendKeys(keys) });
   }
 
   async captureScreen(): Promise<Buffer> {
-    const base64 = this.runScript('capture-screen');
+    const base64 = await this.runScript('capture-screen');
     if (!base64) throw new Error('capture-screen produced no image data');
     return Buffer.from(base64, 'base64');
   }
 
   async captureWindow(pid: number): Promise<Buffer> {
-    const base64 = this.runScript('capture-window', { pid });
+    const base64 = await this.runScript('capture-window', { pid });
     if (!base64) throw new Error(`capture-window produced no image data for PID ${pid}`);
     return Buffer.from(base64, 'base64');
   }
 
   async focusWindow(pid: number): Promise<void> {
-    this.runScript('focus-window', { pid });
+    await this.runScript('focus-window', { pid });
   }
 
   async launchApp(executable: string, args?: string): Promise<object> {
     if (!executable.trim()) throw new Error('Executable is required');
     // pid is null when the shell reuses an existing process (documents, URLs).
-    const result = this.runScriptJson<{ pid: number | null }>('launch-app', { executable, args: args ?? '' });
+    const result = await this.runScriptJson<{ pid: number | null }>('launch-app', { executable, args: args ?? '' });
     return { pid: result.pid ?? null, executable, args: args ?? '' };
   }
 
   async closeWindow(pid: number): Promise<void> {
-    this.runScript('close-window', { pid });
+    await this.runScript('close-window', { pid });
   }
 }

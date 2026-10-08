@@ -12,7 +12,7 @@ type Call = { cmd: string[]; input: string };
 
 function fakeExec(handler: (cmd: string[], input: string) => Partial<NativeExecResult>) {
   const calls: Call[] = [];
-  const exec: NativeExec = (cmd, input) => {
+  const exec: NativeExec = async (cmd, input) => {
     calls.push({ cmd, input });
     const result = handler(cmd, input);
     return { status: 0, stdout: '', stderr: '', ...result };
@@ -124,7 +124,7 @@ describe('MacAppController fallback', () => {
       status: 1,
       stderr: 'execution error: Can’t get application process whose unix id = 7. (-1728)',
     }));
-    expect(ctrl.focusWindow(7)).rejects.toThrow(/unix id = 7/);
+    await expect(ctrl.focusWindow(7)).rejects.toThrow(/unix id = 7/);
   });
 
   test('launchApp uses open with an argv array, never a shell string', async () => {

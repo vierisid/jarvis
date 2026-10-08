@@ -82,7 +82,7 @@ switch (site) {
   // native-exec.ts: the seam behind Windows `launch-app` (powershell
   // Start-Process) and macOS `open -a`, and every other fallback script.
   case 'native-exec': {
-    const r = defaultExec([bin('fake-app'), 'native-exec'], '');
+    const r = await defaultExec([bin('fake-app'), 'native-exec'], '');
     if (r.status !== 0) throw new Error(`defaultExec exited ${r.status}: ${r.stderr}`);
     break;
   }

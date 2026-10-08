@@ -1,6 +1,6 @@
 import { join } from 'node:path';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
-import { captureViaPrivateFile } from './capture-file.ts';
+import { captureViaPrivateFileAsync } from './capture-file.ts';
 import { defaultExec, runNative, type NativeExec } from './native-exec.ts';
 
 /**
@@ -140,8 +140,8 @@ export class MacAppController implements AppController {
    * Run a command of the fixed helper script. Dynamic values travel as
    * osascript arguments — never interpolated into script text.
    */
-  private runScript(command: string, args: string[] = []): string {
-    const stdout = runNative(
+  private async runScript(command: string, args: string[] = []): Promise<string> {
+    const stdout = await runNative(
       this.exec,
       ['osascript', SCRIPT_PATH, command, ...args],
       '',
@@ -151,7 +151,7 @@ export class MacAppController implements AppController {
   }
 
   async getActiveWindow(): Promise<WindowInfo> {
-    const line = this.runScript('get-active-window');
+    const line = await this.runScript('get-active-window');
     const info = parseWindowLine(line);
     if (!info) throw new Error(`Could not parse active window info: ${line.slice(0, 200)}`);
     return info;
@@ -162,7 +162,7 @@ export class MacAppController implements AppController {
   }
 
   async listWindows(): Promise<WindowInfo[]> {
-    const out = this.runScript('list-windows');
+    const out = await this.runScript('list-windows');
     const windows: WindowInfo[] = [];
     for (const line of out.split('\n')) {
       if (!line.trim()) continue;
@@ -175,16 +175,16 @@ export class MacAppController implements AppController {
   async clickElement(element: UIElement): Promise<void> {
     const x = Math.round(element.bounds.x + element.bounds.width / 2);
     const y = Math.round(element.bounds.y + element.bounds.height / 2);
-    this.runScript('click-at', [String(x), String(y)]);
+    await this.runScript('click-at', [String(x), String(y)]);
   }
 
   async typeText(text: string): Promise<void> {
-    this.runScript('type-text', [text]);
+    await this.runScript('type-text', [text]);
   }
 
   async pressKeys(keys: string[]): Promise<void> {
     const chord = mapMacKeys(keys);
-    this.runScript('press-keys', [chord.modifiers.join(',') || '-', chord.kind, chord.value]);
+    await this.runScript('press-keys', [chord.modifiers.join(',') || '-', chord.kind, chord.value]);
   }
 
   async captureScreen(): Promise<Buffer> {
@@ -200,14 +200,14 @@ export class MacAppController implements AppController {
   }
 
   /** Through a private, unpredictable file (#746): see capture-file.ts. */
-  private captureToBuffer(captureArgs: string[]): Buffer {
-    return captureViaPrivateFile((file) => {
-      runNative(this.exec, ['screencapture', ...captureArgs, file], '', 'screencapture');
+  private captureToBuffer(captureArgs: string[]): Promise<Buffer> {
+    return captureViaPrivateFileAsync(async (file) => {
+      await runNative(this.exec, ['screencapture', ...captureArgs, file], '', 'screencapture');
     });
   }
 
   async focusWindow(pid: number): Promise<void> {
-    this.runScript('focus-window', [String(pid)]);
+    await this.runScript('focus-window', [String(pid)]);
   }
 
   async launchApp(executable: string, args?: string): Promise<object> {
@@ -219,10 +219,10 @@ export class MacAppController implements AppController {
     const extraArgs = parseCommandArgs(args);
     const argsTail = extraArgs.length > 0 ? ['--args', ...extraArgs] : [];
     try {
-      runNative(this.exec, ['open', '-a', executable, ...argsTail], '', `open -a ${executable}`);
+      await runNative(this.exec, ['open', '-a', executable, ...argsTail], '', `open -a ${executable}`);
     } catch (appError) {
       try {
-        runNative(this.exec, ['open', executable, ...argsTail], '', `open ${executable}`);
+        await runNative(this.exec, ['open', executable, ...argsTail], '', `open ${executable}`);
       } catch {
         throw appError;
       }

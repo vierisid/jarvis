@@ -11,7 +11,7 @@ type Call = { cmd: string[]; input: string };
 
 function fakeExec(handler: (cmd: string[], input: string) => Partial<NativeExecResult>) {
   const calls: Call[] = [];
-  const exec: NativeExec = (cmd, input) => {
+  const exec: NativeExec = async (cmd, input) => {
     calls.push({ cmd, input });
     const result = handler(cmd, input);
     return { status: 0, stdout: '', stderr: '', ...result };
@@ -163,12 +163,12 @@ describe('WindowsAppController fallback', () => {
   test('throws with stderr detail when the script exits non-zero', async () => {
     // Regression: PR #279 swallowed failures and returned empty strings.
     const { ctrl } = controller(() => ({ status: 1, stderr: 'No visible window for PID 7' }));
-    expect(ctrl.focusWindow(7)).rejects.toThrow(/No visible window for PID 7/);
+    await expect(ctrl.focusWindow(7)).rejects.toThrow(/No visible window for PID 7/);
   });
 
   test('throws when the process cannot be spawned', async () => {
     const { ctrl } = controller(() => ({ status: null, error: new Error('ENOENT') }));
-    expect(ctrl.captureScreen()).rejects.toThrow(/failed to start: ENOENT/);
+    await expect(ctrl.captureScreen()).rejects.toThrow(/failed to start: ENOENT/);
   });
 
   test('launchApp passes executable and args via stdin payload', async () => {

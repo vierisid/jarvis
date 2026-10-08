@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync, lstatSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { __setCaptureTimeoutForTests, awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFile, captureViaPrivateFileAsync } from './capture-file.ts';
+import { __setCaptureTimeoutForTests, awaitCaptureTool, awaitCaptureToolOutput, CaptureTimeoutError, captureViaPrivateFileAsync } from './capture-file.ts';
 import { encodePng } from './fixtures/png.ts';
 import { MacAppController } from './macos.ts';
 import { __setNativeExecTimeoutForTests, defaultExec, runNative, type NativeExec } from './native-exec.ts';
@@ -27,10 +27,12 @@ function plant(predicted: string): { victim: string; cleanup: () => void } {
   return { victim, cleanup: () => { rmSync(predicted, { force: true }); rmSync(dir, { recursive: true, force: true }); } };
 }
 
-describe('captureViaPrivateFile (#746)', () => {
-  test('hands the tool a path in a fresh private directory, and removes it after', () => {
+// The synchronous captureViaPrivateFile went with the synchronous native
+// seam (#893); every capture is awaited now, so these pin the async one.
+describe('captureViaPrivateFileAsync (#746)', () => {
+  test('hands the tool a path in a fresh private directory, and removes it after', async () => {
     let seen = '';
-    const bytes = captureViaPrivateFile((path) => {
+    const bytes = await captureViaPrivateFileAsync(async (path) => {
       seen = path;
       const dir = statSync(dirname(path));
       expect(dir.mode & 0o777).toBe(0o700);
@@ -42,15 +44,14 @@ describe('captureViaPrivateFile (#746)', () => {
     expect(existsSync(dirname(seen))).toBe(false);
     // Two captures never share a path, whatever the clock says.
     const paths = new Set<string>();
-    for (let i = 0; i < 2; i++) captureViaPrivateFile((p) => { paths.add(p); writeFileSync(p, ''); });
+    for (let i = 0; i < 2; i++) await captureViaPrivateFileAsync(async (p) => { paths.add(p); writeFileSync(p, ''); });
     expect(paths.size).toBe(2);
   });
 
-  test('removes the directory when the tool fails, sync or async', async () => {
+  test('removes the directory when the tool fails', async () => {
     let seen = '';
-    expect(() => captureViaPrivateFile((p) => { seen = p; writeFileSync(p, 'half'); throw new Error('tool failed'); })).toThrow('tool failed');
-    expect(existsSync(dirname(seen))).toBe(false);
     await expect(captureViaPrivateFileAsync(async (p) => { seen = p; writeFileSync(p, 'half'); throw new Error('tool failed'); })).rejects.toThrow('tool failed');
+    expect(seen).not.toBe('');
     expect(existsSync(dirname(seen))).toBe(false);
   });
 });
@@ -62,7 +63,7 @@ describe('local captures do not use a predictable path (#746)', () => {
     const { victim, cleanup } = plant(join(tmpdir(), `jarvis-capture-${process.pid}-${PINNED_MS}.png`));
     try {
       const targets: string[] = [];
-      const exec: NativeExec = (cmd) => {
+      const exec: NativeExec = async (cmd) => {
         const target = cmd[cmd.length - 1]!;
         targets.push(target);
         writeFileSync(target, 'what screencapture wrote');
@@ -314,14 +315,20 @@ describe('capture tool bounds (#802)', () => {
     await expect(awaitCaptureTool(proc, 'scrot')).rejects.toThrow('scrot exited with code 3: cannot open display');
   });
 
-  test('macOS/Windows seam: a script that ignores SIGTERM is still stopped at the bound', () => {
+  test('macOS/Windows seam: a script that ignores SIGTERM is still stopped at the bound', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'jarvis-802-'));
     const hung = join(dir, 'hung.sh');
     writeFileSync(hung, "#!/bin/sh\ntrap '' TERM\nexec sleep 5\n", { mode: 0o755 });
     __setNativeExecTimeoutForTests(300);
     try {
       const started = performance.now();
-      expect(() => runNative(defaultExec, [hung], '', 'screencapture')).toThrow('screencapture did not finish within 0.3s and was stopped');
+      // Settled against a deadline rather than `await expect(...).rejects`,
+      // which hangs Bun 1.3.8's runner on a promise that never settles.
+      const outcome = await Promise.race([
+        runNative(defaultExec, [hung], '', 'screencapture').then(() => 'resolved', (e: Error) => e.message),
+        Bun.sleep(4000).then(() => 'still running at 4s'),
+      ]);
+      expect(outcome).toBe('screencapture did not finish within 0.3s and was stopped');
       expect(performance.now() - started).toBeLessThan(3000);
     } finally {
       __setNativeExecTimeoutForTests(null);
