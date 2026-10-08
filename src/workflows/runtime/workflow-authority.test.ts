@@ -32,6 +32,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkflowRoutes } from '../api/routes';
+import { WorkflowEffectBoundary } from './effect-boundary';
+import { ActionOutcomeError } from '../../actions/action-outcome';
 import { createJarvisContextVaultSearchRoute } from '../sandbox-api/routes/jarvis-context';
 import { getSidecarManager, setSidecarManagerRef } from '../../actions/tools/sidecar-route';
 import { CredentialResolver } from '../credentials/adapter';
@@ -171,6 +173,15 @@ describe('workflow effect boundary', () => {
     const pending = await f.invoke();
     f.approvals.approve(pending.approval.approvalId, 'user');
     f.registry.get('write_file')!.authorityGate = () => ({ actionCategory: 'write_data', confirm: 'always', intent: 'Review' });
+    await expect(f.invoke()).rejects.toThrow('predates required UI review');
+    expect(f.calls).toHaveLength(0);
+    // #845. Terminal: the effect is blocked and the granted approval gets its
+    // receipt, instead of both staying as they were with every replay
+    // throwing again.
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    expect(effect).toMatchObject({ status: 'blocked', decision: 'denied',
+      error: 'Workflow approval predates required UI review; start a new reviewed run' });
+    expect(f.approvals.getRequest(pending.approval.approvalId)).toMatchObject({ status: 'executed', execution_outcome: 'blocked' });
     await expect(f.invoke()).rejects.toThrow('predates required UI review');
     expect(f.calls).toHaveLength(0);
   });
@@ -327,6 +338,109 @@ describe('workflow effect boundary', () => {
       expect(f.calls).toHaveLength(0);
     });
   }
+
+  /**
+   * #845. Every way an effect whose approval was GRANTED ends without
+   * succeeding used to leave the approval `approved` with no outcome, because
+   * only success called `markExecuted`. The approvals surface then showed a
+   * granted call that never ran, for good. Each path now gives the approval
+   * the receipt the deferred executor gives a non-workflow one: `blocked` when
+   * nothing was dispatched, `failed` when it was dispatched and failed.
+   */
+  // Not `canceled`: a run that is no longer RUNNING is refused by
+  // `resolveEffectContext` before the record is even read, so its effect is
+  // never finalised at all and stays `pending`. That is not a blocked path and
+  // is outside #845.
+  for (const outcome of ['pause', 'kill', 'policy-change'] as const) {
+    test(`an approved effect refused at dispatch by ${outcome} closes its approval as blocked (#845)`, async () => {
+      const f = fixture(); f.authority.setGovernedCategories(['write_data']);
+      const id = (await f.invoke()).approval!.approvalId;
+      f.approvals.approve(id, 'test');
+      if (outcome === 'pause' || outcome === 'kill') f.emergency[outcome]();
+      if (outcome === 'policy-change') f.authority.addOverride({ action: 'write_data', allowed: false });
+      await expect(f.invoke()).rejects.toThrow();
+      expect(f.calls).toHaveLength(0);
+      const effect = listWorkflowEffects(f.run.id)[0]!;
+      expect(effect.status).toBe('blocked');
+      const approval = f.approvals.getRequest(id)!;
+      expect(approval).toMatchObject({ status: 'executed', execution_outcome: 'blocked' });
+      expect(JSON.parse(approval.execution_result!)).toEqual({ effectId: effect.id, status: 'blocked', error: effect.error });
+    });
+  }
+
+  for (const outcome of ['denied', 'expired'] as const) {
+    for (const via of ['its own refusal', 'a policy block'] as const) {
+      test(`a ${outcome} approval keeps its own status when its effect is blocked by ${via} (#845)`, async () => {
+        // The control: only an APPROVED row takes a receipt. A refused
+        // approval already says what happened, and must not be rewritten as
+        // executed. "A policy block" sends the refused row through the policy
+        // refusal, which DOES call for a receipt, so this pins that the
+        // receipt itself declines a row that is not approved.
+        const f = fixture(); f.authority.setGovernedCategories(['write_data']);
+        const id = (await f.invoke()).approval!.approvalId;
+        if (outcome === 'denied') f.approvals.deny(id, 'test'); else f.approvals.expireOld(-1);
+        if (via === 'a policy block') f.emergency.pause();
+        await expect(f.invoke()).rejects.toThrow(via === 'a policy block' ? /system paused/ : /effect was not executed/);
+        expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('blocked');
+        expect(f.approvals.getRequest(id)).toMatchObject({ status: outcome, execution_outcome: null });
+      });
+    }
+  }
+
+  for (const [label, failure, effectStatus, receipt] of [
+    ['a thrown error', () => new Error('remote timeout'), 'failed', 'failed'],
+    ['a blocked outcome', () => new ActionOutcomeError({ status: 'blocked', code: 'refused', message: 'remote refused', effect: 'not_started' }), 'blocked', 'blocked'],
+    ['an unknown outcome', () => new ActionOutcomeError({ status: 'unknown', code: 'lost', message: 'reply lost', effect: 'may_have_occurred' }), 'unknown', 'failed'],
+    // Blocked partway: the effect may have happened, so the receipt must not
+    // say `blocked`, which reads as "nothing was done".
+    ['a blocked outcome that may have taken effect', () => new ActionOutcomeError({ status: 'blocked', code: 'partial', message: 'stopped partway', effect: 'may_have_occurred' }), 'blocked', 'failed'],
+  ] as const) {
+    test(`an approved effect whose dispatch ends in ${label} closes its approval as ${receipt} (#845)`, async () => {
+      const f = fixture(); f.authority.setGovernedCategories(['write_data']);
+      const id = (await f.invoke()).approval!.approvalId;
+      f.approvals.approve(id, 'test');
+      f.registry.get('write_file')!.execute = async () => { f.calls.push('attempt'); throw failure(); };
+      await expect(f.invoke()).rejects.toThrow();
+      expect(f.calls).toEqual(['attempt']);
+      const effect = listWorkflowEffects(f.run.id)[0]!;
+      expect(effect.status).toBe(effectStatus);
+      const approval = f.approvals.getRequest(id)!;
+      expect(approval).toMatchObject({ status: 'executed', execution_outcome: receipt });
+      expect(JSON.parse(approval.execution_result!)).toEqual({ effectId: effect.id, status: effectStatus, error: effect.error });
+    });
+  }
+
+  test('an approved effect whose target is refused before the claim closes its approval as blocked (#845)', async () => {
+    // The checkpoint's own refusal: an ActionOutcomeError from target
+    // validation, raised before the dispatch claim, so nothing ran.
+    const f = fixture(); f.authority.setGovernedCategories(['write_data']);
+    const boundary = new WorkflowEffectBoundary(f.options);
+    let refuse = false;
+    const invocation = () => boundary.invoke({ context: f.context, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
+      route: 'tool', toolName: 'write_file', category: 'write_data', toolCategory: 'file-ops',
+      request: { toolName: 'write_file', params: { path: '/tmp/synthetic' } },
+      prepare: () => ({ arguments: { path: '/tmp/synthetic' }, target: {} }),
+      validateTarget: () => { if (refuse) throw new ActionOutcomeError({ status: 'blocked', code: 'target_gone',
+        message: 'the reviewed machine is gone', effect: 'not_started' }); },
+      execute: async () => { f.calls.push('dispatched'); return 'saved'; } });
+    const id = (await invocation()).approval!.approvalId;
+    f.approvals.approve(id, 'test');
+    refuse = true;
+    await expect(invocation()).rejects.toThrow('the reviewed machine is gone');
+    expect(f.calls).toHaveLength(0);
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    expect(effect.status).toBe('blocked');
+    expect(f.approvals.getRequest(id)).toMatchObject({ status: 'executed', execution_outcome: 'blocked' });
+  });
+
+  test('a successful approved effect still closes its approval as committed (#845)', async () => {
+    // The other control: the new receipts are for the failure paths only.
+    const f = fixture(); f.authority.setGovernedCategories(['write_data']);
+    const id = (await f.invoke()).approval!.approvalId;
+    f.approvals.approve(id, 'test');
+    expect((await f.invoke()).result).toBe('saved');
+    expect(f.approvals.getRequest(id)).toMatchObject({ status: 'executed', execution_outcome: 'committed' });
+  });
 
   test('approval cannot authorize changed parameters or an edited version', async () => {
     const f = fixture(); f.authority.setGovernedCategories(['write_data']);

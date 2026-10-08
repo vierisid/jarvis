@@ -40,8 +40,8 @@ import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
-import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
-import { getWorkflowEffect, saveWorkflowEffect } from '../db/repos/workflow-effect';
+import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
+import { getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
@@ -437,9 +437,11 @@ export function buildSandboxServiceBackends(
         //
         // Only THIS call's record: the same route, still pending, with the
         // request digest the dispatch below would have bound. A refusal on a
-        // first pass has no record and gets none. The approval row itself is
-        // left as it is, as on every boundary refusal: a workflow-owned
-        // approval's truth is its effect record (`reconcileAfterRestart`).
+        // first pass has no record and gets none. Since #845 the approval gets
+        // its `blocked` receipt too, as every boundary refusal's does: it was
+        // granted and will never be acted on, and leaving it `approved` showed
+        // the approvals surface a granted call that never ran. The effect
+        // record is still where the detail lives; the receipt names it.
         // Synchronous from the read to the write, so nothing can claim the
         // record in between.
         const blockParkedEffect = (reason: string): void => {
@@ -447,7 +449,11 @@ export function buildSandboxServiceBackends(
             workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
           if (!parked || parked.status !== 'pending') return;
           if (parked.requestDigest !== digest({ toolName: call.toolCall.name, arguments: call.toolCall.arguments })) return;
-          saveWorkflowEffect({ ...parked, status: 'blocked', decision: 'denied', error: reason, reason, finishedAt: Date.now() });
+          const blocked: WorkflowEffect = { ...parked, status: 'blocked', decision: 'denied', error: reason, reason, finishedAt: Date.now() };
+          saveWorkflowEffect(blocked);
+          // The approval that parked it was granted and is now never acted on
+          // (#845): its receipt, as the boundary gives its own refusals.
+          closeEffectApproval(opts.approvalManager, blocked, 'blocked');
         };
         const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
         const refusedCategory = severityRank(gate.actionCategory) > severityRank(call.actionCategory)
