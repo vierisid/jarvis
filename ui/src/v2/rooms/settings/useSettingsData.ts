@@ -190,8 +190,15 @@ export function parseModelRef(ref: string | null | undefined): { provider: strin
   return { provider: ref.slice(0, idx), model: ref.slice(idx + 1) };
 }
 
+/** Whether a connected channel has anywhere to send approval requests (#890). */
+export type ChannelRecipientStatus =
+  | { hasRecipient: true }
+  | { hasRecipient: false; reason: "empty_list" | "no_direct_message" };
+
 export interface ChannelStatus {
   channels: { telegram?: boolean; discord?: boolean };
+  /** Per connected channel; absent from an older daemon. */
+  recipients?: { telegram?: ChannelRecipientStatus; discord?: ChannelRecipientStatus };
   stt: string | null;
 }
 

@@ -60,6 +60,27 @@ export function parsePersistedRecipient(channel: string, value: string): Broadca
   return null;
 }
 
+/** See `ChannelService.getRecipientStatus` (#890). */
+export type RecipientStatus =
+  | { hasRecipient: true }
+  | { hasRecipient: false; reason: 'empty_list' | 'no_direct_message' };
+
+/**
+ * What to tell the owner about channels that have nowhere to send approval
+ * requests and notifications (#890), or null when every connected one does.
+ */
+export function recipientWarning(status: Record<string, RecipientStatus>): string | null {
+  const label = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+  const lines: string[] = [];
+  for (const [name, s] of Object.entries(status)) {
+    if (s.hasRecipient) continue;
+    lines.push(s.reason === 'empty_list'
+      ? `${label(name)} will not receive approval requests or notifications: no user ID is listed for it.`
+      : `${label(name)} will not receive approval requests or notifications until a listed user sends the bot a direct message (again, if they did before).`);
+  }
+  return lines.length ? lines.join(' ') : null;
+}
+
 export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string) => Promise<string>;
 
 export type DeliveryFailureHandler = (failure: { channel: string; attempts: number; error: string }) => void;
@@ -307,6 +328,43 @@ export class ChannelService implements Service {
   }
 
   /**
+   * Whether each connected channel has somewhere to send approval requests
+   * and notifications, and if not, why (#890). Since #852 that is only the
+   * private chat of a user the allow-list names, so after a revocation, or
+   * on a list nobody has messaged from yet, broadcasts are skipped with a log
+   * line nobody reads. The dashboard shows this so the owner finds out before
+   * a notification goes nowhere.
+   *
+   *   - `empty_list`: the saved list names nobody, so there can be no
+   *     recipient;
+   *   - `no_direct_message`: the list names someone, but the last listed user
+   *     to message the bot privately is no longer listed, or none has yet.
+   *     Only the LAST such sender is kept, so an earlier one who is still
+   *     listed must message again.
+   */
+  getRecipientStatus(): Record<string, RecipientStatus> {
+    const out: Record<string, RecipientStatus> = {};
+    for (const name of this.manager.listChannels()) {
+      if (!this.manager.getChannel(name)?.isConnected()) continue;
+      if (this.getBroadcastRecipient(name) !== null) {
+        out[name] = { hasRecipient: true };
+        continue;
+      }
+      const list = channelAllowList(name, this.rawAllowList(name));
+      out[name] = { hasRecipient: false, reason: list && list.ids.length > 0 ? 'no_direct_message' : 'empty_list' };
+    }
+    return out;
+  }
+
+  /** The channel's `allowed_users` as configured right now, in whatever shape. */
+  private rawAllowList(channel: string): unknown {
+    const channels = this.config?.channels;
+    return channel === 'telegram' ? channels?.telegram?.allowed_users
+      : channel === 'discord' ? channels?.discord?.allowed_users
+        : undefined;
+  }
+
+  /**
    * Whether the channel's allow-list, as configured right now, names this
    * user. Empty names nobody, and so does an entry that is not a valid id for
    * the channel (#883): the adapters ignore those entries, and a list must not
@@ -314,11 +372,7 @@ export class ChannelService implements Service {
    */
   private allowListNames(channel: string, userId: unknown): boolean {
     if ((typeof userId !== 'string' && typeof userId !== 'number') || userId === '') return false;
-    const channels = this.config?.channels;
-    const raw: unknown = channel === 'telegram' ? channels?.telegram?.allowed_users
-      : channel === 'discord' ? channels?.discord?.allowed_users
-        : undefined;
-    const list = channelAllowList(channel, raw);
+    const list = channelAllowList(channel, this.rawAllowList(channel));
     return !!list && list.ids.some((id) => String(id) === String(userId));
   }
 

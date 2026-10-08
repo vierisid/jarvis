@@ -2653,6 +2653,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const sttBinding = effectiveSttForBinding(ctx.config);
         return json({
           channels: ctx.channelService.getChannelStatus(),
+          // Per connected channel: whether approval requests and
+          // notifications have anywhere to go (#890).
+          recipients: ctx.channelService.getRecipientStatus(),
           stt: sttBinding?.provider || ctx.config.stt?.provider || null,
         });
       },
@@ -2737,7 +2740,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (applyErr) {
             return json({ ok: false, message: `Channel config saved, but applying it failed: ${applyErr.error}` });
           }
-          return json({ ok: true, message: 'Channel config saved and applied.' });
+          // Say so now if the save left a channel with nowhere to send
+          // approval requests, e.g. the recipient was just removed (#890).
+          const { recipientWarning } = await import('./channel-service.ts');
+          // Only the channels this save touched: saving Discord says nothing
+          // about Telegram.
+          const status = ctx.channelService?.getRecipientStatus() ?? {};
+          const touched = Object.fromEntries(Object.entries(status).filter(([name]) => name in (checked.patch as Record<string, unknown>)));
+          const warning = recipientWarning(touched);
+          return json({ ok: true, message: warning ? `Channel config saved and applied. ${warning}` : 'Channel config saved and applied.' });
         } catch (err) {
           return configSaveError('Error saving channels config', err);
         }

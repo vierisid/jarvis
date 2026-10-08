@@ -6,6 +6,7 @@ import type {
   TTSProvider,
 } from "../useSettingsData";
 import { allowedFieldText, parseDiscordIds, parseTelegramIds } from "./channel-ids";
+import { recipientNotice } from "./channel-recipient";
 
 // OpenAI-style voices the hosted Usejarvis TTS accepts (see createTTSProvider:
 // Edge neural names are rejected there, so this list is the whole picker).
@@ -71,6 +72,16 @@ function AllowListProblems({ problems }: { problems?: string[] }) {
           <li key={p}>{p}</li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/** A connected channel with nowhere to send approval requests (#890). */
+function RecipientNotice({ text }: { text: string | null }) {
+  if (!text) return null;
+  return (
+    <div className="v2-set__hint v2-set__hint--warn" role="status">
+      {text}
     </div>
   );
 }
@@ -201,6 +212,7 @@ export function ChannelsTab({
           />
           <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
           <AllowListProblems problems={channelCfg?.telegram.allowed_users_problems} />
+          <RecipientNotice text={recipientNotice("Telegram", channelStatus?.recipients?.telegram)} />
         </div>
         <div style={{ display: "flex", justifyContent: "flex-end" }}>
           <button
@@ -281,6 +293,7 @@ export function ChannelsTab({
           />
           <div className="v2-set__hint">{ALLOW_LIST_HINT}</div>
           <AllowListProblems problems={channelCfg?.discord.allowed_users_problems} />
+          <RecipientNotice text={recipientNotice("Discord", channelStatus?.recipients?.discord)} />
         </div>
         <div className="v2-set__field">
           <label className="v2-set__field-label">Guild ID (optional, restrict to one server)</label>

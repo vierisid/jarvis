@@ -14,6 +14,8 @@ import { getSetting } from '../vault/settings.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { validateChannelsPatch } from './channels-config-patch.ts';
+import { ChannelService } from './channel-service.ts';
+import type { ChannelAdapter } from '../comms/channels/telegram.ts';
 
 const SNOWFLAKE = '123456789012345678';
 
@@ -125,5 +127,66 @@ describe('#883: validateChannelsPatch', () => {
   test('an empty patch and an empty list are valid', () => {
     expect(validateChannelsPatch({})).toEqual({ ok: true, patch: {} });
     expect(validateChannelsPatch({ telegram: { allowed_users: [] } })).toEqual({ ok: true, patch: { telegram: { allowed_users: [] } } });
+  });
+});
+
+/**
+ * #890. A save that leaves a channel with nowhere to send approval requests,
+ * such as removing the user they went to, now says so, and the status route
+ * reports it for the settings page.
+ */
+describe('#890: the routes say when a channel has no recipient', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-channels-route-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    initDatabase(':memory:');
+  });
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  const connected = (name: string): ChannelAdapter => ({
+    name, connect: async () => {}, disconnect: async () => {}, sendMessage: async () => {},
+    onMessage: () => {}, isConnected: () => true,
+  });
+
+  test('removing the recipient: the save says Telegram now has nobody, and status reports why', async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.channels!.telegram = { enabled: true, bot_token: 'tg', allowed_users: [42] };
+    const svc = new ChannelService(config, { handleThreadMessage: async () => 'ok' } as never);
+    svc.getManager().register(connected('telegram'));
+    await (svc as unknown as { handleChannelMessage(m: unknown): Promise<string> }).handleChannelMessage({
+      id: 'm', channel: 'telegram', from: 'owner', text: 'hi', timestamp: 0,
+      metadata: { chatId: 42, userId: 42, chatType: 'private' }, senderAllowListed: true,
+    });
+    const ctx = {
+      daemonStartedAt: Date.now(), healthMonitor: {}, config, channelService: svc,
+      settingsReload: { applyNow: async () => null },
+    } as unknown as ApiContext;
+    const routes = createApiRoutes(ctx);
+    const status = routes['/api/channels/status'] as { GET: () => Response };
+    const channels = routes['/api/config/channels'] as { POST: (req: Request) => Promise<Response> };
+    const save = async (body: unknown) => (await channels.POST(new Request('http://x/api/config/channels', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+    }))).json() as Promise<{ ok: boolean; message: string }>;
+
+    expect(((await status.GET().json()) as { recipients: unknown }).recipients).toEqual({ telegram: { hasRecipient: true } });
+    expect(await save({ telegram: { allowed_users: [42, 7] } })).toEqual({ ok: true, message: 'Channel config saved and applied.' });
+
+    expect(await save({ telegram: { allowed_users: [7] } })).toEqual({
+      ok: true,
+      message: 'Channel config saved and applied. Telegram will not receive approval requests or notifications until a listed user sends the bot a direct message (again, if they did before).',
+    });
+    expect(((await status.GET().json()) as { recipients: unknown }).recipients).toEqual({ telegram: { hasRecipient: false, reason: 'no_direct_message' } });
+
+    expect((await save({ telegram: { allowed_users: [] } })).message).toBe('Channel config saved and applied. Telegram will not receive approval requests or notifications: no user ID is listed for it.');
+    // A save of another channel says nothing about this one.
+    expect((await save({ discord: { enabled: false } })).message).toBe('Channel config saved and applied.');
   });
 });

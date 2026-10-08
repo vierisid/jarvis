@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { ChannelService, channelDecisionCommand, channelDecisionNeedsAllowList, isPrivateChat, parsePersistedRecipient, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
+import { ChannelService, channelDecisionCommand, channelDecisionNeedsAllowList, isPrivateChat, parsePersistedRecipient, recipientWarning, routePerChannel, sendWithRetry, type ChannelRouterServices } from "./channel-service";
 import type { ChannelAdapter, ChannelMessage } from "../comms/channels/telegram";
 import { initDatabase } from "../vault/schema";
 import { getSetting, setSetting } from "../vault/settings";
@@ -940,5 +940,54 @@ describe("#883: the live allow-list check reads the list the way the adapters do
       console.warn = originalWarn;
       globalThis.fetch = originalFetch;
     }
+  });
+});
+
+/**
+ * #890. Since #852 broadcasts go only to a listed user's private chat, so after
+ * a revocation, or before any listed user has messaged, there is no recipient
+ * and broadcasts were skipped with only a log line.
+ */
+describe("#890: whether each channel has anywhere to send approval requests", () => {
+  const dm = (userId: string | number, senderAllowListed: boolean): ChannelMessage => ({
+    id: "m", channel: "telegram", from: "someone", text: "hello", timestamp: 0,
+    metadata: { chatId: String(userId), userId, chatType: "private" },
+    senderAllowListed,
+  });
+
+  test("empty list, listed but silent, recipient, revoked, and a disconnected channel left out", async () => {
+    initDatabase(":memory:");
+    const config = allowListConfig({}) as unknown as { channels: { telegram: { allowed_users: number[] } } };
+    const svc = new ChannelService(config as never, { handleThreadMessage: async () => "ok" } as never);
+    svc.getManager().register(new FakeAdapter({ connected: true, name: "telegram" }));
+    svc.getManager().register(new FakeAdapter({ connected: false, name: "discord" }));
+    const handle = (m: ChannelMessage) =>
+      (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(m);
+
+    expect(svc.getRecipientStatus()).toEqual({ telegram: { hasRecipient: false, reason: "empty_list" } });
+
+    config.channels.telegram.allowed_users = [42];
+    expect(svc.getRecipientStatus()).toEqual({ telegram: { hasRecipient: false, reason: "no_direct_message" } });
+
+    await handle(dm(42, true));
+    expect(svc.getRecipientStatus()).toEqual({ telegram: { hasRecipient: true } });
+
+    // Revoked: 42 is replaced by 7, who has not messaged.
+    config.channels.telegram.allowed_users = [7];
+    expect(svc.getRecipientStatus()).toEqual({ telegram: { hasRecipient: false, reason: "no_direct_message" } });
+    config.channels.telegram.allowed_users = [];
+    expect(svc.getRecipientStatus()).toEqual({ telegram: { hasRecipient: false, reason: "empty_list" } });
+    // A list of only invalid entries names nobody either (#883).
+    (config.channels.telegram as { allowed_users: unknown }).allowed_users = ["abc"];
+    expect(svc.getRecipientStatus()).toEqual({ telegram: { hasRecipient: false, reason: "empty_list" } });
+  });
+
+  test("recipientWarning names each channel without one, and says nothing when all have one", () => {
+    expect(recipientWarning({ telegram: { hasRecipient: true } })).toBeNull();
+    expect(recipientWarning({})).toBeNull();
+    expect(recipientWarning({
+      telegram: { hasRecipient: false, reason: "empty_list" },
+      discord: { hasRecipient: false, reason: "no_direct_message" },
+    })).toBe("Telegram will not receive approval requests or notifications: no user ID is listed for it. Discord will not receive approval requests or notifications until a listed user sends the bot a direct message (again, if they did before).");
   });
 });
