@@ -520,7 +520,7 @@ describe("#718: send options reach the adapter", () => {
 describe("#811: an approve or deny needs a sender the allow-list names", () => {
   const message = (text: string, senderAllowListed?: boolean): ChannelMessage => ({
     id: "m1", channel: "discord", from: "someone", text, timestamp: 0,
-    metadata: { channelId: "c1" },
+    metadata: { channelId: "c1", userId: "u1" },
     ...(senderAllowListed === undefined ? {} : { senderAllowListed }),
   });
   const setup = () => {
@@ -528,7 +528,9 @@ describe("#811: an approve or deny needs a sender the allow-list names", () => {
     const decisions: unknown[][] = [];
     const chats: string[] = [];
     const agent = { handleMessage: async (text: string) => { chats.push(text); return "chat reply"; } };
-    const svc = new ChannelService({} as never, agent as never);
+    // Since #860 the configured list must name the sender as well as the
+    // adapter saying so; "u1" is that sender.
+    const svc = new ChannelService(allowListConfig({ discord: ["u1"] }), agent as never);
     svc.setApprovalHandler(async (...args) => { decisions.push(args); return "decided"; });
     const handle = (msg: ChannelMessage) =>
       (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(msg);
@@ -742,5 +744,137 @@ describe("#852: parsePersistedRecipient", () => {
     expect(parsePersistedRecipient("telegram", JSON.stringify({ to: "42" }))).toBeNull();
     expect(parsePersistedRecipient("telegram", JSON.stringify({ to: "", userId: "42" }))).toBeNull();
     expect(parsePersistedRecipient("telegram", "null")).toBeNull();
+  });
+});
+
+/**
+ * #860. Removing a user from a channel's allow-list must stop them deciding at
+ * once. A save already rebuilds the adapters (the `channels` settings applier
+ * stops and starts this service); these pin that, and the check that does not
+ * depend on the adapter being fresh.
+ */
+describe("#860: a user removed from the allow-list cannot decide", () => {
+  const approve = (userId: string | number, senderAllowListed: boolean): ChannelMessage => ({
+    id: "m", channel: "telegram", from: "someone", text: "approve 1a2b3c4d", timestamp: 0,
+    metadata: { chatId: String(userId), userId },
+    senderAllowListed,
+  });
+
+  test("the list as configured now decides, not the list the adapter was built with", async () => {
+    initDatabase(":memory:");
+    const config = allowListConfig({ telegram: [42] }) as unknown as { channels: { telegram: { allowed_users: number[] } } };
+    const decisions: unknown[][] = [];
+    const svc = new ChannelService(config as never, {} as never);
+    svc.setApprovalHandler(async (...args) => { decisions.push(args); return "decided"; });
+    const handle = (m: ChannelMessage) =>
+      (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage(m);
+
+    expect(await handle(approve(42, true))).toBe("decided");
+    config.channels.telegram.allowed_users = [];
+    // An adapter still holding the old list says the sender is listed.
+    expect(await handle(approve(42, true))).toBe(channelDecisionNeedsAllowList("telegram"));
+    expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram"]]);
+    // A sender the adapter saw as listed but the config does not name is
+    // never the recipient either.
+    expect(svc.getBroadcastRecipient("telegram")).toBeNull();
+  });
+
+  test("end to end through a real Telegram adapter: a save's stop and start applies the new list", async () => {
+    initDatabase(":memory:");
+    const config = {
+      channels: { telegram: { enabled: true, bot_token: "t", allowed_users: [42] as number[] } },
+    };
+    const queue: unknown[] = [];
+    const replies: string[] = [];
+    let nextUpdateId = 1;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: RequestInit) => {
+      const body = (init?.body ? JSON.parse(String(init.body)) : {}) as { text?: string };
+      if (url.endsWith("/getMe")) return Response.json({ ok: true, result: { username: "bot" } });
+      if (url.endsWith("/sendMessage")) { replies.push(body.text ?? ""); return Response.json({ ok: true }); }
+      if (url.endsWith("/getUpdates")) {
+        await Bun.sleep(5);
+        return Response.json({ ok: true, result: queue.splice(0) });
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    }) as typeof fetch;
+    const send = (fromId: number) => queue.push({
+      update_id: nextUpdateId++,
+      message: { message_id: nextUpdateId, from: { id: fromId, first_name: "A" }, chat: { id: fromId, type: "private" }, date: 0, text: "approve 1a2b3c4d" },
+    });
+    const until = async (cond: () => boolean) => {
+      for (let i = 0; i < 400 && !cond(); i++) await Bun.sleep(10);
+      expect(cond()).toBe(true);
+    };
+    const decisions: unknown[][] = [];
+    const svc = new ChannelService(config as never, {} as never);
+    svc.setApprovalHandler(async (...args) => { decisions.push(args); return "decided"; });
+    try {
+      await svc.start();
+      send(42);
+      await until(() => replies.length === 1);
+      expect(replies).toEqual(["decided"]);
+
+      // What POST /api/config/channels does: replace the section on the live
+      // config, then the `channels` applier stops and starts the service.
+      config.channels = { telegram: { ...config.channels.telegram, allowed_users: [] } };
+      await svc.stop();
+      await svc.start();
+      // Let the old adapter's last poll finish, so the update below can only
+      // reach the new one.
+      await Bun.sleep(50);
+      send(42);
+      await until(() => replies.length === 2);
+      expect(replies[1]).toBe(channelDecisionNeedsAllowList("telegram"));
+      expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram"]]);
+    } finally {
+      await svc.stop();
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
+
+/**
+ * #860 review. A workflow notify step fixes its recipient before approval and
+ * sends after it, possibly hours later; removing that user from the list in
+ * between must stop it.
+ */
+describe("#860 review: a workflow notification checks its recipient again when it sends", () => {
+  const setupWorkflow = async () => {
+    initDatabase(":memory:");
+    const config = allowListConfig({ telegram: [42] }) as unknown as { channels: { telegram: { allowed_users: number[] } } };
+    const svc = new ChannelService(config as never, { handleMessage: async () => "ok" } as never);
+    await svc.start();
+    const telegram = new FakeAdapter({ connected: true, name: "telegram" });
+    svc.getManager().register(telegram);
+    await (svc as unknown as { handleChannelMessage(m: ChannelMessage): Promise<string> }).handleChannelMessage({
+      id: "m", channel: "telegram", from: "owner", text: "hi", timestamp: 0,
+      metadata: { chatId: "42", userId: 42, chatType: "private" }, senderAllowListed: true,
+    });
+    return { svc, config, telegram };
+  };
+
+  test("it sends while the recipient resolved before approval is still the allow-listed one", async () => {
+    const { svc, telegram } = await setupWorkflow();
+    const approved = svc.getBroadcastRecipient("telegram");
+    expect(approved).toBe("42");
+    await svc.sendWorkflowNotification("telegram", approved, "workflow done");
+    expect(telegram.sent).toEqual([{ to: "42", text: "workflow done" }]);
+  });
+
+  test("it refuses once that user is removed from the list, though the step was approved earlier", async () => {
+    const { svc, config, telegram } = await setupWorkflow();
+    const approved = svc.getBroadcastRecipient("telegram");
+    config.channels.telegram.allowed_users = [];
+    await expect(svc.sendWorkflowNotification("telegram", approved, "workflow done"))
+      .rejects.toThrow("no longer an allow-listed recipient");
+    expect(telegram.sent).toEqual([]);
+  });
+
+  test("it refuses a recipient that is not this channel's recipient at all", async () => {
+    const { svc, telegram } = await setupWorkflow();
+    await expect(svc.sendWorkflowNotification("telegram", "999", "workflow done"))
+      .rejects.toThrow("no longer an allow-listed recipient");
+    expect(telegram.sent).toEqual([]);
   });
 });

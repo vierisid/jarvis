@@ -296,10 +296,22 @@ export class ChannelService implements Service {
     return Array.isArray(list) && list.some((id) => String(id) === String(userId));
   }
 
+  /**
+   * Send a workflow notification to the recipient resolved before approval
+   * (`getBroadcastRecipient` in the notify step's prepare), and only while it
+   * is still this channel's recipient (#860 review). The step can wait hours
+   * for approval, or across a restart, and removing that user from the
+   * allow-list in the meantime must stop it like every other broadcast. It is
+   * not re-resolved to a later sender either: a different recipient refuses,
+   * as an ordinary failed delivery the workflow reports.
+   */
   async sendWorkflowNotification(channel: string, recipient: string | null, text: string): Promise<void> {
     const adapter = this.manager.getChannel(channel);
     if (!adapter?.isConnected()) throw new Error(`Channel ${channel} is unavailable`);
     if (!recipient) throw new Error(`No approved recipient for ${channel}`);
+    if (this.getBroadcastRecipient(channel) !== recipient) {
+      throw new Error(`The approved recipient for ${channel} is no longer an allow-listed recipient, so nothing was sent`);
+    }
     // Last gate before the adapter hands the message off. The governed caller
     // installs its Authority/emergency checkpoint in the execution scope.
     checkpointExecution();
@@ -359,13 +371,20 @@ export class ChannelService implements Service {
     // became the channel's recipient and received every approval card, and
     // the owner stopped receiving them.
     //
+    // The adapter's own answer is not enough on its own (#860): it holds the
+    // list it was built with, and a Telegram adapter's long poll can deliver
+    // a batch after a settings save replaced it. So the list as configured
+    // right now must name the sender too, and a user removed from it can
+    // neither decide nor become the recipient from that moment.
+    //
     // And only from a private chat with the bot (#852 review). Where the
     // message was typed is where the cards go, so a listed user writing in a
     // Telegram group or a Discord server channel made every member of it a
     // reader of every approval card. A message there still gets its reply
     // and leaves the recipient as it was.
     const userId = msg.metadata.userId;
-    if (msg.senderAllowListed === true && (typeof userId === 'string' || typeof userId === 'number') && isPrivateChat(msg)) {
+    const allowListed = msg.senderAllowListed === true && this.allowListNames(channelTag, userId);
+    if (allowListed && isPrivateChat(msg)) {
       const to = String(msg.metadata.chatId ?? msg.metadata.channelId ?? msg.from);
       this.recordRecipient(channelTag, { to, userId: String(userId) });
     }
@@ -377,7 +396,7 @@ export class ChannelService implements Service {
       // anyone who can reach the bot chat -- any member of the guild on
       // Discord, anyone on Telegram -- and that must not extend to approving
       // a gated action.
-      if (msg.senderAllowListed !== true) return channelDecisionNeedsAllowList(channelTag);
+      if (!allowListed) return channelDecisionNeedsAllowList(channelTag);
       try {
         return await this.approvalHandler(decision.action, decision.shortId, channelTag);
       } catch (err) {

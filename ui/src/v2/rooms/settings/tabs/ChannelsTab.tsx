@@ -128,7 +128,7 @@ export function ChannelsTab({
           <div>
             <h3 className="v2-set__section-title">Telegram</h3>
             <div className="v2-set__section-sub">
-              Bot via @BotFather. Restart-required after token changes.
+              Bot via @BotFather. Changes apply when saved.
             </div>
           </div>
           <span className={"v2-set__chip " + (channelStatus?.channels.telegram ? "v2-set__chip--ok" : "")}>
@@ -208,7 +208,7 @@ export function ChannelsTab({
           <div>
             <h3 className="v2-set__section-title">Discord</h3>
             <div className="v2-set__section-sub">
-              Bot via discord.com/developers. Enable Message Content Intent. Restart-required.
+              Bot via discord.com/developers. Enable Message Content Intent. Changes apply when saved.
             </div>
           </div>
           <span className={"v2-set__chip " + (channelStatus?.channels.discord ? "v2-set__chip--ok" : "")}>
@@ -296,7 +296,7 @@ export function ChannelsTab({
           <div>
             <h3 className="v2-set__section-title">Voice Transcription (STT)</h3>
             <div className="v2-set__section-sub">
-              Enables voice messages on Telegram and Discord. Restart-required.
+              Enables voice messages on Telegram and Discord.
             </div>
           </div>
         </div>
