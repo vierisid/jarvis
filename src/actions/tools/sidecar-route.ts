@@ -22,6 +22,7 @@ import { getMachineScope } from '../machine-scope.ts';
 import type { ToolResult } from './registry.ts';
 import { currentReviewedExecution, type ReviewedExecution } from './reviewed-call-scope.ts';
 import { currentTemplateDeliveryScope } from './template-delivery-scope.ts';
+import { currentLoopSnapshotReadLog, type SnapshotReadLog } from './snapshot-read-log.ts';
 import { guardImageSize, type ContentBlock } from '../../llm/provider.ts';
 import { SCREENSHOT_COMPACT } from '../app-control/image-compact.ts';
 
@@ -813,12 +814,17 @@ const MAX_ELEM_GEN_LENGTH = 64;
  * chat's tool calls from a sub-agent's (named) and a workflow's (suppressed);
  * cards are only raised from the chat's, so another reader's refill now makes
  * the chat's recorded generation disagree with the sidecar's map and the
- * approved click is refused. The residual is that scope's own: everything
- * the main orchestrator runs -- every chat channel, the voice route (which may
- * snapshot, though it raises no card), and any other turn on the main
- * registry -- shares the default scope (template-delivery-scope.ts), so a
- * snapshot from one of them between another's read and its card still binds
- * the later read.
+ * approved click is refused.
+ *
+ * AND PER MODEL LOOP inside the default scope (#827). Everything the main
+ * orchestrator runs -- every chat channel, the voice route (which may snapshot,
+ * though it raises no card), every task-tier call -- shares the default scope,
+ * so a snapshot from one of them between another's read and its card bound the
+ * later card. Each orchestrator loop now also records its own reads in a
+ * `SnapshotReadLog` (snapshot-read-log.ts), and a card raised in a loop that
+ * read this sidecar binds THAT loop's newest read. This map stays the fallback
+ * for a card raised in a loop that read nothing from the sidecar itself, which
+ * is the residual: such a card still binds the newest default-scope read.
  *
  * Read ONLY at review time, by `browserCallGuard`, which copies it into the
  * approval; never at execution, where it would name whatever snapshot came
@@ -859,8 +865,36 @@ export function currentSnapshotReader(): string {
   return !scope ? 'default' : scope.kind === 'named' ? `named:${scope.id}` : 'suppressed';
 }
 
-/** The newest `elem_gen` this reader saw from this sidecar's browser, or null. */
+/**
+ * The model loop whose reads this call records and binds against (#827), or
+ * undefined.
+ *
+ * INSIDE AN APPROVED EXECUTION it is the loop that raised the card, for the
+ * reason `readerKey` gives: an approved navigate's snapshot belongs to the
+ * loop that will act on the page it returned, not to the executor.
+ *
+ * OUTSIDE ONE it is the ambient loop, but ONLY in the default scope. A
+ * sub-agent or a workflow step started from inside a chat loop inherits that
+ * loop's async context, and letting its snapshot land in the chat loop's log
+ * would be WEB-001 (#676) again by another route: the chat card would bind the
+ * other reader's map. Those readers already have their own keys.
+ */
+export function currentSnapshotReadLog(): SnapshotReadLog | undefined {
+  const reviewed = currentReviewedExecution();
+  if (reviewed) return reviewed.readLog;
+  return currentSnapshotReader() === 'default' ? currentLoopSnapshotReadLog() : undefined;
+}
+
+/**
+ * The newest `elem_gen` this reader saw from this sidecar's browser, or null:
+ * the current loop's own read when it made one (#827), else the reader's.
+ */
 export function remoteSnapshotGeneration(sidecarId: string): string | null {
+  const log = currentSnapshotReadLog();
+  if (log?.generations.has(sidecarId)) return log.generations.get(sidecarId) ?? null;
+  // A resumed loop that replays snapshot replies it holds no generation for
+  // binds nothing, rather than whatever another reader took during the pause.
+  if (log?.resumedWithReads) return null;
   return remoteSnapshotGenerations.get(readerKey(sidecarId)) ?? null;
 }
 
@@ -938,6 +972,10 @@ export async function routeBrowserReadToSidecar(
   const { elemGen, ...read } = readSidecarPageReply(out.result);
   if (elemGen) remoteSnapshotGenerations.set(readerKey(out.sidecarId), elemGen);
   else remoteSnapshotGenerations.delete(readerKey(out.sidecarId));
+  // The loop's own record too (#827). A read without a generation is kept as
+  // null rather than deleted, so a card in this loop does not fall back to the
+  // shared record -- which may name a map some other loop filled since.
+  currentSnapshotReadLog()?.generations.set(out.sidecarId, elemGen);
   return { ...read, why: read.pageUrl ? 'confirmed' : 'no_page_identity' };
 }
 

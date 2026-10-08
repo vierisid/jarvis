@@ -216,6 +216,16 @@ type pageSnapshot struct {
 // the model reads, and a page that wants a playbook is exactly the party that
 // would lie about which site it is on.
 func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
+	// One snapshot at a time per browser, from the frame-tree read through the
+	// fill (#826, snapMu on cdpClient). Taken FIRST so the deferred cleanup
+	// below, which may forget an armed world, runs before it is released:
+	// otherwise a waiting snapshot could arm the world and then have this one's
+	// cleanup wipe it.
+	if err := cdp.lockSnapshots(); err != nil {
+		return nil, pageIdentity{}, err
+	}
+	defer cdp.snapMu.Unlock()
+
 	// Before running anything in the page: a page showing local content is not
 	// read back to the model (#526, browser_read_guard.go). Every snapshot
 	// path goes through here -- browser_snapshot and the one navigate returns.
@@ -348,6 +358,49 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
 	// must not undo it.
 	committed = true
 	return &snap, checked, nil
+}
+
+// How long a snapshot or a reviewed type waits for snapMu before refusing
+// (#826). A holder normally keeps it for one snapshot (measured ~8-10ms against
+// headless Chromium on a 1200-element page) or one type (its four round trips
+// plus a fixed 200ms settle), so ten seconds is far past any ordinary wait. It
+// exists for the abnormal one: a renderer that stops answering keeps the holder
+// inside a 30-second send, and without a bound every later snapshot queued
+// behind it, each then taking its own 30 seconds, long after the brain stopped
+// waiting for any of them.
+var snapshotLockTimeout = 10 * time.Second
+
+// lockSnapshots takes snapMu, or refuses once snapshotLockTimeout has passed.
+// Polled rather than a channel so a zero-value cdpClient stays usable.
+func (c *cdpClient) lockSnapshots() error {
+	deadline := time.Now().Add(snapshotLockTimeout)
+	for !c.snapMu.TryLock() {
+		if time.Now().After(deadline) {
+			return fmt.Errorf("another browser snapshot or typed input is still running on this browser, so nothing " +
+				"was done. Try again in a moment")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	return nil
+}
+
+// refuseStaleCoordinate is refuseStaleElement for a caller that dispatches AT
+// the stored coordinate (click, hover), run with snapshots excluded (#826).
+//
+// The coordinate itself is copied out under elemMu and cannot change, but the
+// moved/replaced sentinel inside the check reads the isolated world, which a
+// concurrent snapshot's script re-arms before its fill moves the generation:
+// the sentinel would then judge the NEW reading's element against the NEW
+// reading's point, answer "ok" for an element the page has moved off the
+// reviewed coordinate, and the trusted click would land on whatever is there
+// now. Held only for the check; the dispatch after it uses the copy alone.
+func refuseStaleCoordinate(cdp *cdpClient, id int, reviewed string) (snapshotElement, string, error) {
+	if err := cdp.lockSnapshots(); err != nil {
+		return snapshotElement{}, "", err
+	}
+	defer cdp.snapMu.Unlock()
+	el, _, refusal, err := refuseStaleElement(cdp, id, true, reviewed)
+	return el, refusal, err
 }
 
 // How long a world mint may hold worldMu. Generous for a browser-side call
@@ -596,12 +649,18 @@ func browserSnapshotSuperseded(id int) error {
 // a call nobody reviewed. It is compared FIRST, against the token read in the
 // same critical section as the element, and the generation check at the end of
 // this function then holds the map to that same generation -- so a call that
-// passes both acted on the COORDINATE MAP the person approved. It does not
-// prove the isolated world's refs came from that same snapshot: two snapshots
-// in flight at once can interleave their evaluate (which arms the refs) and
-// their fill (which mints the generation), leaving one snapshot's refs under
-// the other's generation. That race predates #676 and is not closed here; it
-// matters to browser_type, which acts through a ref. The comparison lives here,
+// passes both acted on the COORDINATE MAP the person approved. The isolated
+// world's refs are that same snapshot's because takePageSnapshot holds snapMu
+// from before its script arms the refs until after its fill mints the
+// generation (#826): without that, two snapshots in flight at once could
+// interleave as A-evaluate, B-evaluate, B-fill, A-fill and leave B's refs under
+// A's generation, which browser_type, acting through a ref, would have typed
+// into. Every caller runs this with snapshots excluded, because the
+// moved/replaced sentinel below reads the world too: click and hover through
+// refuseStaleCoordinate, for the check alone, and browser_type, which then
+// acts THROUGH the refs, from before this call to its last focus verify. The world
+// can still be FORGOTTEN between the two (a scroll), and that
+// fails closed: elementWorldFor below refuses. The comparison lives here,
 // on the side that owns the counter, because nothing brain-side can read it at
 // the instant that matters.
 func refuseStaleElement(cdp *cdpClient, id int, usesCoordinates bool, reviewed string) (snapshotElement, float64, string, error) {

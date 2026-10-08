@@ -226,29 +226,44 @@ export class DeferredExecutor {
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
       }
-      // Delivery off for the duration (#586). When #586 was written this path
-      // could not place a trusted trailer outside the untrusted block at all.
-      // Since #708 the INLINE gate can (see the split below), but this
-      // executor also serves deferred approvals, whose receipt only ever
-      // reaches a person or a stored row, and a delivery is recorded when the
-      // tool OFFERS one, not when a consumer places it -- so it stays off here. `browser_navigate` always takes a card (authority/
-      // ui-intent.ts) and an inline approval comes through here too
-      // (orchestrator.ts), so every approved navigation was recording a playbook
-      // it then disclaimed, and the chat model's own snapshot got nothing for
-      // the next 30 minutes.
+      // Site-playbook delivery ON for an INLINE approval and OFF for every
+      // other one (#830, reversing #586 for inline only, on the owner's call).
       //
-      // SAID PLAINLY, because it changes what the model sees: `browser_navigate`
-      // now delivers no playbook at all, and the playbook arrives with the first
-      // `browser_snapshot` instead (which takes no card, so it can place the
-      // trailer outside the block). What is given up is a copy the model was
-      // told to distrust; what is gained is that an authoritative copy is still
-      // available at all, which is what burning the slot used to cost.
+      // #586 turned it off everywhere because this path could not place a
+      // trusted trailer outside the untrusted block: every approved
+      // `browser_navigate` recorded a playbook it then disclaimed, and the chat
+      // model's own snapshot got nothing for the next 30 minutes. A delivery is
+      // recorded when the tool OFFERS one, not when a consumer places it, so a
+      // consumer that cannot place it must not be offered it.
+      //
+      // INLINE: since #708 the gate that runs it (`runApproved` in
+      // orchestrator.ts) receives the trailer separately below and places it
+      // AFTER the frame, so the reason no longer holds. It runs in the async
+      // context of the loop that raised the card, so the delivery is recorded
+      // against that loop's scope -- the model that will read it.
+      //
+      // EVERY OTHER MODE keeps the suppression, and the condition is the MODE,
+      // never the tool or the caller. A deferred approval -- including an
+      // inline one demoted after its wait timed out -- returns to a person or
+      // a stored row, never a model, so #586's argument still holds there in
+      // full. And before #829 the `executed` fallbacks re-read this row with
+      // the trailer in band, which is why this could not land first.
+      //
+      // `inline` therefore has to mean "a live gate owns this", and a restart
+      // is where it stopped meaning that: an approved inline row run from the
+      // dashboard afterwards (the execute route) reaches no model. So
+      // `reconcileAfterRestart` demotes approved inline rows to deferred along
+      // with pending ones (authority/approval.ts). A reviewed UI call such as
+      // navigate would be refused above anyway, its binding gone with the old
+      // process; `browser_snapshot` is not one, and is why the demotion exists.
+      const dispatch = () => registry.execute(request.tool_name, args);
       const raw = await runAsReviewed(uiExecution?.reviewed,
-        () => withoutTemplateDelivery(() => registry.execute(request.tool_name, args)));
-      // Collapsed to one string for every consumer that stores or shows it --
-      // the row, the notification, the execute route -- with any trusted
-      // trailer back in band, where it is framed as data along with the rest
-      // if anything ever frames it. What that cannot do is put attacker text
+        () => request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch));
+      // Collapsed to one string for the consumers that show it -- the
+      // notification and the execute route -- with any trusted trailer back
+      // in band, where it is framed as data along with the rest if anything
+      // ever frames it. The ROW stores the payload without the trailer (#829,
+      // below). What that cannot do is put attacker text
       // OUTSIDE a block, because only trusted code that received a trailer as
       // a trailer ever places one there (roles/untrusted.ts).
       //
@@ -280,7 +295,21 @@ export class DeferredExecutor {
       // rather than only its own payload. The helper rewrites the delimiters to
       // their inert spelling instead, so the row keeps the preamble that says
       // the payload is data and carries no boundary at all.
-      this.approvalManager.markExecuted(requestId, boundedReceiptText(result, RECEIPT_MAX_CHARS), 'committed');
+      //
+      // WITHOUT the trailer (#829). The row is re-read and framed whole by the
+      // inline gate's `executed` fallbacks (orchestrator.ts), so a trailer kept
+      // here reached the model inside the block whose preamble disclaims it --
+      // a repo-authored directive the model is told to ignore. Dropped, it is
+      // simply absent there, which is the better failure: a directive the
+      // model never sees cannot be one it is taught to distrust. Nothing else
+      // reading the row wants it either -- it is addressed to a model, and the
+      // row is a receipt for people and for the commitment that awaited it.
+      // The live receipt below still carries it, separately, for `runApproved`.
+      // Only a TRAILED return changes; every other one stores `result` exactly
+      // as before (a tool returning undefined still stores "undefined", where
+      // `split.outside` would be undefined itself and throw in the bound).
+      const stored = split?.trailer ? split.outside : result;
+      this.approvalManager.markExecuted(requestId, boundedReceiptText(stored, RECEIPT_MAX_CHARS), 'committed');
 
       // Log to audit trail
       this.auditTrail.log({

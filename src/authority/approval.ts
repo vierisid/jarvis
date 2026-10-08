@@ -260,7 +260,19 @@ export class ApprovalManager {
     if (!binding || binding.arguments !== request.tool_arguments ||
         binding.registry.get(request.tool_name) !== binding.tool) return null;
     try {
-      return binding.current() ? { registry: binding.registry, reviewed: binding.current.reviewed ?? {} } : null;
+      if (!binding.current()) return null;
+      const reviewed = binding.current.reviewed ?? {};
+      // The model loop that raised the card is carried ONLY while a live gate
+      // in that loop is the one running the call (#827). A deferred row --
+      // created so, or an inline one demoted after its wait timed out -- runs
+      // whenever the person gets to it, often while that loop has moved on
+      // without the result: its navigate would then write the loop's record,
+      // and the loop's next card would bind a page its model never read.
+      if (request.execution_mode !== 'inline' && reviewed.readLog) {
+        const { readLog: _detached, ...rest } = reviewed;
+        return { registry: binding.registry, reviewed: rest };
+      }
+      return { registry: binding.registry, reviewed };
     } catch {
       return null;
     }
@@ -415,6 +427,20 @@ export class ApprovalManager {
     this.uiExecutions.clear();
     const db = getDb();
     const demotedInline = this.demoteAllPendingInline();
+    // APPROVED inline rows lost their gate too: whoever runs one now (the
+    // execute route, after the person chooses to) hands the result to a
+    // person, not to the loop that asked. `inline` must keep meaning "a live
+    // gate owns this", because the executor keys site-playbook delivery on it
+    // (#830): left inline, an approved `browser_snapshot` card run from the
+    // dashboard after a restart recorded a playbook no model would read, and
+    // the chat's next snapshot got none for 30 minutes. Not counted in
+    // `demotedInline`, which names the pending rows that go back on the queue.
+    // WHATEVER the row's outcome: one an earlier boot already reconciled to
+    // not_started or unknown has no live gate either, and stayed inline.
+    db.run(
+      `UPDATE approval_requests SET execution_mode = 'deferred'
+       WHERE status = 'approved' AND execution_mode = 'inline'`
+    );
     const interrupted = db.run(
       `UPDATE approval_requests SET execution_outcome = 'unknown'
        WHERE status = 'approved' AND execution_claimed_at IS NOT NULL AND execution_outcome IS NULL

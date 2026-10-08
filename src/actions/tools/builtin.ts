@@ -23,7 +23,7 @@ import type { ApprovalGuard, ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import {
   routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
-  routeElementActionToSidecar, remoteSnapshotGeneration, currentSnapshotReader,
+  routeElementActionToSidecar, remoteSnapshotGeneration, currentSnapshotReader, currentSnapshotReadLog,
   type SidecarPageRead,
 } from './sidecar-route.ts';
 import { currentReviewedExecution, type ReviewedExecution, type ReviewedRemoteSnapshot } from './reviewed-call-scope.ts';
@@ -1193,10 +1193,16 @@ function browserCallGuard(
     // Every remote call also carries the READER that raised the card, so a
     // snapshot the approved call takes (a navigate) is recorded as that
     // reader's rather than as the executor's.
+    //
+    // And the model LOOP that raised it (#827), when there is one, so the card
+    // binds the snapshot this loop read rather than the newest one any
+    // default-scope caller took, and an approved navigate records into it.
+    const readLog = reviewedRoute ? currentSnapshotReadLog() : undefined;
+    const reader = { reader: currentSnapshotReader(), ...(readLog ? { readLog } : {}) };
     const reviewed: ReviewedExecution | undefined = !reviewedRoute ? undefined
       : opts.bindDocument
-        ? { remoteBrowserSnapshot: reviewedRemoteSnapshot(reviewedRoute), reader: currentSnapshotReader() }
-        : { reader: currentSnapshotReader() };
+        ? { remoteBrowserSnapshot: reviewedRemoteSnapshot(reviewedRoute), ...reader }
+        : reader;
     const guard = () => {
       // The ROUTE is compared, never used to pick one. Reviewed local and
       // executed remote is a change of machine, not just of surface: the card

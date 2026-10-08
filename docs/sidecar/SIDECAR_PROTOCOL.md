@@ -486,13 +486,24 @@ relaunched browser or a restarted sidecar never hands out a generation an older
 map already used. It travels independently of the `page_url`/`loader_id` pair:
 it names the id map, not the document.
 
-The brain records the newest one per sidecar, copies it onto an approval when a
-`browser_click`, `browser_type` or `browser_hover` card is raised, and sends it
-back as the action's `elem_gen` param when the approved call runs. The sidecar
+The brain records the newest one per sidecar and per reader -- the model loop
+that read it when there is one (#827), else the reader's delivery scope --
+copies it onto an approval when a `browser_click`, `browser_type` or
+`browser_hover` card is raised, and sends it back as the action's `elem_gen`
+param when the approved call runs. The sidecar
 compares it in `refuseStaleElement`, under `elemMu`, before anything else, and
 refuses a mismatch -- or a present-but-malformed value -- with RPC error code
 `BROWSER_SNAPSHOT_SUPERSEDED`, before any CDP command. An absent `elem_gen`
 means the call was not reviewed and is not compared.
+
+The generation names the isolated world's element refs as well as the
+coordinate map, because the sidecar runs one snapshot at a time per browser,
+from its first frame-tree read through the fill, and a reviewed `browser_type`
+excludes snapshots from its generation check through its last use of a ref
+(#826). Without that, two concurrent snapshots could arm the world's refs in
+one order and fill the map in the other, and a snapshot could re-arm the refs
+between a type's check and its focus. A snapshot or type that cannot get its
+turn within ten seconds refuses rather than queueing.
 
 A sidecar older than this ignores the param, so the brain sends a reviewed
 element action only to a sidecar advertising `browser_elem_gen`, and refuses it

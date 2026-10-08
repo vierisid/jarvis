@@ -16,6 +16,15 @@ import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } fr
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /**
+ * Whether a resumed task buffer holds a browser read whose element ids the
+ * model may act on (#827): a call to one of the two tools that fill the id map.
+ */
+export function historyHoldsBrowserRead(history: LLMMessage[] | undefined): boolean {
+  return (history ?? []).some((m) => m.role === 'assistant'
+    && (m.tool_calls ?? []).some((tc) => tc.name === 'browser_snapshot' || tc.name === 'browser_navigate'));
+}
+
+/**
  * Rebuild a turn's taint from a resumed conversation: every tool call the
  * assistant made earlier in it that reads outside content counts, whether or
  * not its result was wrapped (delegate_task's is not).
@@ -41,6 +50,7 @@ import {
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolsInScope, toolInScope, outOfScopeMessage, type TurnToolScope } from '../actions/tools/tool-scope.ts';
 import { withTurnScopeId } from '../actions/tools/turn-scope-store.ts';
+import { newSnapshotReadLog, withSnapshotReadLog } from '../actions/tools/snapshot-read-log.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
@@ -72,6 +82,18 @@ function toSystemMessages(systemPrompt: string | SystemPromptParts): LLMMessage[
 
 const MAX_TOOL_ITERATIONS = 200;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
+
+/**
+ * A tool result's OUTSIDE text cut to MAX_TOOL_RESULT_CHARS, with a note
+ * saying how long it was. Applied to the payload BEFORE it is framed, never to
+ * a framed string: `wrapUntrusted` promises a block is never partially framed,
+ * and a cut made after the frame is drawn would drop its closing line.
+ */
+function capToolResult(text: string): string {
+  return text.length > MAX_TOOL_RESULT_CHARS
+    ? text.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${text.length} chars)`
+    : text;
+}
 // How long the authority gate blocks waiting for the user to approve a
 // gated tool call before falling back to the deferred (fire-and-forget)
 // path. Long enough to click a permission panel, short enough that an
@@ -562,6 +584,11 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts).
+    const turnReads = newSnapshotReadLog();
     const turnScope = scope ?? null;
 
     // Add user message to persistent history
@@ -622,7 +649,7 @@ export class AgentOrchestrator {
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
           this.noteToolUse(ledger, tc.name, turnScope);
-          const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
+          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
           messages.push({
             role: 'tool',
             content: result,
@@ -726,6 +753,13 @@ export class AgentOrchestrator {
     // "ask first, then run it", so the taint is rebuilt from the history
     // instead of starting clean.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts). A resume replays snapshot replies
+    // whose generations were not kept across the pause, so a buffer that
+    // holds one fails closed until the loop snapshots again.
+    const turnReads = newSnapshotReadLog({ resumedWithReads: historyHoldsBrowserRead(opts.history) });
     if (opts.history) seedTaintFromHistory(opts.history, turnTaint, this.toolRegistry);
 
     // Build the running conversation buffer. On a fresh call: system + user
@@ -883,7 +917,7 @@ export class AgentOrchestrator {
           // a registered tool is otherwise admitted and RUN, and on a hosted
           // install the filter does not engage at all (the tier models are
           // frontier-vetoed), so this check is the only thing that refuses.
-          const result = await this.executeTool(tc, opts.signal, turnTaint, turnScope);
+          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, opts.signal, turnTaint, turnScope));
           toolsExecuted++;
           messages.push({
             role: 'tool',
@@ -1021,6 +1055,11 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts).
+    const turnReads = newSnapshotReadLog();
     // The public entry point may leave the scope out; everything below it
     // requires the decision to be explicit, so it is made once here.
     const turnScope = scope ?? null;
@@ -1181,7 +1220,7 @@ export class AgentOrchestrator {
           continue;
         }
         this.noteToolUse(ledger, tc.name, turnScope);
-        const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
+        const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
         messages.push({
           role: 'tool',
           content: result,
@@ -1708,13 +1747,15 @@ export class AgentOrchestrator {
           // The executor hands a trailer over only when the tool returned a
           // carrier, which no reply from another machine can produce.
           if (receipt.trailer) {
-            let outside = receipt.outside ?? '';
-            if (outside.length > MAX_TOOL_RESULT_CHARS) {
-              outside = outside.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${outside.length} chars)`;
-            }
-            return frame(outside) + receipt.trailer;
+            return frame(capToolResult(receipt.outside ?? '')) + receipt.trailer;
           }
-          return frame(receipt.result);
+          // Capped BEFORE it is framed, as the ungated path caps a plain
+          // result (#828; content blocks are uncapped text on both paths). Uncapped, an approved `browser_navigate` or
+          // `desktop_snapshot` -- page- and screen-sized results, and exactly
+          // the tools that take a card -- reached the model whole; and the
+          // order matters as much as the cap, because a cut made after the
+          // frame is drawn would drop its closing line.
+          return frame(capToolResult(receipt.result));
         };
 
         // Every return below is a single string except one: an approved call
@@ -1737,7 +1778,10 @@ export class AgentOrchestrator {
             return runApproved();
           case 'executed':
             // Another path already ran it (shouldn't happen for inline
-            // requests; tolerated for robustness). Surface its result.
+            // requests; tolerated for robustness). Surface its result -- the
+            // STORED receipt, which carries no trusted trailer (#829: the
+            // executor drops it there, so it is absent rather than framed and
+            // disclaimed) and is already bounded to RECEIPT_MAX_CHARS.
             return frame(resolved.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`);
           case 'denied':
             return `[APPROVAL DENIED] The user denied permission to execute ${toolCall.name}. ` +

@@ -103,6 +103,29 @@ type cdpClient struct {
 	//                 generation the brain reviewed against one map would
 	//                 compare equal to the same number minted by the next --
 	//                 a check that reads as one and is not.
+	//   snapMu        held by takePageSnapshot from its first read of the frame
+	//                 tree through the fill (#826). The snapshot script ARMS
+	//                 the isolated world's refs when the browser runs it, and
+	//                 the fill below happens later in Go, so two snapshots in
+	//                 flight at once could run A's script, then B's, and fill
+	//                 B then A: the map on A's coordinates and generation, the
+	//                 world on B's refs, and a browser_type reviewed against A
+	//                 passing the #676 compare and typing into B's element.
+	//                 Serialising rather than detecting, because it removes the
+	//                 interleaving instead of refusing it, and the cost is
+	//                 small and only paid on a collision: the renderer runs
+	//                 the two scripts one after the other on its main thread
+	//                 either way, so what is lost is overlapping the Go-side
+	//                 round trips. Measured against headless Chromium on a
+	//                 1200-element page: one snapshot ~8.5-10ms, two at once
+	//                 ~14.7ms unserialised and ~16.5ms serialised. ALSO held
+	//                 by browser_type from its generation check through its
+	//                 last focus verify, because it acts through the refs
+	//                 after the check and a snapshot script in between would
+	//                 re-arm them under it. NEVER
+	//                 taken by forgetSnapshotElements, which takePageSnapshot's
+	//                 own deferred cleanup calls while holding it.
+	snapMu         sync.Mutex
 	elemMu         sync.Mutex
 	elemCoords     map[int][2]float64
 	elemIdentity   pageIdentity
@@ -973,7 +996,7 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 		// The coordinates are only this click's honest input while the document
 		// they were measured in is still the one on screen (#592) and the page
 		// has not scrolled under them (#603) -- hence `usesCoordinates`.
-		el, _, refusal, err := refuseStaleElement(cdp, id, true, reviewed)
+		el, refusal, err := refuseStaleCoordinate(cdp, id, reviewed)
 		if err != nil {
 			return nil, err
 		}
@@ -1023,6 +1046,26 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		id := int(elemID)
+		// No snapshot may run from the generation check below until the last
+		// focus verify after the insert (#826). The check proves the refs in
+		// the isolated world are the reviewed snapshot's at THAT instant; this
+		// call then acts through them three more times. A snapshot whose script
+		// ran in between would re-arm them before its fill moved the generation,
+		// so the focus, both re-verifies and the insert would all agree -- on
+		// that snapshot's element at the reviewed index. Released before the
+		// optional Enter, which goes to whatever has focus and reads no ref.
+		if err := cdp.lockSnapshots(); err != nil {
+			return nil, err
+		}
+		snapLocked := true
+		releaseSnap := func() {
+			if snapLocked {
+				snapLocked = false
+				cdp.snapMu.Unlock()
+			}
+		}
+		defer releaseSnap()
+
 		// NOT a coordinate user: the typing reaches the element through the ref
 		// the snapshot stashed, so a scroll since then does not make this call
 		// wrong -- and typing itself scrolls the caret into view (#603).
@@ -1186,6 +1229,7 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 				"Error: Element [%d] lost focus while the text was being typed, so the text may have "+
 					"gone to another element. Run browser_snapshot and check the page before retrying.", id)}, nil
 		}
+		releaseSnap()
 
 		verb := "Typed"
 		if appendMode {

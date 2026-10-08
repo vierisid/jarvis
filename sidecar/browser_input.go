@@ -295,7 +295,7 @@ func makeBrowserHoverHandler(cfg *SidecarConfig) RPCHandler {
 		// or trigger UI nobody reviewed (#592).
 		// Hover dispatches at the stored coordinate, so a scroll since the
 		// snapshot disqualifies it (#603).
-		el, _, refusal, err := refuseStaleElement(cdp, id, true, reviewed)
+		el, refusal, err := refuseStaleCoordinate(cdp, id, reviewed)
 		if err != nil {
 			return nil, err
 		}

@@ -24,6 +24,7 @@ import {
   getSidecarManager, remoteSnapshotGeneration, resetRemoteSnapshotGenerations, setSidecarManagerRef,
 } from './sidecar-route.ts';
 import { runAsReviewed } from './reviewed-call-scope.ts';
+import { newSnapshotReadLog, withSnapshotReadLog } from './snapshot-read-log.ts';
 import { withTemplateDeliveryScope, withoutTemplateDelivery } from './template-delivery-scope.ts';
 import type { SidecarManager } from '../../sidecar/manager.ts';
 import type { SidecarInfo } from '../../sidecar/types.ts';
@@ -83,10 +84,11 @@ afterEach(() => {
 });
 
 /** Raise a card for `tool` the way the orchestrator does, and approve it. */
-function approvedRequest(mgr: ApprovalManager, toolName: string, args: Record<string, unknown>, registry: ToolRegistry) {
+function approvedRequest(mgr: ApprovalManager, toolName: string, args: Record<string, unknown>, registry: ToolRegistry,
+  executionMode: 'inline' | 'deferred' = 'deferred') {
   const req = mgr.createRequest({
     agentId: 'a1', agentName: 'PA', toolName, toolArguments: args, actionCategory: 'control_app',
-    urgency: 'normal', reason: 'test', toolRegistry: registry,
+    urgency: 'normal', reason: 'test', toolRegistry: registry, executionMode,
     context: JSON.stringify({ confirm: 'always', intent: `Review ${toolName}` }),
   });
   return req;
@@ -304,5 +306,185 @@ describe('an approved remote element action carries the generation it was review
     const clicks = fake.calls.filter((c) => c.method === 'browser_click');
     expect(clicks).toHaveLength(1);
     expect(clicks[0]!.params.elem_gen).toBe('epoch.2');
+  });
+});
+
+describe('a card binds the snapshot its own model loop read (#827)', () => {
+  // #676 keyed generations by reader scope, and every main-orchestrator turn --
+  // each chat channel, the voice route, every task-tier call -- is the one
+  // DEFAULT reader. So a snapshot by any of them between another's read and its
+  // card was what the card bound, and the sidecar's compare passed on exactly
+  // the refill it exists to refuse.
+
+  test('another default-scope snapshot between the read and the card is not what the card binds', async () => {
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const registry = registryWith(browserClickTool);
+    const mgr = new ApprovalManager();
+    const chat = newSnapshotReadLog();
+
+    await withSnapshotReadLog(chat, () => browserSnapshotTool.execute({ target: 'remote-box' }));
+    // The voice route, which runs no loop of its own: default scope, no log.
+    fake.state.nextGen = 'epoch.2';
+    await browserSnapshotTool.execute({ target: 'remote-box' });
+    // And a turn on another channel, in its own loop.
+    fake.state.nextGen = 'epoch.3';
+    await withSnapshotReadLog(newSnapshotReadLog(), () => browserSnapshotTool.execute({ target: 'remote-box' }));
+    // The shared record names the newest default-scope read, as before.
+    expect(remoteSnapshotGeneration('remote-box')).toBe('epoch.3');
+
+    const req = withSnapshotReadLog(chat, () =>
+      approvedRequest(mgr, 'browser_click', { element_id: 2, target: 'remote-box' }, registry));
+    mgr.approve(req.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(req.id);
+    expect(fake.actions()[0]!.params.elem_gen).toBe('epoch.1');
+  });
+
+  test('a sub-agent started inside a chat loop does not write into that loop', async () => {
+    // The sub-agent inherits the chat loop's async context. Letting its read
+    // land in the chat's log would be WEB-001 again by another route.
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const registry = registryWith(browserClickTool);
+    const mgr = new ApprovalManager();
+    const chat = newSnapshotReadLog();
+
+    await withSnapshotReadLog(chat, async () => {
+      await browserSnapshotTool.execute({ target: 'remote-box' });
+      fake.state.nextGen = 'epoch.2';
+      await withTemplateDeliveryScope('sub-agent:helper', () => browserSnapshotTool.execute({ target: 'remote-box' }));
+      fake.state.nextGen = 'epoch.3';
+      await withoutTemplateDelivery(() => browserSnapshotTool.execute({ target: 'remote-box' }));
+    });
+    expect(chat.generations.get('remote-box')).toBe('epoch.1');
+
+    const req = withSnapshotReadLog(chat, () =>
+      approvedRequest(mgr, 'browser_click', { element_id: 2, target: 'remote-box' }, registry));
+    mgr.approve(req.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(req.id);
+    expect(fake.actions()[0]!.params.elem_gen).toBe('epoch.1');
+  });
+
+  test('an INLINE approved navigate records into the loop that raised it, so the next click there works', async () => {
+    // NEW-1 (#676) for the loop record: the executor runs outside the loop's
+    // async context, so without carrying the loop on the approval the
+    // navigate's generation would miss the loop and its next card would bind
+    // the pre-navigate read. Inline only: the loop's gate is waiting for it.
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const registry = registryWith(browserNavigateTool, browserClickTool);
+    const mgr = new ApprovalManager();
+    const chat = newSnapshotReadLog();
+    await withSnapshotReadLog(chat, () => browserSnapshotTool.execute({ target: 'remote-box' }));
+
+    fake.state.nextGen = 'epoch.2';
+    const nav = withSnapshotReadLog(chat, () =>
+      approvedRequest(mgr, 'browser_navigate', { url: 'https://bank.example/confirm', target: 'remote-box' }, registry, 'inline'));
+    mgr.approve(nav.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(nav.id);
+    expect(chat.generations.get('remote-box')).toBe('epoch.2');
+
+    const click = withSnapshotReadLog(chat, () =>
+      approvedRequest(mgr, 'browser_click', { element_id: 2, target: 'remote-box' }, registry));
+    mgr.approve(click.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(click.id);
+    const clicks = fake.calls.filter((c) => c.method === 'browser_click');
+    expect(clicks).toHaveLength(1);
+    expect(clicks[0]!.params.elem_gen).toBe('epoch.2');
+  });
+
+  test('a navigate approved late, after its inline wait was demoted, does not write the still-running loop', async () => {
+    // Security review SEC-002: the loop got [AWAITING_APPROVAL] and carried on
+    // with the page it had read. A navigate approved minutes later went to a
+    // person's notification, not to that loop's model -- so letting it write
+    // the loop's record made the loop's next card bind a page it never read.
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const registry = registryWith(browserNavigateTool, browserClickTool);
+    const mgr = new ApprovalManager();
+    const chat = newSnapshotReadLog();
+    await withSnapshotReadLog(chat, () => browserSnapshotTool.execute({ target: 'remote-box' }));
+
+    const nav = withSnapshotReadLog(chat, () =>
+      approvedRequest(mgr, 'browser_navigate', { url: 'https://bank.example/next', target: 'remote-box' }, registry, 'inline'));
+    expect(mgr.demoteToDeferred(nav.id)).toBe(true);
+    fake.state.nextGen = 'epoch.2';
+    mgr.approve(nav.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(nav.id);
+    expect(chat.generations.get('remote-box')).toBe('epoch.1');
+
+    const click = withSnapshotReadLog(chat, () =>
+      approvedRequest(mgr, 'browser_click', { element_id: 2, target: 'remote-box' }, registry, 'inline'));
+    mgr.approve(click.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(click.id);
+    // Bound to what the loop read; the sidecar, now on epoch.2, refuses it.
+    expect(fake.calls.filter((c) => c.method === 'browser_click')[0]!.params.elem_gen).toBe('epoch.1');
+  });
+
+  test('a resumed loop replaying snapshot replies binds nothing rather than another reader\'s read', async () => {
+    // Security review SEC-003: a paused task replays its snapshot replies but
+    // not their generations. Falling back to the shared record bound whatever
+    // another reader snapshotted during the pause.
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const registry = registryWith(browserClickTool);
+    const mgr = new ApprovalManager();
+    fake.state.nextGen = 'epoch.9';
+    await browserSnapshotTool.execute({ target: 'remote-box' });
+    expect(remoteSnapshotGeneration('remote-box')).toBe('epoch.9');
+
+    const resumed = newSnapshotReadLog({ resumedWithReads: true });
+    const req = withSnapshotReadLog(resumed, () =>
+      approvedRequest(mgr, 'browser_click', { element_id: 2, target: 'remote-box' }, registry, 'inline'));
+    mgr.approve(req.id, 'dashboard');
+    const receipt = await executor(mgr, registry).executeApprovedWithReceipt(req.id);
+    expect(fake.actions()).toHaveLength(0);
+    expect(receipt.result).toContain('cannot be verified');
+
+    // Once the resumed loop snapshots again, its own read binds as usual.
+    fake.state.nextGen = 'epoch.10';
+    await withSnapshotReadLog(resumed, () => browserSnapshotTool.execute({ target: 'remote-box' }));
+    const again = withSnapshotReadLog(resumed, () =>
+      approvedRequest(mgr, 'browser_click', { element_id: 2, target: 'remote-box' }, registry, 'inline'));
+    mgr.approve(again.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(again.id);
+    expect(fake.actions()[0]!.params.elem_gen).toBe('epoch.10');
+  });
+
+  test('a loop whose own read carried no generation does not borrow another reader\'s', async () => {
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const registry = registryWith(browserClickTool);
+    const mgr = new ApprovalManager();
+    const chat = newSnapshotReadLog();
+
+    fake.state.nextGen = null;
+    await withSnapshotReadLog(chat, () => browserSnapshotTool.execute({ target: 'remote-box' }));
+    fake.state.nextGen = 'epoch.2';
+    await browserSnapshotTool.execute({ target: 'remote-box' });
+    expect(remoteSnapshotGeneration('remote-box')).toBe('epoch.2');
+
+    const req = withSnapshotReadLog(chat, () =>
+      approvedRequest(mgr, 'browser_click', { element_id: 2, target: 'remote-box' }, registry));
+    mgr.approve(req.id, 'dashboard');
+    const receipt = await executor(mgr, registry).executeApprovedWithReceipt(req.id);
+    expect(fake.actions()).toHaveLength(0);
+    expect(receipt.result).toContain('cannot be verified');
+  });
+
+  test('THE RESIDUAL: a loop that read nothing itself still binds the shared default record', async () => {
+    // Stated, not fixed: ids the model carried over in its own text from an
+    // earlier turn have no read in this loop, and fall back to what #676 did.
+    // A regression guard that passes with and without #827.
+    const fake = fakeSidecar();
+    setSidecarManagerRef(fake.manager);
+    const registry = registryWith(browserClickTool);
+    const mgr = new ApprovalManager();
+    await withSnapshotReadLog(newSnapshotReadLog(), () => browserSnapshotTool.execute({ target: 'remote-box' }));
+    const req = withSnapshotReadLog(newSnapshotReadLog(), () =>
+      approvedRequest(mgr, 'browser_click', { element_id: 2, target: 'remote-box' }, registry));
+    mgr.approve(req.id, 'dashboard');
+    await executor(mgr, registry).executeApprovedWithReceipt(req.id);
+    expect(fake.actions()[0]!.params.elem_gen).toBe('epoch.1');
   });
 });
