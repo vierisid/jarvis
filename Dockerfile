@@ -238,12 +238,15 @@ RUN set -eu; \
 # Pinned to BUILDPLATFORM so a multi-arch build runs this ONCE and both
 # images share the result. Two reasons, in order of importance:
 #
-#   1. One prebuild, one artifact. The engine staging install resolves
-#      version RANGES with no lockfile, so two prebuilds run at different
-#      times can inline different dependency versions and emit different
-#      bundle bytes under the SAME bundleHash (measured: two builds two hours
-#      apart differed by ~9.7 KB). Per-arch legs would ship two different
-#      bundles for one hash. Running it once removes the question.
+#   1. One prebuild, one artifact. The engine staging install is held to the
+#      committed src/workflows/runner/engine-runtime/engine-staging.lock and
+#      installed --frozen-lockfile (#836, in #861), so two prebuilds of one
+#      commit install the same versions. Before that it resolved the
+#      synthesized package.json's version RANGES with no lockfile, and two
+#      builds two hours apart emitted bundles ~9.7 KB apart under the SAME
+#      bundleHash -- the drift #836 diagnosed and the lockfile fixed. Running
+#      the prebuild once still makes both images share one bundle by
+#      construction, rather than by the lockfile holding.
 #   2. The arm64 leg then copies plain JavaScript instead of re-running
 #      esbuild and a `bun install` under QEMU.
 #
@@ -252,9 +255,11 @@ RUN set -eu; \
 # pair produced identical engine bundles too, so nothing here is
 # architecture-dependent.
 #
-# No `bun install` in this stage: build-workflows.ts and everything it
-# imports resolve to node: builtins and the repo's own source. esbuild is
-# fetched by the build itself, into the engine staging dir under $HOME.
+# No `bun install` of the repository in this stage: build-workflows.ts and
+# everything it imports resolve to node: builtins and the repo's own source.
+# esbuild and the engine's dependencies are fetched by the build itself, by
+# the staging install above (into the engine staging dir under $HOME), at
+# exactly the versions and integrity hashes engine-staging.lock records.
 FROM --platform=$BUILDPLATFORM oven/bun:1.4.2@sha256:9114c058aeae42162ee16dd5084b95fe9473970bb6bcb5b232ab1630f0546895 AS workflows
 
 WORKDIR /app
