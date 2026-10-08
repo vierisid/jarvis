@@ -239,6 +239,14 @@ export class TelegramAdapter implements ChannelAdapter {
         const updates = await this.getUpdates();
 
         for (const update of updates) {
+          // A long poll outlives disconnect() by up to its 30s timeout, and a
+          // settings save disconnects this adapter and builds a new one with
+          // the new allow-list (#860). A batch that lands afterwards belongs
+          // to the new adapter: handled here, it would be judged against the
+          // OLD list, so a user just removed from it could still approve.
+          // Left unhandled it is never confirmed (the offset only advances on
+          // the next call), so Telegram hands it to the new adapter instead.
+          if (!this.polling) break;
           await this.processUpdate(update);
         }
       } catch (error) {

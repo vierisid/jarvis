@@ -198,3 +198,44 @@ describe('#811: senderAllowListed', () => {
     expect(await deliver([42], 43)).toEqual([]);
   });
 });
+
+/**
+ * #860. A settings save disconnects this adapter and builds a new one with the
+ * new allow-list, but a long poll already in flight can still return a batch.
+ */
+describe('#860: a batch that lands after disconnect is not handled', () => {
+  test('it is left for the new adapter instead of being judged against the old list', async () => {
+    let releasePoll!: () => void;
+    const pollReturned = new Promise<void>((resolve) => { releasePoll = resolve; });
+    let polls = 0;
+    const originalFetch = globalThis.fetch;
+    globalThis.fetch = (async (url: string) => {
+      if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { username: 'bot' } });
+      if (url.endsWith('/getUpdates')) {
+        polls++;
+        await pollReturned;
+        return Response.json({ ok: true, result: [{
+          update_id: 1,
+          message: { message_id: 7, from: { id: 42, first_name: 'A' }, chat: { id: 42, type: 'private' }, date: 0, text: 'approve 1a2b3c4d' },
+        }] });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    try {
+      const adapter = new TelegramAdapter('test-token', { allowedUsers: [42] });
+      const seen: ChannelMessage[] = [];
+      adapter.onMessage(async (m) => { seen.push(m); return ''; });
+      await adapter.connect();
+      for (let i = 0; i < 100 && polls === 0; i++) await Bun.sleep(5);
+      expect(polls).toBe(1);
+
+      await adapter.disconnect();
+      releasePoll();
+      await Bun.sleep(50);
+
+      expect(seen).toEqual([]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+});
