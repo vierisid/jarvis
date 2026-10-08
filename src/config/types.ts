@@ -240,13 +240,16 @@ export type PebbleConfig = {
   palette_hotkey?: unknown;
 };
 
+/**
+ * The `desktop` settings section. #897 removed `sidecar_port`, `sidecar_path`,
+ * `auto_launch`, `tree_depth` and `snapshot_max_elements`: nothing read them
+ * (the legacy desktop bridge their names described used hard-coded constants,
+ * and #799 deleted it), so setting one changed nothing and said nothing. A
+ * stored row or file that still carries them loads as before: deepMerge keeps
+ * unknown keys, and nothing reads them.
+ */
 export type DesktopConfig = {
   enabled: boolean;
-  sidecar_port: number;
-  sidecar_path?: string;
-  auto_launch: boolean;
-  tree_depth: number;
-  snapshot_max_elements: number;
 };
 
 export type AwarenessConfig = {
@@ -901,10 +904,6 @@ export const DEFAULT_CONFIG: JarvisConfig = {
   },
   desktop: {
     enabled: true,
-    sidecar_port: 9224,
-    auto_launch: true,
-    tree_depth: 5,
-    snapshot_max_elements: 60,
   },
   awareness: {
     enabled: true,
