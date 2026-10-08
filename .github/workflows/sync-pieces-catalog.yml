@@ -232,7 +232,15 @@ jobs:
       # Needed by the "Trigger tests" step to dispatch test.yml on the PR branch.
       actions: write
     steps:
+      # No token left in .git/config (#821). This job copies in files a
+      # read-only job produced, so nothing it runs should find the write
+      # token on disk, and nothing here needs it there: create-pull-request
+      # hides any persisted credential and configures its own from its
+      # `token` input (git-config-helper.ts at the pinned SHA), and every gh
+      # call reads GH_TOKEN from its step env.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:

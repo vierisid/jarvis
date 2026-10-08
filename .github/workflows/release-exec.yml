@@ -32,7 +32,7 @@ permissions: {}
 # used to run side by side: both reached publish-docker, both pushed
 # `:latest` for a non-prerelease, and whichever finished second owned it --
 # not necessarily the higher version. Both also wrote `cache-to: type=gha`
-# into the same scope.
+# into the same scope (nothing here uses that cache since #680).
 #
 # Global, not per ref: `:latest` is one pointer for the whole repository, so
 # a group keyed on the tag would let exactly the two runs that matter race.
@@ -83,10 +83,15 @@ env:
   # `docker.io/tonistiigi/binfmt:latest`. qemu-v10.2.3 is the image `latest`
   # pointed at for v0.15.0 (same digest in that run's log).
   BINFMT_IMAGE: docker.io/tonistiigi/binfmt:qemu-v10.2.3@sha256:400a4873b838d1b89194d982c45e5fb3cda4593fbfd7e08a02e76b03b21166f0
-  # The BuildKit daemon that produces the published layers, and the GHA cache
-  # entries both docker jobs share. Was the action's default
-  # `moby/buildkit:buildx-stable-1`, which v0.33.1 is as of 2026-10-06.
+  # The BuildKit daemon that produces the published layers. Was the action's
+  # default `moby/buildkit:buildx-stable-1`, which v0.33.1 is as of 2026-10-06.
   BUILDKIT_IMAGE: moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
+  # The SBOM generator BuildKit runs during build-image (#680), with the
+  # image filesystem mounted, beside a packages: write token. Its default
+  # is the tag docker/buildkit-syft-scanner:stable-1; stable-1 and 1.12.0
+  # were the same index digest on 2026-10-08 (docker buildx imagetools
+  # inspect), so pinning changes nothing that runs today.
+  SBOM_GENERATOR: docker/buildkit-syft-scanner:1.12.0@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
   SIDECAR_BIN: jarvis
   # The one dry-run decision (#685), spelled the same everywhere it has to be
   # made: here, the sidecar call input, discord-notify's `if:` and
@@ -141,8 +146,8 @@ jobs:
   #
   # The Dockerfile's semver check (#625) also rejects metacharacters, and used
   # to be the only thing standing in the way. It is not the control: it sits in
-  # a different job three files from the sink and holds only while build-docker
-  # gates the publish jobs. It may not even hold today. A newline in the
+  # a different job three files from the sink and holds only while the image
+  # build gates the publish jobs. It may not even hold today. A newline in the
   # dispatch input could make the extracted VERSION multi-line via
   # $GITHUB_OUTPUT's `NAME<<DELIM` syntax; build-push-action splits
   # `build-args:` on newlines, so a clean first line would reach the Dockerfile
@@ -188,7 +193,9 @@ jobs:
   # their own branch. What stands between that and an npm publish is the
   # `release` environment's required reviewers on publish-brain and
   # publish-sidecar (#679, #756), not this gate. Nothing equivalent gates
-  # publish-docker's push to GHCR: only the `needs:` order in this file.
+  # GHCR directly: publish-docker, the only job that creates an image tag,
+  # waits for publish-brain by the `needs:` order in this file, while
+  # build-image pushes an untagged digest before any approval (#680; see it).
   validate-tag:
     runs-on: ubuntu-latest
     permissions: {}
@@ -269,37 +276,75 @@ jobs:
       - run: bun test --retry=2
       - run: bunx tsc --noEmit
 
-  # ─── Gate: build AND RUN the image before publishing anything ──
-  # A no-push multi-arch build so a broken Dockerfile fails the entire release
-  # (npm, GitHub Release, Docker push) rather than just one job, and then the
-  # same container smoke check docker-build.yml runs on PRs.
+  # --- Build the release image ONCE and push it by digest (#680) ---
+  # The image that ships is built here and nowhere else. Before #680 a
+  # release built it three times: build-docker built multi-arch to validate,
+  # built amd64 again to smoke-test, and publish-docker built a third time
+  # and pushed THAT. Nothing tied the bytes docker-smoke.sh started to the
+  # bytes users pull, and once #782 made publish-docker build cold while the
+  # gate built from the cache, they were always two independent builds
+  # (#822). Now: this job pushes one multi-arch index by digest, with no
+  # tag; smoke-image pulls exactly that digest and runs it; publish-docker
+  # points the release tags at that same digest without building anything.
   #
-  # The run half is #621. This gate used to build only, and a successful build
-  # was all it proved -- which is why #613 and #614 both shipped: both built
-  # cleanly and failed only at runtime, and both were found by an outside
-  # reporter. The release path was the weaker of the two checks while being the
-  # one that matters. See .github/scripts/docker-smoke.sh for what it asserts.
-  build-docker:
+  # Authority. This job holds packages: write and runs BEFORE the `release`
+  # environment approval on publish-brain. What it writes on a real run is
+  # blobs and an UNTAGGED index: nothing anyone pulls by name, and no tag
+  # moves. Only publish-docker creates tags, and it runs after publish-brain
+  # (release-exec.test.sh checks both). But the package is public, so that
+  # index is publicly pullable by digest, with this version in its labels,
+  # whether or not the release is then approved, and nothing deletes it.
+  #
+  # The TOKEN could push a tag, so a compromise inside this job could move
+  # one with nobody having approved the release. What runs beside the token:
+  # the actions (pinned by SHA; checkout, metadata-action and
+  # build-push-action all receive it as their default token input), the
+  # binfmt, BuildKit and SBOM generator images (pinned by digest), and the
+  # Dockerfile build: bases pinned by digest, dependency lifecycle scripts
+  # from the frozen lockfile, and apt packages that are NOT pinned. RUN
+  # steps cannot read the token without escaping BuildKit's sandbox -- the
+  # build context is the checkout, not git, so no token is passed in as a
+  # build secret, and release-exec.test.sh forbids secrets, ssh, extra
+  # contexts and entitlements on both builds -- but BuildKit runs
+  # privileged under this driver, so an escape is root on the runner, where
+  # the token and the login credential both are. The same build ran with the
+  # same scope in publish-docker before #680, only after the approval.
+  #
+  # It never runs the image: smoke-image does, in a job with no write scope,
+  # so a container escape there does not land beside this token.
+  #
+  # Built cold, with no cache-from or cache-to (#782): this is the build
+  # that ships, and the GHA cache is writable by any run on main and by
+  # every job in this run. Measured cost before #680, for the same cold
+  # two-platform build in publish-docker: 1m55s against 52s warm (runs
+  # 37613557506 and 37610958257).
+  #
+  # A dry run publishes nothing (#685; the owner decision on #680): it does
+  # not log in and pushes nothing anywhere. It builds the same image from
+  # the same inputs into an OCI archive on this runner and hands that to
+  # smoke-image as an artifact, so a rehearsal still proves the build and
+  # the smoke test of exactly the bytes it built. What a dry run does NOT
+  # prove is the push by digest, the pull by digest, or the tagging: those
+  # run only on a real release. The two build steps below are one step
+  # twice, differing only in `outputs:` and `id:`; release-exec.test.sh
+  # fails if anything else about them drifts apart.
+  build-image:
     needs: [validate-tag, test]
     runs-on: ubuntu-latest
-    # This job neither pushes an image nor writes to the repo, and it EXECUTES
-    # the image it built, so it takes the narrowest scope: a container escape
-    # here must not land in a job whose runner holds a publish-capable token.
-    # (Since #646 the workflow-level block is `{}`, so this is what every job
-    # does; it was written when this job was the exception.)
-    # persist-credentials: false below is the other half -- nothing after the
-    # checkout runs git, so the token has no reason to be on disk.
     permissions:
       contents: read
-    # Multi-arch (arm64 under QEMU) plus a second single-arch build plus three
-    # smoke phases. docker-build.yml allows 30 for the single-arch half alone.
-    # Generous on purpose: a too-tight bound on a release gate turns a slow
-    # release into a failed one, and the default is 6 hours.
-    timeout-minutes: 90
-    env:
-      # Run-scoped, matching docker-build.yml, and removed by name at the end.
-      GATE_IMAGE_TAG: jarvis:release-gate-${{ github.run_id }}-${{ github.run_attempt }}
+      packages: write
+    # One cold two-platform build (arm64 under QEMU) plus an SBOM scan per
+    # platform; about 2 minutes measured for the build alone. Generous on
+    # purpose: a too-tight bound turns a slow release into a failed one.
+    timeout-minutes: 45
+    outputs:
+      # Exactly one of the two build steps runs, so exactly one is set.
+      digest: ${{ steps.build.outputs.digest || steps.build-dry.outputs.digest }}
+      tags: ${{ steps.meta.outputs.tags }}
+      archive_sha256: ${{ steps.archive.outputs.sha256 }}
     steps:
+      # persist-credentials: false: nothing after the checkout runs git.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -320,58 +365,209 @@ jobs:
         with:
           driver-opts: image=${{ env.BUILDKIT_IMAGE }}
 
-      - name: Build Docker image (validate, no push)
+      # Only when something will be pushed (#682): a dry run has no use for
+      # a registry credential on disk.
+      - name: Log in to GitHub Container Registry
+        if: env.DRY_RUN != 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # The labels go into the image config, so they are set here, at the
+      # one build. The tags are computed here too and handed to
+      # publish-docker, which checks them against validate-tag before using
+      # them; nothing in this job applies a tag.
+      - name: Generate Docker metadata
+        id: meta
+        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository }}
+          tags: |
+            type=semver,pattern={{version}},value=${{ needs.validate-tag.outputs.tag }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-tag.outputs.tag }}
+            type=raw,value=latest,enable=${{ needs.validate-tag.outputs.prerelease == 'false' }}
+          labels: |
+            org.opencontainers.image.title=Jarvis
+            org.opencontainers.image.description=J.A.R.V.I.S. — Always-on autonomous AI daemon
+            org.opencontainers.image.vendor=vierisid
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}
+
+      # push-by-digest: the index and its blobs go to GHCR under no tag, and
+      # the step output `digest` is the index digest. Provenance (mode=max)
+      # and the SBOM are attestation manifests inside that index, so the
+      # tags publish-docker creates carry them with no extra step.
+      - name: Build the image and push it by digest
+        id: build
+        if: env.DRY_RUN != 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
-          push: false
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ needs.validate-tag.outputs.version }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: generator=${{ env.SBOM_GENERATOR }}
+          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
 
-      # This job runs the image on the runner's own architecture only, so the
-      # smoke check below covers linux/amd64 ONLY. arm64 stays build-validated
-      # by the step above and is never started. Starting it IS possible -- the
-      # QEMU handlers installed above are exactly what would make a foreign-arch
-      # container execute -- and is declined rather than impossible: it is very
-      # slow, and a QEMU-emulated boot is not what an arm64 user executes, so a
-      # pass there would prove less than it appears to. An arm64-only runtime
-      # defect is a gap this gate does not close, deliberately.
-      #
-      # `load: true` is what puts the image in dockerd's image store so
-      # docker-smoke.sh can run it: setup-buildx-action's docker-container
-      # driver otherwise leaves the result in the BuildKit cache only. `load`
-      # forces the single-platform docker exporter, which is why this cannot
-      # just be added to the multi-arch step above.
-      #
-      # cache-from WITHOUT cache-to. The step above exports
-      # `type=gha,mode=max` with no `scope:`, shared with docker-build.yml's
-      # PR builds, and an extra export covering only amd64 risks leaving that
-      # scope covering only amd64. Before #782 that mattered more:
-      # publish-docker read the same scope, so its multi-arch build could then
-      # rebuild the arm64 leg -- published layers this gate never ran. It now
-      # builds cold, so the remaining cost of a thin scope is only a slower
-      # validation here. (Not the engine
-      # bundle: the `workflows` stage is pinned to BUILDPLATFORM and both legs
-      # COPY from it, so it is in the amd64 graph and an arm64 rebuild reuses
-      # it. The exposure is the arm64 `deps`/`build` stages, which are not
-      # pinned.) Reading the cache is all this step needs anyway: it shares one
-      # buildx builder with the step above, whose amd64 result is a local cache
-      # hit, and cache-from is the fallback if that result came from the remote
-      # cache in the first place.
-      - name: Build the amd64 image again, loaded, so it can be run
+      # The same build into an OCI archive on this runner (see above). Its
+      # `digest` output is that archive's index digest, which smoke-image
+      # checks the archive against.
+      - name: Build the image into an OCI archive (dry run)
+        id: build-dry
+        if: env.DRY_RUN == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           file: ./Dockerfile
-          platforms: linux/amd64
-          push: false
-          load: true
-          tags: ${{ env.GATE_IMAGE_TAG }}
+          platforms: linux/amd64,linux/arm64
+          labels: ${{ steps.meta.outputs.labels }}
           build-args: VERSION=${{ needs.validate-tag.outputs.version }}
-          cache-from: type=gha
+          provenance: mode=max
+          sbom: generator=${{ env.SBOM_GENERATOR }}
+          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar
+
+      # The archive crosses to smoke-image as an artifact, which every job in
+      # this run can write; its digest crosses as a job output, which only
+      # this job can set.
+      - name: Digest the dry-run archive
+        id: archive
+        if: env.DRY_RUN == 'true'
+        run: |
+          set -euo pipefail
+          sum="$(sha256sum "${RUNNER_TEMP}/release-image.oci.tar" | cut -d' ' -f1)"
+          echo "sha256=${sum}" >> "$GITHUB_OUTPUT"
+          echo "release-image.oci.tar sha256 ${sum}"
+
+      - name: Upload the dry-run archive
+        if: env.DRY_RUN == 'true'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: release-image-oci
+          path: ${{ runner.temp }}/release-image.oci.tar
+          if-no-files-found: error
+          retention-days: 1
+          # Image layers are gzip already; zipping them again costs time.
+          compression-level: 0
+
+  # --- Gate: RUN the image that will ship before publishing anything ---
+  # The run half is #621: a successful build was all the release gate used to
+  # prove, which is why #613 and #614 both shipped -- both built cleanly and
+  # failed only at runtime, and both were found by an outside reporter. See
+  # .github/scripts/docker-smoke.sh for what it asserts. Since #680 it runs
+  # the image build-image pushed, pulled by digest, so what passes here is
+  # what publish-docker tags.
+  #
+  # No write scope: this job EXECUTES the image, so a container escape here
+  # must not land in a job whose runner holds a publish-capable token.
+  # packages: read is for the pull, and the credential is removed from disk
+  # right after it, before the image runs.
+  smoke-image:
+    needs: [validate-tag, build-image]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    # A pull (or an archive load) plus three smoke phases. docker-build.yml
+    # allows 30 for a build plus the same smoke check.
+    timeout-minutes: 45
+    env:
+      # Run-scoped, matching docker-build.yml, and removed by name at the end.
+      GATE_IMAGE_TAG: jarvis:release-gate-${{ github.run_id }}-${{ github.run_attempt }}
+    steps:
+      # For docker-smoke.sh. Nothing after the checkout runs git.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Log in to GitHub Container Registry
+        if: env.DRY_RUN != 'true'
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # By digest, so what runs below is byte for byte the index build-image
+      # pushed: the daemon refuses content that does not hash to it. This
+      # job runs on the runner's own architecture, so this is the amd64
+      # image ONLY. arm64 is built by build-image and never started.
+      # Starting it IS possible -- QEMU would run it -- and is declined: it
+      # is very slow, and a QEMU-emulated boot is not what an arm64 user
+      # executes, so a pass there would prove less than it appears to. An
+      # arm64-only runtime defect is a gap this gate does not close,
+      # deliberately.
+      - name: Pull the pushed image by digest
+        if: env.DRY_RUN != 'true'
+        env:
+          DIGEST: ${{ needs.build-image.outputs.digest }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }
+          ref="ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
+          docker pull --platform linux/amd64 "$ref"
+          # The credential is not needed past the pull, and the image runs next.
+          docker logout ghcr.io
+          docker tag "$ref" "$GATE_IMAGE_TAG"
+
+      - name: Download the dry-run archive
+        if: env.DRY_RUN == 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-image-oci
+          path: ${{ runner.temp }}/release-image
+
+      # The dry-run counterpart of the pull: the amd64 image of the index
+      # build-image reported, checked by content from the archive digest down
+      # to the config, then loaded. `docker load` on the runner (Docker 28,
+      # classic image store) cannot read a multi-platform OCI archive -- it
+      # fails with "blobs/json: no such file or directory", measured on
+      # 28.0.4, the runner version -- so this writes the docker-archive
+      # manifest.json for the one amd64 image over the same blobs.
+      - name: Load the dry-run image from its archive
+        if: env.DRY_RUN == 'true'
+        env:
+          DIGEST: ${{ needs.build-image.outputs.digest }}
+          ARCHIVE_SHA256: ${{ needs.build-image.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }
+          [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no archive digest"; exit 1; }
+          dir="${RUNNER_TEMP}/release-image"
+          echo "${ARCHIVE_SHA256}  ${dir}/release-image.oci.tar" | sha256sum -c -
+          mkdir "${dir}/layout"
+          tar -xf "${dir}/release-image.oci.tar" -C "${dir}/layout"
+          blob() { printf '%s/layout/blobs/sha256/%s' "$dir" "${1#sha256:}"; }
+          # By content, from the index build-image reported down: whatever
+          # index.json says is not trusted.
+          echo "${DIGEST#sha256:}  $(blob "$DIGEST")" | sha256sum -c -
+          manifest="$(jq -er '[.manifests[] | select(.platform.os == "linux" and .platform.architecture == "amd64")] | if length == 1 then .[0].digest else error("not exactly one linux/amd64 image") end' "$(blob "$DIGEST")")"
+          [[ "$manifest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::the amd64 entry has no digest"; exit 1; }
+          echo "${manifest#sha256:}  $(blob "$manifest")" | sha256sum -c -
+          config="$(jq -er '.config.digest' "$(blob "$manifest")")"
+          jq -c --arg tag "$GATE_IMAGE_TAG" \
+            '[{Config: ("blobs/sha256/" + (.config.digest | ltrimstr("sha256:"))), RepoTags: [$tag], Layers: [.layers[].digest | "blobs/sha256/" + ltrimstr("sha256:")]}]' \
+            "$(blob "$manifest")" > "${dir}/layout/manifest.json"
+          # Only the amd64 config and layers, not every blob: the archive also
+          # holds arm64 and the attestations, and the runner disk holds the
+          # download and the extracted layout already (434 MB measured for
+          # the two-platform archive on 2026-10-08).
+          jq -r '.[0].Config, .[0].Layers[]' "${dir}/layout/manifest.json" >"${dir}/amd64.files"
+          tar -cf "${dir}/amd64.tar" -C "${dir}/layout" manifest.json -T "${dir}/amd64.files"
+          rm -f "${dir}/release-image.oci.tar"
+          docker load -i "${dir}/amd64.tar"
+          # The image ID is the config digest; docker load checks each layer
+          # against the config, so this closes the chain down to the layers.
+          # (That equality holds for the classic image store the runner uses.
+          # On the containerd store the ID is a manifest digest, so this check
+          # fails closed after such a runner change rather than passing.)
+          got="$(docker image inspect --format '{{.Id}}' "$GATE_IMAGE_TAG")"
+          [ "$got" = "$config" ] || { echo "::error::the loaded image is ${got}, not ${config}, the amd64 image of ${DIGEST}"; exit 1; }
 
       # Runs with no DRY_RUN condition on purpose: a dry run exists to rehearse
       # the release, and skipping the only check that starts the image would
@@ -381,13 +577,10 @@ jobs:
       # defaults to it, which is the script's own default.
       #
       # What this proves, stated narrowly so nobody reads more into a green
-      # gate: an amd64 image built from this Dockerfile and this cache state
-      # boots healthy, answers /health unauthenticated, logs no startup
-      # failure, and does it again over a written volume. It does NOT prove byte
-      # identity with the manifest publish-docker pushes -- that is a separate
-      # build in a separate job, with no digest carried between them. Closing
-      # that needs a build-once/push-by-digest restructure, which is filed
-      # separately and is not what #621 asked for.
+      # gate: the amd64 image of the index publish-docker will tag boots
+      # healthy, answers /health unauthenticated, logs no startup failure,
+      # and does it again over a written volume. On a dry run, the same for
+      # the image in the archive build-image made.
       - name: Smoke-test the image (run it like a user does)
         env:
           # Unique per run AND per re-run, so a retry cannot collide with a
@@ -410,12 +603,12 @@ jobs:
         run: docker image rm "$GATE_IMAGE_TAG" || true
 
   # ─── Sidecar release (reusable, versioned from sidecar/VERSION) ─
-  # Builds + publishes the sidecar at its own version, gated behind the Docker
-  # validation like the brain publish. Idempotent: a no-op when that version is
+  # Builds + publishes the sidecar at its own version, gated behind the image
+  # smoke test like the brain publish. Idempotent: a no-op when that version is
   # already on npm, so a brain release ships the sidecar only when it actually
   # changed. See sidecar-release.yml.
   sidecar:
-    needs: [test, build-docker]
+    needs: [test, smoke-image]
     permissions:
       contents: read
       id-token: write
@@ -449,12 +642,12 @@ jobs:
   #
   # It runs dependency code, and every job in this run can write this run's
   # artifacts, so it starts only once the sidecar workflow has published and
-  # build-docker is done: a lifecycle script left running here must not be
+  # smoke-image is done: a lifecycle script left running here must not be
   # able to swap the sidecar binaries between their upload and
   # publish-sidecar's download. publish-brain waits for both anyway, so this
   # costs no time. The timeout bounds how long anything it starts can linger.
   pack-brain:
-    needs: [validate-tag, test, build-docker, sidecar]
+    needs: [validate-tag, test, smoke-image, sidecar]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -541,7 +734,7 @@ jobs:
   # verifies pack-brain's tarball against the digest pack-brain reported and
   # publishes it.
   publish-brain:
-    needs: [validate-tag, pack-brain, build-docker, sidecar]
+    needs: [validate-tag, pack-brain, smoke-image, sidecar]
     runs-on: ubuntu-latest
     # npm Trusted Publishing for @usejarvis/brain requires this environment, so
     # the OIDC token this job mints must carry the claim or npm refuses the
@@ -748,39 +941,31 @@ jobs:
           echo "Would have created release v${VERSION}"
           ls -lh release/ 2>/dev/null || true
 
-  # ─── Build and push Docker images ──────────────────────────────
-  # Gated by the npm publishes — if any npm publish fails, docker never
-  # pushes. Keeps the release atomic from the user-visible side: a Docker
-  # image tagged vX.Y.Z always has matching @usejarvis/* npm versions.
+  # --- Tag the smoked image ---
+  # Gated by the npm publishes -- if any npm publish fails, no tag moves.
+  # Keeps the release atomic from the user-visible side: a Docker image
+  # tagged vX.Y.Z always has matching @usejarvis/* npm versions. And, through
+  # publish-brain, gated by the `release` environment approval: this is the
+  # only job that creates a tag.
+  #
+  # Builds nothing (#680). It points the release tags at the index
+  # build-image pushed and smoke-image ran, by digest, so the tagged image is
+  # byte for byte the one the smoke test started. `imagetools create` from a
+  # single index under several tags writes that same index (the same
+  # digest), attestations included, which the check after it asserts.
+  #
+  # On a dry run nothing was pushed, so there is nothing to tag: the step
+  # still validates the digest and the tags and prints the command a release
+  # would run, but it cannot rehearse the tagging itself.
   publish-docker:
-    needs: [validate-tag, sidecar, publish-brain]
+    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]
     runs-on: ubuntu-latest
+    # No checkout and no build: the registry write is the whole job.
     permissions:
-      contents: read
       packages: write
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      # Pinned images: see BINFMT_IMAGE and BUILDKIT_IMAGE at the top.
-      # cache-image: false, because with it on the action `docker load`s the
-      # privileged binfmt image from the Actions cache -- which any workflow
-      # run on main can write -- before every pull, and runs that copy if the
-      # pull fails. A loaded tar can also bring tags of its own into dockerd.
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
-        with:
-          image: ${{ env.BINFMT_IMAGE }}
-          cache-image: false
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
-        with:
-          driver-opts: image=${{ env.BUILDKIT_IMAGE }}
-
-      # Only when something will be pushed (#682): a dry run builds with
-      # push: false and has no use for a registry credential on disk.
+      # Only when something will be pushed (#682).
       - name: Log in to GitHub Container Registry
         if: env.DRY_RUN != 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -789,68 +974,66 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Generate Docker metadata
-        id: meta
-        uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
-        with:
-          images: ghcr.io/${{ github.repository }}
-          tags: |
-            type=semver,pattern={{version}},value=${{ needs.validate-tag.outputs.tag }}
-            type=semver,pattern={{major}}.{{minor}},value=${{ needs.validate-tag.outputs.tag }}
-            type=raw,value=latest,enable=${{ needs.validate-tag.outputs.prerelease == 'false' }}
-          labels: |
-            org.opencontainers.image.title=Jarvis
-            org.opencontainers.image.description=J.A.R.V.I.S. — Always-on autonomous AI daemon
-            org.opencontainers.image.vendor=vierisid
-            org.opencontainers.image.source=https://github.com/${{ github.repository }}
-            org.opencontainers.image.documentation=https://github.com/${{ github.repository }}
-
-      # Built cold, with no cache-from or cache-to (#782). This is the only
-      # build whose output ships, and the GHA cache it used to read is
-      # writable by any workflow run on main and by every job in this run, so
-      # the pushed layers could be assembled from cache entries nobody built
-      # here. build-docker keeps the cache: it builds the same two-platform
-      # image only to validate and smoke-test it, and nothing reads its
-      # output. Measured cost: publish-docker 1m55s cold against 52s warm,
-      # about +63s per release (runs 37613557506 cold, 37610958257 warm; the
-      # cold log has no cache import and no CACHED step). The dry-run build
-      # below is cold too, so a rehearsal times and builds what a release does.
-      #
-      # The trade: the image docker-smoke.sh starts in build-docker is now a
-      # separate, cache-assisted build of the same source, no longer the bytes
-      # this job pushes (it never was byte-proven; see build-docker).
-      - name: Build and push Docker image
-        if: env.DRY_RUN != 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ needs.validate-tag.outputs.version }}
-
-      - name: Build Docker image (dry run)
-        if: env.DRY_RUN == 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: false
-          tags: ${{ steps.meta.outputs.tags }}
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ needs.validate-tag.outputs.version }}
-
-      - name: Dry-run summary
-        if: env.DRY_RUN == 'true'
+      # The tags arrive from build-image's metadata step and are taken only if
+      # they are exactly the ones this release owns, worked out again here
+      # from validate-tag: the version, and for a non-prerelease also
+      # major.minor and latest (metadata-action gives a prerelease its
+      # version tag only). So `latest` cannot move on a prerelease, and no
+      # tag outside this repository image can be named.
+      - name: Point the release tags at the smoked digest
         env:
-          TAGS: ${{ steps.meta.outputs.tags }}
+          DIGEST: ${{ needs.build-image.outputs.digest }}
+          TAGS: ${{ needs.build-image.outputs.tags }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
         run: |
-          echo "::notice::DRY RUN — Docker image built but not pushed"
-          echo "Tags that would have been pushed:"
-          printf '%s\n' "$TAGS"
+          set -euo pipefail
+          export LC_ALL=C
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }
+          image="ghcr.io/${GITHUB_REPOSITORY,,}"
+          want=("${image}:${VERSION}")
+          if [ "$PRERELEASE" = "false" ]; then
+            want+=("${image}:${VERSION%.*}" "${image}:latest")
+          fi
+          got=()
+          while IFS= read -r t; do
+            [ -n "$t" ] && got+=("$t")
+          done <<<"$TAGS"
+          # As sets: metadata-action lists `latest` twice for a release (once
+          # from the semver flavor, once from the raw rule; the v0.15.0 log,
+          # run 36728949586, shows both), and each tag is created once anyway.
+          if [ "$(printf '%s\n' "${got[@]}" | sort -u)" != "$(printf '%s\n' "${want[@]}" | sort -u)" ]; then
+            echo "::error::build-image computed tags other than the ones this release owns"
+            printf 'computed: %q\n' "${got[@]}"
+            printf 'expected: %q\n' "${want[@]}"
+            exit 1
+          fi
+          args=()
+          for t in "${want[@]}"; do args+=(-t "$t"); done
+          if [ "$DRY_RUN" = "true" ]; then
+            echo "::notice::DRY RUN -- no tag created. A release would run: docker buildx imagetools create ${args[*]} ${image}@${DIGEST}"
+            echo "(${DIGEST} is the index of the dry-run archive, which was never pushed.)"
+            exit 0
+          fi
+          # Before any tag moves: what create would write must BE that index,
+          # byte for byte. --dry-run prints it (the index JSON, measured on
+          # buildx 0.37 to hash to the source digest once its trailing newline
+          # is dropped, which $( ) does), so a buildx that re-serialised the
+          # index would stop here instead of after :latest had moved.
+          planned="$(docker buildx imagetools create --dry-run "${args[@]}" "${image}@${DIGEST}")"
+          [ "sha256:$(printf '%s' "$planned" | sha256sum | cut -d' ' -f1)" = "$DIGEST" ] ||
+            { echo "::error::imagetools create would write an index other than ${DIGEST}; no tag was moved"; exit 1; }
+          docker buildx imagetools create "${args[@]}" "${image}@${DIGEST}"
+          # Every tag must now name exactly the index smoke-image ran. If this
+          # fails, the tags HAVE moved and npm has published, while
+          # github-release and discord-notify are skipped. Recovery: find
+          # what the tags point at, then re-run the failed jobs of this run
+          # (publish-docker, then github-release) once the cause is known.
+          for t in "${want[@]}"; do
+            d="$(docker buildx imagetools inspect "$t" --format '{{json .Manifest.Digest}}')"
+            [ "$d" = "\"${DIGEST}\"" ] || { echo "::error::${t} points at ${d}, not ${DIGEST}"; exit 1; }
+          done
+          printf 'tagged %s\n' "${want[@]}"
 
   # ─── Notify Discord about the new release ──────────────────────
   discord-notify:

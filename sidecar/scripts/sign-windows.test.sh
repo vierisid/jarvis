@@ -529,20 +529,131 @@ else
 	no "fails when no signature is present" "$out"
 fi
 
-# absent tooling degrades to a warning rather than blocking a local run.
-# Build a minimal PATH holding only what the script needs, so this still
-# exercises the absent case on a machine that HAS osslsigncode installed.
+# --- split signing and verification (#817) ---
+# CI signs in a job holding the Workload Identity token and verifies in a
+# separate job without it, because osslsigncode is an apt package and apt
+# maintainer scripts run as root. --defer-verify signs and leaves the check
+# to that job; --verify-only checks and needs no credential at all.
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 0
+: >"$WORK/argv.log"
+: >"$WORK/verify.log"
+out="$(VERIFY_LOG="$WORK/verify.log" run_sign --defer-verify "$WORK/app.exe" 2>&1)"
+if [ $? -eq 0 ] && [ "$(grep -zc -- '--storetype' "$WORK/argv.log" 2>/dev/null || true)" = 1 ] &&
+	[ ! -s "$WORK/verify.log" ] && [[ "$out" == *"verification deferred"* ]]; then
+	ok "--defer-verify signs, runs no verification, and says the check is deferred"
+else
+	no "--defer-verify signs and defers the check" "$out; verify log: $(tr '\0' ' ' <"$WORK/verify.log")"
+fi
+
+# run_verify_only <file...>: no credentials, no certificate file, no jar.
+run_verify_only() {
+	env -u GCP_KMS_KEYRING -u GCP_KMS_KEY_ALIAS -u GCP_ACCESS_TOKEN \
+		STUB_JAVA_LOG="$WORK/argv.log" CODESIGN_CERT_FILE="$WORK/no-such-chain.pem" \
+		JSIGN_JAR="$WORK/no-such.jar" VERIFY_LOG="${VERIFY_LOG:-/dev/null}" \
+		bash "$SCRIPT" --verify-only "$@"
+}
+: >"$WORK/argv.log"
+: >"$WORK/verify.log"
+out="$(VERIFY_LOG="$WORK/verify.log" SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_verify_only "$WORK/app.exe" "$WORK/second.exe" 2>&1)"
+if [ $? -eq 0 ] && [ ! -s "$WORK/argv.log" ] && [ "$(grep -zc -- 'verify' "$WORK/verify.log" 2>/dev/null || true)" = 2 ] &&
+	[[ "$out" == *"chain trusted"* ]]; then
+	ok "--verify-only verifies every file with no credential, certificate or jar, and signs nothing"
+else
+	no "--verify-only verifies without signing" "$out; java argv: $(tr '\0' ' ' <"$WORK/argv.log")"
+fi
+
+make_osslsigncode "DEADBEEF     MISMATCH!!!" "Jarvis Technologies Inc" "$TS_OK" "$CHAIN_OK" 1
+out="$(run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"does not cover its contents"* ]]; then
+	ok "--verify-only refuses a signature that does not cover the file"
+else
+	no "--verify-only refuses a digest MISMATCH" "$out"
+fi
+
+make_osslsigncode "$GOOD_DIGEST" "Someone Else Ltd" "$TS_OK" "$CHAIN_OK" 0
+out="$(SIGNING_PUBLISHER_CN="Jarvis Technologies Inc" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"Someone Else Ltd"* ]]; then
+	ok "--verify-only asserts the publisher"
+else
+	no "--verify-only asserts the publisher" "$out"
+fi
+
+make_osslsigncode "$GOOD_DIGEST" "Jarvis Technologies Inc" "$TS_OK" "" 1
+out="$(run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"did not fully verify"* ]]; then
+	ok "--verify-only requires a trusted chain by default"
+else
+	no "--verify-only requires a trusted chain by default" "$out"
+fi
+
+out="$(run_verify_only "$WORK/does-not-exist.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"file not found"* ]]; then
+	ok "--verify-only refuses a missing file"
+else
+	no "--verify-only refuses a missing file" "$out"
+fi
+
+# Only 0 or 1: any other spelling used to turn both requirements off.
+for v in yes true " 1" 2; do
+	out="$(SIGN_REQUIRE_TRUSTED_CHAIN="$v" run_verify_only "$WORK/app.exe" 2>&1)"
+	if [ $? -ne 0 ] && [[ "$out" == *"must be 0 or 1"* ]]; then
+		ok "refuses SIGN_REQUIRE_TRUSTED_CHAIN='$v' instead of reading it as off"
+	else
+		no "refuses SIGN_REQUIRE_TRUSTED_CHAIN='$v'" "$out"
+	fi
+done
+
+out="$(run_sign --defer-verify --verify-only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"one option"* ]]; then
+	ok "refuses both modes at once"
+else
+	no "refuses both modes at once" "$out"
+fi
+out="$(run_sign --no-such-option "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"unknown option"* ]]; then
+	ok "refuses an unknown option rather than treating it as a file"
+else
+	no "refuses an unknown option" "$out"
+fi
+
+# Absent tooling. Build a minimal PATH holding only what the script needs,
+# so this still exercises the absent case on a machine that HAS osslsigncode
+# installed.
 rm -f "$WORK/bin/osslsigncode"
 mkdir -p "$WORK/nopath"
 for b in bash env printf mktemp chmod rm grep sed awk cat curl sha256sum tr dirname basename; do
 	src="$(command -v "$b" 2>/dev/null || true)"
 	[ -n "$src" ] && ln -sf "$src" "$WORK/nopath/$b"
 done
+# #817: verification that is required and cannot run is a failure. It used
+# to be a warning and exit 0 even under SIGN_REQUIRE_TRUSTED_CHAIN=1, so a
+# runner without osslsigncode shipped an unverified signature silently.
 out="$(PATH="$WORK/bin:$WORK/nopath" run_sign "$WORK/app.exe" 2>&1)"
-if [ $? -eq 0 ] && [[ "$out" == *"skipping post-sign verification"* ]]; then
-	ok "warns (not fails) when osslsigncode is unavailable"
+if [ $? -ne 0 ] && [[ "$out" == *"osslsigncode is not installed"* ]]; then
+	ok "fails when osslsigncode is unavailable and verification is required (the default)"
 else
-	no "warns when osslsigncode is unavailable" "$out"
+	no "fails when osslsigncode is unavailable and verification is required" "$out"
+fi
+out="$(PATH="$WORK/bin:$WORK/nopath" run_verify_only "$WORK/app.exe" 2>&1)"
+if [ $? -ne 0 ] && [[ "$out" == *"osslsigncode is not installed"* ]]; then
+	ok "--verify-only fails when osslsigncode is unavailable"
+else
+	no "--verify-only fails when osslsigncode is unavailable" "$out"
+fi
+# ...and still only warns for a local experiment that opted out of the
+# trusted-chain requirement.
+out="$(PATH="$WORK/bin:$WORK/nopath" SIGN_REQUIRE_TRUSTED_CHAIN=0 run_sign "$WORK/app.exe" 2>&1)"
+if [ $? -eq 0 ] && [[ "$out" == *"skipping post-sign verification"* ]]; then
+	ok "warns (not fails) when osslsigncode is unavailable under SIGN_REQUIRE_TRUSTED_CHAIN=0"
+else
+	no "warns when osslsigncode is unavailable under SIGN_REQUIRE_TRUSTED_CHAIN=0" "$out"
+fi
+# --defer-verify needs no osslsigncode: the check runs elsewhere.
+out="$(PATH="$WORK/bin:$WORK/nopath" run_sign --defer-verify "$WORK/app.exe" 2>&1)"
+if [ $? -eq 0 ] && [[ "$out" == *"verification deferred"* ]]; then
+	ok "--defer-verify signs on a runner without osslsigncode"
+else
+	no "--defer-verify signs on a runner without osslsigncode" "$out"
 fi
 
 echo
