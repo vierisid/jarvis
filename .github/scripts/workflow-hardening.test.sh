@@ -28,7 +28,8 @@
 #      that is a channel or a range, no global npm install without an exact
 #      version, no `@latest`-style run, no `curl | sh`, the QEMU binfmt and
 #      BuildKit images pinned by digest, and no Bun, Go cache or binfmt image
-#      restored from the Actions cache (writable by any run on main). Both
+#      restored from the Actions cache (writable by any run on main), and
+#      (#680) no SBOM generator image by tag. Both
 #      npm publishers pin the same exact npm, and every Dockerfile base image
 #      is pinned by tag and digest, its Bun bases at BUN_VERSION (#783). Not
 #      checked: setup-node's node-version major (runner tool cache).
@@ -324,6 +325,21 @@ if (rule === "mutable") {
         const image = (opts.find((o) => o.startsWith("image=")) ?? "").slice("image=".length);
         if (!digest.test(image)) out.push(label + ": BuildKit image is not pinned by digest (" + JSON.stringify(image || "default buildx-stable-1") + ")");
       }
+      // #680: an SBOM attestation runs a generator IMAGE inside the build,
+      // with the image filesystem mounted, and its default is the tag
+      // docker/buildkit-syft-scanner:stable-1. Both spellings: the sbom
+      // input (true, or generator=...) and an attests entry of type=sbom.
+      if (/^docker\/(build-push-action|bake-action)@/i.test(uses)) {
+        const specs = [];
+        const sbom = resolve(s.with?.sbom, ...scopes).trim();
+        if (sbom && sbom.toLowerCase() !== "false") specs.push(sbom);
+        for (const a of resolve(s.with?.attests, ...scopes).split("\n"))
+          if (/(?:^|,)\s*type\s*=\s*sbom\b/i.test(a)) specs.push(a);
+        for (const spec of specs) {
+          const g = /(?:^|,)\s*generator\s*=\s*([^,\s]+)/i.exec(spec)?.[1] ?? "";
+          if (!digest.test(g)) out.push(label + ": SBOM generator image is not pinned by digest (" + JSON.stringify(g || "default stable-1") + ")");
+        }
+      }
     }
   }
 }
@@ -603,8 +619,9 @@ if (rule === "pushcache") {
   // #782: a job that pushes an image to a registry builds it cold. The GHA
   // cache is writable by any run on main and by every job in the same run, so
   // a job that both restores from it and pushes can ship layers nobody built
-  // in that job. "Pushes": a build-push or bake step whose push is not false,
-  // a registry login, or a `docker push` / `buildx ... --push` command. Every
+  // in that job. "Pushes": a build-push or bake step whose push is not false
+  // or whose outputs push, a registry login, or a `docker push`,
+  // `buildx ... --push` or `imagetools create` command. Every
   // image build in such a job is held to it, dry-run twins included, so a
   // rehearsal builds what the release does.
   for (const [name, job] of Object.entries(jobs)) {
@@ -612,9 +629,12 @@ if (rule === "pushcache") {
     const u = (st) => String(st.uses ?? "").toLowerCase();
     const isBuild = (st) => /^docker\/(build-push-action|bake-action)@/.test(u(st));
     const runs = steps.map((st) => typeof st.run === "string" ? st.run : "").join("\n");
-    const pushes = steps.some((st) => isBuild(st) && String(st.with?.push ?? "false") !== "false") ||
+    // `outputs: type=image,...,push=true` (or type=registry) pushes as surely
+    // as `push: true` does (#680: build-image pushes by digest that way).
+    const pushes = steps.some((st) => isBuild(st) && (String(st.with?.push ?? "false") !== "false" ||
+        /(?:^|[,\s])push\s*=\s*(?:true|1|t)\b|(?:^|[,\s])type\s*=\s*registry\b/i.test(String(st.with?.outputs ?? "")))) ||
       steps.some((st) => /^docker\/login-action@/.test(u(st))) ||
-      /\bdocker\s+(?:image\s+)?push\b|\bbuildx\s+(?:build|bake)\b[^\n]*--push\b/.test(runs);
+      /\bdocker\s+(?:image\s+)?push\b|\bbuildx\s+(?:build|bake)\b[^\n]*--push\b|\bimagetools\s+create\b/.test(runs);
     if (!pushes) continue;
     for (const [i, st] of steps.entries()) {
       const label = name + ": step " + (st.name ?? st.id ?? st.uses ?? String(i));
@@ -892,27 +912,50 @@ done
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'the gha cache back on the build that pushes (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		$'          push: true\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n' \
-		$'          push: true\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n          cache-from: type=gha\n' \
+		$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
+		$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n          cache-from: type=gha\n' \
 		'restores cache-from "type=gha" in a job that pushes'
 	expect_caught 'the gha cache back on the dry-run twin in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		$'          push: false\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n' \
-		$'          push: false\n          tags: ${{ steps.meta.outputs.tags }}\n          labels: ${{ steps.meta.outputs.labels }}\n          build-args: VERSION=${{ needs.validate-tag.outputs.version }}\n          cache-from: type=registry,ref=ghcr.io/x/y:cache\n' \
+		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n' \
+		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n          cache-from: type=registry,ref=ghcr.io/x/y:cache\n' \
 		'in a job that pushes'
 	expect_caught 'a buildx command line restoring a cache in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		'      - name: Build Docker image (dry run)' $'      - run: docker buildx build --cache-from type=gha --push .\n      - name: Build Docker image (dry run)' \
+		'      - name: Build the image into an OCI archive (dry run)' $'      - run: docker buildx build --cache-from type=gha --push .\n      - name: Build the image into an OCI archive (dry run)' \
 		'runs a build with --cache-from'
 	expect_caught 'the push step spelled in another case, with its cache back (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		$'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          push: true\n' \
-		$'        uses: Docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          cache-from: type=gha\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          push: true\n' \
+		$'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n' \
+		$'        uses: Docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          cache-from: type=gha\n          context: .\n' \
 		'restores cache-from'
 }
-# build-docker keeps its cache on purpose: it pushes nothing. If the rule
-# flagged it, the rule would be wrong, not the workflow.
-if [ -z "$(check pushcache "$WORKFLOWS/release-exec.yml" | grep 'build-docker')" ]; then
-	ok "the validate-only build-docker job, which pushes nothing, may keep its cache"
+# A build that pushes through `outputs:` (push=true, as build-image does since
+# #680) is a push whether or not the job also logs in: with the login removed,
+# the cache coming back must still be reported. (This replaces a check that
+# the validate-only build-docker job could keep its cache: #680 removed that
+# job, and nothing in release-exec.yml uses the cache now.)
+copy="${WORK}/pushcache-nologin.yml"
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+if FROM="$WORKFLOWS/release-exec.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const re = /      # Only when something will be pushed \(#682\): a dry run has no use for\n      # a registry credential on disk\.\n      - name: Log in to GitHub Container Registry\n(?:        .*\n|          .*\n)+?(?=\n)/;
+if (!re.test(s)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(re, ""));
+'; then
+	if grep -q 'docker/login-action' <(sed -n '/^  build-image:/,/^  smoke-image:/p' "$copy"); then
+		no "the build-image login could be removed from the copy"
+	else
+		# shellcheck disable=SC2016 # literal workflow text, not shell.
+		expect_caught 'the gha cache back on a build that pushes only through outputs push=true (#680)' pushcache "$copy" \
+			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
+			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n          cache-from: type=gha\n' \
+			'restores cache-from "type=gha" in a job that pushes'
+		# BuildKit parses the value as a Go bool: 1 and t push too (#680 review).
+		expect_caught 'the gha cache back on a build that pushes through outputs push=1 (#680 review)' pushcache "$copy" \
+			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
+			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=1\n          cache-from: type=gha\n' \
+			'restores cache-from "type=gha" in a job that pushes'
+	fi
 else
-	no "the validate-only build-docker job, which pushes nothing, may keep its cache"
+	no "mutant 'build-image without its login' could be applied (the workflow no longer has the text it mutates)"
 fi
 
 echo
@@ -1019,6 +1062,18 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'BUILDKIT_IMAGE: moby/buildkit:v0.33.1@sha256:' 'BUILDKIT_IMAGE: moby/buildkit:buildx-stable-1 #'
 	expect_caught 'BuildKit back to its default image' mutable "$WORKFLOWS/release-exec.yml" \
 		$'        with:\n          driver-opts: image=${{ env.BUILDKIT_IMAGE }}\n' ''
+	expect_caught 'the SBOM generator back to its default tag on the build that ships (#680)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          sbom: generator=${{ env.SBOM_GENERATOR }}' '          sbom: true' \
+		'SBOM generator image is not pinned by digest'
+	expect_caught 'the SBOM generator back to its default tag on the dry-run twin (#680)' mutable "$WORKFLOWS/release-exec.yml" \
+		$'          sbom: generator=${{ env.SBOM_GENERATOR }}\n          outputs: type=oci' $'          sbom: true\n          outputs: type=oci' \
+		'SBOM generator image is not pinned by digest'
+	expect_caught 'the SBOM generator pin loosened to its tag (#680)' mutable "$WORKFLOWS/release-exec.yml" \
+		'  SBOM_GENERATOR: docker/buildkit-syft-scanner:1.12.0@sha256:' '  SBOM_GENERATOR: docker/buildkit-syft-scanner:stable-1 #' \
+		'SBOM generator image is not pinned by digest ("docker/buildkit-syft-scanner:stable-1")'
+	expect_caught 'an SBOM requested through attests with no generator (#680)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          sbom: generator=${{ env.SBOM_GENERATOR }}' '          attests: type=sbom' \
+		'SBOM generator image is not pinned by digest ("default stable-1")'
 	expect_caught 'a global npm install with no version' mutable "$WORKFLOWS/sidecar-release.yml" \
 		'npm install -g "npm@${NPM_VERSION}"' 'npm install -g npm'
 	expect_caught 'a global npm install of a range' mutable "$WORKFLOWS/sidecar-release.yml" \
@@ -1067,7 +1122,7 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 	expect_caught 'a directory npm publish (runs lifecycle scripts)' narrow "$WORKFLOWS/release-exec.yml" \
 		'npm publish "${RUNNER_TEMP}/brain-pack/${TARBALL}" --access public' 'npm publish --access public'
 	expect_caught 'the digest check removed before the publish' narrow "$WORKFLOWS/release-exec.yml" \
-		'| sha256sum -c -' '| cat'
+		'brain-pack/${TARBALL}" | sha256sum -c -' 'brain-pack/${TARBALL}" | cat'
 	expect_caught 'another global package installed in the npm publish job' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Verify the tarball' $'      - run: npm install -g evil@1.0.0\n      - name: Verify the tarball' \
 		'installs something other than npm'
