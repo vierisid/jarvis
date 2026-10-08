@@ -486,9 +486,11 @@ relaunched browser or a restarted sidecar never hands out a generation an older
 map already used. It travels independently of the `page_url`/`loader_id` pair:
 it names the id map, not the document.
 
-The brain records the newest one per sidecar, copies it onto an approval when a
-`browser_click`, `browser_type` or `browser_hover` card is raised, and sends it
-back as the action's `elem_gen` param when the approved call runs. The sidecar
+The brain records the newest one per sidecar and per reader -- the model loop
+that read it when there is one (#827), else the reader's delivery scope --
+copies it onto an approval when a `browser_click`, `browser_type` or
+`browser_hover` card is raised, and sends it back as the action's `elem_gen`
+param when the approved call runs. The sidecar
 compares it in `refuseStaleElement`, under `elemMu`, before anything else, and
 refuses a mismatch -- or a present-but-malformed value -- with RPC error code
 `BROWSER_SNAPSHOT_SUPERSEDED`, before any CDP command. An absent `elem_gen`

@@ -16,6 +16,15 @@ import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } fr
 import { AsyncLocalStorage } from 'node:async_hooks';
 
 /**
+ * Whether a resumed task buffer holds a browser read whose element ids the
+ * model may act on (#827): a call to one of the two tools that fill the id map.
+ */
+export function historyHoldsBrowserRead(history: LLMMessage[] | undefined): boolean {
+  return (history ?? []).some((m) => m.role === 'assistant'
+    && (m.tool_calls ?? []).some((tc) => tc.name === 'browser_snapshot' || tc.name === 'browser_navigate'));
+}
+
+/**
  * Rebuild a turn's taint from a resumed conversation: every tool call the
  * assistant made earlier in it that reads outside content counts, whether or
  * not its result was wrapped (delegate_task's is not).
@@ -41,6 +50,7 @@ import {
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolsInScope, toolInScope, outOfScopeMessage, type TurnToolScope } from '../actions/tools/tool-scope.ts';
 import { withTurnScopeId } from '../actions/tools/turn-scope-store.ts';
+import { newSnapshotReadLog, withSnapshotReadLog } from '../actions/tools/snapshot-read-log.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
@@ -562,6 +572,11 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts).
+    const turnReads = newSnapshotReadLog();
     const turnScope = scope ?? null;
 
     // Add user message to persistent history
@@ -622,7 +637,7 @@ export class AgentOrchestrator {
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
           this.noteToolUse(ledger, tc.name, turnScope);
-          const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
+          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
           messages.push({
             role: 'tool',
             content: result,
@@ -726,6 +741,13 @@ export class AgentOrchestrator {
     // "ask first, then run it", so the taint is rebuilt from the history
     // instead of starting clean.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts). A resume replays snapshot replies
+    // whose generations were not kept across the pause, so a buffer that
+    // holds one fails closed until the loop snapshots again.
+    const turnReads = newSnapshotReadLog({ resumedWithReads: historyHoldsBrowserRead(opts.history) });
     if (opts.history) seedTaintFromHistory(opts.history, turnTaint, this.toolRegistry);
 
     // Build the running conversation buffer. On a fresh call: system + user
@@ -883,7 +905,7 @@ export class AgentOrchestrator {
           // a registered tool is otherwise admitted and RUN, and on a hosted
           // install the filter does not engage at all (the tier models are
           // frontier-vetoed), so this check is the only thing that refuses.
-          const result = await this.executeTool(tc, opts.signal, turnTaint, turnScope);
+          const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, opts.signal, turnTaint, turnScope));
           toolsExecuted++;
           messages.push({
             role: 'tool',
@@ -1021,6 +1043,11 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
+    // The remote snapshots THIS loop reads, entered around each of its tool
+    // calls, so a browser card it raises binds the snapshot it read and not
+    // the newest one another channel or the voice route took (#827,
+    // actions/tools/snapshot-read-log.ts).
+    const turnReads = newSnapshotReadLog();
     // The public entry point may leave the scope out; everything below it
     // requires the decision to be explicit, so it is made once here.
     const turnScope = scope ?? null;
@@ -1181,7 +1208,7 @@ export class AgentOrchestrator {
           continue;
         }
         this.noteToolUse(ledger, tc.name, turnScope);
-        const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
+        const result = await withSnapshotReadLog(turnReads, () => this.executeTool(tc, undefined, turnTaint, turnScope));
         messages.push({
           role: 'tool',
           content: result,

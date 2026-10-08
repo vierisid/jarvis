@@ -260,7 +260,19 @@ export class ApprovalManager {
     if (!binding || binding.arguments !== request.tool_arguments ||
         binding.registry.get(request.tool_name) !== binding.tool) return null;
     try {
-      return binding.current() ? { registry: binding.registry, reviewed: binding.current.reviewed ?? {} } : null;
+      if (!binding.current()) return null;
+      const reviewed = binding.current.reviewed ?? {};
+      // The model loop that raised the card is carried ONLY while a live gate
+      // in that loop is the one running the call (#827). A deferred row --
+      // created so, or an inline one demoted after its wait timed out -- runs
+      // whenever the person gets to it, often while that loop has moved on
+      // without the result: its navigate would then write the loop's record,
+      // and the loop's next card would bind a page its model never read.
+      if (request.execution_mode !== 'inline' && reviewed.readLog) {
+        const { readLog: _detached, ...rest } = reviewed;
+        return { registry: binding.registry, reviewed: rest };
+      }
+      return { registry: binding.registry, reviewed };
     } catch {
       return null;
     }

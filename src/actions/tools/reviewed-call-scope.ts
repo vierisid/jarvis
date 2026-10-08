@@ -30,6 +30,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import type { SnapshotReadLog } from './snapshot-read-log.ts';
 
 /** The remote snapshot a reviewed element action was approved against. */
 export type ReviewedRemoteSnapshot = {
@@ -53,6 +54,13 @@ export type ReviewedExecution = {
    * the executor's.
    */
   readonly reader?: string;
+  /**
+   * The model loop that raised the card, when it was a main-orchestrator loop
+   * (#827; snapshot-read-log.ts), for the same reason as `reader`: a snapshot
+   * the approved call takes is recorded as that loop's read, so the loop's next
+   * card binds the page the approved navigate returned.
+   */
+  readonly readLog?: SnapshotReadLog;
 };
 
 const store = new AsyncLocalStorage<ReviewedExecution>();
