@@ -54,10 +54,11 @@ export const VOICE_APPROVAL_CONFIDENCE_FLOOR = 0.85;
  *
  *   resolve  — confidence is high enough and the action is safe enough
  *              for voice resolution; proceed with approve/deny.
- *   clarify  — voice resolution refused; emit a clarifier card asking
- *              the user to either repeat (low confidence) or click
- *              (destructive impact). The pending approval STAYS in the
- *              queue and can be resolved via the dashboard.
+ *   clarify  — voice resolution refused; the caller says so in the thread
+ *              and why (`voiceApprovalGatedMessage`, #856): repeat (low
+ *              confidence) or click (destructive impact). The pending
+ *              approval STAYS in the queue and can be resolved via the
+ *              dashboard.
  */
 export type VoiceApprovalGateOutcome =
   | { kind: 'resolve' }
@@ -76,9 +77,10 @@ export type VoiceApprovalGateOutcome =
  *      podcasts, third parties saying "yes" all hit this gate.
  *
  * Returning `clarify` is intentionally not the same as falling through —
- * the caller emits a clarifier card so the user knows the spoken
- * resolution was heard but suppressed (instead of the resolution silently
- * doing nothing).
+ * the caller posts a thread message saying the spoken answer was heard but
+ * decided nothing, and which reason (`voiceApprovalGatedMessage`, #856),
+ * instead of the resolution silently doing nothing. `message` here is not
+ * what the person sees.
  *
  * Exported for unit testing; this is the regression boundary for the
  * "voice approves a destructive action by misheard 'yes'" failure mode.

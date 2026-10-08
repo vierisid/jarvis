@@ -137,6 +137,53 @@ export function voiceApprovalMismatch(
 }
 
 /**
+ * Why voice may not decide this approval at all, though it is the one on
+ * screen (#856): it is destructive, the tool that asked for it requires a
+ * click, or the classifier was not sure the answer was a yes or a no.
+ */
+export type VoiceApprovalGateReason = 'destructive' | 'click_only' | 'low_confidence';
+
+/**
+ * What a gated spoken yes or no gets back (#856), as an assistant message in
+ * the thread like #809's refusals. It used to be a `voice_approval_gated`
+ * notification nothing rendered, so the person said "yes", the daemon
+ * deliberately did nothing, and the dashboard showed nothing either --
+ * indistinguishable from not being heard.
+ *
+ * Each reason says what to do differently, because they differ: a
+ * destructive or click-only request will never take a voice answer, so the
+ * only way is its card; a low-confidence answer was simply unclear, so saying
+ * it again plainly can work.
+ *
+ * That suggestion carries a condition, "while it is still the only request
+ * waiting" (#856 review). A second answer is judged afresh, by what is on
+ * screen when it starts and by the one-pending rule, so it cannot decide a
+ * request the person cannot see; but if this request is decided elsewhere or
+ * expires and another arrives before they speak again, the one on screen --
+ * and so the one a second "yes" answers -- is the new one, not the one this
+ * message names. Every message says nothing was decided and names the
+ * request, quoted like the refusals (`voiceApprovalLabel`).
+ */
+export function voiceApprovalGatedMessage(
+  decision: 'approve' | 'cancel',
+  reason: VoiceApprovalGateReason,
+  request: ApprovalRequest,
+): string {
+  const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
+  const label = voiceApprovalLabel(request);
+  switch (reason) {
+    case 'destructive':
+      return `That request is marked destructive, and destructive requests are decided only with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card.`;
+    case 'click_only':
+      return `That request has to be confirmed with a click, never by voice, so ${nothing}. Waiting for you: ${label}. Approve or deny it on its card.`;
+    case 'low_confidence': {
+      const word = decision === 'approve' ? 'yes' : 'no';
+      return `I wasn't sure that was a clear "${word}", so ${nothing}. Waiting for you: ${label}. Decide it on its card, or, while it is still the only request waiting, say "${word}" again plainly.`;
+    }
+  }
+}
+
+/**
  * Why a spoken yes or no decided nothing when several approvals are pending
  * (#855). The rail lists every one of them, so "yes" says which by position
  * only -- the one on top -- not by which card the person was reading. Voice
@@ -2350,7 +2397,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             // decided, and which request is waiting (#809).
             this.broadcastAssistantAck(resolved.message, requestId);
           } else if (resolved.kind === 'gated') {
-            this.broadcastVoiceApprovalGated(resolved.label, resolved.message, requestId);
+            // In the thread too, and saying which reason (#856).
+            this.broadcastAssistantAck(resolved.message, requestId);
           } else {
             const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
             this.broadcastAssistantAck(`${verb} ${resolved.label}.`, requestId);
@@ -2450,7 +2498,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     shownApprovalId?: string | null,
   ): Promise<
     | { kind: 'approval' | 'clarifier' | 'repeat_back'; label: string }
-    | { kind: 'gated'; label: string; message: string }
+    | { kind: 'gated'; label: string; reason: VoiceApprovalGateReason; message: string }
     | { kind: 'refused'; message: string }
     | null
   > {
@@ -2499,10 +2547,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // non-destructive require confidence ≥ 0.85. Gate decision is a
         // pure helper so it's unit-testable without spinning up the
         // approval pipeline. See gateVoiceApprovalResolution.
-        // A request the gated tool marked click-only (record_skill start)
-        // is treated like a destructive one: the card must be clicked.
+        // A request whose tool marked it click-only (`confirm: 'always'`,
+        // `approvalNeedsClick`) is gated like a destructive one, the card must
+        // be clicked, but reported as click_only (#856): it may not be
+        // destructive at all. Checked first, so a request that is both is
+        // reported as click_only.
         const gate = approvalNeedsClick(latest)
-          ? { kind: 'clarify' as const, reason: 'destructive_impact' as const, message: 'This action requires dashboard confirmation. Please click the approval card.' }
+          ? { kind: 'clarify' as const, reason: 'click_only' as const }
           : gateVoiceApprovalResolution(latest.action_category as ActionCategory, confidence);
         if (gate.kind === 'clarify') {
           // Pending approval STAYS in the queue — user can resolve via
@@ -2519,7 +2570,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             executed: false,
             channel: 'voice',
           });
-          return { kind: 'gated', label, message: gate.message };
+          const why: VoiceApprovalGateReason = gate.reason === 'destructive_impact' ? 'destructive' : gate.reason;
+          return { kind: 'gated', label, reason: why, message: voiceApprovalGatedMessage(decision, why, latest) };
         }
 
         if (decision === 'approve') {
@@ -2664,29 +2716,6 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
-  }
-
-  /**
-   * Broadcast a "voice approval gated" notice — the user's spoken yes/no
-   * was heard but suppressed because either the action is destructive
-   * (always click) or STT confidence was too low (please repeat or click).
-   *
-   * The pending approval STAYS in the queue; this notice tells the UI
-   * to show a transient banner so the user knows their voice didn't
-   * resolve anything (vs silent no-op which would be confusing).
-   */
-  private broadcastVoiceApprovalGated(label: string, message: string, requestId?: string): void {
-    const wsMessage: WSMessage = {
-      type: 'notification',
-      payload: {
-        source: 'voice_approval_gated',
-        label,
-        message,
-      },
-      id: requestId,
-      timestamp: Date.now(),
-    };
-    this.wsServer.broadcast(wsMessage);
   }
 
   /** Broadcast: classifier didn't understand; ask the user to confirm the verbatim transcript. */
