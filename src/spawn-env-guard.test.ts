@@ -133,8 +133,8 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'actions/app-control/linux.ts': {
     reason:
-      'xdotool/wmctrl/xprop via Bun `$`, and import/scrot via Bun.spawn (for a timeout, #802): ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
-      'argv, escaped by Bun `$` for the shell and placed after `--`, which ends xdotool\'s own option ' +
+      'xdotool/wmctrl/xprop/import/scrot via Bun.spawn (for a timeout, #802 and #895), and `which` via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
+      'argv, with no shell, placed after `--`, which ends xdotool\'s own option ' +
       'parsing; key chords are checked against keysym names first (#518). ' +
       'launchApp, the model-chosen executable, is in MODEL_EXEC.',
     calls: {
@@ -143,6 +143,9 @@ const EXEMPT: Record<string, Exemption> = {
       // longer mints the temp path, mkdtemp does. #802 replaced each `$` there
       // with a Bun.spawn one for one, hence the same counts; so did its review, for
       // the xdotool search and xprop lookups in searchWindowIds and findWindowByPid.
+      // #895 did the same for every remaining `$` but checkTool's `which`
+      // (getActiveWindow, listWindows, clickElement, typeText, pressKeys,
+      // focusWindow), one for one, env inherited as before: counts unchanged.
       'LinuxAppController.captureScreen/<anonymous>': 2,
       'LinuxAppController.captureWindow/<anonymous>': 1,
       'LinuxAppController.checkTool': 1,
