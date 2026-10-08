@@ -15,6 +15,7 @@ import {
 import type { ApprovalRequest } from './approval.ts';
 import { UNTRUSTED_OPEN } from '../roles/untrusted.ts';
 import { createRequestApprovalTool } from '../actions/tools/approval-tool.ts';
+import { confusableSkeleton } from './ui-intent.ts';
 import type { SendOptions } from '../comms/channels/telegram.ts';
 
 function makeRequest(overrides?: Partial<ApprovalRequest>): ApprovalRequest {
@@ -622,6 +623,99 @@ describe('#791 review: the toast budget fails closed on widths it cannot know', 
     ['right-to-left letters, which reorder the runs around them', 'Pay 100 to \u05d0\u05d1 then 200 to bob'],
   ])('%s makes the toast review-only (#791 re-review)', (_label, body) => {
     expect(toast(body).approvable).toBe(false);
+  });
+
+  test('#812: a cross-script look-alike is review-only, shown whole with the reason', () => {
+    // `pаypal` with a Cyrillic U+0430: one column per letter, inside the
+    // width allow-list and the budget, so it used to carry Approve.
+    const body = 'Pay 500 EUR to pаypal.com';
+    expect(toastLines(`${body} · external`)).toBe(1);
+    const t = toast(body);
+    expect(t.approvable).toBe(false);
+    expect(t.kind).toBe('approval_review');
+    expect(t.actions.map((a) => a.id)).toEqual(['review', 'dismiss']);
+    expect(t.body).toBe(body);
+    expect(t.meta).toContain('mixes letters from different alphabets');
+    expect(t.meta).not.toContain('too long');
+  });
+
+  test.each([
+    ['a Cyrillic letter inside a Latin word', 'Send the invoice to аccounts'],
+    ['a Greek omicron inside a Latin word', 'Log in to gοogle.com'],
+    ['a whole Cyrillic word that reads as Latin, in a Latin sentence', 'Approve рау for bob'],
+    ['a Latin letter inside a Cyrillic word', 'Отправить oтчёт'],
+  ])('#812: %s is review-only', (_label, body) => {
+    expect(toast(body).approvable).toBe(false);
+  });
+
+  test('#812: the check only ever removes Approve: a review-only toast stays review-only', () => {
+    // Too long AND a look-alike: still the length reason, still cut.
+    const t = toast(`Pay pаypal ${'x'.repeat(200)}`);
+    expect(t.approvable).toBe(false);
+    expect(t.body.endsWith('...')).toBe(true);
+    expect(t.meta).toContain('too long to approve from a notification');
+  });
+
+  test('#812: mixing scripts with nothing confusable stays approvable', () => {
+    // U+0434 and U+0436 have no prototype in the UTS #39 table, and nothing
+    // else in the body maps, so the skeleton is the body itself.
+    const body = 'Send to дж';
+    expect(toast(body).approvable).toBe(true);
+  });
+
+  test.each([
+    ['a Latin click letter for l (U+01C0)', 'Send email to billing@paypaǀ.com'],
+    ['a dotless i (U+0131)', 'Send email to admin@mıcrosoft.com'],
+    ['a Latin letter that reads as a digit (U+01BC for 5)', 'Pay Ƽ00 EUR to bob'],
+    ['a kra for k, whose skeleton is not ASCII (U+0138)', 'Send email to admin@booĸing.com'],
+    ['a superscript digit (U+00B9)', 'Pay ¹00 EUR to bob'],
+    ['a middle-dot l (U+0140)', 'Send email to billing@paypaŀ.com'],
+  ])('#812 review: a look-alike inside one script is review-only: %s', (_label, body) => {
+    // All Latin, so the script-mix half cannot see them; and they fit, so
+    // length is not what makes them review-only.
+    expect(toastLines(`${body} · external`)).toBeLessThanOrEqual(2);
+    const t = toast(body);
+    expect(t.approvable).toBe(false);
+    expect(t.meta).toContain('mixes letters from different alphabets');
+  });
+
+  test('#812 re-review: a one dot leader for a full stop is review-only, its width now unknown', () => {
+    const body = 'Send email to billing@paypal․com';
+    expect(confusableSkeleton('․')).toBe('.');
+    expect(toastColumns('․')).toBeNull();
+    expect(toast(body).approvable).toBe(false);
+    expect(toast(body).kind).toBe('approval_review');
+  });
+
+  test('#812 review: accented and other ordinary Latin letters stay approvable', () => {
+    for (const body of ['Envoyer le résumé à François', 'Grüße an die Straße senden', 'Wyślij raport do Łukasza', 'Send to Søren and Đorđe']) {
+      expect(toast(body).approvable).toBe(true);
+    }
+  });
+
+  test('#812 review: curly quotes and dashes stay approvable, though their skeletons are ASCII', () => {
+    // Ordinary in model-written text; the letter check leaves punctuation out.
+    expect(confusableSkeleton('’')).toBe("'");
+    expect(toast('Don’t send the “report” 9–5').approvable).toBe(true);
+  });
+
+  test('#812 review, the cost: Turkish dotless i and French ligatures beside ASCII are review-only', () => {
+    expect(toast('Dosyayı gönder').approvable).toBe(false);
+    expect(toast('Envoyer le cœur').approvable).toBe(false);
+  });
+
+  test('#812, the cost: a Cyrillic name in an English sentence is review-only too', () => {
+    // Its skeleton differs (`m` -> `rn`, and Cyrillic letters map), and it
+    // mixes scripts. Pinned so the trade is visible, not discovered.
+    expect(toast('Send email to Дмитрий').approvable).toBe(false);
+  });
+
+  test('#812: Japanese mixing kanji and kana is one script for this check', () => {
+    // "Delete the log": katakana, hiragana and kanji, and its skeleton DIFFERS
+    // (U+30ED maps to U+53E3), so only the shared bucket keeps it approvable.
+    const body = 'ログを削除';
+    expect(confusableSkeleton(body)).not.toBe(body);
+    expect(toast(body).approvable).toBe(true);
   });
 
   test('measuring stops once the budget is passed, so a huge body is cheap', () => {

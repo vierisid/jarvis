@@ -190,6 +190,14 @@ describe('notificationApprovalDecision', () => {
     expect(mgr.getRequest(req.id)!.status).toBe('pending');
   });
 
+  test('#812: an approve for a look-alike toast is ignored, though it fits', async () => {
+    const req = create('Pay 500 EUR to pаypal.com');
+    expect(approvalToast(req).kind).toBe('approval_review');
+    expect(await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'approve' }, deps)).toBeNull();
+    expect(mgr.getRequest(req.id)!.status).toBe('pending');
+    expect(executions).toBe(0);
+  });
+
   test('an approve for a toast that showed everything is applied', async () => {
     const req = create('Send the weekly update');
     const outcome = await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'approve' }, deps);

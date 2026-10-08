@@ -6,6 +6,7 @@
 import { APPROVAL_SHORT_ID_LENGTH, approvalIntentFromContext, type ApprovalRequest } from './approval.ts';
 import { boundedReceiptText } from '../roles/untrusted.ts';
 import { commandForCard } from '../util/card-text.ts';
+import { confusableSkeleton } from './ui-intent.ts';
 import type { SendOptions } from '../comms/channels/telegram.ts';
 import { impactFromCategory } from '../roles/authority.ts';
 
@@ -132,8 +133,8 @@ export const TOAST_APPROVABLE_MAX_COLUMNS = 80;
 const TOAST_APPROVABLE_LINES = 2;
 const TOAST_LINE_COLUMNS = TOAST_APPROVABLE_MAX_COLUMNS / TOAST_APPROVABLE_LINES;
 
-/** Precomposed Latin, Greek and Cyrillic letters, ASCII, Latin-1 and the common dashes, quotes and the euro sign: one Latin cell each. Deliberately narrow (#791 review): Letterlike Symbols such as U+213B and per-mille signs render two or three cells wide, and right-to-left letters reorder the runs around them. */
-const ONE_COLUMN = /^[ -~\u00a0-\u024f\u0370-\u03ff\u0400-\u0482\u048a-\u04ff\u1e00-\u1eff\u2010-\u2027\u20ac]$/u;
+/** Precomposed Latin, Greek and Cyrillic letters, ASCII, Latin-1 and the common dashes, quotes and the euro sign: one Latin cell each. Deliberately narrow (#791 review): Letterlike Symbols such as U+213B and per-mille signs render two or three cells wide, and right-to-left letters reorder the runs around them. U+2024 ONE DOT LEADER is left out (#812 re-review): it is the one punctuation mark here whose skeleton is exactly `.`, so `paypal․com` read as a domain; out of the list its width is unknown and the toast is review-only. */
+const ONE_COLUMN = /^[ -~\u00a0-\u024f\u0370-\u03ff\u0400-\u0482\u048a-\u04ff\u1e00-\u1eff\u2010-\u2023\u2025-\u2027\u20ac]$/u;
 /** East Asian Wide/Fullwidth text and the emoji and pictograph blocks: two columns. */
 const TWO_COLUMNS = /^[\u1100-\u115f\u2600-\u27bf\u2e80-\u303e\u3041-\u33ff\u3400-\u4dbf\u4e00-\u9fff\ua000-\ua4cf\uac00-\ud7a3\uf900-\ufaff\ufe30-\ufe4f\uff00-\uff60\uffe0-\uffe6\u{1f300}-\u{1f64f}\u{1f680}-\u{1f6ff}\u{1f900}-\u{1f9ff}\u{1fa70}-\u{1faff}\u{20000}-\u{3fffd}]$/u;
 
@@ -185,6 +186,101 @@ export function toastLines(text: string): number {
   return lines;
 }
 
+/**
+ * Scripts a toast body's letters are written in, for `toastLookAlike`. Han,
+ * kana, Hangul and Bopomofo count as one, since Japanese and Korean mix them
+ * in ordinary text; Common and Inherited letters (modifier letters and the
+ * like) belong to no script; any script not listed counts as `other`.
+ */
+const TOAST_SCRIPTS: ReadonlyArray<[string, RegExp]> = [
+  ['latin', /^\p{Script=Latin}$/u],
+  ['greek', /^\p{Script=Greek}$/u],
+  ['cyrillic', /^\p{Script=Cyrillic}$/u],
+  ['cjk', /^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]$/u],
+];
+const NO_SCRIPT = /^[\p{Script=Common}\p{Script=Inherited}]$/u;
+
+function mixesScripts(text: string): boolean {
+  let first: string | null = null;
+  for (const ch of text) {
+    if (!/^\p{L}$/u.test(ch) || NO_SCRIPT.test(ch)) continue;
+    const script = TOAST_SCRIPTS.find(([, re]) => re.test(ch))?.[0] ?? 'other';
+    if (first === null) first = script;
+    else if (script !== first) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a toast body could be a look-alike (#812): its letters mix scripts
+ * AND its UTS #39 skeleton (`confusableSkeleton`, #794) differs from it, so
+ * some character in it is listed as confusable with another -- `pаypal` with a
+ * Cyrillic `а` is both -- or it holds a non-ASCII letter that reads as ASCII
+ * beside ASCII text (`asciiLookAlike`). Such a toast is review-only.
+ *
+ * The width allow-list admits Greek and Cyrillic letters because they are one
+ * column and legitimate, so on its own it let `pаypal` through: within the
+ * budget, every character of known width, and approvable from the surface
+ * with the least context and the most casual tap.
+ *
+ * Neither half is enough alone. The skeleton maps some ASCII too (`m` ->
+ * `rn`, `I` -> `l`) and NFD-decomposes accents, so it differs from almost any
+ * real sentence; and mixing scripts is ordinary in a name (`Send email to
+ * Дмитрий`). Together they still make that second toast review-only -- a cost
+ * of this check, which only ever removes Approve, never adds it. What it does
+ * not catch is a body written entirely in one non-Latin script that reads as
+ * another (`рау` all in Cyrillic, with no ASCII beside it), or a punctuation
+ * look-alike; the dashboard card, which shows the full request, is the place
+ * for those.
+ */
+export function toastLookAlike(body: string): boolean {
+  return (mixesScripts(body) && confusableSkeleton(body) !== body) || asciiLookAlike(body);
+}
+
+const ASCII_ALNUM = /[A-Za-z0-9]/;
+const PRINTABLE_ASCII = /^[\x20-\x7e]+$/;
+
+/**
+ * A non-ASCII letter or digit whose skeleton is plain ASCII, in a body that
+ * also has ASCII letters or digits (#812 review): a look-alike WITHIN one
+ * script, which `mixesScripts` cannot see. `paypaǀ.com` (U+01C0, a Latin
+ * click letter, for `l`) and `mıcrosoft.com` (U+0131 dotless i) are all Latin,
+ * inside the width allow-list and the budget, and read as the real names.
+ *
+ * Measured over the toast's one-column allow-list: 133 letters and 3 digits
+ * have an ASCII skeleton, most of them Greek and Cyrillic (already caught
+ * above when mixed with Latin), plus the Latin ones that matter here. The
+ * cost: a body that mixes ASCII with `ı` (Turkish), `æ`/`œ` (French ligatures,
+ * skeleton `ae`/`oe`) or `þ` is review-only. Accented letters are not
+ * affected: their skeleton keeps the combining mark, so it is not ASCII.
+ *
+ * Punctuation is left out on purpose: curly quotes and dashes have ASCII
+ * skeletons and are ordinary in model-written text. That leaves punctuation
+ * look-alikes such as U+2024 ONE DOT LEADER for `.` approvable; see the issue
+ * filed with #812.
+ */
+function asciiLookAlike(body: string): boolean {
+  if (!ASCII_ALNUM.test(body)) return false;
+  for (const ch of body) {
+    if (ch <= '\x7f' || !/^[\p{L}\p{N}]$/u.test(ch)) continue;
+    if (LATIN_LOOK_ALIKES.test(ch)) return true;
+    const s = confusableSkeleton(ch);
+    if (s !== ch && PRINTABLE_ASCII.test(s)) return true;
+  }
+  return false;
+}
+
+/**
+ * Letters and digits inside the one-column allow-list that read as ASCII but
+ * whose skeleton is not ASCII, so the rule above cannot see them (#812
+ * re-review, each measured): kra U+0138 (`booĸing`), U+0185 for `b`, the
+ * middle-dot L U+013F/U+0140, the ordinals U+00AA/U+00BA, and the superscript
+ * digits U+00B9/U+00B2/U+00B3. Letters with a mark BELOW (`ạ`, `ḷ`) are still
+ * approvable: flagging them would cost Vietnamese, which is a decision of its
+ * own (filed with #812).
+ */
+const LATIN_LOOK_ALIKES = /^[ĸƅĿŀªº¹²³]$/u;
+
 /** The longest prefix of `text` that fits `max` columns, an unknown width counted wide. */
 function fitColumns(text: string, max: number): string {
   let columns = 0;
@@ -221,6 +317,9 @@ export type ApprovalToast = {
  * (`toastLines`) for the toast to carry Approve and Deny. What follows the impact may be cut
  * by the OS, and is never what the decision is about.
  *
+ * So is a body that fits but could be a cross-script look-alike
+ * (`toastLookAlike`, #812), shown whole with that reason in the meta.
+ *
  * Above the budget the toast is review-only: no Approve, no Deny, an "Open
  * Jarvis" action, the body cut here with a visible `...`, and its own kind,
  * `approval_review`. The kind matters, not just the action list: the macOS
@@ -247,7 +346,11 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
   const impact = impactFromCategory(request.action_category);
   const toolLabel = label(request.tool_name);
   const destructive = impact === 'destructive';
-  const approvable = toastLines(`${body} · ${impact}`) <= TOAST_APPROVABLE_LINES;
+  // The look-alike check runs only on a body that already fits, so it never
+  // walks a long one (toastLines stops with the budget).
+  const fits = toastLines(`${body} · ${impact}`) <= TOAST_APPROVABLE_LINES;
+  const lookAlike = fits && toastLookAlike(body);
+  const approvable = fits && !lookAlike;
   if (approvable) {
     // The reason goes last, after the impact and the tool: it says why
     // approval was needed, and it is the part an OS cut may take.
@@ -258,12 +361,13 @@ export function approvalToast(request: ApprovalRequest): ApprovalToast {
       approvable,
     };
   }
-  // Leave room for the `...` and the ` · <impact>` that follows the body.
+  // Leave room for the `...` and the ` · <impact>` that follows the body. A
+  // look-alike body already fits, so it is shown whole, with the reason.
   const room = TOAST_APPROVABLE_MAX_COLUMNS - `... · ${impact}`.length;
   return {
     id: request.id, kind: 'approval_review', title: `Review in Jarvis: ${tool}`,
-    body: `${fitColumns(body, room).trimEnd()}...`,
-    meta: `${impact} · ${toolLabel} · too long to approve from a notification`, destructive,
+    body: lookAlike ? body : `${fitColumns(body, room).trimEnd()}...`,
+    meta: `${impact} · ${toolLabel} · ${lookAlike ? 'mixes letters from different alphabets, so check it in Jarvis' : 'too long to approve from a notification'}`, destructive,
     actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
     approvable,
   };
