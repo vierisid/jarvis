@@ -30,7 +30,7 @@ function registry(): ToolRegistry {
 }
 
 describe('a trusted trailer survives the approval executor (#708)', () => {
-  test('the receipt carries it separately, and every stored copy keeps the collapsed text', async () => {
+  test('the receipt carries it separately, and the stored row drops it', async () => {
     // Not a UI tool name, so the executor's own path is all that runs: a UI
     // call would also need its card and its guard binding.
     const mgr = new ApprovalManager();
@@ -49,10 +49,33 @@ describe('a trusted trailer survives the approval executor (#708)', () => {
 
     expect(receipt.outside).toBe(PAYLOAD);
     expect(receipt.trailer).toBe(TRAILER);
-    // Unchanged for the row, the notification and the execute route.
+    // Unchanged for the notification and the execute route.
     expect(receipt.result).toBe(PAYLOAD + TRAILER);
-    expect(mgr.getRequest(req.id)!.execution_result).toBe(PAYLOAD + TRAILER);
     expect(notified).toEqual([PAYLOAD + TRAILER]);
+    // The ROW changed on purpose (#829): it used to keep PAYLOAD + TRAILER,
+    // and the inline gate's `executed` fallbacks frame the row whole, so the
+    // directive reached the model inside the block that disclaims it. It is
+    // now absent from the row rather than disclaimed there.
+    expect(mgr.getRequest(req.id)!.execution_result).toBe(PAYLOAD);
+    expect(mgr.getRequest(req.id)!.execution_result).not.toContain(TRAILER.trim());
+  });
+
+  test('a tool returning nothing is still a committed receipt, stored as before (#829 review)', async () => {
+    // Storing `split.outside` for every return made an undefined one throw in
+    // the bound, after the tool had run: a committed effect recorded as failed.
+    const mgr = new ApprovalManager();
+    const req = mgr.createRequest({ agentId: 'a1', agentName: 'PA', toolName: 'quiet_tool', toolArguments: {},
+      actionCategory: 'read_data', urgency: 'normal', reason: 'test', context: '' });
+    mgr.approve(req.id, 'dashboard');
+    const r = new ToolRegistry();
+    r.register({ name: 'quiet_tool', category: 'general', description: 'synthetic', parameters: {},
+      execute: async () => undefined });
+    const ex = new DeferredExecutor(mgr, new AuditTrail());
+    ex.setToolRegistry(r);
+    const receipt = await ex.executeApprovedWithReceipt(req.id);
+    expect(receipt.failed).toBeUndefined();
+    expect(mgr.getRequest(req.id)!.execution_outcome).toBe('committed');
+    expect(mgr.getRequest(req.id)!.execution_result).toBe(receipt.result);
   });
 
   test('a plain return carries no trailer fields', async () => {
@@ -147,6 +170,49 @@ describe('a trusted trailer survives the approval executor (#708)', () => {
     expect(result.length).toBeLessThan(huge.length);
     expect(result.endsWith(TRAILER)).toBe(true);
     expect(result.lastIndexOf(UNTRUSTED_CLOSE)).toBeLessThan(result.indexOf(TRAILER.trim()));
+  });
+
+  test('an inline request another path already ran reaches the model with no trailer in the frame (#829)', async () => {
+    // The `executed` branch: the gate's poll finds the row already executed
+    // (another executor ran it) and frames the STORED receipt. Before #829 the
+    // row held PAYLOAD + TRAILER, so the directive sat inside the block whose
+    // preamble tells the model to follow nothing there.
+    const role = { id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [], tools: ['desktop'],
+      authority_level: 10 } as unknown as RoleDefinition;
+    const approvals = new ApprovalManager();
+    const audit = new AuditTrail();
+    const reg = registry();
+    const orch = new AgentOrchestrator();
+    orch.setToolRegistry(reg);
+    orch.setAuthorityEngine(new AuthorityEngine({ default_level: 10, governed_categories: ['read_data', 'control_app'],
+      overrides: [], context_rules: [], learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' }));
+    orch.setApprovalManager(approvals);
+    orch.setAuditTrail(audit);
+    const gateExecutor = new DeferredExecutor(approvals, audit);
+    gateExecutor.setToolRegistry(reg);
+    orch.setDeferredExecutor(gateExecutor);
+    orch.createPrimary(role);
+    type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<unknown> };
+    const pending = (orch as unknown as Exec).executeTool({ id: 'call', name: 'desktop_launch_app', arguments: {} }, undefined, new Set());
+    let card = approvals.getPending()[0];
+    for (let i = 0; !card && i < 200; i++) {
+      await new Promise((r) => setTimeout(r, 5));
+      card = approvals.getPending()[0];
+    }
+    approvals.approve(card!.id, 'dashboard');
+    // Another surface runs it before the gate's next poll (every 250ms).
+    const other = new DeferredExecutor(approvals, audit);
+    other.setToolRegistry(reg);
+    const elsewhere = await other.executeApprovedWithReceipt(card!.id, 'execute-route');
+    expect(elsewhere.claimed).toBe(true);
+
+    const result = String(await pending);
+    // It really took the `executed` branch: the payload, framed, from the row.
+    expect(approvals.getRequest(card!.id)!.execution_claimed_by).toBe('execute-route');
+    expect(result).toContain(UNTRUSTED_OPEN);
+    expect(result).toContain(PAYLOAD);
+    // And the directive is ABSENT, not disclaimed inside the block.
+    expect(result).not.toContain(TRAILER.trim());
   });
 
   test('a carrier with an empty trailer is framed whole, as a plain return', async () => {

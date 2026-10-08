@@ -245,10 +245,11 @@ export class DeferredExecutor {
       // available at all, which is what burning the slot used to cost.
       const raw = await runAsReviewed(uiExecution?.reviewed,
         () => withoutTemplateDelivery(() => registry.execute(request.tool_name, args)));
-      // Collapsed to one string for every consumer that stores or shows it --
-      // the row, the notification, the execute route -- with any trusted
-      // trailer back in band, where it is framed as data along with the rest
-      // if anything ever frames it. What that cannot do is put attacker text
+      // Collapsed to one string for the consumers that show it -- the
+      // notification and the execute route -- with any trusted trailer back
+      // in band, where it is framed as data along with the rest if anything
+      // ever frames it. The ROW stores the payload without the trailer (#829,
+      // below). What that cannot do is put attacker text
       // OUTSIDE a block, because only trusted code that received a trailer as
       // a trailer ever places one there (roles/untrusted.ts).
       //
@@ -280,7 +281,21 @@ export class DeferredExecutor {
       // rather than only its own payload. The helper rewrites the delimiters to
       // their inert spelling instead, so the row keeps the preamble that says
       // the payload is data and carries no boundary at all.
-      this.approvalManager.markExecuted(requestId, boundedReceiptText(result, RECEIPT_MAX_CHARS), 'committed');
+      //
+      // WITHOUT the trailer (#829). The row is re-read and framed whole by the
+      // inline gate's `executed` fallbacks (orchestrator.ts), so a trailer kept
+      // here reached the model inside the block whose preamble disclaims it --
+      // a repo-authored directive the model is told to ignore. Dropped, it is
+      // simply absent there, which is the better failure: a directive the
+      // model never sees cannot be one it is taught to distrust. Nothing else
+      // reading the row wants it either -- it is addressed to a model, and the
+      // row is a receipt for people and for the commitment that awaited it.
+      // The live receipt below still carries it, separately, for `runApproved`.
+      // Only a TRAILED return changes; every other one stores `result` exactly
+      // as before (a tool returning undefined still stores "undefined", where
+      // `split.outside` would be undefined itself and throw in the bound).
+      const stored = split?.trailer ? split.outside : result;
+      this.approvalManager.markExecuted(requestId, boundedReceiptText(stored, RECEIPT_MAX_CHARS), 'committed');
 
       // Log to audit trail
       this.auditTrail.log({

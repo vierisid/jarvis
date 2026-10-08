@@ -334,11 +334,13 @@ const UNTRUSTED_TOOL_NAMES: ReadonlySet<string> = new Set([
   // before, `DeferredExecution` collapsed the return with `toolReturnText` and
   // landed the trailer back in band.
   //
-  // Still open, filed rather than hidden: the `executed` fallback branches in
-  // orchestrator.ts re-read `execution_result` from the stored receipt, which
-  // holds the trailer in band, so those paths disclaim it again. And a
-  // `success: false` reply's directive cannot ride a trailer at all, because it
-  // arrives as a thrown typed failure rather than a return.
+  // The `executed` fallback branches in orchestrator.ts re-read
+  // `execution_result` from the stored receipt, which used to hold the trailer
+  // in band, so those paths disclaimed it again. Since #829 the executor stores
+  // the receipt WITHOUT the trailer, so there it is absent rather than
+  // disclaimed. Still open, filed rather than hidden: a `success: false`
+  // reply's directive cannot ride a trailer at all, because it arrives as a
+  // thrown typed failure rather than a return (#831).
   //
   // WHERE THE FRAME IS ACTUALLY DRAWN, which is not the ordinary dispatch: all
   // five actuators are in `REVIEWED_UI_TOOLS`, so `rawUiGate` forces

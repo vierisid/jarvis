@@ -1778,7 +1778,10 @@ export class AgentOrchestrator {
             return runApproved();
           case 'executed':
             // Another path already ran it (shouldn't happen for inline
-            // requests; tolerated for robustness). Surface its result.
+            // requests; tolerated for robustness). Surface its result -- the
+            // STORED receipt, which carries no trusted trailer (#829: the
+            // executor drops it there, so it is absent rather than framed and
+            // disclaimed) and is already bounded to RECEIPT_MAX_CHARS.
             return frame(resolved.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`);
           case 'denied':
             return `[APPROVAL DENIED] The user denied permission to execute ${toolCall.name}. ` +
