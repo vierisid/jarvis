@@ -678,8 +678,25 @@ const MARKER_TOKEN = 'UNTRUSTED_CONTENT';
  * Widening is safe because the class only decides what to look THROUGH when
  * hunting the marker: nothing outside a matched span is ever rewritten.
  * Combining marks that render as a visible accent are deliberately not in it.
+ *
+ * And `\p{Cf}` with it (#838): 32 format characters are not
+ * Default_Ignorable (U+0600..U+0605, U+06DD, U+070F, U+0890..U+0891, U+08E2,
+ * U+FFF9..U+FFFB, U+110BD, U+110CD, U+13430..U+1343F), so on the receipt path
+ * `UNTRUSTED` + U+FFFA + `_CONTENT` was not defanged. The class is now the
+ * union `inlineUntrusted` (INLINE_INVISIBLE) and `forCard` strip, plus the
+ * controls.
+ *
+ * Not all of those 32 render as nothing: the 13 prepended concatenation marks
+ * (the Arabic number signs, U+06DD, U+070F, U+0890..U+0891, U+08E2, U+110BD,
+ * U+110CD) draw a visible sign. They are in anyway, as every format character
+ * is: no format character has a reason to sit between the marker's letters,
+ * and tolerating one costs nothing, because only a span that otherwise spells
+ * the marker is ever rewritten. So the in-scope set is case folds, every
+ * format character, every Default_Ignorable code point and the controls;
+ * visible characters that are NOT format characters (a combining accent, a
+ * homoglyph) stay out, as the table in `defangDelimiters` says.
  */
-const IGNORABLE = '[\\p{Default_Ignorable_Code_Point}\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\x9f]';
+const IGNORABLE = '[\\p{Cf}\\p{Default_Ignorable_Code_Point}\\x00-\\x08\\x0b\\x0c\\x0e-\\x1f\\x7f-\\x9f]';
 
 const IGNORABLE_ALL = new RegExp(IGNORABLE, 'gu');
 
@@ -781,8 +798,8 @@ function markerPattern(): RegExp {
  * character or a bidi override, and the two combined. The match tolerates all
  * of them.
  *
- * On the inline path `inlineUntrusted` now strips the whole
- * Default_Ignorable_Code_Point set before calling this (#763), so a marker
+ * On the inline path `inlineUntrusted` now strips every format character and
+ * Default_Ignorable_Code_Point before calling this (#763), so a marker
  * split by an invisible arrives already joined there; the control characters
  * IGNORABLE adds still reach it, because the control mapping runs after.
  * Everywhere else the tolerance is the whole control, because nothing strips
@@ -809,7 +826,9 @@ function markerPattern(): RegExp {
  *
  * WHERE THIS STOPS, and why. Defang the spellings that are indistinguishable
  * from the genuine delimiter once rendered: case folds and invisible
- * splitters. Do NOT chase the spellings that look different on the page --
+ * splitters -- and, since #838, any format character, a few of which do draw
+ * a sign (see IGNORABLE for why that costs nothing). Do NOT chase the
+ * spellings that look different on the page --
  * homoglyphs (Cyrillic Es), fullwidth forms, the `st` ligature, a space or no
  * separator at all, a line break through the middle. The reason is not
  * effort: this function's own output, `UNTRUSTED-CONTENT`, is itself one

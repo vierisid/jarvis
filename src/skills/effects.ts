@@ -108,8 +108,8 @@ const CARD_LABEL_MAX = 80;
 const CARD_VALUE_MAX = 40;
 
 /**
- * Unvetted text, reduced for the card (#706): `forCard` drops every
- * Default_Ignorable code point and the C0/DEL/C1 controls, collapses
+ * Unvetted text, reduced for the card (#706): `forCard` drops every format
+ * character and Default_Ignorable code point (#838) and the C0/DEL/C1 controls, collapses
  * whitespace and caps with a visible `...`. A bidi override in a recorded
  * label would otherwise reorder the rest of the line, including a later
  * `click Send (sends email)`.

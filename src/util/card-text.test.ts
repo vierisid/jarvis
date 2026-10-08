@@ -9,6 +9,7 @@
 
 import { describe, expect, test } from 'bun:test';
 import { commandForCard, escapedLiteralForCard, forCard } from './card-text.ts';
+import { inlineUntrusted } from '../roles/untrusted.ts';
 
 describe('forCard', () => {
   test('it collapses whitespace so a newline cannot hide the sentence', () => {
@@ -25,16 +26,16 @@ describe('forCard', () => {
   });
 
   test('it strips a bidi override that would reorder what the reader sees', () => {
-    // `cv‮gpj.exe` renders as `cvexe.jpg`. The override survives a
+    // `cv\u202egpj.exe` renders as `cvexe.jpg`. The override survives a
     // whitespace collapse and a length cap untouched, so a filename the model
     // chose could make the card describe a different file than the one approved.
-    const out = forCard('/home/me/Documents/cv‮gpj.exe');
+    const out = forCard('/home/me/Documents/cv\u202egpj.exe');
     expect(out).toBe('/home/me/Documents/cvgpj.exe');
-    expect(out).not.toContain('‮');
+    expect(out).not.toContain('\u202e');
   });
 
   test('it strips the other invisible formatting characters', () => {
-    for (const ch of ['​', '‎', '‏', '‪', '‭', '⁦', '⁩', '﻿', '­']) {
+    for (const ch of ['\u200b', '\u200e', '\u200f', '\u202a', '\u202d', '\u2066', '\u2069', '\ufeff', '\u00ad']) {
       expect(forCard(`a${ch}b`), ch.charCodeAt(0).toString(16)).toBe('ab');
     }
   });
@@ -61,6 +62,37 @@ describe('forCard', () => {
     expect(forCard('a\ufe0fb')).toBe('ab');
     expect(forCard('a\u{e0041}\u{e0042}b')).toBe('ab');
     expect(forCard('\u3164\u115f')).toBe('');
+  });
+
+  test('#838: it strips every format character, including the 32 that are not default-ignorable', () => {
+    // Measured from the runtime's own property tables, not listed by hand, so
+    // a Unicode update that moves a character is covered as well.
+    const gap: string[] = [];
+    for (let c = 0; c <= 0x10ffff; c++) {
+      if (c >= 0xd800 && c <= 0xdfff) continue;
+      const ch = String.fromCodePoint(c);
+      if (/^\p{Cf}$/u.test(ch) && !/^\p{Default_Ignorable_Code_Point}$/u.test(ch)) gap.push(ch);
+    }
+    expect(gap.length).toBe(32);
+    for (const ch of gap) {
+      expect(forCard(`pay${ch} 100`), ch.codePointAt(0)!.toString(16)).toBe('pay 100');
+    }
+    // The interlinear annotation the issue named: U+FFF9..U+FFFB around text
+    // that a renderer may show as a ruby gloss, or not at all.
+    expect(forCard('approve \ufff9rm -rf ~\ufffaharmless\ufffb')).toBe('approve rm -rf ~harmless');
+  });
+
+  test('#838: it drops exactly what inlineUntrusted drops as invisible', () => {
+    // The log helper and the card disagreed in both directions before #763
+    // and #838. Every Cf or Default_Ignorable code point, one at a time.
+    for (let c = 0; c <= 0x10ffff; c++) {
+      if (c >= 0xd800 && c <= 0xdfff) continue;
+      const ch = String.fromCodePoint(c);
+      if (!/^[\p{Cf}\p{Default_Ignorable_Code_Point}]$/u.test(ch)) continue;
+      const card = forCard(`a${ch}b`);
+      const inline = inlineUntrusted(`a${ch}b`);
+      if (card !== 'ab' || inline !== 'ab') throw new Error(`U+${c.toString(16)}: card ${JSON.stringify(card)} inline ${JSON.stringify(inline)}`);
+    }
   });
 
   test('it leaves ordinary text, including non-ASCII, alone', () => {

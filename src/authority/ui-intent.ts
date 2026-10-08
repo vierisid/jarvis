@@ -35,8 +35,9 @@ const SETTINGS_RE = /^(save (settings|changes|preferences)|apply|grant|allow acc
  *
  * A third reading is for classification only and never shown: compatibility
  * forms decomposed (NFKD: `Send` in fullwidth letters, accents), marks and
- * every format character dropped (`forCard` keeps the format characters outside
- * Default_Ignorable), the Braille blank read as a space, and punctuation
+ * every format character dropped (since #838 `forCard` drops them too; the
+ * fold keeps its own strip so it does not depend on that), the Braille blank
+ * read as a space, and punctuation
  * trimmed from both ends (`Send.`, `Send...`). It is deliberately aggressive,
  * since it can only add.
  *
