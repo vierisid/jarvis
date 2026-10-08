@@ -71,16 +71,31 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          export LC_ALL=C
           VERSION="$(cat sidecar/installer/VERSION)"
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          # Checked before it becomes an output or reaches any message (#818),
+          # as sidecar-release.yml checks sidecar/VERSION (#684). A newline
+          # here would write extra lines into $GITHUB_OUTPUT, and every job
+          # below takes the value as a tag name and a linker flag, so it must
+          # be a plain semver with nothing a shell or the linker would read
+          # as syntax. LC_ALL=C first: under a UTF-8 locale glibc's [A-Za-z]
+          # and [0-9] match letters and digits outside ASCII.
+          # SemVer 2.0 pre-release identifiers: no empty one, no leading zero
+          # on a numeric one.
+          id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-${id}(\.${id})*)?$ ]]; then
+            printf '::error::sidecar/installer/VERSION is not a plain semver: %q\n' "$VERSION"
+            exit 1
+          fi
           # A tag push must agree with the version file, or the run silently
           # does the wrong thing: a stale file no-ops the whole workflow with a
           # green check, and a mistyped tag publishes under a DIFFERENT tag
-          # than the one pushed.
+          # than the one pushed. Checked before any output is written.
           if [ "${GITHUB_EVENT_NAME}" = "push" ] && [ "${GITHUB_REF_NAME}" != "installer-v${VERSION}" ]; then
-            echo "::error::tag ${GITHUB_REF_NAME} does not match sidecar/installer/VERSION (${VERSION}) — bump the file or retag as installer-v${VERSION}"
+            printf '::error::tag %q does not match sidecar/installer/VERSION (%s) -- bump the file or retag as installer-v%s\n' "$GITHUB_REF_NAME" "$VERSION" "$VERSION"
             exit 1
           fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${DRY_RUN}" = "true" ]; then
             echo "should_release=true" >> "$GITHUB_OUTPUT"
             echo "::notice::Dry run — building/signing installer v${VERSION} without publishing."
@@ -132,6 +147,8 @@ jobs:
           GOOS: windows
           GOARCH: amd64
           CGO_ENABLED: "1"
+          # Checked by resolve (#818); read from its output, not the file.
+          INSTALLER_VERSION: ${{ needs.resolve.outputs.version }}
           # Pins the publisher whose payloads this installer will accept —
           # chain validity alone would accept ANY signed exe. Set it together
           # with the signing credentials; empty means chain-only + a warning.
@@ -147,7 +164,7 @@ jobs:
           # The go tool splits -ldflags on whitespace, so the CN (a company
           # name — always contains spaces) must carry its own quotes through
           # to the linker.
-          LDFLAGS="-s -w -H windowsgui -X main.installerVersion=$(cat installer/VERSION)"
+          LDFLAGS="-s -w -H windowsgui -X main.installerVersion=${INSTALLER_VERSION}"
           LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherCN=${SIGNING_PUBLISHER_CN}'"
           # -trimpath keeps -ldflags out of the embedded build info, so the
           # check below sees the pin only when the -X target really exists.
@@ -312,6 +329,8 @@ jobs:
         working-directory: sidecar
         env:
           CGO_ENABLED: "1"
+          # Checked by resolve (#818); read from its output, not the file.
+          INSTALLER_VERSION: ${{ needs.resolve.outputs.version }}
           # Pins the Developer ID team whose payloads this installer accepts.
           APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
@@ -319,7 +338,7 @@ jobs:
           if [ -z "${APPLE_TEAM_ID}" ]; then
             echo "::warning::APPLE_TEAM_ID repo variable is unset — the installer will accept any Apple-anchored payload."
           fi
-          LDFLAGS="-s -w -X main.installerVersion=$(cat installer/VERSION)"
+          LDFLAGS="-s -w -X main.installerVersion=${INSTALLER_VERSION}"
           LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedTeamID=${APPLE_TEAM_ID}'"
           CC="clang -target arm64-apple-macos11"  CXX="clang++ -target arm64-apple-macos11" \
             GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o /tmp/installer-arm64 ./installer/
@@ -512,8 +531,11 @@ jobs:
             release/Install-Jarvis.dmg
             release/SHA256SUMS
 
+      # The version through env:, never as ${{ }} in the script (#818).
       - name: Dry-run summary
         if: env.DRY_RUN == 'true'
+        env:
+          INSTALLER_VERSION: ${{ needs.resolve.outputs.version }}
         run: |
-          echo "::notice::DRY RUN — built and signed installer v${{ needs.resolve.outputs.version }} without publishing"
+          echo "::notice::DRY RUN -- built and signed installer v${INSTALLER_VERSION} without publishing"
           ls -lh release/

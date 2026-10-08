@@ -32,6 +32,9 @@
 #   publish: sidecar-release.yml publish-sidecar, and installer-release.yml
 #   sign-windows and publish. Each check is executed verbatim against
 #   tampered, extra, missing and undigested fixtures.
+#   Plus (#684, #818) the version gates of sidecar-release.yml and
+#   installer-release.yml, executed verbatim against hostile VERSION files,
+#   and no ${{ }} inside any run: of either workflow.
 #   Plus one sink executed directly -- pack-brain's `npm version` -- with a
 #   hostile value and no validator in front of it, to show the env-quoted form
 #   is safe on its own and not just because the gate stopped the input.
@@ -838,33 +841,50 @@ done
 }
 
 echo
-echo "sidecar-release.yml: no \${{ }} inside run: (#684)"
+echo "sidecar-release.yml and installer-release.yml: no \${{ }} inside run: (#684, #818)"
 # The reusable sidecar workflow runs in the same release, and its publish job
 # holds id-token too. Its versions come from sidecar/VERSION rather than the
-# tag, so the gate above does not cover them; the structure rule does.
+# tag, so the gate above does not cover them; the structure rule does. The
+# installer release reads sidecar/installer/VERSION the same way, and its
+# publish job holds contents: write (#818).
 SIDECAR_WORKFLOW="${SIDECAR_RELEASE_WORKFLOW:-${HERE}/../workflows/sidecar-release.yml}"
-found="$(YQ_FILE="$SIDECAR_WORKFLOW" yq run-expressions)" || {
-	no "sidecar-release.yml run-expression check ran" "the bun helper failed"
-	found=""
-}
-if [ -z "$found" ]; then
-	ok "sidecar-release.yml: every run: takes its values through env:"
-else
-	no "sidecar-release.yml: every run: takes its values through env:" "$found"
-fi
-copy="${WORK}/sidecar-mutant.yml"
-# shellcheck disable=SC2016 # JavaScript source, not shell.
-FROM="$SIDECAR_WORKFLOW" TO="$copy" bun -e '
+INSTALLER_WORKFLOW="${INSTALLER_RELEASE_WORKFLOW:-${HERE}/../workflows/installer-release.yml}"
+for f in "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
+	found="$(YQ_FILE="$f" yq run-expressions)" || {
+		no "$(basename "$f") run-expression check ran" "the bun helper failed"
+		found=""
+	}
+	if [ -z "$found" ]; then
+		ok "$(basename "$f"): every run: takes its values through env:"
+	else
+		no "$(basename "$f"): every run: takes its values through env:" "$found"
+	fi
+done
+# run_expression_mutant <file> <exact text> <replacement>
+run_expression_mutant() {
+	local copy="${WORK}/run-expression-mutant.yml"
+	rm -f "$copy"
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FROM="$1" TO="$copy" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
-const anchor = "npm version \"${VERSION}\" --no-git-tag-version --allow-same-version";
-if (!s.includes(anchor)) process.exit(2);
-await Bun.write(process.env.TO, s.replace(anchor, "npm version \"${{ needs.resolve.outputs.version }}\" --no-git-tag-version --allow-same-version"));
-' || no "the sidecar mutant could be applied (the workflow no longer has the text it mutates)"
-if [ -f "$copy" ] && [ -n "$(YQ_FILE="$copy" yq run-expressions)" ]; then
-	ok "reports: a \${{ }} expression back inside a sidecar-release.yml run:"
-else
-	no "reports: a \${{ }} expression back inside a sidecar-release.yml run:"
-fi
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+' || no "the $(basename "$1") mutant could be applied (the workflow no longer has the text it mutates)"
+	if [ -f "$copy" ] && [ -n "$(YQ_FILE="$copy" yq run-expressions)" ]; then
+		ok "reports: a \${{ }} expression back inside a $(basename "$1") run:"
+	else
+		no "reports: a \${{ }} expression back inside a $(basename "$1") run:"
+	fi
+}
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	run_expression_mutant "$SIDECAR_WORKFLOW" \
+		'npm version "${VERSION}" --no-git-tag-version --allow-same-version' \
+		'npm version "${{ needs.resolve.outputs.version }}" --no-git-tag-version --allow-same-version'
+	run_expression_mutant "$INSTALLER_WORKFLOW" \
+		'echo "::notice::DRY RUN -- built and signed installer v${INSTALLER_VERSION} without publishing"' \
+		'echo "::notice::DRY RUN -- built and signed installer v${{ needs.resolve.outputs.version }} without publishing"'
+}
 
 echo
 echo "sidecar artifacts cross into publish-sidecar with their digests (#781)"
@@ -1237,6 +1257,79 @@ else
 				ok "sidecar resolve rejects $(printf '%q' "$v") under ${UTF8_LOCALE}"
 			else
 				no "sidecar resolve rejects $(printf '%q' "$v") under ${UTF8_LOCALE}" "exit ${RC}; output: ${OUT}"
+			fi
+		done
+	fi
+fi
+
+echo
+echo "installer version gate (installer-release.yml resolve step, executed verbatim) (#818)"
+# The installer version comes from sidecar/installer/VERSION, which no tag gate
+# sees. resolve checks it before it becomes an output, as the sidecar resolve
+# does (#684); run that script against hostile file contents and check what
+# reaches $GITHUB_OUTPUT. A stub gh answers "not released" for the real-run
+# cases, so nothing here touches the network.
+IRESOLVE="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step resolve v)" || IRESOLVE=""
+if [ -z "$IRESOLVE" ]; then
+	no "found installer-release.yml's resolve step"
+else
+	mkdir -p "${WORK}/ibin"
+	printf '#!/usr/bin/env bash\nexit 1\n' >"${WORK}/ibin/gh"
+	chmod +x "${WORK}/ibin/gh"
+	# installer_resolve <file contents> [event] [ref name] [dry run] [locale]: sets RC and OUT.
+	installer_resolve() {
+		rm -rf "${WORK}/ir" && mkdir -p "${WORK}/ir/sidecar/installer"
+		printf '%s' "$1" >"${WORK}/ir/sidecar/installer/VERSION"
+		: >"${WORK}/ir/out"
+		local -a envs=(PATH="${WORK}/ibin:$PATH" GITHUB_OUTPUT="${WORK}/ir/out" GITHUB_REPOSITORY=o/r
+			GITHUB_EVENT_NAME="${2:-workflow_dispatch}" GITHUB_REF_NAME="${3:-main}" DRY_RUN="${4:-true}")
+		[ -n "${5:-}" ] && envs+=(LC_ALL="$5" LANG="$5")
+		(cd "${WORK}/ir" && env -i "${envs[@]}" bash -e -c "$IRESOLVE") >"${WORK}/ir/log" 2>&1
+		RC=$?
+		OUT="$(cat "${WORK}/ir/out")"
+	}
+	for v in 0.3.0 $'0.3.0\n' 1.2.3-rc.1 1.2.3-alpha-1.beta.11 10.20.30; do
+		installer_resolve "$v"
+		if [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=%s\nshould_release=true' "${v%$'\n'}")" ]; then
+			ok "installer resolve accepts $(printf '%q' "$v")"
+		else
+			no "installer resolve accepts $(printf '%q' "$v")" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/ir/log")"
+		fi
+	done
+	for v in '' '1.2' '01.2.3' '1.2.3+build' $'1.2.3\nshould_release=true' $'1.2.3\nversion=9.9.9' "1.2.3\$(touch ${WORK}/pwned)" \
+		"1.2.3\";touch ${WORK}/pwned;\"" '1.2.3|x' '1.2.3/x' '1.2.3-' "1.2.3-rc.1 " '1.2.3-01' '1.2.3-rc..1' $'1.2.3\n::warning::injected'; do
+		rm -f "${WORK}/pwned"
+		installer_resolve "$v"
+		if [ "$RC" -ne 0 ] && [ -z "$OUT" ] && [ ! -e "${WORK}/pwned" ] && grep -qF '::error::sidecar/installer/VERSION is not a plain semver' "${WORK}/ir/log" &&
+			[ "$(grep -c '^::' "${WORK}/ir/log")" -eq 1 ]; then
+			ok "installer resolve rejects $(printf '%q' "$v") without writing outputs"
+		else
+			no "installer resolve rejects $(printf '%q' "$v")" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/ir/log")"
+		fi
+	done
+	# A tag push must name the version in the file; it is compared only once
+	# the file has passed the check above.
+	installer_resolve 1.2.3 push installer-v1.2.3 false
+	if [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=1.2.3\nshould_release=true')" ]; then
+		ok "installer resolve accepts a tag push that matches the file"
+	else
+		no "installer resolve accepts a tag push that matches the file" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/ir/log")"
+	fi
+	installer_resolve 1.2.3 push installer-v1.2.4 false
+	if [ "$RC" -ne 0 ] && grep -qF 'does not match sidecar/installer/VERSION' "${WORK}/ir/log" && ! grep -q '^should_release=' "${WORK}/ir/out"; then
+		ok "installer resolve refuses a tag push that does not match the file"
+	else
+		no "installer resolve refuses a tag push that does not match the file" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/ir/log")"
+	fi
+	if [ -z "$UTF8_LOCALE" ]; then
+		echo "  skip - no en_US.UTF-8 locale on this machine, so the installer locale fixtures cannot run"
+	else
+		for v in $'1.2.3-é' $'١.2.3' $'1.2.3-ａ'; do
+			installer_resolve "$v" workflow_dispatch main true "$UTF8_LOCALE"
+			if [ "$RC" -ne 0 ] && [ -z "$OUT" ]; then
+				ok "installer resolve rejects $(printf '%q' "$v") under ${UTF8_LOCALE}"
+			else
+				no "installer resolve rejects $(printf '%q' "$v") under ${UTF8_LOCALE}" "exit ${RC}; output: ${OUT}"
 			fi
 		done
 	fi
