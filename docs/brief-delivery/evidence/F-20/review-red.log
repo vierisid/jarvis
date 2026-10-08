@@ -1,0 +1,11 @@
+(fail) R2: the last ordinary command can remove and still Undo once at capacity after restart [362.97ms]
+(fail) R2: invalid Undo cannot use receipt-reserved capacity or mutate the removal [356.20ms]
+(fail) R4: a real older draft run finishing while removed cannot change the receipt version [347.23ms]
+(fail) R4: late bookkeeping after Undo keeps the selected draft; explicit authoring selects a new draft [299.13ms]
+(fail) #573 premise 2: the routes out of the workflow data plane are enumerated > only the reviewed files outside src/workflows hold a run or a version object [11.33ms]
+(fail) R3: pending unsigned webhook cannot cross Remove/Undo/Enable [23.26ms]
+(fail) R3: pending signed webhook cannot cross Remove/Undo/Enable [22.15ms]
+ 0 pass
+ 7 fail
+ 10 expect() calls
+Ran 7 tests across 3 files. [1.60s]

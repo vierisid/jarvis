@@ -1,0 +1,41 @@
+[
+  {
+    "variant": "removed-run-fence",
+    "file": "src/workflows/db/workflow-removal-schema.ts",
+    "test": "already queued work",
+    "exit_code": 1,
+    "verdicts": [
+      "(fail) already queued work may finish after removal, without admitting new runs [1177.03ms]",
+      " 0 pass",
+      " 1 fail",
+      " 3 expect() calls",
+      "Ran 1 test across 1 file. [1436.00ms]"
+    ]
+  },
+  {
+    "variant": "undo-paused",
+    "file": "src/brief/workflow-removal.ts",
+    "test": "reverse-order Undo",
+    "exit_code": 1,
+    "verdicts": [
+      "(fail) remove, reload and reverse-order Undo retain exact identities, history and original slots paused [1193.45ms]",
+      " 0 pass",
+      " 1 fail",
+      " 6 expect() calls",
+      "Ran 1 test across 1 file. [1320.00ms]"
+    ]
+  },
+  {
+    "variant": "trigger-generation",
+    "file": "src/workflows/db/repos/workflow-removal-state.ts",
+    "test": "a polling result",
+    "exit_code": 1,
+    "verdicts": [
+      "(fail) a polling result accepted before removal cannot create a run after Undo and explicit re-enable [69.09ms]",
+      " 0 pass",
+      " 1 fail",
+      " 1 expect() calls",
+      "Ran 1 test across 1 file. [160.00ms]"
+    ]
+  }
+]

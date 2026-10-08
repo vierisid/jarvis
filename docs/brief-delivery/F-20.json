@@ -1,0 +1,170 @@
+{
+  "task": "F-20",
+  "title": "Make workflow removal reversible",
+  "date": "2026-10-08",
+  "branch": "brief/f-20",
+  "base_branch": "brief/f-19",
+  "baseline": "4d48f4982e0c5f158e4a59415424299bf32a7020",
+  "main_reviewed": "17eadd7a0182a3173fac5862109b06b27025aa0b",
+  "main_rechecked": "17eadd7a0182a3173fac5862109b06b27025aa0b",
+  "head": "Commit containing this receipt; exact published head and normal hook results recorded in the PR description.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-f-20",
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [],
+    "stack": "User-requested F stack on corrected F19. No unmerged D/Q implementation imported."
+  },
+  "baseline_review": {
+    "pinned": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": [
+      "A17 src/workflows/db/repos/flow.ts",
+      "A13 src/workflows/runtime/effect-boundary.ts"
+    ],
+    "comparison": "Reviewed audit, current main and corrected parent. Main has project-scoped workflow APIs; F20 explicitly scopes its service to the server project. Effect and continuation authority remains unchanged. Final main and parent fetch unchanged. No F20 branch/PR existed at start.",
+    "overlap": "D21 PR #832 owns management presentation; Q06 PR #806 owns trigger/continuation certification and overlaps manager/flow integration. Resolve and rerun both suites during integration.",
+    "parent_ci": "All active checks on F19 4d48f498 pass; conditional checks skipped.",
+    "parent_ci_log": "docs/brief-delivery/evidence/F-20/parent-ci.json"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "255:3795",
+    "visual": "Backend contract only. D21 owns the visible controls; no screenshot or live browser binding claimed."
+  },
+  "activation": {
+    "capability": "workflowRemoval",
+    "flag": "JARVIS_BRIEF_WORKFLOW_REMOVAL=1",
+    "default": "off",
+    "merged": false,
+    "release_enabled": false,
+    "independence": "Exact provider and live trigger runtime required. Durable database fences and reconciliation survive flag rollback."
+  },
+  "implementation": [
+    "Transactional tombstone, DISABLED status, generation fence, stable slot and immutable command outcome. Original flow/version/run/effect evidence retained.",
+    "30-second server-owned Undo receipt restores the same selected identity and slot paused. Explicit Enable uses canonical readiness and CODE permission gates.",
+    "Authenticated no-store complete collection, strict 4096-byte command route and read-only request recovery. Scope/version/revision checks and same-payload idempotency.",
+    "SQLite fences cover legacy and concurrent writers. Trigger generation blocks stale callbacks, delayed polls and late ON_ENABLE installation across Remove/Undo/re-enable.",
+    "Previously accepted queued/running/paused work continues under existing authority and cancellation. Undo does not queue work or replay effects.",
+    "Durable pending trigger reconciliation survives restart and runtime replacement; external unsubscribe remains best effort."
+  ],
+  "limits": {
+    "undo_ms": 30000,
+    "collection_flows_including_removed": 1000,
+    "nonterminal_runs_per_removed_flow": 1000,
+    "snapshot_bytes": 16777216,
+    "command_body_bytes": 4096,
+    "durable_receipts": 10000,
+    "overflow": "Explicit refusal; no partial collection or silent eviction.",
+    "ordinary_command_outcomes": 10000,
+    "reserved_successful_undo_outcomes": 10000,
+    "maximum_total_command_outcomes": 20000
+  },
+  "limitations": [
+    "Removal does not cancel previously accepted queued/running/paused work or undo external effects. Cancellation and effect authority remain separate.",
+    "Local refresh completion does not certify remote unsubscribe; existing trigger manager remote cleanup is best effort.",
+    "No hard purge or restore after expiry. Legacy hard delete for workflows never removed is unchanged.",
+    "D21 production host adapter, receipt hydration and browser integration remain a release gate. Q06 shared-file integration requires both suites.",
+    "No deployment, production activation or F21 implementation. Full repository CI reports separately."
+  ],
+  "rollback": "Unset the flag and restart. Retain schema, draft pins and shared selection view, tombstones, list filtering, SQLite fences and generation checks. A pre-F20 binary must not replace these protections after Remove has been used.",
+  "guide": "docs/brief-workflow-removal.md",
+  "next_task": "F-21 not started",
+  "prior_implementation_verification": {
+    "affected": {
+      "passed": 1010,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 18463,
+      "files": 61,
+      "command_file": "docs/brief-delivery/evidence/F-20/affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-20/affected.log",
+      "timing": "Before final CODE readiness projection correction and transaction indentation; final affected checks cover those changes."
+    },
+    "mutations": {
+      "variants": 3,
+      "expected_failures": 3,
+      "log": "docs/brief-delivery/evidence/F-20/mutations.json",
+      "restoration": "Original bytes restored and checked before passing affected tests."
+    },
+    "d21_probe": {
+      "status": "passed",
+      "validator_revision": "3131564517fe5dd4a9bd136abe688b45b0bf4337",
+      "log": "docs/brief-delivery/evidence/F-20/d21-contract-probe.log",
+      "scope": "Actual D21 validators; list/remove/request recovery/paused Undo/Enable/rejection. Host adapter not bound."
+    },
+    "manual": "Isolated persistent SQLite, second connection and legacy routes; real Worker and trigger manager with local scripted engine, no real provider effects; authenticated panel session over Unix socket.",
+    "guards": "Normal commit hooks required before push; exact results recorded in PR description.",
+    "evidence_policy": "Committed logs include test verdicts only; raw fixture payloads remain local.",
+    "focused": {
+      "passed": 24,
+      "failed": 0,
+      "assertions": 166,
+      "files": 3,
+      "command": "bun test src/brief/workflow-removal.test.ts src/workflows/runner/triggers/workflow-removal.test.ts src/daemon/api-brief-workflow-removal.test.ts",
+      "log": "docs/brief-delivery/evidence/F-20/focused.log"
+    },
+    "final_affected": {
+      "passed": 108,
+      "failed": 0,
+      "assertions": 417,
+      "files": 5,
+      "command_file": "docs/brief-delivery/evidence/F-20/final-affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-20/final-affected.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "command": "bun x tsc --noEmit",
+      "log": "docs/brief-delivery/evidence/F-20/typescript.log"
+    }
+  },
+  "review_fixes": {
+    "reviewed_head": "45fb513bcb8fa4f596fa6b38ba002cdc064c1053",
+    "pull_request": "https://github.com/vierisid/jarvis/pull/848",
+    "R1": "Inventory the authenticated management reader and prove raw trigger inputs, sample data, private metadata and run outputs stay out of its projections.",
+    "R2": "Reserve one successful Undo outcome per durable receipt outside the ordinary command budget. Receipt consumption and outcome recording are atomic; invalid/reused receipts cannot claim the reservation.",
+    "R3": "Capture webhook registration identity and generation before body/HMAC awaits. Replaced registrations return 409; callbacks carry the captured generation.",
+    "R4": "Pin the selected unpublished draft through removal, Undo and late run bookkeeping. Share its selector across reads, readiness/CODE gates and trigger eligibility. Explicit authoring/publication clears the pin.",
+    "schema": "Additive nullable pinned_draft_id, active-receipt backfill, shared selection view and authoring/publication triggers; old F20 schema upgrade covered.",
+    "new_regression_tests": 11,
+    "baseline_reproduction": "Six new behavioral regressions plus the existing CI reader-inventory check failed on the reviewed code before fixes.",
+    "default_off": true,
+    "merged": false
+  },
+  "verification": {
+    "red": {
+      "passed": 0,
+      "failed": 7,
+      "assertions": 10,
+      "files": 3,
+      "expected": "Reviewed-code failures before fixes",
+      "command_file": "docs/brief-delivery/evidence/F-20/review-red-command.txt",
+      "log": "docs/brief-delivery/evidence/F-20/review-red.log"
+    },
+    "focused": {
+      "passed": 46,
+      "failed": 0,
+      "assertions": 235,
+      "files": 4,
+      "command_file": "docs/brief-delivery/evidence/F-20/review-focused-command.txt",
+      "log": "docs/brief-delivery/evidence/F-20/review-focused.log"
+    },
+    "affected": {
+      "passed": 1123,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 18926,
+      "files": 64,
+      "command_file": "docs/brief-delivery/evidence/F-20/review-affected-command.txt",
+      "log": "docs/brief-delivery/evidence/F-20/review-affected.log"
+    },
+    "typescript": {
+      "status": "passed",
+      "command": "bun x tsc --noEmit",
+      "log": "docs/brief-delivery/evidence/F-20/review-typescript.log"
+    },
+    "guards": "Normal commit hooks required before push; exact results and published head recorded in the PR description.",
+    "evidence_policy": "Committed logs include test verdicts only; raw fixture payloads remain local.",
+    "ci": "Full repository CI reports separately on the pushed head; local affected-suite success is not a full-CI claim."
+  }
+}

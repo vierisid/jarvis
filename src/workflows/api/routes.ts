@@ -589,6 +589,7 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
     // is well-formed and the caller is told exactly which grant is missing.
     if (e instanceof CodeStepsRefusedError) return err(e.message, e.status);
     const msg = e instanceof Error ? e.message : String(e);
+    if (['workflow_removed', 'workflow_history_retained'].includes(msg)) return ok({ error: msg, code: msg }, 409);
     if (/not found/i.test(msg)) return err(msg, 404);
     return err(msg, 500);
   }

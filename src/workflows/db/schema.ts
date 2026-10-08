@@ -1,3 +1,4 @@
+import { ensureWorkflowRemovalSchema } from './workflow-removal-schema';
 /**
  * SQLite schema for the Jarvis workflow runtime.
  *
@@ -294,6 +295,7 @@ export function createSchema(db: Database): void {
   db.exec("PRAGMA foreign_keys=ON");
   for (const stmt of STATEMENTS) db.exec(stmt);
   applyAdditiveColumnMigrations(db);
+  ensureWorkflowRemovalSchema(db);
 }
 
 /**

@@ -1,0 +1,1 @@
+bun test src/brief/workflow-removal.test.ts src/workflows/runner/triggers/workflow-removal.test.ts src/workflows/adapters/untrusted-reach.test.ts --test-name-pattern 'R[234]:|only the reviewed files outside'

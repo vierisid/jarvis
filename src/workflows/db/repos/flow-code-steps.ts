@@ -142,9 +142,7 @@ export function assertFlowCodeStepsAllowed(flowId: string, intent: CodeStepInten
   const target = getWorkflowDb()
     .query<{ version_id: string | null }, [string]>(
       `SELECT COALESCE(f.published_version_id,
-                       (SELECT v.id FROM flow_version v
-                         WHERE v.flow_id = f.id AND v.state = 'DRAFT'
-                         ORDER BY v.updated DESC LIMIT 1)) AS version_id
+                       (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = f.id)) AS version_id
          FROM flow f WHERE f.id = ?`,
     )
     .get(flowId);

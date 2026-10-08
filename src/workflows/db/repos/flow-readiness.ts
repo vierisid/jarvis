@@ -125,7 +125,7 @@ function contextFor(flowId: string, ancestors: string[] = [], cache = new Map<st
       if (!target) return 'Select an existing workflow ID in this project';
       const version = db.query<{ trigger: string }, [string]>(
         `SELECT v.trigger FROM flow f JOIN flow_version v ON v.flow_id = f.id AND v.id =
-          COALESCE(f.published_version_id, (SELECT id FROM flow_version WHERE flow_id = f.id AND state = 'DRAFT' ORDER BY updated DESC LIMIT 1))
+          COALESCE(f.published_version_id, (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = f.id))
           WHERE f.id = ?`,
       ).get(id);
       if (!version) return 'Target workflow has no executable version';
@@ -183,7 +183,7 @@ export function assertVersionReady(flowId: string, versionId: string, preview?: 
 }
 export function assertFlowReady(flowId: string): void {
   const row = getWorkflowDb().query<{ version_id: string | null }, [string]>(
-    `SELECT COALESCE(f.published_version_id, (SELECT id FROM flow_version WHERE flow_id = f.id AND state = 'DRAFT' ORDER BY updated DESC LIMIT 1)) AS version_id FROM flow f WHERE id = ?`,
+    `SELECT COALESCE(f.published_version_id, (SELECT version_id FROM brief_workflow_draft_selection WHERE flow_id = f.id)) AS version_id FROM flow f WHERE id = ?`,
   ).get(flowId);
   if (!row) throw new Error('flow not found');
   if (!row.version_id) throw new WorkflowReadinessError({ ready: false, runtimeChecks: [], issues: [{ node: 'trigger', path: 'graph', code: 'VERSION', message: 'Create a workflow version before enabling it' }] });

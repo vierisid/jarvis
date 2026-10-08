@@ -1,3 +1,5 @@
+import { WorkflowRemoval } from '../brief/workflow-removal';
+import { registerWorkflowRemoval } from '../brief/registrations/workflow-removal';
 import { MemoryForget } from '../brief/memory-forget';
 import { registerMemoryForget } from '../brief/registrations/memory-forget';
 import { getMemoryUsageLedger } from '../vault/memory-usage';
@@ -189,6 +191,7 @@ let awarenessService: import('../awareness/service.ts').AwarenessService | null 
 let goalService: import('../goals/service.ts').GoalService | null = null;
 let workflowWorker: WorkflowWorker | null = null;
 let triggerManager: TriggerManager | null = null;
+let briefWorkflowRemoval: WorkflowRemoval | null = null;
 let workflowEngineShutdown: (() => Promise<void>) | null = null;
 let systemCron: import('./system-cron.ts').SystemCronService | null = null;
 let usageAlerts: import('./usage-alerts-service.ts').UsageAlertsService | null = null;
@@ -427,6 +430,8 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
 
     // Stop the trigger manager so no NEW RUN_FLOW jobs get enqueued while we
     // drain (in-flight runs already claimed keep going).
+    briefWorkflowRemoval?.stop();
+    briefWorkflowRemoval = null;
     if (triggerManager) {
       await triggerManager.stop();
       triggerManager = null;
@@ -4999,6 +5004,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefOutcomes = new Outcomes(getDb());
     const briefMemoryUsage = getMemoryUsageLedger();
     const briefMemoryForget = new MemoryForget(getDb());
+    briefWorkflowRemoval = new WorkflowRemoval(getDb());
     const briefMemoryStream = new MemoryStream(getDb(), briefMemoryUsage, briefMemoryForget);
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService });
     const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions, approvalManager, id => {
@@ -5031,6 +5037,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
     if (process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') briefEnabled.push('memoryUsage');
     if (process.env.JARVIS_BRIEF_MEMORY_FORGET === '1') briefEnabled.push('memoryForget');
+    if (process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL === '1') briefEnabled.push('workflowRemoval');
     if (process.env.JARVIS_BRIEF_OUTCOMES === '1') briefEnabled.push('outcomes');
     if (process.env.JARVIS_BRIEF_RECOMMENDATIONS === '1') briefEnabled.push('recommendations');
     if (process.env.JARVIS_BRIEF_DECISION_EDITS === '1') briefEnabled.push('decisionEdits');
@@ -5062,6 +5069,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerMemoryStream(briefMemoryStream),
       ...registerMemoryUsage(briefMemoryUsage),
       ...registerMemoryForget(briefMemoryForget),
+      ...registerWorkflowRemoval(briefWorkflowRemoval),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
@@ -5072,6 +5080,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefMemoryStream,
       briefMemoryUsage,
       briefMemoryForget,
+      briefWorkflowRemoval,
       briefDecisionDocuments,
       briefRecommendations,
       briefConversations,
@@ -5667,6 +5676,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // status flips ENABLED via the v2 API gets reconciled by the route
     // hooks calling `triggerManager.refresh(flowId)`.
     await triggerManager.start();
+    briefWorkflowRemoval.start(triggerManager);
     if (process.env.JARVIS_BRIEF_OPPORTUNITY_ACTIVATION === '1' && process.env.JARVIS_BRIEF_PREPARED_OPPORTUNITIES === '1') {
       briefOpportunityActivation?.configure(briefPreparedOpportunities!, triggerManager);
       briefOpportunityActivation?.start();
