@@ -8,7 +8,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
 import type { HealthMonitor } from './health.ts';
-import { applyApprovalDecision, applyExecutionResolution } from './approval-decision.ts';
+import { applyApprovalDecision, applyExecutionResolution, heldApprovalMessage } from './approval-decision.ts';
 import { executionState } from '../authority/approval.ts';
 import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
 import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
@@ -34,6 +34,7 @@ import type { EmergencyController } from '../authority/emergency.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { applyQuickOverride } from '../authority/quick-override.ts';
 import type { ActionCategory } from '../roles/authority.ts';
+import { authorityConfigPatchError, isActionCategory } from '../authority/config-validation.ts';
 
 import { findEntities, getEntity, searchEntitiesByName, createEntity } from '../vault/entities.ts';
 import { findFacts, createFact, FactInputError } from '../vault/facts.ts';
@@ -3182,10 +3183,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           approvalManager: ctx.approvalManager,
           deferredExecutor: ctx.deferredExecutor,
           wsService: ctx.wsService,
+          auditTrail: ctx.auditTrail,
         });
         if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
+        if (outcome.status === 'held') return error(heldApprovalMessage(outcome.state), 409);
         if (outcome.status !== 'approved') return error('Unexpected decision outcome', 500);
-        return json({ ok: true, result: outcome.result.slice(0, 500) });
+        // What the receipt says happened, so a refused or failed run does not read as done (Q-08).
+        return json({ ok: true, result: outcome.result.slice(0, 500), state: executionState(outcome.request) });
       },
     },
 
@@ -3198,6 +3202,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           approvalManager: ctx.approvalManager,
           deferredExecutor: ctx.deferredExecutor,
           wsService: ctx.wsService,
+          auditTrail: ctx.auditTrail,
         });
         if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
         return json({ ok: true });
@@ -3726,6 +3731,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
         try {
           const body = await req.json() as Record<string, unknown>;
+          // Checked before anything is applied: a level that is not a number
+          // used to pass every level check (Q-08).
+          const invalid = authorityConfigPatchError(body);
+          if (invalid) return error(invalid);
           const currentConfig = ctx.authorityEngine.getConfig();
 
           // Merge updates into current config
@@ -3854,6 +3863,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const body = await req.json() as { action: ActionCategory; tool_name: string };
           if (!body.action) return error('Missing "action" field');
+          // Only a suggestion the learner actually made can be accepted: this
+          // writes an "always allow" override (Q-08).
+          if (!isActionCategory(body.action)) return error('Unknown action category');
+          if (!ctx.learner.getSuggestions().some((s) => s.actionCategory === body.action)) {
+            return error('There is no learning suggestion for that action');
+          }
 
           // Add the override to the engine
           ctx.authorityEngine.addOverride({
@@ -3868,10 +3883,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // Persist
           const { saveUserSection } = await import('./user-settings.ts');
           const freshConfig = ctx.config;
+          // Only the overrides this accept changed: persisting the whole engine
+          // config also wrote its copy of the emergency state, which could
+          // turn a Kill back to normal across a restart (Q-08).
           freshConfig.authority = {
             ...freshConfig.authority,
-            ...ctx.authorityEngine.getConfig(),
-          };
+            overrides: ctx.authorityEngine.getConfig().overrides,
+          } as typeof freshConfig.authority;
           saveUserSection('authority', freshConfig.authority);
 
           return json({ ok: true });

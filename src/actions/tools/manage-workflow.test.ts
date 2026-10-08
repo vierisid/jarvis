@@ -190,6 +190,22 @@ describe("manage_workflow tool", () => {
     expect(inspected.steps).toEqual({ send: { output: { receipt: "fake-delivery-1" } } });
   });
 
+  test("a run asked for in chat while Jarvis is paused is refused, saying why (Q-08)", async () => {
+    const { EmergencyController, setActiveEmergencyController } = await import("../../authority/emergency.ts");
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    try {
+      await call("create", { name: "held", empty: true });
+      controller.pause();
+      await expect(call("run", { flow: "held" })).rejects.toThrow(/Jarvis is paused/);
+      expect(queueStats().queued).toBe(0);
+      controller.resume();
+      expect(await call("run", { flow: "held" })).toMatchObject({ status: "QUEUED" });
+    } finally {
+      setActiveEmergencyController(null);
+    }
+  });
+
   test("enable / disable round-trip", async () => {
     await call("create", { name: "toggle", empty: true });
     let st = (await call("enable", { flow: "toggle" })) as { status: string };

@@ -12,6 +12,8 @@ import { getFlow } from '../workflows/db/repos/flow.ts';
 import { getFlowVersion } from '../workflows/db/repos/flow-version.ts';
 import { createFlowRun, type FlowRun } from '../workflows/db/repos/flow-run.ts';
 import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
+import { assertCodeStepsAllowed } from '../workflows/db/repos/flow-code-steps';
+import { manualStartRefusal } from '../workflows/runtime/emergency-hold';
 import { enqueue } from '../workflows/db/repos/job-queue.ts';
 
 /** The real plan-to-execution bridge. All writes share the vault transaction. */
@@ -28,12 +30,18 @@ export function startWorkItemRun(workItemId: string, workflowId: string): FlowRu
       return work.run;
     }
     if (work.blocker || work.resultCheck) throw new WorkItemError('Work is blocked or already checked', 409);
+    // Pause holds and Kill stops: no new run (Q-08).
+    const held = manualStartRefusal();
+    if (held) throw new WorkItemError(held, 409);
     const flow = getFlow(workflowId);
     const version = getFlowVersion(work.workflowVersionId);
     if (!flow || !version || version.flowId !== workflowId || version.state !== 'LOCKED') {
       throw new WorkItemError('The accepted workflow version is unavailable', 409);
     }
     assertVersionReady(workflowId, version.id);
+    // Locking a version does not check CODE steps the way publishing does, so
+    // the grant is checked here as at every other start (Q-08).
+    assertCodeStepsAllowed(workflowId, version.id, 'run');
     const run = createFlowRun({
       flowId: workflowId, flowVersionId: version.id, environment: 'PRODUCTION',
       triggeredBy: `work_item:${work.id}:decision:${work.decision.id}`, startTime: Date.now(),

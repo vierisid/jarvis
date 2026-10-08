@@ -197,13 +197,52 @@ describe('workflow effect boundary', () => {
       await expect(f.invoke()).rejects.toThrow(/denied/i);
       expect(f.calls).toHaveLength(0);
     });
-    for (const state of ['pause', 'kill'] as const) test(`${route}: ${state} prevents the effect`, async () => {
+    test(`${route}: kill prevents the effect`, async () => {
       const f = fixture(route);
-      f.emergency[state]();
-      await expect(f.invoke()).rejects.toThrow(/paused|killed/i);
+      f.emergency.kill();
+      await expect(f.invoke()).rejects.toThrow(/killed/i);
       expect(f.calls).toHaveLength(0);
     });
+    test(`${route}: pause holds the effect, and Resume lets it run (Q-08)`, async () => {
+      const f = fixture(route);
+      f.emergency.pause();
+      const held = await f.invoke() as { approval?: { hold?: string } };
+      expect(held.approval?.hold).toMatch(/paused/i);
+      expect(f.calls).toHaveLength(0);
+      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'pending' });
+      f.emergency.resume();
+      expect((await f.invoke() as { approval?: unknown }).approval).toBeUndefined();
+    });
   }
+
+  test('a step that needs approval, reached while paused, raises no card until Resume (Q-08)', async () => {
+    const f = fixture(); f.authority.setGovernedCategories(['write_data']);
+    f.emergency.pause();
+    expect((await f.invoke()).approval?.hold).toMatch(/paused/i);
+    expect(f.approvals.getPending()).toHaveLength(0);
+    f.emergency.resume();
+    expect((await f.invoke()).approval?.approvalId).toBeTruthy();
+    expect(f.approvals.getPending()).toHaveLength(1);
+  });
+
+  test('a Pause pressed while a card is delivered holds the step, even approved meanwhile (Q-08)', async () => {
+    const f = fixture(); f.authority.setGovernedCategories(['write_data']);
+    f.options.onWorkflowApproval = (request) => { f.approvals.approve(request.id, 'dashboard'); f.emergency.pause(); };
+    expect((await f.invoke()).approval?.hold).toMatch(/paused/i);
+    expect(f.calls).toHaveLength(0);
+    f.emergency.resume();
+    await f.invoke();
+    expect(f.calls).toHaveLength(1);
+  });
+
+  test('a stale copy of the state in the engine config does not keep workflows blocked after Resume (Q-08)', async () => {
+    const f = fixture();
+    // What a boot while paused left behind: the engine's copy says paused,
+    // the controller -- the one source of truth -- was resumed.
+    f.authority.updateConfig({ ...f.authority.getConfig(), emergency_state: 'paused' });
+    await f.invoke();
+    expect(f.calls).toHaveLength(1);
+  });
 
   test('context reads and prompts are recorded as durable effects, not passed straight through', async () => {
     const ctx = fixture('context');
@@ -305,6 +344,15 @@ describe('workflow effect boundary', () => {
         if (outcome === 'pause' || outcome === 'kill') f.emergency[outcome]();
         if (outcome === 'policy-change') f.authority.addOverride({ action: 'write_data', allowed: false });
         if (outcome === 'canceled') updateRun(f.run.id, { status: 'STOPPED' });
+      }
+      if (outcome === 'pause') {
+        // Pause holds the approved effect before its claim; Resume runs it once (Q-08).
+        expect((await f.invoke()).approval?.hold).toMatch(/paused/i);
+        expect(f.calls).toHaveLength(0);
+        f.emergency.resume();
+        await f.invoke();
+        expect(f.calls).toHaveLength(1);
+        return;
       }
       await expect(f.invoke()).rejects.toThrow();
       expect(f.calls).toHaveLength(0);
@@ -414,16 +462,17 @@ describe('workflow effect boundary', () => {
     expect(listWorkflowEffects(f.run.id)[0]!.target).toMatchObject({ recipients: { telegram: 'recipient-at-review' } });
   });
 
-  test('emergency during notification fan-out blocks later channels and records partial delivery', async () => {
+  test('a Kill during notification fan-out blocks later channels and records partial delivery', async () => {
     const f = fixture('notify');
     const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
-    (ws as any).wsServer.broadcast = () => { f.calls.push('dashboard'); f.emergency.pause(); };
+    // Kill stops work in flight; a Pause lets it finish (Q-08).
+    (ws as any).wsServer.broadcast = () => { f.calls.push('dashboard'); f.emergency.kill(); };
     ws.setChannelService({ broadcastToAll: async () => { f.calls.push('unapproved-recipient'); } } as any);
     f.options.wsService = ws;
     const reply = await f.backends.notify!({ message: 'hello', channels: ['dashboard', 'telegram'], priority: 'high' }, f.context);
     expect(reply.delivered).toEqual(['dashboard']);
     expect(reply.failed[0]).toMatchObject({ channel: 'telegram' });
-    expect(reply.failed[0]!.error).toContain('paused');
+    expect(reply.failed[0]!.error).toContain('killed');
     expect(f.calls).toEqual(['dashboard']);
     expect(listWorkflowEffects(f.run.id)[0]!.result).toEqual(reply);
   });
@@ -460,18 +509,18 @@ describe('workflow effect boundary', () => {
     let refusal: string | null = null;
     // Deep dispatch points (TTS chunks, channel adapters) only have
     // `checkpointExecution()`. Inside a governed effect that has to refuse on
-    // emergency state too, or a pause mid-fan-out would go unnoticed.
+    // emergency state too, or a Kill mid-fan-out would go unnoticed.
     f.registry.unregister('write_file');
     f.registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
       execute: async () => {
-        f.emergency.pause();
+        f.emergency.kill();
         try { checkpointExecution(); } catch (error) { refusal = (error as Error).message; throw error; }
-        f.calls.push('dispatched-after-pause');
+        f.calls.push('dispatched-after-kill');
         return 'saved';
       } });
     await expect(f.backends.toolsInvoke!({ toolName: 'write_file',
-      params: { path: '/tmp/synthetic', content: 'hello' } }, f.context)).rejects.toThrow(/paused/i);
-    expect(refusal).toMatch(/paused/i);
+      params: { path: '/tmp/synthetic', content: 'hello' } }, f.context)).rejects.toThrow(/killed/i);
+    expect(refusal).toMatch(/killed/i);
     expect(f.calls).toHaveLength(0);
   });
 

@@ -144,21 +144,23 @@ in its realtime session (a response in flight, or mic audio in the last 2s): the
 clip would talk over the model and the open mic would feed it back in. Only the
 audio is skipped.
 
-### Phase 3 - auto-approve tool bridge
+### Phase 3 - tool bridge
 
-`orchestrator.executeRealtimeToolCall` mirrors the text-path authority gate but
-**auto-approves**: a `requiresApproval` decision is executed so the audio loop is
-never blocked on a dashboard click. Still enforced:
+`orchestrator.executeRealtimeToolCall` mirrors the text-path authority gate
+without blocking the audio loop on a decision. A call that needs approval is
+**not run**: it leaves an approval card on the dashboard and in chat, like any
+other request, and the model tells the user it is waiting there (Q-08, owner
+decision, 7 October; this replaced the original auto-approve, decision #2).
+Also enforced:
 
 - emergency state,
 - explicit hard denies,
-- the `blocked_categories` backstop.
+- the `blocked_categories` backstop,
+- a card that must be clicked (`confirm: 'always'`) is refused outright.
 
-Every realtime tool call is written to the audit trail tagged `channel: 'voice'`;
-an auto-approved call is logged as `approval_required` + `executed: true` so the
-trail shows no human confirmed it.
+Every realtime tool call is written to the audit trail tagged `channel: 'voice'`.
 
-**Safe defaults.** Because the mic is open and tools auto-approve, the backstop
+**Safe defaults.** Because the mic is open, the backstop
 must be safe by default. When `blocked_categories` is unset it defaults to every
 `destructive`-impact action category (`DEFAULT_BLOCKED_CATEGORIES`): payments,
 deletes, shell exec, software installs, settings changes, agent termination.

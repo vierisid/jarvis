@@ -6,6 +6,7 @@ import { continueIfFailureHandler, runWithExponentialBackoff } from '../helper/e
 import { utils } from '../utils'
 import { ActionHandler, BaseExecutor } from './base-executor'
 import { runProgressService } from './run-progress'
+import { authorizePieceDispatch, CODE_STEP_PIECE } from '../../../../../../../runtime/piece-effect-guard'
 
 export const codeExecutor: BaseExecutor<CodeAction> = {
     async handle({
@@ -43,6 +44,25 @@ const executeAction: ActionHandler<CodeAction> = async ({ action, executionState
 
         if (isNil(constants.runEnvironment)) {
             throw new EngineGenericError('RunEnvironmentNotSetError', 'Run environment is not set')
+        }
+
+        // Jarvis: a CODE step has no Authority adapter -- it runs only in a
+        // workflow granted CODE steps -- but it obeys Pause and Kill (Q-08):
+        // paused, it parks until Resume; stopped, it does not run.
+        const admission = await authorizePieceDispatch({
+            apiUrl: constants.internalApiUrl,
+            engineToken: constants.engineToken,
+            piece: CODE_STEP_PIECE,
+            action: 'run',
+            stepName: action.name,
+            executionPath: executionState.currentPath.path,
+            input: {},
+        })
+        if ('dispatch' in admission && admission.dispatch === 'held') {
+            return executionState
+                .upsertStep(action.name, stepOutput.setOutput({ approval: admission.approval }).setStatus(StepOutputStatus.PAUSED).setDuration(performance.now() - stepStartTime))
+                .incrementStepsExecuted()
+                .setVerdict({ status: FlowRunStatus.PAUSED })
         }
 
         const artifactPath = path.resolve(`${constants.baseCodeDirectory}/${constants.flowVersionId}/${action.name}/index.js`)

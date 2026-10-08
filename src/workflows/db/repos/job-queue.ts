@@ -317,6 +317,19 @@ export function recoverOrphanedJobs(): number {
   })();
 }
 
+/**
+ * Put a claimed job back in the queue as if it had never been claimed: it
+ * did not start, so it keeps its attempt and is not taken for a replay
+ * (Q-08: a job claimed just as Jarvis was paused waits for Resume).
+ */
+export function releaseJob(id: string): boolean {
+  return db().run(
+    `UPDATE workflow_job SET status = 'QUEUED', attempt = MAX(attempt - 1, 0), locked_until = NULL, updated = ?
+     WHERE id = ? AND status = 'RUNNING'`,
+    [nowMs(), id],
+  ).changes > 0;
+}
+
 export function completeJob(id: string): void {
   const ts = nowMs();
   const res = db().run(

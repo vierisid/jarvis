@@ -1,3 +1,4 @@
+import { stopUnfinishedRunsForKill } from './emergency-hold';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -86,7 +87,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
     ...(opts.writeGate ? { authorityGate: () => opts.writeGate!() } : {}),
     ...(opts.writeFreeze ? { freezeArguments: (p: Record<string, unknown>) => ({ ...p, frozen: true }) } : {}),
-    execute: async (p: Record<string, unknown>) => { writes.push(p); effects++; if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.pause(); checkpointExecution(); } return 'saved'; } });
+    execute: async (p: Record<string, unknown>) => { writes.push(p); effects++; if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.kill(); checkpointExecution(); } return 'saved'; } });
   registry.register({ name: 'read_file', category: 'file-ops', description: 'Synthetic read', parameters: {},
     execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); if (opts.readCancels) cancelFlowRun(ids.run.id); return 'contents'; } });
   registry.register({ name: 'run_script', category: 'terminal', description: 'Synthetic command', parameters: {}, execute: async () => { effects++; return 'ran'; } });
@@ -515,22 +516,34 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(f.effects()).toBe(1);
   });
 
-  test('an emergency during resume blocks the pending call for good, and the agent sees the denial', async () => {
+  test('a Kill during resume stops the delegation, and Reset does not revive it (Q-08)', async () => {
+    const ids = createRun();
+    const f = backends(ids);
+    const parked = await f.delegate({ requiredTools: ['write_file'] });
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    f.emergency.kill();
+    // The delegation's own recorded authorization is not handed out again.
+    await expect(f.delegate({ requiredTools: ['write_file'] })).rejects.toThrow(/system killed/);
+    // What the daemon does on Kill: the run is stopped, so nothing resumes it.
+    stopUnfinishedRunsForKill();
+    f.emergency.reset();
+    await expect(f.delegate({ requiredTools: ['write_file'] })).rejects.toThrow();
+    expect(f.effects()).toBe(0);
+  });
+
+  test('a Pause during resume holds the pending call, and Resume lets it run once (Q-08)', async () => {
     const ids = createRun();
     const f = backends(ids);
     const parked = await f.delegate({ requiredTools: ['write_file'] });
     f.approvals.approve(parked.approval!.approvalId, 'test');
     f.emergency.pause();
+    const held = await f.delegate({ requiredTools: ['write_file'] });
+    expect(held.approval?.hold).toMatch(/paused/i);
+    expect(f.effects()).toBe(0);
+    f.emergency.resume();
     const done = await f.delegate({ requiredTools: ['write_file'] });
     expect(done.status).toBe('completed');
-    expect(done.toolCalls[0]!.error).toMatch(/^\[APPROVAL DENIED\] write_file: Workflow effect blocked: system paused/);
-    expect(done.outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED' });
-    expect(f.effects()).toBe(0);
-    // The boundary finalized the effect as blocked, as it does for a direct tool; clearing the emergency does not revive it.
-    expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'blocked', decision: 'denied' });
-    f.emergency.resume();
-    expect(await f.delegate({ requiredTools: ['write_file'] })).toEqual(done);
-    expect(f.effects()).toBe(0);
+    expect(f.effects()).toBe(1);
   });
 
   test('a refusal that leaves the effect untouched is this run\'s error, and the checkpoint keeps its state', async () => {
@@ -634,7 +647,7 @@ describe('delegated approvals through the workflow effect boundary', () => {
     const done = await f.delegate({ requiredTools: ['write_file'] });
     expect(done.status).toBe('completed');
     expect(done.toolCalls[0]!.error).not.toMatch(/APPROVAL DENIED/);
-    expect(done.toolCalls[0]!.error).toContain('system paused');
+    expect(done.toolCalls[0]!.error).toContain('system killed');
     expect(done.outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED', effect: 'may_have_occurred' });
     expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'failed', outcome: { code: 'TOOL_FAILED', effect: 'may_have_occurred' } });
     // The approval row is not the receipt for a workflow effect; the effect record is (A4 leaves workflow-owned rows to it).

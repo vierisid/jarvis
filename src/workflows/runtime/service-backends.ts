@@ -50,6 +50,10 @@ import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
+import { CODE_STEP_PIECE, type PieceAuthorizeRequest, type PieceAuthorizeResponse } from './piece-effect-guard';
+import { holdStep, KILLED_REASON, PAUSED_REASON } from './emergency-hold';
+import { getFlowRun } from '../db/repos/flow-run';
+import { boundedReceiptText } from '../../roles/untrusted';
 import { evaluateLlmOutput } from './llm-output-contract';
 import { withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
@@ -598,9 +602,34 @@ export function buildSandboxServiceBackends(
    * arguments, the version or the Authority decision invalidates the record and
    * stops the dispatch.
    */
+  /**
+   * A step with no Jarvis adapter: a community piece the owner installed from
+   * the Library, or a CODE step in a workflow granted them. It stays outside
+   * Authority by those opt-ins, but it obeys Pause and Kill and leaves an
+   * audit row when it is let run (Q-08). Its input is never sent here.
+   */
+  const admitUngovernedStep = (req: PieceAuthorizeRequest, ctx: WorkflowEffectContext): PieceAuthorizeResponse => {
+    const run = getFlowRun(ctx.runId);
+    if (!run || run.projectId !== ctx.projectId) throw new Error('Workflow step identity does not match the run');
+    if (run.status !== 'RUNNING') throw new Error(`Workflow step blocked: run is ${run.status}`);
+    const state = opts.emergencyController?.getState() ?? 'normal';
+    if (state === 'killed') throw new Error(KILLED_REASON);
+    const stepName = boundedReceiptText(ctx.stepName ?? 'unknown step', 120);
+    if (state === 'paused') {
+      const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
+      return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
+    }
+    try {
+      opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
+        tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,
+        action_category: 'execute_command', authority_decision: 'allowed', approval_id: null, executed: true });
+    } catch (error) { console.error('[Workflow Authority] step audit failed:', error); }
+    return { governed: false };
+  };
+
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
     const resolved = resolveGovernedPieceAction(req.piece, req.action);
-    if (!resolved) return { governed: false };
+    if (!resolved) return admitUngovernedStep(req, ctx);
     // The connection is stripped on the engine side before the input is sent;
     // stripping it again here means neither path can put a credential into the
     // durable record or the approval card.
@@ -625,9 +654,11 @@ export function buildSandboxServiceBackends(
     })();
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
       route: 'piece', toolName: tool.name, category: capability.category, toolCategory: tool.category,
-      // Digested over the whole resolved input, so a change to any prop -- not
-      // just the ones the card shows -- invalidates an approval granted earlier.
-      request: { piece: req.piece, action: req.action, input },
+      // Digested over the projection AND the engine's digest of the whole
+      // resolved input, so a change to any prop -- including the part of a
+      // long body or a long recipient list the card cuts -- invalidates an
+      // approval granted earlier (Q-08).
+      request: { piece: req.piece, action: req.action, input, ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}) },
       prepare: () => ({ arguments: input, target: capability.target(input) }),
       validateTarget: (_args, target) => {
         if (digest(capability.target(input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');

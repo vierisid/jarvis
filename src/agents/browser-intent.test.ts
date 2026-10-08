@@ -95,7 +95,8 @@ describe('ambiguous UI effects require review at real agent gates', () => {
     await exec(f.orch, 'browser_scroll', { direction: 'down' });
     const card = f.approvals.getPending()[0]!;
     expect(JSON.parse(card.tool_arguments)).toEqual({ direction: 'down' });
-    f.approvals.approve(card.id, 'user');
+    // A click-only card: the decision has to come from the dashboard (Q-08).
+    f.approvals.approve(card.id, 'dashboard');
     const executor = new DeferredExecutor(f.approvals, f.audit);
     executor.setToolRegistry(f.registry);
     await executor.executeApproved(card.id);

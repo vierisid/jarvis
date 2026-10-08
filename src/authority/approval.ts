@@ -14,6 +14,7 @@
 
 import { getDb, generateId } from '../vault/schema.ts';
 import type { ActionCategory } from '../roles/authority.ts';
+import type { AuthorityProfile } from './engine.ts';
 import type { ToolDefinition, ToolRegistry } from '../actions/tools/registry.ts';
 import { rawUiGate } from './ui-intent';
 
@@ -74,7 +75,40 @@ export type ApprovalRequest = {
   resolved_at?: number | null;
   resolved_by?: string | null;
   resolution_note?: string | null;
+  /** JSON `ApprovalPrincipal`: who the request was asked for. Null on rows from before Q-08. */
+  principal?: string | null;
 };
+
+/**
+ * Who a request was asked for, recorded with it so the executor judges the
+ * approved call again as that agent (Q-08): its role, its level, and any
+ * profile that tightened its decisions (the background agent's cap, a
+ * tainted turn's governed categories).
+ */
+export type ApprovalPrincipal = {
+  agentRoleId: string;
+  agentAuthorityLevel: number;
+  profile?: AuthorityProfile | null;
+};
+
+/** The request's recorded principal, or null when it has none or it does not parse. */
+export function approvalPrincipal(request: Pick<ApprovalRequest, 'principal'>): ApprovalPrincipal | null {
+  if (!request.principal) return null;
+  try {
+    const parsed = JSON.parse(request.principal) as Partial<ApprovalPrincipal> | null;
+    if (!parsed || typeof parsed.agentRoleId !== 'string' || typeof parsed.agentAuthorityLevel !== 'number'
+      || !Number.isFinite(parsed.agentAuthorityLevel)) return null;
+    return { agentRoleId: parsed.agentRoleId, agentAuthorityLevel: parsed.agentAuthorityLevel, profile: parsed.profile ?? null };
+  } catch {
+    return null;
+  }
+}
+
+/** How long a chat or background card stays approvable (Q-08); workflow approvals keep their own lifecycle. */
+export const UNANSWERED_APPROVAL_TTL_MS = 24 * 60 * 60_000;
+
+/** The surface whose decision a click-only card needs: the dashboard (Q-08). */
+export const DASHBOARD_DECIDER = 'dashboard';
 
 /**
  * One word for where a request stands, for lists and cards. Pending rows
@@ -160,6 +194,8 @@ export class ApprovalManager {
     executionMode?: ApprovalExecutionMode;
     /** Trusted originating registry, supplied by the agent, never model input. */
     toolRegistry?: ToolRegistry;
+    /** Who the request is asked for; the executor judges the approved call again as them. */
+    principal?: ApprovalPrincipal;
   }): ApprovalRequest {
     const db = getDb();
     const id = generateId();
@@ -177,10 +213,11 @@ export class ApprovalManager {
       }
     }
 
+    const principal = params.principal ? JSON.stringify(params.principal) : null;
     db.run(
-      `INSERT INTO approval_requests (id, agent_id, agent_name, tool_name, tool_arguments, action_category, urgency, reason, context, status, execution_mode, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
-      [id, params.agentId, params.agentName, params.toolName, toolArgs, params.actionCategory, params.urgency, params.reason, params.context, executionMode, now]
+      `INSERT INTO approval_requests (id, agent_id, agent_name, tool_name, tool_arguments, action_category, urgency, reason, context, status, execution_mode, created_at, principal)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, ?)`,
+      [id, params.agentId, params.agentName, params.toolName, toolArgs, params.actionCategory, params.urgency, params.reason, params.context, executionMode, now, principal]
     );
 
     if (tool && current && params.toolRegistry) {
@@ -211,6 +248,7 @@ export class ApprovalManager {
       resolved_at: null,
       resolved_by: null,
       resolution_note: null,
+      principal,
     };
   }
 
@@ -236,13 +274,17 @@ export class ApprovalManager {
   }
 
   /**
-   * Find a request by short ID prefix (for Telegram/Discord commands).
+   * Find a pending request by the id a chat card shows: its first 8
+   * characters, or more (Telegram/Discord commands). A shorter prefix, or one
+   * two pending requests share, finds nothing: a reply names exactly one card
+   * (Q-08). Before, `approve a` acted on whichever pending row came first.
    */
   findByShortId(shortId: string): ApprovalRequest | null {
+    if (!/^[a-f0-9-]{8,}$/i.test(shortId)) return null;
     const db = getDb();
-    const row = db.query('SELECT * FROM approval_requests WHERE id LIKE ? AND status = ?')
-      .get(`${shortId}%`, 'pending') as ApprovalRequest | null;
-    return row;
+    const rows = db.query('SELECT * FROM approval_requests WHERE id LIKE ? AND status = ? LIMIT 2')
+      .all(`${shortId.toLowerCase()}%`, 'pending') as ApprovalRequest[];
+    return rows.length === 1 ? rows[0]! : null;
   }
 
   /**
@@ -446,6 +488,58 @@ export class ApprovalManager {
     return db.query(
       `SELECT * FROM approval_requests ${where} ORDER BY created_at DESC LIMIT ?`
     ).all(...[...values, limit] as any[]) as ApprovalRequest[];
+  }
+
+  /**
+   * Kill: deny every pending request, workflow ones included, so nothing
+   * raised before the Kill can be approved after Reset (Q-08). Returns the
+   * denied rows, for the dashboard to drop their cards.
+   */
+  denyAllPending(decidedBy: string): ApprovalRequest[] {
+    const db = getDb();
+    const ids = (db.query(`SELECT id FROM approval_requests WHERE status = 'pending'`).all() as Array<{ id: string }>).map((row) => row.id);
+    const denied: ApprovalRequest[] = [];
+    for (const id of ids) {
+      const row = this.deny(id, decidedBy);
+      if (row) denied.push(row);
+    }
+    return denied;
+  }
+
+  /**
+   * Expire pending requests nobody answered within `maxAgeMs` (Q-08: a chat
+   * or background card stays approvable for 24 hours, not forever). Workflow
+   * approvals are left alone: a paused run is waiting on each, on its own
+   * terms. Returns how many expired.
+   */
+  expireUnanswered(maxAgeMs: number, now = Date.now()): number {
+    const db = getDb();
+    const result = db.run(
+      `UPDATE approval_requests SET status = 'expired' WHERE status = 'pending' AND execution_mode != 'workflow' AND created_at < ?`,
+      [now - maxAgeMs],
+    );
+    for (const id of this.uiExecutions.keys()) {
+      if (this.getRequest(id)?.status === 'expired') this.uiExecutions.delete(id);
+    }
+    return result.changes;
+  }
+
+  /**
+   * An approved request whose tool could not say whether it took effect
+   * (`ActionOutcomeError` with an effect that may have occurred). It keeps
+   * the `unknown` outcome a restart gives an interrupted run: never run
+   * again, closed by a person after checking (Q-08). Before, it read as
+   * failed. Only the claimed row can be marked; returns whether it was.
+   */
+  markUncertain(requestId: string, executionResult: string): boolean {
+    const db = getDb();
+    const result = db.run(
+      `UPDATE approval_requests SET execution_outcome = 'unknown', execution_result = ?
+       WHERE id = ? AND status = 'approved' AND execution_claimed_at IS NOT NULL`,
+      [executionResult, requestId],
+    );
+    if (result.changes > 0) this.uiExecutions.delete(requestId);
+    return result.changes > 0;
   }
 
   /**

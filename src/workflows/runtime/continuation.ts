@@ -14,7 +14,8 @@
  *    whatever the run paused on next.
  * The RUN_FLOW handler checks the same again when the job is claimed
  * (`continuationRefusal`), and a run of a workflow turned off since it began
- * never continues (repos/flow-turn-off.ts).
+ * never continues (repos/flow-turn-off.ts). While Jarvis is paused or stopped
+ * nothing continues at all (Q-08, runtime/emergency-hold.ts).
  */
 import { createHash } from "node:crypto";
 import { getWorkflowDb } from "../db/index";
@@ -22,6 +23,7 @@ import { getFlowRun, type FlowRun } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
 import { getWaitpoint, markWaitpointResumed, type Waitpoint } from "../db/repos/waitpoint";
 import { claimFire, fireDigest, recordFire } from "../db/repos/trigger-fire";
+import { emergencyHold } from "./emergency-hold";
 
 /** Digest of a version's graph: a draft edited while a run of it was paused no longer matches. */
 export function graphDigest(trigger: unknown): string {
@@ -73,7 +75,7 @@ function stale(run: FlowRun, waitpoint: Waitpoint): boolean {
   return waitpoint.type !== "WEBHOOK" && stepIsPaused(run.steps, waitpoint.stepName) === false;
 }
 
-export type ContinuationKind = "timer" | "approval" | "webhook";
+export type ContinuationKind = "timer" | "approval" | "webhook" | "hold";
 export type ContinuationOutcome =
   /** The waitpoint was consumed and the RESUME job queued. */
   | "resumed"
@@ -84,7 +86,9 @@ export type ContinuationOutcome =
   /** Someone else consumed the waitpoint first. */
   | "taken"
   /** The run is not paused. */
-  | "not-paused";
+  | "not-paused"
+  /** Jarvis is paused or stopped: nothing continues; the waitpoint is kept for Resume (Q-08). */
+  | "held";
 
 /**
  * Claim one continuation of a paused run. Call outside any transaction.
@@ -99,6 +103,7 @@ export function claimContinuation(input: {
 }): ContinuationOutcome {
   const now = input.now ?? Date.now();
   const { runId, waitpoint } = input;
+  if (emergencyHold()) return "held";
   const run = getFlowRun(runId);
   if (!run || run.status !== "PAUSED") return "not-paused";
   if (activeContinuation(runId)) return "busy";
@@ -130,6 +135,26 @@ export function claimContinuation(input: {
   });
   if (claimed.outcome === "duplicate") return "taken";
   return claimed.outcome === "started" ? "resumed" : outcome;
+}
+
+/**
+ * Release every step parked while Jarvis was paused (HOLD waitpoints). Called
+ * when Jarvis is resumed, and on every timer tick so a release survives a
+ * restart. A run with another continuation queued keeps its hold for the next
+ * tick. Q-08.
+ */
+export function releaseEmergencyHolds(now = Date.now()): number {
+  if (emergencyHold()) return 0;
+  const rows = getWorkflowDb().query<{ id: string; flow_run_id: string }, []>(
+    `SELECT w.id, w.flow_run_id FROM waitpoint w JOIN flow_run r ON r.id = w.flow_run_id
+      WHERE w.type = 'HOLD' AND w.resumed_at IS NULL AND r.status = 'PAUSED'`,
+  ).all();
+  let released = 0;
+  for (const row of rows) {
+    const waitpoint = getWaitpoint(row.id);
+    if (waitpoint && claimContinuation({ runId: row.flow_run_id, waitpoint, kind: "hold", resumePayload: {}, now }) === "resumed") released++;
+  }
+  return released;
 }
 
 /**

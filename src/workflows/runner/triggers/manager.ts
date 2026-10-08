@@ -62,6 +62,7 @@ import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineRuntime } from "../engine-runtime/engine-runtime";
 import { toUpstreamFlowVersion } from "../engine-runtime/flow-version-adapter";
 import { graphDigest } from "../../runtime/continuation";
+import { emergencyHold, PAUSED_REASON } from "../../runtime/emergency-hold";
 
 interface TriggerNode {
   type: string;
@@ -809,6 +810,21 @@ export class TriggerManager {
       this.log(`flow ${flowId} (${opts.source}) not started: ${off}`);
       return { outcome: "blocked", fireId: fire?.id, reason: off, disabled: true };
     }
+    // Pause holds and Kill stops (Q-08): nothing starts. A scheduled time is
+    // skipped and shown, keyed so it is never run late after Resume; a webhook
+    // sender is asked to retry later; anything else is recorded as skipped.
+    const held = emergencyHold();
+    if (held) {
+      const reason = held === PAUSED_REASON ? "Jarvis was paused, so this did not run." : "Jarvis was stopped with Kill, so this did not run.";
+      const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source,
+        dedupeKey: opts.source === "schedule" ? opts.dedupeKey : null, scheduledFor: opts.scheduledFor,
+        lateMs: opts.lateMs ?? null, outcome: "skipped",
+        detail: { reason: opts.source === "webhook" ? `${reason} The sender was asked to retry.` : reason } });
+      this.log(`flow ${flowId} (${opts.source}) not started: ${reason}`);
+      return opts.source === "webhook"
+        ? { outcome: "skipped", fireId: fire?.id, reason: held, retryAfterSeconds: 60 }
+        : { outcome: "skipped", fireId: fire?.id, reason };
+    }
     const repeat = opts.dedupeKey ? repeatOf({ flowId, source: opts.source, dedupeKey: opts.dedupeKey, duplicateSince: opts.duplicateSince }) : null;
     if (repeat) {
       this.log(`flow ${flowId} (${opts.source}) repeat of ${repeat.id} not run again`);
@@ -982,6 +998,14 @@ export class TriggerManager {
       if (pureSchedule) recordFire({ flowId, flowVersionId: versionId, source: "schedule", scheduledFor: occurrence?.at ?? null,
         lateMs: occurrence?.lateMs ?? null, outcome, detail: { reason } });
     };
+    // Paused or stopped: no poll at all (Q-08). An event source keeps its
+    // items, picked up by the first poll after Resume; a time of the schedule
+    // piece is skipped and shown.
+    const held = emergencyHold();
+    if (held) {
+      unrun("skipped", held === PAUSED_REASON ? "Jarvis was paused, so this time was skipped." : "Jarvis was stopped with Kill, so this time was skipped.");
+      return;
+    }
     // Skip if a prior poll for this flow is still running (slow poll vs. fast
     // cron); the next tick will pick up anything missed.
     if (this.pollingInFlight.has(flowId)) {

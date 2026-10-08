@@ -25,6 +25,7 @@ import { createWorkflowRoutes } from "../../api/routes";
 import { Worker } from "../../queue/worker";
 import { createRunFlowHandler, RUN_FLOW } from "../handler";
 import { scheduleZoneWarning, TriggerManager } from "./manager";
+import { EmergencyController, setActiveEmergencyController } from "../../../authority/emergency";
 
 const silent = () => undefined;
 const at = (iso: string) => Date.parse(iso);
@@ -42,6 +43,7 @@ afterEach(() => {
   setSystemTime();
   setCronTimezone(null);
   setEncryptionKey(null);
+  setActiveEmergencyController(null);
   closeWorkflowDb();
 });
 
@@ -594,6 +596,78 @@ describe("through the engine, as production runs triggers", () => {
     expect(enables()).toBe(1);
     await save({ ...trigger, settings: { ...trigger.settings, input: { eventType: "y" } } });
     expect(enables()).toBe(2);
+    await d.stop();
+  });
+});
+
+describe("Pause and Kill (Q-08)", () => {
+  function emergency() {
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    return controller;
+  }
+
+  test("a scheduled time while paused is skipped and shown, and not run late after Resume", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("0 9 * * *");
+    const controller = emergency();
+    const d = await daemon(at("2026-10-07T08:59:50Z"));
+    controller.pause();
+    d.tick(flowId, "2026-10-07T09:00:10Z");
+    expect(runsOf(flowId)).toHaveLength(0);
+    expect(listFlowFires(flowId)).toEqual([expect.objectContaining({ label: "skipped", dedupeKey: "2026-10-07T09:00",
+      detail: { reason: "Jarvis was paused, so this did not run." } })]);
+    controller.resume();
+    // A restart inside the grace window looks at 09:00 again: it is a repeat, not a run.
+    await d.stop();
+    const again = await daemon(at("2026-10-07T09:01:00Z"));
+    again.tick(flowId, "2026-10-07T09:01:10Z");
+    expect(runsOf(flowId)).toHaveLength(0);
+    await again.stop();
+  });
+
+  test("a webhook while paused is told to retry later, and its retry after Resume runs", async () => {
+    const { flowId } = webhook();
+    const controller = emergency();
+    const d = await daemon(Date.now());
+    controller.pause();
+    const paused = await post(d, flowId, "{}", { "Idempotency-Key": "k-9" });
+    expect(paused.status).toBe(503);
+    expect(paused.headers.get("Retry-After")).toBe("60");
+    expect(runsOf(flowId)).toHaveLength(0);
+    controller.resume();
+    expect(await (await post(d, flowId, "{}", { "Idempotency-Key": "k-9" })).json()).toMatchObject({ outcome: "started" });
+    await d.stop();
+  });
+
+  test("an event source is not polled while paused, so its items wait for Resume; a schedule piece time is skipped", async () => {
+    setCronTimezone("UTC");
+    let polls = 0;
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "* * * * *" } }, poll: () => { polls++; return []; } });
+    const events = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "x" } } });
+    const piece = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "@activepieces/piece-schedule", triggerName: "cron_expression", input: { cronExpression: "* * * * *", timezone: "UTC" } } });
+    const controller = emergency();
+    const d = await daemon(at("2026-10-07T09:00:00Z"), engine);
+    controller.pause();
+    await d.poll(events.flowId, "2026-10-07T09:00:10Z");
+    await d.poll(piece.flowId, "2026-10-07T09:00:10Z");
+    expect(polls).toBe(0);
+    expect(listFlowFires(piece.flowId)).toEqual([expect.objectContaining({ label: "skipped", detail: { reason: "Jarvis was paused, so this time was skipped." } })]);
+    controller.resume();
+    await d.poll(events.flowId, "2026-10-07T09:01:10Z");
+    expect(polls).toBe(1);
+    await d.stop();
+  });
+
+  test("after Kill nothing starts either, saying so", async () => {
+    setCronTimezone("UTC");
+    const { flowId } = schedule("* * * * *");
+    const controller = emergency();
+    const d = await daemon(at("2026-10-07T09:00:00Z"));
+    controller.kill();
+    d.tick(flowId, "2026-10-07T09:00:10Z");
+    expect(runsOf(flowId)).toHaveLength(0);
+    expect(listFlowFires(flowId)[0]).toMatchObject({ label: "skipped", detail: { reason: "Jarvis was stopped with Kill, so this did not run." } });
     await d.stop();
   });
 });

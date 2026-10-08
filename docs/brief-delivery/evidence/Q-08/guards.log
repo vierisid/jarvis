@@ -1,0 +1,12 @@
+$ bun run check:no-ee && bun run check:migrations && bun run lint:templates && bun run check:package
+$ bun run scripts/check-no-ee-imports.ts
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+$ bun run scripts/check-migrations.ts
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+$ bun run scripts/lint-webapp-templates.ts
+
+100 templates: 0 errors, 0 warnings
+$ bun run scripts/check-package-files.ts
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2356 files).
+exit 0

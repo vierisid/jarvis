@@ -3,8 +3,11 @@
  */
 
 import type { ToolRegistry } from '../actions/tools/registry.ts';
-import { executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
-import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank } from './tool-action-map.ts';
+import { executionState, approvalIntentFromContext, approvalNeedsClick, approvalPrincipal, DASHBOARD_DECIDER, type ApprovalManager, type ApprovalRequest } from './approval.ts';
+import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank, substituteAboveLevel } from './tool-action-map.ts';
+import { combineDecisions, type AuthorityEngine } from './engine.ts';
+import type { ToolDefinition } from '../actions/tools/registry.ts';
+import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { rawUiGate } from './ui-intent';
 import type { AuditTrail } from './audit.ts';
 import type { AuthorityLearner } from './learning.ts';
@@ -56,6 +59,7 @@ export class DeferredExecutor {
   private auditTrail: AuditTrail;
   private learner: AuthorityLearner | null = null;
   private emergencyController: EmergencyController | null = null;
+  private authorityEngine: AuthorityEngine | null = null;
   private onResult: ExecutionResultCallback | null = null;
 
   constructor(approvalManager: ApprovalManager, auditTrail: AuditTrail) {
@@ -73,6 +77,54 @@ export class DeferredExecutor {
 
   setEmergencyController(controller: EmergencyController): void {
     this.emergencyController = controller;
+  }
+
+  /** Approved calls are judged again against the permissions in force when they run (Q-08). */
+  setAuthorityEngine(engine: AuthorityEngine): void {
+    this.authorityEngine = engine;
+  }
+
+  /**
+   * Why the approved call may no longer run under the permissions in force
+   * now, or null. Judged as the agent the request was asked for, the way its
+   * gate judged it, with the approval standing in for the approval it asked
+   * for: what stops it is a denial -- a deny override, a context rule, a
+   * revoked permission, a lowered level a gate cannot substitute -- added
+   * since the card was raised (Q-08). Unwired (tests), nothing is rechecked.
+   */
+  private permissionsRefusal(request: ApprovalRequest, tool: ToolDefinition | undefined, args: Record<string, unknown>): string | null {
+    if (!this.authorityEngine) return null;
+    const principal = approvalPrincipal(request);
+    if (!principal) return 'it was approved before each request recorded whom it was asked for, so its permissions cannot be checked again. Ask for it again.';
+    const gate = resolveToolGate(tool, request.tool_name, args);
+    const check = (actionCategory: ActionCategory) => this.authorityEngine!.checkAuthority({
+      agentId: request.agent_id, agentAuthorityLevel: principal.agentAuthorityLevel, agentRoleId: principal.agentRoleId,
+      toolName: request.tool_name, toolCategory: tool?.category ?? 'unknown', actionCategory,
+      temporaryGrants: new Map(), profile: principal.profile ?? null,
+    });
+    const decision = substituteAboveLevel(combineDecisions(gate.categories.map(check)), gate, check);
+    return decision.allowed ? null : `its permissions changed after it was approved: ${decision.reason}.`;
+  }
+
+  /** The audit row for what became of an approved call: run, refused, failed or uncertain. */
+  private logReceipt(request: ApprovalRequest, executed: boolean, executionTimeMs: number | null = null): void {
+    try {
+      this.auditTrail.log({
+        agent_id: request.agent_id, agent_name: request.agent_name, tool_name: request.tool_name,
+        action_category: request.action_category as ActionCategory, authority_decision: 'approval_required',
+        approval_id: request.id, executed, execution_time_ms: executionTimeMs,
+      });
+    } catch (err) {
+      console.warn('[DeferredExecutor] could not audit a receipt:', err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** Record a refusal after the claim: nothing ran. */
+  private refuse(request: ApprovalRequest, text: string): { claimed: true; result: string } {
+    this.approvalManager.markExecuted(request.id, boundedReceiptText(text, RECEIPT_MAX_CHARS), 'blocked');
+    this.logReceipt(request, false);
+    this.onResult?.(request.id, request, text);
+    return { claimed: true, result: text };
   }
 
   setResultCallback(cb: ExecutionResultCallback): void {
@@ -125,10 +177,7 @@ export class DeferredExecutor {
     // so it doesn't linger as an approved-but-never-executed zombie.
     if (this.emergencyController && !this.emergencyController.canExecute()) {
       const state = this.emergencyController.getState();
-      const blocked = `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`;
-      this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
-      this.onResult?.(requestId, request, blocked);
-      return { claimed: true, result: blocked };
+      return this.refuse(request, `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`);
     }
 
     const startTime = Date.now();
@@ -149,6 +198,16 @@ export class DeferredExecutor {
         this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
+      }
+      // A card that must be reviewed on screen was approved somewhere that
+      // could not show it: a chat reply, a toast, a voice "yes" (Q-08). Every
+      // decision surface refuses such an approve; this holds below them all.
+      if (approvalNeedsClick(request) && request.decided_by !== DASHBOARD_DECIDER) {
+        return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: it must be reviewed and approved on the dashboard, and it was approved from ${request.decided_by ?? 'an unknown surface'}. Ask for it again and approve it on the dashboard.`);
+      }
+      const permissions = this.permissionsRefusal(request, registry.get(request.tool_name), args);
+      if (permissions) {
+        return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: ${permissions}`);
       }
       // An approval given to a call that had no per-call gate then, but has
       // one now that raises it, was not an approval of what would run: a
@@ -215,16 +274,7 @@ export class DeferredExecutor {
       this.approvalManager.markExecuted(requestId, boundedReceiptText(result, RECEIPT_MAX_CHARS), 'committed');
 
       // Log to audit trail
-      this.auditTrail.log({
-        agent_id: request.agent_id,
-        agent_name: request.agent_name,
-        tool_name: request.tool_name,
-        action_category: request.action_category as ActionCategory,
-        authority_decision: 'approval_required',
-        approval_id: requestId,
-        executed: true,
-        execution_time_ms: executionTimeMs,
-      });
+      this.logReceipt(request, true, executionTimeMs);
 
       // Record approval for learning. Two kinds are excluded.
       //
@@ -277,7 +327,23 @@ export class DeferredExecutor {
       // Bounded through the same helper as the success receipt above, which also
       // gives this branch a size bound it never had: a thrown message can carry
       // a step name, a remote error or a stderr tail of unbounded length.
-      this.approvalManager.markExecuted(requestId, boundedReceiptText(errorStr, RECEIPT_MAX_CHARS), 'failed');
+      //
+      // Unless the tool said what happened (Q-08). Nothing started: the row is
+      // blocked, not failed. It may have taken effect: the row keeps the
+      // `unknown` outcome a restart gives an interrupted run, so it is never
+      // run again and a person checks before closing it.
+      const outcome = err instanceof ActionOutcomeError ? err.outcome : null;
+      const receipt = boundedReceiptText(errorStr, RECEIPT_MAX_CHARS);
+      if (outcome?.effect === 'not_started') {
+        this.approvalManager.markExecuted(requestId, receipt, 'blocked');
+        this.logReceipt(request, false);
+      } else if (outcome?.status === 'unknown') {
+        this.approvalManager.markUncertain(requestId, receipt);
+        this.logReceipt(request, true);
+      } else {
+        this.approvalManager.markExecuted(requestId, receipt, 'failed');
+        this.logReceipt(request, true);
+      }
       this.onResult?.(requestId, request, errorStr);
       return { claimed: true, result: errorStr, failed: true };
     }

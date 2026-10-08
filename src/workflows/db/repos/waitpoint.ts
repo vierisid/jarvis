@@ -38,7 +38,11 @@ import { getWorkflowDb } from "../index";
 import { apId } from "../ids";
 import { assertRunNotCanceled } from "../../runtime/cancellation";
 
-export type WaitpointType = "WEBHOOK" | "TIMER" | "MANUAL";
+/**
+ * HOLD: a step reached while Jarvis is paused parks on one; only the daemon
+ * releases it, once Jarvis is resumed (Q-08). Never resumable by URL.
+ */
+export type WaitpointType = "WEBHOOK" | "TIMER" | "MANUAL" | "HOLD";
 
 interface WaitpointRow {
   id: string;

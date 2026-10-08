@@ -157,9 +157,10 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
         const testSingleStepMode = !isNil(constants.stepNameToTest)
         const runMethodToExecute = (testSingleStepMode && !isNil(pieceAction.test)) ? pieceAction.test : pieceAction.run
         // Jarvis: a verified piece's action passes the daemon's Authority
-        // boundary before it touches the network. Ungoverned pieces are not
-        // asked about and run untouched. Re-runs on RESUME re-authorize rather
-        // than trusting the decision that parked the step.
+        // boundary before it touches the network. A piece with no adapter is
+        // asked only whether Jarvis is paused or stopped (Q-08). Re-runs on
+        // RESUME re-authorize rather than trusting the decision that parked
+        // the step.
         const governance = await authorizePieceDispatch({
             apiUrl: constants.internalApiUrl,
             engineToken: constants.engineToken,
@@ -169,12 +170,14 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
             executionPath: executionState.currentPath.path,
             input: processedInput,
         })
-        if (governance.governed && governance.dispatch === 'approval_required') {
-            // Same pause the jarvis-tool piece uses: park on the approval
-            // waitpoint without running the action.
+        // Parked: for an approval, or held while Jarvis is paused (Q-08).
+        const parked = 'dispatch' in governance && (governance.dispatch === 'approval_required' || governance.dispatch === 'held')
+        if (parked) {
+            // Same pause the jarvis-tool piece uses: park on the waitpoint
+            // without running the action.
             params.hookResponse = { ...params.hookResponse, type: 'paused' }
         }
-        const output = (governance.governed && governance.dispatch === 'approval_required')
+        const output = parked
             ? { approval: governance.approval }
             : await runMethodToExecute(backwardCompatibleContext)
         const newExecutionContext = executionState.addTags(params.hookResponse.tags)

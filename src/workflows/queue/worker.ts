@@ -21,6 +21,7 @@ import {
   getJob,
   type Job,
 } from "../db/repos/job-queue";
+import { emergencyHold } from "../runtime/emergency-hold";
 
 export type JobHandler<P = Record<string, unknown>> = (job: Job<P>) => Promise<void>;
 
@@ -86,6 +87,8 @@ export class Worker {
   async drain(): Promise<number> {
     let processed = 0;
     while (true) {
+      // Paused or stopped: queued work waits (Q-08).
+      if (emergencyHold()) return processed;
       const job = claimNextJob({ leaseMs: this.leaseMs });
       if (!job) return processed;
       await this.handle(job);
@@ -98,6 +101,11 @@ export class Worker {
 
   private async runLoop(idx: number): Promise<void> {
     while (this.running) {
+      // Paused or stopped: claim nothing; queued work waits for Resume (Q-08).
+      if (emergencyHold()) {
+        await sleep(this.pollIntervalMs);
+        continue;
+      }
       let claimed: Job | null = null;
       try {
         claimed = claimNextJob({ leaseMs: this.leaseMs });
