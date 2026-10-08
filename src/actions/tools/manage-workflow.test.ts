@@ -1096,3 +1096,162 @@ describe("#598: summarizeFlow's metadata and name are framed where they reach th
     }
   });
 });
+
+/**
+ * #844. The model-facing half of what #692 and #729 fixed on the HTTP routes:
+ * `list` showed the default project while a flow or run id resolved in any
+ * project, and `list_runs` with no flow listed every project's runs. These
+ * write a second project directly, which is the state the day there is one.
+ */
+describe("#844: manage_workflow acts in one project, for reads by id as well as listings", () => {
+  const OTHER_PROJECT = "proj_other_844";
+  const MISSING_FLOW = "flow_does_not_exist_844";
+  const MISSING_RUN = "run_does_not_exist_844";
+
+  async function seedIn(projectId: string) {
+    const { createFlow } = await import("../../workflows/db/repos/flow.ts");
+    const { createDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
+    const { createFlowRun } = await import("../../workflows/db/repos/flow-run.ts");
+    const flow = createFlow({ projectId });
+    const name = `theirs_${flow.id}`;
+    const version = createDraftVersion({ flowId: flow.id, displayName: name,
+      trigger: { name: "trigger", type: "EMPTY", displayName: "Manual", settings: {} } });
+    updateRun(createFlowRun({ flowId: flow.id, flowVersionId: version.id }).id,
+      { status: "FAILED", failedStep: { name: "s", displayName: "s", errorMessage: "their captured output" } });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+    return { flowId: flow.id, name, runId: run.id };
+  }
+
+  /** Every row of the foreign project any action could write, plus the queue. */
+  async function stateOf(flowId: string) {
+    const { getWorkflowDb } = await import("../../workflows/db/index.ts");
+    const db = getWorkflowDb();
+    return {
+      flow: db.query("SELECT * FROM flow WHERE id = ?").all(flowId),
+      versions: db.query("SELECT * FROM flow_version WHERE flow_id = ? ORDER BY id").all(flowId),
+      runs: db.query("SELECT * FROM flow_run WHERE flow_id = ? ORDER BY id").all(flowId),
+      jobs: db.query("SELECT COUNT(*) AS n FROM workflow_job").get(),
+    };
+  }
+
+  type Ids = { flowId: string; name: string; runId: string };
+  // Every action that takes a flow or run reference, by id and (for flows) by
+  // name. `ref` picks the reference out of the ids, so the same call runs
+  // against a foreign row and a missing one.
+  const CALLS: Array<{ name: string; action: string; ref: (i: Ids) => string; params: (r: string) => Record<string, unknown> }> = [
+    ...["get", "run", "enable", "disable", "publish", "delete", "list_runs"].flatMap((action) => [
+      { name: `${action} by id`, action, ref: (i: Ids) => i.flowId, params: (r: string) => ({ flow: r }) },
+      { name: `${action} by name`, action, ref: (i: Ids) => i.name, params: (r: string) => ({ flow: r }) },
+    ]),
+    { name: "get_run", action: "get_run", ref: (i: Ids) => i.runId, params: (r: string) => ({ run_id: r }) },
+  ];
+  const missing: Ids = { flowId: MISSING_FLOW, name: MISSING_FLOW, runId: MISSING_RUN };
+
+  /** The thrown message with the reference replaced, so the two can be compared byte for byte. */
+  async function refusal(t: ToolDefinition, call: (typeof CALLS)[number], ids: Ids): Promise<string> {
+    const ref = call.ref(ids);
+    try {
+      await t.execute({ action: call.action, ...call.params(ref) });
+      return "<no error>";
+    } catch (e) {
+      return (e as Error).message.split(ref).join("<ref>");
+    }
+  }
+
+  test("a foreign flow or run answers exactly as a missing one does, and nothing of it changes", async () => {
+    const notMissingShaped: string[] = [];
+    const distinguishable: string[] = [];
+    const wrote: string[] = [];
+    for (const call of CALLS) {
+      // Fresh foreign rows per call: a delete that got through would otherwise
+      // make every later call see a missing flow and pass.
+      const foreign = await seedIn(OTHER_PROJECT);
+      const before = await stateOf(foreign.flowId);
+      const fromForeign = await refusal(tool, call, foreign);
+      const fromMissing = await refusal(tool, call, missing);
+      // Pinned exactly, so the comparison cannot pass by both failing alike
+      // for a reason that is not the scope.
+      const expected = call.action === "get_run" ? "run not found: <ref>" : "workflow not found: <ref>";
+      if (fromMissing !== expected) notMissingShaped.push(`${call.name}: ${fromMissing}`);
+      if (fromForeign !== fromMissing) distinguishable.push(`${call.name}: ${fromForeign}`);
+      if (!Bun.deepEquals(await stateOf(foreign.flowId), before)) wrote.push(call.name);
+    }
+    expect({ notMissingShaped, distinguishable, wrote }).toEqual({ notMissingShaped: [], distinguishable: [], wrote: [] });
+  });
+
+  test("a tool in that project reaches its own flows and runs on every one of the same calls", async () => {
+    // The control for the refusals above: they are about the project, not the
+    // action or the reference.
+    const own = createManageWorkflowTool({ callerProjectId: () => OTHER_PROJECT });
+    const refused: string[] = [];
+    for (const call of CALLS) {
+      const ids = await seedIn(OTHER_PROJECT);
+      const answer = await refusal(own, call, ids);
+      if (/not found/.test(answer)) refused.push(`${call.name}: ${answer}`);
+    }
+    expect(refused).toEqual([]);
+  });
+
+  test("list, list_runs, create and compose act in the caller's project only", async () => {
+    const { DEFAULT_IDS } = await import("../../workflows/db/schema.ts");
+    const foreign = await seedIn(OTHER_PROJECT);
+    const mine = await seedIn(DEFAULT_IDS.project);
+
+    const listed = (await call("list")) as { flows: Array<{ id: string }>; total: number };
+    expect(listed.flows.map((f) => f.id)).toEqual([mine.flowId]);
+    expect(listed.total).toBe(1);
+    // With no flow named this listed every project's runs, captured
+    // `failedStep` text included.
+    const runs = (await call("list_runs")) as Array<{ flow_id: string }>;
+    expect(runs.length).toBe(2);
+    expect(new Set(runs.map((r) => r.flow_id))).toEqual(new Set([mine.flowId]));
+
+    const own = createManageWorkflowTool({ callerProjectId: () => OTHER_PROJECT });
+    const ownListed = (await callFrom(own, "list")) as { flows: Array<{ id: string }> };
+    expect(ownListed.flows.map((f) => f.id)).toEqual([foreign.flowId]);
+    const ownRuns =(await callFrom(own, "list_runs")) as Array<{ flow_id: string }>;
+    expect(new Set(ownRuns.map((r) => r.flow_id))).toEqual(new Set([foreign.flowId]));
+    const created = (await callFrom(own, "create", { name: "Made in other", empty: true })) as { id: string };
+    expect(getFlow(created.id)?.project_id).toBe(OTHER_PROJECT);
+    // A name used in the default project is free in another one.
+    const sameName = (await callFrom(own, "create", { name: mine.name, empty: true })) as { id: string };
+    expect(getFlow(sameName.id)?.project_id).toBe(OTHER_PROJECT);
+  });
+
+  test("list_runs scopes by the run's FLOW, not by flow_run.project_id", async () => {
+    // A run row whose column disagrees with its flow, as every pre-#843 row
+    // did. Made directly and asserted, so this cannot pass on a column that
+    // happens to be right.
+    const { DEFAULT_IDS } = await import("../../workflows/db/schema.ts");
+    const { getWorkflowDb } = await import("../../workflows/db/index.ts");
+    const foreign = await seedIn(OTHER_PROJECT);
+    getWorkflowDb().run("UPDATE flow_run SET project_id = ? WHERE flow_id = ?", [DEFAULT_IDS.project, foreign.flowId]);
+    expect(getWorkflowDb().query("SELECT DISTINCT project_id AS p FROM flow_run WHERE flow_id = ?").all(foreign.flowId))
+      .toEqual([{ p: DEFAULT_IDS.project }]);
+    expect((await call("list_runs")) as unknown[]).toEqual([]);
+    await expect(call("get_run", { run_id: foreign.runId })).rejects.toThrow(`run not found: ${foreign.runId}`);
+    const own = createManageWorkflowTool({ callerProjectId: () => OTHER_PROJECT });
+    expect(((await callFrom(own, "list_runs")) as unknown[]).length).toBe(2);
+    expect(((await callFrom(own, "get_run", { run_id: foreign.runId })) as { id: string }).id).toBe(foreign.runId);
+  });
+
+  test("compose writes to the caller's project and checks for a name collision only there", async () => {
+    const { DEFAULT_IDS } = await import("../../workflows/db/schema.ts");
+    const mine = await seedIn(DEFAULT_IDS.project);
+    const llm = new StubLlm(JSON.stringify({ displayName: mine.name, trigger: { name: "trigger", type: "EMPTY",
+      nextAction: { name: "step_1", type: "PIECE", settings: { pieceName: "jarvis-ask", actionName: "ask", input: { prompt: "hi" } } } } }));
+    const own = createManageWorkflowTool({ llm, pieceRegistry: sampleCatalog(), callerProjectId: () => OTHER_PROJECT });
+    const out = (await callFrom(own, "compose", { name: mine.name, description: "do a thing" })) as { ok: boolean; flow?: { id: string }; errors?: string[] };
+    // The collision check used to scan the default project whatever the
+    // caller's was; a collision would have named the default flow's id.
+    expect(out.errors).toBeUndefined();
+    expect(out.ok).toBe(true);
+    expect(getFlow(out.flow!.id)?.project_id).toBe(OTHER_PROJECT);
+    // And its composition journal is in the same project, so the flow's
+    // `compositionRecordId` resolves where the flow lives.
+    const { getWorkflowComposition } = await import("../../workflows/db/repos/workflow-composition.ts");
+    const recordId = (out as unknown as { compositionRecordId: string }).compositionRecordId;
+    expect(getWorkflowComposition(recordId, OTHER_PROJECT)?.id).toBe(recordId);
+    expect(getWorkflowComposition(recordId, DEFAULT_IDS.project)).toBeNull();
+  });
+});

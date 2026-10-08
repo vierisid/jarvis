@@ -336,6 +336,12 @@ export function updateRun(id: string, patch: UpdateRunInput): FlowRun {
 
 export interface ListRunsOptions {
   flowId?: string;
+  /**
+   * Only runs whose FLOW is in this project (#844), scoped through the flow
+   * for the reason `getFlowRunInProject` gives: it holds whatever any writer
+   * put in `flow_run.project_id`.
+   */
+  projectId?: string;
   status?: FlowRunStatus;
   limit?: number;
   offset?: number;
@@ -409,6 +415,10 @@ export function listRuns(opts: ListRunsOptions = {}): FlowRun[] {
   if (opts.status !== undefined) {
     filters.push("status = ?");
     args.push(opts.status);
+  }
+  if (opts.projectId !== undefined) {
+    filters.push("flow_id IN (SELECT id FROM flow WHERE project_id = ?)");
+    args.push(opts.projectId);
   }
   const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
   return db()
