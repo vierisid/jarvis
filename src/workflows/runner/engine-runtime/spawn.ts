@@ -22,8 +22,8 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { readFileSync, utimesSync } from "node:fs";
-import { dirname, isAbsolute } from "node:path";
+import { accessSync, constants as fsConstants, lstatSync, readdirSync, readFileSync, realpathSync, utimesSync } from "node:fs";
+import { dirname, isAbsolute, join, resolve } from "node:path";
 import { isSecretEnvName } from "../../../util/subprocess-env";
 import { assertBundleUnchanged } from "./bundle-integrity";
 import {
@@ -102,6 +102,8 @@ export interface SpawnEngineOptions {
    * a directory where `packages/pieces/<piece>/dist/package.json` exists.
    */
   cwd?: string;
+  /** See `EngineRuntimeOptions.warmTranspilerCache`. Build time only. */
+  warmTranspilerCache?: boolean;
 }
 
 /**
@@ -143,7 +145,9 @@ export const ENGINE_ENV_PASSTHROUGH: readonly string[] = Object.freeze([
   // Not a secret — forwarding it lets the engine child hit the host's shared
   // read-only transpiler cache when it parses large piece SDK files
   // (multi-tenant hosting warms it per version). Bun is fail-open on an
-  // unreadable/unwritable cache dir, so this can never break a spawn.
+  // unreadable/unwritable cache dir, so this can never break a spawn. For a
+  // PINNED bundle it is forwarded only when root owns it and nothing here can
+  // write it; see engineTranspilerCache (#835).
   "BUN_RUNTIME_TRANSPILER_CACHE_PATH",
   // Operator knobs read by the bundle's lifecycle shim (engine-lifecycle.ts):
   // how long the engine may keep flushing after SIGTERM, and how often it
@@ -263,6 +267,150 @@ export function engineEnv(opts: Omit<SpawnEngineOptions, "expectedDigest">): Rec
   return env;
 }
 
+export const TRANSPILER_CACHE_ENV = "BUN_RUNTIME_TRANSPILER_CACHE_PATH";
+
+/**
+ * What the engine's BUN_RUNTIME_TRANSPILER_CACHE_PATH should be (#835);
+ * `undefined` leaves it unset.
+ *
+ * WHY. Bun does not execute a large `main.js` as read: it executes the
+ * TRANSPILED copy it cached on an earlier run, from
+ * `$BUN_RUNTIME_TRANSPILER_CACHE_PATH`, or by default
+ * `$HOME/.bun/install/cache/@t@/<hash>.pile` -- 3.5 MB for the engine, the
+ * transpiled bundle plus its sourcemap behind a header of input and output
+ * hashes. The digest pin (#671, #762) covers `main.js` on disk and never sees
+ * that file. Bun does validate an entry (a naive same-length edit was detected
+ * and rewritten), but with an unkeyed 64-bit hash whose function was not
+ * identified, so whether an entry can be FORGED is open. This makes the
+ * question moot for a pinned bundle instead of answering it: the engine either
+ * caches nowhere, or caches only where nothing but root can write -- not this
+ * uid, which is every CODE step, piece and file tool the instance runs.
+ *
+ * So, for a pinned bundle:
+ *   - unset (the default path, under HOME): "0", which disables the cache.
+ *   - a root-owned directory of root-owned files that nothing here can write
+ *     or rename (isHostOwnedReadOnly): kept. That is the read-only cache
+ *     multi-tenant hosting warms per version (build-shared-runtime.ts), which
+ *     Bun reads without writing. It is only as trustworthy as the code that ran
+ *     while it was being warmed, which today includes every catalog piece.
+ *   - anything else, including a "daemon-owned" directory: "0". A directory
+ *     the daemon owns is one every tenant workload at the daemon's uid owns
+ *     too, so it would move the cache without making it any less forgeable.
+ * An unpinned bundle (one adopted from the per-user cache that nothing
+ * verified) is left as configured: there is no pin there for the cache to get
+ * around.
+ *
+ * COST, measured on Bun 1.3.8, engine boot until it exits without a sandbox
+ * id, median of 15: 119 ms with a warm cache, 184 ms disabled -- one parse of
+ * the 1.8 MB bundle, about 65 ms per engine SPAWN (not per run: the pool keeps
+ * engines warm). Importing four installed piece SDKs went from 743 ms to
+ * 818 ms. A host-owned read-only cache keeps both.
+ */
+const WARNED_CACHE_VALUES = new Set<string>();
+
+export function engineTranspilerCache(
+  configured: string | undefined,
+  pinned: boolean,
+  isProtected: (dir: string) => boolean = (dir) => isHostOwnedReadOnly(dir),
+): string | undefined {
+  if (!pinned) return configured;
+  const value = configured?.trim();
+  if (!value || value === "0") return "0";
+  if (isProtected(value)) return value;
+  // Once per value, not once per spawn: a misconfigured host spawns often.
+  if (WARNED_CACHE_VALUES.has(value)) return "0";
+  WARNED_CACHE_VALUES.add(value);
+  console.warn(
+    `[engine-spawn] not forwarding ${TRANSPILER_CACHE_ENV}=${JSON.stringify(value)} to a pinned engine: ` +
+      `it is not a normalized path to a root-owned directory of root-owned files that nothing here can write ` +
+      `or rename, so a cached transpilation there could run code the bundle digest never checked. ` +
+      `The cache is disabled for this engine instead (#835).`,
+  );
+  return "0";
+}
+
+/** The filesystem calls `isHostOwnedReadOnly` makes; injectable so its accepting case is testable. */
+export interface CacheDirProbe {
+  lstat(path: string): { uid: number; mode: number; isDirectory(): boolean; isFile(): boolean };
+  realpath(path: string): string;
+  readdir(path: string): string[];
+  writable(path: string): boolean;
+}
+
+const REAL_PROBE: CacheDirProbe = {
+  lstat: (path) => lstatSync(path),
+  realpath: (path) => realpathSync(path),
+  readdir: (path) => readdirSync(path),
+  writable,
+};
+
+/**
+ * True only when nothing but root can change what Bun would read from `dir`:
+ *   - `dir` is absolute and already normalized, and is forwarded exactly as
+ *     judged. `resolve()` collapses `..` lexically while the kernel follows
+ *     symlinks first, so `/a/link/../b` would be judged at `/a/b` and opened
+ *     wherever the link points (found in review);
+ *   - it is a directory reached through no symlink;
+ *   - it, every entry in it and every ancestor is OWNED BY ROOT. "Not this
+ *     uid" is not enough: on a host with a uid per tenant, a neighbour owning
+ *     any of them could rewrite or rename it (found in review);
+ *   - every entry is a regular file. Bun's cache is flat, and the contents of
+ *     a subdirectory, or the target of a link, would go unchecked;
+ *   - neither it nor an entry is writable by this uid, and no ancestor is
+ *     unless sticky (a sticky directory refuses to let us rename an entry root
+ *     owns).
+ * Conservative: any doubt is false, including Windows, where write access
+ * cannot be judged this way, and a process running as root, which can write
+ * everything.
+ *
+ * A `true` is remembered for the process: by construction only root can turn
+ * it false again, and re-walking a warm cache of a whole piece catalog at
+ * every spawn is not free (9 ms for a 1680-entry directory, measured). A
+ * `false` is re-checked every time, so a host that fixes its permissions is
+ * picked up without a restart.
+ */
+export function isHostOwnedReadOnly(dir: string, probe: CacheDirProbe = REAL_PROBE, uid = process.getuid?.()): boolean {
+  if (process.platform === "win32" || uid === undefined || uid === 0) return false;
+  if (!isAbsolute(dir) || resolve(dir) !== dir) return false;
+  const memo = probe === REAL_PROBE;
+  if (memo && PROTECTED_DIRS.has(`${uid}\0${dir}`)) return true;
+  const verdict = judgeHostOwned(dir, probe);
+  if (memo && verdict) PROTECTED_DIRS.add(`${uid}\0${dir}`);
+  return verdict;
+}
+
+const PROTECTED_DIRS = new Set<string>();
+
+function judgeHostOwned(dir: string, probe: CacheDirProbe): boolean {
+  try {
+    if (probe.realpath(dir) !== dir) return false;
+    const top = probe.lstat(dir);
+    if (!top.isDirectory() || top.uid !== 0 || probe.writable(dir)) return false;
+    for (const entry of probe.readdir(dir)) {
+      const path = join(dir, entry);
+      const st = probe.lstat(path);
+      if (!st.isFile() || st.uid !== 0 || probe.writable(path)) return false;
+    }
+    for (let cur = dirname(dir); ; cur = dirname(cur)) {
+      const st = probe.lstat(cur);
+      if (st.uid !== 0) return false;
+      if (probe.writable(cur) && (st.mode & 0o1000) === 0) return false;
+      if (dirname(cur) === cur) return true;
+    }
+  } catch {
+    return false;
+  }
+}
+
+function writable(path: string): boolean {
+  try {
+    accessSync(path, fsConstants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // A bundle that verified at resolution must still be those bytes (#671),
   // checked against the digest the caller carries rather than one looked up by
@@ -278,6 +426,16 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   }
   assertBundleUnchanged(opts.bundlePath, opts.expectedDigest);
   const env = engineEnv(opts);
+  // After engineEnv, so it judges the value a caller override left (#835). A
+  // build-time warm-up is the one caller allowed to write a cache: it judges
+  // the bundle as unpinned for this purpose only, so the configured directory
+  // is used as is.
+  const transpilerCache = engineTranspilerCache(
+    env[TRANSPILER_CACHE_ENV],
+    opts.expectedDigest !== null && opts.warmTranspilerCache !== true,
+  );
+  if (transpilerCache === undefined) delete env[TRANSPILER_CACHE_ENV];
+  else env[TRANSPILER_CACHE_ENV] = transpilerCache;
   const runtime = opts.runtime ?? process.execPath;
   // --smol: the engine is a short-lived-to-parked sandbox that grows to
   // ~100MB under default JSC heap growth; the smaller-heap GC profile is the
