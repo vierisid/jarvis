@@ -36,10 +36,17 @@ export function newestApprovalId(approvals: ReadonlyArray<{ id: string; timestam
  * decide nothing and say no approval was on screen.
  *
  * "Visible" is what the page reports, not proof the card was read: a window
- * covered by others still reports visible, and the Windows sidecar panel
- * (WebView2) probably reports visible while hidden or minimised too, since the
- * panel never tells the controller otherwise. That is a sidecar fix, filed
- * with #809.
+ * covered by others still reports visible.
+ *
+ * In the Windows sidecar panel (WebView2) this was measured, not assumed
+ * (#854; WebView2 runtime 154, a probe window built from the vendored
+ * webview_go): minimising the window reports `hidden` at once and restoring
+ * it `visible`, with no help from the host. A window hidden with SW_HIDE
+ * keeps reporting `visible`, because WebView2 only learns of that through
+ * `put_IsVisible`, which the vendored engine only ever sets to TRUE. The
+ * panels use SW_HIDE only to keep a panel hidden while its page first loads
+ * (at most 6s, `panels_runtime.go`), and close a panel by destroying it, so
+ * the guard holds for a panel the person minimised or closed.
  */
 export function shownApprovalId(
   approvals: ReadonlyArray<{ id: string; timestamp: number }>,
