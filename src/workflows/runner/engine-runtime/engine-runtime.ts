@@ -294,7 +294,7 @@ export class EngineHandle {
     const upstream = isUpstreamFlowVersion(opts.flowVersion)
       ? opts.flowVersion
       : toUpstreamFlowVersion(opts.flowVersion);
-    materializeCodeActions(upstream, this.baseCodeDir);
+    await materializeCodeActions(upstream, this.baseCodeDir);
 
     const baseExecuteFlowOptions: ExecuteFlowOptions = {
       flowVersion: upstream,

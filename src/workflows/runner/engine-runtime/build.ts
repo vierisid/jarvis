@@ -243,6 +243,10 @@ export const PATCHED_VENDOR_SOURCES = [
   // invalidates every cached engine bundle and compiled piece, on every
   // instance and shared root.
   '../../../util/subprocess-env.ts',
+  // CACHE INVALIDATION (#837): the CODE-step child now runs with `--no-install`
+  // and names an undeclared package, so every cached engine bundle and shared
+  // root rebuilds once. Intended: an old bundle still lets a step's bare
+  // `require` auto-install from the npm registry.
   'server/engine/src/lib/core/code/no-op-code-sandbox.ts',
   'server/engine/src/lib/variables/props-resolver.ts',
   'server/engine/src/lib/variables/props-processor.ts',
