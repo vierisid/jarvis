@@ -165,7 +165,7 @@ describe("collectCodeActions", () => {
 });
 
 describe("materializeCodeActions", () => {
-  test("writes one index.js per CODE action under <baseCodeDir>/<versionId>/<stepName>/", () => {
+  test("writes one index.js per CODE action under <baseCodeDir>/<versionId>/<stepName>/", async () => {
     const baseCodeDir = mkdtempSync(resolve(tmpdir(), "jarvis-mat-"));
     try {
       const version = toUpstreamFlowVersion(
@@ -188,7 +188,7 @@ describe("materializeCodeActions", () => {
           },
         }),
       );
-      const result = materializeCodeActions(version, baseCodeDir);
+      const result = await materializeCodeActions(version, baseCodeDir);
       expect(result.written).toBe(1);
       expect(result.paths.length).toBe(1);
       const file = resolve(baseCodeDir, "v_1", "compute", "index.js");

@@ -22,6 +22,9 @@ import {
   ENGINE_ESBUILD_CONFIG,
   ENGINE_REQUEST_BASE_SHIM,
   PATCHED_VENDOR_SOURCES,
+  STAGING_INSTALLED_MARKER,
+  stagingInstallStamp,
+  stagingLockfile,
 } from "./build";
 import { ENGINE_LIFECYCLE_SHIM, ENGINE_OWNER_PID_ENV } from "./engine-lifecycle";
 import { BundleIntegrityError } from "./bundle-integrity";
@@ -522,8 +525,10 @@ describe("engine bundle build", () => {
       const log = resolve(stagingDir, "builds.log");
       writeFileSync(log, "");
       writeFileSync(resolve(stagingDir, "package.json"), buildStagingPackageJson());
+      writeFileSync(resolve(stagingDir, "bun.lock"), stagingLockfile());
       const lib = resolve(stagingDir, "node_modules", "esbuild", "lib");
       mkdirSync(lib, { recursive: true });
+      writeFileSync(resolve(stagingDir, "node_modules", STAGING_INSTALLED_MARKER), stagingInstallStamp());
       writeFileSync(resolve(lib, "main.js"),
         `const fs = require("fs");\n` +
         `exports.build = async (o) => {\n` +
