@@ -1785,6 +1785,73 @@ describe("#729: the flow, version and run routes share one project scope", () =>
   });
 });
 
+/**
+ * #846. Since #729 the scope check runs before the body is read, so an
+ * ordinary missing flow is answered 404 by the route. What was left is a flow
+ * deleted DURING the body await: the write then threw from the repo and
+ * `trapErrors` sent its message, which names the function. The race is made
+ * deterministic here with a body stream that deletes the flow when it is read.
+ */
+describe("#846: a flow deleted while its body is read gets the route's own 404", () => {
+  const MISSING = "flow_does_not_exist_846";
+  const CALLS: Array<{ name: string; route: string; body: unknown }> = [
+    { name: "PATCH status", route: "/api/workflows/:id", body: { status: "DISABLED" } },
+    { name: "PATCH metadata", route: "/api/workflows/:id", body: { metadata: { a: 1 } } },
+    { name: "code-steps POST", route: "/api/workflows/:id/code-steps", body: { enabled: true } },
+    { name: "run POST", route: "/api/workflows/:id/run", body: {} },
+  ];
+  const methodOf = (route: string) => (route === "/api/workflows/:id" ? "PATCH" : "POST");
+
+  /**
+   * A request whose body deletes `flowId` the moment the route reads it.
+   * `highWaterMark: 0` is what makes that true: with the default of 1 the
+   * stream pulls on the first microtask after it is built, before the route
+   * reads anything, and the delete would land wherever that happened to fall.
+   */
+  function racing(route: string, flowId: string, body: unknown, during: () => void) {
+    const bytes = new TextEncoder().encode(JSON.stringify(body));
+    const stream = new ReadableStream({ pull(c) { during(); c.enqueue(bytes); c.close(); } }, { highWaterMark: 0 });
+    const req = new Request("http://x/", { method: methodOf(route), body: stream,
+      headers: { "Content-Type": "application/json" }, duplex: "half" } as RequestInit);
+    return Object.assign(req, { params: { id: flowId } });
+  }
+
+  async function answer(route: string, req: Request) {
+    const handler = (routes as Record<string, Record<string, unknown> | undefined>)[route]?.[methodOf(route)];
+    const res = await (handler as (r: Request) => Promise<Response>)(req);
+    return { status: res.status, contentType: res.headers.get("content-type"), body: await res.text() };
+  }
+
+  test("each write route answers exactly what a missing flow gets", async () => {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { getWorkflowDb } = await import("../db/index");
+    const expected = { status: 404, contentType: "application/json", body: JSON.stringify({ error: "flow not found" }) };
+    const wrong: string[] = [];
+    let raced = 0;
+    for (const call of CALLS) {
+      const flow = createFlow();
+      createDraftVersion({ flowId: flow.id, displayName: "v", trigger: { name: "trigger", type: "EMPTY", displayName: "Manual" } });
+      const req = racing(call.route, flow.id, call.body, () => {
+        getWorkflowDb().run("DELETE FROM flow WHERE id = ?", [flow.id]);
+        raced++;
+      });
+      // Nothing has pulled yet: the delete is still to come, inside the read.
+      await Promise.resolve();
+      expect(raced).toBe(CALLS.indexOf(call));
+      const got = await answer(call.route, req);
+      if (!Bun.deepEquals(got, expected)) wrong.push(`${call.name}: ${got.status} ${got.body}`);
+      // The pinned answer is the missing-id one, not merely a 404.
+      const missing = await answer(call.route, reqWithParams(methodOf(call.route), "http://x/", { id: MISSING }, call.body));
+      if (!Bun.deepEquals(missing, expected)) wrong.push(`${call.name} (missing): ${missing.status} ${missing.body}`);
+    }
+    // The deletion really happened inside each body read, so this is the race
+    // and not an ordinary missing flow answered by the first check.
+    expect(raced).toBe(CALLS.length);
+    expect(wrong).toEqual([]);
+  });
+});
+
 describe("workflow API: waitpoints surface", () => {
   test("GET /api/workflow-runs/:runId/waitpoints lists active waitpoints with resume URLs", async () => {
     const { createFlow } = await import("../db/repos/flow");
