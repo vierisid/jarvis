@@ -16,6 +16,7 @@ import { ComposerSpecimen } from "../chat/composer/preview/ComposerSpecimen";
 import { MessageSpecimen } from "../chat/message/preview/MessageSpecimen";
 import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCreationSpecimen";
 import { DecisionsSpecimen } from "../decisions/DecisionsSpecimen";
+import { GoalsSpecimen } from "../goals/GoalsSpecimen";
 import { OpportunitiesSpecimen } from "../opportunities/OpportunitiesSpecimen";
 
 import { WorkflowManagementSpecimen } from "../workflows/manage-list/WorkflowManagementSpecimen";
@@ -46,6 +47,7 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
+  if (specimen === "goals") return <GoalsSpecimen />;
   if (specimen === "decisions") return <DecisionsSpecimen />;
   if (specimen === "opportunities") return <OpportunitiesSpecimen />;
   if (specimen === "workflow-manage") return <WorkflowManagementSpecimen />;

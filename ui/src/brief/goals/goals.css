@@ -1,0 +1,438 @@
+.brief-root .brief-goals-room {
+  container: goals-room / inline-size;
+  min-width: 0;
+  padding-block: 4px 32px;
+}
+.brief-root .brief-goals-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  margin-bottom: 22px;
+}
+.brief-root .brief-goals-heading h1 {
+  margin: 0;
+}
+.brief-root .brief-goals-heading > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.brief-root .brief-goals-room .brief-tabs__panel {
+  padding-top: 0;
+}
+.brief-root .brief-goals-filter {
+  display: flex;
+  justify-content: flex-end;
+  margin: 14px 0;
+  min-height: 40px;
+}
+.brief-root .brief-goals-filter .brief-field {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin: 0;
+}
+.brief-root .brief-goals-filter .brief-field__control {
+  min-width: 160px;
+}
+.brief-root .brief-goals-read-status {
+  color: var(--brief-secondary);
+}
+.brief-root .brief-goals-read-status:empty {
+  display: none;
+}
+.brief-root .brief-goal-selectors {
+  display: flex;
+  overflow-x: auto;
+  gap: 14px;
+  padding: 4px 3px 10px;
+  scroll-padding-inline: 3px;
+  scrollbar-width: thin;
+}
+.brief-root .brief-goal-selector {
+  flex: 1 0 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+  min-height: 104px;
+  border-radius: var(--brief-corner-card);
+  border: 1px solid var(--brief-card-edge);
+  padding: 20px;
+  color: var(--brief-ink);
+  background: var(--brief-card);
+  text-align: left;
+  cursor: pointer;
+  /* Appearance changes must switch ink, surface and edge together. */
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-selector:hover {
+  background: var(--brief-soft);
+}
+.brief-root .brief-goal-selector[aria-pressed="true"] {
+  border-color: var(--brief-focus);
+  box-shadow: inset 0 0 0 1px var(--brief-focus);
+  background: var(--brief-selected);
+}
+.brief-root .brief-goal-selector:focus-visible,
+.brief-root .brief-goal-basis summary:focus-visible {
+  outline: 2px solid var(--brief-focus);
+  outline-offset: 3px;
+}
+.brief-root .brief-goal-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-goal-path-heading {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 16px;
+  margin: 24px 0 38px;
+}
+.brief-root .brief-goal-path-heading h2 {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-change {
+  flex-shrink: 0;
+  padding: 6px 16px;
+  border-radius: 24px;
+  background: var(--brief-soft);
+  font-variant-numeric: tabular-nums;
+}
+.brief-root .brief-goal-change[data-positive="true"] {
+  background: var(--brief-success-surface);
+}
+.brief-root .brief-goal-stages {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  gap: 42px;
+  align-items: stretch;
+}
+.brief-root .brief-goal-stages > li {
+  flex: 1 1 0;
+  min-width: 0;
+  position: relative;
+  display: flex;
+}
+.brief-root .brief-goal-connector {
+  position: absolute;
+  left: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--brief-tertiary);
+}
+.brief-root .brief-goal-stage {
+  flex: 1;
+  min-width: 0;
+  padding: 22px;
+  display: flex;
+  flex-direction: column;
+}
+.brief-root .brief-goal-stage[data-current="true"] {
+  border-color: var(--brief-focus);
+}
+.brief-root .brief-goal-stage h3 {
+  margin: 0 0 32px;
+  min-height: 40px;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-stage-value {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+  font-variant-numeric: tabular-nums;
+}
+.brief-root .brief-goal-stage-value strong {
+  font: 700 48px/1.1 var(--brief-sans);
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-stage-value > span {
+  color: var(--brief-secondary);
+  font-size: 18px;
+  overflow-wrap: anywhere;
+  max-width: 100%;
+}
+.brief-root .brief-goal-stage .brief-outcome-number {
+  min-inline-size: 2ch;
+}
+.brief-root .brief-goal-unit {
+  margin-top: 8px;
+  min-height: 16px;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-stage .brief-progress {
+  margin-top: 24px;
+}
+.brief-root .brief-goal-stage-status {
+  margin: 18px 0 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-stage-caption {
+  margin: 6px 0 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-basis {
+  margin-top: auto;
+  padding-top: 14px;
+}
+.brief-root .brief-goal-basis summary {
+  cursor: pointer;
+  padding-block: 6px;
+  width: fit-content;
+}
+.brief-root .brief-goal-basis dl {
+  margin: 8px 0 0;
+  display: grid;
+  gap: 4px;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-basis dd {
+  margin: 0 0 8px;
+}
+.brief-root .brief-goal-next-action {
+  margin-top: 48px;
+  padding: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+}
+.brief-root .brief-goal-next-action > div {
+  min-width: 0;
+}
+.brief-root .brief-goal-next-action h3 {
+  margin: 12px 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-next-action p {
+  margin: 0;
+}
+.brief-root .brief-goal-next-action .brief-button {
+  min-width: 172px;
+}
+.brief-root .brief-goals-empty {
+  padding-block: 48px;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-goals-room {
+  position: relative;
+}
+.brief-root .brief-goals-filter {
+  position: absolute;
+  top: 66px;
+  right: 0;
+  margin: 0;
+}
+.brief-root .brief-goal-selectors {
+  margin-top: 28px;
+}
+.brief-root .brief-goals-read-status:not(:empty) {
+  padding-top: 20px;
+}
+.brief-root .brief-goals-completed {
+  display: grid;
+  gap: 28px;
+  padding-top: 28px;
+}
+.brief-root .brief-goal-completed {
+  padding: 26px;
+}
+.brief-root .brief-goal-completed-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+.brief-root .brief-goal-completed-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--brief-success-text);
+  background: var(--brief-success-surface);
+  padding: 5px 14px;
+  border-radius: 24px;
+}
+.brief-root .brief-goal-completed h2 {
+  margin: 28px 0 20px;
+}
+.brief-root .brief-goal-completed-value {
+  display: flex;
+  align-items: baseline;
+  gap: 28px;
+  font-variant-numeric: tabular-nums;
+  flex-wrap: wrap;
+}
+.brief-root .brief-goal-completed-value strong {
+  font: 700 56px/1.1 var(--brief-sans);
+}
+.brief-root .brief-goal-completed-value > span {
+  font-size: 20px;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-milestones {
+  list-style: none;
+  display: flex;
+  gap: 18px;
+  padding: 0;
+  margin: 30px 0 20px;
+}
+.brief-root .brief-goal-milestones li {
+  flex: 1;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 14px;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-goal-milestones li:not(:first-child)::before {
+  content: "";
+  height: 1px;
+  background: var(--brief-card-edge);
+  flex: 1;
+  min-width: 10px;
+}
+.brief-root .brief-goal-milestone-mark {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--brief-progress-remaining);
+}
+.brief-root
+  .brief-goal-milestones
+  li[data-complete="true"]
+  .brief-goal-milestone-mark {
+  color: var(--brief-card);
+  background: var(--brief-progress-complete);
+}
+.brief-root .brief-goal-completion-context {
+  border-top: 1px solid var(--brief-card-edge);
+  padding-top: 20px;
+}
+.brief-root .brief-goal-completion-context p {
+  margin: 0 0 10px;
+}
+.brief-root .brief-goal-compact-title {
+  display: none;
+}
+@container goals-room (max-width: 920px) {
+  .brief-root .brief-goal-full-title {
+    display: none;
+  }
+  .brief-root .brief-goal-compact-title {
+    display: inline;
+  }
+  .brief-root .brief-goal-stages {
+    gap: 22px;
+  }
+  .brief-root .brief-goal-stage {
+    padding: 14px;
+  }
+  .brief-root .brief-goal-stage-value {
+    gap: 6px;
+  }
+  .brief-root .brief-goal-stage-value strong {
+    font-size: 38px;
+  }
+  .brief-root .brief-goal-stage-value > span {
+    font-size: 16px;
+  }
+  .brief-root .brief-goal-stage .brief-outcome-number {
+    min-inline-size: 1ch;
+  }
+  .brief-root .brief-goal-stage-caption {
+    display: none;
+  }
+  .brief-root .brief-goal-connector {
+    left: calc(100% + 3px);
+    width: 16px;
+  }
+  .brief-root .brief-goal-selector {
+    padding: 16px;
+    flex-basis: 150px;
+  }
+  .brief-root .brief-goal-milestones {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .brief-root .brief-goal-milestones li::before {
+    display: none;
+  }
+  .brief-root .brief-goal-next-action {
+    flex-direction: column;
+    align-items: stretch;
+  }
+}
+@container goals-room (max-width: 570px) {
+  .brief-root .brief-goals-filter {
+    position: static;
+    margin-block: 16px;
+  }
+  .brief-root .brief-goal-selectors {
+    margin-top: 0;
+  }
+  .brief-root .brief-goal-stages {
+    flex-direction: column;
+    gap: 30px;
+  }
+  .brief-root .brief-goal-stages > li .brief-goal-connector {
+    left: 50%;
+    top: calc(100% + 4px);
+    transform: rotate(90deg);
+    width: 22px;
+  }
+  .brief-root .brief-goal-stage {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(110px, 0.7fr);
+    gap: 12px 20px;
+  }
+  .brief-root .brief-goal-stage h3 {
+    margin: 0;
+  }
+  .brief-root .brief-goal-stage-value {
+    grid-column: 2;
+    grid-row: 1 / 3;
+  }
+  .brief-root .brief-goal-stage .brief-progress {
+    grid-column: 1 / -1;
+    margin-top: 4px;
+  }
+  .brief-root .brief-goal-basis {
+    grid-column: 1 / -1;
+  }
+  .brief-root .brief-goal-stage-status {
+    grid-column: 1 / -1;
+    margin-top: 0;
+  }
+  .brief-root .brief-goal-path-heading {
+    align-items: start;
+    flex-direction: column;
+    margin-bottom: 24px;
+  }
+  .brief-root .brief-goals-heading {
+    gap: 8px;
+  }
+  .brief-root .brief-goals-heading .brief-button {
+    padding-inline: 12px;
+  }
+}
+.brief-root .brief-goal-stages[data-long-path="true"] {
+  flex-direction: column;
+  gap: 30px;
+}
+.brief-root .brief-goal-stages[data-long-path="true"] .brief-goal-connector {
+  left: 50%;
+  top: calc(100% + 4px);
+  transform: rotate(90deg);
+}

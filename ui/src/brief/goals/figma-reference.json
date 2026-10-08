@@ -1,0 +1,27 @@
+{
+  "file": "eNfKeirIKLZLlZEasrurZa",
+  "page": "81:2",
+  "checkpoint": "UI-35 · Dashboard craft pass verified · prototype limits recorded",
+  "inspected": "2026-10-08",
+  "method": "Signed-in native prototype through the browser; screenshots are captures, not node exports.",
+  "states": {
+    "active": "81:3608",
+    "active_chat": "81:3780",
+    "completed": "367:3642",
+    "completed_chat": "367:4308"
+  },
+  "preserved": [
+    "Active selectors and four connected path cards in desktop/chat compositions",
+    "Completed summary cards with settled milestones",
+    "Shared brand, typography, progress geometry, quiet hover and persistent selection",
+    "No date, removed subtitle or Archive tab"
+  ],
+  "implementation_adaptations": [
+    "Qualified numeric evidence and Data basis; no counts invented from scores",
+    "Quiet filter for actual paused, failed, draft and killed statuses",
+    "Vertical path below 570px room width or with more than four stages",
+    "Add a goal appears only with an existing host onCreate flow",
+    "Refresh exposes source read states; fixture review toolbar is separate from product UI"
+  ],
+  "evidence": "docs/brief-delivery/evidence/D-24/"
+}

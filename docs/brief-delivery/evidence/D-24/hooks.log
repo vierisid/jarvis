@@ -1,0 +1,93 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 2 required path(s) present in the bun tarball (2340 files).
+[pre-commit] Running 3 related test file(s) (180s timeout)...
+bun test v1.3.6 (d530ed99)
+
+ui/src/brief/goals/GoalsRoom.test.tsx:
+(pass) approved path, shared segments, and absence of removed headings [108.33ms]
+(pass) selection remains across all eight layouts and returns from completed [299.01ms]
+(pass) next action opens exactly the shared Today work and approval [74.45ms]
+(pass) score-only and unknown goals never invent measured counts [52.95ms]
+(pass) decreasing targets retain units, baseline, source and canonical progress [27.17ms]
+(pass) filter changes expose real paused and failed statuses without an archive [60.68ms]
+(pass) refresh changes only the existing value nodes, without replacing unrelated stages [58.94ms]
+(pass) stale evidence leaves the path readable but blocks next-step navigation [34.61ms]
+(pass) source, scope and capability mismatches fail closed [27.84ms]
+(pass) direct completed route selects the canonical goal and keeps long facts readable [39.84ms]
+(pass) completed visits remain settled and show real milestones [251.02ms]
+(pass) a value change animates only the changed glyph, never the entire goal path [48.47ms]
+
+ui/src/brief/goals/model.test.ts:
+(pass) zero-baseline counts use the same normalized band as Today [0.28ms]
+(pass) score-only titles never supply a numerator [0.13ms]
+(pass) unknown and observed zero remain different [0.10ms]
+(pass) nonzero and decreasing targets use canonical progress, with unmodified measurements [0.19ms]
+(pass) missing provenance, invalid time or invalid fraction never render an evidenced count [0.18ms]
+(pass) completion status never forces score or measurement to 100 percent [0.10ms]
+(pass) canonical statuses remain reachable, with no archive reinterpretation [0.11ms]
+(pass) next action is the existing Today decision and only available on a current active goal [0.09ms]
+(pass) duplicate roots and duplicate path stages are rejected [0.16ms]
+
+ui/src/brief/goals/controller.test.ts:
+(pass) access gates reads; revocation clears private rows and selection [3.26ms]
+(pass) selection survives reorder, tab returns, filter returns and refreshed values [1.86ms]
+(pass) unknown, failed and completed direct IDs select their real status [1.41ms]
+(pass) late reads cannot overwrite a later selection or refreshed data [1.43ms]
+(pass) failed refresh retains a stale read; duplicate projections fail closed [1.47ms]
+(pass) retired or revoked pending reads cannot repopulate a scope [2.46ms]
+(pass) read-state families remain distinct [9.42ms]
+
+ 28 pass
+ 0 fail
+ 116 expect() calls
+Ran 28 tests across 3 files. [1448.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-24 85b11e98] feat(brief): build Goals paths and completed milestones (D-24)
+ 40 files changed, 3895 insertions(+), 13 deletions(-)
+ create mode 100644 docs/brief-delivery/D-24.json
+ create mode 100644 docs/brief-delivery/D-24.md
+ create mode 100644 docs/brief-delivery/evidence/D-24/README.md
+ create mode 100644 docs/brief-delivery/evidence/D-24/brief-regression.log
+ create mode 100644 docs/brief-delivery/evidence/D-24/browser-checks.json
+ create mode 100644 docs/brief-delivery/evidence/D-24/build.log
+ create mode 100644 docs/brief-delivery/evidence/D-24/completed-dark-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/completed-light-wide.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/dark-expanded-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/dark-expanded-closed.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/dark-rail-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/dark-rail-closed.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/figma-active-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/figma-active.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/figma-completed-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/figma-completed.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/final-active-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/final-active-light.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/focused-tests.log
+ create mode 100644 docs/brief-delivery/evidence/D-24/format-check.log
+ create mode 100644 docs/brief-delivery/evidence/D-24/light-expanded-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/light-expanded-closed.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/light-rail-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/light-rail-closed.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/long-1024-chat.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/long-1024-closed.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/score-only.jpg
+ create mode 100644 docs/brief-delivery/evidence/D-24/typecheck.log
+ create mode 100644 ui/src/brief/goals/GoalsRoom.test.tsx
+ create mode 100644 ui/src/brief/goals/GoalsRoom.tsx
+ create mode 100644 ui/src/brief/goals/GoalsSpecimen.tsx
+ create mode 100644 ui/src/brief/goals/controller.test.ts
+ create mode 100644 ui/src/brief/goals/controller.ts
+ create mode 100644 ui/src/brief/goals/figma-reference.json
+ create mode 100644 ui/src/brief/goals/fixtures.ts
+ create mode 100644 ui/src/brief/goals/goals.css
+ create mode 100644 ui/src/brief/goals/model.test.ts
+ create mode 100644 ui/src/brief/goals/model.ts
