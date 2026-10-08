@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
-import { WebSocketService, shownApprovalIdFrom } from './ws-service.ts';
+import { WebSocketService, shownApprovalIdFrom, voiceApprovalAmbiguous } from './ws-service.ts';
 import { getDb, initDatabase } from '../vault/schema.ts';
 import { ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
 import { AuditTrail } from '../authority/audit.ts';
@@ -279,5 +279,69 @@ describe('#809: the shown id travels with the utterance', () => {
     expect(shownApprovalIdFrom({ shownApprovalId: '' })).toBeUndefined();
     expect(shownApprovalIdFrom({ shownApprovalId: 7 })).toBeUndefined();
     expect(shownApprovalIdFrom(undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * #855. #809 bound a voice answer to the card on top of the rail. With two or
+ * more up, "on top" is position, not the card the person read, so voice
+ * decides nothing until only one is waiting.
+ */
+describe('#855: with several approvals pending, voice decides none of them', () => {
+  test('a yes on the newest, shown, approval is refused while another is pending, and says why', async () => {
+    const a = pendingEmail('alice@example.com', 1000);
+    const b = pendingEmail('bob@example.com', 2000);
+    const resolved = await svc.resolveLatestPendingByVoice('approve', 1, b.id);
+    expect(resolved).toEqual({ kind: 'refused', message: voiceApprovalAmbiguous('approve', 2) });
+    expect(status(a)).toBe('pending');
+    expect(status(b)).toBe('pending');
+    expect(executions).toEqual([]);
+  });
+
+  test('a no is held to the same rule', async () => {
+    const a = pendingEmail('alice@example.com', 1000);
+    const b = pendingEmail('bob@example.com', 2000);
+    const c = pendingEmail('carol@example.com', 3000);
+    const resolved = await svc.resolveLatestPendingByVoice('cancel', 1, c.id);
+    expect(resolved).toEqual({ kind: 'refused', message: voiceApprovalAmbiguous('cancel', 3) });
+    expect([status(a), status(b), status(c)]).toEqual(['pending', 'pending', 'pending']);
+  });
+
+  test('the message says several are waiting and to pick each on its card, not that something failed', () => {
+    const yes = voiceApprovalAmbiguous('approve', 2);
+    expect(yes).toBe('2 requests are waiting for approval, so I can\'t tell which one your "yes" is for, and I haven\'t approved anything. Approve or deny each one on its card. Voice works again once only one is waiting.');
+    const no = voiceApprovalAmbiguous('cancel', 4);
+    expect(no).toContain('4 requests are waiting');
+    expect(no).toContain('your "no" is for');
+    expect(no).toContain("I haven't cancelled anything");
+    // Never "say yes again": while several are waiting the next yes is just as ambiguous.
+    expect(yes.toLowerCase()).not.toMatch(/say (yes|it|that) again/);
+  });
+
+  test('a request arriving mid-answer still gets the more specific #809 message', async () => {
+    const a = pendingEmail('alice@example.com', 1000);
+    pendingEmail('mallory@example.com', 2000);
+    const resolved = await svc.resolveLatestPendingByVoice('approve', 1, a.id);
+    if (resolved?.kind !== 'refused') throw new Error('expected a refusal');
+    expect(resolved.message).toContain('A new request arrived while you were answering');
+  });
+
+  test('once the other is decided, the one left is decided by voice as before', async () => {
+    const a = pendingEmail('alice@example.com', 1000);
+    const b = pendingEmail('bob@example.com', 2000);
+    mgr.deny(a.id, 'dashboard');
+    const resolved = await svc.resolveLatestPendingByVoice('approve', 1, b.id);
+    expect(resolved?.kind).toBe('approval');
+    expect(status(b)).toBe('executed');
+  });
+
+  test('through the voice pipeline: the thread says why, and nothing is decided', async () => {
+    const a = pendingEmail('alice@example.com', 1000);
+    const b = pendingEmail('bob@example.com', 2000);
+    await (svc as unknown as { routeMessage: (m: unknown, ws: unknown) => Promise<unknown> })
+      .routeMessage({ type: 'voice_text', payload: { requestId: 'r1', text: 'yes', shownApprovalId: b.id }, timestamp: 0 }, {});
+    for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 0));
+    expect(replies()).toEqual([voiceApprovalAmbiguous('approve', 2)]);
+    expect([status(a), status(b)]).toEqual(['pending', 'pending']);
   });
 });

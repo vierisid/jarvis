@@ -137,6 +137,23 @@ export function voiceApprovalMismatch(
 }
 
 /**
+ * Why a spoken yes or no decided nothing when several approvals are pending
+ * (#855). The rail lists every one of them, so "yes" says which by position
+ * only -- the one on top -- not by which card the person was reading. Voice
+ * therefore decides only while exactly one approval is waiting.
+ *
+ * The message says how many are waiting and that each has to be decided on
+ * its own card, so the refusal reads as "I can't tell which one you mean",
+ * not as a failure. It does not name them: they are all on the rail, and a
+ * list read back as a sentence is no easier to pick from than the cards.
+ */
+export function voiceApprovalAmbiguous(decision: 'approve' | 'cancel', pendingCount: number): string {
+  const word = decision === 'approve' ? 'yes' : 'no';
+  const nothing = decision === 'approve' ? "I haven't approved anything" : "I haven't cancelled anything";
+  return `${pendingCount} requests are waiting for approval, so I can't tell which one your "${word}" is for, and ${nothing}. Approve or deny each one on its card. Voice works again once only one is waiting.`;
+}
+
+/**
  * A voice utterance that's been STT'd but is held pending user confirmation
  * because the classifier wasn't confident enough to act unilaterally. The
  * REST resolution endpoint looks up the pending entry by id and either
@@ -2421,6 +2438,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * The same holds when the approval they were answering has gone and nothing
    * else is pending: their "yes" was not about a clarifier or a repeat-back,
    * so it confirms neither.
+   *
+   * And it holds only while one approval is pending (#855): with two cards up,
+   * the one on top is not necessarily the one they read, so a yes or no is
+   * `refused` (`voiceApprovalAmbiguous`) and each is decided on its card. A
+   * mismatch is reported first, since it says more about what happened.
    */
   async resolveLatestPendingByVoice(
     decision: 'approve' | 'cancel',
@@ -2456,6 +2478,21 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             channel: 'voice',
           });
           return { kind: 'refused', message: mismatch };
+        }
+        if (pending.length > 1) {
+          // The newest is the one shown, but it is not the only one (#855):
+          // the person may have been reading any card on the rail.
+          this.auditTrail?.log({
+            agent_id: latest.agent_id,
+            agent_name: latest.agent_name,
+            tool_name: latest.tool_name,
+            action_category: latest.action_category as ActionCategory,
+            authority_decision: 'approval_required',
+            approval_id: latest.id,
+            executed: false,
+            channel: 'voice',
+          });
+          return { kind: 'refused', message: voiceApprovalAmbiguous(decision, pending.length) };
         }
 
         // Two-tier safety: destructive impacts never resolve by voice;
