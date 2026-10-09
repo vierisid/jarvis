@@ -17,6 +17,7 @@ class FakeRealtimeSession {
   usageCb: ((u: RealtimeUsage) => void) | null = null;
   errorCb: ((e: string) => void) | null = null;
   closeCb: (() => void) | null = null;
+  turnStartCb: (() => void) | null = null;
   results: Array<{ callId: string; result: unknown }> = [];
   connected = false;
   closed = false;
@@ -27,6 +28,7 @@ class FakeRealtimeSession {
   onError(cb: (e: string) => void) { this.errorCb = cb; }
   onOpen() {}
   onClose(cb: () => void) { this.closeCb = cb; }
+  onUserTurnStart(cb: () => void) { this.turnStartCb = cb; }
   onSpeechStarted() {}
   async connect() { this.connected = true; }
   sendFunctionResult(callId: string, result: unknown) { this.results.push({ callId, result }); }
@@ -39,18 +41,33 @@ function setup(executeToolCall: (n: string, a: Record<string, unknown>) => Promi
   const transport = new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 });
   const transcripts: RealtimeTranscript[] = [];
   let closeCalls = 0;
+  let turnStarts = 0;
   const rv = new RealtimeVoiceSession(RESOLVED, transport, {
     tools: [],
     instructions: 'persona',
     executeToolCall,
+    onUserTurnStart: () => { turnStarts++; },
     onTranscript: (t) => transcripts.push(t),
     onClose: () => { closeCalls++; },
     sessionFactory: () => fake as unknown as RealtimeSession,
   });
-  return { fake, rv, transcripts, getCloseCalls: () => closeCalls };
+  return { fake, rv, transcripts, getCloseCalls: () => closeCalls, getTurnStarts: () => turnStarts };
 }
 
 describe('RealtimeVoiceSession', () => {
+  // The taint-gating turn boundary used to be wired by each caller, out of
+  // band, and the pebble never did it -- so one capture_screen or page read
+  // left every later machine-changing action refused as taint-gated for the
+  // life of the daemon, at any authority level. It is wired here now, so a
+  // surface cannot have a session without one.
+  test('the session registers the deps user-turn handler with the inner session', () => {
+    const { fake, getTurnStarts } = setup(async () => 'ok');
+    expect(fake.turnStartCb).not.toBeNull();
+    fake.turnStartCb!();
+    fake.turnStartCb!();
+    expect(getTurnStarts()).toBe(2);
+  });
+
   test('connect() delegates to the underlying session', async () => {
     const { fake, rv } = setup(async () => 'ok');
     await rv.connect();
@@ -157,6 +174,7 @@ describe('RealtimeVoiceSession error copy', () => {
         tools: [],
         instructions: 'persona',
         executeToolCall: async () => 'ok',
+        onUserTurnStart: () => {},
         onError: (e) => errors.push(e),
         sessionFactory: () => fake as unknown as RealtimeSession,
       },

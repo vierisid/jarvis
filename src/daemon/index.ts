@@ -1084,6 +1084,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (nav !== null) return nav;
           return agentService.getOrchestrator().executeRealtimeToolCall(name, args, { blockedCategories });
         },
+        // Voice has no turn objects: the user starting to speak is the taint
+        // gating boundary, and on this surface nothing else clears it. Without
+        // it one `capture_screen` (or any page read) left every later
+        // machine-changing action refused as taint-gated for the rest of the
+        // daemon's life, at any authority level.
+        onUserTurnStart: () => { agentService.getOrchestrator().resetRealtimeTaint(); },
         onState: (sidecarId, state, text) => { void setState(sidecarId, state, text); },
         onStatus: (sidecarId, status, detail) => {
           console.log(`[pebble-realtime] ${sidecarId} ${status}${detail ? `: ${detail}` : ''}`);
