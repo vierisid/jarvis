@@ -3,8 +3,8 @@
  *
  * Manages Telegram, Discord (and future) channel adapters.
  * Routes all external messages through the same AgentService (same brain),
- * persists conversations to the vault (unified history), and handles
- * proactive broadcasts to all connected channels.
+ * persists conversations to the vault, one per sender and chat (#884), and
+ * handles proactive broadcasts to all connected channels.
  */
 
 import type { Service, ServiceStatus } from './services.ts';
@@ -15,6 +15,7 @@ import type { STTProvider } from '../comms/voice.ts';
 
 import { ChannelManager } from '../comms/index.ts';
 import { TelegramAdapter } from '../comms/channels/telegram.ts';
+import { channelAllowList } from '../comms/channels/allow-list.ts';
 import { createSTTProvider } from '../comms/voice.ts';
 import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
@@ -59,6 +60,27 @@ export function parsePersistedRecipient(channel: string, value: string): Broadca
   return null;
 }
 
+/** See `ChannelService.getRecipientStatus` (#890). */
+export type RecipientStatus =
+  | { hasRecipient: true }
+  | { hasRecipient: false; reason: 'empty_list' | 'no_direct_message' };
+
+/**
+ * What to tell the owner about channels that have nowhere to send approval
+ * requests and notifications (#890), or null when every connected one does.
+ */
+export function recipientWarning(status: Record<string, RecipientStatus>): string | null {
+  const label = (name: string) => name.charAt(0).toUpperCase() + name.slice(1);
+  const lines: string[] = [];
+  for (const [name, s] of Object.entries(status)) {
+    if (s.hasRecipient) continue;
+    lines.push(s.reason === 'empty_list'
+      ? `${label(name)} will not receive approval requests or notifications: no user ID is listed for it.`
+      : `${label(name)} will not receive approval requests or notifications until a listed user sends the bot a direct message (again, if they did before).`);
+  }
+  return lines.length ? lines.join(' ') : null;
+}
+
 export type ApprovalCommandHandler = (action: 'approve' | 'deny', shortId: string, channel: string) => Promise<string>;
 
 export type DeliveryFailureHandler = (failure: { channel: string; attempts: number; error: string }) => void;
@@ -79,6 +101,17 @@ export class ChannelService implements Service {
    * directly.
    */
   private lastRecipients = new Map<string, BroadcastRecipient>();
+  /**
+   * The last Telegram update an adapter started handling, kept across the
+   * stop/start a settings save does (#882), per bot token: update ids are
+   * numbered per bot, so another token starts over, and switching back to a
+   * token picks up where that bot left off.
+   *
+   * Never the adapter's poll offset. That also counts updates an old adapter
+   * fetched but left unhandled once it was disconnected (#860), which must
+   * reach the new adapter so they are judged against the new allow-list.
+   */
+  private telegramTaken = new Map<string, number>();
   /** Handler for approval commands (approve/deny) from external channels */
   private approvalHandler: ApprovalCommandHandler | null = null;
   /** Notified when a send has exhausted its retries (e.g. to alert the dashboard). */
@@ -130,22 +163,51 @@ export class ChannelService implements Service {
         }
       }
 
-      // 2. Create & register adapters from config. An empty allowed_users
-      // lets anyone who can reach the bot chat, but lets nobody approve or
-      // deny from that channel (#811, ChannelConfig, senderAllowListed).
+      // 2. Create & register adapters from config.
+      //
+      // An enabled channel whose allow-list is empty is NOT started (#908).
+      // The API refuses to save that state, but a config saved before #908, or
+      // edited by hand, can still hold it -- and starting it would be shell
+      // access for anyone who can reach the bot. At the default authority level
+      // an unlisted sender's turn gets run_command, read_file, write_file and
+      // browser_navigate with requiresApproval false, and taint gating does not
+      // engage because their message IS the user turn.
+      //
+      // Refusing loudly rather than silently: the daemon still starts, and the
+      // log says which channel was skipped and what to do, because a channel
+      // that quietly stopped working is its own support problem.
       const channels = this.config.channels;
+      const refuseOpen = (name: 'telegram' | 'discord', allowed: readonly unknown[] | undefined): boolean => {
+        if ((allowed ?? []).length > 0) return false;
+        console.error(
+          `[ChannelService] ${name} is enabled but its allowed_users list is empty, so it was NOT started (#908). ` +
+          `Anyone who could reach the bot would be able to run commands and read or write files with your ` +
+          `authority. Add at least one user ID in Settings > Channels to enable it.`,
+        );
+        return true;
+      };
 
-      if (channels?.telegram?.enabled && channels.telegram.bot_token) {
-        const telegram = new TelegramAdapter(channels.telegram.bot_token, {
+      if (channels?.telegram?.enabled && channels.telegram.bot_token
+        && !refuseOpen('telegram', channels.telegram.allowed_users)) {
+        warnAllowListProblems('telegram', channels.telegram.allowed_users);
+        const token = channels.telegram.bot_token;
+        const taken = this.telegramTaken.get(token);
+        const telegram = new TelegramAdapter(token, {
           sttProvider: this.sttProvider ?? undefined,
           allowedUsers: channels.telegram.allowed_users,
+          ...(taken !== undefined ? { startOffset: taken + 1 } : {}),
+          onUpdateTaken: (updateId) => {
+            this.telegramTaken.set(token, Math.max(updateId, this.telegramTaken.get(token) ?? 0));
+          },
         });
         this.manager.register(telegram);
       }
 
-      if (channels?.discord?.enabled && channels.discord.bot_token) {
+      if (channels?.discord?.enabled && channels.discord.bot_token
+        && !refuseOpen('discord', channels.discord.allowed_users)) {
         // Lazy-loaded: discord.js costs ~38MB RSS, only pay it when the
         // Discord channel is actually enabled.
+        warnAllowListProblems('discord', channels.discord.allowed_users);
         const { DiscordAdapter } = await import('../comms/channels/discord.ts');
         const discord = new DiscordAdapter(channels.discord.bot_token, {
           sttProvider: this.sttProvider ?? undefined,
@@ -286,14 +348,53 @@ export class ChannelService implements Service {
     return recipient && this.allowListNames(channel, recipient.userId) ? recipient.to : null;
   }
 
-  /** Whether the channel's allow-list, as configured right now, names this user. Empty names nobody. */
-  private allowListNames(channel: string, userId: unknown): boolean {
-    if ((typeof userId !== 'string' && typeof userId !== 'number') || userId === '') return false;
+  /**
+   * Whether each connected channel has somewhere to send approval requests
+   * and notifications, and if not, why (#890). Since #852 that is only the
+   * private chat of a user the allow-list names, so after a revocation, or
+   * on a list nobody has messaged from yet, broadcasts are skipped with a log
+   * line nobody reads. The dashboard shows this so the owner finds out before
+   * a notification goes nowhere.
+   *
+   *   - `empty_list`: the saved list names nobody, so there can be no
+   *     recipient;
+   *   - `no_direct_message`: the list names someone, but the last listed user
+   *     to message the bot privately is no longer listed, or none has yet.
+   *     Only the LAST such sender is kept, so an earlier one who is still
+   *     listed must message again.
+   */
+  getRecipientStatus(): Record<string, RecipientStatus> {
+    const out: Record<string, RecipientStatus> = {};
+    for (const name of this.manager.listChannels()) {
+      if (!this.manager.getChannel(name)?.isConnected()) continue;
+      if (this.getBroadcastRecipient(name) !== null) {
+        out[name] = { hasRecipient: true };
+        continue;
+      }
+      const list = channelAllowList(name, this.rawAllowList(name));
+      out[name] = { hasRecipient: false, reason: list && list.ids.length > 0 ? 'no_direct_message' : 'empty_list' };
+    }
+    return out;
+  }
+
+  /** The channel's `allowed_users` as configured right now, in whatever shape. */
+  private rawAllowList(channel: string): unknown {
     const channels = this.config?.channels;
-    const list: unknown = channel === 'telegram' ? channels?.telegram?.allowed_users
+    return channel === 'telegram' ? channels?.telegram?.allowed_users
       : channel === 'discord' ? channels?.discord?.allowed_users
         : undefined;
-    return Array.isArray(list) && list.some((id) => String(id) === String(userId));
+  }
+
+  /**
+   * Whether the channel's allow-list, as configured right now, names this
+   * user. Empty names nobody, and so does an entry that is not a valid id for
+   * the channel (#883): the adapters ignore those entries, and a list must not
+   * name someone here whom the adapter would turn away.
+   */
+  private allowListNames(channel: string, userId: unknown): boolean {
+    if ((typeof userId !== 'string' && typeof userId !== 'number') || userId === '') return false;
+    const list = channelAllowList(channel, this.rawAllowList(channel));
+    return !!list && list.ids.some((id) => String(id) === String(userId));
   }
 
   /**
@@ -404,18 +505,59 @@ export class ChannelService implements Service {
       }
     }
 
-    // 1. Persist inbound user message to vault
-    const conversation = getOrCreateConversation(channelTag);
+    // 1. Persist inbound user message to vault, in this sender's own
+    //    conversation (#884). Every sender used to share the channel's one
+    //    conversation, so on a channel anyone may message (an empty list,
+    //    #811) a stranger could ask about the owner's earlier turns.
+    const sender = conversationSender(msg);
+    if (!sender) return "Sorry, I can't tell who sent this message, so I can't answer it.";
+    const conversation = getOrCreateConversation(channelTag, { sender });
     addMessage(conversation.id, { role: 'user', content: msg.text });
 
-    // 2. Route to AgentService (non-streaming — external channels are request/response)
-    const response = await runWithOrigin('user', () => this.agentService.handleMessage(msg.text, channelTag));
+    // 2. Route to AgentService (non-streaming — external channels are
+    //    request/response), on that conversation's history alone. A sender the
+    //    list does not name does not teach the agent anything either: what it
+    //    learns goes into every later turn's prompt, the owner's included.
+    const response = await runWithOrigin('user', () => this.agentService.handleThreadMessage(
+      msg.text, channelTag, { conversationId: conversation.id, contextKey: `channel:${channelTag}:${sender}`, learn: allowListed },
+    ));
 
     // 3. Persist assistant response to vault
     addMessage(conversation.id, { role: 'assistant', content: response });
 
     return response;
   }
+}
+
+/**
+ * Say, at startup and after every settings save, which `allowed_users`
+ * entries name nobody (#883). They are ignored, and a list made only of them
+ * lets nobody in, which an owner would otherwise discover only as a bot that
+ * never answers.
+ */
+function warnAllowListProblems(channel: string, raw: unknown): void {
+  const list = channelAllowList(channel, raw);
+  for (const problem of list?.problems ?? []) {
+    console.warn(`[ChannelService] ${channel} allowed_users: ${problem}`);
+  }
+  if (list && list.restricted && list.ids.length === 0) {
+    console.warn(`[ChannelService] ${channel} allowed_users names nobody, so nobody can message the bot. Fix it in Settings > Channels.`);
+  }
+}
+
+/**
+ * Whose conversation a channel message belongs to (#884): the sender, in the
+ * chat they wrote from. Keyed by the chat too, so what someone said in a
+ * private chat is not the history of a reply the bot posts in a group, where
+ * every member reads it. Null when the adapter did not say who sent it, which
+ * is answered without the agent rather than filed under a shared key.
+ */
+export function conversationSender(msg: Pick<ChannelMessage, 'metadata'>): string | null {
+  const userId = msg.metadata.userId;
+  const chat = msg.metadata.chatId ?? msg.metadata.channelId;
+  const id = (v: unknown) => (typeof v === 'string' && v !== '') || (typeof v === 'number' && Number.isFinite(v));
+  if (!id(userId) || !id(chat)) return null;
+  return `user:${String(userId)}/chat:${String(chat)}`;
 }
 
 /**

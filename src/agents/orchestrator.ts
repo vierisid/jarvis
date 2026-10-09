@@ -575,11 +575,18 @@ export class AgentOrchestrator {
     // BackgroundAgentService), which is how a commitment written in a site
     // chat gets its originating scope back (#571).
     scope?: TurnToolScope | null,
+    // A conversation of the caller's own instead of the primary agent's
+    // history (#884). An external channel passes each sender's thread here:
+    // the primary history is the one the dashboard chat writes, so a stranger
+    // messaging the bot read the owner's dashboard conversation. The thread
+    // is read, never written: the caller persists the turn itself.
+    thread?: { history: LLMMessage[] } | null,
   ): Promise<string> {
     const primary = this.getPrimary();
     if (!primary) {
       throw new Error('No primary agent exists. Create one first.');
     }
+    const ownThread = thread ?? null;
 
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
@@ -592,19 +599,19 @@ export class AgentOrchestrator {
     const turnScope = scope ?? null;
 
     // Add user message to persistent history
-    primary.addMessage('user', message);
+    if (!ownThread) primary.addMessage('user', message);
 
     // If no LLM manager, return placeholder
     if (!this.llmManager) {
       const response = `[No LLM configured] Received: ${message}`;
-      primary.addMessage('assistant', response);
+      if (!ownThread) primary.addMessage('assistant', response);
       return response;
     }
 
     // Build local messages array for this turn (system + history)
     const messages: LLMMessage[] = [
       ...toSystemMessages(systemPrompt),
-      ...primary.getMessages(),
+      ...(ownThread ? [...ownThread.history, { role: 'user' as const, content: message }] : primary.getMessages()),
     ];
 
     // Decided once for the turn and held across the loop. Recomputing per
@@ -691,7 +698,7 @@ export class AgentOrchestrator {
     }
 
     // Add final response to persistent history
-    primary.addMessage('assistant', finalText);
+    if (!ownThread) primary.addMessage('assistant', finalText);
     return finalText;
   }
 

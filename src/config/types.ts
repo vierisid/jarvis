@@ -78,9 +78,15 @@ export type GoogleConfig = {
 };
 
 /**
+ * `allowed_users` is a list of user ids: positive integers for Telegram,
+ * snowflake strings for Discord. Any other entry is ignored with a warning, and
+ * a value that names nobody (a string, `["042"]`) lets nobody in rather than
+ * everyone (#883, comms/channels/allow-list.ts).
+ *
  * `allowed_users` means two different things when it is EMPTY (#811):
  *   - chat: everyone who can reach the bot may talk to Jarvis (any Telegram
- *     user who finds it, any member of a Discord guild it is in);
+ *     user who finds it, any member of a Discord guild it is in), each in a
+ *     conversation of their own (#884), though with the owner's tools;
  *   - approvals: nobody may approve or deny from that channel. An
  *     `approve <id>` or `deny <id>` reply is refused, and the decision has to
  *     be made in the dashboard. A gated action is the one place "allow all"

@@ -239,3 +239,110 @@ describe('#860: a batch that lands after disconnect is not handled', () => {
     }
   });
 });
+
+/**
+ * #883. The gate was `allowedUsers.includes(id)` on whatever the setting held,
+ * and a string's `.includes` is a substring test.
+ */
+describe('#883: an allowed_users value that is not a list of ids', () => {
+  const reaches = async (allowedUsers: unknown, fromId: number) => {
+    const adapter = new TelegramAdapter('test-token', { allowedUsers });
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    await (adapter as unknown as { processUpdate(u: unknown): Promise<void> }).processUpdate({
+      update_id: 1,
+      message: { message_id: 7, from: { id: fromId, first_name: 'A' }, chat: { id: fromId, type: 'private' }, date: 0, text: 'hello' },
+    });
+    return seen;
+  };
+
+  test('a string is not a substring match: "12345" lets in neither 123 nor 234 nor 12345', async () => {
+    for (const id of [123, 234, 1234, 12345]) {
+      expect(await reaches('12345', id)).toEqual([]);
+    }
+  });
+
+  test('a list of entries that name nobody lets nobody in, rather than everyone', async () => {
+    expect(await reaches(['042'], 42)).toEqual([]);
+    expect(await reaches([1.5], 1)).toEqual([]);
+  });
+
+  test('the valid entries of a mixed list still work, and only they are allow-listed', async () => {
+    const seen = await reaches(['042', 42], 42);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.senderAllowListed).toBe(true);
+  });
+});
+
+/**
+ * #885. Telegram gives every message sent on behalf of a chat the same
+ * placeholder sender: 1087968824 (GroupAnonymousBot) for anonymous group
+ * admins, 136817688 (Channel_Bot) for "send as channel" and a linked channel's
+ * automatic forwards. `sender_chat` is what marks them.
+ */
+describe('#885: a message sent on behalf of a chat is not handled', () => {
+  const GROUP_ANONYMOUS_BOT = 1087968824;
+  const CHANNEL_BOT = 136817688;
+  const handled = async (allowedUsers: number[], message: Record<string, unknown>) => {
+    const adapter = new TelegramAdapter('test-token', { allowedUsers });
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    await (adapter as unknown as { processUpdate(u: unknown): Promise<void> }).processUpdate({
+      update_id: 1,
+      message: { message_id: 7, chat: { id: -100123, type: 'supergroup' }, date: 0, text: 'approve 1a2b3c4d', ...message },
+    });
+    return seen;
+  };
+
+  test('an anonymous admin is dropped even when the shared id is listed', async () => {
+    const msg = { from: { id: GROUP_ANONYMOUS_BOT, first_name: 'Group', username: 'GroupAnonymousBot' }, sender_chat: { id: -100123, type: 'supergroup', title: 'Any group' } };
+    expect(await handled([GROUP_ANONYMOUS_BOT], msg)).toEqual([]);
+    // And on an empty list, where anyone may chat, it still cannot.
+    expect(await handled([], msg)).toEqual([]);
+  });
+
+  test('a post sent as a channel is dropped too', async () => {
+    const msg = { from: { id: CHANNEL_BOT, first_name: 'Channel', username: 'Channel_Bot' }, sender_chat: { id: -100999, type: 'channel', title: 'A channel' } };
+    expect(await handled([CHANNEL_BOT], msg)).toEqual([]);
+    expect(await handled([], msg)).toEqual([]);
+  });
+
+  test('a message with no sender at all is dropped instead of throwing', async () => {
+    expect(await handled([], {})).toEqual([]);
+  });
+
+  test('an ordinary member of the same group is still handled', async () => {
+    const seen = await handled([42], { from: { id: 42, first_name: 'A' } });
+    expect(seen).toHaveLength(1);
+    expect(seen[0]!.senderAllowListed).toBe(true);
+  });
+
+  test('a sender-less update does not take the rest of its batch down with it', async () => {
+    const originalFetch = globalThis.fetch;
+    let served = false;
+    globalThis.fetch = (async (url: string) => {
+      if (url.endsWith('/getMe')) return Response.json({ ok: true, result: { username: 'bot' } });
+      if (url.endsWith('/getUpdates')) {
+        await Bun.sleep(5);
+        if (served) return Response.json({ ok: true, result: [] });
+        served = true;
+        return Response.json({ ok: true, result: [
+          { update_id: 1, message: { message_id: 1, chat: { id: -100123, type: 'supergroup' }, date: 0, text: 'from nobody' } },
+          { update_id: 2, message: { message_id: 2, from: { id: 42, first_name: 'A' }, chat: { id: 42, type: 'private' }, date: 0, text: 'hello' } },
+        ] });
+      }
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+    const adapter = new TelegramAdapter('test-token', { allowedUsers: [42] });
+    const seen: string[] = [];
+    adapter.onMessage(async (m) => { seen.push(m.text); return ''; });
+    try {
+      await adapter.connect();
+      for (let i = 0; i < 100 && seen.length === 0; i++) await Bun.sleep(10);
+      expect(seen).toEqual(['hello']);
+    } finally {
+      await adapter.disconnect();
+      globalThis.fetch = originalFetch;
+    }
+  });
+});

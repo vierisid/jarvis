@@ -586,6 +586,67 @@ export class AgentService implements Service, IAgentService {
   }
 
   /**
+   * A turn in one conversation of its own, for an external channel (#884).
+   *
+   * `handleMessage` reads the channel's history: the conv tier the channel's
+   * most recent conversation, the classic orchestrator the primary agent's
+   * history, which is the one the dashboard chat writes. So every sender on a
+   * channel anyone may message shared the owner's context, and in classic
+   * mode (the default, with no conversation tier) a stranger read the owner's
+   * dashboard conversation. Here the history is exactly `conversationId`'s,
+   * on both paths, and nothing is written to the primary history.
+   *
+   * `contextKey` is the thread's on the conv tier too (#884 review). Tasks
+   * the conv model delegates are matched to the chat that created them by it,
+   * and every caller that passed none was the dashboard's main chat: a
+   * stranger's turn listed the owner's recent task intents and results, and
+   * could resume or cancel the owner's tasks, and the owner's router read the
+   * stranger's results. Required, so a thread cannot fall back to the main
+   * chat's key.
+   *
+   * `learn: false` also skips knowledge extraction and personality learning.
+   * Those write into what EVERY later turn's prompt is built from, so a
+   * stranger's turn would leak into the owner's context and into other
+   * strangers', which separate conversations are meant to prevent.
+   *
+   * The caller has already stored `text` in the conversation; it is passed as
+   * this turn's message and dropped from the history, so it is not sent twice.
+   */
+  async handleThreadMessage(
+    text: string,
+    channel: string,
+    thread: { conversationId: string; contextKey: string; learn: boolean },
+  ): Promise<string> {
+    if (activeTurns.isDraining) throw new DrainingError();
+    const endTurn = activeTurns.begin();
+    try {
+      const history = withoutTrailingTurn(await this.loadDialogue(thread.conversationId), text);
+      let response: string;
+      if (this.convOrchestrator) {
+        response = await this.handleMessageConv(text, channel, null, undefined, history, thread.contextKey);
+      } else {
+        const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+        response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, null, { history });
+      }
+
+      if (thread.learn) {
+        Promise.allSettled([
+          this.extractKnowledge(text, response).catch((err) =>
+            console.error('[AgentService] Extraction error:', err instanceof Error ? err.message : err)
+          ),
+          this.learnFromInteraction(text, response, channel).catch((err) =>
+            console.error('[AgentService] Learning error:', err instanceof Error ? err.message : err)
+          ),
+        ]);
+      }
+
+      return response;
+    } finally {
+      endTurn();
+    }
+  }
+
+  /**
    * Router-first message handler. Builds a tight conv-tier context (user
    * identity + recent dialogue) and lets the conv LLM decide whether to
    * delegate or answer directly.
@@ -595,13 +656,17 @@ export class AgentService implements Service, IAgentService {
     channel: string = 'websocket',
     scope?: TurnToolScope | null,
     siteContext?: string,
+    // A conversation's own history (#884); absent reads the channel's.
+    dialogue?: LLMMessage[],
+    // Which chat this is, for matching tasks to it; absent is the main chat.
+    contextKey?: string,
   ): Promise<string> {
     if (!this.convOrchestrator) {
       // Should be unreachable - caller checks this.convOrchestrator first.
       throw new Error('Conv orchestrator not initialized');
     }
     const identity = this.buildUserIdentityBlock();
-    const recentDialogue = await this.loadRecentDialogue(channel);
+    const recentDialogue = dialogue ?? await this.loadRecentDialogue(channel);
     const result = await this.convOrchestrator.processTurn(
       text,
       {
@@ -610,7 +675,7 @@ export class AgentService implements Service, IAgentService {
         recentDialogue,
         ambientFacts: this.buildAmbientFactsBlock(text),
       },
-      { scope: scope ?? null, ...(siteContext ? { siteContext } : {}) },
+      { scope: scope ?? null, ...(contextKey ? { contextKey } : {}), ...(siteContext ? { siteContext } : {}) },
       this.convTaskEventListener ?? undefined,
     );
     return result.text;
@@ -623,14 +688,26 @@ export class AgentService implements Service, IAgentService {
    * keeps the conv-tier context budget tight without losing continuity.
    */
   private async loadRecentDialogue(channel: string): Promise<LLMMessage[]> {
+    let conversationId: string;
     try {
       const recent = getRecentConversation(channel);
       if (!recent) return [];
+      conversationId = recent.conversation.id;
+    } catch (err) {
+      console.warn('[AgentService] Failed to load recent dialogue:', err);
+      return [];
+    }
+    return this.loadDialogue(conversationId);
+  }
+
+  /** One conversation's recent dialogue, compacted as `loadRecentDialogue` does. */
+  private async loadDialogue(conversationId: string): Promise<LLMMessage[]> {
+    try {
       // Pull a wider window than we'll inject so the compactor has material
       // to summarize when the conversation is long. The compactor caps the
       // final list size (last 20 verbatim by default; older bucketed into a
       // background-built summary when conversation exceeds 40 messages).
-      const messages = getMessages(recent.conversation.id, { limit: 80 });
+      const messages = getMessages(conversationId, { limit: 80 });
       const dialogue: LLMMessage[] = messages
         .filter(m => m.role === 'user' || m.role === 'assistant')
         .map(m => ({
@@ -639,7 +716,7 @@ export class AgentService implements Service, IAgentService {
         }));
 
       if (!this.dialogueCompactor) return dialogue.slice(-10);
-      return await this.dialogueCompactor.compact(recent.conversation.id, dialogue);
+      return await this.dialogueCompactor.compact(conversationId, dialogue);
     } catch (err) {
       console.warn('[AgentService] Failed to load recent dialogue:', err);
       return [];
@@ -1151,4 +1228,14 @@ export class AgentService implements Service, IAgentService {
     savePersonality(personality);
     this.personality = personality;
   }
+}
+
+/**
+ * The dialogue without its last entry when that entry is this turn's own
+ * message, already stored by the caller: both orchestrators append the turn's
+ * message themselves (#884).
+ */
+export function withoutTrailingTurn(dialogue: LLMMessage[], text: string): LLMMessage[] {
+  const last = dialogue[dialogue.length - 1];
+  return last && last.role === 'user' && last.content === text ? dialogue.slice(0, -1) : dialogue;
 }

@@ -190,17 +190,38 @@ export function parseModelRef(ref: string | null | undefined): { provider: strin
   return { provider: ref.slice(0, idx), model: ref.slice(idx + 1) };
 }
 
+/** Whether a connected channel has anywhere to send approval requests (#890). */
+export type ChannelRecipientStatus =
+  | { hasRecipient: true }
+  | { hasRecipient: false; reason: "empty_list" | "no_direct_message" };
+
 export interface ChannelStatus {
   channels: { telegram?: boolean; discord?: boolean };
+  /** Per connected channel; absent from an older daemon. */
+  recipients?: { telegram?: ChannelRecipientStatus; discord?: ChannelRecipientStatus };
   stt: string | null;
 }
 
+/**
+ * `allowed_users` is what the daemon reads the saved list as (#883): the ids
+ * that name someone. `allowed_users_rejected` is what it ignored, as text, and
+ * `allowed_users_problems` says why, so a hand-edited value that names nobody
+ * is visible here. Both are absent from an older daemon.
+ */
 export interface ChannelConfig {
-  telegram: { enabled: boolean; has_token: boolean; allowed_users: number[] };
+  telegram: {
+    enabled: boolean;
+    has_token: boolean;
+    allowed_users: number[];
+    allowed_users_rejected?: string[];
+    allowed_users_problems?: string[];
+  };
   discord: {
     enabled: boolean;
     has_token: boolean;
     allowed_users: string[];
+    allowed_users_rejected?: string[];
+    allowed_users_problems?: string[];
     guild_id: string | null;
   };
 }

@@ -124,17 +124,43 @@ describe('#811: senderAllowListed', () => {
 
   test('is false for every guild member while the list is empty', async () => {
     for (const list of [undefined, []]) {
-      const seen = await deliver(list, 'u42');
+      const seen = await deliver(list, '100000000000000042');
       expect(seen.length).toBe(1);
       expect(seen[0]!.senderAllowListed).toBe(false);
     }
   });
 
   test('is true for a member the list names', async () => {
-    expect((await deliver(['u42'], 'u42'))[0]!.senderAllowListed).toBe(true);
+    expect((await deliver(['100000000000000042'], '100000000000000042'))[0]!.senderAllowListed).toBe(true);
   });
 
   test('a member a non-empty list does not name is still dropped before the handler', async () => {
-    expect(await deliver(['u42'], 'u43')).toEqual([]);
+    expect(await deliver(['100000000000000042'], '100000000000000043')).toEqual([]);
+  });
+});
+
+/** #883. A string setting made the Discord gate a substring test too. */
+describe('#883: an allowed_users value that is not a list of snowflakes', () => {
+  const reaches = async (allowedUsers: unknown, authorId: string) => {
+    const adapter = new DiscordAdapter('test-token', { allowedUsers });
+    const seen: ChannelMessage[] = [];
+    adapter.onMessage(async (m) => { seen.push(m); return ''; });
+    await (adapter as unknown as { processMessage(m: unknown): Promise<void> }).processMessage({
+      id: 'm1', content: 'hello', createdTimestamp: 0, channelId: 'c1', guildId: null,
+      author: { id: authorId, username: 'member', bot: false },
+      attachments: { find: () => undefined },
+      channel: { isSendable: () => false },
+    });
+    return seen;
+  };
+
+  test('a string is not a substring match', async () => {
+    expect(await reaches('123456789012345678', '1234567890')).toEqual([]);
+    expect(await reaches('123456789012345678', '123456789012345678')).toEqual([]);
+  });
+
+  test('a number has lost precision and names nobody, and a list of only those lets nobody in', async () => {
+    expect(await reaches([123456789012345678], '123456789012345680')).toEqual([]);
+    expect(await reaches([123456789012345678], '100000000000000099')).toEqual([]);
   });
 });

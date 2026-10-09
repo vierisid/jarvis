@@ -46,6 +46,7 @@ const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'conce
 import { getDb } from '../vault/schema.ts';
 import { findCommitments, getUpcoming, createCommitment, getCommitment, updateCommitmentStatus, reorderCommitments } from '../vault/commitments.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
+import { telegramAllowList, discordAllowList } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
@@ -2652,6 +2653,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const sttBinding = effectiveSttForBinding(ctx.config);
         return json({
           channels: ctx.channelService.getChannelStatus(),
+          // Per connected channel: whether approval requests and
+          // notifications have anywhere to go (#890).
+          recipients: ctx.channelService.getRecipientStatus(),
           stt: sttBinding?.provider || ctx.config.stt?.provider || null,
         });
       },
@@ -2660,23 +2664,46 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/config/channels': {
       GET: () => {
         const cfg = ctx.config.channels;
+        // The saved list is reported as the adapters read it (#883): the ids
+        // that name someone, plus what was ignored and why, so a hand-edited
+        // value that names nobody shows up on the settings page instead of
+        // only as a bot that never answers. The raw value could be any shape,
+        // and the page's `.join` on a string crashed the Channels tab.
+        const tgList = telegramAllowList(cfg?.telegram?.allowed_users);
+        const dcList = discordAllowList(cfg?.discord?.allowed_users);
         return json({
-          telegram: cfg?.telegram ? {
-            enabled: cfg.telegram.enabled,
-            has_token: !!cfg.telegram.bot_token,
-            allowed_users: cfg.telegram.allowed_users,
-          } : { enabled: false, has_token: false, allowed_users: [] },
-          discord: cfg?.discord ? {
-            enabled: cfg.discord.enabled,
-            has_token: !!cfg.discord.bot_token,
-            allowed_users: cfg.discord.allowed_users,
-            guild_id: cfg.discord.guild_id ?? null,
-          } : { enabled: false, has_token: false, allowed_users: [], guild_id: null },
+          telegram: {
+            enabled: cfg?.telegram?.enabled ?? false,
+            has_token: !!cfg?.telegram?.bot_token,
+            allowed_users: tgList.ids,
+            allowed_users_rejected: tgList.rejected,
+            allowed_users_problems: tgList.problems,
+          },
+          discord: {
+            enabled: cfg?.discord?.enabled ?? false,
+            has_token: !!cfg?.discord?.bot_token,
+            allowed_users: dcList.ids,
+            allowed_users_rejected: dcList.rejected,
+            allowed_users_problems: dcList.problems,
+            guild_id: cfg?.discord?.guild_id ?? null,
+          },
         });
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as Record<string, unknown>;
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return error('Expected a JSON body');
+          }
+          // Every key checked, unknown ones refused, nothing saved unless the
+          // whole body is valid (#883). This was spread over the section with
+          // `as any`, so `allowed_users: "12345"` was saved and made the chat
+          // gate a substring match.
+          const { validateChannelsPatch } = await import('./channels-config-patch.ts');
+          const checked = validateChannelsPatch(body);
+          if (!checked.ok) return error(checked.error);
           const { saveUserSection } = await import('./user-settings.ts');
 
           // Merge into a LOCAL copy: saveUserSection throws when the keychain
@@ -2684,19 +2711,57 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // running daemon holding a credential the API just reported as not
           // saved (GET would answer has_token: true) until the next restart.
           const merged: NonNullable<JarvisConfig['channels']> = { ...ctx.config.channels };
-          if (body.telegram && typeof body.telegram === 'object') {
+          if (checked.patch.telegram) {
             merged.telegram = {
+              enabled: false, bot_token: '', allowed_users: [],
               ...merged.telegram,
-              ...(body.telegram as Record<string, unknown>),
-            } as any;
+              ...checked.patch.telegram,
+            };
           }
-          if (body.discord && typeof body.discord === 'object') {
-            merged.discord = {
+          if (checked.patch.discord) {
+            const { guild_id, ...rest } = checked.patch.discord;
+            const discord: NonNullable<NonNullable<JarvisConfig['channels']>['discord']> = {
+              enabled: false, bot_token: '', allowed_users: [],
               ...merged.discord,
-              ...(body.discord as Record<string, unknown>),
-            } as any;
+              ...rest,
+            };
+            if (guild_id === null) delete discord.guild_id;
+            else if (guild_id !== undefined) discord.guild_id = guild_id;
+            merged.discord = discord;
           }
 
+          // An enabled channel must name somebody (#908). Checked on the MERGED
+          // result, not the patch, because a patch is partial in both
+          // directions: `{telegram: {enabled: true}}` says nothing about the
+          // saved list, and `{telegram: {allowed_users: []}}` reaches the same
+          // open state on a channel that is already enabled. Only the merge
+          // knows what the save would actually leave behind.
+          //
+          // Why this is refused rather than warned: at the default authority
+          // level an unlisted sender's turn gets run_command, read_file,
+          // write_file and browser_navigate with requiresApproval false, and
+          // taint gating does not engage because their message IS the user
+          // turn. So an enabled channel with an empty list is shell access for
+          // anyone who can reach the bot -- any member of a Discord guild it is
+          // in, with no discovery needed. Refusing at save time means there is
+          // no window in which the channel is enabled and open.
+          // Only the channels this save TOUCHES, the same scope #890's warning
+          // below uses. Scanning both would let one channel's pre-#908 state
+          // block an unrelated save -- including the save that disables it --
+          // and a config already holding that state is the startup path's job,
+          // which refuses to start such a channel and says why.
+          const openChannel = (['telegram', 'discord'] as const).find((name) => {
+            if (!checked.patch[name]) return false;
+            const ch = merged[name];
+            return ch?.enabled === true && (ch.allowed_users ?? []).length === 0;
+          });
+          if (openChannel) {
+            return error(
+              `${openChannel}.allowed_users must name at least one user before the channel can be enabled. ` +
+              'An enabled channel with an empty list lets anyone who can reach the bot run commands and ' +
+              'read or write files with your authority.',
+            );
+          }
           saveUserSection('channels', merged);
           ctx.config.channels = merged;
 
@@ -2707,7 +2772,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (applyErr) {
             return json({ ok: false, message: `Channel config saved, but applying it failed: ${applyErr.error}` });
           }
-          return json({ ok: true, message: 'Channel config saved and applied.' });
+          // Say so now if the save left a channel with nowhere to send
+          // approval requests, e.g. the recipient was just removed (#890).
+          const { recipientWarning } = await import('./channel-service.ts');
+          // Only the channels this save touched: saving Discord says nothing
+          // about Telegram.
+          const status = ctx.channelService?.getRecipientStatus() ?? {};
+          const touched = Object.fromEntries(Object.entries(status).filter(([name]) => name in (checked.patch as Record<string, unknown>)));
+          const warning = recipientWarning(touched);
+          return json({ ok: true, message: warning ? `Channel config saved and applied. ${warning}` : 'Channel config saved and applied.' });
         } catch (err) {
           return configSaveError('Error saving channels config', err);
         }
