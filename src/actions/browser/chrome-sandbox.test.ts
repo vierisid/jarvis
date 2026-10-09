@@ -116,6 +116,36 @@ describe('decideSandbox (#521)', () => {
 const isWSL = existsSync('/proc/version') && readFileSync('/proc/version', 'utf-8').toLowerCase().includes('microsoft');
 const exe = process.platform === 'linux' && !isWSL ? findBrowserExecutable() : null;
 
+/**
+ * The cleanup hook below waits for Chrome's children, and that wait must stay
+ * SHORTER than the hook's own budget. They used to be identical -- 50 x 100ms
+ * against Bun's 5000ms default -- so exhausting the wait always failed the hook
+ * at ~5000ms, reported as `(unnamed)` because hook failures carry no test name.
+ * That blocked release dry run 37930279805, and `--retry=2` (added in #784 so a
+ * Chromium flake could not block a release) does not retry hooks.
+ *
+ * Derived from the source rather than restated, so raising the loop bound
+ * without raising the budget fails here instead of in a release.
+ */
+test('the cleanup wait is bounded below the hook budget it runs under', () => {
+  const src = readFileSync(new URL(import.meta.url).pathname, 'utf-8');
+  const loop = /for \(let i = 0; i < (\d+) && profileProcesses\(\)\.length > 0; i\+\+\) await Bun\.sleep\((\d+)\)/.exec(src);
+  const budget = /await watch\?\.release\(\);\s*\},\s*([\d_]+)\)/.exec(src);
+  const iterations = loop?.[1];
+  const step = loop?.[2];
+  const budgetMs = budget?.[1];
+  // A throw, not an assertion: if the shapes stop matching, this test would
+  // otherwise pass while measuring nothing, which is the failure mode it exists
+  // to prevent.
+  if (iterations === undefined || step === undefined || budgetMs === undefined) {
+    throw new Error('could not read the wait or the hook budget out of this file');
+  }
+  const worstCaseWait = Number(iterations) * Number(step);
+  const hookBudget = Number(budgetMs.replace(/_/g, ''));
+  expect(worstCaseWait).toBe(5000);
+  expect(hookBudget).toBeGreaterThan(worstCaseWait);
+});
+
 describe.skipIf(!exe)('launchChrome on this host (#521, real headless Chromium)', () => {
   // Asked of the kernel, not picked at random: a random port in the
   // ephemeral range can collide with another test's server, and Chrome then
@@ -134,6 +164,14 @@ describe.skipIf(!exe)('launchChrome on this host (#521, real headless Chromium)'
   // A SIGKILLed test run skips this afterAll. launchChrome owns the spawn, so
   // the browser cannot run under launchTestChromium's watchdog; watchBrowser
   // from the same fixture ties it to this process once it is up instead.
+  // The timeout is explicit because the wait below is bounded at 50 x 100ms =
+  // 5000ms, which is EXACTLY Bun's default per-hook budget. So whenever Chrome's
+  // children linger long enough for that loop to run to completion, the hook was
+  // guaranteed to fail at ~5000ms -- not a race with slack, the two numbers were
+  // identical. It failed that way in release dry run 37930279805 at 5000.19ms,
+  // and blocked the run: `--retry=2` (added in #784 so a Chromium flake could
+  // not block a release) does not retry HOOK failures, which is also why the
+  // failure is reported as `(unnamed)` with no attempt markers.
   afterAll(async () => {
     if (running) await stopChrome(running);
     if (!profile) return;
@@ -145,7 +183,7 @@ describe.skipIf(!exe)('launchChrome on this host (#521, real headless Chromium)'
     }
     rmSync(profile, { recursive: true, force: true });
     await watch?.release();
-  });
+  }, 20_000);
 
   function profileProcesses(): number[] {
     return readdirSync('/proc').filter(d => /^\d+$/.test(d)).map(Number)
