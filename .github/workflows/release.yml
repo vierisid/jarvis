@@ -40,9 +40,32 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
+      # Refuse now, with a reason, rather than at a confusing checkout failure
+      # (#929). Same shape as #869: a release that cannot finish should say so
+      # before it changes anything, not after the bump PR is open.
+      # Through env, not an `if:`: the secrets context is not dependable in a
+      # step condition, and an empty `token:` on the checkout below would fail
+      # with something that looks like a network problem.
+      - name: Refuse without the bump-PR token
+        env:
+          BUMP_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+        run: |
+          if [ -z "$BUMP_PR_TOKEN" ]; then
+            echo "::error::RELEASE_PR_TOKEN is not set, so the bump PR would open without CI and could never merge (#929)."
+            echo "Add a fine-grained PAT with Contents: read and write, and Pull requests: read and write, on this repository."
+            exit 1
+          fi
+
+      # The PAT, not GITHUB_TOKEN (#929). GitHub suppresses `pull_request` CI
+      # for anything GITHUB_TOKEN opens, so the bump PR got no `test` run --
+      # measured: zero checks on #600, the v0.15.0 bump PR -- and main has
+      # required `test` since 2026-10-05. It is on the checkout so that the
+      # branch push and `gh pr create` are the same actor; the PR-opened event
+      # is what has to be attributed to a real token for CI to start.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
+          token: ${{ secrets.RELEASE_PR_TOKEN }}
 
       # Pinned, never `latest` (#681): this job's token can push a v* tag and
       # dispatch a real release. Same version as test.yml and release-exec.yml.
@@ -93,6 +116,9 @@ jobs:
         id: pr
         env:
           NEW: ${{ steps.version.outputs.NEW }}
+          # Overrides the job-level github.token for this step only (#929), so
+          # the PR is opened by the PAT and its CI starts.
+          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
         run: |
           set -euo pipefail
           BRANCH="release/v${NEW}"
@@ -117,23 +143,40 @@ jobs:
           PR_URL: ${{ steps.pr.outputs.PR_URL }}
         run: |
           set -euo pipefail
-          # Mergeability is computed async after PR creation; retry while it is
-          # UNKNOWN, but fail fast on a real conflict (e.g. package.json changed
-          # on main between checkout and merge) -- retrying cannot fix that.
+          # Two things are waited on here, and a real conflict is not one of
+          # them: mergeability is computed async after creation, so UNKNOWN is
+          # retried, but CONFLICTING (package.json changed on main between
+          # checkout and merge) fails fast because retrying cannot fix it.
+          #
+          # The other is the required check (#929). main has required `test`
+          # since 2026-10-05, it takes about 11 minutes (measured 10m49s, run
+          # 37949458219), and a merely PENDING required check refuses the merge
+          # exactly as a missing one does. This loop used to allow 10 tries at
+          # 5s -- 50 seconds -- which no required check could ever have
+          # satisfied; it went unnoticed because no release has run since.
+          #
+          # Bounded at 20 minutes: this job has 330 and the release watch below
+          # takes 300, leaving 30 for everything before it.
+          DEADLINE=$(( $(date +%s) + 1200 ))
           MERGED=0
-          for i in $(seq 1 10); do
+          while [ "$(date +%s)" -lt "$DEADLINE" ]; do
             STATUS=$(gh pr view "$PR_URL" --json mergeable --jq .mergeable || true)
             if [ "$STATUS" = "CONFLICTING" ]; then
               echo "Release PR ${PR_URL} conflicts with main; aborting."
               exit 1
             fi
-            if [ "$STATUS" = "MERGEABLE" ]; then
+            # Checks first, then merge: a refused merge prints a GraphQL error,
+            # and at 20s intervals that would be 60 of them in the log ahead of
+            # the one that works.
+            if [ "$STATUS" = "MERGEABLE" ] && gh pr checks "$PR_URL" --required >/dev/null 2>&1; then
               if gh pr merge "$PR_URL" --squash; then MERGED=1; break; fi
             fi
-            sleep 5
+            sleep 20
           done
           if [ "$MERGED" != 1 ]; then
-            echo "Could not merge release PR ${PR_URL}"
+            echo "Could not merge release PR ${PR_URL} within 20 minutes."
+            echo "If its checks never started, it was opened without RELEASE_PR_TOKEN (#929)."
+            gh pr checks "$PR_URL" || true
             exit 1
           fi
           SHA=""
