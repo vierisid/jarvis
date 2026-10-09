@@ -163,12 +163,32 @@ export class ChannelService implements Service {
         }
       }
 
-      // 2. Create & register adapters from config. An empty allowed_users
-      // lets anyone who can reach the bot chat, but lets nobody approve or
-      // deny from that channel (#811, ChannelConfig, senderAllowListed).
+      // 2. Create & register adapters from config.
+      //
+      // An enabled channel whose allow-list is empty is NOT started (#908).
+      // The API refuses to save that state, but a config saved before #908, or
+      // edited by hand, can still hold it -- and starting it would be shell
+      // access for anyone who can reach the bot. At the default authority level
+      // an unlisted sender's turn gets run_command, read_file, write_file and
+      // browser_navigate with requiresApproval false, and taint gating does not
+      // engage because their message IS the user turn.
+      //
+      // Refusing loudly rather than silently: the daemon still starts, and the
+      // log says which channel was skipped and what to do, because a channel
+      // that quietly stopped working is its own support problem.
       const channels = this.config.channels;
+      const refuseOpen = (name: 'telegram' | 'discord', allowed: readonly unknown[] | undefined): boolean => {
+        if ((allowed ?? []).length > 0) return false;
+        console.error(
+          `[ChannelService] ${name} is enabled but its allowed_users list is empty, so it was NOT started (#908). ` +
+          `Anyone who could reach the bot would be able to run commands and read or write files with your ` +
+          `authority. Add at least one user ID in Settings > Channels to enable it.`,
+        );
+        return true;
+      };
 
-      if (channels?.telegram?.enabled && channels.telegram.bot_token) {
+      if (channels?.telegram?.enabled && channels.telegram.bot_token
+        && !refuseOpen('telegram', channels.telegram.allowed_users)) {
         warnAllowListProblems('telegram', channels.telegram.allowed_users);
         const token = channels.telegram.bot_token;
         const taken = this.telegramTaken.get(token);
@@ -183,7 +203,8 @@ export class ChannelService implements Service {
         this.manager.register(telegram);
       }
 
-      if (channels?.discord?.enabled && channels.discord.bot_token) {
+      if (channels?.discord?.enabled && channels.discord.bot_token
+        && !refuseOpen('discord', channels.discord.allowed_users)) {
         // Lazy-loaded: discord.js costs ~38MB RSS, only pay it when the
         // Discord channel is actually enabled.
         warnAllowListProblems('discord', channels.discord.allowed_users);

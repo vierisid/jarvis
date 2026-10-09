@@ -823,16 +823,44 @@ describe("#860: a user removed from the allow-list cannot decide", () => {
 
       // What POST /api/config/channels does: replace the section on the live
       // config, then the `channels` applier stops and starts the service.
-      config.channels = { telegram: { ...config.channels.telegram, allowed_users: [] } };
+      //
+      // 42 is REMOVED and 7 is left, rather than emptying the list. This test
+      // used to EMPTY it and then assert 42 got the "not on the allow-list"
+      // refusal. That scenario no longer exists, for two reasons that compound:
+      //
+      //   - #908 forbids an enabled channel with an empty list, so it is not
+      //     started at all -- at the default authority level an unlisted
+      //     sender's turn gets run_command with no approval.
+      //   - With a NON-empty list, telegram.ts:369 drops a non-listed sender
+      //     before the decision path is reached at all.
+      //
+      // So "can chat but cannot decide" only ever existed in the empty-list
+      // state. Removing 42 while keeping 7 gives the stronger guarantee that
+      // #860 was reaching for: 42 is not refused, it is not heard. Both
+      // directions are asserted, so this cannot pass by everything being
+      // broken.
+      config.channels = { telegram: { ...config.channels.telegram, allowed_users: [7] } };
       await svc.stop();
       await svc.start();
       // Let the old adapter's last poll finish, so the update below can only
       // reach the new one.
       await Bun.sleep(50);
+
+      // The removed user is dropped: no reply, no decision.
       send(42);
-      await until(() => replies.length === 2);
-      expect(replies[1]).toBe(channelDecisionNeedsAllowList("telegram"));
+      await Bun.sleep(150);
+      expect(replies).toEqual(["decided"]);
       expect(decisions).toEqual([["approve", "1a2b3c4d", "telegram"]]);
+
+      // The control, proving the restart applied the new list rather than
+      // breaking the channel: the user it now names IS heard.
+      send(7);
+      await until(() => replies.length === 2);
+      expect(replies[1]).toBe("decided");
+      expect(decisions).toEqual([
+        ["approve", "1a2b3c4d", "telegram"],
+        ["approve", "1a2b3c4d", "telegram"],
+      ]);
     } finally {
       await svc.stop();
       globalThis.fetch = originalFetch;

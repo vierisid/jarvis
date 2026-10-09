@@ -2730,6 +2730,38 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             merged.discord = discord;
           }
 
+          // An enabled channel must name somebody (#908). Checked on the MERGED
+          // result, not the patch, because a patch is partial in both
+          // directions: `{telegram: {enabled: true}}` says nothing about the
+          // saved list, and `{telegram: {allowed_users: []}}` reaches the same
+          // open state on a channel that is already enabled. Only the merge
+          // knows what the save would actually leave behind.
+          //
+          // Why this is refused rather than warned: at the default authority
+          // level an unlisted sender's turn gets run_command, read_file,
+          // write_file and browser_navigate with requiresApproval false, and
+          // taint gating does not engage because their message IS the user
+          // turn. So an enabled channel with an empty list is shell access for
+          // anyone who can reach the bot -- any member of a Discord guild it is
+          // in, with no discovery needed. Refusing at save time means there is
+          // no window in which the channel is enabled and open.
+          // Only the channels this save TOUCHES, the same scope #890's warning
+          // below uses. Scanning both would let one channel's pre-#908 state
+          // block an unrelated save -- including the save that disables it --
+          // and a config already holding that state is the startup path's job,
+          // which refuses to start such a channel and says why.
+          const openChannel = (['telegram', 'discord'] as const).find((name) => {
+            if (!checked.patch[name]) return false;
+            const ch = merged[name];
+            return ch?.enabled === true && (ch.allowed_users ?? []).length === 0;
+          });
+          if (openChannel) {
+            return error(
+              `${openChannel}.allowed_users must name at least one user before the channel can be enabled. ` +
+              'An enabled channel with an empty list lets anyone who can reach the bot run commands and ' +
+              'read or write files with your authority.',
+            );
+          }
           saveUserSection('channels', merged);
           ctx.config.channels = merged;
 
