@@ -1549,6 +1549,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (!scopedFlow(req, id)) return err("flow not found", 404);
           const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
           if ("error" in read) return read.error;
+          // Scope again after the body await (#846). A flow deleted while the
+          // body was read used to reach the repo write and come back as that
+          // function's own error, naming it (`updateFlowStatus: flow not
+          // found (id=...)`); this answers the route's own 404 instead, the
+          // body every other path gives a missing or foreign flow. No await
+          // follows, so nothing can delete it between here and the write.
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           const body = read.body as {
             status?: FlowStatus;
             metadata?: Record<string, unknown> | null;
@@ -1885,6 +1892,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // below, which says what to send, rather than a bare JSON error.
           const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES, { allowEmpty: true });
           if ("error" in read) return read.error;
+          // Scope again after the body await (#846). A flow deleted while the
+          // body was read used to reach the repo write and come back as that
+          // function's own error, naming it (`setFlowCodeStepsEnabled: flow
+          // not found (id=...)`); this answers the route's own 404 instead, the
+          // body every other path gives a missing or foreign flow. No await
+          // follows, so nothing can delete it between here and the write.
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           const body = read.body as { enabled?: unknown };
           if (typeof body.enabled !== "boolean") {
             return err('enabled must be a boolean ({"enabled": true} permits CODE steps for this flow)', 400);
@@ -1921,8 +1935,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const flow = scopedFlow(req, id);
-          if (!flow) return err("flow not found", 404);
+          if (!scopedFlow(req, id)) return err("flow not found", 404);
           // `payload` is one run's trigger input, JSON.stringify'd into
           // `workflow_job.payload`, so this body was unbounded STORAGE, not
           // just parse cost (#649). It is the same kind of thing a resume
@@ -1934,6 +1947,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // with input the caller did not send is worse than saying so.
           const read = await readWriteBody(req, WAITPOINT_RESUME_MAX_BODY_BYTES, { allowEmpty: true });
           if ("error" in read) return read.error;
+          // Read again after the body await (#846), for the same race as the
+          // PATCH route: a flow deleted meanwhile answered 400 "flow has no
+          // published or draft version" from the snapshot taken before it. The
+          // row is also the one version selection below reads
+          // `published_version_id` from, so a publish that landed during the
+          // await is the one this run uses rather than the stale pointer.
+          const flow = scopedFlow(req, id);
+          if (!flow) return err("flow not found", 404);
           const body = read.body as {
             environment?: unknown;
             triggeredBy?: unknown;

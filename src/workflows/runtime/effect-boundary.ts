@@ -71,6 +71,39 @@ export interface EffectInvocation {
 }
 export type EffectReply = { result: unknown; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
 
+/**
+ * Give an approved workflow approval its receipt when its effect ends without
+ * succeeding (#845).
+ *
+ * Before this only success called `markExecuted`, so every other ending left
+ * `approval_requests.status = 'approved'` with no `execution_outcome` for
+ * good: the approvals surface showed a granted approval that never ran, and
+ * only `/api/workflow-runs/:id/effects` said otherwise. The deferred executor
+ * already closes the same zombie for a non-workflow approval with
+ * `markExecuted(id, text, 'blocked')`, and its `failed` for a tool that threw;
+ * this is the same rule for a workflow-owned one, with the same outcomes.
+ *
+ * `blocked` when the effect was never dispatched or its outcome says it was
+ * blocked; `failed` when it was dispatched and did not succeed, which is what
+ * the deferred executor's `failed` means too ("the call was dispatched, so a
+ * partial effect is possible") and why an `unknown` outcome is `failed` here
+ * rather than `blocked`: `blocked` would tell an operator nothing happened.
+ *
+ * A no-op for an effect with no approval, and for an approval that is not
+ * `approved` -- `markExecuted` only writes an approved row, so a denied or
+ * expired one keeps its own status. The receipt names the effect, so the
+ * approval leads to the record that holds the detail. Best effort: a failed
+ * receipt write must not replace the error the step is about to throw.
+ */
+export function closeEffectApproval(approvals: ApprovalManager | undefined, effect: WorkflowEffect,
+  outcome: 'blocked' | 'failed'): void {
+  if (!effect.approvalId || !approvals) return;
+  try {
+    approvals.markExecuted(effect.approvalId, boundedReceiptText(canonicalJson({ effectId: effect.id,
+      status: effect.status, error: effect.error ?? null }), RECEIPT_MAX_CHARS), outcome);
+  } catch (error) { console.error('[Workflow Authority] approval receipt failed:', error); }
+}
+
 /** The durable identity of an effect: one per run, step, loop position and route. */
 export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
   'wfe_' + digest([runId, stepName, executionPath, route]);
@@ -201,7 +234,13 @@ export class WorkflowEffectBoundary {
     let decision;
     try { decision = policy(); } catch (error) {
       record.status = 'blocked'; record.decision = 'denied'; record.error = String((error as Error).message);
-      record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false); throw error;
+      record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
+      // A resumed effect whose approval was granted and that policy now
+      // refuses: an emergency state, the job-row cancellation fence, or
+      // Authority. (A run that is no longer RUNNING never gets here:
+      // `resolveEffectContext` refused it above, before the record was read.)
+      closeEffectApproval(approvals, record, 'blocked');
+      log(false); throw error;
     }
     record.reason = decision.reason;
     if (record.approvalId || decision.requiresApproval) {
@@ -250,7 +289,16 @@ export class WorkflowEffectBoundary {
         throw new Error('Workflow approval does not match the recorded effect');
       }
       if (input.confirmation && !approvalNeedsClick(approval)) {
-        throw new Error('Workflow approval predates required UI review; start a new reviewed run');
+        // Terminal, as the message says: this approval can never satisfy the
+        // review, so the effect is blocked and a granted approval gets its
+        // receipt (#845) -- the deferred executor's answer to the same case.
+        // It used to throw and leave both as they were, so every replay threw
+        // again and the approval stayed `approved` for good.
+        record.status = 'blocked'; record.decision = 'denied';
+        record.error = 'Workflow approval predates required UI review; start a new reviewed run';
+        record.reason = record.error; record.finishedAt = Date.now(); saveWorkflowEffect(record);
+        closeEffectApproval(approvals, record, 'blocked');
+        log(false); throw new Error(record.error);
       }
       if (approval.status === 'pending') return { approval: { effectId: id, approvalId: approval.id, waitpointId: record.waitpointId! } };
       if (approval.status !== 'approved') {
@@ -276,7 +324,10 @@ export class WorkflowEffectBoundary {
       // that fact separately from uncertainty about already-started effects.
       if (error instanceof ActionOutcomeError) {
         record.outcome = error.outcome; record.status = 'blocked'; record.error = error.message;
-        record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);
+        record.finishedAt = Date.now(); saveWorkflowEffect(record);
+        // Refused before the dispatch claim, so nothing was dispatched.
+        closeEffectApproval(approvals, record, 'blocked');
+        log(false);
       }
       throw error;
     }
@@ -328,6 +379,12 @@ export class WorkflowEffectBoundary {
         record.status = 'failed'; record.error = `Effect dispatch failed; partial effects may have occurred: ${(error as Error).message}`;
       }
       record.finishedAt = Date.now(); saveWorkflowEffect(record);
+      // Dispatched and not succeeded: `blocked` only when the outcome says
+      // so AND says nothing was started; `failed` for an error, an unknown
+      // outcome, or a block that may have happened partway, so the receipt
+      // never tells an operator nothing happened when something may have.
+      closeEffectApproval(approvals, record,
+        record.outcome?.status === 'blocked' && record.outcome.effect === 'not_started' ? 'blocked' : 'failed');
       // Completion was not established. The durable record retains the
       // possibility that a remote effect happened before the failure.
       log(false);

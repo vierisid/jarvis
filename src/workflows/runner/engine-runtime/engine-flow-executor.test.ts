@@ -88,6 +88,31 @@ function setupRun(): { runId: string; ctx: Parameters<EngineFlowExecutor["execut
 }
 
 describe("EngineFlowExecutor", () => {
+  test("the engine is acquired in the run's flow's project, not the default (#843)", async () => {
+    // The acquire's projectId is what the sandbox engine token is minted with,
+    // and that token scopes store and connection access. It is read off the
+    // run row, which before #843 always said DEFAULT_IDS.project.
+    const other = "proj_other_843";
+    const flow = createFlow({ projectId: other });
+    const v = createDraftVersion({ flowId: flow.id, displayName: "test", trigger: { name: "trigger", type: "EMPTY" } });
+    lockVersion(v.id);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
+    const acquired: string[] = [];
+    const runtime = { async acquire(args: { runId: string; projectId: string }) {
+      acquired.push(args.projectId);
+      throw new Error("stop after acquire");
+    } } as unknown as EngineRuntime;
+    const ctx = {
+      run: getFlowRun(run.id)!,
+      version: { ...v, trigger: { name: "trigger", type: "EMPTY" } } as FlowVersion,
+      job: { id: "job_x", payload: { runId: run.id } } as unknown as Job<{ runId: string; executeTrigger?: boolean }>,
+      payload: {},
+    };
+    await new EngineFlowExecutor(runtime).execute(ctx).catch(() => undefined);
+    expect(acquired.length).toBeGreaterThan(0);
+    expect(new Set(acquired)).toEqual(new Set([other]));
+  });
+
   test("cancellation interrupts a pending RPC and destroys rather than releases the handle", async () => {
     const { runId, ctx } = setupRun();
     const watch = watchRunCancellation(runId);

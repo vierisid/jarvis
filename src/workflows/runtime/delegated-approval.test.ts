@@ -642,6 +642,12 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(refusal).toContain(effect.error!);
     expect(effect.reason).toBe(effect.error!);
     expect(effect.error).toMatch(/^Unsupported workflow capability: write_file requires the user's explicit confirmation/);
+    // #845. The approval was granted and the call will never run, so it gets
+    // the `blocked` receipt the boundary gives its own refusals, naming the
+    // effect. It used to stay `approved` with no outcome, for good.
+    const approval = f.approvals.getRequest(parked.approval!.approvalId)!;
+    expect(approval).toMatchObject({ status: 'executed', execution_outcome: 'blocked' });
+    expect(JSON.parse(approval.execution_result!)).toEqual({ effectId: effect.id, status: 'blocked', error: effect.error });
 
     // Terminal: the gate relaxing does not revive it, the scheduler has
     // nothing to resume, and asking again answers the same without running.
@@ -873,8 +879,11 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(done.toolCalls[0]!.error).toContain('system paused');
     expect(done.outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED', effect: 'may_have_occurred' });
     expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'failed', outcome: { code: 'TOOL_FAILED', effect: 'may_have_occurred' } });
-    // The approval row is not the receipt for a workflow effect; the effect record is (A4 leaves workflow-owned rows to it).
-    expect(f.approvals.getRequest(parked.approval!.approvalId)).toMatchObject({ status: 'approved' });
+    // The effect record holds the detail, but since #845 the approval is no
+    // longer left `approved` with no outcome: a dispatched call that failed
+    // gets the `failed` receipt the deferred executor gives a tool that threw.
+    // This pinned `approved` before, which is the zombie #845 is about.
+    expect(f.approvals.getRequest(parked.approval!.approvalId)).toMatchObject({ status: 'executed', execution_outcome: 'failed' });
     expect(f.effects()).toBe(1);
   });
 
