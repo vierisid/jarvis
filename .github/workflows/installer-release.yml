@@ -564,6 +564,22 @@ jobs:
     needs: [resolve, sign-windows, verify-windows, build-macos]
     if: needs.resolve.outputs.should_release == 'true'
     runs-on: ubuntu-latest
+    # The gate (#920). Until now this job held `contents: write` with no
+    # environment at all, so a tag push or a dispatch from ANY branch could
+    # publish to `installer-latest` with nobody approving it -- including a
+    # branch whose copy of this workflow had dropped #919's refusal to ship an
+    # unsigned Windows binary. `publish-sidecar` has been gated since #756;
+    # the installer never was.
+    #
+    # A dry run names a DIFFERENT environment, because naming one records a
+    # deployment against it, and a rehearsal would otherwise show as the live
+    # installer. Only `github`, `inputs`, `vars`, `needs`, `strategy` and
+    # `matrix` are allowed in an environment name -- NOT `env`, so this reads
+    # `inputs.dry_run` rather than the DRY_RUN env the steps use. On a tag push
+    # `inputs.dry_run` is unset, which is not `true`, so a tag push gets
+    # `release` and its approval.
+    environment:
+      name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
     permissions:
       contents: write
     steps:

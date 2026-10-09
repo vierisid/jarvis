@@ -366,10 +366,12 @@ if (rule === "narrow") {
     return n.includes("${{") && /(^|[^-\w])'release'([^-\w]|$)/.test(n);
   };
   // ...and (#779) any workflow in which a job can mint an OIDC token. The
-  // environment test alone missed installer-release.yml, which has no
-  // `release` environment yet compiled in the job that federates into the
-  // same KMS signing key as the sidecar. A token is the authority, whatever
-  // the environment is called, so holding one puts a workflow on this path.
+  // environment test alone used to miss installer-release.yml: it had no
+  // `release` environment, yet it compiled the job that federates into the
+  // same KMS signing key as the sidecar. #920 has since gated its `publish`
+  // job on `release`, so it now qualifies either way. The token test stays,
+  // because a token is the authority whatever the environment is called, and
+  // a workflow added later can mint one with no environment at all.
   const mintsToken = Object.values(jobs).some((j) => writes(j.permissions ?? doc.permissions, "id-token"));
   const release = Object.values(jobs).some(gatedByRelease) || mintsToken;
   for (const [name, job] of Object.entries(jobs)) {
