@@ -40,15 +40,15 @@ import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
-import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
-import { getWorkflowEffect, saveWorkflowEffect } from '../db/repos/workflow-effect';
+import { closeEffectApproval, WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
+import { getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
   resolveGovernedPieceAction } from './piece-effects';
 import { defangPieceProjection } from './piece-effect-receipt';
-import { getFlow } from '../db/repos/flow';
+import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
 import { evaluateLlmOutput } from './llm-output-contract';
@@ -437,9 +437,11 @@ export function buildSandboxServiceBackends(
         //
         // Only THIS call's record: the same route, still pending, with the
         // request digest the dispatch below would have bound. A refusal on a
-        // first pass has no record and gets none. The approval row itself is
-        // left as it is, as on every boundary refusal: a workflow-owned
-        // approval's truth is its effect record (`reconcileAfterRestart`).
+        // first pass has no record and gets none. Since #845 the approval gets
+        // its `blocked` receipt too, as every boundary refusal's does: it was
+        // granted and will never be acted on, and leaving it `approved` showed
+        // the approvals surface a granted call that never ran. The effect
+        // record is still where the detail lives; the receipt names it.
         // Synchronous from the read to the write, so nothing can claim the
         // record in between.
         const blockParkedEffect = (reason: string): void => {
@@ -447,7 +449,11 @@ export function buildSandboxServiceBackends(
             workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
           if (!parked || parked.status !== 'pending') return;
           if (parked.requestDigest !== digest({ toolName: call.toolCall.name, arguments: call.toolCall.arguments })) return;
-          saveWorkflowEffect({ ...parked, status: 'blocked', decision: 'denied', error: reason, reason, finishedAt: Date.now() });
+          const blocked: WorkflowEffect = { ...parked, status: 'blocked', decision: 'denied', error: reason, reason, finishedAt: Date.now() };
+          saveWorkflowEffect(blocked);
+          // The approval that parked it was granted and is now never acted on
+          // (#845): its receipt, as the boundary gives its own refusals.
+          closeEffectApproval(opts.approvalManager, blocked, 'blocked');
         };
         const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
         const refusedCategory = severityRank(gate.actionCategory) > severityRank(call.actionCategory)
@@ -620,8 +626,16 @@ export function buildSandboxServiceBackends(
   };
 
   const runnerAdapter = new JarvisWorkflowRunnerAdapter();
-  const childVersion = (flowId: string) => {
-    const flow = getFlow(flowId);
+  // The target flow is looked up in the CALLER's project only (#843 review).
+  // `ctx.projectId` is the engine token's, which `resolveEffectContext` has
+  // already checked against the caller run before `prepare` runs. Before #843
+  // this mattered less: every child run was put in the default project
+  // whatever its flow's was. Since #843 a child runs under its own flow's
+  // project token, so an unscoped lookup let a flow in one project start
+  // another project's flow, with that project's store and connections, on
+  // input it chose. A foreign id gets what a missing one gets.
+  const childVersion = (flowId: string, projectId: string) => {
+    const flow = getFlowInProject(projectId, flowId);
     const versionId = flow?.published_version_id ?? (flow ? getLatestDraft(flow.id)?.id : null);
     const version = versionId ? getFlowVersion(versionId) : null;
     if (!version) throw new Error('Target workflow version is unavailable');
@@ -631,13 +645,13 @@ export function buildSandboxServiceBackends(
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-trigger', action: 'run_workflow',
       route: 'workflow', toolName: 'workflow_start', category: 'spawn_agent', toolCategory: 'delegation',
       request: { ...req }, prepare: () => {
-        const pinned = childVersion(req.flowId);
+        const pinned = childVersion(req.flowId, ctx.projectId);
         return { arguments: { ...req, pinned }, target: { flowId: req.flowId, ...pinned } };
       },
       execute: async (args, checkpoint) => {
         checkpoint();
-        if (digest(childVersion(args.flowId as string)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
-        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId);
+        if (digest(childVersion(args.flowId as string, ctx.projectId)) !== digest(args.pinned)) throw new Error('Target workflow changed after approval; start a new run');
+        return runnerAdapter.start(args as unknown as Parameters<typeof runnerAdapter.start>[0], ctx.runId, ctx.projectId);
       },
     });
     return reply.approval ? { runId: null, approval: reply.approval }

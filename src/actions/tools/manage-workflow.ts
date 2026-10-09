@@ -44,8 +44,9 @@ export interface ComposerToolRegistry {
 }
 import {
   createFlow,
-  deleteFlow,
+  deleteFlowInProject,
   getFlow,
+  getFlowInProject,
   listFlows,
   parseFlowMetadata,
   updateFlowStatus,
@@ -61,10 +62,11 @@ import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
 import {
   createFlowRun,
-  getFlowRun,
+  getFlowRunInProject,
   listRuns,
   type FlowRun,
 } from "../../workflows/db/repos/flow-run.ts";
+import { DEFAULT_IDS } from "../../workflows/db/schema.ts";
 import { enqueue } from "../../workflows/db/repos/job-queue.ts";
 import { RUN_FLOW } from "../../workflows/runner/handler.ts";
 import {
@@ -124,6 +126,36 @@ export interface ManageWorkflowDeps {
    * their OS long after this tool is constructed.
    */
   executionTargets?: () => ExecutionTarget[];
+  /**
+   * The workflow project every action acts in (#844): what `list` and
+   * `list_runs` show, what `create` and `compose` write to, and the only
+   * project a flow or run id is resolved in. One source, so a listing and a
+   * resolve-by-id can never disagree about scope -- the defect #692 fixed for
+   * the connections routes and #729 for the flow, version and run routes, on
+   * the model-facing path.
+   *
+   * A thunk with no argument because this tool has no request to read a
+   * project from. Unset in production, which resolves to
+   * `DEFAULT_IDS.project`: the same answer `callerProjectId` gives every HTTP
+   * request in production (`workflows/api/routes.ts`), and the project this
+   * tool already wrote to before #844 -- `createFlow()` with no project, and
+   * `listFlows(undefined)` -- so for a single-project store the only thing
+   * that changes is that a foreign id is no longer found.
+   *
+   * NOT YET RIGHT FOR A WORKFLOW CALLER, and stated because the gap is
+   * invisible from here. A workflow reaches this tool two ways: a
+   * `jarvis-tool` invoke step calls it by name (`toolsInvoke` in
+   * `workflows/runtime/service-backends.ts`), and a `jarvis-agent` step's
+   * sub-agent can call it (see `framedForModel` below). Either way its
+   * project should be its run's. No ambient context carries the run to a
+   * tool's `execute` today (the machine scope carries a sidecar policy, the
+   * execution scope a checkpoint, the LLM origin only the word "workflow"),
+   * so such a call acts in this project too. Harmless while there is one
+   * project; the day there are more, that run context is what has to be
+   * added, and `withWorkflowMachineBinding` in service-backends, which wraps
+   * both paths with the run in hand, is where it would be entered.
+   */
+  callerProjectId?: () => string;
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
@@ -305,9 +337,13 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     },
     execute: async (params) => {
       const action = String(params.action ?? "");
+      // Resolved once per call, so every read and write this action makes is
+      // in the same project (#844).
+      const project = deps.callerProjectId?.() ?? DEFAULT_IDS.project;
+      const requireFlowParam = (p: Record<string, unknown>) => requireFlowIn(project, p);
       switch (action) {
         case "list":
-          return framedForModel(actList(), "the workflow list and its stored metadata");
+          return framedForModel(actList(project), "the workflow list and its stored metadata");
         case "get":
           return framedForModel(
             actGet(requireFlowParam(params)),
@@ -330,7 +366,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           const name = requireString(params, "name");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
-            const composed = await actCompose(name, description, deps);
+            const composed = await actCompose(name, description, deps, project);
             // ACCEPTED COST of one block per action: `note` is repo-authored
             // guidance to the model, and framing the whole return puts it under
             // a preamble that says not to follow instructions inside the block.
@@ -361,7 +397,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
                 'If the user really wants a blank canvas to edit in the UI, retry with empty: true.',
             );
           }
-          return framedForModel(actCreate(name), "a new workflow and its stored metadata");
+          return framedForModel(actCreate(name, project), "a new workflow and its stored metadata");
         }
         case "enable":
           return framedForModel(
@@ -379,20 +415,20 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
             "a published workflow and its warnings",
           );
         case "delete":
-          return JSON.stringify(actDelete(requireFlowParam(params), deps));
+          return JSON.stringify(actDelete(requireFlowParam(params), deps, project));
         case "list_runs":
           return framedForModel(
-            actListRuns(params.flow as string | undefined, asLimit(params.limit)),
+            actListRuns(project, params.flow as string | undefined, asLimit(params.limit)),
             "workflow run history",
           );
         case "get_run":
           return framedForModel(
-            actGetRun(requireString(params, "run_id")),
+            actGetRun(project, requireString(params, "run_id")),
             "a workflow run's captured step output",
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps),
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project),
             "a composed workflow and the composer's text",
           );
         default:
@@ -638,12 +674,18 @@ function framedForModel(payload: unknown, source: string): string {
 
 /* ------------------------------------------------------------ resolution */
 
-function resolveFlow(ref: string): FlowRow {
-  const direct = getFlow(ref);
+/**
+ * A flow by id or display name, in `project` only (#844). Both halves are
+ * scoped: the id lookup used to be a bare `getFlow` while the name scan listed
+ * the default project, so a foreign id resolved while a foreign name did not.
+ * A foreign id now gets the same "workflow not found" a missing one does.
+ */
+function resolveFlow(project: string, ref: string): FlowRow {
+  const direct = getFlowInProject(project, ref);
   if (direct) return direct;
   const target = ref.trim().toLowerCase();
   // Match against the display name on the latest published or draft version.
-  for (const flow of listFlows(undefined, { limit: 1000 })) {
+  for (const flow of listFlows(project, { limit: 1000 })) {
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) continue;
     const version = getFlowVersion(versionId);
@@ -652,12 +694,12 @@ function resolveFlow(ref: string): FlowRow {
   throw new Error(`workflow not found: ${ref}`);
 }
 
-function requireFlowParam(params: Record<string, unknown>): FlowRow {
+function requireFlowIn(project: string, params: Record<string, unknown>): FlowRow {
   const ref = params.flow;
   if (typeof ref !== "string" || ref.length === 0) {
     throw new Error("'flow' parameter is required (display name or id)");
   }
-  return resolveFlow(ref);
+  return resolveFlow(project, ref);
 }
 
 function requireString(params: Record<string, unknown>, key: string): string {
@@ -842,8 +884,8 @@ const LIST_SCAN_MAX_FLOWS = 1000;
  */
 const LIST_PAYLOAD_MAX_CHARS = 3600;
 
-function actList(): Record<string, unknown> {
-  const rows = listFlows(undefined, { limit: LIST_SCAN_MAX_FLOWS });
+function actList(project: string): Record<string, unknown> {
+  const rows = listFlows(project, { limit: LIST_SCAN_MAX_FLOWS });
   const flows: Array<Record<string, unknown>> = [];
   let used = 0;
   for (const row of rows) {
@@ -912,8 +954,8 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
   return { run_id: run.id, status: "QUEUED", flow_id: flow.id };
 }
 
-function actCreate(displayName: string): Record<string, unknown> {
-  const flow = createFlow();
+function actCreate(displayName: string, project: string): Record<string, unknown> {
+  const flow = createFlow({ projectId: project });
   createDraftVersion({
     flowId: flow.id,
     displayName,
@@ -975,8 +1017,10 @@ function publishOsWarnings(trigger: unknown, deps: ManageWorkflowDeps): string[]
   return ctx ? flowOsWarnings(trigger, ctx) : [];
 }
 
-function actDelete(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
-  deleteFlow(flow.id);
+function actDelete(flow: FlowRow, deps: ManageWorkflowDeps, project: string): Record<string, unknown> {
+  // Its own predicate rather than trusting the resolve above for its scope,
+  // as #692 made the connections UPDATE carry one.
+  if (!deleteFlowInProject(project, flow.id)) throw new Error(`workflow not found: ${flow.id}`);
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   return { id: flow.id, deleted: true };
 }
@@ -987,6 +1031,7 @@ async function actCompose(
   name: string,
   description: string,
   deps: ManageWorkflowDeps,
+  project: string,
 ): Promise<Record<string, unknown>> {
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
@@ -998,7 +1043,7 @@ async function actCompose(
   // Reject up-front when a flow with the same display name already exists.
   // Auto-suffixing silently ("My Flow (2)") is more annoying than helpful;
   // the assistant can rename and call again.
-  const collision = findFlowByDisplayName(name);
+  const collision = findFlowByDisplayName(project, name);
   if (collision) {
     return {
       ok: false,
@@ -1030,7 +1075,9 @@ async function actCompose(
     const targets = deps.executionTargets();
     if (targets.length > 0) composeDeps.executionTargets = targets;
   }
-  const result = await composePersistedFlow(composeDeps, { name, description });
+  // The journal goes in the same project as the flow, or the flow's
+  // `compositionRecordId` names a record its own project cannot read.
+  const result = await composePersistedFlow(composeDeps, { name, description }, project);
 
   if (!result.ok) {
     return {
@@ -1047,7 +1094,7 @@ async function actCompose(
 
   // Persist as a fresh flow + draft version. The flow is created DISABLED;
   // the user must publish + enable explicitly.
-  const flow = createFlow({ metadata: { compositionRecordId: result.compositionRecordId } });
+  const flow = createFlow({ projectId: project, metadata: { compositionRecordId: result.compositionRecordId } });
   const flowName = result.flow.displayName.trim() || name;
   const version = createDraftVersion({
     flowId: flow.id,
@@ -1062,10 +1109,10 @@ async function actCompose(
   };
 }
 
-function findFlowByDisplayName(name: string): FlowRow | null {
+function findFlowByDisplayName(project: string, name: string): FlowRow | null {
   const target = name.trim().toLowerCase();
   if (!target) return null;
-  for (const flow of listFlows(undefined, { limit: 1000 })) {
+  for (const flow of listFlows(project, { limit: 1000 })) {
     const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
     if (!versionId) continue;
     const version = getFlowVersion(versionId);
@@ -1083,15 +1130,18 @@ function capRawResponse(raw: string | null): string | null {
 /** Re-export for tests so they can inspect the parser output without going through the LLM. */
 export type { ComposedFlow };
 
-function actListRuns(flowRef: string | undefined, limit: number): Array<Record<string, unknown>> {
-  const flow = flowRef ? resolveFlow(flowRef) : null;
-  const opts: Parameters<typeof listRuns>[0] = { limit };
+function actListRuns(project: string, flowRef: string | undefined, limit: number): Array<Record<string, unknown>> {
+  const flow = flowRef ? resolveFlow(project, flowRef) : null;
+  // Scoped even with no flow named (#844): this used to list every project's
+  // runs, captured `failedStep` text included.
+  const opts: Parameters<typeof listRuns>[0] = { limit, projectId: project };
   if (flow) opts.flowId = flow.id;
   return listRuns(opts).map((r) => summarizeRun(r));
 }
 
-function actGetRun(runId: string): Record<string, unknown> {
-  const run = getFlowRun(runId);
+function actGetRun(project: string, runId: string): Record<string, unknown> {
+  // Through the run's FLOW's project, as the HTTP route does (#729).
+  const run = getFlowRunInProject(project, runId);
   if (!run) throw new Error(`run not found: ${runId}`);
   return summarizeRun(run, true);
 }

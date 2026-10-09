@@ -10,7 +10,7 @@
 import type { Database, SQLQueryBindings } from "bun:sqlite";
 import { getRunCancellation, type RunCancellation } from "./run-cancellation";
 import { getRunMachineBinding, type RunMachineBinding } from "./run-machine-binding";
-import { getWorkflowDb, DEFAULT_IDS } from "../index";
+import { getWorkflowDb } from "../index";
 import { apId } from "../ids";
 
 export type FlowRunStatus =
@@ -131,7 +131,13 @@ export interface FlowRun {
 export interface CreateFlowRunInput {
   flowId: string;
   flowVersionId: string;
-  projectId?: string;
+  // No `projectId` (#843). A run belongs to its flow's project, and that is
+  // read from the flow row inside the INSERT below rather than taken from the
+  // caller. While this was an optional input no caller ever passed it, so
+  // every run landed in DEFAULT_IDS.project whatever project its flow was in,
+  // and that column is what the effect record copies and what the engine
+  // token's projectId -- the scope for store and connection access -- is
+  // minted from. Leaving it out of the type means no caller can disagree.
   parentRunId?: string | null;
   failParentOnFailure?: boolean;
   triggeredBy?: string;
@@ -190,16 +196,25 @@ function rowToRun(row: FlowRunRow): FlowRun {
 export function createFlowRun(input: CreateFlowRunInput): FlowRun {
   const id = apId();
   const ts = now();
-  db().run(
+  // INSERT ... SELECT so the project is the flow's own, read in the same
+  // statement as the write (#843): there is no window in which a separate
+  // lookup and the insert could see different rows. A flow that does not exist
+  // matches nothing and inserts nothing, which is answered below.
+  //
+  // The version must be one of THIS flow's, which the schema's foreign key
+  // does not say (it only requires the version to exist). Taking the project
+  // from the flow makes the pairing matter: a run of flow A naming flow B's
+  // version would execute B's definition under A's project token and merge
+  // its outputs into B's sample data. No caller does that today; this keeps it
+  // so rather than leaving it to each of them.
+  const inserted = db().run(
     `INSERT INTO flow_run (
       id, flow_id, flow_version_id, project_id, parent_run_id, fail_parent_on_failure,
       triggered_by, status, environment, start_time, step_name_to_test, tags, created, updated
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) SELECT ?, f.id, v.id, f.project_id, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      FROM flow f JOIN flow_version v ON v.id = ? AND v.flow_id = f.id WHERE f.id = ?`,
     [
       id,
-      input.flowId,
-      input.flowVersionId,
-      input.projectId ?? DEFAULT_IDS.project,
       input.parentRunId ?? null,
       input.failParentOnFailure ? 1 : 0,
       input.triggeredBy ?? null,
@@ -210,8 +225,16 @@ export function createFlowRun(input: CreateFlowRunInput): FlowRun {
       input.tags ? JSON.stringify(input.tags) : null,
       ts,
       ts,
+      input.flowVersionId,
+      input.flowId,
     ],
   );
+  if (inserted.changes !== 1) {
+    const flowExists = db().query("SELECT 1 FROM flow WHERE id = ?").get(input.flowId);
+    throw new Error(flowExists
+      ? `createFlowRun: version ${input.flowVersionId} is not a version of flow ${input.flowId}`
+      : `createFlowRun: flow not found (id=${input.flowId})`);
+  }
   const row = getFlowRunRow(id);
   if (!row) throw new Error(`createFlowRun: row missing after insert (id=${id})`);
   return rowToRun(row);
@@ -231,11 +254,23 @@ export function getFlowRun(id: string): FlowRun | null {
 /**
  * The run with this id whose FLOW is in this project, or null (#729).
  *
- * Scoped through the flow rather than `flow_run.project_id` on purpose: no
- * caller of `createFlowRun` passes a project, so that column is always
- * `DEFAULT_IDS.project`, even for a run of a flow in another project. The
- * flow's own `project_id` is the one value that is written where the flow is
- * created and never changes, so it is what a run belongs to.
+ * Scoped through the flow rather than `flow_run.project_id`. When #729 wrote
+ * this, no caller of `createFlowRun` passed a project, so that column was
+ * always `DEFAULT_IDS.project`, even for a run of a flow in another project.
+ * Since #843 `createFlowRun` copies the flow's project into the column, so for
+ * a run created from then on the two agree and this JOIN gives the same answer
+ * as `WHERE project_id = ?` would.
+ *
+ * And since #843 `createSchema` backfills older rows to their flow's project
+ * at boot, so the column is now right for every row.
+ *
+ * KEPT ANYWAY, deliberately, rather than simplified to the column. It costs a
+ * primary-key lookup, and it does not depend on any writer of `flow_run`
+ * getting the column right: the flow's `project_id` is written once where the
+ * flow is created and never changes, so a future writer that put a run in the
+ * wrong project would still not widen this scope. Dropping it would trade a
+ * guard that cannot drift for one that holds only while every writer is
+ * correct, for no gain.
  */
 export function getFlowRunInProject(projectId: string, id: string): FlowRun | null {
   const row = db()
@@ -301,6 +336,12 @@ export function updateRun(id: string, patch: UpdateRunInput): FlowRun {
 
 export interface ListRunsOptions {
   flowId?: string;
+  /**
+   * Only runs whose FLOW is in this project (#844), scoped through the flow
+   * for the reason `getFlowRunInProject` gives: it holds whatever any writer
+   * put in `flow_run.project_id`.
+   */
+  projectId?: string;
   status?: FlowRunStatus;
   limit?: number;
   offset?: number;
@@ -374,6 +415,10 @@ export function listRuns(opts: ListRunsOptions = {}): FlowRun[] {
   if (opts.status !== undefined) {
     filters.push("status = ?");
     args.push(opts.status);
+  }
+  if (opts.projectId !== undefined) {
+    filters.push("flow_id IN (SELECT id FROM flow WHERE project_id = ?)");
+    args.push(opts.projectId);
   }
   const where = filters.length ? ` WHERE ${filters.join(" AND ")}` : "";
   return db()
