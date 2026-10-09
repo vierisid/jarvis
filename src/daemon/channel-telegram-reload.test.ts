@@ -80,6 +80,12 @@ function slowAgent() {
   return { agent, turns, release: (text: string) => gates.get(text)?.() };
 }
 
+// The fixtures name their senders in `allowed_users` because #908 refuses to
+// START an enabled channel whose list is empty -- at the default authority
+// level an unlisted sender's turn gets run_command with no approval. These
+// tests are about update offsets across a reload, not about the allow-list, so
+// a legal list keeps the subject unchanged; an empty one would register no
+// adapter and every assertion here would time out.
 describe('#882: a settings reload does not re-run what the old Telegram adapter took', () => {
   let originalFetch: typeof fetch;
   beforeEach(() => { initDatabase(':memory:'); originalFetch = globalThis.fetch; });
@@ -89,7 +95,7 @@ describe('#882: a settings reload does not re-run what the old Telegram adapter 
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;
     const { agent, turns, release } = slowAgent();
-    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [] as number[] } } };
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [42] } } };
     const svc = new ChannelService(config as never, agent as never);
     try {
       await svc.start();
@@ -127,7 +133,7 @@ describe('#882: a settings reload does not re-run what the old Telegram adapter 
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;
     const { agent, turns, release } = slowAgent();
-    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [] as number[] } } };
+    const config = { channels: { telegram: { enabled: true, bot_token: 'tok', allowed_users: [7] } } };
     const svc = new ChannelService(config as never, agent as never);
     try {
       const releasePolls = api.holdPolls();
@@ -157,7 +163,7 @@ describe('#882: a settings reload does not re-run what the old Telegram adapter 
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;
     const { agent, turns } = slowAgent();
-    const config = { channels: { telegram: { enabled: true, bot_token: 'old', allowed_users: [] as number[] } } };
+    const config = { channels: { telegram: { enabled: true, bot_token: 'old', allowed_users: [42] } } };
     const svc = new ChannelService(config as never, agent as never);
     try {
       await svc.start();
@@ -243,7 +249,7 @@ describe('#882 review: what the abort and the per-bot record cover', () => {
     const api = fakeBotApi();
     globalThis.fetch = api.fetchImpl;
     const { agent, turns, release } = slowAgent();
-    const config = { channels: { telegram: { enabled: true, bot_token: 'a', allowed_users: [] as number[] } } };
+    const config = { channels: { telegram: { enabled: true, bot_token: 'a', allowed_users: [42, 9] } } };
     const svc = new ChannelService(config as never, agent as never);
     try {
       await svc.start();

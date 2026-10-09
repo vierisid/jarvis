@@ -345,7 +345,11 @@ describe('section secrets (stt/tts keys, channel tokens)', () => {
     const res = await route.POST(new Request('http://x/api/config/channels', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ telegram: { enabled: true, bot_token: 'tg-1', allowed_users: [] } }),
+      // A named user because #908 refuses an enabled channel with an empty
+      // list BEFORE the save is attempted. This test is about a keychain
+      // failure being reported as a storage error, so the body has to reach
+      // the keychain at all.
+      body: JSON.stringify({ telegram: { enabled: true, bot_token: 'tg-1', allowed_users: [42] } }),
     }));
 
     expect(res.status).toBe(500);
