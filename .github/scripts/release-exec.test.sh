@@ -32,13 +32,14 @@
 #   publish: sidecar-release.yml publish-sidecar, and installer-release.yml
 #   sign-windows and publish. Each check is executed verbatim against
 #   tampered, extra, missing and undigested fixtures.
-#   Plus (#680) the image path: one build in build-image (a real push by
-#   digest and a dry-run twin into an OCI archive that differ only in
-#   outputs), smoke-image running exactly that digest with no write scope,
-#   publish-docker tagging it with no rebuild after the approval chain, and
-#   only those two jobs holding packages: write. Its three scripts (the
-#   pull, the archive load and the tag step) are executed verbatim against
-#   a docker stub, with tampered, wrong and missing inputs.
+#   Plus (#680, #868) the image path: one build in build-image, into an OCI
+#   archive, by a job with no registry scope; smoke-image loading and
+#   running exactly that archive and rehearsing its push on a loopback
+#   registry; publish-docker, the only job holding packages: write, pushing
+#   it by digest and tagging it after the approval chain, by the very script
+#   the rehearsal runs. The push script and the archive load are executed
+#   verbatim against docker and skopeo stubs, with tampered, wrong and
+#   missing inputs.
 #   Plus (#817) post-sign verification in a job without id-token, on the
 #   digest that ships, gating the publish.
 #   Plus (#684, #818) the version gates of sidecar-release.yml and
@@ -125,6 +126,11 @@ if (mode === "dry-run") {
     ["jobs.publish-brain.environment.name", (d) => d.jobs?.["publish-brain"]?.environment?.name, ENV_NAME, "environment"]);
   else if (file === "sidecar-release.yml") sites.push(
     ["jobs.publish-sidecar.environment.name", (d) => d.jobs?.["publish-sidecar"]?.environment?.name, ENV_NAME, "environment"]);
+  // #869: the installer readiness step reads DRY_RUN. Its one site is
+  // env.DRY_RUN itself, already in sites; this branch only keeps the file
+  // from being reported as unknown, so the spelling and no-redefinition
+  // rules below apply to it.
+  else if (file === "installer-release.yml") {}
   else out.push("no dry-run sites are known for " + file);
   // A small evaluator for the GitHub expression subset these use: literals,
   // inputs.dry_run, ! == != && || and parentheses, with GitHub loose
@@ -351,137 +357,221 @@ if (mode === "installer-digests") {
   process.exit(0);
 }
 if (mode === "image") {
-  // #680: the image is built once, smoke-tested by digest, and tagged from
-  // that digest with no rebuild; the dry run is the same build into an
-  // archive; and only the job after the approval chain creates a tag.
+  // #680, #868: the image is built once into an OCI archive by a job that
+  // cannot write to a registry, smoke-tested from that archive, its push
+  // rehearsed against a loopback registry by the very script publish-docker
+  // runs, and pushed to GHCR by digest only by publish-docker, after the
+  // approval chain. No comment in this JS may contain an apostrophe: the
+  // whole program sits inside a single-quoted shell string.
   const out = [];
   const lc = (st) => String(st.uses ?? "").toLowerCase();
   const isBuild = (st) => /^docker\/(build-push-action|bake-action)@/.test(lc(st));
+  const isLogin = (st) => lc(st).startsWith("docker/login-action@");
   const code = (st) => typeof st.run === "string" ? st.run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n") : "";
   const stepsOf = (j) => jobs[j]?.steps ?? [];
-  const writes = (perm) => perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((x) => x === "write"));
   const permOf = (j) => jobs[j]?.permissions ?? doc.permissions;
+  const same = (a, b) => JSON.stringify(Object.entries(a ?? {}).sort()) === JSON.stringify(Object.entries(b ?? {}).sort());
   const upstream = (j, target, seen = new Set()) => {
     if (j === target) return true;
     if (seen.has(j)) return false;
     seen.add(j);
     return needsOf(j).some((n) => upstream(n, target, seen));
   };
-  // Who builds, who writes to a registry, who holds packages: write.
+  const OCI_OUT = "type=oci,dest=${{ runner.temp }}/release-image.oci.tar";
+  const ARCHIVE = "${{ runner.temp }}/release-image.oci.tar";
+  const DIG = "${{ needs.build-image.outputs.digest }}";
+  const ASUM = "${{ needs.build-image.outputs.archive_sha256 }}";
+  const PUSH_ENV = (registry) => ({
+    REGISTRY: registry,
+    DIGEST: DIG,
+    ARCHIVE_SHA256: ASUM,
+    TAGS: "${{ needs.build-image.outputs.tags }}",
+    VERSION: "${{ needs.validate-tag.outputs.version }}",
+    PRERELEASE: "${{ needs.validate-tag.outputs.prerelease }}",
+  });
+  const REAL = "env.DRY_RUN != \x27true\x27";
+  const PUSH_NAME = "Push the smoked archive by digest and tag it";
+  const REHEARSE_NAME = "Rehearse the push by digest and the tagging";
+  const pd = stepsOf("publish-docker");
+  const si = stepsOf("smoke-image");
+  const bi = stepsOf("build-image");
+  const push = pd.find((st) => st.name === PUSH_NAME);
+  const rehearse = si.find((st) => st.name === REHEARSE_NAME);
+  // Who builds, who writes to a registry, who holds a registry scope.
   const buildCmd = /\bdocker\s+(?:image\s+)?build\b|\bbuildx\s+(?:build|bake)\b|\bdocker\s+(?:image\s+)?(?:commit|import)\b/;
-  const registryWrite = /\bdocker\s+(?:image\s+)?push\b|\bimagetools\s+create\b|\b(?:skopeo|crane|regctl|oras)\s+(?:copy|cp|push|tag|image\s+copy|index\s+create)\b|--push\b/;
+  // Global flags may sit between a binary and its subcommand (docker
+  // --config x push, skopeo --debug copy), so they are skipped (#868 review).
+  const flags = "(?:\\s+-{1,2}[^\\s=]+(?:=\\S*|\\s+(?!-)\\S+)?)*";
+  const registryWrite = new RegExp(
+    "\\b(?:docker|podman|buildah)" + flags + "\\s+(?:(?:image|manifest)\\s+)?push\\b" +
+    "|\\bimagetools" + flags + "\\s+create\\b" +
+    "|\\b(?:skopeo|crane|regctl|oras)" + flags + "\\s+(?:copy|cp|push|tag|sync|delete|mutate|append|attach|image\\s+copy|index\\s+create|image\\s+mod|manifest\\s+(?:put|push|delete))\\b" +
+    "|--push\\b|\\btype\\s*=\\s*registry\\b" +
+    "|\\b(?:curl|wget)\\b[^\\n]*(?:-X\\s*|--method[=\\s])(?:PUT|POST|PATCH|DELETE)\\b[^\\n]*\\/v2\\/");
   for (const [name, job] of Object.entries(jobs)) {
     const steps = job.steps ?? [];
     if (name !== "build-image" && (steps.some(isBuild) || steps.some((st) => buildCmd.test(code(st)))))
       out.push(name + ": builds an image; only build-image may, so the image that ships is built once");
-    if (name !== "publish-docker" && steps.some((st) => registryWrite.test(code(st))))
-      out.push(name + ": writes to a registry from a run: step; only publish-docker tags, and build-image pushes through its build step alone");
+    // The only two run: steps that may write to a registry are the push
+    // script and its rehearsal, which are pinned to each other below.
+    for (const st of steps)
+      if (registryWrite.test(code(st)) && st !== push && st !== rehearse)
+        out.push(name + ": writes to a registry from a run: step other than the push script; only publish-docker pushes, and smoke-image rehearses that push on loopback");
+    if (name !== "publish-docker" && steps.some(isLogin))
+      out.push(name + ": logs in to a registry; since #868 only publish-docker, after the approval chain, holds a registry credential");
     const p = permOf(name);
-    if ((p === "write-all" || p?.packages === "write") && name !== "build-image" && name !== "publish-docker")
-      out.push(name + ": holds packages: write; only build-image (untagged push) and publish-docker (tags) may");
+    if ((p === "write-all" || p?.packages === "write") && name !== "publish-docker")
+      out.push(name + ": holds packages: write; only publish-docker may, after the approval chain (#868)");
+    if (steps.some((st) => isBuild(st) && (String(st.with?.push ?? "false") !== "false" || /(?:^|[,\s])(?:push\s*=\s*(?:true|1|t)\b|type\s*=\s*(?:image|registry)\b)/i.test(String(st.with?.outputs ?? "")))))
+      out.push(name + ": a build step pushes or exports to a registry; the release image leaves its build only as the archive");
   }
-  // build-image: the one build, twice spelled, cold, attested.
-  const bi = stepsOf("build-image");
+  // Every action the three image jobs use, allowlisted (#868 review): a
+  // push action has no run: text for the rule above to see.
+  const USES = {
+    "build-image": ["actions/checkout@", "docker/setup-qemu-action@", "docker/setup-buildx-action@", "docker/metadata-action@", "docker/build-push-action@", "actions/upload-artifact@"],
+    "smoke-image": ["actions/checkout@", "actions/download-artifact@"],
+    "publish-docker": ["actions/download-artifact@", "docker/login-action@"],
+  };
+  for (const [j, ok] of Object.entries(USES))
+    for (const st of stepsOf(j))
+      if (st.uses !== undefined && !ok.some((a) => lc(st).startsWith(a)))
+        out.push(j + ": uses " + st.uses + ", which is not one of the actions this job may use");
+  // build-image: one cold, attested build into the archive, and nothing else.
   const b = bi.find((st) => st.id === "build");
-  const d = bi.find((st) => st.id === "build-dry");
-  const REAL_OUT = "type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true";
-  const DRY_OUT = "type=oci,dest=${{ runner.temp }}/release-image.oci.tar";
   if (!jobs["build-image"]) out.push("no build-image job");
-  else if (!b || !d || !isBuild(b) || !isBuild(d)) out.push("build-image: needs a build step with id build and one with id build-dry");
   else {
-    if (bi.filter(isBuild).length !== 2) out.push("build-image: has " + bi.filter(isBuild).length + " build steps, not exactly the real one and its dry-run twin");
-    if (b.if !== "env.DRY_RUN != \x27true\x27" || d.if !== "env.DRY_RUN == \x27true\x27")
-      out.push("build-image: the two builds must run under env.DRY_RUN != and == \x27true\x27 (got " + JSON.stringify([b.if, d.if]) + ")");
-    if (b.uses !== d.uses) out.push("build-image: the two builds use different actions");
-    const rest = (st) => JSON.stringify(Object.fromEntries(Object.entries(st.with ?? {}).filter(([k]) => k !== "outputs").sort()));
-    if (rest(b) !== rest(d)) out.push("build-image: the dry-run build differs from the real one in more than outputs:, so a rehearsal no longer builds what ships: " + rest(b) + " vs " + rest(d));
-    if (b.with?.outputs !== REAL_OUT) out.push("build-image: the real build must output exactly " + REAL_OUT + " (got " + JSON.stringify(b.with?.outputs) + ")");
-    if (d.with?.outputs !== DRY_OUT) out.push("build-image: the dry-run build must output exactly " + DRY_OUT + ", writing nothing to a registry (got " + JSON.stringify(d.with?.outputs) + ")");
-    for (const k of ["push", "load", "tags", "cache-from", "cache-to"])
-      if (b.with?.[k] !== undefined) out.push("build-image: the build sets " + k + ", which push-by-digest from a cold build must not");
-    if (b.with?.provenance !== "mode=max") out.push("build-image: provenance must be mode=max (got " + JSON.stringify(b.with?.provenance) + ")");
-    if (b.with?.sbom !== "generator=${{ env.SBOM_GENERATOR }}") out.push("build-image: sbom must be generator=${{ env.SBOM_GENERATOR }} (got " + JSON.stringify(b.with?.sbom) + ")");
-    for (const st of [b, d]) if (st["continue-on-error"] !== undefined) out.push("build-image: a build step has continue-on-error");
-    // Nothing that hands the build a credential or more authority (#680
-    // review): both build the checked-out directory, with no secrets, ssh,
-    // extra contexts or entitlements. Without context: ., build-push-action
-    // builds the git context and passes its github-token (packages: write
-    // here) as a build secret any RUN step can mount.
-    for (const st of [b, d]) {
-      if (st.with?.context !== ".") out.push("build-image: " + st.id + " builds context " + JSON.stringify(st.with?.context) + ", not the checkout (.)");
+    if (!same(permOf("build-image"), { contents: "read" })) out.push("build-image: permissions must be exactly contents: read, no registry scope (#868) (got " + JSON.stringify(permOf("build-image")) + ")");
+    if (bi.filter(isBuild).length !== 1) out.push("build-image: has " + bi.filter(isBuild).length + " build steps, not exactly one (#868 retired the dry-run twin)");
+    if (!b || !isBuild(b)) out.push("build-image: needs a build step with id build");
+    else {
+      if (b.if !== undefined) out.push("build-image: the build runs under " + JSON.stringify(b.if) + "; it must run on every run, dry or real, so a rehearsal builds what ships");
+      if (b["continue-on-error"] !== undefined) out.push("build-image: a build step has continue-on-error");
+      if (b.with?.outputs !== OCI_OUT) out.push("build-image: the build must output exactly " + OCI_OUT + " (got " + JSON.stringify(b.with?.outputs) + ")");
+      for (const k of ["push", "load", "tags", "cache-from", "cache-to"])
+        if (b.with?.[k] !== undefined) out.push("build-image: the build sets " + k + ", which a cold build into the archive must not");
+      if (b.with?.provenance !== "mode=max") out.push("build-image: provenance must be mode=max (got " + JSON.stringify(b.with?.provenance) + ")");
+      if (b.with?.sbom !== "generator=${{ env.SBOM_GENERATOR }}") out.push("build-image: sbom must be generator=${{ env.SBOM_GENERATOR }} (got " + JSON.stringify(b.with?.sbom) + ")");
+      // Nothing that hands the build a credential or more authority (#680
+      // review). Without context: ., build-push-action builds the git
+      // context and passes its github-token as a build secret any RUN step
+      // can mount.
+      if (b.with?.context !== ".") out.push("build-image: build builds context " + JSON.stringify(b.with?.context) + ", not the checkout (.)");
       for (const k of ["secrets", "secret-files", "secret-envs", "ssh", "github-token", "build-contexts", "allow", "network"])
-        if (st.with?.[k] !== undefined) out.push("build-image: " + st.id + " sets " + k + ", which hands the build a credential or more authority");
+        if (b.with?.[k] !== undefined) out.push("build-image: build sets " + k + ", which hands the build a credential or more authority");
     }
-  }
-  if (jobs["build-image"]) {
     const o = jobs["build-image"].outputs ?? {};
-    if (o.digest !== "${{ steps.build.outputs.digest || steps.build-dry.outputs.digest }}")
-      out.push("build-image: output digest must be ${{ steps.build.outputs.digest || steps.build-dry.outputs.digest }} (got " + JSON.stringify(o.digest) + ")");
+    if (o.digest !== "${{ steps.build.outputs.digest }}") out.push("build-image: output digest must be ${{ steps.build.outputs.digest }} (got " + JSON.stringify(o.digest) + ")");
     if (o.archive_sha256 !== "${{ steps.archive.outputs.sha256 }}") out.push("build-image: output archive_sha256 must be ${{ steps.archive.outputs.sha256 }} (got " + JSON.stringify(o.archive_sha256) + ")");
-    // The archive digest is taken after the dry build, and only the upload follows.
+    // The archive digest is taken after the build, and only the upload follows.
     const at = bi.findIndex((st) => st.id === "archive");
-    const di = bi.indexOf(d);
-    if (at < 0 || at < di || !bi.slice(at + 1).length || !bi.slice(at + 1).every((st) => lc(st).startsWith("actions/upload-artifact@")))
-      out.push("build-image: the archive digest is not taken after the dry-run build with only its upload after it");
+    const up = bi[at + 1];
+    if (at < 0 || at < bi.indexOf(b) || bi.length !== at + 2 || !up || !lc(up).startsWith("actions/upload-artifact@"))
+      out.push("build-image: the archive digest is not taken after the build with only the upload after it");
+    else {
+      if (bi[at].if !== undefined || up.if !== undefined) out.push("build-image: the archive digest or upload runs under a condition; both run on every run");
+      // Kept until publish-docker can read it after the approvals: GitHub
+      // cancels a run after 35 days, waiting included.
+      if (up.with?.name !== "release-image-oci" || up.with?.path !== ARCHIVE || up.with?.["if-no-files-found"] !== "error" ||
+          up.with?.["retention-days"] !== "${{ env.DRY_RUN == \x27true\x27 && 1 || 35 }}")
+        out.push("build-image: the archive upload must be release-image-oci from " + ARCHIVE + ", if-no-files-found: error, retention-days ${{ env.DRY_RUN == \x27true\x27 && 1 || 35 }} (got " + JSON.stringify(up.with) + ")");
+    }
     // Never runs what it built.
     const runsImage = /\bdocker\s+(?:container\s+)?(?:run|create|start|exec|load)\b|docker-smoke\.sh/;
     if (bi.some((st) => runsImage.test(code(st))) || bi.some((st) => isBuild(st) && String(st.with?.load ?? "false") !== "false"))
-      out.push("build-image: runs or loads an image in the job holding packages: write");
+      out.push("build-image: runs or loads an image");
   }
-  // smoke-image: no write scope, the reported digest pulled, the archive
-  // checked by content, and the smoke test unconditional.
-  const si = stepsOf("smoke-image");
+  // smoke-image: no registry scope, the archive checked by content and run,
+  // and the push rehearsed on loopback by the publish script itself.
   if (!jobs["smoke-image"]) out.push("no smoke-image job");
   else {
-    if (writes(permOf("smoke-image"))) out.push("smoke-image: holds a write scope (" + JSON.stringify(permOf("smoke-image")) + ") in the job that runs the image");
-    if (!needsOf("smoke-image").includes("build-image")) out.push("smoke-image: does not list build-image in needs, so its digest reads as empty");
-    const DIG = "${{ needs.build-image.outputs.digest }}";
-    const pull = si.findIndex((st) => /\bdocker\s+pull\b/.test(code(st)));
-    const ps = si[pull];
-    if (pull < 0) out.push("smoke-image: never pulls the pushed image");
-    else {
-      if (ps.if !== "env.DRY_RUN != \x27true\x27") out.push("smoke-image: the pull runs under " + JSON.stringify(ps.if) + ", not env.DRY_RUN != \x27true\x27");
-      if (ps.env?.DIGEST !== DIG) out.push("smoke-image: the pull takes DIGEST from " + JSON.stringify(ps.env?.DIGEST) + ", not " + DIG);
-      if (!/ref="ghcr\.io\/\$\{GITHUB_REPOSITORY,,\}@\$\{DIGEST\}"/.test(code(ps)) || !/\bdocker\s+pull\s+--platform\s+linux\/amd64\s+"\$ref"/.test(code(ps)))
-        out.push("smoke-image: the pull is not docker pull --platform linux/amd64 of ghcr.io/<repo>@${DIGEST}");
-      if (!/\bdocker\s+logout\s+ghcr\.io\b/.test(code(ps))) out.push("smoke-image: the registry credential stays on disk while the image runs");
-    }
+    if (!same(permOf("smoke-image"), { contents: "read" })) out.push("smoke-image: permissions must be exactly contents: read, in the job that runs the image (got " + JSON.stringify(permOf("smoke-image")) + ")");
+    for (const n of ["build-image", "validate-tag"])
+      if (!needsOf("smoke-image").includes(n)) out.push("smoke-image: does not list " + n + " in needs, so its outputs read as empty");
+    if (si.some((st) => /\bdocker\s+(?:image\s+)?pull\b/.test(code(st)))) out.push("smoke-image: pulls an image by name; it runs the archive build-image made");
     const load = si.findIndex((st) => /\bdocker\s+load\b/.test(code(st)));
     const ls = si[load];
-    if (load < 0) out.push("smoke-image: never loads the dry-run archive");
+    if (load < 0) out.push("smoke-image: never loads the archive");
     else {
-      if (ls.if !== "env.DRY_RUN == \x27true\x27") out.push("smoke-image: the archive load runs under " + JSON.stringify(ls.if) + ", not env.DRY_RUN == \x27true\x27");
-      if (ls.env?.DIGEST !== DIG || ls.env?.ARCHIVE_SHA256 !== "${{ needs.build-image.outputs.archive_sha256 }}")
+      if (ls.if !== undefined || ls["continue-on-error"] !== undefined) out.push("smoke-image: the archive load runs under " + JSON.stringify(ls.if) + " or may fail; it must run on every run");
+      if (ls.env?.DIGEST !== DIG || ls.env?.ARCHIVE_SHA256 !== ASUM)
         out.push("smoke-image: the archive load does not take DIGEST and ARCHIVE_SHA256 from build-image outputs");
       const dl = si[load - 1];
-      if (!dl || !lc(dl).startsWith("actions/download-artifact@") || dl.with?.name !== "release-image-oci" || dl.if !== ls.if)
-        out.push("smoke-image: the archive load is not right after the release-image-oci download, under the same condition");
-      const c = code(ls);
-      if (!/sha256sum -c -[\s\S]*tar -xf[\s\S]*sha256sum -c -[\s\S]*sha256sum -c -[\s\S]*docker load/.test(c))
+      if (!dl || !lc(dl).startsWith("actions/download-artifact@") || dl.with?.name !== "release-image-oci" || dl.if !== undefined || dl["continue-on-error"] !== undefined)
+        out.push("smoke-image: the archive load is not right after an unconditional release-image-oci download");
+      if (!/sha256sum -c -[\s\S]*tar -xf[\s\S]*sha256sum -c -[\s\S]*sha256sum -c -[\s\S]*docker load/.test(code(ls)))
         out.push("smoke-image: the archive load does not check the archive, then the index, then the amd64 manifest, before docker load");
     }
     const sm = si.findIndex((st) => /docker-smoke\.sh\s+"\$GATE_IMAGE_TAG"/.test(code(st)));
     if (sm < 0) out.push("smoke-image: never runs docker-smoke.sh on $GATE_IMAGE_TAG");
     else {
       if (si[sm].if !== undefined || si[sm]["continue-on-error"] !== undefined) out.push("smoke-image: the smoke test can be skipped or allowed to fail");
-      if (sm < pull || sm < load) out.push("smoke-image: smokes before the image is pulled or loaded");
+      if (sm < load) out.push("smoke-image: smokes before the image is loaded");
     }
-    for (const st of [ps, ls]) if (st && st["continue-on-error"] !== undefined) out.push("smoke-image: the pull or load is allowed to fail");
+    if (!rehearse || typeof rehearse.run !== "string") out.push("smoke-image: no step named " + JSON.stringify(REHEARSE_NAME) + " rehearsing the push");
+    else {
+      if (rehearse.if !== undefined || rehearse["continue-on-error"] !== undefined) out.push("smoke-image: the push rehearsal can be skipped or allowed to fail; it runs on every run, dry or real");
+      if (!same(rehearse.env, PUSH_ENV("127.0.0.1:5000")))
+        out.push("smoke-image: the push rehearsal env must be exactly, pushing to a loopback registry, " + JSON.stringify(PUSH_ENV("127.0.0.1:5000")) + " (got " + JSON.stringify(rehearse.env) + ")");
+      if (si.indexOf(rehearse) < load) out.push("smoke-image: rehearses the push before the archive is checked and loaded");
+    }
+    // The throwaway registry: pinned by digest, on loopback only.
+    const reg = si.find((st) => /\bdocker\s+run\b[^\n]*\$REHEARSAL_REGISTRY_IMAGE/.test(code(st)));
+    if (!reg) out.push("smoke-image: the throwaway registry is not started from $REHEARSAL_REGISTRY_IMAGE");
+    else if (!/\bdocker\s+run\s+-d\s+--name\s+"\$REHEARSAL_CONTAINER"\s+-p\s+127\.0\.0\.1:5000:5000\s+"\$REHEARSAL_REGISTRY_IMAGE"\s*$/m.test(code(reg)))
+      out.push("smoke-image: the throwaway registry is not bound to 127.0.0.1:5000 alone");
+    if (!/^registry:[0-9][0-9.]*@sha256:[0-9a-f]{64}$/.test(String(doc.env?.REHEARSAL_REGISTRY_IMAGE ?? "")))
+      out.push("REHEARSAL_REGISTRY_IMAGE is not pinned by tag and digest (got " + JSON.stringify(doc.env?.REHEARSAL_REGISTRY_IMAGE) + ")");
   }
-  // publish-docker: tags that digest, builds nothing, after the approval chain.
-  const pd = stepsOf("publish-docker");
+  // publish-docker: after the approval chain, the archive checked, pushed by
+  // digest and tagged, by the script smoke-image rehearsed.
   if (!jobs["publish-docker"]) out.push("no publish-docker job");
   else {
     const p = permOf("publish-docker");
     if (JSON.stringify(p) !== JSON.stringify({ packages: "write" })) out.push("publish-docker: permissions must be exactly packages: write (got " + JSON.stringify(p) + ")");
-    for (const n of ["build-image", "smoke-image", "publish-brain"])
+    for (const n of ["build-image", "smoke-image", "publish-brain", "validate-tag"])
       if (!needsOf("publish-docker").includes(n)) out.push("publish-docker: does not list " + n + " in needs");
-    const t = pd.find((st) => /\bimagetools\s+create\b/.test(code(st)));
-    if (!t) out.push("publish-docker: never runs imagetools create");
+    if (!push || typeof push.run !== "string") out.push("publish-docker: no step named " + JSON.stringify(PUSH_NAME));
     else {
-      if (t.env?.DIGEST !== "${{ needs.build-image.outputs.digest }}") out.push("publish-docker: tags a DIGEST from " + JSON.stringify(t.env?.DIGEST) + ", not build-image");
-      if (!/imagetools\s+create\s+"\$\{args\[@\]\}"\s+"\$\{image\}@\$\{DIGEST\}"/.test(code(t))) out.push("publish-docker: imagetools create does not take its source as ${image}@${DIGEST}");
-      if (t.if !== undefined || t["continue-on-error"] !== undefined) out.push("publish-docker: the tag step can be skipped or allowed to fail");
+      if (push.if !== REAL || push["continue-on-error"] !== undefined)
+        out.push("publish-docker: the push step must run under exactly " + REAL + " and may not fail (got if " + JSON.stringify(push.if) + ")");
+      if (!same(push.env, PUSH_ENV("ghcr.io"))) out.push("publish-docker: the push step env must be exactly " + JSON.stringify(PUSH_ENV("ghcr.io")) + " (got " + JSON.stringify(push.env) + ")");
+      // Exactly these steps, in this order (#868 review): the archive is
+      // downloaded and checked before the credential exists, and nothing but
+      // the push script runs while it does.
+      const SHAPE = [
+        ["download", (st) => lc(st).startsWith("actions/download-artifact@") && st.with?.name === "release-image-oci" && st.if === REAL],
+        ["Verify the archive", (st) => st.name === "Verify the archive" && st.if === REAL && st.env?.ARCHIVE_SHA256 === ASUM && /sha256sum -c -/.test(code(st))],
+        ["login", (st) => lc(st).startsWith("docker/login-action@") && st.if === REAL],
+        [PUSH_NAME, (st) => st === push],
+        ["Dry-run summary", (st) => st.name === "Dry-run summary" && st.if === "env.DRY_RUN == \x27true\x27" && !registryWrite.test(code(st))],
+      ];
+      if (pd.length !== SHAPE.length || SHAPE.some(([, test], i) => !pd[i] || !test(pd[i])))
+        out.push("publish-docker: steps must be exactly " + SHAPE.map(([n]) => n).join(", ") + ", in that order, the first four under " + REAL + " (got " + JSON.stringify(pd.map((st) => st.name ?? st.uses)) + ")");
+      if (rehearse && typeof rehearse.run === "string" && rehearse.run !== push.run)
+        out.push("publish-docker: the rehearsal and the publish run different scripts, so the rehearsal no longer proves the push");
+      // The script itself: the archive checked, then pushed by its index
+      // digest with digests preserved, then that digest read back and tagged.
+      const c = code(push);
+      const at = (re) => { const m = re.exec(c); return m ? m.index : -1; };
+      const chk = at(/echo "\$\{ARCHIVE_SHA256\}  \$\{archive\}" \| sha256sum -c -/);
+      const cp = at(/\bskopeo copy --all --preserve-digests --retry-times 3 "oci-archive:\$\{archive\}" "docker:\/\/\$\{image\}@\$\{DIGEST\}"/);
+      const plan = at(/\bimagetools create --dry-run "\$\{args\[@\]\}" "\$\{image\}@\$\{DIGEST\}"/);
+      const cr = at(/\bimagetools create "\$\{args\[@\]\}" "\$\{image\}@\$\{DIGEST\}"/);
+      if (!/^\s*archive="\$\{RUNNER_TEMP\}\/release-image\/release-image\.oci\.tar"$/m.test(c)) out.push("publish-docker: the push script does not read the archive from ${RUNNER_TEMP}/release-image");
+      if (!/^\s*image="\$\{REGISTRY\}\/\$\{GITHUB_REPOSITORY,,\}"$/m.test(c) || !/^\s*owned="ghcr\.io\/\$\{GITHUB_REPOSITORY,,\}"$/m.test(c))
+        out.push("publish-docker: the push script does not derive image from REGISTRY and check tags against ghcr.io/<repo>");
+      if (chk < 0) out.push("publish-docker: the push script does not check the archive before skopeo");
+      if (cp < 0) out.push("publish-docker: skopeo copy must be exactly skopeo copy --all --preserve-digests --retry-times 3 oci-archive:${archive} docker://${image}@${DIGEST}");
+      if (cr < 0) out.push("publish-docker: imagetools create does not take its source as ${image}@${DIGEST}");
+      if (plan < 0) out.push("publish-docker: no imagetools create --dry-run of ${image}@${DIGEST} before the tags move");
+      if (chk >= 0 && cp >= 0 && plan >= 0 && cr >= 0 && !(chk < cp && cp < plan && plan < cr))
+        out.push("publish-docker: the push script does not run archive check, push, read-back, tag in that order");
+      // Exactly those three registry calls, and no other write of any kind.
+      const rest = c.replace(/\bskopeo copy --all --preserve-digests --retry-times 3 "oci-archive:\$\{archive\}" "docker:\/\/\$\{image\}@\$\{DIGEST\}"/, "")
+        .replace(/\bimagetools create --dry-run "\$\{args\[@\]\}" "\$\{image\}@\$\{DIGEST\}"/, "")
+        .replace(/\bimagetools create "\$\{args\[@\]\}" "\$\{image\}@\$\{DIGEST\}"/, "");
+      if (registryWrite.test(rest) || /\bskopeo\s+(?!--version\b)\S/.test(rest))
+        out.push("publish-docker: the push script writes to the registry other than by its one skopeo copy and one imagetools create");
     }
     if (pd.some((st) => lc(st).startsWith("actions/checkout@") || lc(st).startsWith("docker/setup-")))
       out.push("publish-docker: checks out or sets up a builder, and it builds nothing");
@@ -525,6 +615,33 @@ if (mode === "postsign") {
     }
     if (jobs[T.sign].outputs?.signed !== "${{ steps.winsign.outputs.ready }}")
       out.push(T.sign + ": output signed must be ${{ steps.winsign.outputs.ready }} (got " + JSON.stringify(jobs[T.sign].outputs?.signed) + "), or the check can be told there is nothing to verify");
+    // #869: readiness fails a real run unless the escape hatch is set. Its
+    // script is executed verbatim below; this pins what it is given and that
+    // nothing can switch it off: no condition, no continue-on-error, the two
+    // repository variables and nothing else, before any signing step.
+    const steps = stepsOf(T.sign);
+    const ri = steps.findIndex((st) => st.id === "winsign");
+    const r = steps[ri];
+    const READY_ENV = { GCP_KMS_KEYRING: "${{ vars.GCP_KMS_KEYRING }}", ALLOW_UNSIGNED_WINDOWS: "${{ vars.ALLOW_UNSIGNED_WINDOWS }}" };
+    if (!r || typeof r.run !== "string") out.push(T.sign + ": no readiness run step with id winsign");
+    else {
+      if (r.if !== undefined) out.push(T.sign + ": the readiness step runs under " + JSON.stringify(r.if) + ", so it can be skipped and signing with it");
+      if (r["continue-on-error"] !== undefined) out.push(T.sign + ": the readiness step has continue-on-error, so a real run missing its signing config would continue unsigned");
+      if (r.shell !== undefined && r.shell !== "bash") out.push(T.sign + ": the readiness step runs under shell " + JSON.stringify(r.shell) + ", not bash");
+      if (JSON.stringify(Object.entries(r.env ?? {}).sort()) !== JSON.stringify(Object.entries(READY_ENV).sort()))
+        out.push(T.sign + ": the readiness step env must be exactly " + JSON.stringify(READY_ENV) + " (got " + JSON.stringify(r.env) + ")");
+      const firstGated = steps.findIndex((st) => /steps\.winsign\.outputs\.ready/.test(String(st.if ?? "")));
+      if (firstGated >= 0 && firstGated < ri) out.push(T.sign + ": a step gated on readiness runs before the readiness step");
+      // What the step reads besides its own env: DRY_RUN, from the workflow.
+      // A job env or an earlier GITHUB_ENV write could tell it a real run is
+      // a rehearsal while the publish still reads the workflow value (#869
+      // review).
+      for (const k of ["DRY_RUN", "ALLOW_UNSIGNED_WINDOWS", "GCP_KMS_KEYRING"])
+        if (jobs[T.sign].env && k in jobs[T.sign].env) out.push(T.sign + ": the job env sets " + k + ", which the readiness step reads");
+      for (const st of steps.slice(0, ri))
+        if (/GITHUB_ENV/.test(String(st.run ?? "") + JSON.stringify(st.with ?? {})))
+          out.push(T.sign + ": a step before readiness writes GITHUB_ENV, which can change what the readiness step reads");
+    }
   }
   const v = jobs[T.verify];
   if (!v) out.push("no " + T.verify + " job");
@@ -553,6 +670,19 @@ if (mode === "postsign") {
       const inst = steps.findIndex((st) => typeof st.run === "string" && /\bapt-get\s+install\b[^\n]*\bosslsigncode\b/.test(st.run));
       if (inst < 0 || inst > at || steps[inst].if !== SIGNED) out.push(T.verify + ": does not install osslsigncode, under the same condition, before the check");
     }
+  }
+  // #869 review: the token-less verify job refuses an unsigned answer from
+  // the signer on a real run without the escape hatch, unconditionally.
+  if (v) {
+    const ref = (v.steps ?? []).find((st) => st.name === "Refuse an unsigned binary on a real run");
+    const REF_ENV = { SIGNED: "${{ needs." + T.sign + ".outputs.signed }}", ALLOW_UNSIGNED_WINDOWS: "${{ vars.ALLOW_UNSIGNED_WINDOWS }}" };
+    if (!ref || typeof ref.run !== "string") out.push(T.verify + ": no step refusing an unsigned binary on a real run");
+    else {
+      if (ref.if !== undefined || ref["continue-on-error"] !== undefined) out.push(T.verify + ": the unsigned-binary refusal can be skipped or allowed to fail");
+      if (JSON.stringify(Object.entries(ref.env ?? {}).sort()) !== JSON.stringify(Object.entries(REF_ENV).sort()))
+        out.push(T.verify + ": the unsigned-binary refusal env must be exactly " + JSON.stringify(REF_ENV) + " (got " + JSON.stringify(ref.env) + ")");
+    }
+    if (v.env && "DRY_RUN" in v.env) out.push(T.verify + ": the job env sets DRY_RUN, which the unsigned-binary refusal reads");
   }
   if (!needsOf(T.publish).includes(T.verify)) out.push(T.publish + ": does not wait for " + T.verify + ", so it can publish a signature nobody checked");
   // Job-level bypasses (#817 review): a failed check must fail the job, and
@@ -1019,152 +1149,286 @@ ${found}"
 }
 
 echo
-echo "the release image is built once, smoke-tested by digest and tagged from that digest (#680)"
+echo "the release image is built once into an archive, smoke-tested and rehearsed from it, and pushed by digest only after approval (#680, #868)"
 found="$(yq image)" || {
 	no "image structure check ran" "the bun helper failed"
 	found=""
 }
 if [ -z "$found" ]; then
-	ok "one build in build-image, smoke-image runs its digest with no write scope, publish-docker tags it after the approval chain"
+	ok "one build into an archive with no registry scope, smoke-image runs and rehearses it on loopback, only publish-docker pushes it, after the approval chain"
 else
 	no "release image built once" "$found"
 fi
+# Every mutant names the reason it must be reported for (#680 review), so
+# none of them passes because some other rule happens to fire.
 # shellcheck disable=SC2016 # every mutant is literal workflow text.
 {
 	MUTANT_MODE=image
-	mutant 'a second build of the image, in the job that tags it (#680)' \
-		'      - name: Point the release tags at the smoked digest' $'      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          push: true\n      - name: Point the release tags at the smoked digest'
-	mutant 'a rebuild by command line in the smoke job (#680)' \
-		'      - name: Smoke-test the image (run it like a user does)' $'      - run: docker buildx build --load -t "$GATE_IMAGE_TAG" .\n      - name: Smoke-test the image (run it like a user does)'
-	mutant 'the dry-run build drifting from the real one (#680)' \
-		$'          sbom: generator=${{ env.SBOM_GENERATOR }}\n          outputs: type=oci' $'          sbom: false\n          outputs: type=oci'
-	mutant 'the dry-run build pushing to a registry (#680)' \
-		'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar' '          outputs: type=image,name=ghcr.io/${{ github.repository }},push=true'
-	mutant 'the real build pushing a tag of its own (#680)' \
-		'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true' $'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n          tags: ghcr.io/${{ github.repository }}:latest'
-	mutant 'both builds running on a real release (#680)' \
-		$'        id: build-dry\n        if: env.DRY_RUN == \'true\'' $'        id: build-dry\n        if: always()'
-	mutant 'provenance dropped from the build that ships (#680)' \
-		$'          provenance: mode=max\n          sbom: generator=${{ env.SBOM_GENERATOR }}\n          outputs: type=image' $'          provenance: false\n          sbom: generator=${{ env.SBOM_GENERATOR }}\n          outputs: type=image'
-	mutant 'the digest output read from the wrong step (#680)' \
-		'      digest: ${{ steps.build.outputs.digest || steps.build-dry.outputs.digest }}' '      digest: ${{ steps.meta.outputs.digest }}'
-	mutant 'the image run in the job holding packages: write (#680)' \
-		'      - name: Upload the dry-run archive' $'      - run: docker run --rm alpine true\n      - name: Upload the dry-run archive'
-	mutant 'a write scope on the job that runs the image (#680)' \
-		$'    permissions:\n      contents: read\n      packages: read\n' $'    permissions:\n      contents: read\n      packages: write\n'
-	mutant 'the smoke job pulling by tag instead of by digest (#680)' \
-		'          ref="ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"' '          ref="ghcr.io/${GITHUB_REPOSITORY,,}:latest"'
-	mutant 'the registry credential left on disk while the image runs (#680)' \
-		'          docker logout ghcr.io' '          true'
-	mutant 'the smoke test switched off on its own (#680)' \
-		$'      - name: Smoke-test the image (run it like a user does)\n' $'      - name: Smoke-test the image (run it like a user does)\n        if: env.DRY_RUN == \'true\'\n'
-	mutant 'the dry-run archive loaded without its content checks (#680)' \
-		'          echo "${DIGEST#sha256:}  $(blob "$DIGEST")" | sha256sum -c -' '          true'
-	mutant 'the smoke job not waiting for build-image (#680)' \
-		'    needs: [validate-tag, build-image]' '    needs: [validate-tag, test]'
-	mutant 'the tags taken from a digest other than the one smoked (#680)' \
-		$'          DIGEST: ${{ needs.build-image.outputs.digest }}\n          TAGS:' $'          DIGEST: ${{ needs.smoke-image.outputs.digest }}\n          TAGS:'
-	mutant 'publish-docker tagging before the approval chain (#680)' \
-		'    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image]'
-	mutant 'publish-docker given contents: write as well (#680)' \
-		$'    permissions:\n      packages: write\n    timeout-minutes: 15' $'    permissions:\n      contents: write\n      packages: write\n    timeout-minutes: 15'
+	# Authority (#868): nothing before the approval chain can write to a registry.
+	mutant 'the build job given packages: write again (#868)' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: write\n' \
+		'build-image: holds packages: write'
+	mutant 'the build job logging in to GHCR again (#868)' \
+		'      - name: Generate Docker metadata' $'      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0\n        with:\n          registry: ghcr.io\n      - name: Generate Docker metadata' \
+		'build-image: logs in to a registry'
+	mutant 'the build pushing by digest again, as #680 did (#868)' \
+		'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar' '          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true' \
+		'build-image: a build step pushes or exports to a registry'
+	mutant 'the build job given a packages scope of any kind (#868)' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
+		$'  build-image:\n    needs: [validate-tag, test]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: read\n' \
+		'build-image: permissions must be exactly contents: read'
+	mutant 'the smoke job given a packages scope (#868)' \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
+		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: read\n' \
+		'smoke-image: permissions must be exactly contents: read'
+	mutant 'the smoke job logging in to GHCR again (#868)' \
+		'      - name: Download the archive
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-image-oci
+          path: ${{ runner.temp }}/release-image
+
+      # The amd64' $'      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0\n        with:\n          registry: ghcr.io\n      - name: Download the archive\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-image-oci\n          path: ${{ runner.temp }}/release-image\n\n      # The amd64' \
+		'smoke-image: logs in to a registry'
 	mutant 'a third job holding packages: write (#680)' \
 		$'  github-release:\n    needs: [validate-tag, publish-docker, sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
-		$'  github-release:\n    needs: [validate-tag, publish-docker, sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write'
-	mutant 'a tag created outside publish-docker (#680)' \
-		'          docker tag "$ref" "$GATE_IMAGE_TAG"' $'          docker tag "$ref" "$GATE_IMAGE_TAG"\n          docker buildx imagetools create -t ghcr.io/o/r:latest "$ref"'
-	mutant 'the sidecar no longer gated on the smoke test (#680)' \
-		'    needs: [test, smoke-image]' '    needs: [test, build-image]'
-	mutant 'the tag job allowed to run after a failed smoke test (#680)' \
-		$'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]\n' $'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]\n    if: ${{ !cancelled() && needs.build-image.result == \'success\' }}\n'
-	mutant 'a third build step in build-image (#680)' \
-		'      - name: Digest the dry-run archive' $'      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        if: env.DRY_RUN == \'true\'\n      - name: Digest the dry-run archive'
-	mutant 'the dry-run twin on another action version (#680)' \
-		$'        id: build-dry\n        if: env.DRY_RUN == \'true\'\n        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc' $'        id: build-dry\n        if: env.DRY_RUN == \'true\'\n        uses: docker/build-push-action@0000000000000000000000000000000000000000'
-	mutant_all 'the SBOM dropped from both builds alike, so they still agree (#680)' \
-		$'          sbom: generator=${{ env.SBOM_GENERATOR }}\n' ''
-	mutant 'the build that ships allowed to fail (#680)' \
-		$'        id: build\n' $'        id: build\n        continue-on-error: true\n'
-	mutant 'the real build losing push-by-digest (#680)' \
-		'name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true' 'name=ghcr.io/${{ github.repository }},push=true'
-	mutant 'the archive digest output taken from the wrong step (#680)' \
-		'      archive_sha256: ${{ steps.archive.outputs.sha256 }}' '      archive_sha256: ${{ steps.build-dry.outputs.digest }}'
+		$'  github-release:\n    needs: [validate-tag, publish-docker, sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
+		'github-release: holds packages: write'
 	mutant 'a docker push from a run: step in the build job (#680)' \
-		'      - name: Upload the dry-run archive' $'      - run: docker push ghcr.io/vierisid/jarvis:latest\n      - name: Upload the dry-run archive'
-	mutant 'the pull running on a dry run too (#680)' \
-		$'      - name: Pull the pushed image by digest\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Pull the pushed image by digest\n'
-	mutant 'the pull taking its digest from somewhere else (#680)' \
-		$'          DIGEST: ${{ needs.build-image.outputs.digest }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }\n          ref=' \
-		$'          DIGEST: ${{ vars.RELEASE_DIGEST }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }\n          ref='
-	mutant 'the archive load running on a real release too (#680)' \
-		$'      - name: Load the dry-run image from its archive\n        if: env.DRY_RUN == \'true\'\n' $'      - name: Load the dry-run image from its archive\n'
-	mutant 'the archive checked against a digest from somewhere else (#680)' \
-		'          ARCHIVE_SHA256: ${{ needs.build-image.outputs.archive_sha256 }}' '          ARCHIVE_SHA256: ${{ vars.ARCHIVE_SHA256 }}'
-	mutant 'a step between the archive download and its checks (#680)' \
-		'      - name: Load the dry-run image from its archive' $'      - run: ls "$RUNNER_TEMP"\n        if: env.DRY_RUN == \'true\'\n      - name: Load the dry-run image from its archive'
-	mutant 'the smoke test run before the image is in place (#680)' \
-		'      - name: Pull the pushed image by digest' $'      - run: ./.github/scripts/docker-smoke.sh "$GATE_IMAGE_TAG"\n      - name: Pull the pushed image by digest'
-	mutant 'a checkout in the tag job, which builds nothing (#680)' \
-		'      - name: Point the release tags at the smoked digest' $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      - name: Point the release tags at the smoked digest'
-	mutant 'the tag step switched off on its own (#680)' \
-		$'      - name: Point the release tags at the smoked digest\n' $'      - name: Point the release tags at the smoked digest\n        if: env.DRY_RUN == \'true\'\n'
-	mutant 'the tags created from a tag rather than the smoked digest (#680)' \
-		'docker buildx imagetools create "${args[@]}" "${image}@${DIGEST}"' 'docker buildx imagetools create "${args[@]}" "${image}:edge"'
-	mutant 'the GitHub Release no longer after the image tags (#680)' \
-		'    needs: [validate-tag, publish-docker, sidecar]' '    needs: [validate-tag, publish-brain, sidecar]'
-	mutant_all 'both builds exporting to the shared gha cache again (#680)' \
-		$'          provenance: mode=max\n' $'          provenance: mode=max\n          cache-to: type=gha,mode=max\n'
-	mutant 'the pull allowed to fail (#680)' \
-		$'      - name: Pull the pushed image by digest\n' $'      - name: Pull the pushed image by digest\n        continue-on-error: true\n'
-	mutant 'publish-docker not waiting for the smoke test (#680)' \
-		'    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]' '    needs: [validate-tag, build-image, sidecar, publish-brain]'
-	# Each of these is caught by its own rule and no other (#680 review): the
-	# run: steps go before the login, away from the archive ordering rule,
-	# and the build changes go into both builds, away from the drift rule.
-	mutant 'the image run in the job holding packages: write, on its own (#680 review)' \
-		'      # Only when something will be pushed (#682): a dry run has no use for' $'      - run: docker run --rm alpine true\n      # Only when something will be pushed (#682): a dry run has no use for' \
-		'build-image: runs or loads an image in the job holding packages: write'
-	mutant 'a docker push from a run: step in the build job, on its own (#680 review)' \
-		'      # Only when something will be pushed (#682): a dry run has no use for' $'      - run: docker push ghcr.io/vierisid/jarvis:latest\n      # Only when something will be pushed (#682): a dry run has no use for' \
+		'      - name: Upload the archive' $'      - run: docker push ghcr.io/vierisid/jarvis:latest\n      - name: Upload the archive' \
 		'build-image: writes to a registry from a run: step'
-	mutant_all 'both builds tagging the image themselves (#680 review)' \
-		$'          provenance: mode=max\n' $'          provenance: mode=max\n          tags: ghcr.io/vierisid/jarvis:latest\n' \
-		'build-image: the build sets tags'
-	mutant_all 'provenance dropped from both builds alike (#680 review)' \
+	mutant 'a tag created in the smoke job outside the rehearsal (#680)' \
+		'      - name: Remove the image tag and the registry this job started' $'      - run: docker buildx imagetools create -t ghcr.io/o/r:latest "ghcr.io/o/r@$DIGEST"\n      - name: Remove the image tag and the registry this job started' \
+		'smoke-image: writes to a registry from a run: step'
+	mutant 'a skopeo push from the smoke job outside the rehearsal (#868)' \
+		'      - name: Remove the image tag and the registry this job started' $'      - run: skopeo copy oci-archive:x docker://ghcr.io/o/r:latest\n      - name: Remove the image tag and the registry this job started' \
+		'smoke-image: writes to a registry from a run: step'
+	# One build, cold, attested, into the archive.
+	mutant 'a second build of the image, in the job that pushes it (#680)' \
+		'      - name: Push the smoked archive by digest and tag it' $'      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          push: true\n      - name: Push the smoked archive by digest and tag it' \
+		'publish-docker: builds an image'
+	mutant 'a rebuild by command line in the smoke job (#680)' \
+		'      - name: Smoke-test the image (run it like a user does)' $'      - run: docker buildx build --load -t "$GATE_IMAGE_TAG" .\n      - name: Smoke-test the image (run it like a user does)' \
+		'smoke-image: builds an image'
+	mutant 'a second build step in build-image, a dry-run twin again (#868)' \
+		'      - name: Digest the archive' $'      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        if: env.DRY_RUN == \'true\'\n      - name: Digest the archive' \
+		'build-image: has 2 build steps'
+	mutant 'the build skipped on a dry run, so the rehearsal builds nothing (#868)' \
+		$'        id: build\n        uses: docker/build-push-action' $'        id: build\n        if: env.DRY_RUN != \'true\'\n        uses: docker/build-push-action' \
+		'build-image: the build runs under'
+	mutant 'the build that ships allowed to fail (#680)' \
+		$'        id: build\n' $'        id: build\n        continue-on-error: true\n' \
+		'build-image: a build step has continue-on-error'
+	mutant 'provenance dropped from the build that ships (#680)' \
 		'          provenance: mode=max' '          provenance: false' \
 		'build-image: provenance must be mode=max'
-	mutant_all 'the github token handed to both builds as a secret (#680 review)' \
+	mutant 'the SBOM dropped from the build that ships (#680)' \
+		$'          sbom: generator=${{ env.SBOM_GENERATOR }}\n' '' \
+		'build-image: sbom must be generator='
+	mutant 'the build tagging the image itself (#680 review)' \
+		$'          provenance: mode=max\n' $'          provenance: mode=max\n          tags: ghcr.io/vierisid/jarvis:latest\n' \
+		'build-image: the build sets tags'
+	mutant 'the build exporting to the shared gha cache again (#782)' \
+		$'          provenance: mode=max\n' $'          provenance: mode=max\n          cache-to: type=gha,mode=max\n' \
+		'build-image: the build sets cache-to'
+	mutant 'the github token handed to the build as a secret (#680 review)' \
 		$'          provenance: mode=max\n' $'          provenance: mode=max\n          secrets: GIT_AUTH_TOKEN=${{ github.token }}\n' \
 		'build-image: build sets secrets'
-	mutant_all 'both builds off the checkout, onto the git context and its token (#680 review)' \
-		$'          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          labels:' $'          file: ./Dockerfile\n          platforms: linux/amd64,linux/arm64\n          labels:' \
+	mutant 'the build off the checkout, onto the git context and its token (#680 review)' \
+		$'          context: .\n          file: ./Dockerfile\n' $'          file: ./Dockerfile\n' \
 		'build-image: build builds context undefined'
-	mutant_all 'both builds granted an insecure entitlement (#680 review)' \
+	mutant 'the build granted an insecure entitlement (#680 review)' \
 		$'          provenance: mode=max\n' $'          provenance: mode=max\n          allow: security.insecure\n' \
 		'build-image: build sets allow'
+	mutant 'the digest output read from the wrong step (#680)' \
+		'      digest: ${{ steps.build.outputs.digest }}' '      digest: ${{ steps.meta.outputs.digest }}' \
+		'build-image: output digest must be'
+	mutant 'the archive digest output taken from the wrong step (#680)' \
+		'      archive_sha256: ${{ steps.archive.outputs.sha256 }}' '      archive_sha256: ${{ steps.build.outputs.digest }}' \
+		'build-image: output archive_sha256 must be'
+	mutant 'a step between the archive digest and its upload (#680)' \
+		'      - name: Upload the archive' $'      - run: ls "$RUNNER_TEMP"\n      - name: Upload the archive' \
+		'build-image: the archive digest is not taken after the build'
+	mutant 'the archive upload skipped on a real run (#868)' \
+		$'      - name: Upload the archive\n' $'      - name: Upload the archive\n        if: env.DRY_RUN == \'true\'\n' \
+		'build-image: the archive digest or upload runs under a condition'
+	mutant 'the archive expiring before a slow approval (#868)' \
+		"          retention-days: \${{ env.DRY_RUN == 'true' && 1 || 35 }}" '          retention-days: 1' \
+		'build-image: the archive upload must be release-image-oci'
+	mutant 'the image run in the build job (#680)' \
+		'      - name: Upload the archive' $'      - run: docker run --rm alpine true\n      - name: Upload the archive' \
+		'build-image: runs or loads an image'
 	mutant 'the push allowed after a failed test gate (#680)' \
-		$'  build-image:\n    needs: [validate-tag, test]\n' $'  build-image:\n    needs: [validate-tag, test]\n    if: always()\n'
+		$'  build-image:\n    needs: [validate-tag, test]\n' $'  build-image:\n    needs: [validate-tag, test]\n    if: always()\n' \
+		'build-image: can run after a failed gate'
+	# smoke-image: the archive, by content, run, and its push rehearsed.
+	mutant 'the smoke job pulling the image by name again (#868)' \
+		'      - name: Load the image from its archive' $'      - run: docker pull ghcr.io/vierisid/jarvis:latest\n      - name: Load the image from its archive' \
+		'smoke-image: pulls an image by name'
+	mutant 'the archive load skipped on a real run, as before #868' \
+		$'      - name: Load the image from its archive\n' $'      - name: Load the image from its archive\n        if: env.DRY_RUN == \'true\'\n' \
+		'smoke-image: the archive load runs under'
+	mutant 'the archive download skipped on a real run, as before #868' \
+		$'      - name: Download the archive\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-image-oci\n          path: ${{ runner.temp }}/release-image\n\n      # The amd64' \
+		$'      - name: Download the archive\n        if: env.DRY_RUN == \'true\'\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-image-oci\n          path: ${{ runner.temp }}/release-image\n\n      # The amd64' \
+		'smoke-image: the archive load is not right after an unconditional release-image-oci download'
+	mutant 'the archive loaded without its content checks (#680)' \
+		'          echo "${DIGEST#sha256:}  $(blob "$DIGEST")" | sha256sum -c -' '          true' \
+		'smoke-image: the archive load does not check the archive, then the index'
+	mutant 'the archive checked against a digest from somewhere else (#680)' \
+		$'          ARCHIVE_SHA256: ${{ needs.build-image.outputs.archive_sha256 }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }\n          [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no archive digest"; exit 1; }\n          dir=' \
+		$'          ARCHIVE_SHA256: ${{ vars.ARCHIVE_SHA256 }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }\n          [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no archive digest"; exit 1; }\n          dir=' \
+		'smoke-image: the archive load does not take DIGEST and ARCHIVE_SHA256'
+	mutant 'a step between the archive download and its checks (#680)' \
+		'      - name: Load the image from its archive' $'      - run: ls "$RUNNER_TEMP"\n      - name: Load the image from its archive' \
+		'smoke-image: the archive load is not right after'
+	mutant 'the smoke test switched off on its own (#680)' \
+		$'      - name: Smoke-test the image (run it like a user does)\n' $'      - name: Smoke-test the image (run it like a user does)\n        if: env.DRY_RUN == \'true\'\n' \
+		'smoke-image: the smoke test can be skipped'
+	mutant 'the smoke test run before the image is in place (#680)' \
+		'      - name: Load the image from its archive' $'      - run: ./.github/scripts/docker-smoke.sh "$GATE_IMAGE_TAG"\n      - name: Load the image from its archive' \
+		'smoke-image: smokes before the image is loaded'
+	mutant 'the smoke job not waiting for build-image (#680)' \
+		'    needs: [validate-tag, build-image]' '    needs: [validate-tag, test]' \
+		'smoke-image: does not list build-image in needs'
+	mutant 'the push rehearsal skipped on a real run (#868)' \
+		$'      - name: Rehearse the push by digest and the tagging\n' $'      - name: Rehearse the push by digest and the tagging\n        if: env.DRY_RUN == \'true\'\n' \
+		'smoke-image: the push rehearsal can be skipped'
+	mutant 'the push rehearsal allowed to fail (#868)' \
+		$'      - name: Rehearse the push by digest and the tagging\n' $'      - name: Rehearse the push by digest and the tagging\n        continue-on-error: true\n' \
+		'smoke-image: the push rehearsal can be skipped or allowed to fail'
+	mutant 'the push rehearsal pointed at GHCR (#868)' \
+		'          REGISTRY: 127.0.0.1:5000' '          REGISTRY: ghcr.io' \
+		'smoke-image: the push rehearsal env must be exactly'
+	mutant 'the push rehearsal fed a digest of its own (#868)' \
+		$'          REGISTRY: 127.0.0.1:5000\n          DIGEST: ${{ needs.build-image.outputs.digest }}' $'          REGISTRY: 127.0.0.1:5000\n          DIGEST: ${{ vars.REHEARSAL_DIGEST }}' \
+		'smoke-image: the push rehearsal env must be exactly'
+	mutant 'the push rehearsal running a script other than the publish one (#868)' \
+		'        run: *push-release-image' $'        run: |\n          echo pushed' \
+		'publish-docker: the rehearsal and the publish run different scripts'
+	mutant 'the throwaway registry on every interface (#868)' \
+		'-p 127.0.0.1:5000:5000 "$REHEARSAL_REGISTRY_IMAGE"' '-p 5000:5000 "$REHEARSAL_REGISTRY_IMAGE"' \
+		'smoke-image: the throwaway registry is not bound to 127.0.0.1:5000 alone'
+	mutant 'the throwaway registry by tag alone (#868)' \
+		'  REHEARSAL_REGISTRY_IMAGE: registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8' '  REHEARSAL_REGISTRY_IMAGE: registry:3' \
+		'REHEARSAL_REGISTRY_IMAGE is not pinned by tag and digest'
+	# publish-docker: after the approval chain, by digest, the rehearsed script.
+	mutant 'publish-docker pushing before the approval chain (#680)' \
+		'    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image]' \
+		'publish-docker: does not list publish-brain in needs'
+	mutant 'publish-docker not waiting for the smoke test (#680)' \
+		'    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]' '    needs: [validate-tag, build-image, sidecar, publish-brain]' \
+		'publish-docker: does not list smoke-image in needs'
+	mutant 'the push job allowed to run after a failed smoke test (#680)' \
+		$'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]\n' $'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]\n    if: ${{ !cancelled() && needs.build-image.result == \'success\' }}\n' \
+		'publish-docker: can run after a failed gate'
+	mutant 'publish-docker given contents: write as well (#680)' \
+		$'    permissions:\n      packages: write\n' $'    permissions:\n      contents: write\n      packages: write\n' \
+		'publish-docker: permissions must be exactly packages: write'
+	mutant 'a checkout in the push job, which builds nothing (#680)' \
+		'      # Only when something will be pushed (#682). skopeo reads the' $'      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n      # Only when something will be pushed (#682). skopeo reads the' \
+		'publish-docker: checks out or sets up a builder'
+	mutant 'a builder set up in the push job (#680)' \
+		'      # Outside the workspace, though nothing here is checked out. Before the' $'      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1\n      # Outside the workspace, though nothing here is checked out. Before the' \
+		'publish-docker: checks out or sets up a builder'
+	mutant 'the push step pushing on a dry run (#868)' \
+		$'      - name: Push the smoked archive by digest and tag it\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Push the smoked archive by digest and tag it\n' \
+		'publish-docker: the push step must run under exactly'
+	mutant 'the push step switched off on a real run (#868)' \
+		$'      - name: Push the smoked archive by digest and tag it\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Push the smoked archive by digest and tag it\n        if: env.DRY_RUN == \'true\'\n' \
+		'publish-docker: the push step must run under exactly'
+	mutant 'the push step allowed to fail (#868)' \
+		$'      - name: Push the smoked archive by digest and tag it\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Push the smoked archive by digest and tag it\n        if: env.DRY_RUN != \'true\'\n        continue-on-error: true\n' \
+		'publish-docker: the push step must run under exactly'
+	mutant 'the push sent to a registry other than GHCR (#868)' \
+		'          REGISTRY: ghcr.io' '          REGISTRY: ghcr.io.example.com' \
+		'publish-docker: the push step env must be exactly'
+	mutant 'the push taking its digest from the smoke job (#680)' \
+		$'          REGISTRY: ghcr.io\n          DIGEST: ${{ needs.build-image.outputs.digest }}' $'          REGISTRY: ghcr.io\n          DIGEST: ${{ needs.smoke-image.outputs.digest }}' \
+		'publish-docker: the push step env must be exactly'
+	mutant 'the push reading an archive it never downloaded (#868)' \
+		$'      - name: Download the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Download the archive\n        if: env.DRY_RUN == \'true\'\n' \
+		'publish-docker: steps must be exactly'
+	mutant 'skopeo free to convert, changing the digest (#868)' \
+		'skopeo copy --all --preserve-digests --retry-times 3' 'skopeo copy --all --retry-times 3' \
+		'publish-docker: skopeo copy must be exactly'
+	mutant 'skopeo pushing one platform only (#868)' \
+		'skopeo copy --all --preserve-digests --retry-times 3' 'skopeo copy --preserve-digests --retry-times 3' \
+		'publish-docker: skopeo copy must be exactly'
+	mutant 'skopeo pushing to a tag instead of the digest (#868)' \
+		'"docker://${image}@${DIGEST}"' '"docker://${image}:latest"' \
+		'publish-docker: skopeo copy must be exactly'
+	mutant 'the archive pushed without its check (#868)' \
+		$'          echo "${ARCHIVE_SHA256}  ${archive}" | sha256sum -c -\n' $'          true\n' \
+		'publish-docker: the push script does not check the archive before skopeo'
+	mutant 'the tags created from a tag rather than the pushed digest (#680)' \
+		'docker buildx imagetools create "${args[@]}" "${image}@${DIGEST}"' 'docker buildx imagetools create "${args[@]}" "${image}:edge"' \
+		'publish-docker: imagetools create does not take its source as'
+	mutant 'the tags moved with no read-back first (#680)' \
+		'planned="$(docker buildx imagetools create --dry-run "${args[@]}" "${image}@${DIGEST}")"' 'planned="index"' \
+		'publish-docker: no imagetools create --dry-run'
+	mutant 'the tag check aimed at the push registry, so the rehearsal checks other names (#868)' \
+		'          owned="ghcr.io/${GITHUB_REPOSITORY,,}"' '          owned="${REGISTRY}/${GITHUB_REPOSITORY,,}"' \
+		'publish-docker: the push script does not derive image from REGISTRY and check tags against ghcr.io'
+	mutant 'a second registry write in the push script (#868)' \
+		'          args=()' $'          docker push "${image}:latest"\n          args=()' \
+		'publish-docker: the push script writes to the registry other than by'
+	mutant 'docker manifest push from the smoke job (#868 review)' \
+		'      - name: Remove the image tag and the registry this job started' $'      - run: docker manifest push ghcr.io/o/r:latest\n      - name: Remove the image tag and the registry this job started' \
+		'smoke-image: writes to a registry from a run: step'
+	mutant 'skopeo with a global flag before copy, in the smoke job (#868 review)' \
+		'      - name: Remove the image tag and the registry this job started' $'      - run: skopeo --debug copy oci-archive:x docker://ghcr.io/o/r:latest\n      - name: Remove the image tag and the registry this job started' \
+		'smoke-image: writes to a registry from a run: step'
+	mutant 'docker push behind --config, in the smoke job (#868 review)' \
+		'      - name: Remove the image tag and the registry this job started' $'      - run: docker --config /tmp/c push ghcr.io/o/r:latest\n      - name: Remove the image tag and the registry this job started' \
+		'smoke-image: writes to a registry from a run: step'
+	mutant 'a raw registry API PUT from the build job (#868 review)' \
+		'      - name: Upload the archive' $'      - run: curl -fsS -X PUT --data-binary @m.json https://ghcr.io/v2/o/r/manifests/latest\n      - name: Upload the archive' \
+		'build-image: writes to a registry from a run: step'
+	mutant 'a push action in the smoke job (#868 review)' \
+		'      - name: Remove the image tag and the registry this job started' $'      - uses: redhat-actions/push-to-registry@5ed88d269cf581ea9ef6dd6806d01562096bee9c\n      - name: Remove the image tag and the registry this job started' \
+		'smoke-image: uses redhat-actions/push-to-registry'
+	mutant 'a second registry write after the push step in publish-docker (#868 review)' \
+		$'      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          DIGEST:' $'      - run: skopeo --debug copy oci-archive:x docker://ghcr.io/o/r:latest\n      - name: Dry-run summary\n        if: env.DRY_RUN == \'true\'\n        env:\n          DIGEST:' \
+		'publish-docker: steps must be exactly'
+	mutant 'the credential written before the artifact is unpacked again (#868 review)' \
+		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Log in again\n        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0\n      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' \
+		'publish-docker: steps must be exactly'
+	mutant 'the archive check before the login switched off (#868 review)' \
+		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Verify the archive\n        if: false\n' \
+		'publish-docker: steps must be exactly'
+	mutant 'the GitHub Release no longer after the image push (#680)' \
+		'    needs: [validate-tag, publish-docker, sidecar]' '    needs: [validate-tag, publish-brain, sidecar]' \
+		'github-release: does not run after publish-docker'
+	mutant 'the sidecar no longer gated on the smoke test (#680)' \
+		'    needs: [test, smoke-image]' '    needs: [test, build-image]' \
+		'sidecar: does not run after smoke-image'
 	unset MUTANT_MODE
 }
 
-# The three scripts on this path, executed verbatim with a docker stub that
-# records its argv and answers what a registry would.
-PUBTAG="$(yq step publish-docker 'Point the release tags at the smoked digest')" || PUBTAG=""
-PULL="$(yq step smoke-image 'Pull the pushed image by digest')" || PULL=""
-LOAD="$(yq step smoke-image 'Load the dry-run image from its archive')" || LOAD=""
-if [ -z "$PUBTAG" ] || [ -z "$PULL" ] || [ -z "$LOAD" ]; then
-	no "found the publish-docker tag step and the smoke-image pull and load steps"
+# The two scripts on this path, executed verbatim with docker and skopeo
+# stubs that record their argv and answer what a registry would. (The same
+# scripts ran against Docker 28.0.4, buildx 0.37.1, skopeo 1.13.3 and a real
+# registry for #868; these keep their behaviour pinned.)
+PUSH="$(yq step publish-docker 'Push the smoked archive by digest and tag it')" || PUSH=""
+REHEARSE="$(yq step smoke-image 'Rehearse the push by digest and the tagging')" || REHEARSE=""
+LOAD="$(yq step smoke-image 'Load the image from its archive')" || LOAD=""
+if [ -z "$PUSH" ] || [ -z "$REHEARSE" ] || [ -z "$LOAD" ]; then
+	no "found the publish-docker push step and the smoke-image rehearsal and load steps"
 else
+	if [ "$PUSH" = "$REHEARSE" ]; then ok "the rehearsal runs the publish script byte for byte"; else no "the rehearsal runs the publish script byte for byte"; fi
 	mkdir -p "${WORK}/dbin"
 	# docker stub: records each call; `imagetools inspect` answers
-	# $STUB_INSPECT; `load -i x` computes the image ID docker would (the
-	# sha256 of the config named in manifest.json) and `image inspect`
-	# returns it, or $STUB_ID when set.
+	# $STUB_INSPECT; `create --dry-run` prints $STUB_PLANNED (default
+	# "index", which hashes to D1); `load -i x` computes the image ID docker
+	# would (the sha256 of the config named in manifest.json) and `image
+	# inspect` returns it, or $STUB_ID when set.
 	cat >"${WORK}/dbin/docker" <<'EOF'
 #!/usr/bin/env bash
-printf '%s\n' "$*" >>"$DOCKER_LOG"
+printf 'docker %s\n' "$*" >>"$DOCKER_LOG"
 if [ "$1 $2 $3" = "buildx imagetools inspect" ]; then printf '%s\n' "$STUB_INSPECT"; exit 0; fi
-# create --dry-run prints the index it would write; "index" hashes to D1.
 if [ "$1 $2 $3 $4" = "buildx imagetools create --dry-run" ]; then printf '%s\n' "${STUB_PLANNED-index}"; exit 0; fi
 if [ "$1" = load ]; then
 	t="$(mktemp -d)"
@@ -1179,87 +1443,122 @@ if [ "$1 $2" = "image inspect" ]; then
 fi
 exit 0
 EOF
-	chmod +x "${WORK}/dbin/docker"
+	# skopeo stub: records each call, and fails when STUB_SKOPEO_FAIL is set.
+	cat >"${WORK}/dbin/skopeo" <<'EOF'
+#!/usr/bin/env bash
+printf 'skopeo %s\n' "$*" >>"$DOCKER_LOG"
+[ -z "${STUB_SKOPEO_FAIL:-}" ]
+EOF
+	chmod +x "${WORK}/dbin/docker" "${WORK}/dbin/skopeo"
 	D1="sha256:$(printf 'index' | sha256sum | cut -d' ' -f1)"
-	# pubtag <want 0|1> <label> <dry run> <version> <prerelease> <tags> [digest] [inspect answer]
-	pubtag() {
+	rm -rf "${WORK}/prt" "${WORK}/ptar" && mkdir -p "${WORK}/prt/release-image" "${WORK}/ptar/blobs/sha256"
+	printf 'layout' >"${WORK}/ptar/oci-layout" && printf 'index' >"${WORK}/ptar/index.json"
+	tar -cf "${WORK}/prt/release-image/release-image.oci.tar" -C "${WORK}/ptar" oci-layout index.json blobs
+	cp "${WORK}/prt/release-image/release-image.oci.tar" "${WORK}/ptar.tar"
+	PARC="$(sha256sum "${WORK}/prt/release-image/release-image.oci.tar" | cut -d' ' -f1)"
+	# pushrun <want 0|1> <label> <registry> <version> <prerelease> <tags> [digest] [inspect answer]
+	pushrun() {
 		local want="$1" label="$2"
 		: >"${WORK}/docker.log"
 		(cd "$WORK" && env -i PATH="${WORK}/dbin:$PATH" DOCKER_LOG="${WORK}/docker.log" GITHUB_REPOSITORY=Vierisid/Jarvis \
-			DRY_RUN="$3" VERSION="$4" PRERELEASE="$5" TAGS="$6" DIGEST="${7-$D1}" STUB_INSPECT="${8-\"${7-$D1}\"}" \
-			${STUB_PLANNED+STUB_PLANNED="$STUB_PLANNED"} \
-			bash -e -c "$PUBTAG") >"${WORK}/pub.out" 2>&1
+			RUNNER_TEMP="${WORK}/prt" ARCHIVE_SHA256="${PUSH_ARC-$PARC}" REGISTRY="$3" \
+			VERSION="$4" PRERELEASE="$5" TAGS="$6" DIGEST="${7-$D1}" STUB_INSPECT="${8-\"${7-$D1}\"}" \
+			${STUB_PLANNED+STUB_PLANNED="$STUB_PLANNED"} ${STUB_SKOPEO_FAIL+STUB_SKOPEO_FAIL=1} \
+			bash -e -c "$PUSH") >"${WORK}/pub.out" 2>&1
 		local rc=$?
 		if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -ne 0 ]; }; then
-			ok "publish-docker: $label"
+			ok "push script: $label"
 		else
-			no "publish-docker: $label" "exit ${rc}: $(cat "${WORK}/pub.out")
-docker calls: $(cat "${WORK}/docker.log")"
+			no "push script: $label" "exit ${rc}: $(cat "${WORK}/pub.out")
+calls: $(cat "${WORK}/docker.log")"
 		fi
 	}
+	# writes: the registry writes the last run made (skopeo copy and tag creation).
+	writes() { grep -cE '^(skopeo copy|docker buildx imagetools create -t)' "${WORK}/docker.log"; }
 	I=ghcr.io/vierisid/jarvis
 	REL_TAGS="$(printf '%s\n' "$I:1.2.3" "$I:1.2" "$I:latest")"
-	pubtag 0 "tags a release with its version, major.minor and latest" false 1.2.3 false "$REL_TAGS"
-	if [ "$(sed -n 1p "${WORK}/docker.log")" = "buildx imagetools create --dry-run -t $I:1.2.3 -t $I:1.2 -t $I:latest $I@$D1" ] &&
-		[ "$(sed -n 2p "${WORK}/docker.log")" = "buildx imagetools create -t $I:1.2.3 -t $I:1.2 -t $I:latest $I@$D1" ] &&
-		[ "$(grep -c '^buildx imagetools inspect' "${WORK}/docker.log")" = 3 ]; then
-		ok "publish-docker: creates exactly those three tags from ${I}@<digest>, then checks each one"
+	pushrun 0 "pushes and tags a release on GHCR" ghcr.io 1.2.3 false "$REL_TAGS"
+	if [ "$(sed -n 2p "${WORK}/docker.log")" = "skopeo copy --all --preserve-digests --retry-times 3 oci-archive:${WORK}/prt/release-image/release-image.oci.tar docker://$I@$D1" ] &&
+		[ "$(sed -n 3p "${WORK}/docker.log")" = "docker buildx imagetools create --dry-run -t $I:1.2.3 -t $I:1.2 -t $I:latest $I@$D1" ] &&
+		[ "$(sed -n 4p "${WORK}/docker.log")" = "docker buildx imagetools create -t $I:1.2.3 -t $I:1.2 -t $I:latest $I@$D1" ] &&
+		[ "$(grep -c '^docker buildx imagetools inspect' "${WORK}/docker.log")" = 3 ]; then
+		ok "push script: pushes the archive to ${I}@<digest>, reads it back, creates exactly the three tags from it, then checks each one"
 	else
-		no "publish-docker: creates exactly those three tags from the digest, then checks each one" "$(cat "${WORK}/docker.log")"
+		no "push script: pushes the archive by digest, reads it back, creates the three tags, then checks each one" "$(cat "${WORK}/docker.log")"
 	fi
 	# What metadata-action really emits for a release: latest TWICE, once
 	# from the semver flavor and once from the raw latest rule (the v0.15.0
 	# publish-docker log, run 36728949586, lists ghcr.io/vierisid/jarvis:latest
 	# on two lines). The tag set is what counts, and each tag is created once.
-	pubtag 0 "accepts the tags metadata-action emits for a release, latest listed twice" false 1.2.3 false "$(printf '%s\n' "$I:1.2.3" "$I:1.2" "$I:latest" "$I:latest")"
-	if [ "$(sed -n 2p "${WORK}/docker.log")" = "buildx imagetools create -t $I:1.2.3 -t $I:1.2 -t $I:latest $I@$D1" ]; then
-		ok "publish-docker: creates each of those tags once"
+	pushrun 0 "accepts the tags metadata-action emits for a release, latest listed twice" ghcr.io 1.2.3 false "$(printf '%s\n' "$I:1.2.3" "$I:1.2" "$I:latest" "$I:latest")"
+	if [ "$(sed -n 4p "${WORK}/docker.log")" = "docker buildx imagetools create -t $I:1.2.3 -t $I:1.2 -t $I:latest $I@$D1" ]; then
+		ok "push script: creates each of those tags once"
 	else
-		no "publish-docker: creates each of those tags once" "$(cat "${WORK}/docker.log")"
+		no "push script: creates each of those tags once" "$(cat "${WORK}/docker.log")"
 	fi
-	pubtag 0 "tags a prerelease with its version only" false 1.2.3-rc.1 true "$I:1.2.3-rc.1"
-	pubtag 1 "refuses latest on a prerelease" false 1.2.3-rc.1 true "$(printf '%s\n' "$I:1.2.3-rc.1" "$I:latest")"
-	pubtag 1 "refuses a tag on another image" false 1.2.3 false "$(printf '%s\n' "$I:1.2.3" "$I:1.2" "ghcr.io/evil/jarvis:latest")"
-	pubtag 1 "refuses a missing tag" false 1.2.3 false "$(printf '%s\n' "$I:1.2.3" "$I:1.2")"
-	pubtag 1 "refuses an empty digest" false 1.2.3 false "$REL_TAGS" ""
-	pubtag 1 "refuses a digest that is not sha256" false 1.2.3 false "$REL_TAGS" "sha256:abc"
-	pubtag 1 "refuses a tag that came out pointing elsewhere" false 1.2.3 false "$REL_TAGS" "$D1" "\"sha256:$(printf 'other' | sha256sum | cut -d' ' -f1)\""
-	STUB_PLANNED='{"re-serialised":true}' pubtag 1 "refuses before tagging when create would write a different index" false 1.2.3 false "$REL_TAGS"
-	if [ "$(grep -c '^buildx imagetools create -t' "${WORK}/docker.log")" = 0 ]; then
-		ok "publish-docker: moves no tag when the planned index is not the smoked one"
+	# The rehearsal: the same GHCR tag names checked, written to loopback.
+	R=127.0.0.1:5000/vierisid/jarvis
+	pushrun 0 "rehearses on loopback: checks the GHCR tag names, writes only to the loopback registry" 127.0.0.1:5000 1.2.3 false "$REL_TAGS"
+	if [ "$(sed -n 2p "${WORK}/docker.log")" = "skopeo copy --all --preserve-digests --retry-times 3 oci-archive:${WORK}/prt/release-image/release-image.oci.tar docker://$R@$D1" ] &&
+		[ "$(sed -n 4p "${WORK}/docker.log")" = "docker buildx imagetools create -t $R:1.2.3 -t $R:1.2 -t $R:latest $R@$D1" ] &&
+		! grep -q 'ghcr\.io' "${WORK}/docker.log"; then
+		ok "push script: the rehearsal names nothing on ghcr.io"
 	else
-		no "publish-docker: moves no tag when the planned index is not the smoked one" "$(cat "${WORK}/docker.log")"
+		no "push script: the rehearsal names nothing on ghcr.io" "$(cat "${WORK}/docker.log")"
 	fi
-	pubtag 0 "on a dry run, validates and prints" true 1.2.3 false "$REL_TAGS"
-	if [ ! -s "${WORK}/docker.log" ] && grep -qF "DRY RUN -- no tag created" "${WORK}/pub.out"; then
-		ok "publish-docker: a dry run calls docker not at all"
+	pushrun 1 "refuses loopback tag names, so a rehearsal checks what a release would" 127.0.0.1:5000 1.2.3 false "$(printf '%s\n' "$R:1.2.3" "$R:1.2" "$R:latest")"
+	pushrun 0 "tags a prerelease with its version only" ghcr.io 1.2.3-rc.1 true "$I:1.2.3-rc.1"
+	pushrun 1 "refuses latest on a prerelease" ghcr.io 1.2.3-rc.1 true "$(printf '%s\n' "$I:1.2.3-rc.1" "$I:latest")"
+	if [ "$(writes)" = 0 ]; then ok "push script: pushes nothing when the tags are wrong"; else no "push script: pushes nothing when the tags are wrong" "$(cat "${WORK}/docker.log")"; fi
+	pushrun 1 "refuses a tag on another image" ghcr.io 1.2.3 false "$(printf '%s\n' "$I:1.2.3" "$I:1.2" "ghcr.io/evil/jarvis:latest")"
+	pushrun 1 "refuses a missing tag" ghcr.io 1.2.3 false "$(printf '%s\n' "$I:1.2.3" "$I:1.2")"
+	pushrun 1 "refuses an empty digest" ghcr.io 1.2.3 false "$REL_TAGS" ""
+	if [ ! -s "${WORK}/docker.log" ]; then ok "push script: nothing reaches docker or skopeo once the digest is refused"; else no "push script: nothing reaches docker or skopeo once the digest is refused" "$(cat "${WORK}/docker.log")"; fi
+	pushrun 1 "refuses a digest that is not sha256" ghcr.io 1.2.3 false "$REL_TAGS" "sha256:abc"
+	PUSH_ARC="" pushrun 1 "refuses an empty archive digest" ghcr.io 1.2.3 false "$REL_TAGS"
+	PUSH_ARC="$(printf 'other' | sha256sum | cut -d' ' -f1)" pushrun 1 "refuses an archive other than the one build-image hashed" ghcr.io 1.2.3 false "$REL_TAGS"
+	if [ ! -s "${WORK}/docker.log" ]; then ok "push script: nothing is pushed from a refused archive"; else no "push script: nothing is pushed from a refused archive" "$(cat "${WORK}/docker.log")"; fi
+	STUB_SKOPEO_FAIL=1 pushrun 1 "stops when skopeo cannot push by that digest" ghcr.io 1.2.3 false "$REL_TAGS"
+	if ! grep -q '^docker buildx imagetools create' "${WORK}/docker.log"; then ok "push script: no tag is attempted after a failed push"; else no "push script: no tag is attempted after a failed push" "$(cat "${WORK}/docker.log")"; fi
+	# The archive entry allowlist, against real tar files.
+	mkdir -p "${WORK}/tarx/blobs/sha256" && printf x >"${WORK}/tarx/oci-layout" && printf x >"${WORK}/tarx/index.json"
+	printf b >"${WORK}/tarx/blobs/sha256/$(printf b | sha256sum | cut -d' ' -f1)"
+	tar -cf "${WORK}/prt/release-image/release-image.oci.tar" -C "${WORK}/tarx" oci-layout index.json blobs
+	PUSH_ARC="$(sha256sum "${WORK}/prt/release-image/release-image.oci.tar" | cut -d' ' -f1)" pushrun 0 "accepts an archive of only OCI layout entries" ghcr.io 1.2.3 false "$REL_TAGS"
+	ln -s /home "${WORK}/tarx/blobs/sha256/$(printf c | sha256sum | cut -d' ' -f1)"
+	tar -cf "${WORK}/prt/release-image/release-image.oci.tar" -C "${WORK}/tarx" oci-layout index.json blobs
+	PUSH_ARC="$(sha256sum "${WORK}/prt/release-image/release-image.oci.tar" | cut -d' ' -f1)" pushrun 1 "refuses an archive holding a symlink" ghcr.io 1.2.3 false "$REL_TAGS"
+	if [ "$(writes)" = 0 ]; then ok "push script: nothing is pushed from an archive holding a symlink"; else no "push script: nothing is pushed from an archive holding a symlink" "$(cat "${WORK}/docker.log")"; fi
+	rm "${WORK}/tarx/blobs/sha256/$(printf c | sha256sum | cut -d' ' -f1)" && printf e >"${WORK}/tarx/evil"
+	tar -cf "${WORK}/prt/release-image/release-image.oci.tar" -C "${WORK}/tarx" oci-layout index.json blobs evil
+	PUSH_ARC="$(sha256sum "${WORK}/prt/release-image/release-image.oci.tar" | cut -d' ' -f1)" pushrun 1 "refuses an archive holding a file outside the OCI layout" ghcr.io 1.2.3 false "$REL_TAGS"
+	# The bad entry first, then more than 64 KiB of valid names behind it:
+	# a check that pipes into grep -q under pipefail passes these (#868
+	# re-review), so each must still be refused.
+	rm -rf "${WORK}/tarbig" && mkdir -p "${WORK}/tarbig/blobs/sha256" && printf x >"${WORK}/tarbig/oci-layout" && printf x >"${WORK}/tarbig/index.json"
+	for i in $(seq 1 1500); do : >"${WORK}/tarbig/blobs/sha256/$(printf '%064d' "$i")"; done
+	ls "${WORK}/tarbig/blobs/sha256" | sed 's#^#blobs/sha256/#' >"${WORK}/tarbig.list"
+	printf e >"${WORK}/tarbig/notallowed"
+	tar -cf "${WORK}/prt/release-image/release-image.oci.tar" -C "${WORK}/tarbig" notallowed oci-layout index.json -T "${WORK}/tarbig.list"
+	tar -tf "${WORK}/prt/release-image/release-image.oci.tar" | wc -c >"${WORK}/tarbig.size"
+	PUSH_ARC="$(sha256sum "${WORK}/prt/release-image/release-image.oci.tar" | cut -d' ' -f1)" pushrun 1 "refuses a stray file listed first, ahead of $(cat "${WORK}/tarbig.size") bytes of valid names" ghcr.io 1.2.3 false "$REL_TAGS"
+	rm "${WORK}/tarbig/notallowed" && ln -s /home "${WORK}/tarbig/blobs/sha256/$(printf '%064d' 0)"
+	tar -cf "${WORK}/prt/release-image/release-image.oci.tar" -C "${WORK}/tarbig" "blobs/sha256/$(printf '%064d' 0)" oci-layout index.json -T "${WORK}/tarbig.list"
+	PUSH_ARC="$(sha256sum "${WORK}/prt/release-image/release-image.oci.tar" | cut -d' ' -f1)" pushrun 1 "refuses a symlink listed first, ahead of thousands of valid entries" ghcr.io 1.2.3 false "$REL_TAGS"
+	if [ "$(writes)" = 0 ]; then ok "push script: nothing is pushed from either"; else no "push script: nothing is pushed from either" "$(cat "${WORK}/docker.log")"; fi
+	rm -rf "${WORK}/tarbig" "${WORK}/tarbig.list" "${WORK}/tarbig.size"
+	cp "${WORK}/ptar.tar" "${WORK}/prt/release-image/release-image.oci.tar"
+	rm -rf "${WORK}/tarx"
+	pushrun 1 "refuses a tag that came out pointing elsewhere" ghcr.io 1.2.3 false "$REL_TAGS" "$D1" "\"sha256:$(printf 'other' | sha256sum | cut -d' ' -f1)\""
+	STUB_PLANNED='{"re-serialised":true}' pushrun 1 "refuses before tagging when the index read back is not the archive one" ghcr.io 1.2.3 false "$REL_TAGS"
+	if [ "$(grep -c '^docker buildx imagetools create -t' "${WORK}/docker.log")" = 0 ]; then
+		ok "push script: moves no tag when the index read back is not the archive one"
 	else
-		no "publish-docker: a dry run calls docker not at all" "$(cat "${WORK}/docker.log")"
-	fi
-	pubtag 1 "a dry run still refuses wrong tags" true 1.2.3-rc.1 true "$(printf '%s\n' "$I:1.2.3-rc.1" "$I:latest")"
-	: >"${WORK}/docker.log"
-	pubtag 1 "refuses an empty digest without calling docker" false 1.2.3 false "$REL_TAGS" ""
-	if [ ! -s "${WORK}/docker.log" ]; then ok "publish-docker: nothing reaches docker once the digest is refused"; else no "publish-docker: nothing reaches docker once the digest is refused" "$(cat "${WORK}/docker.log")"; fi
-
-	# The pull.
-	: >"${WORK}/docker.log"
-	(cd "$WORK" && env -i PATH="${WORK}/dbin:$PATH" DOCKER_LOG="${WORK}/docker.log" GITHUB_REPOSITORY=Vierisid/Jarvis \
-		DIGEST="$D1" GATE_IMAGE_TAG=jarvis:gate bash -e -c "$PULL") >"${WORK}/pull.out" 2>&1
-	if [ "$(cat "${WORK}/docker.log")" = "$(printf '%s\n' "pull --platform linux/amd64 $I@$D1" "logout ghcr.io" "tag $I@$D1 jarvis:gate")" ]; then
-		ok "smoke-image: pulls the amd64 image by digest, logs out, then tags it locally"
-	else
-		no "smoke-image: pulls the amd64 image by digest, logs out, then tags it locally" "$(cat "${WORK}/docker.log") / $(cat "${WORK}/pull.out")"
-	fi
-	: >"${WORK}/docker.log"
-	if (cd "$WORK" && env -i PATH="${WORK}/dbin:$PATH" DOCKER_LOG="${WORK}/docker.log" GITHUB_REPOSITORY=o/r DIGEST="latest" GATE_IMAGE_TAG=jarvis:gate bash -e -c "$PULL") >/dev/null 2>&1 ||
-		[ -s "${WORK}/docker.log" ]; then
-		no "smoke-image: refuses a digest that is not sha256, before any pull"
-	else
-		ok "smoke-image: refuses a digest that is not sha256, before any pull"
+		no "push script: moves no tag when the index read back is not the archive one" "$(cat "${WORK}/docker.log")"
 	fi
 
 	# The archive load, against a hand-built two-platform OCI layout.
-	# make_layout [amd64 count]: writes ${WORK}/oci/release-image.oci.tar and
+	# make_layout [amd64 count] [layer digest]: writes ${WORK}/oci/release-image.oci.tar and
 	# sets IDX (the index digest), CFG (the amd64 config digest), ARC (the
 	# archive sha256).
 	make_layout() {
@@ -1267,7 +1566,7 @@ docker calls: $(cat "${WORK}/docker.log")"
 		rm -rf "${WORK}/oci" && mkdir -p "$L/blobs/sha256"
 		put() { local h; h="$(printf '%s' "$1" | sha256sum | cut -d' ' -f1)"; printf '%s' "$1" >"$L/blobs/sha256/$h"; printf 'sha256:%s' "$h"; }
 		local layer cfg man arm i entries=""
-		layer="$(put 'layer bytes')"
+		layer="${2:-$(put 'layer bytes')}"
 		cfg="$(put '{"architecture":"amd64","os":"linux","rootfs":{"type":"layers","diff_ids":[]}}')"
 		man="$(put "{\"schemaVersion\":2,\"config\":{\"digest\":\"$cfg\"},\"layers\":[{\"digest\":\"$layer\"}]}")"
 		arm="$(put "{\"schemaVersion\":2,\"config\":{\"digest\":\"$cfg\"},\"layers\":[]}")"
@@ -1289,22 +1588,28 @@ docker calls: $(cat "${WORK}/docker.log")"
 			bash -e -c "$LOAD") >"${WORK}/load.out" 2>&1
 		local rc=$?
 		if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -ne 0 ]; }; then
-			ok "smoke-image dry run: $label"
+			ok "smoke-image load: $label"
 		else
-			no "smoke-image dry run: $label" "exit ${rc}: $(cat "${WORK}/load.out")"
+			no "smoke-image load: $label" "exit ${rc}: $(cat "${WORK}/load.out")"
 		fi
 	}
 	make_layout
 	run_load 0 "loads the amd64 image of the reported index"
-	if grep -q '^load -i ' "${WORK}/docker.log" && [ "$(cat "${WORK}/docker.state")" = "$CFG" ]; then
-		ok "smoke-image dry run: what reaches docker load is exactly the amd64 config of that index"
+	if grep -q '^docker load -i ' "${WORK}/docker.log" && [ "$(cat "${WORK}/docker.state")" = "$CFG" ]; then
+		ok "smoke-image load: what reaches docker load is exactly the amd64 config of that index"
 	else
-		no "smoke-image dry run: what reaches docker load is exactly the amd64 config of that index" "$(cat "${WORK}/docker.log")"
+		no "smoke-image load: what reaches docker load is exactly the amd64 config of that index" "$(cat "${WORK}/docker.log")"
+	fi
+	# The rehearsal after it reads the archive, so the load must leave it.
+	if cmp -s "${WORK}/oci/release-image.oci.tar" "${WORK}/rt/release-image/release-image.oci.tar"; then
+		ok "smoke-image load: leaves the archive in place for the push rehearsal"
+	else
+		no "smoke-image load: leaves the archive in place for the push rehearsal"
 	fi
 	make_layout
 	ARC="$(printf 'other' | sha256sum | cut -d' ' -f1)"
 	run_load 1 "refuses an archive other than the one build-image hashed"
-	if ! grep -q '^load' "${WORK}/docker.log"; then ok "smoke-image dry run: nothing is loaded from a refused archive"; else no "smoke-image dry run: nothing is loaded from a refused archive"; fi
+	if ! grep -q '^docker load' "${WORK}/docker.log"; then ok "smoke-image load: nothing is loaded from a refused archive"; else no "smoke-image load: nothing is loaded from a refused archive"; fi
 	make_layout
 	IDX="sha256:$(printf 'not the index' | sha256sum | cut -d' ' -f1)"
 	run_load 1 "refuses an archive without the reported index"
@@ -1323,12 +1628,52 @@ docker calls: $(cat "${WORK}/docker.log")"
 	tar -cf "${WORK}/oci/release-image.oci.tar" -C "${WORK}/oci/l" index.json blobs
 	ARC="$(sha256sum "${WORK}/oci/release-image.oci.tar" | cut -d' ' -f1)"
 	run_load 1 "refuses a manifest blob swapped inside a re-hashed archive"
+	# A layer named by a path rather than a digest, which resolves to a file
+	# that exists in the layout: only the digest-format check stops it.
+	make_layout 1 'sha256:../../index.json'
+	run_load 1 "refuses a manifest whose layer is a path, not a digest"
+	if grep -qF "names a config or layer that is not a sha256 digest" "${WORK}/load.out"; then
+		ok "smoke-image load: says why it refused the path"
+	else
+		no "smoke-image load: says why it refused the path" "$(cat "${WORK}/load.out")"
+	fi
+	# A stray entry first, ahead of more than 64 KiB of valid names, refused
+	# before this job unpacks anything (#868 review).
+	make_layout
+	for i in $(seq 1 1500); do : >"${WORK}/oci/l/blobs/sha256/$(printf '%064d' "$i")"; done
+	printf e >"${WORK}/oci/l/zz-stray"
+	(cd "${WORK}/oci/l" && tar -cf "${WORK}/oci/release-image.oci.tar" zz-stray index.json blobs)
+	ARC="$(sha256sum "${WORK}/oci/release-image.oci.tar" | cut -d' ' -f1)"
+	run_load 1 "refuses a stray entry listed first, ahead of thousands of valid ones"
+	if [ ! -d "${WORK}/rt/release-image/layout" ]; then ok "smoke-image load: unpacks nothing from that archive"; else no "smoke-image load: unpacks nothing from that archive"; fi
+fi
+# The standalone archive check publish-docker runs before its login, verbatim.
+PVERIFY="$(yq step publish-docker 'Verify the archive')" || PVERIFY=""
+if [ -z "$PVERIFY" ]; then
+	no "found publish-docker's Verify the archive step"
+else
+	pv_case() {
+		local label="$1" want="$2"
+		shift 2
+		(cd "$WORK" && env -i PATH="$PATH" "$@" bash -e -c "$PVERIFY") >"${WORK}/pv.log" 2>&1
+		local rc=$?
+		if { [ "$want" = 0 ] && [ "$rc" -eq 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -ne 0 ]; }; then ok "$label"; else no "$label" "exit ${rc}: $(cat "${WORK}/pv.log")"; fi
+	}
+	rm -rf "${WORK}/pv" && mkdir -p "${WORK}/pv/release-image" && printf 'archive\n' >"${WORK}/pv/release-image/release-image.oci.tar"
+	pvsum="$(sha256sum "${WORK}/pv/release-image/release-image.oci.tar" | cut -d' ' -f1)"
+	pv_case "publish-docker verify: accepts the archive build-image hashed" 0 RUNNER_TEMP="${WORK}/pv" ARCHIVE_SHA256="$pvsum"
+	pv_case "publish-docker verify: refuses an empty digest" 1 RUNNER_TEMP="${WORK}/pv" ARCHIVE_SHA256=
+	printf x >"${WORK}/pv/release-image/extra"
+	pv_case "publish-docker verify: refuses an artifact carrying anything else" 1 RUNNER_TEMP="${WORK}/pv" ARCHIVE_SHA256="$pvsum"
+	rm "${WORK}/pv/release-image/extra" && printf 'swapped\n' >"${WORK}/pv/release-image/release-image.oci.tar"
+	pv_case "publish-docker verify: refuses an archive replaced after build-image hashed it" 1 RUNNER_TEMP="${WORK}/pv" ARCHIVE_SHA256="$pvsum"
 fi
 
 echo
-echo "one dry-run decision, evaluated, in both release workflows (#685)"
+echo "one dry-run decision, evaluated, in the three release workflows (#685, #869)"
 SIDECAR_WORKFLOW="${SIDECAR_RELEASE_WORKFLOW:-${HERE}/../workflows/sidecar-release.yml}"
-for f in "$WORKFLOW" "$SIDECAR_WORKFLOW"; do
+INSTALLER_WORKFLOW="${INSTALLER_RELEASE_WORKFLOW:-${HERE}/../workflows/installer-release.yml}"
+for f in "$WORKFLOW" "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
 	found="$(YQ_FILE="$f" yq dry-run)" || {
 		no "$(basename "$f"): dry-run check ran" "the bun helper failed"
 		continue
@@ -1397,6 +1742,13 @@ done
 		'  DRY_RUN: ${{ inputs.dry_run == true }}' '  DRY_RUN: ${{ inputs.dry_run || false }}'
 	mutant 'sidecar-release.yml: the environment name inverted (#685)' \
 		"      name: \${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}" "      name: \${{ inputs.dry_run != true && 'release-dry-run' || 'release' }}"
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'installer-release.yml: the signer told it is a dry run on its own (#869 review)' \
+		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    env:\n      DRY_RUN: "true"\n' \
+		'sign-windows: redefines DRY_RUN'
+	mutant 'installer-release.yml: the env decision loosened to truthiness (#869 review)' \
+		'  DRY_RUN: ${{ inputs.dry_run == true }}' '  DRY_RUN: ${{ inputs.dry_run || false }}' \
+		'not the one spelling'
 	unset MUTANT_MODE MUTANT_FROM
 }
 
@@ -1816,6 +2168,141 @@ if [ -z "$SIDEV" ] || [ -z "$INSTV" ]; then
 else
 	inbox_suite verify-sidecar-windows "$SIDEV" signed jarvis.exe no SIDECAR_BIN=jarvis
 	inbox_suite verify-windows "$INSTV" signed Jarvis-Setup.exe no
+fi
+
+echo
+echo "Windows signing readiness fails a real run that would ship unsigned (#869)"
+# Both signers decide here whether to sign at all, and every signing and
+# verification step follows that decision, so a readiness step that says
+# "not ready" on a real run ships an unsigned binary with only a warning.
+# Executed verbatim, under bash -e as the runner runs it, against every
+# combination of the two preconditions, the dry run and the escape hatch.
+# shellcheck disable=SC2016 # the escape hatch text is matched literally.
+{
+	MUTANT_MODE=postsign
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the sidecar readiness step allowed to fail (#869)' \
+		$'      - name: Windows signing readiness\n        id: winsign\n' $'      - name: Windows signing readiness\n        id: winsign\n        continue-on-error: true\n' \
+		'the readiness step has continue-on-error'
+	mutant 'the sidecar readiness step switched off on its own (#869)' \
+		$'      - name: Windows signing readiness\n        id: winsign\n' $'      - name: Windows signing readiness\n        id: winsign\n        if: env.DRY_RUN != \'true\'\n' \
+		'the readiness step runs under'
+	mutant 'the sidecar escape hatch read from something other than its variable (#869)' \
+		$'          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n        run: |\n          set -euo pipefail\n          missing=' $'          ALLOW_UNSIGNED_WINDOWS: "true"\n        run: |\n          set -euo pipefail\n          missing=' \
+		'the readiness step env must be exactly'
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'the installer readiness step allowed to fail (#869)' \
+		$'      - name: Windows signing readiness\n        id: winsign\n' $'      - name: Windows signing readiness\n        id: winsign\n        continue-on-error: true\n' \
+		'the readiness step has continue-on-error'
+	mutant 'the installer escape hatch dropped from the readiness env (#869)' \
+		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n        run: |\n          set -euo pipefail\n          missing=' $'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n        run: |\n          set -euo pipefail\n          missing=' \
+		'the readiness step env must be exactly'
+	mutant 'the installer readiness step handed a token as well (#869)' \
+		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n        run: |\n          set -euo pipefail\n          missing=' $'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n          GH_TOKEN: ${{ github.token }}\n        run: |\n          set -euo pipefail\n          missing=' \
+		'the readiness step env must be exactly'
+	mutant 'the installer signer told it is a rehearsal through GITHUB_ENV (#869 review)' \
+		'      - name: Windows signing readiness' $'      - run: echo "DRY_RUN=true" >> "$GITHUB_ENV"\n      - name: Windows signing readiness' \
+		'a step before readiness writes GITHUB_ENV'
+	mutant 'the installer signer job env setting the escape hatch (#869 review)' \
+		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    env:\n      ALLOW_UNSIGNED_WINDOWS: "true"\n' \
+		'the job env sets ALLOW_UNSIGNED_WINDOWS'
+	mutant 'the installer unsigned-binary refusal switched off (#869 review)' \
+		$'      - name: Refuse an unsigned binary on a real run\n' $'      - name: Refuse an unsigned binary on a real run\n        if: needs.sign-windows.outputs.signed == \'true\'\n' \
+		'the unsigned-binary refusal can be skipped'
+	mutant 'the installer unsigned-binary refusal removed (#869 review)' \
+		'      - name: Refuse an unsigned binary on a real run' '      - name: Something else' \
+		'no step refusing an unsigned binary on a real run'
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the sidecar unsigned-binary refusal told the signer always signed (#869 review)' \
+		'          SIGNED: ${{ needs.sign-sidecar-windows.outputs.signed }}' '          SIGNED: "true"' \
+		'the unsigned-binary refusal env must be exactly'
+	mutant 'the sidecar unsigned-binary refusal allowed to fail (#869 review)' \
+		$'      - name: Refuse an unsigned binary on a real run\n' $'      - name: Refuse an unsigned binary on a real run\n        continue-on-error: true\n' \
+		'the unsigned-binary refusal can be skipped or allowed to fail'
+	unset MUTANT_MODE MUTANT_FROM
+}
+SREADY="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-windows winsign)" || SREADY=""
+IREADY="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step sign-windows winsign)" || IREADY=""
+if [ -z "$SREADY" ] || [ -z "$IREADY" ]; then
+	no "found both Windows signing readiness steps (sign-sidecar-windows, sign-windows)"
+else
+	# ready_case <job> <script> <want rc 0|1> <want output> <keyring> <chain yes|no> <dry run> <hatch> <label> [text the log must carry]
+	ready_case() {
+		local job="$1" script="$2" want="$3" wantout="$4" keyring="$5" chain="$6" dry="$7" hatch="$8" label="$9" text="${10:-}"
+		local d="${WORK}/ready"
+		rm -rf "$d" && mkdir -p "$d/cwd/sidecar/packaging/windows"
+		[ "$chain" = yes ] && printf 'chain\n' >"$d/cwd/sidecar/packaging/windows/codesign-chain.pem"
+		: >"$d/out"
+		(cd "$d/cwd" && env -i PATH="$PATH" GITHUB_OUTPUT="$d/out" GCP_KMS_KEYRING="$keyring" DRY_RUN="$dry" \
+			ALLOW_UNSIGNED_WINDOWS="$hatch" bash -e -c "$script") >"$d/log" 2>&1
+		local rc=$?
+		local got
+		got="$(cat "$d/out")"
+		if { [ "$want" = 0 ] && [ "$rc" -ne 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -eq 0 ]; }; then
+			no "$job: $label" "exit ${rc}, wanted $([ "$want" = 0 ] && echo 0 || echo non-zero): $(cat "$d/log")"
+		elif [ "$got" != "$wantout" ]; then
+			no "$job: $label" "GITHUB_OUTPUT was '${got}', wanted '${wantout}'; log: $(cat "$d/log")"
+		elif [ -n "$text" ] && ! grep -qF -- "$text" "$d/log"; then
+			no "$job: $label, saying '${text}'" "$(cat "$d/log")"
+		elif [ "$want" != 0 ] && [ "$(grep -c '^::error::' "$d/log")" -ne 1 ]; then
+			no "$job: $label, with exactly one ::error::" "$(cat "$d/log")"
+		else
+			ok "$job: $label"
+		fi
+	}
+	KR=projects/p/locations/global/keyRings/k
+	for pair in "sign-sidecar-windows:SREADY" "sign-windows:IREADY"; do
+		job="${pair%%:*}"
+		var="${pair#*:}"
+		script="${!var}"
+		ready_case "$job" "$script" 0 "ready=true" "$KR" yes false "" "signs a real run when both preconditions hold"
+		ready_case "$job" "$script" 0 "ready=true" "$KR" yes true "" "signs a dry run when both preconditions hold"
+		# The real-run refusals: each names its cause and every way forward.
+		ready_case "$job" "$script" 1 "" "" yes false "" "refuses a real run with GCP_KMS_KEYRING unset" "::error::Windows signing is not configured (GCP_KMS_KEYRING unset)"
+		ready_case "$job" "$script" 1 "" "" yes false "" "names the escape hatch when it refuses" "ALLOW_UNSIGNED_WINDOWS"
+		ready_case "$job" "$script" 1 "" "" yes false "" "says to set the keyring variable when it is the one missing" "Set the GCP_KMS_KEYRING repository variable"
+		ready_case "$job" "$script" 1 "" "$KR" no false "" "refuses a real run with the certificate chain missing" "::error::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing"
+		ready_case "$job" "$script" 1 "" "$KR" no false "" "says to commit the chain when it is the one missing" "commit sidecar/packaging/windows/codesign-chain.pem"
+		ready_case "$job" "$script" 1 "" "" no false "" "refuses a real run with neither, naming the keyring first" "GCP_KMS_KEYRING unset"
+		# A rehearsal needs no signing configuration: it warns, as before.
+		ready_case "$job" "$script" 0 "ready=false" "" yes true "" "lets a dry run continue unsigned with the keyring unset" "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset)"
+		ready_case "$job" "$script" 0 "ready=false" "$KR" no true "" "lets a dry run continue unsigned with the chain missing" "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing"
+		ready_case "$job" "$script" 0 "ready=false" "" yes true "" "tells a dry run that a real release would stop there" "a real release would stop here"
+		# The escape hatch: exactly the string true, recorded as a warning.
+		ready_case "$job" "$script" 0 "ready=false" "" yes false true "ships unsigned on purpose with ALLOW_UNSIGNED_WINDOWS=true" "because ALLOW_UNSIGNED_WINDOWS is true"
+		ready_case "$job" "$script" 0 "ready=false" "$KR" no false true "ships unsigned on purpose with the chain missing and the hatch set" "::warning::GCP_KMS_KEYRING is set but"
+		for h in TRUE True 1 yes " true" "true " false; do
+			ready_case "$job" "$script" 1 "" "" yes false "$h" "refuses the escape hatch spelled $(printf '%q' "$h")" "::error::"
+		done
+		# The hatch never turns signing off when signing is possible, and a
+		# hatch left set after the config is fixed is pointed out.
+		ready_case "$job" "$script" 0 "ready=true" "$KR" yes false true "still signs when the hatch is set but signing is configured" "::warning::ALLOW_UNSIGNED_WINDOWS is set but signing is configured"
+		ready_case "$job" "$script" 0 "ready=false" "" yes true true "takes the dry-run branch when a dry run also has the hatch set" "This dry run continues"
+	done
+fi
+# The token-less verify jobs refuse the signer answer on their own (#869
+# review), executed verbatim.
+SREFUSE="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step verify-sidecar-windows 'Refuse an unsigned binary on a real run')" || SREFUSE=""
+IREFUSE="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step verify-windows 'Refuse an unsigned binary on a real run')" || IREFUSE=""
+if [ -z "$SREFUSE" ] || [ -z "$IREFUSE" ]; then
+	no "found both unsigned-binary refusals (verify-sidecar-windows, verify-windows)"
+else
+	# refuse_case <job> <script> <want 0|1> <signed> <dry run> <hatch> <label>
+	refuse_case() {
+		verbatim_case "$1: $7" "$3" "$WORK" "$2" SIGNED="$4" DRY_RUN="$5" ALLOW_UNSIGNED_WINDOWS="$6"
+		if [ "$3" != 0 ] && ! grep -qF "::error::" "${WORK}/v.log"; then no "$1: $7, with an ::error::" "$(cat "${WORK}/v.log")"; fi
+	}
+	for pair in "verify-sidecar-windows:SREFUSE" "verify-windows:IREFUSE"; do
+		job="${pair%%:*}"
+		var="${pair#*:}"
+		script="${!var}"
+		refuse_case "$job" "$script" 0 true false "" "passes a signed binary on a real run"
+		refuse_case "$job" "$script" 1 false false "" "refuses an unsigned binary on a real run"
+		refuse_case "$job" "$script" 1 "" false "" "refuses when the signer reported nothing"
+		refuse_case "$job" "$script" 0 false true "" "passes an unsigned binary on a dry run"
+		refuse_case "$job" "$script" 0 false false true "passes an unsigned binary under ALLOW_UNSIGNED_WINDOWS=true"
+		refuse_case "$job" "$script" 1 false false TRUE "refuses the hatch spelled TRUE"
+	done
 fi
 
 echo

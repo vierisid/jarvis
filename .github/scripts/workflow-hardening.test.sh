@@ -616,34 +616,48 @@ if (rule === "narrow") {
   }
 }
 if (rule === "pushcache") {
-  // #782: a job that pushes an image to a registry builds it cold. The GHA
-  // cache is writable by any run on main and by every job in the same run, so
-  // a job that both restores from it and pushes can ship layers nobody built
-  // in that job. "Pushes": a build-push or bake step whose push is not false
-  // or whose outputs push, a registry login, or a `docker push`,
-  // `buildx ... --push` or `imagetools create` command. Every
-  // image build in such a job is held to it, dry-run twins included, so a
-  // rehearsal builds what the release does.
+  // #782: a job that ships an image builds it cold. The GHA cache is
+  // writable by any run on main and by every job in the same run, so a job
+  // that both restores from it and ships can ship layers nobody built in
+  // that job. "Ships" is either of:
+  //   - pushes: a build-push or bake step whose push is not false or whose
+  //     outputs push, a registry login, or a `docker push`, `buildx ...
+  //     --push`, `imagetools create` or skopeo/crane/regctl/oras write;
+  //   - (#868) builds an image and uploads any artifact: what it uploads
+  //     may be that image, for a later job to push. Since #868 the release
+  //     image is built that way, by a job with no registry scope, and pushed
+  //     from the archive after approval, so the build that ships pushes
+  //     nothing itself. Any upload counts, not only one whose path matches
+  //     the build output (#868 review: a parent directory, or the same
+  //     expression spaced differently, slipped past that), and a classic
+  //     docker build counts as a build.
+  // Every image build in such a job is held to it, so a rehearsal builds
+  // what the release does.
   for (const [name, job] of Object.entries(jobs)) {
     const steps = flatSteps(job.steps).map((x) => x.st);
     const u = (st) => String(st.uses ?? "").toLowerCase();
     const isBuild = (st) => /^docker\/(build-push-action|bake-action)@/.test(u(st));
+    const isUpload = (st) => /^actions\/upload-artifact@/.test(u(st));
     const runs = steps.map((st) => typeof st.run === "string" ? st.run : "").join("\n");
     // `outputs: type=image,...,push=true` (or type=registry) pushes as surely
-    // as `push: true` does (#680: build-image pushes by digest that way).
+    // as `push: true` does (#680: build-image pushed by digest that way).
     const pushes = steps.some((st) => isBuild(st) && (String(st.with?.push ?? "false") !== "false" ||
         /(?:^|[,\s])push\s*=\s*(?:true|1|t)\b|(?:^|[,\s])type\s*=\s*registry\b/i.test(String(st.with?.outputs ?? "")))) ||
       steps.some((st) => /^docker\/login-action@/.test(u(st))) ||
-      /\bdocker\s+(?:image\s+)?push\b|\bbuildx\s+(?:build|bake)\b[^\n]*--push\b|\bimagetools\s+create\b/.test(runs);
-    if (!pushes) continue;
+      // Global flags may sit before the subcommand (skopeo --debug copy).
+      /\bdocker(?:\s+-{1,2}\S+(?:\s+(?!-)\S+)?)*\s+(?:(?:image|manifest)\s+)?push\b|\bbuildx\s+(?:build|bake)\b[^\n]*--push\b|\bimagetools\s+create\b|\b(?:skopeo|crane|regctl|oras)(?:\s+-{1,2}\S+(?:\s+(?!-)\S+)?)*\s+(?:copy|cp|push|sync|mutate|append|image\s+copy|index\s+create)\b/.test(runs);
+    const builds = steps.some(isBuild) || /\bdocker\s+(?:image\s+)?build\b|\bbuildx\s+(?:build|bake)\b/.test(runs);
+    const uploadsArchive = builds && steps.some(isUpload);
+    if (!pushes && !uploadsArchive) continue;
+    const why = pushes ? "pushes to a registry" : "builds an image and uploads an artifact, which may be that image";
     for (const [i, st] of steps.entries()) {
       const label = name + ": step " + (st.name ?? st.id ?? st.uses ?? String(i));
       if (isBuild(st) && st.with?.["cache-from"] !== undefined)
-        out.push(label + " restores cache-from " + JSON.stringify(st.with["cache-from"]) + " in a job that pushes to a registry");
+        out.push(label + " restores cache-from " + JSON.stringify(st.with["cache-from"]) + " in a job that " + why);
       if (isBuild(st) && /cache-from/.test(JSON.stringify(st.with?.set ?? "")))
-        out.push(label + " sets cache-from through bake in a job that pushes to a registry");
+        out.push(label + " sets cache-from through bake in a job that " + why);
       if (typeof st.run === "string" && /--cache-from\b/.test(st.run))
-        out.push(label + " runs a build with --cache-from in a job that pushes to a registry");
+        out.push(label + " runs a build with --cache-from in a job that " + why);
     }
   }
 }
@@ -905,58 +919,63 @@ for f in "$WORKFLOWS"/*.yml; do
 done
 
 echo
-echo "no job that pushes an image restores it from a cache (#782)"
+echo "no job that ships an image restores it from a cache (#782, #868)"
 for f in "$WORKFLOWS"/*.yml; do
-	expect_clean "$(basename "$f"): every image a pushing job builds is built cold" pushcache "$f"
+	expect_clean "$(basename "$f"): every image a shipping job builds is built cold" pushcache "$f"
 done
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
-	expect_caught 'the gha cache back on the build that pushes (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
-		$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n          cache-from: type=gha\n' \
-		'restores cache-from "type=gha" in a job that pushes'
-	expect_caught 'the gha cache back on the dry-run twin in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+	# The build that ships pushes nothing since #868: it is shipping because
+	# its archive is uploaded for publish-docker to push.
+	expect_caught 'the gha cache back on the build that ships into the archive (#782, #868)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n' \
+		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n          cache-from: type=gha\n' \
+		'restores cache-from "type=gha" in a job that builds an image and uploads an artifact'
+	expect_caught 'a registry cache back on the build that ships into the archive (#782, #868)' pushcache "$WORKFLOWS/release-exec.yml" \
 		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n' \
 		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n          cache-from: type=registry,ref=ghcr.io/x/y:cache\n' \
-		'in a job that pushes'
-	expect_caught 'a buildx command line restoring a cache in the pushing job (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
-		'      - name: Build the image into an OCI archive (dry run)' $'      - run: docker buildx build --cache-from type=gha --push .\n      - name: Build the image into an OCI archive (dry run)' \
-		'runs a build with --cache-from'
-	expect_caught 'the push step spelled in another case, with its cache back (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		'in a job that builds an image and uploads an artifact'
+	expect_caught 'a buildx command line restoring a cache in the job that ships the archive (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
+		'      - name: Digest the archive' $'      - run: docker buildx build --cache-from type=gha -o type=oci,dest=x.tar .\n      - name: Digest the archive' \
+		'runs a build with --cache-from in a job that builds an image and uploads an artifact'
+	expect_caught 'the build step spelled in another case, with its cache back (#782)' pushcache "$WORKFLOWS/release-exec.yml" \
 		$'        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          context: .\n' \
 		$'        uses: Docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0\n        with:\n          cache-from: type=gha\n          context: .\n' \
 		'restores cache-from'
+	# A build that pushes through `outputs:` (push=true, as build-image did
+	# from #680 to #868) is a push whether or not the job also logs in or
+	# uploads anything: with the archive export replaced by a push, the cache
+	# coming back must still be reported, for the push.
+	expect_caught 'the gha cache back on a build that pushes only through outputs push=true (#680)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n' \
+		$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n          cache-from: type=gha\n' \
+		'restores cache-from "type=gha" in a job that pushes'
+	# BuildKit parses the value as a Go bool: 1 and t push too (#680 review).
+	expect_caught 'the gha cache back on a build that pushes through outputs push=1 (#680 review)' pushcache "$WORKFLOWS/release-exec.yml" \
+		$'          outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar\n' \
+		$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push=1\n          cache-from: type=gha\n' \
+		'restores cache-from "type=gha" in a job that pushes'
+	# A job that pushes only through skopeo, with no login, no push flag and
+	# no imagetools: the validate-only docker-build.yml job with a skopeo
+	# copy added, so only the skopeo detection can report its cache (#868).
+	expect_caught 'a cached build in a job that pushes only through skopeo (#868)' pushcache "$WORKFLOWS/docker-build.yml" \
+		'      - name: Check the release cache guard has not been disarmed' $'      - run: skopeo copy docker-daemon:jarvis:ci docker://ghcr.io/o/r:ci\n      - name: Check the release cache guard has not been disarmed' \
+		'restores cache-from "type=gha" in a job that pushes'
+	# The same, with a global flag before the subcommand (#868 review).
+	expect_caught 'a cached build in a job that pushes through skopeo --debug copy (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
+		'      - name: Check the release cache guard has not been disarmed' $'      - run: skopeo --debug copy docker-daemon:jarvis:ci docker://ghcr.io/o/r:ci\n      - name: Check the release cache guard has not been disarmed' \
+		'restores cache-from "type=gha" in a job that pushes'
+	# Away from release-exec.yml, so the image mode there cannot be what
+	# catches them: the cached validate build gaining an upload of a parent
+	# directory, or of the same path spelled another way (#868 review).
+	expect_caught 'a cached build uploading the directory holding its output (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
+		'      - name: Check the release cache guard has not been disarmed' $'      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: image\n          path: ${{ runner.temp }}\n      - name: Check the release cache guard has not been disarmed' \
+		'restores cache-from "type=gha" in a job that builds an image and uploads an artifact'
+	expect_caught 'a classic docker build with a cache, saved and uploaded (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
+		$'      - name: Build Docker image (validate)\n        uses: docker/build-push-action@v7\n        with:\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64\n          push: false\n          load: true\n          tags: ${{ env.IMAGE_TAG }}\n          build-args: VERSION=0.0.0-ci\n          cache-from: type=gha\n          cache-to: type=gha,mode=max\n' \
+		$'      - run: docker build --cache-from jarvis:ci -t jarvis:ci . && docker save jarvis:ci -o i.tar\n      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: image\n          path: i.tar\n' \
+		'runs a build with --cache-from in a job that builds an image and uploads an artifact'
 }
-# A build that pushes through `outputs:` (push=true, as build-image does since
-# #680) is a push whether or not the job also logs in: with the login removed,
-# the cache coming back must still be reported. (This replaces a check that
-# the validate-only build-docker job could keep its cache: #680 removed that
-# job, and nothing in release-exec.yml uses the cache now.)
-copy="${WORK}/pushcache-nologin.yml"
-# shellcheck disable=SC2016 # JavaScript source, not shell.
-if FROM="$WORKFLOWS/release-exec.yml" TO="$copy" bun -e '
-const s = await Bun.file(process.env.FROM).text();
-const re = /      # Only when something will be pushed \(#682\): a dry run has no use for\n      # a registry credential on disk\.\n      - name: Log in to GitHub Container Registry\n(?:        .*\n|          .*\n)+?(?=\n)/;
-if (!re.test(s)) process.exit(2);
-await Bun.write(process.env.TO, s.replace(re, ""));
-'; then
-	if grep -q 'docker/login-action' <(sed -n '/^  build-image:/,/^  smoke-image:/p' "$copy"); then
-		no "the build-image login could be removed from the copy"
-	else
-		# shellcheck disable=SC2016 # literal workflow text, not shell.
-		expect_caught 'the gha cache back on a build that pushes only through outputs push=true (#680)' pushcache "$copy" \
-			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
-			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n          cache-from: type=gha\n' \
-			'restores cache-from "type=gha" in a job that pushes'
-		# BuildKit parses the value as a Go bool: 1 and t push too (#680 review).
-		expect_caught 'the gha cache back on a build that pushes through outputs push=1 (#680 review)' pushcache "$copy" \
-			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true\n' \
-			$'          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=1\n          cache-from: type=gha\n' \
-			'restores cache-from "type=gha" in a job that pushes'
-	fi
-else
-	no "mutant 'build-image without its login' could be applied (the workflow no longer has the text it mutates)"
-fi
 
 echo
 echo "the catalog sync processes third-party data without write access"
@@ -1248,8 +1267,8 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'      - name: Windows signing readiness' $'      - run: |\n          curl -fsS -H "Authorization: Bearer $ACTIONS_RUNTIME_TOKEN" "${ACTIONS_RESULTS_URL}twirp/github.actions.results.api.v1.ArtifactService/ListArtifacts"\n      - name: Windows signing readiness' \
 		'reads the Actions runtime artifact API'
 	expect_caught 'the runtime token handed to a step through env (#820)' narrow "$WORKFLOWS/installer-release.yml" \
-		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n        run: |\n' \
-		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          URL: ${{ env.ACTIONS_RESULTS_URL }}\n        run: |\n' \
+		$'          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n        run: |\n' \
+		$'          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n          URL: ${{ env.ACTIONS_RESULTS_URL }}\n        run: |\n' \
 		'reads the Actions runtime artifact API'
 	expect_caught 'the runtime URL in a signing job env (#820)' narrow "$WORKFLOWS/installer-release.yml" \
 		$'    steps:\n      # For scripts/sign-windows.sh and the committed certificate chain.' \

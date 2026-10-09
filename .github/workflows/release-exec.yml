@@ -50,9 +50,10 @@ permissions: {}
 # them in order (GitHub docs, workflow-level `concurrency.queue`; changelog
 # 2026-05-07). It is rejected only together with cancel-in-progress: true.
 #
-# Dry runs share the group. They push nothing, but they do build and smoke
-# the image, so a rehearsal can delay a real release by one gate's length --
-# never cancel it, which under `single` it could have.
+# Dry runs share the group. They publish nothing, but they do build and smoke
+# the image (and push it to a registry on their own runner), so a rehearsal
+# can delay a real release by one gate's length -- never cancel it, which
+# under `single` it could have.
 #
 # actionlint 1.7.x predates the `queue` key and reports it as unexpected; that
 # is the linter, not this file.
@@ -87,11 +88,15 @@ env:
   # default `moby/buildkit:buildx-stable-1`, which v0.33.1 is as of 2026-10-06.
   BUILDKIT_IMAGE: moby/buildkit:v0.33.1@sha256:cec9f139f45e93c5c69c60f8b07cfad9f43f4ef6b6a6cd917527fea5ff2e3dea
   # The SBOM generator BuildKit runs during build-image (#680), with the
-  # image filesystem mounted, beside a packages: write token. Its default
+  # image filesystem mounted (beside a packages: write token until #868). Its default
   # is the tag docker/buildkit-syft-scanner:stable-1; stable-1 and 1.12.0
   # were the same index digest on 2026-10-08 (docker buildx imagetools
   # inspect), so pinning changes nothing that runs today.
   SBOM_GENERATOR: docker/buildkit-syft-scanner:1.12.0@sha256:ae4f3b554449e7e25548e7d8ccc029d17357348e30c6e3df01b92bc93654d6a9
+  # The throwaway registry smoke-image rehearses the push against (#868), on
+  # loopback only. registry:3.1.2, which `3`, `3.1` and `latest` all
+  # resolved to on 2026-10-09 (docker buildx imagetools inspect).
+  REHEARSAL_REGISTRY_IMAGE: registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
   SIDECAR_BIN: jarvis
   # The one dry-run decision (#685), spelled the same everywhere it has to be
   # made: here, the sidecar call input, discord-notify's `if:` and
@@ -193,9 +198,8 @@ jobs:
   # their own branch. What stands between that and an npm publish is the
   # `release` environment's required reviewers on publish-brain and
   # publish-sidecar (#679, #756), not this gate. Nothing equivalent gates
-  # GHCR directly: publish-docker, the only job that creates an image tag,
-  # waits for publish-brain by the `needs:` order in this file, while
-  # build-image pushes an untagged digest before any approval (#680; see it).
+  # GHCR directly: publish-docker, the only job that can write to it at all
+  # since #868, waits for publish-brain by the `needs:` order in this file.
   validate-tag:
     runs-on: ubuntu-latest
     permissions: {}
@@ -276,42 +280,41 @@ jobs:
       - run: bun test --retry=2
       - run: bunx tsc --noEmit
 
-  # --- Build the release image ONCE and push it by digest (#680) ---
+  # --- Build the release image ONCE, into an OCI archive (#680, #868) ---
   # The image that ships is built here and nowhere else. Before #680 a
   # release built it three times: build-docker built multi-arch to validate,
   # built amd64 again to smoke-test, and publish-docker built a third time
   # and pushed THAT. Nothing tied the bytes docker-smoke.sh started to the
   # bytes users pull, and once #782 made publish-docker build cold while the
   # gate built from the cache, they were always two independent builds
-  # (#822). Now: this job pushes one multi-arch index by digest, with no
-  # tag; smoke-image pulls exactly that digest and runs it; publish-docker
-  # points the release tags at that same digest without building anything.
+  # (#822). Now: this job builds one multi-arch index into an OCI archive;
+  # smoke-image runs that archive's amd64 image and rehearses the push of the
+  # archive against a throwaway registry; publish-docker, after the approval
+  # chain, pushes that same archive to GHCR by digest and points the release
+  # tags at it. One build, one set of bytes, from here to the registry.
   #
-  # Authority. This job holds packages: write and runs BEFORE the `release`
-  # environment approval on publish-brain. What it writes on a real run is
-  # blobs and an UNTAGGED index: nothing anyone pulls by name, and no tag
-  # moves. Only publish-docker creates tags, and it runs after publish-brain
-  # (release-exec.test.sh checks both). But the package is public, so that
-  # index is publicly pullable by digest, with this version in its labels,
-  # whether or not the release is then approved, and nothing deletes it.
+  # Authority (#868). This job holds contents: read and NO registry scope,
+  # and it does not log in to anything. It runs BuildKit (privileged under
+  # this driver, so root on the runner), QEMU, the dependency lifecycle
+  # scripts, the Dockerfile's apt packages (NOT pinned) and the SBOM
+  # scanner, all before any approval -- and from #680 until #868 it did so
+  # beside a packages: write token, so a sandbox escape here could have moved
+  # :latest unapproved, and every real run left a publicly pullable,
+  # version-labelled untagged index on the public package whether or not it
+  # was ever approved. Now nothing that runs before the `release`
+  # environment approval on publish-brain can write to a registry:
+  # publish-docker is the only job holding packages: write
+  # (release-exec.test.sh checks that, and the needs order behind it).
   #
-  # The TOKEN could push a tag, so a compromise inside this job could move
-  # one with nobody having approved the release. What runs beside the token:
-  # the actions (pinned by SHA; checkout, metadata-action and
-  # build-push-action all receive it as their default token input), the
-  # binfmt, BuildKit and SBOM generator images (pinned by digest), and the
-  # Dockerfile build: bases pinned by digest, dependency lifecycle scripts
-  # from the frozen lockfile, and apt packages that are NOT pinned. RUN
-  # steps cannot read the token without escaping BuildKit's sandbox -- the
-  # build context is the checkout, not git, so no token is passed in as a
-  # build secret, and release-exec.test.sh forbids secrets, ssh, extra
-  # contexts and entitlements on both builds -- but BuildKit runs
-  # privileged under this driver, so an escape is root on the runner, where
-  # the token and the login credential both are. The same build ran with the
-  # same scope in publish-docker before #680, only after the approval.
+  # What crosses: the archive, as an artifact, which every job in this run
+  # can write; its sha256, as a job output, which only this job can set; and
+  # the index digest BuildKit reported, also an output. Both consumers check
+  # the archive against the sha256 before reading it, and the registry and
+  # skopeo then refuse anything at that digest that does not hash to it.
   #
-  # It never runs the image: smoke-image does, in a job with no write scope,
-  # so a container escape there does not land beside this token.
+  # The rehearsal is this same job, step for step (#868): a dry run builds the
+  # archive a release builds, by the same path, which retires the dry-run
+  # twin build #680 needed and the drift guard that held the two together.
   #
   # Built cold, with no cache-from or cache-to (#782): this is the build
   # that ships, and the GHA cache is writable by any run on main and by
@@ -319,28 +322,21 @@ jobs:
   # two-platform build in publish-docker: 1m55s against 52s warm (runs
   # 37613557506 and 37610958257).
   #
-  # A dry run publishes nothing (#685; the owner decision on #680): it does
-  # not log in and pushes nothing anywhere. It builds the same image from
-  # the same inputs into an OCI archive on this runner and hands that to
-  # smoke-image as an artifact, so a rehearsal still proves the build and
-  # the smoke test of exactly the bytes it built. What a dry run does NOT
-  # prove is the push by digest, the pull by digest, or the tagging: those
-  # run only on a real release. The two build steps below are one step
-  # twice, differing only in `outputs:` and `id:`; release-exec.test.sh
-  # fails if anything else about them drifts apart.
+  # Cost of the archive (#868), measured on the 2026-10-08 dry run
+  # 37788481655: 434,377,884 bytes, uploaded in 6s and downloaded in 5s. It
+  # is stored once and downloaded twice on a real run (smoke-image and
+  # publish-docker), where #680 pushed it straight to GHCR from here.
   build-image:
     needs: [validate-tag, test]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
     # One cold two-platform build (arm64 under QEMU) plus an SBOM scan per
     # platform; about 2 minutes measured for the build alone. Generous on
     # purpose: a too-tight bound turns a slow release into a failed one.
     timeout-minutes: 45
     outputs:
-      # Exactly one of the two build steps runs, so exactly one is set.
-      digest: ${{ steps.build.outputs.digest || steps.build-dry.outputs.digest }}
+      digest: ${{ steps.build.outputs.digest }}
       tags: ${{ steps.meta.outputs.tags }}
       archive_sha256: ${{ steps.archive.outputs.sha256 }}
     steps:
@@ -365,20 +361,10 @@ jobs:
         with:
           driver-opts: image=${{ env.BUILDKIT_IMAGE }}
 
-      # Only when something will be pushed (#682): a dry run has no use for
-      # a registry credential on disk.
-      - name: Log in to GitHub Container Registry
-        if: env.DRY_RUN != 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
       # The labels go into the image config, so they are set here, at the
-      # one build. The tags are computed here too and handed to
-      # publish-docker, which checks them against validate-tag before using
-      # them; nothing in this job applies a tag.
+      # one build. The tags are computed here too and handed on, and every
+      # job that applies them checks them against validate-tag first;
+      # nothing in this job applies a tag.
       - name: Generate Docker metadata
         id: meta
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302 # v6.2.0
@@ -395,30 +381,13 @@ jobs:
             org.opencontainers.image.source=https://github.com/${{ github.repository }}
             org.opencontainers.image.documentation=https://github.com/${{ github.repository }}
 
-      # push-by-digest: the index and its blobs go to GHCR under no tag, and
-      # the step output `digest` is the index digest. Provenance (mode=max)
-      # and the SBOM are attestation manifests inside that index, so the
-      # tags publish-docker creates carry them with no extra step.
-      - name: Build the image and push it by digest
+      # Into an OCI archive on this runner, on every run. The step output
+      # `digest` is the index digest, the blob of that name in the archive.
+      # Provenance (mode=max) and the SBOM are attestation manifests inside
+      # that index, so the tags publish-docker creates carry them with no
+      # extra step.
+      - name: Build the image into an OCI archive
         id: build
-        if: env.DRY_RUN != 'true'
-        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
-        with:
-          context: .
-          file: ./Dockerfile
-          platforms: linux/amd64,linux/arm64
-          labels: ${{ steps.meta.outputs.labels }}
-          build-args: VERSION=${{ needs.validate-tag.outputs.version }}
-          provenance: mode=max
-          sbom: generator=${{ env.SBOM_GENERATOR }}
-          outputs: type=image,name=ghcr.io/${{ github.repository }},push-by-digest=true,name-canonical=true,push=true
-
-      # The same build into an OCI archive on this runner (see above). Its
-      # `digest` output is that archive's index digest, which smoke-image
-      # checks the archive against.
-      - name: Build the image into an OCI archive (dry run)
-        id: build-dry
-        if: env.DRY_RUN == 'true'
         uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
@@ -430,106 +399,91 @@ jobs:
           sbom: generator=${{ env.SBOM_GENERATOR }}
           outputs: type=oci,dest=${{ runner.temp }}/release-image.oci.tar
 
-      # The archive crosses to smoke-image as an artifact, which every job in
-      # this run can write; its digest crosses as a job output, which only
-      # this job can set.
-      - name: Digest the dry-run archive
+      # The archive crosses to smoke-image and publish-docker as an artifact,
+      # which every job in this run can write; its digest crosses as a job
+      # output, which only this job can set.
+      - name: Digest the archive
         id: archive
-        if: env.DRY_RUN == 'true'
         run: |
           set -euo pipefail
           sum="$(sha256sum "${RUNNER_TEMP}/release-image.oci.tar" | cut -d' ' -f1)"
           echo "sha256=${sum}" >> "$GITHUB_OUTPUT"
           echo "release-image.oci.tar sha256 ${sum}"
 
-      - name: Upload the dry-run archive
-        if: env.DRY_RUN == 'true'
+      # Kept on a real run for as long as publish-docker can still need it:
+      # it reads the archive after the approvals, which a person gives (a
+      # deployment review times out after 30 days), and a failed
+      # publish-docker can be re-run up to 30 days after the run started, so
+      # 35 days covers both with margin. upload-artifact lowers this, with a
+      # warning, if the repository retention setting is lower. A dry run
+      # reads it only in smoke-image.
+      - name: Upload the archive
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-image-oci
           path: ${{ runner.temp }}/release-image.oci.tar
           if-no-files-found: error
-          retention-days: 1
+          retention-days: ${{ env.DRY_RUN == 'true' && 1 || 35 }}
           # Image layers are gzip already; zipping them again costs time.
           compression-level: 0
 
-  # --- Gate: RUN the image that will ship before publishing anything ---
+  # --- Gate: RUN the image that will ship, and rehearse its push ---
   # The run half is #621: a successful build was all the release gate used to
   # prove, which is why #613 and #614 both shipped -- both built cleanly and
   # failed only at runtime, and both were found by an outside reporter. See
   # .github/scripts/docker-smoke.sh for what it asserts. Since #680 it runs
-  # the image build-image pushed, pulled by digest, so what passes here is
-  # what publish-docker tags.
+  # the image build-image built, and since #868 on every run from the
+  # archive publish-docker pushes, so what passes here is what ships.
   #
-  # No write scope: this job EXECUTES the image, so a container escape here
-  # must not land in a job whose runner holds a publish-capable token.
-  # packages: read is for the pull, and the credential is removed from disk
-  # right after it, before the image runs.
+  # And the push half (#868): the archive is pushed by digest to a
+  # throwaway registry on this runner and tagged there, by the very script
+  # publish-docker runs against GHCR (a YAML alias of it, so the two cannot
+  # drift). On every run, dry or real, so a push path that cannot work fails
+  # here, before the approvals and before npm publishes, and not in
+  # publish-docker after them.
+  #
+  # No registry scope at all: this job EXECUTES the image, so a container
+  # escape here must not land in a job whose runner holds a publish-capable
+  # token. It logs in to nothing.
   smoke-image:
     needs: [validate-tag, build-image]
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: read
-    # A pull (or an archive load) plus three smoke phases. docker-build.yml
+    # An archive load, three smoke phases and a local push. docker-build.yml
     # allows 30 for a build plus the same smoke check.
     timeout-minutes: 45
     env:
       # Run-scoped, matching docker-build.yml, and removed by name at the end.
       GATE_IMAGE_TAG: jarvis:release-gate-${{ github.run_id }}-${{ github.run_attempt }}
+      REHEARSAL_CONTAINER: jarvis-release-rehearsal-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       # For docker-smoke.sh. Nothing after the checkout runs git.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Log in to GitHub Container Registry
-        if: env.DRY_RUN != 'true'
-        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      # By digest, so what runs below is byte for byte the index build-image
-      # pushed: the daemon refuses content that does not hash to it. This
-      # job runs on the runner's own architecture, so this is the amd64
-      # image ONLY. arm64 is built by build-image and never started.
-      # Starting it IS possible -- QEMU would run it -- and is declined: it
-      # is very slow, and a QEMU-emulated boot is not what an arm64 user
-      # executes, so a pass there would prove less than it appears to. An
-      # arm64-only runtime defect is a gap this gate does not close,
-      # deliberately.
-      - name: Pull the pushed image by digest
-        if: env.DRY_RUN != 'true'
-        env:
-          DIGEST: ${{ needs.build-image.outputs.digest }}
-        run: |
-          set -euo pipefail
-          export LC_ALL=C
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }
-          ref="ghcr.io/${GITHUB_REPOSITORY,,}@${DIGEST}"
-          docker pull --platform linux/amd64 "$ref"
-          # The credential is not needed past the pull, and the image runs next.
-          docker logout ghcr.io
-          docker tag "$ref" "$GATE_IMAGE_TAG"
-
-      - name: Download the dry-run archive
-        if: env.DRY_RUN == 'true'
+      - name: Download the archive
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: release-image-oci
           path: ${{ runner.temp }}/release-image
 
-      # The dry-run counterpart of the pull: the amd64 image of the index
-      # build-image reported, checked by content from the archive digest down
-      # to the config, then loaded. `docker load` on the runner (Docker 28,
-      # classic image store) cannot read a multi-platform OCI archive -- it
-      # fails with "blobs/json: no such file or directory", measured on
-      # 28.0.4, the runner version -- so this writes the docker-archive
-      # manifest.json for the one amd64 image over the same blobs.
-      - name: Load the dry-run image from its archive
-        if: env.DRY_RUN == 'true'
+      # The amd64 image of the index build-image reported, checked by content
+      # from the archive digest down to the config, then loaded. This job
+      # runs on the runner's own architecture, so this is the amd64 image
+      # ONLY. arm64 is built by build-image and never started. Starting it IS
+      # possible -- QEMU would run it -- and is declined: it is very slow, and
+      # a QEMU-emulated boot is not what an arm64 user executes, so a pass
+      # there would prove less than it appears to. An arm64-only runtime
+      # defect is a gap this gate does not close, deliberately.
+      #
+      # `docker load` on the runner (Docker 28, classic image store) cannot
+      # read a multi-platform OCI archive -- it fails with "blobs/json: no
+      # such file or directory", measured on 28.0.4, the runner version -- so
+      # this writes the docker-archive manifest.json for the one amd64 image
+      # over the same blobs.
+      - name: Load the image from its archive
         env:
           DIGEST: ${{ needs.build-image.outputs.digest }}
           ARCHIVE_SHA256: ${{ needs.build-image.outputs.archive_sha256 }}
@@ -540,6 +494,16 @@ jobs:
           [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no archive digest"; exit 1; }
           dir="${RUNNER_TEMP}/release-image"
           echo "${ARCHIVE_SHA256}  ${dir}/release-image.oci.tar" | sha256sum -c -
+          # The entry allowlist the push script also applies, here before
+          # this job unpacks the archive itself (#868 review). Files, not
+          # pipes, for the reason given there.
+          tar -tvf "${dir}/release-image.oci.tar" | cut -c1 >"${dir}/types"
+          tar -tf "${dir}/release-image.oci.tar" >"${dir}/names"
+          if grep -qv '^[-d]$' "${dir}/types" ||
+            grep -qvE '^(oci-layout|index\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' "${dir}/names"; then
+            echo "::error::the archive holds entries an OCI layout does not have; refusing to unpack it"
+            exit 1
+          fi
           mkdir "${dir}/layout"
           tar -xf "${dir}/release-image.oci.tar" -C "${dir}/layout"
           blob() { printf '%s/layout/blobs/sha256/%s' "$dir" "${1#sha256:}"; }
@@ -550,17 +514,20 @@ jobs:
           [[ "$manifest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::the amd64 entry has no digest"; exit 1; }
           echo "${manifest#sha256:}  $(blob "$manifest")" | sha256sum -c -
           config="$(jq -er '.config.digest' "$(blob "$manifest")")"
+          # These become tar paths below, so each must be a plain digest.
+          jq -e '[.config.digest, .layers[].digest] | all(test("^sha256:[0-9a-f]{64}$"))' "$(blob "$manifest")" >/dev/null ||
+            { echo "::error::the amd64 manifest names a config or layer that is not a sha256 digest"; exit 1; }
           jq -c --arg tag "$GATE_IMAGE_TAG" \
             '[{Config: ("blobs/sha256/" + (.config.digest | ltrimstr("sha256:"))), RepoTags: [$tag], Layers: [.layers[].digest | "blobs/sha256/" + ltrimstr("sha256:")]}]' \
             "$(blob "$manifest")" > "${dir}/layout/manifest.json"
           # Only the amd64 config and layers, not every blob: the archive also
-          # holds arm64 and the attestations, and the runner disk holds the
-          # download and the extracted layout already (434 MB measured for
-          # the two-platform archive on 2026-10-08).
+          # holds arm64 and the attestations (434 MB measured for the
+          # two-platform archive on 2026-10-08). The archive itself stays:
+          # the push rehearsal below reads it.
           jq -r '.[0].Config, .[0].Layers[]' "${dir}/layout/manifest.json" >"${dir}/amd64.files"
           tar -cf "${dir}/amd64.tar" -C "${dir}/layout" manifest.json -T "${dir}/amd64.files"
-          rm -f "${dir}/release-image.oci.tar"
           docker load -i "${dir}/amd64.tar"
+          rm -rf "${dir}/layout" "${dir}/amd64.tar"
           # The image ID is the config digest; docker load checks each layer
           # against the config, so this closes the chain down to the layers.
           # (That equality holds for the classic image store the runner uses.
@@ -577,10 +544,9 @@ jobs:
       # defaults to it, which is the script's own default.
       #
       # What this proves, stated narrowly so nobody reads more into a green
-      # gate: the amd64 image of the index publish-docker will tag boots
+      # gate: the amd64 image of the index publish-docker will push boots
       # healthy, answers /health unauthenticated, logs no startup failure,
-      # and does it again over a written volume. On a dry run, the same for
-      # the image in the archive build-image made.
+      # and does it again over a written volume.
       - name: Smoke-test the image (run it like a user does)
         env:
           # Unique per run AND per re-run, so a retry cannot collide with a
@@ -588,9 +554,133 @@ jobs:
           SMOKE_PREFIX: jarvis-release-smoke-${{ github.run_id }}-${{ github.run_attempt }}
         run: ./.github/scripts/docker-smoke.sh "$GATE_IMAGE_TAG"
 
+      # A registry on loopback only, for the rehearsal below; nothing outside
+      # this runner can reach it, and it holds nothing but this run's
+      # archive. The image is pinned by digest (REHEARSAL_REGISTRY_IMAGE).
+      #
+      # skopeo talks HTTPS unless told otherwise, and the runner's skopeo
+      # (1.13.3, Ubuntu 24.04's package) ignores CONTAINERS_REGISTRIES_CONF
+      # -- measured: with it set, skopeo --debug still loads only
+      # /etc/containers/registries.conf and its .d directory. So this marks
+      # exactly this registry plain-HTTP in a drop-in there, on this
+      # ephemeral runner, and the push script stays byte for byte the one
+      # publish-docker runs. (buildx imagetools already speaks plain HTTP to
+      # a loopback registry, measured on buildx 0.37.1.)
+      - name: Start a throwaway registry for the push rehearsal
+        run: |
+          set -euo pipefail
+          docker run -d --name "$REHEARSAL_CONTAINER" -p 127.0.0.1:5000:5000 "$REHEARSAL_REGISTRY_IMAGE"
+          sudo mkdir -p /etc/containers/registries.conf.d
+          printf '[[registry]]\nlocation = "127.0.0.1:5000"\ninsecure = true\n' |
+            sudo tee /etc/containers/registries.conf.d/50-jarvis-release-rehearsal.conf >/dev/null
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:5000/v2/ >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          echo "::error::the throwaway registry did not answer on 127.0.0.1:5000"
+          exit 1
+
+      # The push publish-docker makes after the approvals, made here first
+      # against the throwaway registry: the same script (this is its anchor,
+      # and publish-docker runs it through the alias), the same archive, the
+      # same digest and tags; only REGISTRY differs. So it proves the archive
+      # check, the tag check, that skopeo pushes this archive by its index
+      # digest unchanged, and that imagetools tags exactly that index.
+      # What it cannot prove: GHCR itself, and the GHCR credential.
+      - name: Rehearse the push by digest and the tagging
+        env:
+          REGISTRY: 127.0.0.1:5000
+          DIGEST: ${{ needs.build-image.outputs.digest }}
+          ARCHIVE_SHA256: ${{ needs.build-image.outputs.archive_sha256 }}
+          TAGS: ${{ needs.build-image.outputs.tags }}
+          VERSION: ${{ needs.validate-tag.outputs.version }}
+          PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+        run: &push-release-image |
+          set -euo pipefail
+          export LC_ALL=C
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }
+          [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no archive digest"; exit 1; }
+          archive="${RUNNER_TEMP}/release-image/release-image.oci.tar"
+          echo "${ARCHIVE_SHA256}  ${archive}" | sha256sum -c -
+          # skopeo unpacks the archive before it reads it. The digest above
+          # already binds it to build-image; this also refuses any entry an
+          # OCI layout from BuildKit does not have (measured: oci-layout,
+          # index.json, blobs/, blobs/sha256/ and regular blob files), so no
+          # link, absolute path or .. reaches the unpacking. Files, not pipes:
+          # under pipefail a grep -q that stops early kills the writer with
+          # SIGPIPE, and the if would read that 141 as nothing found.
+          lists="${RUNNER_TEMP}/release-image"
+          tar -tvf "$archive" | cut -c1 >"${lists}/types"
+          tar -tf "$archive" >"${lists}/names"
+          if grep -qv '^[-d]$' "${lists}/types" ||
+            grep -qvE '^(oci-layout|index\.json|blobs/|blobs/sha256/|blobs/sha256/[0-9a-f]{64})$' "${lists}/names"; then
+            echo "::error::the archive holds entries an OCI layout does not have; refusing to unpack it"
+            exit 1
+          fi
+          # The tags arrive from build-image's metadata step and are taken only
+          # if they are exactly the ones this release owns, worked out again
+          # here from validate-tag: the version, and for a non-prerelease also
+          # major.minor and latest (metadata-action gives a prerelease its
+          # version tag only). So `latest` cannot move on a prerelease, and no
+          # tag outside this repository image can be named.
+          owned="ghcr.io/${GITHUB_REPOSITORY,,}"
+          image="${REGISTRY}/${GITHUB_REPOSITORY,,}"
+          want=("${VERSION}")
+          if [ "$PRERELEASE" = "false" ]; then
+            want+=("${VERSION%.*}" "latest")
+          fi
+          expected=()
+          for t in "${want[@]}"; do expected+=("${owned}:${t}"); done
+          got=()
+          while IFS= read -r t; do
+            [ -n "$t" ] && got+=("$t")
+          done <<<"$TAGS"
+          # As sets: metadata-action lists `latest` twice for a release (once
+          # from the semver flavor, once from the raw rule; the v0.15.0 log,
+          # run 36728949586, shows both), and each tag is created once anyway.
+          if [ "$(printf '%s\n' "${got[@]}" | sort -u)" != "$(printf '%s\n' "${expected[@]}" | sort -u)" ]; then
+            echo "::error::build-image computed tags other than the ones this release owns"
+            printf 'computed: %q\n' "${got[@]}"
+            printf 'expected: %q\n' "${expected[@]}"
+            exit 1
+          fi
+          # The index and everything under it, by digest. skopeo refuses a
+          # destination digest the archive index does not hash to ("Digest of
+          # source image's manifest would not match destination reference",
+          # measured on 1.13.3) before it writes a manifest, and
+          # --preserve-digests refuses any conversion that would change a
+          # digest. --all takes both platforms and both attestation manifests.
+          skopeo --version
+          skopeo copy --all --preserve-digests --retry-times 3 "oci-archive:${archive}" "docker://${image}@${DIGEST}"
+          args=()
+          for t in "${want[@]}"; do args+=(-t "${image}:${t}"); done
+          # Before any tag moves: what create would write must BE that index,
+          # byte for byte. --dry-run prints it (the index JSON, measured on
+          # buildx 0.37 to hash to the source digest once its trailing newline
+          # is dropped, which $( ) does), so this also reads back what the
+          # push wrote, and a buildx that re-serialised the index would stop
+          # here instead of after :latest had moved.
+          planned="$(docker buildx imagetools create --dry-run "${args[@]}" "${image}@${DIGEST}")"
+          [ "sha256:$(printf '%s' "$planned" | sha256sum | cut -d' ' -f1)" = "$DIGEST" ] ||
+            { echo "::error::the index at ${image}@${DIGEST} is not the one in the archive; no tag was moved"; exit 1; }
+          docker buildx imagetools create "${args[@]}" "${image}@${DIGEST}"
+          # Every tag must now name exactly the index smoke-image ran. If this
+          # fails on GHCR, the tags HAVE moved and npm has published, while
+          # github-release and discord-notify are skipped. Recovery: find what
+          # the tags point at, then re-run the failed jobs of this run
+          # (publish-docker, then github-release) once the cause is known; the
+          # archive is kept for 35 days. NOT if a later release has shipped
+          # since: a re-run would point latest and major.minor back at this
+          # older build. Then create only the version tag by hand.
+          for t in "${want[@]}"; do
+            d="$(docker buildx imagetools inspect "${image}:${t}" --format '{{json .Manifest.Digest}}')"
+            [ "$d" = "\"${DIGEST}\"" ] || { echo "::error::${image}:${t} points at ${d}, not ${DIGEST}"; exit 1; }
+          done
+          for t in "${want[@]}"; do echo "tagged ${image}:${t}"; done
+
       # The script removes the containers and volumes it created, by name, in
       # its own EXIT trap, and deliberately leaves the image to its caller.
-      # By exact tag: no prune.
+      # By exact name: no prune.
       #
       # `|| true` so a cleanup problem cannot redden an otherwise green gate,
       # which does mean a leak goes unreported: if the script is SIGKILLed its
@@ -598,9 +688,11 @@ jobs:
       # fails silently. Acceptable because every runner here is a GitHub-hosted
       # ephemeral VM that is destroyed with the job. On a self-hosted runner
       # this would need to report what it could not remove.
-      - name: Remove the image tag this job loaded
+      - name: Remove the image tag and the registry this job started
         if: always()
-        run: docker image rm "$GATE_IMAGE_TAG" || true
+        run: |
+          docker rm -f -v "$REHEARSAL_CONTAINER" || true
+          docker image rm "$GATE_IMAGE_TAG" || true
 
   # ─── Sidecar release (reusable, versioned from sidecar/VERSION) ─
   # Builds + publishes the sidecar at its own version, gated behind the image
@@ -879,8 +971,9 @@ jobs:
               -C "artifacts/sidecar-${platform}" "${SIDECAR_BIN}"
           done
 
-          # Windows gets a zip (the .exe is Authenticode-signed at build time
-          # when Windows signing is configured — see sidecar-release.yml)
+          # Windows gets a zip. The .exe is Authenticode-signed by
+          # sidecar-release.yml; a real run that cannot sign fails there
+          # unless ALLOW_UNSIGNED_WINDOWS is set (#869).
           cd "artifacts/sidecar-win32-x64"
           zip "../../release/${SIDECAR_BIN}-v${SIDECAR_VERSION}-win32-x64.zip" \
             "${SIDECAR_BIN}.exe"
@@ -941,31 +1034,66 @@ jobs:
           echo "Would have created release v${VERSION}"
           ls -lh release/ 2>/dev/null || true
 
-  # --- Tag the smoked image ---
-  # Gated by the npm publishes -- if any npm publish fails, no tag moves.
-  # Keeps the release atomic from the user-visible side: a Docker image
+  # --- Push the smoked archive to GHCR by digest, and tag it ---
+  # Gated by the npm publishes -- if any npm publish fails, nothing reaches
+  # GHCR. Keeps the release atomic from the user-visible side: a Docker image
   # tagged vX.Y.Z always has matching @usejarvis/* npm versions. And, through
   # publish-brain, gated by the `release` environment approval: this is the
-  # only job that creates a tag.
+  # only job that can write to the registry at all (#868).
   #
-  # Builds nothing (#680). It points the release tags at the index
-  # build-image pushed and smoke-image ran, by digest, so the tagged image is
-  # byte for byte the one the smoke test started. `imagetools create` from a
-  # single index under several tags writes that same index (the same
-  # digest), attestations included, which the check after it asserts.
+  # Builds nothing (#680). It pushes the archive build-image built and
+  # smoke-image ran, by its index digest, and points the release tags at that
+  # digest, so the tagged image is byte for byte the one the smoke test
+  # started. The script is smoke-image's rehearsal script, through a YAML
+  # alias: the same lines already pushed and tagged this archive against a
+  # throwaway registry before any approval, so what is new here is only GHCR
+  # and its credential.
   #
-  # On a dry run nothing was pushed, so there is nothing to tag: the step
-  # still validates the digest and the tags and prints the command a release
-  # would run, but it cannot rehearse the tagging itself.
+  # On a dry run nothing is downloaded, pushed or tagged: the rehearsal in
+  # smoke-image is the dry run of this job.
   publish-docker:
     needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]
     runs-on: ubuntu-latest
     # No checkout and no build: the registry write is the whole job.
     permissions:
       packages: write
+    # Unchanged by #868, measured against: the archive downloads in 5s
+    # (434,377,884 bytes, dry run 37788481655), and v0.15.0 built AND
+    # pushed the image in one 82s step (run 36728949586), so the push alone
+    # takes less than that. A timeout here comes after npm has published,
+    # hence the margin.
     timeout-minutes: 15
     steps:
-      # Only when something will be pushed (#682).
+      # Outside the workspace, though nothing here is checked out. Before the
+      # login (#868 review): the artifact store is writable by every job in
+      # this run, so the zip is unpacked and checked while no registry
+      # credential is on disk yet.
+      - name: Download the archive
+        if: env.DRY_RUN != 'true'
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-image-oci
+          path: ${{ runner.temp }}/release-image
+
+      # #781: the digest comes as a job output, which only build-image can
+      # set. The push script checks it again; this is the check that runs
+      # before the credential exists.
+      - name: Verify the archive
+        if: env.DRY_RUN != 'true'
+        env:
+          ARCHIVE_SHA256: ${{ needs.build-image.outputs.archive_sha256 }}
+        run: |
+          set -euo pipefail
+          [[ "$ARCHIVE_SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no archive digest"; exit 1; }
+          in="${RUNNER_TEMP}/release-image"
+          if [ "$(find "$in" -mindepth 1 -print)" != "${in}/release-image.oci.tar" ] || [ -L "${in}/release-image.oci.tar" ] || [ ! -f "${in}/release-image.oci.tar" ]; then
+            echo "::error::the release-image-oci artifact is not exactly one file, release-image.oci.tar"
+            exit 1
+          fi
+          echo "${ARCHIVE_SHA256}  ${in}/release-image.oci.tar" | sha256sum -c -
+
+      # Only when something will be pushed (#682). skopeo reads the
+      # credential this writes to ~/.docker/config.json, as imagetools does.
       - name: Log in to GitHub Container Registry
         if: env.DRY_RUN != 'true'
         uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
@@ -974,66 +1102,23 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # The tags arrive from build-image's metadata step and are taken only if
-      # they are exactly the ones this release owns, worked out again here
-      # from validate-tag: the version, and for a non-prerelease also
-      # major.minor and latest (metadata-action gives a prerelease its
-      # version tag only). So `latest` cannot move on a prerelease, and no
-      # tag outside this repository image can be named.
-      - name: Point the release tags at the smoked digest
+      - name: Push the smoked archive by digest and tag it
+        if: env.DRY_RUN != 'true'
         env:
+          REGISTRY: ghcr.io
           DIGEST: ${{ needs.build-image.outputs.digest }}
+          ARCHIVE_SHA256: ${{ needs.build-image.outputs.archive_sha256 }}
           TAGS: ${{ needs.build-image.outputs.tags }}
           VERSION: ${{ needs.validate-tag.outputs.version }}
           PRERELEASE: ${{ needs.validate-tag.outputs.prerelease }}
+        run: *push-release-image
+
+      - name: Dry-run summary
+        if: env.DRY_RUN == 'true'
+        env:
+          DIGEST: ${{ needs.build-image.outputs.digest }}
         run: |
-          set -euo pipefail
-          export LC_ALL=C
-          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::build-image reported no image digest"; exit 1; }
-          image="ghcr.io/${GITHUB_REPOSITORY,,}"
-          want=("${image}:${VERSION}")
-          if [ "$PRERELEASE" = "false" ]; then
-            want+=("${image}:${VERSION%.*}" "${image}:latest")
-          fi
-          got=()
-          while IFS= read -r t; do
-            [ -n "$t" ] && got+=("$t")
-          done <<<"$TAGS"
-          # As sets: metadata-action lists `latest` twice for a release (once
-          # from the semver flavor, once from the raw rule; the v0.15.0 log,
-          # run 36728949586, shows both), and each tag is created once anyway.
-          if [ "$(printf '%s\n' "${got[@]}" | sort -u)" != "$(printf '%s\n' "${want[@]}" | sort -u)" ]; then
-            echo "::error::build-image computed tags other than the ones this release owns"
-            printf 'computed: %q\n' "${got[@]}"
-            printf 'expected: %q\n' "${want[@]}"
-            exit 1
-          fi
-          args=()
-          for t in "${want[@]}"; do args+=(-t "$t"); done
-          if [ "$DRY_RUN" = "true" ]; then
-            echo "::notice::DRY RUN -- no tag created. A release would run: docker buildx imagetools create ${args[*]} ${image}@${DIGEST}"
-            echo "(${DIGEST} is the index of the dry-run archive, which was never pushed.)"
-            exit 0
-          fi
-          # Before any tag moves: what create would write must BE that index,
-          # byte for byte. --dry-run prints it (the index JSON, measured on
-          # buildx 0.37 to hash to the source digest once its trailing newline
-          # is dropped, which $( ) does), so a buildx that re-serialised the
-          # index would stop here instead of after :latest had moved.
-          planned="$(docker buildx imagetools create --dry-run "${args[@]}" "${image}@${DIGEST}")"
-          [ "sha256:$(printf '%s' "$planned" | sha256sum | cut -d' ' -f1)" = "$DIGEST" ] ||
-            { echo "::error::imagetools create would write an index other than ${DIGEST}; no tag was moved"; exit 1; }
-          docker buildx imagetools create "${args[@]}" "${image}@${DIGEST}"
-          # Every tag must now name exactly the index smoke-image ran. If this
-          # fails, the tags HAVE moved and npm has published, while
-          # github-release and discord-notify are skipped. Recovery: find
-          # what the tags point at, then re-run the failed jobs of this run
-          # (publish-docker, then github-release) once the cause is known.
-          for t in "${want[@]}"; do
-            d="$(docker buildx imagetools inspect "$t" --format '{{json .Manifest.Digest}}')"
-            [ "$d" = "\"${DIGEST}\"" ] || { echo "::error::${t} points at ${d}, not ${DIGEST}"; exit 1; }
-          done
-          printf 'tagged %s\n' "${want[@]}"
+          echo "::notice::DRY RUN -- nothing pushed to GHCR. smoke-image pushed ${DIGEST} to a throwaway registry and tagged it there, with the script this job runs."
 
   # ─── Notify Discord about the new release ──────────────────────
   discord-notify:
