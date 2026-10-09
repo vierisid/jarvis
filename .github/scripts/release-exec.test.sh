@@ -125,6 +125,9 @@ if (mode === "dry-run") {
     ["jobs.publish-brain.environment.name", (d) => d.jobs?.["publish-brain"]?.environment?.name, ENV_NAME, "environment"]);
   else if (file === "sidecar-release.yml") sites.push(
     ["jobs.publish-sidecar.environment.name", (d) => d.jobs?.["publish-sidecar"]?.environment?.name, ENV_NAME, "environment"]);
+  // #869: the installer readiness step reads DRY_RUN, so its one site is
+  // held to the same spelling and the same no-redefinition rule.
+  else if (file === "installer-release.yml") {}
   else out.push("no dry-run sites are known for " + file);
   // A small evaluator for the GitHub expression subset these use: literals,
   // inputs.dry_run, ! == != && || and parentheses, with GitHub loose
@@ -525,6 +528,33 @@ if (mode === "postsign") {
     }
     if (jobs[T.sign].outputs?.signed !== "${{ steps.winsign.outputs.ready }}")
       out.push(T.sign + ": output signed must be ${{ steps.winsign.outputs.ready }} (got " + JSON.stringify(jobs[T.sign].outputs?.signed) + "), or the check can be told there is nothing to verify");
+    // #869: readiness fails a real run unless the escape hatch is set. Its
+    // script is executed verbatim below; this pins what it is given and that
+    // nothing can switch it off: no condition, no continue-on-error, the two
+    // repository variables and nothing else, before any signing step.
+    const steps = stepsOf(T.sign);
+    const ri = steps.findIndex((st) => st.id === "winsign");
+    const r = steps[ri];
+    const READY_ENV = { GCP_KMS_KEYRING: "${{ vars.GCP_KMS_KEYRING }}", ALLOW_UNSIGNED_WINDOWS: "${{ vars.ALLOW_UNSIGNED_WINDOWS }}" };
+    if (!r || typeof r.run !== "string") out.push(T.sign + ": no readiness run step with id winsign");
+    else {
+      if (r.if !== undefined) out.push(T.sign + ": the readiness step runs under " + JSON.stringify(r.if) + ", so it can be skipped and signing with it");
+      if (r["continue-on-error"] !== undefined) out.push(T.sign + ": the readiness step has continue-on-error, so a real run missing its signing config would continue unsigned");
+      if (r.shell !== undefined && r.shell !== "bash") out.push(T.sign + ": the readiness step runs under shell " + JSON.stringify(r.shell) + ", not bash");
+      if (JSON.stringify(Object.entries(r.env ?? {}).sort()) !== JSON.stringify(Object.entries(READY_ENV).sort()))
+        out.push(T.sign + ": the readiness step env must be exactly " + JSON.stringify(READY_ENV) + " (got " + JSON.stringify(r.env) + ")");
+      const firstGated = steps.findIndex((st) => /steps\.winsign\.outputs\.ready/.test(String(st.if ?? "")));
+      if (firstGated >= 0 && firstGated < ri) out.push(T.sign + ": a step gated on readiness runs before the readiness step");
+      // What the step reads besides its own env: DRY_RUN, from the workflow.
+      // A job env or an earlier GITHUB_ENV write could tell it a real run is
+      // a rehearsal while the publish still reads the workflow value (#869
+      // review).
+      for (const k of ["DRY_RUN", "ALLOW_UNSIGNED_WINDOWS", "GCP_KMS_KEYRING"])
+        if (jobs[T.sign].env && k in jobs[T.sign].env) out.push(T.sign + ": the job env sets " + k + ", which the readiness step reads");
+      for (const st of steps.slice(0, ri))
+        if (/GITHUB_ENV/.test(String(st.run ?? "") + JSON.stringify(st.with ?? {})))
+          out.push(T.sign + ": a step before readiness writes GITHUB_ENV, which can change what the readiness step reads");
+    }
   }
   const v = jobs[T.verify];
   if (!v) out.push("no " + T.verify + " job");
@@ -553,6 +583,19 @@ if (mode === "postsign") {
       const inst = steps.findIndex((st) => typeof st.run === "string" && /\bapt-get\s+install\b[^\n]*\bosslsigncode\b/.test(st.run));
       if (inst < 0 || inst > at || steps[inst].if !== SIGNED) out.push(T.verify + ": does not install osslsigncode, under the same condition, before the check");
     }
+  }
+  // #869 review: the token-less verify job refuses an unsigned answer from
+  // the signer on a real run without the escape hatch, unconditionally.
+  if (v) {
+    const ref = (v.steps ?? []).find((st) => st.name === "Refuse an unsigned binary on a real run");
+    const REF_ENV = { SIGNED: "${{ needs." + T.sign + ".outputs.signed }}", ALLOW_UNSIGNED_WINDOWS: "${{ vars.ALLOW_UNSIGNED_WINDOWS }}" };
+    if (!ref || typeof ref.run !== "string") out.push(T.verify + ": no step refusing an unsigned binary on a real run");
+    else {
+      if (ref.if !== undefined || ref["continue-on-error"] !== undefined) out.push(T.verify + ": the unsigned-binary refusal can be skipped or allowed to fail");
+      if (JSON.stringify(Object.entries(ref.env ?? {}).sort()) !== JSON.stringify(Object.entries(REF_ENV).sort()))
+        out.push(T.verify + ": the unsigned-binary refusal env must be exactly " + JSON.stringify(REF_ENV) + " (got " + JSON.stringify(ref.env) + ")");
+    }
+    if (v.env && "DRY_RUN" in v.env) out.push(T.verify + ": the job env sets DRY_RUN, which the unsigned-binary refusal reads");
   }
   if (!needsOf(T.publish).includes(T.verify)) out.push(T.publish + ": does not wait for " + T.verify + ", so it can publish a signature nobody checked");
   // Job-level bypasses (#817 review): a failed check must fail the job, and
@@ -1326,9 +1369,10 @@ docker calls: $(cat "${WORK}/docker.log")"
 fi
 
 echo
-echo "one dry-run decision, evaluated, in both release workflows (#685)"
+echo "one dry-run decision, evaluated, in the three release workflows (#685, #869)"
 SIDECAR_WORKFLOW="${SIDECAR_RELEASE_WORKFLOW:-${HERE}/../workflows/sidecar-release.yml}"
-for f in "$WORKFLOW" "$SIDECAR_WORKFLOW"; do
+INSTALLER_WORKFLOW="${INSTALLER_RELEASE_WORKFLOW:-${HERE}/../workflows/installer-release.yml}"
+for f in "$WORKFLOW" "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
 	found="$(YQ_FILE="$f" yq dry-run)" || {
 		no "$(basename "$f"): dry-run check ran" "the bun helper failed"
 		continue
@@ -1397,6 +1441,13 @@ done
 		'  DRY_RUN: ${{ inputs.dry_run == true }}' '  DRY_RUN: ${{ inputs.dry_run || false }}'
 	mutant 'sidecar-release.yml: the environment name inverted (#685)' \
 		"      name: \${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}" "      name: \${{ inputs.dry_run != true && 'release-dry-run' || 'release' }}"
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'installer-release.yml: the signer told it is a dry run on its own (#869 review)' \
+		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    env:\n      DRY_RUN: "true"\n' \
+		'sign-windows: redefines DRY_RUN'
+	mutant 'installer-release.yml: the env decision loosened to truthiness (#869 review)' \
+		'  DRY_RUN: ${{ inputs.dry_run == true }}' '  DRY_RUN: ${{ inputs.dry_run || false }}' \
+		'not the one spelling'
 	unset MUTANT_MODE MUTANT_FROM
 }
 
@@ -1816,6 +1867,141 @@ if [ -z "$SIDEV" ] || [ -z "$INSTV" ]; then
 else
 	inbox_suite verify-sidecar-windows "$SIDEV" signed jarvis.exe no SIDECAR_BIN=jarvis
 	inbox_suite verify-windows "$INSTV" signed Jarvis-Setup.exe no
+fi
+
+echo
+echo "Windows signing readiness fails a real run that would ship unsigned (#869)"
+# Both signers decide here whether to sign at all, and every signing and
+# verification step follows that decision, so a readiness step that says
+# "not ready" on a real run ships an unsigned binary with only a warning.
+# Executed verbatim, under bash -e as the runner runs it, against every
+# combination of the two preconditions, the dry run and the escape hatch.
+# shellcheck disable=SC2016 # the escape hatch text is matched literally.
+{
+	MUTANT_MODE=postsign
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the sidecar readiness step allowed to fail (#869)' \
+		$'      - name: Windows signing readiness\n        id: winsign\n' $'      - name: Windows signing readiness\n        id: winsign\n        continue-on-error: true\n' \
+		'the readiness step has continue-on-error'
+	mutant 'the sidecar readiness step switched off on its own (#869)' \
+		$'      - name: Windows signing readiness\n        id: winsign\n' $'      - name: Windows signing readiness\n        id: winsign\n        if: env.DRY_RUN != \'true\'\n' \
+		'the readiness step runs under'
+	mutant 'the sidecar escape hatch read from something other than its variable (#869)' \
+		$'          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n        run: |\n          set -euo pipefail\n          missing=' $'          ALLOW_UNSIGNED_WINDOWS: "true"\n        run: |\n          set -euo pipefail\n          missing=' \
+		'the readiness step env must be exactly'
+	MUTANT_FROM="$INSTALLER_WORKFLOW"
+	mutant 'the installer readiness step allowed to fail (#869)' \
+		$'      - name: Windows signing readiness\n        id: winsign\n' $'      - name: Windows signing readiness\n        id: winsign\n        continue-on-error: true\n' \
+		'the readiness step has continue-on-error'
+	mutant 'the installer escape hatch dropped from the readiness env (#869)' \
+		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n        run: |\n          set -euo pipefail\n          missing=' $'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n        run: |\n          set -euo pipefail\n          missing=' \
+		'the readiness step env must be exactly'
+	mutant 'the installer readiness step handed a token as well (#869)' \
+		$'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n        run: |\n          set -euo pipefail\n          missing=' $'          GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}\n          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}\n          GH_TOKEN: ${{ github.token }}\n        run: |\n          set -euo pipefail\n          missing=' \
+		'the readiness step env must be exactly'
+	mutant 'the installer signer told it is a rehearsal through GITHUB_ENV (#869 review)' \
+		'      - name: Windows signing readiness' $'      - run: echo "DRY_RUN=true" >> "$GITHUB_ENV"\n      - name: Windows signing readiness' \
+		'a step before readiness writes GITHUB_ENV'
+	mutant 'the installer signer job env setting the escape hatch (#869 review)' \
+		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    env:\n      ALLOW_UNSIGNED_WINDOWS: "true"\n' \
+		'the job env sets ALLOW_UNSIGNED_WINDOWS'
+	mutant 'the installer unsigned-binary refusal switched off (#869 review)' \
+		$'      - name: Refuse an unsigned binary on a real run\n' $'      - name: Refuse an unsigned binary on a real run\n        if: needs.sign-windows.outputs.signed == \'true\'\n' \
+		'the unsigned-binary refusal can be skipped'
+	mutant 'the installer unsigned-binary refusal removed (#869 review)' \
+		'      - name: Refuse an unsigned binary on a real run' '      - name: Something else' \
+		'no step refusing an unsigned binary on a real run'
+	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the sidecar unsigned-binary refusal told the signer always signed (#869 review)' \
+		'          SIGNED: ${{ needs.sign-sidecar-windows.outputs.signed }}' '          SIGNED: "true"' \
+		'the unsigned-binary refusal env must be exactly'
+	mutant 'the sidecar unsigned-binary refusal allowed to fail (#869 review)' \
+		$'      - name: Refuse an unsigned binary on a real run\n' $'      - name: Refuse an unsigned binary on a real run\n        continue-on-error: true\n' \
+		'the unsigned-binary refusal can be skipped or allowed to fail'
+	unset MUTANT_MODE MUTANT_FROM
+}
+SREADY="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step sign-sidecar-windows winsign)" || SREADY=""
+IREADY="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step sign-windows winsign)" || IREADY=""
+if [ -z "$SREADY" ] || [ -z "$IREADY" ]; then
+	no "found both Windows signing readiness steps (sign-sidecar-windows, sign-windows)"
+else
+	# ready_case <job> <script> <want rc 0|1> <want output> <keyring> <chain yes|no> <dry run> <hatch> <label> [text the log must carry]
+	ready_case() {
+		local job="$1" script="$2" want="$3" wantout="$4" keyring="$5" chain="$6" dry="$7" hatch="$8" label="$9" text="${10:-}"
+		local d="${WORK}/ready"
+		rm -rf "$d" && mkdir -p "$d/cwd/sidecar/packaging/windows"
+		[ "$chain" = yes ] && printf 'chain\n' >"$d/cwd/sidecar/packaging/windows/codesign-chain.pem"
+		: >"$d/out"
+		(cd "$d/cwd" && env -i PATH="$PATH" GITHUB_OUTPUT="$d/out" GCP_KMS_KEYRING="$keyring" DRY_RUN="$dry" \
+			ALLOW_UNSIGNED_WINDOWS="$hatch" bash -e -c "$script") >"$d/log" 2>&1
+		local rc=$?
+		local got
+		got="$(cat "$d/out")"
+		if { [ "$want" = 0 ] && [ "$rc" -ne 0 ]; } || { [ "$want" != 0 ] && [ "$rc" -eq 0 ]; }; then
+			no "$job: $label" "exit ${rc}, wanted $([ "$want" = 0 ] && echo 0 || echo non-zero): $(cat "$d/log")"
+		elif [ "$got" != "$wantout" ]; then
+			no "$job: $label" "GITHUB_OUTPUT was '${got}', wanted '${wantout}'; log: $(cat "$d/log")"
+		elif [ -n "$text" ] && ! grep -qF -- "$text" "$d/log"; then
+			no "$job: $label, saying '${text}'" "$(cat "$d/log")"
+		elif [ "$want" != 0 ] && [ "$(grep -c '^::error::' "$d/log")" -ne 1 ]; then
+			no "$job: $label, with exactly one ::error::" "$(cat "$d/log")"
+		else
+			ok "$job: $label"
+		fi
+	}
+	KR=projects/p/locations/global/keyRings/k
+	for pair in "sign-sidecar-windows:SREADY" "sign-windows:IREADY"; do
+		job="${pair%%:*}"
+		var="${pair#*:}"
+		script="${!var}"
+		ready_case "$job" "$script" 0 "ready=true" "$KR" yes false "" "signs a real run when both preconditions hold"
+		ready_case "$job" "$script" 0 "ready=true" "$KR" yes true "" "signs a dry run when both preconditions hold"
+		# The real-run refusals: each names its cause and every way forward.
+		ready_case "$job" "$script" 1 "" "" yes false "" "refuses a real run with GCP_KMS_KEYRING unset" "::error::Windows signing is not configured (GCP_KMS_KEYRING unset)"
+		ready_case "$job" "$script" 1 "" "" yes false "" "names the escape hatch when it refuses" "ALLOW_UNSIGNED_WINDOWS"
+		ready_case "$job" "$script" 1 "" "" yes false "" "says to set the keyring variable when it is the one missing" "Set the GCP_KMS_KEYRING repository variable"
+		ready_case "$job" "$script" 1 "" "$KR" no false "" "refuses a real run with the certificate chain missing" "::error::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing"
+		ready_case "$job" "$script" 1 "" "$KR" no false "" "says to commit the chain when it is the one missing" "commit sidecar/packaging/windows/codesign-chain.pem"
+		ready_case "$job" "$script" 1 "" "" no false "" "refuses a real run with neither, naming the keyring first" "GCP_KMS_KEYRING unset"
+		# A rehearsal needs no signing configuration: it warns, as before.
+		ready_case "$job" "$script" 0 "ready=false" "" yes true "" "lets a dry run continue unsigned with the keyring unset" "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset)"
+		ready_case "$job" "$script" 0 "ready=false" "$KR" no true "" "lets a dry run continue unsigned with the chain missing" "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing"
+		ready_case "$job" "$script" 0 "ready=false" "" yes true "" "tells a dry run that a real release would stop there" "a real release would stop here"
+		# The escape hatch: exactly the string true, recorded as a warning.
+		ready_case "$job" "$script" 0 "ready=false" "" yes false true "ships unsigned on purpose with ALLOW_UNSIGNED_WINDOWS=true" "because ALLOW_UNSIGNED_WINDOWS is true"
+		ready_case "$job" "$script" 0 "ready=false" "$KR" no false true "ships unsigned on purpose with the chain missing and the hatch set" "::warning::GCP_KMS_KEYRING is set but"
+		for h in TRUE True 1 yes " true" "true " false; do
+			ready_case "$job" "$script" 1 "" "" yes false "$h" "refuses the escape hatch spelled $(printf '%q' "$h")" "::error::"
+		done
+		# The hatch never turns signing off when signing is possible, and a
+		# hatch left set after the config is fixed is pointed out.
+		ready_case "$job" "$script" 0 "ready=true" "$KR" yes false true "still signs when the hatch is set but signing is configured" "::warning::ALLOW_UNSIGNED_WINDOWS is set but signing is configured"
+		ready_case "$job" "$script" 0 "ready=false" "" yes true true "takes the dry-run branch when a dry run also has the hatch set" "This dry run continues"
+	done
+fi
+# The token-less verify jobs refuse the signer answer on their own (#869
+# review), executed verbatim.
+SREFUSE="$(YQ_FILE="$SIDECAR_WORKFLOW" yq step verify-sidecar-windows 'Refuse an unsigned binary on a real run')" || SREFUSE=""
+IREFUSE="$(YQ_FILE="$INSTALLER_WORKFLOW" yq step verify-windows 'Refuse an unsigned binary on a real run')" || IREFUSE=""
+if [ -z "$SREFUSE" ] || [ -z "$IREFUSE" ]; then
+	no "found both unsigned-binary refusals (verify-sidecar-windows, verify-windows)"
+else
+	# refuse_case <job> <script> <want 0|1> <signed> <dry run> <hatch> <label>
+	refuse_case() {
+		verbatim_case "$1: $7" "$3" "$WORK" "$2" SIGNED="$4" DRY_RUN="$5" ALLOW_UNSIGNED_WINDOWS="$6"
+		if [ "$3" != 0 ] && ! grep -qF "::error::" "${WORK}/v.log"; then no "$1: $7, with an ::error::" "$(cat "${WORK}/v.log")"; fi
+	}
+	for pair in "verify-sidecar-windows:SREFUSE" "verify-windows:IREFUSE"; do
+		job="${pair%%:*}"
+		var="${pair#*:}"
+		script="${!var}"
+		refuse_case "$job" "$script" 0 true false "" "passes a signed binary on a real run"
+		refuse_case "$job" "$script" 1 false false "" "refuses an unsigned binary on a real run"
+		refuse_case "$job" "$script" 1 "" false "" "refuses when the signer reported nothing"
+		refuse_case "$job" "$script" 0 false true "" "passes an unsigned binary on a dry run"
+		refuse_case "$job" "$script" 0 false false true "passes an unsigned binary under ALLOW_UNSIGNED_WINDOWS=true"
+		refuse_case "$job" "$script" 1 false false TRUE "refuses the hatch spelled TRUE"
+	done
 fi
 
 echo

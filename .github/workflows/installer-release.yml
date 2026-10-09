@@ -51,7 +51,12 @@ concurrency:
   cancel-in-progress: false
 
 env:
-  DRY_RUN: ${{ inputs.dry_run || false }}
+  # Spelled as in release-exec.yml and sidecar-release.yml (#685), so
+  # release-exec.test.sh holds this file to the same one-decision rule: the
+  # readiness step in sign-windows reads it to decide whether a run missing
+  # its signing config may continue (#869), and nothing may redefine it. On a
+  # tag push there are no inputs and it is false, as `|| false` gave before.
+  DRY_RUN: ${{ inputs.dry_run == true }}
 
 jobs:
   # ─── Resolve version + idempotency gate ────────────────────────
@@ -196,9 +201,10 @@ jobs:
   # The only job here that holds id-token. It builds nothing and installs
   # nothing: it verifies the installer build-windows reported, signs it with
   # scripts/sign-windows.sh (whose jsign download is checksum-pinned), and
-  # uploads the result as installer-win32-x64 -- signed, or unsigned when
-  # signing is not configured, exactly as before. The post-sign check runs
-  # in verify-windows (#817).
+  # uploads the result as installer-win32-x64 -- signed, or, when signing is
+  # not configured, unsigned on a dry run or with ALLOW_UNSIGNED_WINDOWS set,
+  # and otherwise not at all (#869: see the readiness step). The post-sign
+  # check runs in verify-windows (#817).
   sign-windows:
     needs: [resolve, build-windows]
     if: needs.resolve.outputs.should_release == 'true'
@@ -212,7 +218,8 @@ jobs:
     outputs:
       sha256: ${{ steps.digest.outputs.sha256 }}
       # Whether the signing step ran, so verify-windows knows whether there
-      # is a signature to check (an unconfigured signer ships unsigned).
+      # is a signature to check (false only on a dry run or under
+      # ALLOW_UNSIGNED_WINDOWS, #869).
       signed: ${{ steps.winsign.outputs.ready }}
     steps:
       # For scripts/sign-windows.sh and the committed certificate chain.
@@ -250,23 +257,46 @@ jobs:
       # Windows signing needs BOTH the KMS keyring variable AND the issued
       # certificate chain in the repo. They arrive at DIFFERENT times: the
       # Sectigo CSR is generated FROM the KMS key, so the keyring necessarily
-      # exists days before the certificate does. Gating on the variable alone
-      # would turn that window into hard release failures instead of unsigned
-      # builds — so check the chain file too.
+      # exists days before the certificate does -- so this checks the chain
+      # file too, and says which of the two is missing.
+      #
+      # A real run missing either one FAILS here (#869). It used to warn and
+      # carry on, and since every signing and verification step follows this
+      # decision, a release then shipped an UNSIGNED Jarvis-Setup.exe with nothing
+      # but a warning in a green run. Shipping unsigned is now a recorded
+      # choice: set the repository variable ALLOW_UNSIGNED_WINDOWS to exactly
+      # `true` and the run warns and continues as it used to. A dry run
+      # still only warns, so a rehearsal needs no signing configuration.
+      # release-exec.test.sh runs this script verbatim against every case.
       - name: Windows signing readiness
         id: winsign
         env:
           GCP_KMS_KEYRING: ${{ vars.GCP_KMS_KEYRING }}
+          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
         run: |
           set -euo pipefail
+          missing=""
           if [ -z "${GCP_KMS_KEYRING}" ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Windows signing is not configured (GCP_KMS_KEYRING unset) — shipping an unsigned Jarvis-Setup.exe (SmartScreen will block it)."
+            missing="Windows signing is not configured (GCP_KMS_KEYRING unset)"
+            fix="Set the GCP_KMS_KEYRING repository variable"
           elif [ ! -f sidecar/packaging/windows/codesign-chain.pem ]; then
-            echo "ready=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing — the certificate has not been issued/committed yet, so Jarvis-Setup.exe ships UNSIGNED."
-          else
+            missing="GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing -- the certificate has not been issued/committed yet"
+            fix="Issue the certificate and commit sidecar/packaging/windows/codesign-chain.pem"
+          fi
+          if [ -z "$missing" ]; then
             echo "ready=true" >> "$GITHUB_OUTPUT"
+            if [ "${ALLOW_UNSIGNED_WINDOWS}" = "true" ]; then
+              echo "::warning::ALLOW_UNSIGNED_WINDOWS is set but signing is configured, so it changed nothing this run. Delete the variable, or the next missing signing config ships an UNSIGNED Jarvis-Setup.exe instead of failing."
+            fi
+          elif [ "${DRY_RUN}" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::${missing}. This dry run continues and builds an UNSIGNED Jarvis-Setup.exe; a real release would stop here unless ALLOW_UNSIGNED_WINDOWS is true."
+          elif [ "${ALLOW_UNSIGNED_WINDOWS}" = "true" ]; then
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::${missing}. Shipping an UNSIGNED Jarvis-Setup.exe because ALLOW_UNSIGNED_WINDOWS is true (SmartScreen will block it)."
+          else
+            echo "::error::${missing}, so this release would ship an UNSIGNED Jarvis-Setup.exe. ${fix}, or set the repository variable ALLOW_UNSIGNED_WINDOWS to true to ship unsigned on purpose."
+            exit 1
           fi
 
       - name: Authenticate to Google Cloud
@@ -348,6 +378,22 @@ jobs:
             exit 1
           fi
           echo "${SHA256}  ${in}/Jarvis-Setup.exe" | sha256sum -c -
+
+      # #869, checked again in a job that holds no token: the signer decides
+      # whether to sign, and this refuses its answer when a real run without
+      # ALLOW_UNSIGNED_WINDOWS says it did not, so a mistake in that decision
+      # cannot reach the publish on its own. An empty answer (the signer did
+      # not say) is a refusal too.
+      - name: Refuse an unsigned binary on a real run
+        env:
+          SIGNED: ${{ needs.sign-windows.outputs.signed }}
+          ALLOW_UNSIGNED_WINDOWS: ${{ vars.ALLOW_UNSIGNED_WINDOWS }}
+        run: |
+          set -euo pipefail
+          if [ "${SIGNED}" != "true" ] && [ "${DRY_RUN}" != "true" ] && [ "${ALLOW_UNSIGNED_WINDOWS}" != "true" ]; then
+            echo "::error::sign-windows did not sign Jarvis-Setup.exe, and this is a real run without ALLOW_UNSIGNED_WINDOWS set to true, so it would ship unsigned. See its Windows signing readiness step."
+            exit 1
+          fi
 
       - name: Install osslsigncode
         if: needs.sign-windows.outputs.signed == 'true'
