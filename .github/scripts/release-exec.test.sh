@@ -126,11 +126,13 @@ if (mode === "dry-run") {
     ["jobs.publish-brain.environment.name", (d) => d.jobs?.["publish-brain"]?.environment?.name, ENV_NAME, "environment"]);
   else if (file === "sidecar-release.yml") sites.push(
     ["jobs.publish-sidecar.environment.name", (d) => d.jobs?.["publish-sidecar"]?.environment?.name, ENV_NAME, "environment"]);
-  // #869: the installer readiness step reads DRY_RUN. Its one site is
-  // env.DRY_RUN itself, already in sites; this branch only keeps the file
-  // from being reported as unknown, so the spelling and no-redefinition
-  // rules below apply to it.
-  else if (file === "installer-release.yml") {}
+  // #869: the installer readiness step reads DRY_RUN, whose one site is
+  // env.DRY_RUN itself, already in sites. #920 then gated `publish` on the
+  // release environment, and an environment name cannot read `env`, so the
+  // installer now makes the decision a second time the way the other two
+  // workflows do, and is held to the same canonical spelling.
+  else if (file === "installer-release.yml") sites.push(
+    ["jobs.publish.environment.name", (d) => d.jobs?.publish?.environment?.name, ENV_NAME, "environment"]);
   else out.push("no dry-run sites are known for " + file);
   // A small evaluator for the GitHub expression subset these use: literals,
   // inputs.dry_run, ! == != && || and parentheses, with GitHub loose
@@ -1749,6 +1751,10 @@ done
 	mutant 'installer-release.yml: the env decision loosened to truthiness (#869 review)' \
 		'  DRY_RUN: ${{ inputs.dry_run == true }}' '  DRY_RUN: ${{ inputs.dry_run || false }}' \
 		'not the one spelling'
+	mutant 'installer-release.yml: the publish environment name inverted (#920)' \
+		"      name: \${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}" "      name: \${{ inputs.dry_run != true && 'release-dry-run' || 'release' }}"
+	mutant 'installer-release.yml: the publish gate dropped altogether (#920)' \
+		$'    environment:\n      name: ${{ inputs.dry_run == true && \'release-dry-run\' || \'release\' }}\n' ''
 	unset MUTANT_MODE MUTANT_FROM
 }
 
