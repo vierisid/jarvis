@@ -1817,6 +1817,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         if (nav !== null) return Promise.resolve(nav);
         return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories });
       },
+      // Voice has no turn objects: the user starting to speak is the taint
+      // gating boundary (ordered before that utterance's tool calls; the
+      // transcript event is not).
+      onUserTurnStart: () => orchestrator.resetRealtimeTaint(),
       onTranscript: (t) =>
         this.wsServer.sendToClient(ws, {
           type: 'realtime_transcript',
@@ -1849,10 +1853,6 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // that never got its voice_end). handleVoiceAudio checks accumulators first,
     // so a stale one would swallow every realtime mic frame.
     this.voiceSessions.delete(ws);
-    // Voice has no turn objects: the user starting to speak is the taint
-    // gating boundary (ordered before that utterance's tool calls; the
-    // transcript event is not).
-    session.onUserTurnStart(() => orchestrator.resetRealtimeTaint());
     this.realtimeSessions.set(ws, {
       session, transport, timeout, startedAt: Date.now(),
       hosted: resolved.provider === 'usejarvis_ai',

@@ -44,6 +44,12 @@ export type PebbleRealtimeDeps = {
    *  sidecarId is passed so nav tools (open_dashboard_room, …) can spawn a
    *  panel on the right machine. */
   executeToolCall: (sidecarId: string, name: string, args: Record<string, unknown>, blockedCategories: string[]) => Promise<string>;
+  /** The user has begun a new utterance: the taint-gating turn boundary for
+   *  voice. Bind to `orchestrator.resetRealtimeTaint`; see
+   *  `RealtimeVoiceDeps.onUserTurnStart` for why nothing else clears it.
+   *  `sidecarId` is for the caller's logs, not for scoping: the session taint
+   *  it clears is one process-wide set shared with the dashboard's sessions. */
+  onUserTurnStart: (sidecarId: string) => void;
   /** Drive the pebble's visual state + bubble text. */
   onState?: (sidecarId: string, state: PebbleRealtimeState, text?: string) => void;
   /** Surface session lifecycle to logs / the sidecar. */
@@ -218,6 +224,7 @@ export class PebbleRealtimeManager {
       tools: this.deps.tools(),
       instructions: this.deps.instructions(),
       executeToolCall: (name, args) => this.deps.executeToolCall(sidecarId, name, args, resolved.blockedCategories),
+      onUserTurnStart: () => this.deps.onUserTurnStart(sidecarId),
       onTranscript: (t) => {
         // Drive the pebble: assistant turn → speaking (with growing bubble
         // text), user turn → listening. foldTranscript accumulates the delta

@@ -29,6 +29,21 @@ export type RealtimeVoiceDeps = {
    * Always resolves to a string (result or denial marker).
    */
   executeToolCall: (name: string, args: Record<string, unknown>) => Promise<string>;
+  /**
+   * The user has started a new utterance (server VAD), before the model
+   * responds to it: the taint-gating turn boundary for voice. Bind to
+   * `orchestrator.resetRealtimeTaint`.
+   *
+   * REQUIRED, and that is the point. A voice session has no turn objects, so
+   * this event is the only thing that clears the session taint, and
+   * `executeRealtimeToolCall` refuses a taint-gated call outright rather than
+   * auto-approving it. A surface that does not wire it works until the first
+   * `capture_screen` or page read and then refuses every machine-changing
+   * action for the life of the process -- whatever the authority level, since
+   * taint gating is a profile, not a level. The pebble shipped that way
+   * because this was wired out of band, at one of the two call sites only.
+   */
+  onUserTurnStart: () => void;
   /** Transcript sink (UI captions + vault writes). */
   onTranscript?: (t: RealtimeTranscript) => void;
   /** Error sink. Receives text that is safe to show the user: on a hosted
@@ -65,6 +80,11 @@ export class RealtimeVoiceSession {
     this.session = deps.sessionFactory ? deps.sessionFactory(opts) : new RealtimeSession(opts);
 
     this.session.onTranscript((t) => this.deps.onTranscript?.(t));
+    // The taint-gating turn boundary, wired HERE rather than by each caller:
+    // it is the same event for every surface, and leaving it to the callers is
+    // what left the pebble without one. Optional call because a test fake of
+    // the inner session may not implement it.
+    this.session.onUserTurnStart?.(() => this.deps.onUserTurnStart());
     // The one place both realtime surfaces (the dashboard socket in ws-service
     // and the pebble in pebble-realtime) receive session errors, so the hosted
     // rule lives here rather than in each of them. The proxy relays upstream
@@ -124,15 +144,6 @@ export class RealtimeVoiceSession {
   /** Stop the current spoken response without closing the conversation. */
   interrupt(): void {
     if (!this.closed) this.session.interrupt();
-  }
-
-  /**
-   * Fired when the user starts a new utterance (server VAD), before the
-   * model responds to it. The taint-gating turn boundary for voice.
-   * Optional call: test fakes of the inner session may not implement it.
-   */
-  onUserTurnStart(cb: () => void): void {
-    this.session.onUserTurnStart?.(cb);
   }
 
   close(): void {
