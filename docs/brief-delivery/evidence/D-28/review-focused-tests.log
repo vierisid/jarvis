@@ -1,0 +1,81 @@
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/authority/authority.test.ts:
+[EmergencyController] System PAUSED — all tool execution suspended
+[EmergencyController] System RESUMED — tool execution restored
+[EmergencyController] System KILLED — all agents terminated
+[EmergencyController] System RESET — back to normal
+(pass) review regression: emergency status follows the live controller, not the engine startup copy [4.07ms]
+(pass) review regression: explicitly retry the same level after an in-memory apply and persistence failure [15.65ms]
+(pass) missing host is unsupported and cannot fabricate default settings [0.52ms]
+(pass) invalid level 0 does not become a plausible default [0.08ms]
+(pass) invalid level 11 does not become a plausible default [0.01ms]
+(pass) invalid level 2.5 does not become a plausible default
+(pass) invalid level NaN does not become a plausible default
+(pass) invalid level 3 does not become a plausible default
+(pass) invalid level null does not become a plausible default
+(pass) canonical public fields are validated without leaking advanced config or dropping additive categories [0.18ms]
+(pass) save sends only changed canonical fields, preserves additive governed values, and reload restores them [14.53ms]
+(pass) turning read_data off changes category membership, not policy [11.10ms]
+(pass) turning write_data off changes category membership, not policy [10.81ms]
+(pass) turning delete_data off changes category membership, not policy [9.80ms]
+(pass) turning send_message off changes category membership, not policy [6.90ms]
+(pass) turning send_email off changes category membership, not policy [5.34ms]
+(pass) turning execute_command off changes category membership, not policy [9.95ms]
+(pass) turning install_software off changes category membership, not policy [8.88ms]
+(pass) turning make_payment off changes category membership, not policy [6.21ms]
+(pass) turning modify_settings off changes category membership, not policy [9.63ms]
+(pass) turning spawn_agent off changes category membership, not policy [10.58ms]
+(pass) turning terminate_agent off changes category membership, not policy [8.64ms]
+(pass) turning access_browser off changes category membership, not policy [9.99ms]
+(pass) turning control_app off changes category membership, not policy [10.08ms]
+(pass) canonical engine still denies a low-level ungoverned action and honors advanced deny overrides [1.04ms]
+(pass) editing and polling never imply a save or overwrite the draft [4.39ms]
+(pass) external changes to an edited field produce conflict before posting [4.58ms]
+(pass) unrelated changes are preserved by a partial save and appear in its canonical readback [6.73ms]
+(pass) save-failure never appears saved and cannot silently retry [12.47ms]
+(pass) persistence-failure never appears saved and cannot silently retry [12.91ms]
+(pass) lost-response never appears saved and cannot silently retry [12.92ms]
+(pass) positive acknowledgment alone is insufficient; duplicate save waits for fresh readback [4.76ms]
+(pass) mismatched canonical readback never reports success [6.74ms]
+(pass) read-only cannot write settings [1.66ms]
+(pass) error cannot write settings [1.33ms]
+(pass) unavailable cannot write settings [1.35ms]
+(pass) unsupported cannot write settings [1.27ms]
+(pass) failed refresh retains stale context with disabled controls; denied access purges it [4.48ms]
+(pass) retiring during the preflight prevents the write and drops late data [1.77ms]
+(pass) late reads after scope loss cannot restore settings [3.44ms]
+(pass) advanced and emergency destinations remain reachable during uncertain saves and honor cancellation [8.36ms]
+(pass) a forged port confirmation cannot mark another level saved [1.95ms]
+(pass) malformed or disabled live status never falls back to the config emergency copy [1.08ms]
+(pass) emergency polling preserves a dirty or uncertain policy baseline and never retries [8.54ms]
+(pass) a category retry persists its original fields while preserving an unrelated external level [11.13ms]
+(pass) retry can include a new intentional edit and still verifies the previously attempted field [9.22ms]
+(pass) discarding a pending retry clears intent without claiming persistence or sending another write [8.36ms]
+(pass) retry still detects a conflict that occurs after reloading the uncertain write [7.93ms]
+(pass) failed retry reload retains intent, and scope loss purges it [7.91ms]
+(pass) a retry cannot report Saved from a forged confirmation when its base and draft already match [5.45ms]
+
+ui/src/brief/authority/AuthorityWorkspace.test.tsx:
+(pass) all thirteen current categories are readable with distinct on/off semantics [190.90ms]
+(pass) keyboard steps and Home/End agree with restored canonical values after explicit save [316.32ms]
+(pass) pointer position stays continuous until release and focus refresh cannot interrupt a clean drag [111.65ms]
+(pass) pointer cancellation restores the starting level and releases the refresh lock [114.14ms]
+(pass) unsaved level and category edits survive room remount and all eight shell states [707.95ms]
+(pass) read-only keeps on/off values visible but all write controls disabled [106.07ms]
+(pass) review regression: read-only reports stale values and recovers without enabling writes [141.23ms]
+(pass) save-failure leaves editable values visible without claiming Saved [204.09ms]
+(pass) persistence-failure leaves editable values visible without claiming Saved [192.43ms]
+(pass) lost-response leaves editable values visible without claiming Saved [222.91ms]
+(pass) conflict leaves editable values visible without claiming Saved [171.67ms]
+(pass) live emergency banner changes while edits stay visible and unsaved [149.41ms]
+(pass) discard retry remains an explicit alternative without displaying Saved [170.56ms]
+(pass) stale values are non-editable and permission loss removes their content [132.75ms]
+(pass) live activation rejects fixtures, scope mismatches and a missing F-25 gate or destinations [277.04ms]
+(pass) replacing the scope binding purges and disables the old controller [128.00ms]
+(pass) background focus refresh preserves a focused clean keyboard control [126.07ms]
+
+ 67 pass
+ 0 fail
+ 517 expect() calls
+Ran 67 tests across 2 files. [4.35s]
