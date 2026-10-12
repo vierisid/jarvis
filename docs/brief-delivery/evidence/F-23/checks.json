@@ -1,0 +1,55 @@
+{
+  "focused": {
+    "command": "bun test --timeout 15000 src/brief/profile-settings.test.ts src/daemon/api-brief-profile-settings.test.ts ui/src/brief/profile-settings/editor.test.ts",
+    "passed": 17,
+    "failed": 0,
+    "assertions": 119,
+    "scope": "Rerun after all review corrections."
+  },
+  "ui": {
+    "command": "bun test --timeout 15000 ui/src/brief/profile-settings/actions.test.tsx",
+    "passed": 4,
+    "failed": 0,
+    "assertions": 32,
+    "scope": "Rerun after all review corrections; actual React form, Settings hook and canonical API with delayed/failed reads and reordered mutation responses."
+  },
+  "affected": {
+    "command": "bun test --timeout 15000 src/brief src/vault/user-profile.test.ts src/daemon/api-brief-profile-settings.test.ts src/daemon/user-settings.test.ts src/daemon/usejarvis-ai.test.ts src/daemon/settings-reload.test.ts src/daemon/config-merge.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts",
+    "passed": 632,
+    "skipped": 6,
+    "failed": 0,
+    "assertions": 4050,
+    "files": 41,
+    "scope": "Before the review correction; final focused and UI tests rerun after the save/poll fix."
+  },
+  "typescript": {
+    "command": "bun x tsc --noEmit",
+    "status": "passed"
+  },
+  "build": {
+    "command": "bun run build:ui",
+    "status": "passed",
+    "warnings": "Existing Tailwind @theme/@tailwind warnings."
+  },
+  "guards": {
+    "commands": [
+      "bun run check:no-ee",
+      "bun run check:migrations",
+      "bun run lint:templates",
+      "bun run check:package"
+    ],
+    "status": "passed"
+  },
+  "initial_ci": {
+    "head": "7aa2aa0d9da42c5b6e0fb32a7a93e2ee458d655d",
+    "url": "https://github.com/vierisid/jarvis/actions/runs/38310974652",
+    "command": "bun test --retry=2",
+    "passed": 8560,
+    "skipped": 38,
+    "failed": 0,
+    "assertions": 60837,
+    "files": 487,
+    "all_applicable_checks": "passed"
+  },
+  "normalization": "Only the ephemeral HTTP socket directory is replaced with <temporary-fixture> in focused.log."
+}
