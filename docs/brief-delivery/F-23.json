@@ -1,0 +1,122 @@
+{
+  "task": "F-23",
+  "title": "Map Profile and Settings to canonical values",
+  "date": "2026-10-12",
+  "branch": "brief/f-23",
+  "base_branch": "brief/f-22",
+  "baseline": "9f5b258e8548cd3b481c17b5a1653b20753206a2",
+  "main_reviewed": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
+  "head": {
+    "ref": "brief/f-23",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-23.json",
+    "published_head": "Exact final head and CI recorded in the PR; receipt is part of that commit."
+  },
+  "ownership": {
+    "implementer": "Codex",
+    "reviewer": "lapociampi",
+    "automated_review": "Read-only Review Agent / codex review in progress; final findings and corrections will be recorded before delivery."
+  },
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [],
+    "stack": "F-22 #943 open/unmerged at the baseline, all six applicable checks green. D-27 #944 and Q-09 #942 rechecked without modifying their work. No D-28/D-29 or F-23 PR existed at the pre-delivery recheck."
+  },
+  "baseline_review": {
+    "main_guards": "Compared main-only API/settings changes (#918, #881, #851, #807). Their channel/approval guards are outside this card. No older implementation copied over main; no stack merge or rebase.",
+    "runtime": "Canonical DB/profile, memory correction/forget, settings reload, hosted identity bridge and current ignored heartbeat schedule inspected. Fixture runtime only; production unchanged."
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "node": "392:3946",
+    "checkpoint": "UI-35",
+    "inspection": "Native Figma form inspected after page reload. All six labels and UI-33 stable-form labels verified; no sample identity values copied into code or evidence."
+  },
+  "contract": {
+    "guide": "docs/brief-profile-settings.md",
+    "capability": "profileSettings",
+    "read": "GET /api/brief/profile-settings",
+    "writes": [
+      "PATCH /api/brief/profile-settings/profile",
+      "PATCH /api/brief/profile-settings/voice"
+    ],
+    "canonical": "user.profile.v1 and cfg.tts; additive Company answer only; canonical memory projection and keychain/settings writers reused.",
+    "legacy": "GET /api/user-profile adds revision; current form pins its draft revision. Revision-bearing saves patch named answers; missing revision rejected with 428 only when F-23 is enabled.",
+    "replay": "Existing resetOnboarding client and /api/onboarding/reset for confirmed profile/tutorial replay only.",
+    "account": "Full name unavailable: account_name_not_exposed. Hosted account email and browser links remain owned by /api/billing.",
+    "preferences": "Check-in unavailable because heartbeat interval/active-hours are unused. Existing Edge/Usejarvis standard TTS catalogs only; other providers route to existing settings."
+  },
+  "activation": {
+    "flag": "JARVIS_BRIEF_PROFILE_SETTINGS=1",
+    "default": "off",
+    "code_delivered": true,
+    "merged": false,
+    "release_enabled": false,
+    "deployed": false,
+    "capability_readiness": "Fixture-tested provider and headless client; D-29 visible binding, human review, stack merges and release verification remain separate."
+  },
+  "limits": {
+    "request_bytes": 64000,
+    "answer_characters": 4000,
+    "profile_record_characters": 256000,
+    "tts_record_characters": 64000,
+    "mutation_retries": 0
+  },
+  "verification": {
+    "toolchain": {
+      "bun": "1.3.14",
+      "install": "bun install --frozen-lockfile; isolated node_modules; lock unchanged"
+    },
+    "focused": {
+      "command": "bun test --timeout 15000 src/brief/profile-settings.test.ts src/daemon/api-brief-profile-settings.test.ts ui/src/brief/profile-settings/editor.test.ts",
+      "passed": 17,
+      "failed": 0,
+      "assertions": 119
+    },
+    "ui": {
+      "command": "bun test --timeout 15000 ui/src/brief/profile-settings/actions.test.tsx",
+      "passed": 3,
+      "failed": 0,
+      "assertions": 9
+    },
+    "affected": {
+      "command": "bun test --timeout 15000 src/brief src/vault/user-profile.test.ts src/daemon/api-brief-profile-settings.test.ts src/daemon/user-settings.test.ts src/daemon/usejarvis-ai.test.ts src/daemon/settings-reload.test.ts src/daemon/config-merge.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts",
+      "passed": 632,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 4050,
+      "files": 41
+    },
+    "typescript": {
+      "command": "bun x tsc --noEmit",
+      "status": "passed"
+    },
+    "build": {
+      "command": "bun run build:ui",
+      "status": "passed",
+      "warnings": "Existing Tailwind @theme/@tailwind warnings."
+    },
+    "guards": {
+      "commands": [
+        "bun run check:no-ee",
+        "bun run check:migrations",
+        "bun run lint:templates",
+        "bun run check:package"
+      ],
+      "status": "passed"
+    },
+    "runtime": "Real authenticated HTTP over temporary Unix socket, canonical SQLite save/restart and memory correction/forget, isolated encrypted keychain, fake TTS applier; actual legacy React form and replay/navigation helpers. No real external effect.",
+    "intermediate_failures": "Fixed a test-only fetch cast reported by TypeScript; subsequent typecheck passed.",
+    "ci": "Pending initial PR; exact pushed-head result will be reported before delivery.",
+    "review_corrections": []
+  },
+  "rollback": "Disable the feature flag; new routes fail closed. No schema migration. Back up vault/keychain, preserve canonical rows, revert only this card. Older binaries may drop the additive Company answer if they rewrite the profile.",
+  "quick_verification": [
+    "Read gated snapshot in isolated fixture; patch Company and confirm restart read.",
+    "Reuse stale revision and verify 409 with unchanged canonical answer and retained local draft.",
+    "Hosted voice-only save retains provider silence and secrets; unsupported voice rejects.",
+    "Disable flag and verify capability/routes unavailable."
+  ]
+}

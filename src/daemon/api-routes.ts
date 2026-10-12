@@ -1,3 +1,4 @@
+import { patchUserProfile, readEditableProfile, ProfileEditError } from '../vault/profile-edit';
 /**
  * REST API Routes
  *
@@ -152,6 +153,7 @@ export type ApiContext = {
   briefMemoryStream?: import('../brief/memory-stream').MemoryStream;
   briefMemoryUsage?: import('../vault/memory-usage').MemoryUsageLedger;
   briefMemoryForget?: import('../brief/memory-forget').MemoryForget;
+  briefProfileSettings?: import('../brief/profile-settings').ProfileSettings;
   briefWorkflowContext?: import('../brief/workflow-context').WorkflowContext;
   briefConnections?: import('../brief/connected-workspace').ConnectedWorkspace;
   briefWorkflowRemoval?: import('../brief/workflow-removal').WorkflowRemoval;
@@ -411,7 +413,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
   return {
     ...createOpportunityRoutes(json),
-    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections),
+    ...createBriefRoutes(ctx.briefCapabilities ?? createBriefCapabilities(), json, ctx.briefConversations, ctx.briefAttachments, ctx.briefWorkflowComposition, ctx.briefPreparedOpportunities, ctx.briefOpportunityActivation, ctx.briefDecisions, ctx.briefRecommendations, ctx.briefDecisionDocuments, ctx.briefGoalMeasurements, ctx.briefOutcomes, ctx.briefMemoryStream, ctx.briefMemoryUsage, ctx.briefMemoryForget, ctx.briefWorkflowRemoval, ctx.briefWorkflowContext, ctx.briefConnections, ctx.briefProfileSettings),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
@@ -1083,19 +1085,23 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // --- User Profile Wizard ---
     '/api/user-profile': {
       GET: () => {
-        const profile = getUserProfile();
-        return json({
-          questions: USER_PROFILE_QUESTIONS,
-          profile,
-          answered_count: countAnsweredUserProfileQuestions(profile),
-          total_questions: USER_PROFILE_QUESTIONS.length,
-          has_profile: hasUserProfile(profile),
-        });
+        let response: Response;
+        try {
+          const { profile, revision } = readEditableProfile();
+          response = json({ revision, questions: USER_PROFILE_QUESTIONS, profile,
+            answered_count: countAnsweredUserProfileQuestions(profile),
+            total_questions: USER_PROFILE_QUESTIONS.length, has_profile: hasUserProfile(profile) });
+        } catch { response = error('Profile unavailable.', 503); }
+        response.headers.set('Cache-Control', 'no-store');
+        return response;
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as { answers?: Record<string, unknown> };
-          const profile = saveUserProfile(body.answers ?? {});
+          const body = await req.json() as { answers?: Record<string, unknown>; revision?: unknown };
+          if (process.env.JARVIS_BRIEF_PROFILE_SETTINGS === '1' && body.revision === undefined) {
+            return error('Reload the profile before saving.', 428);
+          }
+          const profile = body.revision === undefined ? saveUserProfile(body.answers ?? {}) : patchUserProfile(body.revision, body.answers).profile;
           return json({
             ok: true,
             profile,
@@ -1104,8 +1110,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             message: 'User profile saved.',
           });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return error(`Failed to save user profile: ${msg}`);
+          if (err instanceof ProfileEditError) return error(err.code === 'revision_conflict' ? 'Profile changed. Reload before saving; your draft has been kept.' : err.code, err.status);
+          return error('Failed to save user profile.');
         }
       },
     },

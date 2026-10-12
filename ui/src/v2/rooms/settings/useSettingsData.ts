@@ -393,6 +393,7 @@ export interface UserProfileQuestion {
 }
 
 export interface UserProfileResponse {
+  revision?: string;
   questions: UserProfileQuestion[];
   profile: {
     version: 1;
@@ -978,10 +979,10 @@ export function useSettingsData() {
 
   // ── User profile ────────────────────────────────────────────────────
   const saveProfile = useCallback(
-    async (answers: Record<string, string>): Promise<ActionResult> => {
+    async (answers: Record<string, string>, revision?: string): Promise<ActionResult> => {
       try {
         const r = await postJson<{ message: string }>("/api/user-profile", {
-          answers,
+          answers, revision,
         });
         await refresh();
         return { ok: true, message: r.message || "Profile saved." };
