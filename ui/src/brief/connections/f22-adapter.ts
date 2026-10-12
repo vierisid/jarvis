@@ -99,13 +99,14 @@ export interface F22Binding {
   ): F22Setup;
   /** Bind to F-22 openLegacyConnectionSetup. Its existing surfaces own OAuth and secrets. */
   openSetup(action: F22Action, rowId: string | null): void;
-  /** F-25 must supply exact device destinations and current update metadata. */
+  /** F-25 supplies exact destinations/update metadata and checks the signal before delayed navigation. */
   deviceDetails?(identity: BriefConnection): ConnectionItem["device"];
   manageDevice(
     identity: BriefConnection,
     action: DeviceAction,
+    signal: AbortSignal,
   ): Promise<Handoff>;
-  addDevice(): Promise<Handoff>;
+  addDevice(signal: AbortSignal): Promise<Handoff>;
 }
 const sourceNames = [
   "devices",
@@ -230,7 +231,9 @@ export function createF22ConnectionsPort(
     const row = a.rowId
       ? latest?.rows.find((r) => r.sourceId === a.rowId)
       : undefined;
-    if (a.scopeId !== scopeId || (a.rowId && !row)) return null;
+    // The local attempt must remain recoverable when its canonical row disappears.
+    // Verification and reopening still require the exact F-22 rowId below.
+    if (a.scopeId !== scopeId) return null;
     return {
       attemptId: a.nonce,
       serviceId: a.actionId,
@@ -263,6 +266,17 @@ export function createF22ConnectionsPort(
         ? error.message
         : "error",
   });
+  const accountCandidates = (a: Attempt) => {
+    const action = latest?.setup.find((s) => s.id === a.actionId);
+    if (!action) return [];
+    return (
+      latest?.rows.filter(
+        (r) =>
+          r.kind === action.verifies.kind &&
+          r.serviceId === action.verifies.serviceId,
+      ) ?? []
+    );
+  };
   return {
     source: "live",
     scopeId,
@@ -326,9 +340,15 @@ export function createF22ConnectionsPort(
         return result.state === "none" ? { state: "error" } : result;
       } catch (error) {
         const failed = failure(error);
-        // The headless owner persisted nothing and opened nothing. This is a known
-        // failed launch, so deliberate retry is safe; an existing attempt stays unknown.
-        if (failed.state === "error" && !setup.current())
+        const current = setup.current();
+        // A retained terminal attempt belongs to the previous action. If F-22 never
+        // replaced it, this new launch did not persist or open and may be retried.
+        if (
+          failed.state === "error" &&
+          (!current ||
+            (current.nonce === existing?.nonce &&
+              current.nonce !== command.attemptId))
+        )
           return {
             state: "cancelled",
             ticket: { ...command, expiresAt: Date.now() + 600_000 },
@@ -349,11 +369,7 @@ export function createF22ConnectionsPort(
           return result.state === "none" ? { state: "error" } : result;
         const action = snapshot.setup.find((s) => s.id === a.actionId);
         if (!action) return { state: "error" };
-        const candidates = snapshot.rows.filter(
-          (r) =>
-            r.kind === action.verifies.kind &&
-            r.serviceId === action.verifies.serviceId,
-        );
+        const candidates = accountCandidates(a);
         const chosen = a.rowId
           ? candidates.find((r) => r.sourceId === a.rowId)
           : candidates.find((r) => connectionKey(r) === selectedKey);
@@ -375,7 +391,17 @@ export function createF22ConnectionsPort(
             connectionKey: connectionKey(verified.row),
           };
         }
-        return state(setup.current()) as SetupRead;
+        const pending = state(setup.current());
+        return pending.state === "pending"
+          ? {
+              ...pending,
+              candidateKeys: a.rowId
+                ? []
+                : accountCandidates(a).map(connectionKey),
+            }
+          : pending.state === "none"
+            ? { state: "error" }
+            : pending;
       } catch (error) {
         return failure(error);
       }
@@ -386,7 +412,7 @@ export function createF22ConnectionsPort(
         if (a?.nonce !== id && starting?.attemptId !== id)
           return { state: "error" };
         setup.cancel();
-        if (!a && starting)
+        if (a?.nonce !== id && starting?.attemptId === id)
           return {
             state: "cancelled",
             ticket: { ...starting, expiresAt: Date.now() + 600_000 },
@@ -396,11 +422,13 @@ export function createF22ConnectionsPort(
         return failure(error);
       }
     },
-    async handoff(t) {
+    async handoff(t, signal) {
+      if (signal.aborted) return { state: "error" };
       try {
         const snapshot = await read(),
           a = setup.current();
         if (
+          signal.aborted ||
           !a ||
           a.nonce !== t.attemptId ||
           ["expired", "canceled"].includes(a.phase)
@@ -422,13 +450,15 @@ export function createF22ConnectionsPort(
         return failure(error);
       }
     },
-    async manageDevice(identity, action) {
+    async manageDevice(identity, action, signal) {
+      if (signal.aborted) return { state: "error" };
       try {
         const snapshot = await read(),
           row = snapshot.rows.find(
             (r) => connectionKey(r) === connectionKey(identity),
           );
         if (
+          signal.aborted ||
           !row ||
           row.kind !== "device" ||
           !row.permissions.canInspect ||
@@ -436,16 +466,21 @@ export function createF22ConnectionsPort(
           (action === "update" && !binding.deviceDetails?.(row)?.canUpdate)
         )
           return { state: "unavailable" };
-        return await binding.manageDevice(row, action);
+        return await binding.manageDevice(row, action, signal);
       } catch (error) {
         return failure(error);
       }
     },
-    async addDevice() {
+    async addDevice(signal) {
+      if (signal.aborted) return { state: "error" };
       try {
-        if (!(await read()).setup.some((a) => a.target.kind === "device"))
+        const snapshot = await read();
+        if (
+          signal.aborted ||
+          !snapshot.setup.some((a) => a.target.kind === "device")
+        )
           return { state: "unavailable" };
-        return await binding.addDevice();
+        return await binding.addDevice(signal);
       } catch (error) {
         return failure(error);
       }

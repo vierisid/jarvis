@@ -86,13 +86,14 @@ export interface ConnectionsPort {
     selectedKey?: string,
   ): Promise<SetupRead>;
   cancel(attemptId: string, signal: AbortSignal): Promise<SetupRead>;
-  /** The host opens its verified browser/settings destination; it must report blocked launch. */
-  handoff(ticket: SetupTicket): Promise<Handoff>;
+  /** The host must check cancellation before navigation and report blocked launch. */
+  handoff(ticket: SetupTicket, signal: AbortSignal): Promise<Handoff>;
   manageDevice(
     identity: BriefConnection,
     action: DeviceAction,
+    signal: AbortSignal,
   ): Promise<Handoff>;
-  addDevice(): Promise<Handoff>;
+  addDevice(signal: AbortSignal): Promise<Handoff>;
 }
 /** Compile-safe until F-22/F-25 are integrated; never substitute specimen accounts. */
 export function unavailableConnectionsPort(scopeId: string): ConnectionsPort {

@@ -200,6 +200,22 @@ test("mismatched setup identity never replaces selected service or becomes conne
   expect(c.snapshot().setupState).toBe("unknown");
   expect(c.snapshot().service?.id).toBe("gmail");
 });
+test("a confirmation cannot drop the reconnect identity even when the account is connected", async () => {
+  const f = await fixture(),
+    c = f.controller;
+  const row = f.data.connections[4]!;
+  c.select("notion", connectionKey(row.identity));
+  await c.start();
+  f.confirm();
+  f.port.check = async () => ({
+    state: "confirmed",
+    ticket: { ...c.snapshot().ticket!, reconnectKey: null },
+    connectionKey: connectionKey(row.identity),
+  });
+  await c.check();
+  expect(c.snapshot().setupState).toBe("unknown");
+  expect(c.snapshot().reconnectKey).toBe(connectionKey(row.identity));
+});
 test("cancel preserves catalog search and accounts and permits deliberate retry", async () => {
   const f = await fixture(),
     c = f.controller;

@@ -321,26 +321,32 @@ export class ConnectionsController {
         (this.state.attemptId
           ? {
               attemptId: this.state.attemptId,
-              serviceId: this.state.service?.id,
+              serviceId: this.state.ticket?.serviceId ?? this.state.service?.id,
               reconnectKey: this.state.reconnectKey,
             }
           : null);
+    const terminal =
+      result.state === "confirmed" || result.state === "configured";
     if (
       !ticket ||
       (prior &&
         (ticket.attemptId !== prior.attemptId ||
           ticket.serviceId !== prior.serviceId ||
-          ticket.reconnectKey !== prior.reconnectKey))
+          (ticket.reconnectKey !== prior.reconnectKey &&
+            (terminal || ticket.reconnectKey !== null))))
     ) {
       this.unknown();
       return;
     }
+    // A missing canonical row cannot erase the original reconnect identity in memory.
+    // Only non-confirming local states may omit it; success still requires an exact match.
+    ticket.reconnectKey ??= prior?.reconnectKey ?? null;
     const read = this.state.read;
     const service =
       read.state === "ready" || read.state === "stale"
         ? read.data.catalog.find((s) => s.id === ticket.serviceId)
         : null;
-    if (!service) {
+    if (!service && terminal) {
       this.unknown();
       return;
     }
@@ -351,28 +357,33 @@ export class ConnectionsController {
         result.position.scrollTop,
       );
     }
-    const terminal =
-      result.state === "confirmed" || result.state === "configured";
+    const candidateKeys =
+      "candidateKeys" in result
+        ? (result.candidateKeys ?? []).filter(
+            (key) =>
+              (read.state === "ready" || read.state === "stale") &&
+              read.data.connections.some(
+                (r) => connectionKey(r.identity) === key,
+              ),
+          )
+        : [];
     this.publish({
       panel: "setup",
-      service,
+      service: service ?? null,
       reconnectKey: ticket.reconnectKey,
       attemptId: ticket.attemptId,
       ticket,
       setupState: terminal ? "pending" : result.state,
-      candidateKeys:
-        "candidateKeys" in result
-          ? (result.candidateKeys ?? []).filter(
-              (key) =>
-                (read.state === "ready" || read.state === "stale") &&
-                read.data.connections.some(
-                  (r) => connectionKey(r.identity) === key,
-                ),
-            )
-          : [],
+      candidateKeys,
+      selectedKey: candidateKeys.includes(this.state.selectedKey)
+        ? this.state.selectedKey
+        : "",
       message: "",
     });
-    if (result.state === "confirmed" || result.state === "configured") {
+    if (
+      service &&
+      (result.state === "confirmed" || result.state === "configured")
+    ) {
       // Browser return, launch and callback parameters are never confirmation. Re-read the
       // canonical projection and require the exact account named by its verified attempt.
       this.publish({
@@ -482,7 +493,7 @@ export class ConnectionsController {
     const op = this.operation();
     this.publish({ busy: true });
     try {
-      const result = await this.port.handoff(ticket);
+      const result = await this.port.handoff(ticket, op.signal);
       if (op.current() && result.state === "unavailable") {
         this.publish({ ...empty(), read: { state: "unavailable" } });
         return;
@@ -533,16 +544,21 @@ export class ConnectionsController {
       (action === "revoke" && !row.identity.permissions.canRevoke)
     )
       return;
-    await this.manage(() => this.port.manageDevice(row.identity, action));
+    await this.manage((signal) =>
+      this.port.manageDevice(row.identity, action, signal),
+    );
   }
   async addDevice() {
-    if (this.usable()) await this.manage(() => this.port.addDevice());
+    if (this.usable())
+      await this.manage((signal) => this.port.addDevice(signal));
   }
-  private async manage(run: () => ReturnType<ConnectionsPort["addDevice"]>) {
+  private async manage(
+    run: (signal: AbortSignal) => ReturnType<ConnectionsPort["addDevice"]>,
+  ) {
     const op = this.operation();
     this.publish({ busy: true });
     try {
-      const result = await run();
+      const result = await run(op.signal);
       if (op.current() && result.state === "unavailable") {
         this.publish({ ...empty(), read: { state: "unavailable" } });
         return;
