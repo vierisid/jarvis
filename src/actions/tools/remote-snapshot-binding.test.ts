@@ -55,6 +55,7 @@ function fakeSidecar(info: SidecarInfo = box) {
   const calls: Call[] = [];
   const state = { nextGen: 'epoch.1' as string | null };
   const manager = {
+    getConnectionSessionId: () => 'fixture-session',
     listSidecars: () => [info],
     dispatchRPC: async (_id: string, method: string, params: Record<string, unknown>) => {
       calls.push({ method, params });
@@ -127,7 +128,8 @@ describe('the snapshot reply records its generation (#676)', () => {
     for (const bad of [7, ['epoch.1'], '', 'x'.repeat(65)]) {
       resetRemoteSnapshotGenerations();
       const manager = {
-        listSidecars: () => [box],
+        getConnectionSessionId: () => 'fixture-session',
+    listSidecars: () => [box],
         dispatchRPC: async () => ({ text: 'Page: x', page_url: 'https://x.example/', loader_id: 'L1', elem_gen: bad }),
       } as unknown as SidecarManager;
       setSidecarManagerRef(manager);

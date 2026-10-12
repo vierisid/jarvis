@@ -23,7 +23,7 @@ import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upl
 import type { ApprovalGuard, ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import {
-  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
+  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, captureMachineApprovalGuard, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
   routeElementActionToSidecar, remoteSnapshotGeneration, currentSnapshotReader, currentSnapshotReadLog,
   type SidecarPageRead,
 } from './sidecar-route.ts';
@@ -1229,6 +1229,7 @@ function browserCallGuard(
     // element-addressed tools are the opposite -- they cannot work without the
     // snapshot that minted their ids, so for them a cold browser at review
     // really does mean nothing was reviewed.
+    const machineCurrent = captureMachineApprovalGuard(params.target, 'browser', tool);
     const mayConnectLazily = !opts.bindDocument;
     const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
     // What the remote call will be held to (#676), captured NOW -- the newest
@@ -1264,7 +1265,7 @@ function browserCallGuard(
       } catch {
         return false;
       }
-      if (nowRoute !== reviewedRoute) return false;
+      if (nowRoute !== reviewedRoute || !machineCurrent()) return false;
       // Remote: nothing in this process holds the reviewed surface. The
       // sidecar runs its own document and generation checks at use time --
       // against the generation `reviewed` carries, for an element action --

@@ -88,6 +88,32 @@ export function getSidecarManager(): SidecarManager | null {
   return sidecarManager;
 }
 
+/** Read-only approval fence: compare the canonical device and socket session,
+ * never adopt a replacement when a default, name, or connection changes. */
+export function captureMachineApprovalGuard(explicit: unknown, capability: SidecarCapability, tool: string): () => boolean {
+  const manager = sidecarManager;
+  const resolve = () => {
+    const route = resolveToolTarget(explicit, capability, tool, { quiet: true });
+    if (!route) return null;
+    const sidecar = findSidecar(route, sidecarManager?.listSidecars() ?? []);
+    if (!sidecar?.connected || !sidecar.capabilities?.includes(capability)
+      || sidecar.unavailable_capabilities?.some(c => c.name === capability)) return undefined;
+    const session = sidecarManager?.getConnectionSessionId(sidecar.id);
+    return session ? { id: sidecar.id, session } : undefined;
+  };
+  try {
+    const captured = resolve();
+    if (captured === undefined) return () => false;
+    return () => {
+      try {
+        const current = resolve();
+        if (captured === null) return current === null;
+        return sidecarManager === manager && current?.id === captured.id && current.session === captured.session;
+      } catch { return false; }
+    };
+  } catch { return () => false; }
+}
+
 /**
  * Pick a default sidecar for tools that didn't get an explicit target.
  * Returns the first connected sidecar advertising the required capability,

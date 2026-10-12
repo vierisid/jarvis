@@ -13,7 +13,7 @@ import { recordActionVerification, observedWindow } from '../action-verification
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
-import { routeToSidecarAction as routeToSidecar, routeToSidecarActionReply, routeScreenshotToSidecar, resolveToolTarget } from './sidecar-route.ts';
+import { routeToSidecarAction as routeToSidecar, routeToSidecarActionReply, routeScreenshotToSidecar, resolveToolTarget, captureMachineApprovalGuard } from './sidecar-route.ts';
 import { withTrustedTrailer } from '../../roles/untrusted.ts';
 import { ActionOutcomeError } from '../action-outcome.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
@@ -793,3 +793,10 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
   desktopFocusWindowTool,
   desktopFindElementTool,
 ];
+
+// The approval stays on the device/session the user reviewed. This also refuses
+// a local-to-remote default change; native element guards remain authoritative.
+for (const tool of DESKTOP_TOOLS) {
+  tool.captureApprovalGuard = params => captureMachineApprovalGuard(params.target,
+    tool.name === 'desktop_screenshot' ? 'screenshot' : 'desktop', tool.name);
+}
