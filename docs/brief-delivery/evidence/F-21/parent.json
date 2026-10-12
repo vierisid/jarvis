@@ -1,0 +1,127 @@
+{
+  "baseRefName": "brief/f-19",
+  "headRefOid": "35018804546c18254abd7ba3e062deb812066734",
+  "state": "OPEN",
+  "statusCheckRollup": [
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:52:23Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867787/job/113430493847",
+      "name": "docker-build",
+      "startedAt": "2026-10-08T16:50:08Z",
+      "status": "COMPLETED",
+      "workflowName": "Docker Build"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:14Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811864046/job/113430485668",
+      "name": "label",
+      "startedAt": "2026-10-08T16:50:07Z",
+      "status": "COMPLETED",
+      "workflowName": "Label PRs"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:16Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430494690",
+      "name": "changes",
+      "startedAt": "2026-10-08T16:50:09Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T17:01:12Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430494268",
+      "name": "test",
+      "startedAt": "2026-10-08T16:50:08Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:51:23Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430494632",
+      "name": "sidecar-test-windows",
+      "startedAt": "2026-10-08T16:50:08Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:25Z",
+      "conclusion": "SUCCESS",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430494472",
+      "name": "applescript-check",
+      "startedAt": "2026-10-08T16:50:15Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:17Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430577150",
+      "name": "daemon-cli-darwin",
+      "startedAt": "2026-10-08T16:50:17Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:17Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430577882",
+      "name": "sidecar-build",
+      "startedAt": "2026-10-08T16:50:17Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:17Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430577741",
+      "name": "toast-windows",
+      "startedAt": "2026-10-08T16:50:17Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:17Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430576830",
+      "name": "sidecar-build-darwin",
+      "startedAt": "2026-10-08T16:50:17Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:17Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430576482",
+      "name": "plist-lint",
+      "startedAt": "2026-10-08T16:50:17Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-08T16:50:17Z",
+      "conclusion": "SKIPPED",
+      "detailsUrl": "https://github.com/vierisid/jarvis/actions/runs/37811867899/job/113430577107",
+      "name": "ocr-helper",
+      "startedAt": "2026-10-08T16:50:17Z",
+      "status": "COMPLETED",
+      "workflowName": "Tests"
+    }
+  ]
+}
