@@ -40,7 +40,7 @@ const box: SidecarInfo = {
   os: 'linux',
   platform: 'x64',
   capabilities: ['browser'],
-  features: ['browser_elem_gen'],
+  features: ['browser_elem_gen', 'browser_action_outcomes'],
   version: '0.11.0',
   latest_version: '0.11.0',
 };

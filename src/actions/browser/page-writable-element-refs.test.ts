@@ -23,6 +23,7 @@
  */
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test';
 import { BrowserController } from './session.ts';
+import { collectActionVerification } from '../action-verification';
 import { chromiumExe, launchTestChromium, type TestChromium } from './fixtures/headless-chromium.ts';
 
 /**
@@ -166,6 +167,17 @@ describe.skipIf(!chromiumExe)('page-writable element refs (#592, integration)', 
     // Refused BEFORE the insert, which is the difference between preventing the
     // leak and merely reporting it.
     expect(result).toContain('lost focus before anything was typed');
+    expect(await valueOf('attacker')).toBe('');
+  });
+
+  test('approved typing that clears a field before focus loss retains uncertainty', async () => {
+    await fresh();
+    const reviewed = await idOf('reviewed');
+    await browser.evaluate(`document.getElementById('reviewed').addEventListener('focus', () => {
+      setTimeout(() => document.getElementById('attacker').focus(), 40); }); 'armed'`);
+    await expect(collectActionVerification('browser_type', 'browser', () => browser.type(reviewed, 'approved text')))
+      .rejects.toMatchObject({ outcome: { status: 'unknown', code: 'BROWSER_ACTION_UNCERTAIN', effect: 'may_have_occurred' } });
+    expect(await valueOf('reviewed')).toBe('');
     expect(await valueOf('attacker')).toBe('');
   });
 

@@ -7,7 +7,7 @@ export type ActionFailure = {
   /** An error response can follow a partial effect. Never infer safe retry. */
   effect: 'not_started' | 'may_have_occurred';
 };
-export type ActionOutcome = { status: 'succeeded' } | ActionFailure;
+export type ActionOutcome = { status: 'succeeded'; verification?: import('./action-verification').ActionVerification } | ActionFailure;
 
 export class ActionOutcomeError extends Error {
   constructor(public readonly outcome: ActionFailure) {

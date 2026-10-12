@@ -1,3 +1,4 @@
+import { recordActionVerification, observedWindow } from '../action-verification';
 /**
  * Desktop Tools — Desktop Automation via Sidecar RPC or Local Execution
  *
@@ -636,6 +637,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
     const target = resolveDesktopTarget(params.target, 'desktop', 'desktop_launch_app');
     if (target) {
       const { text, reply } = await routeToSidecarActionReply(target, 'launch_app', params, 'desktop');
+      recordActionVerification('desktop_launch_app', observedWindow(reply));
       const directive = launchDirective(reply);
       return directive ? withTrustedTrailer(text, directive) : text;
     }
@@ -644,6 +646,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
         throw new Error(`Local app launch is not supported on ${process.platform}`);
       }
       const result = await controller.launchApp(params.executable as string, params.args as string | undefined);
+      recordActionVerification('desktop_launch_app', observedWindow(result));
       return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
     });
   },

@@ -1,3 +1,4 @@
+import { recordActionVerification, observedPage, hasUiVerificationScope } from '../action-verification';
 /**
  * Sidecar Routing — Transparent Remote Execution
  *
@@ -73,6 +74,7 @@ let sidecarManager: SidecarManager | null = null;
  */
 const NOT_STARTED_RPC_CODES = new Set([
   'DESKTOP_INVALID_KEYS', 'DESKTOP_STALE_ELEMENT', 'DESKTOP_TARGET_OBSCURED', 'BROWSER_SNAPSHOT_SUPERSEDED',
+  'BROWSER_ACTION_REFUSED',
 ]);
 
 /**
@@ -461,6 +463,7 @@ async function dispatchToSidecar(
   // Ahead of the typed/legacy split: a workflow binding failure must stay an
   // exception even for tools that have not adopted typed outcomes.
   const scope = getMachineScope();
+  if ((scope || hasUiVerificationScope()) && requiredCapability === 'browser') typedErrors = true;
   if (scope) {
     target = scope.resolveTarget(target, requiredCapability)!;
     scope.assertDispatch(target, requiredCapability);
@@ -513,7 +516,15 @@ async function dispatchToSidecar(
   // before anything is sent: nothing has been dispatched, so `not_started`.
   const pre = preflight?.(sidecar);
   if (pre?.kind === 'refuse') return fail('blocked', pre.code, pre.message);
-  const sent = pre?.kind === 'send' ? { ...params, ...pre.extra } : params;
+  // Older handlers return some refusals as normal strings. A workflow cannot
+  // distinguish those from completion without this negotiated protocol feature.
+  const browserOutcome = (!!scope || hasUiVerificationScope()) && ['browser_click', 'browser_type', 'browser_hover'].includes(method);
+  if (browserOutcome && !sidecar.features?.includes('browser_action_outcomes')) {
+    return fail('blocked', 'SIDECAR_TOO_OLD_FOR_BROWSER_OUTCOMES',
+      'This sidecar cannot report typed browser action outcomes. Update it before running this approved action. Nothing was dispatched.');
+  }
+  const sent = { ...params, ...(pre?.kind === 'send' ? pre.extra : {}),
+    ...(browserOutcome ? { action_outcome: true } : {}) };
 
   try {
     const result = await sidecarManager.dispatchRPC(sidecar.id, method, sent);
@@ -597,7 +608,7 @@ async function dispatchToSidecar(
     // a command written for the wrong platform (`notepad.exe` sent to a Mac),
     // and "command not found" alone tells neither the model nor the user why.
     const refused = err instanceof SidecarRPCError && NOT_STARTED_RPC_CODES.has(err.code);
-    return fail(err instanceof SidecarRPCError ? 'error' : 'unknown',
+    return fail(err instanceof SidecarRPCError && err.code !== 'BROWSER_ACTION_UNCERTAIN' ? 'error' : 'unknown',
       err instanceof SidecarRPCError ? err.code : 'SIDECAR_OUTCOME_UNKNOWN',
       `Error [${describeMachine(sidecar)}]: ${msg}`, refused ? 'not_started' : 'may_have_occurred');
   }
@@ -925,15 +936,15 @@ export function resetRemoteSnapshotGenerations(): void {
  * An older sidecar replies with a bare string: that is the whole reply, and there
  * is no identity to read. Same for any shape that is not the documented one.
  */
-function readSidecarPageReply(result: unknown): SidecarPageRead & { readonly elemGen: string | null } {
-  if (typeof result === 'string') return { text: result, pageUrl: null, elemGen: null };
+function readSidecarPageReply(result: unknown): SidecarPageRead & { readonly elemGen: string | null; readonly documentId: string | null } {
+  if (typeof result === 'string') return { text: result, pageUrl: null, elemGen: null, documentId: null };
   if (result === null || typeof result !== 'object' || Array.isArray(result)) {
-    return { text: JSON.stringify(result, null, 2), pageUrl: null, elemGen: null };
+    return { text: JSON.stringify(result, null, 2), pageUrl: null, elemGen: null, documentId: null };
   }
   const reply = result as Record<string, unknown>;
   // No usable text half means no page, so there is no identity worth reading
   // either -- and the fallback keeps the pre-#583 rendering of an odd reply.
-  if (typeof reply.text !== 'string') return { text: JSON.stringify(result, null, 2), pageUrl: null, elemGen: null };
+  if (typeof reply.text !== 'string') return { text: JSON.stringify(result, null, 2), pageUrl: null, elemGen: null, documentId: null };
   const hasLoader = typeof reply.loader_id === 'string'
     && reply.loader_id.length > 0
     && reply.loader_id.length <= MAX_LOADER_ID_LENGTH;
@@ -943,7 +954,7 @@ function readSidecarPageReply(result: unknown): SidecarPageRead & { readonly ele
   // nothing here interprets it.
   const elemGen = Object.hasOwn(reply, 'elem_gen') && typeof reply.elem_gen === 'string'
     && reply.elem_gen.length > 0 && reply.elem_gen.length <= MAX_ELEM_GEN_LENGTH ? reply.elem_gen : null;
-  return { text: reply.text, pageUrl, elemGen };
+  return { text: reply.text, pageUrl, elemGen, documentId: hasLoader ? reply.loader_id as string : null };
 }
 
 /**
@@ -969,7 +980,8 @@ export async function routeBrowserReadToSidecar(
 ): Promise<SidecarPageRead & { readonly why: 'confirmed' | 'no_reply' | 'no_page_identity' }> {
   const out = await dispatchToSidecar(target, method, { ...params, page_identity: true }, 'browser', false);
   if (out.kind === 'message') return { text: out.text, pageUrl: null, why: 'no_reply' };
-  const { elemGen, ...read } = readSidecarPageReply(out.result);
+  const { elemGen, documentId, ...read } = readSidecarPageReply(out.result);
+  recordActionVerification(method, observedPage(read.pageUrl, documentId));
   if (elemGen) remoteSnapshotGenerations.set(readerKey(out.sidecarId), elemGen);
   else remoteSnapshotGenerations.delete(readerKey(out.sidecarId));
   // The loop's own record too (#827). A read without a generation is kept as

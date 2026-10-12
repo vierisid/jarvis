@@ -300,7 +300,7 @@ func makeBrowserHoverHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 		if refusal != "" {
-			return &RPCResult{Result: refusal}, nil
+			return browserActionRefusal(params, refusal, false)
 		}
 		x, y := el.x, el.y
 
