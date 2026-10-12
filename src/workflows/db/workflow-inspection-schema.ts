@@ -2,6 +2,9 @@ import type { Database } from 'bun:sqlite';
 /** No foreign-key cascade: removing old run history must never release a request
  * identity for replay. At capacity, refuse new requests; never evict receipts. */
 export function ensureWorkflowInspectionSchema(db: Database): void {
+  // Scope and order together so first-page reads and cursor seeks do not scan
+  // unrelated workflows or sort their accumulated history on the daemon thread.
+  db.run(`CREATE INDEX IF NOT EXISTS idx_brief_run_history ON flow_run(project_id,flow_id,created DESC,id DESC)`);
   db.run(`CREATE TABLE IF NOT EXISTS brief_manual_run_requests (
     project_id TEXT NOT NULL, request_id TEXT NOT NULL, flow_id TEXT NOT NULL,
     digest TEXT NOT NULL, result TEXT NOT NULL, created INTEGER NOT NULL,

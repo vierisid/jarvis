@@ -12,5 +12,7 @@
   "install": "bun install --frozen-lockfile",
   "types": "bun x tsc --noEmit",
   "build": "bun run build:ui",
-  "env_classification": "bun test --timeout 15000 src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts"
+  "env_classification": "bun test --timeout 15000 src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts",
+  "review_focused": "bun test --timeout 15000 src/brief/workflow-context.test.ts src/daemon/api-brief-workflow-context.test.ts src/workflows/adapters/untrusted-reach.test.ts",
+  "review_affected": "bun test --timeout 15000 src/brief src/workflows/api src/workflows/db src/workflows/runner/handler.test.ts src/workflows/runner/triggers/workflow-removal.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/adapters/untrusted-reach.test.ts src/workflows/sandbox-api/worker-rpc.test.ts src/goals/work-items.test.ts src/daemon/api-brief-workflow-context.test.ts src/daemon/api-brief-workflow-removal.test.ts"
 }

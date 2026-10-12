@@ -28,7 +28,10 @@ SQLite snapshot.
 recorded version; disagreement is 409. There is no fallback to the current
 published version. Canvas uses that version's sanitized nodes and edges; the
 run section uses actual retained step input/output, nested loop iterations,
-effect receipts and waits. Unknown/dispatching effects make the run summary
+effect receipts and waits. Inspection unwraps the real worker's
+`{output: StepOutput}` storage envelope before projecting inputs, outputs, status
+and nested iterations; existing unwrapped records remain supported.
+Unknown/dispatching effects make the run summary
 `uncertain`, even if the run row says succeeded. This is a read projection, not
 effect reconciliation or a permission to replay.
 
@@ -86,6 +89,9 @@ receipts, waits or context entries, 100 graph nodes, 512 KB per complete selecti
 per nested object/array. Small-field truncation is explicitly labeled; collection
 or response overflow is 413, never silent pagination or a false complete result.
 Run history uses a `(created,id)` keyset and does not hydrate step blobs.
+Its `(project_id,flow_id,created DESC,id DESC)` index and tuple cursor predicate
+avoid scanning unrelated workflows or sorting accumulated history on each page.
+Context-group caps include restricted auth entries alongside connection references.
 
 ## Explicit, idempotent manual Run
 
@@ -120,6 +126,11 @@ before dispatch, retain one command owner across Canvas/Runs/Context, and recove
 uncertain HTTP outcomes through the read-only request route. A missing receipt
 must not prompt a new request ID or automatic execution retry. A deliberate new
 run requires a fresh explicit user action and identity.
+
+Accepted receipts remain readable after the existing hard-delete endpoint removes
+a workflow and after daemon restart. Recovery checks the receipt's stored project,
+flow and request identity without requiring a surviving flow row. The same
+authentication, capability and readiness gates apply; lookup does not enqueue work.
 
 ## Integration and rollback
 

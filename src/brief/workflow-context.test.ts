@@ -1,12 +1,14 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initWorkflowDb, getWorkflowDb, closeWorkflowDb, DEFAULT_IDS } from '../workflows/db';
-import { createFlow, setPublishedVersion } from '../workflows/db/repos/flow';
+import { createFlow, deleteFlow, setPublishedVersion } from '../workflows/db/repos/flow';
 import { createDraftVersion, lockVersion, updateDraftVersion } from '../workflows/db/repos/flow-version';
-import { createFlowRun, updateRun } from '../workflows/db/repos/flow-run';
+import { createFlowRun, getFlowRun, updateRun } from '../workflows/db/repos/flow-run';
+import { DefaultWorkerHandlers } from '../workflows/sandbox-api/worker-handlers';
+import { SandboxRegistry } from '../workflows/sandbox-api/sandbox-registry';
 import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { createSuggestion } from '../vault/awareness';
 import { ensurePreparedSchema } from '../awareness/prepared-schema';
@@ -36,6 +38,12 @@ beforeEach(() => {
 afterEach(() => { setEncryptionKey(null); closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); });
 const command = (requestId = 'fixture-request', payload: unknown = {}) => ({ brief: { scopeId: DEFAULT_IDS.project, versionId, requestId }, payload });
 function run() { return createFlowRun({ flowId, flowVersionId: versionId }); }
+function progressWriter(runId: string) {
+  const registry = new SandboxRegistry();
+  registry.register({ sandboxId: 'fixture', runId, projectId: DEFAULT_IDS.project, engineToken: 'fixture',
+    expiresAt: Date.now() + 60_000, terminatedAt: null });
+  return new DefaultWorkerHandlers({ registry });
+}
 function effect(runId: string, status: WorkflowEffect['status'] = 'unknown'): WorkflowEffect {
   return { id: 'fixture-effect', runId, flowId, versionId, projectId: DEFAULT_IDS.project, versionDigest: 'fixture',
     stepName: 'trigger', executionPath: [], route: 'tools', toolName: 'fixture', actionCategory: 'read', requestDigest: 'fixture',
@@ -129,6 +137,31 @@ test('stable keyset pagination handles equal timestamps and new head inserts wit
   const got = [...first.data.items, ...second.data.items].map(x => x.runId);
   expect(new Set(got).size).toBe(60); expect(got.sort()).toEqual(ids.sort()); expect(got).not.toContain(later.id);
 });
+test('history queries seek within the selected flow index without scanning or sorting project history', () => {
+  const ids = Array.from({ length: 60 }, () => run().id); db.run('UPDATE flow_run SET created=1');
+  const other = createFlow(), otherVersion = lockVersion(createDraftVersion({ flowId: other.id, displayName: 'Other' }).id);
+  db.run(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<10000)
+    INSERT INTO flow_run (id,flow_id,flow_version_id,project_id,status,environment,created,updated)
+    SELECT 'unrelated-'||i,?,?,?,'SUCCEEDED','PRODUCTION',i,i FROM n`, [other.id, otherVersion.id, DEFAULT_IDS.project]);
+  // Observe the actual service queries, not a separate hand-written equivalent.
+  const queries = spyOn(db, 'query');
+  let historySql: string[] = [];
+  try {
+    const first = service.list(flowId); if (first.status !== 'ready') throw Error();
+    const second = service.list(flowId, first.data.nextCursor); if (second.status !== 'ready') throw Error();
+    expect([...first.data.items, ...second.data.items].map(r => r.runId).sort()).toEqual(ids.sort());
+    historySql = queries.mock.calls.map(([sql]) => sql).filter(sql => sql.includes('ORDER BY created DESC, id DESC LIMIT 51'));
+  } finally { queries.mockRestore(); }
+  expect(historySql).toHaveLength(2);
+  for (const [page, sql] of historySql.entries()) {
+    const parameters = Array.from({ length: sql.match(/\?/g)?.length ?? 0 }, () => null);
+    const plan = db.query<{ detail: string }, null[]>(`EXPLAIN QUERY PLAN ${sql}`).all(...parameters).map(r => r.detail).join('\n');
+    expect(plan).toContain('idx_brief_run_history');
+    expect(plan).toContain('project_id=? AND flow_id=?');
+    expect(plan).not.toContain('TEMP B-TREE'); expect(plan).not.toContain('SCAN');
+    if (page) expect(plan).toContain('(created,id)<(?,?)');
+  }
+});
 test('legacy giant source, aggregate receipts and row counts are refused before projection', () => {
   const r = run(); db.run('UPDATE flow_run SET steps=? WHERE id=?', [' '.repeat(INSPECTION_LIMITS.sourceBytes + 1), r.id]);
   expect(() => service.detail(flowId, r.id)).toThrow('source_too_large');
@@ -151,6 +184,20 @@ test('manual start atomically queues one run and returns a durable run ID across
   expect(service.start(flowId, command('once', { a: 1, b: 2 }))).toEqual(result);
   expect(db.query('SELECT id FROM flow_run').all()).toHaveLength(1);
   expect(db.query('SELECT max_attempts FROM workflow_job').all()).toEqual([{ max_attempts: 1 }]);
+});
+test('accepted request recovery survives hard deletion and restart while retaining scope and readiness gates', () => {
+  const accepted = service.start(flowId, command()); deleteFlow(flowId);
+  const jobs = db.query('SELECT id FROM workflow_job').all();
+  expect(service.request(flowId, 'fixture-request')).toEqual(accepted);
+  closeWorkflowDb(); db = initWorkflowDb(file); service = new WorkflowContext(db, DEFAULT_IDS.project, () => true);
+  expect(service.request(flowId, 'fixture-request')).toEqual(accepted);
+  expect(() => new WorkflowContext(db, 'foreign', () => true).request(flowId, 'fixture-request')).toThrow('not_found');
+  expect(() => service.request(createFlow().id, 'fixture-request')).toThrow('not_found');
+  expect(() => service.request('invalid/id', 'fixture-request')).toThrow('invalid_identity');
+  expect(() => new WorkflowContext(db, DEFAULT_IDS.project, () => false).request(flowId, 'fixture-request')).toThrow('unavailable');
+  expect(() => service.start(flowId, command())).toThrow('not_found');
+  expect(db.query('SELECT id FROM workflow_job').all()).toEqual(jobs);
+  expect(db.query('SELECT * FROM brief_manual_run_requests').all()).toHaveLength(1);
 });
 test('request key reuse with changed version, flow or input refuses without another run', () => {
   service.start(flowId, command());
@@ -197,12 +244,50 @@ test('existing worker executes the explicitly submitted input once and inspectio
   const result = service.start(flowId, command('worker', { count: 7 })); let executions = 0;
   const worker = new Worker({ log: () => {}, handlers: { [RUN_FLOW]: createRunFlowHandler({ executor: {
     async execute(ctx) { executions++; expect(ctx.version.id).toBe(versionId); expect(ctx.payload).toEqual({ count: 7 });
-      return { stepsCount: 1, steps: { trigger: { status: 'SUCCEEDED', input: ctx.payload, output: 14 } } }; },
+      await progressWriter(ctx.run.id).updateRunProgress('fixture', { flowRun: { id: ctx.run.id, flowId, flowVersionId: versionId,
+        projectId: DEFAULT_IDS.project, status: 'SUCCEEDED' }, step: { name: 'trigger', path: [],
+        output: { type: 'EMPTY', status: 'SUCCEEDED', input: ctx.payload, output: 14 } } });
+      return { stepsCount: 1, steps: getFlowRun(ctx.run.id)!.steps! }; },
   } }) } });
   await worker.drain(); service.start(flowId, command('worker', { count: 7 })); await worker.drain();
   expect(executions).toBe(1); const d = service.detail(flowId, result.run.runId);
   expect(d.status).toBe('succeeded'); expect(d.steps[0]?.fields[1]?.value).toBe('14');
+  expect(d.steps[0]?.status).toBe('succeeded'); expect(d.steps[0]?.fields[0]?.value).toContain('7');
   expect(db.query('SELECT * FROM goal_progress').all()).toHaveLength(0);
+});
+test('real worker envelopes preserve nested loop evidence and redact payloads without unwrapping payload lookalikes', async () => {
+  const r = run(), writer = progressWriter(r.id);
+  const child = { type: 'CODE', status: 'FAILED', input: { count: 9, password: 'fixture-secret' }, output: false };
+  const loop = { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: [1], output: { iterations: [
+    { nested: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: [2], output: { iterations: [{ child }] } } },
+  ] } };
+  await writer.updateRunProgress('fixture', { flowRun: { id: r.id, flowId, flowVersionId: versionId,
+    projectId: DEFAULT_IDS.project, status: 'SUCCEEDED' }, step: { name: 'loop', path: [], output: loop } });
+  const detail = service.detail(flowId, r.id);
+  expect(detail.steps).toHaveLength(3); expect(new Set(detail.steps.map(s => s.id)).size).toBe(3);
+  expect(detail.steps[0]).toMatchObject({ status: 'succeeded', fields: [{ label: 'Input', value: '[1]' }, {}] });
+  const leaf = detail.steps.find(s => s.title.endsWith('child'))!;
+  expect(leaf.status).toBe('failed'); expect(leaf.fields[0]?.value).toContain('9');
+  expect(leaf.fields[1]?.value).toBe('false'); expect(JSON.stringify(detail)).not.toContain('fixture-secret');
+  // An unwrapped step's application output may itself resemble a step record.
+  updateRun(r.id, { steps: { direct: { type: 'CODE', status: 'SUCCEEDED', input: 4, output: child } } });
+  const direct = service.detail(flowId, r.id).steps[0]!;
+  expect(direct.status).toBe('succeeded'); expect(direct.fields[0]?.value).toBe('4');
+  expect(direct.fields[1]?.value).toContain('9');
+});
+test('configured bindings share one cap across connection references and restricted auth entries', () => {
+  for (const count of [199, 200]) {
+    const v = createDraftVersion({ flowId, displayName: 'Bindings', trigger: { name: 'trigger', type: 'EMPTY',
+      settings: { input: { auth: 'fixture-inline-secret' } } } });
+    updateDraftVersion(v.id, { connectionIds: Array.from({ length: count }, (_,i) => `ref-${i}`) }); lockVersion(v.id);
+    if (count === 200) expect(() => service.selection(flowId, v.id)).toThrow('context_capacity');
+    else {
+      const group = service.selection(flowId, v.id).context.groups.bindings;
+      expect(group.status).toBe('ready'); if (group.status !== 'ready') throw Error();
+      expect(group.data).toHaveLength(200); expect(group.data.at(-1)?.availability).toBe('redacted');
+      expect(JSON.stringify(group)).not.toContain('fixture-inline-secret');
+    }
+  }
 });
 test('loop iterations retain individual actual inputs, outputs and statuses', () => {
   const r = run(); updateRun(r.id, { steps: { loop: { type: 'LOOP_ON_ITEMS', status: 'SUCCEEDED', input: [1,2], output: {

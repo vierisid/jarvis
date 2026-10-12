@@ -93,12 +93,14 @@ export class WorkflowContext {
     this.flow(flowId);
     let before: RunRow | null = null;
     if (cursor !== null) before = this.run(flowId, cursor);
-    const rows = this.db.query<RunRow, [string, string, number | null, number | null, number | null, string | null]>(`SELECT ${runColumns} FROM flow_run
-      WHERE flow_id=? AND project_id=? AND (? IS NULL OR created < ? OR (created=? AND id < ?))
+    const parameters: [string, string] | [string, string, number, string] = before
+      ? [this.projectId, flowId, before.created, before.id] : [this.projectId, flowId];
+    const rows = this.db.query<RunRow, typeof parameters>(`SELECT ${runColumns} FROM flow_run
+      WHERE project_id=? AND flow_id=?${before ? ' AND (created,id) < (?,?)' : ''}
       ORDER BY created DESC, id DESC LIMIT 51`);
-    // A stable keyset cursor, not an offset that skips runs inserted on refresh.
-    const items = rows.all(flowId, this.projectId, before?.created ?? null, before?.created ?? null,
-      before?.created ?? null, before?.id ?? null);
+    // Match idx_brief_run_history for both the first page and a tuple seek.
+    // An optional-cursor OR would prevent SQLite seeking to the requested page.
+    const items = rows.all(...parameters);
     return ready({ items: items.slice(0, 50).map(r => this.summary(r)), nextCursor: items.length > 50 ? items[49]!.id : null, total: null });
   }
   selection(flowId: string, versionId: string, runId: string | null = null): InspectionSelection {
@@ -204,9 +206,13 @@ export class WorkflowContext {
       }
     }
     const projected = {} as InspectionContext['groups'];
-    for (const group of groups) projected[group] = rows[group].length ? ready(rows[group])
-      : missing(r ? 'No retained evidence recorded for this context group; current configuration was not substituted.'
+    for (const group of groups) {
+      // Include restricted entries as well as typed references in the group cap.
+      if (rows[group].length > LIMIT.rows) throw new WorkflowInspectionError('context_capacity', 413);
+      projected[group] = rows[group].length ? ready(rows[group])
+        : missing(r ? 'No retained evidence recorded for this context group; current configuration was not substituted.'
         : !nodes ? 'Immutable configured context is unavailable.' : 'No explicit configured reference is available.');
+    }
     return { scopeId: this.projectId, flowId, versionId, basis: r ? 'recorded' : 'configured', runId: r?.id ?? null,
       runLabel: r ? `Run ${r.id}` : null, asOf: r?.updated ?? v?.updated ?? null, groups: projected };
   }
@@ -241,12 +247,17 @@ export class WorkflowContext {
       const part = pending.pop()!;
       if (!object(part.value)) continue;
       for (const [name, raw] of Object.entries(part.value)) {
+        // DefaultWorkerHandlers persists { output: StepOutput }. Loop children
+        // and legacy writers can already contain StepOutput directly. Unwrap
+        // only the storage envelope, never an existing step's application output.
+        const step = object(raw) && Object.keys(raw).length === 1 && object(raw.output)
+          && typeof raw.output.type === 'string' && typeof raw.output.status === 'string' ? raw.output : raw;
         const path = opaque(JSON.stringify([part.path, name]));
         const label = (part.label + safeName(name, 'unknown')).slice(0, 450);
-        entries.push([label, raw, path]); this.boundedRows(entries);
-        if (object(raw) && raw.type === 'LOOP_ON_ITEMS' && object(raw.output) && Array.isArray(raw.output.iterations)) {
-          if (raw.output.iterations.length + pending.length > LIMIT.rows) throw new WorkflowInspectionError('inspection_capacity', 413);
-          raw.output.iterations.forEach((value, i) => pending.push({ path: opaque(JSON.stringify([path, i])), label: label + `-iteration-${i + 1}-`, value }));
+        entries.push([label, step, path]); this.boundedRows(entries);
+        if (object(step) && step.type === 'LOOP_ON_ITEMS' && object(step.output) && Array.isArray(step.output.iterations)) {
+          if (step.output.iterations.length + pending.length > LIMIT.rows) throw new WorkflowInspectionError('inspection_capacity', 413);
+          step.output.iterations.forEach((value, i) => pending.push({ path: opaque(JSON.stringify([path, i])), label: label + `-iteration-${i + 1}-`, value }));
         }
       }
     }
@@ -271,8 +282,10 @@ export class WorkflowContext {
       inspection: { status: 'partial', note: `Text values and field names are redacted. Context covers retained records only.${nodes ? '' : ' Immutable historical graph unavailable.'}${steps == null ? ' Step data was not recorded.' : ''}` } };
   }
   request(flowId: string, requestId: string): ManualInspectionRunResult {
-    this.flow(flowId);
-    if (!inspectionId(requestId)) throw new WorkflowInspectionError('invalid_identity');
+    this.assertReady();
+    if (!inspectionId(flowId) || !inspectionId(requestId)) throw new WorkflowInspectionError('invalid_identity');
+    // The accepted receipt owns its scope even after a hard deletion removes
+    // the flow and run. A read must neither lose that outcome nor enqueue work.
     const row = this.db.query<{ result: string }, [string, string, string]>(
       'SELECT result FROM brief_manual_run_requests WHERE project_id=? AND request_id=? AND flow_id=?').get(this.projectId, requestId, flowId);
     if (!row) throw new WorkflowInspectionError('not_found', 404);

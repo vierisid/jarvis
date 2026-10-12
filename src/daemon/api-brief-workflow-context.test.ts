@@ -124,5 +124,13 @@ test('real panel authentication protects every inspection and start route over a
     for (const path of [listUrl, `/api/brief/workflows/${flowId}/inspection?versionId=${versionId}&runId=${result.run.runId}`, `${listUrl}/${result.run.runId}`, `/api/brief/workflows/${flowId}/run-requests/fixture-request`]) {
       const reply = await send(path, { headers }); expect(reply.status).toBe(200); expect(reply.headers.get('Cache-Control')).toBe('no-store');
     }
+    // Recovery remains authenticated after the existing hard-delete endpoint
+    // removes the flow; the retained receipt itself supplies the project scope.
+    expect((await send(`/api/workflows/${flowId}`, { method: 'DELETE', headers })).status).toBe(200);
+    const receiptUrl = `/api/brief/workflows/${flowId}/run-requests/fixture-request`;
+    expect((await send(receiptUrl)).status).toBe(401);
+    const recovered = await send(receiptUrl, { headers }); expect(recovered.status).toBe(200);
+    expect(recovered.headers.get('Cache-Control')).toBe('no-store'); expect(await recovered.json()).toEqual(result);
+    expect((await send(startUrl, { method: 'POST', headers, body: JSON.stringify(command()) })).status).toBe(404);
   } finally { server.stop(); rmSync(directory, { recursive: true, force: true }); }
 });

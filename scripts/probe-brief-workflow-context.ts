@@ -7,9 +7,10 @@ import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { strict as assert } from 'node:assert';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../src/workflows/db';
-import { createFlow } from '../src/workflows/db/repos/flow';
-import { createDraftVersion, lockVersion } from '../src/workflows/db/repos/flow-version';
-import { updateRun } from '../src/workflows/db/repos/flow-run';
+import { createFlow, deleteFlow } from '../src/workflows/db/repos/flow';
+import { createDraftVersion, lockVersion, updateDraftVersion } from '../src/workflows/db/repos/flow-version';
+import { DefaultWorkerHandlers } from '../src/workflows/sandbox-api/worker-handlers';
+import { SandboxRegistry } from '../src/workflows/sandbox-api/sandbox-registry';
 import { configureWorkflowReadiness } from '../src/workflows/db/repos/flow-readiness';
 import { WorkflowContext } from '../src/brief/workflow-context';
 const sources = [
@@ -27,13 +28,26 @@ try {
   const scope = { scopeId: DEFAULT_IDS.project, flowId, versionId };
   const result = provider.start(flowId, { brief: { scopeId: scope.scopeId, versionId, requestId: 'probe' }, payload: {} });
   assert(runs.validSummary(result.run, scope));
-  updateRun(result.run.runId, { status: 'SUCCEEDED', steps: { trigger: { status: 'SUCCEEDED', input: {}, output: { count: 4, message: '<script>fixture</script>' } } } });
+  const registry = new SandboxRegistry();
+  registry.register({ sandboxId: 'probe', runId: result.run.runId, projectId: scope.scopeId, engineToken: 'fixture', expiresAt: Date.now() + 60_000, terminatedAt: null });
+  await new DefaultWorkerHandlers({ registry }).updateRunProgress('probe', {
+    flowRun: { id: result.run.runId, flowId, flowVersionId: versionId, projectId: scope.scopeId, status: 'SUCCEEDED' },
+    step: { name: 'trigger', path: [], output: { type: 'EMPTY', status: 'SUCCEEDED', input: {}, output: { count: 4, message: '<script>fixture</script>' } } },
+  });
   const page = provider.list(flowId); assert(page.status === 'ready'); runs.validatePage(page.data, scope);
   const selection = provider.selection(flowId, versionId, result.run.runId);
   runs.validateDetail(selection.run, scope, result.run.runId, versionId);
+  assert.equal(selection.run!.steps[0]!.status, 'succeeded');
   contexts.validateContext(selection.context, scope, { basis: 'recorded', runId: result.run.runId, versionId });
   contexts.validateContext(provider.selection(flowId, versionId).context, scope, { basis: 'configured' });
   assert(!JSON.stringify(selection).includes('<script>'));
   assert.equal(provider.request(flowId, 'probe').run.runId, result.run.runId);
-  console.log(JSON.stringify({ status: 'passed', sources, checks: ['accepted run', 'history', 'recorded detail', 'recorded context', 'configured context', 'redaction', 'request recovery'], productionHostBound: false }, null, 2));
+  for (const count of [199, 200]) {
+    const v = createDraftVersion({ flowId, displayName: 'Bounds', trigger: { name: 'trigger', type: 'EMPTY', settings: { input: { auth: 'inline-fixture' } } } });
+    updateDraftVersion(v.id, { connectionIds: Array.from({ length: count }, (_,i) => `ref-${i}`) }); lockVersion(v.id);
+    if (count === 200) assert.throws(() => provider.selection(flowId, v.id), /context_capacity/);
+    else contexts.validateContext(provider.selection(flowId, v.id).context, { ...scope, versionId: v.id }, { basis: 'configured' });
+  }
+  deleteFlow(flowId); assert.deepEqual(provider.request(flowId, 'probe'), result);
+  console.log(JSON.stringify({ status: 'passed', sources, checks: ['accepted run', 'history', 'real worker recorded detail', 'recorded context', 'configured context', 'redaction', 'request recovery after deletion', 'mixed-source context cap'], productionHostBound: false }, null, 2));
 } finally { closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); }

@@ -16,7 +16,7 @@
   "ownership": {
     "implementer": "Codex",
     "reviewer": "lapociampi",
-    "review_state": "Human review requested from lapociampi on PR #939. Self-reviewed locally; no independent review completion claimed."
+    "review_state": "Codex PR reviewer found four defects at 64609e98; all four fixes have regression coverage. Follow-up automated review and new-head CI reported in PR #939. Human review remains requested from lapociampi."
   },
   "dependencies": {
     "compile": [
@@ -42,7 +42,7 @@
     "selection": "Explicit immutable version and optional run ID, matched across sanitized canvas, context and actual run evidence within one SQLite snapshot.",
     "context": "Configured work-item/prepared goal and fact references, connection/target/rule references; actual retained memory handoffs, linked work, approval and machine-binding evidence remain separate.",
     "historical": "No current-version fallback. Capture whether a version was locked when a new run was accepted. Mutable/ambiguous legacy history is explicitly unavailable, while retained actual steps remain readable.",
-    "manual": "Existing /api/workflows/:id/run accepts an explicit Brief envelope and bounded object payload; atomic run/job/receipt with maxAttempts=1; durable idempotency and read-only request recovery.",
+    "manual": "Existing /api/workflows/:id/run accepts an explicit Brief envelope and bounded object payload; atomic run/job/receipt with maxAttempts=1; durable idempotency and read-only request recovery. Accepted receipts remain recoverable in their original scope after workflow hard deletion.",
     "read_shape": "Compatible with pinned D-19/D-20 validators; graph projection is read-only and not an editor replacement.",
     "security": "Exact provider/capability gate, authenticated routes, project-scoped reads, no-store JSON, bounded legacy data, conservative text/key/subtree redaction, no decrypted connections or bearer wait IDs.",
     "guide": "docs/brief-workflow-context.md"
@@ -80,21 +80,21 @@
     },
     "focused": {
       "command": "bun test --timeout 15000 src/brief/workflow-context.test.ts src/daemon/api-brief-workflow-context.test.ts src/workflows/adapters/untrusted-reach.test.ts",
-      "passed": 48,
+      "passed": 52,
       "failed": 0,
-      "assertions": 202,
+      "assertions": 245,
       "files": 3,
-      "evidence": "evidence/F-21/focused.log"
+      "evidence": "evidence/F-21/review-focused.log"
     },
     "affected": {
-      "command": "bun test --timeout 15000 src/brief src/workflows/api src/workflows/db src/workflows/runner/handler.test.ts src/workflows/runner/triggers/workflow-removal.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/adapters/untrusted-reach.test.ts src/goals/work-items.test.ts src/daemon/api-brief-workflow-context.test.ts src/daemon/api-brief-workflow-removal.test.ts",
-      "passed": 903,
+      "command": "bun test --timeout 15000 src/brief src/workflows/api src/workflows/db src/workflows/runner/handler.test.ts src/workflows/runner/triggers/workflow-removal.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/adapters/untrusted-reach.test.ts src/workflows/sandbox-api/worker-rpc.test.ts src/goals/work-items.test.ts src/daemon/api-brief-workflow-context.test.ts src/daemon/api-brief-workflow-removal.test.ts",
+      "passed": 926,
       "skipped": 6,
       "failed": 0,
-      "assertions": 15640,
-      "files": 45,
-      "evidence": "evidence/F-21/affected.log",
-      "scope": "Final implementation and all final regressions."
+      "assertions": 15719,
+      "files": 46,
+      "evidence": "evidence/F-21/review-affected.log",
+      "scope": "Review corrections, all F-21 regressions, affected F stack and sandbox worker RPC tests."
     },
     "initial_affected": {
       "command": "bun test src/brief src/workflows/api src/workflows/db src/workflows/runner/handler.test.ts src/workflows/runner/triggers/workflow-removal.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/adapters/untrusted-reach.test.ts src/goals/work-items.test.ts src/daemon/api-brief-workflow-context.test.ts src/daemon/api-brief-workflow-removal.test.ts",
@@ -109,19 +109,20 @@
     "consumer_compatibility": {
       "status": "passed",
       "command": "bun run scripts/probe-brief-workflow-context.ts",
-      "evidence": "evidence/F-21/consumers.json",
+      "evidence": "evidence/F-21/review-consumers.json",
       "production_host_bound": false
     },
     "typescript": {
       "status": "passed",
       "command": "bun x tsc --noEmit",
-      "evidence": "evidence/F-21/typescript.log"
+      "evidence": "evidence/F-21/review-typescript.log"
     },
     "ui_build": {
       "status": "passed",
       "command": "bun run build:ui",
       "evidence": "evidence/F-21/build.log",
-      "warnings": "Existing Tailwind @theme/@tailwind warnings."
+      "warnings": "Existing Tailwind @theme/@tailwind warnings.",
+      "scope": "Original implementation build; review corrections do not change UI sources."
     },
     "guards": {
       "status": "passed",
@@ -134,11 +135,11 @@
       "evidence": "evidence/F-21/guards.log"
     },
     "http": "Real panel authentication over an isolated Unix socket; all readers and existing manual endpoint deny anonymous access. Concurrent UI retry test accepts exactly one run/job.",
-    "runtime": "Existing Worker with a deterministic fake executor consumes exact explicit input, exposes actual recorded output and executes once after retries. No goal progress writes.",
+    "runtime": "Existing Worker with a deterministic fake executor records through real DefaultWorkerHandlers, consumes explicit input once and projects the persisted envelope. Nested real-writer loop records and redaction covered; no goal progress writes.",
     "intermediate_failures": "Fixed a missing fake-executor stepsCount type and two test fixture setup errors. One repeated run during local contention hit four default 5-second timeouts; the final 15-second focused and affected runs passed. No skipped failing assertions.",
     "hooks": "Initial implementation normal hooks passed all repository guards, 162 related tests / 11173 assertions and TypeScript. Correction commit uses the same normal hooks; result reported in PR #939.",
-    "ci": "Initial full GitHub suite: 8500 pass, 38 skip, one environment-inventory failure. Fixed the flag classification and passed all 28 related tests. See evidence/F-21/ci.json; final published-head CI is reported in PR #939 after push.",
-    "self_review": "Reviewed the complete staged diff, auth/scoping, immutable history, redaction, idempotent transaction and rollback. Added regressions for loop/literal identity collisions, malformed legacy step containers, prototype-name statuses and non-finite manual input.",
+    "ci": "Reviewed head 64609e98 passed full CI: 8501 pass, 38 skip, zero fail; one unchanged browser integration needed attempt 3. New-head CI is reported separately in PR #939 after pushing the review fixes.",
+    "self_review": "Reviewed the complete staged diff, auth/scoping, immutable history, redaction, idempotent transaction and rollback. Added regressions for loop/literal identity collisions, malformed legacy step containers, prototype-name statuses and non-finite manual input. Addressed all four independent reviewer findings; compared the changed queries and storage normalization with the real writer and pinned consumer contracts.",
     "env_classification": {
       "command": "bun test --timeout 15000 src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts",
       "passed": 28,
@@ -146,7 +147,8 @@
       "assertions": 282,
       "files": 2,
       "evidence": "evidence/F-21/env-classification.log"
-    }
+    },
+    "review_corrections": "evidence/F-21/review-fixes.json"
   },
   "limitations": [
     "All arbitrary string leaves and field names are redacted until reviewed schemas can safely expose more; numeric/boolean values, structure and typed references remain inspectable.",
