@@ -1,3 +1,4 @@
+import { CONNECTION_SETUP_EVENT, takePieceSetup, type PieceSetupRequest } from './connection-setup-request';
 /**
  * Connections panel: list `app_connection` rows + registered Jarvis sources,
  * add / delete connections. Renders inline below the workflows list when the
@@ -7,7 +8,7 @@
  * shows metadata + accepts new values via the add form.
  */
 
-import React, { useState } from "react";
+import React, { useEffect, useState } from "react";
 import { confirmDialog } from "../../ui/ConfirmDialog";
 import { Button, Chip, Icon } from "../../ui";
 import { RefreshCw, Trash2, Plus, KeyRound } from "lucide-react";
@@ -19,7 +20,13 @@ import {
 
 export function ConnectionsPanel(): React.ReactElement {
   const conn = useConnections();
-  const [showForm, setShowForm] = useState(false);
+  const [setup, setSetup] = useState<PieceSetupRequest | null>(() => takePieceSetup());
+  const [showForm, setShowForm] = useState(() => !!setup && !setup.rowId);
+  useEffect(() => {
+    const apply = () => { const request = takePieceSetup(); if (request) { setSetup(request); setShowForm(!request.rowId); } };
+    window.addEventListener(CONNECTION_SETUP_EVENT, apply);
+    return () => window.removeEventListener(CONNECTION_SETUP_EVENT, apply);
+  }, []);
   const [toast, setToast] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
 
   const flash = (tone: "ok" | "warn", text: string): void => {
@@ -67,6 +74,8 @@ export function ConnectionsPanel(): React.ReactElement {
 
       {showForm ? (
         <AddConnectionForm
+          key={setup?.requestId}
+          setup={setup}
           onSubmit={async (input) => {
             const r = await conn.create(input);
             flash(r.ok ? "ok" : "warn", r.ok ? `Connection "${input.displayName}" added` : `Add failed: ${r.message}`);
@@ -85,6 +94,7 @@ export function ConnectionsPanel(): React.ReactElement {
             <ConnectionRow
               key={c.id}
               connection={c}
+              requestedEdit={setup?.rowId === `account:${c.id}` ? setup.requestId : undefined}
               onDelete={async () => {
                 if (!await confirmDialog(`Delete connection "${c.displayName}"? Secrets are removed permanently.`)) return;
                 const r = await conn.remove(c.id);
@@ -108,10 +118,12 @@ export function ConnectionsPanel(): React.ReactElement {
 
 function ConnectionRow({
   connection,
+  requestedEdit,
   onDelete,
   onUpdate,
 }: {
   connection: ConnectionMeta;
+  requestedEdit?: string;
   onDelete: () => void;
   onUpdate: (patch: {
     displayName?: string;
@@ -119,7 +131,8 @@ function ConnectionRow({
     status?: "ACTIVE" | "MISSING" | "ERROR";
   }) => Promise<boolean>;
 }): React.ReactElement {
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(!!requestedEdit);
+  useEffect(() => { if (requestedEdit) setEditing(true); }, [requestedEdit]);
   return (
     <li className="wf-conn__row">
       <div className="wf-conn__row-summary">
@@ -272,8 +285,10 @@ const TYPES: AppConnectionType[] = [
 ];
 
 function AddConnectionForm({
+  setup,
   onSubmit,
 }: {
+  setup?: PieceSetupRequest | null;
   onSubmit: (input: {
     externalId: string;
     displayName: string;
@@ -285,10 +300,10 @@ function AddConnectionForm({
 }): React.ReactElement {
   const [externalId, setExternalId] = useState("");
   const [displayName, setDisplayName] = useState("");
-  const [type, setType] = useState<AppConnectionType>("OAUTH2");
-  const [pieceName, setPieceName] = useState("");
-  const [pieceVersion, setPieceVersion] = useState("0.0.0");
-  const [valueText, setValueText] = useState('{"access_token": ""}');
+  const [type, setType] = useState<AppConnectionType>((setup?.authType as AppConnectionType) ?? "OAUTH2");
+  const [pieceName, setPieceName] = useState(setup?.pieceName ?? "");
+  const [pieceVersion, setPieceVersion] = useState(setup?.pieceVersion ?? "0.0.0");
+  const [valueText, setValueText] = useState(setup && !["OAUTH2", "PLATFORM_OAUTH2", "CLOUD_OAUTH2"].includes(setup.authType) ? '{}' : '{"access_token": ""}');
   const [submitting, setSubmitting] = useState(false);
   const [parseError, setParseError] = useState<string | null>(null);
 

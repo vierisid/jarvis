@@ -9,6 +9,7 @@ export class DiscordAdapter implements ChannelAdapter {
   private token: string;
   private handler: ChannelHandler | null = null;
   private connected: boolean = false;
+  private authenticationRejected = false;
   private client: Client | null = null;
   /** Parsed, never the raw setting: a string there was a substring match (#883). */
   private allowList: AllowList<string>;
@@ -36,6 +37,7 @@ export class DiscordAdapter implements ChannelAdapter {
       return;
     }
 
+    this.authenticationRejected = false;
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -49,6 +51,8 @@ export class DiscordAdapter implements ChannelAdapter {
       // channel service decides, from the error, what is safe to retry.
       rest: { retries: 0 },
     });
+
+    this.client.on('shardDisconnect', event => { if (event.code === 4004) this.authenticationRejected = true; });
 
     // Wait for ready event
     let loginTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -83,6 +87,7 @@ export class DiscordAdapter implements ChannelAdapter {
       await this.client.login(this.token);
       await readyPromise;
     } catch (err) {
+      if ((err as { code?: string })?.code === 'TokenInvalid') this.authenticationRejected = true;
       if (loginTimeout) clearTimeout(loginTimeout);
       try {
         await this.client?.destroy();
@@ -140,6 +145,10 @@ export class DiscordAdapter implements ChannelAdapter {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  authenticationState(): 'verified' | 'rejected' | 'unknown' {
+    return this.authenticationRejected ? 'rejected' : this.client?.isReady() ? 'verified' : 'unknown';
   }
 
   private async processMessage(message: Message): Promise<void> {
