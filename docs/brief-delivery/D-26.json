@@ -1,0 +1,182 @@
+{
+  "step": "D-26",
+  "title": "Connect memory to detail, edit and return",
+  "date": "2026-10-12",
+  "status": "implemented_verified_not_activated",
+  "implementation_head": "pending_commit",
+  "head": "Final receipt commit is the PR head; implementation_head identifies tested code.",
+  "branch": "brief/d-26",
+  "target": "brief/d-25",
+  "base_sha": "9d53db5cbae7a642fff6eeefd3c57b3d42763b58",
+  "main_inspected": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
+  "worktree": "/home/vieri-balboni/Projects/.worktrees/jarvis-d-26",
+  "github_recheck": {
+    "parent": "https://github.com/vierisid/jarvis/pull/937",
+    "state": "OPEN",
+    "parent_ci": "All active checks successful; conditional checks skipped.",
+    "duplicate_d26_prs": 0,
+    "evidence": "evidence/D-26/parent-recheck.json",
+    "base_decision": "Continue the unmerged D stack on its corrected D25 head, preserving the owner checkout and not claiming isolated D01 compatibility."
+  },
+  "source_pins": {
+    "F-17": "42e54d637f2b4c0e955bae4bd6183b1373bd7442",
+    "F-18": "5f83f7876a9bd1ff84e57aa4e00966eb5dc04cb1",
+    "F-19": "4d48f4982e0c5f158e4a59415424299bf32a7020",
+    "roadmap_audit": "69211511c95355776c6c319c01e1df5acd3b8f1e"
+  },
+  "ownership": [
+    "ui/src/brief/memory/detail/**",
+    "ui/src/brief/memory/stream/controller.ts: additive invalidate()",
+    "ui/src/brief/preview/FoundationPreview.tsx: isolated import and dispatch",
+    "docs/brief-delivery/D-26.* and evidence/D-26/**"
+  ],
+  "design_reference": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "detail": "382:4043",
+    "ui35_handoff": "898:379708",
+    "ui35_coverage": "898:379724",
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=382-4043",
+    "inspection": "Native Figma detail at 37/50 percent and UI35 handoff/coverage inspected in browser; screenshots retained.",
+    "limits": "Eight runtime combinations, not eight native exports or a pixel diff. UI35 itself does not certify runtime focus, interruption, frame rate or OS reduced motion."
+  },
+  "activation": {
+    "code_delivered": true,
+    "code_merged": false,
+    "capability_ready": false,
+    "release_enabled": false,
+    "production_registry_changed": false,
+    "capability_defaults_changed": false,
+    "real_effects_invoked": false,
+    "merge_prerequisite": "D-01",
+    "enable_after": ["F-17", "F-19"],
+    "inherited_stream_dependency": "F-18",
+    "required_capabilities": ["memoryStream", "memoryUsage", "memoryForget"],
+    "correction": "Current F17 canCorrect=false is preserved. Existing legacy writer has no expectedRevision CAS; preflight comparison does not make it atomic. Integration owner must verify correction readiness and concurrent-write behavior before enabling writes.",
+    "host_requirements": [
+      "Retain controllers per authenticated scope; retire on logout/replacement.",
+      "Use matching live/fixture ports and scope IDs, never fixture fallback.",
+      "Verify F17/F18/F19 deployment, canonical invalidation/reconnect, durable Forget receipts and restart suppression."
+    ]
+  },
+  "implementation": [
+    "Sentence transfer without scaling text, subordinate source/use/history, explicit correction/confirmation.",
+    "Stable assertion/action/note geometry and reserved feedback preserve the editor through conflicts; draft retained, reload required.",
+    "Canonical route correction follows replacement identity and retains provenance, including isolated SQLite reopen verification.",
+    "F19 local scope confirmation, distinct prepared digest, request identity and receipt recovery without automatic replay.",
+    "Stream invalidation before possible effects; query/window/scroll/focus restoration to replacement, origin or nearest surviving row.",
+    "Abort/generation guards and access/history failures purge stale content."
+  ],
+  "toolchain": {
+    "bun": "1.3.14",
+    "pin": ".github/actions/bun-setup/action.yml",
+    "install": "bun install --frozen-lockfile passed",
+    "lockfile_changed": false
+  },
+  "verification": [
+    {
+      "command": "bun test ui/src/brief/memory",
+      "result": "pass",
+      "tests": 110,
+      "assertions": 366,
+      "failed": 0,
+      "evidence": "evidence/D-26/memory-tests.log"
+    },
+    {
+      "command": "bun test ui/src/brief",
+      "result": "pass",
+      "tests": 661,
+      "skipped": 2,
+      "failed": 0,
+      "assertions": 5408,
+      "evidence": "evidence/D-26/brief-regression.log"
+    },
+    {
+      "command": "bunx tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-26/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "warnings": "Existing @theme/@tailwind at-rule warnings",
+      "evidence": "evidence/D-26/build.log"
+    },
+    {
+      "command": "bunx prettier --check ui/src/brief/memory/detail ui/src/brief/memory/stream/controller.ts docs/brief-delivery/D-26.md docs/brief-delivery/D-26.json docs/brief-delivery/evidence/D-26/browser-checks.json",
+      "result": "pass",
+      "evidence": "evidence/D-26/format-check.log"
+    },
+    {
+      "command": "git diff --cached --check",
+      "result": "pass"
+    }
+  ],
+  "commit_hooks": {
+    "result": "pending",
+    "evidence": "evidence/D-26/hooks.log",
+    "note": "Normal hooks required; no bypass or OpenAI/ChatGPT coauthor trailer."
+  },
+  "browser": {
+    "result": "pass_with_recorded_limits",
+    "method": "CUA in-app Chromium interaction and read-only DOM geometry",
+    "evidence": "evidence/D-26/browser-checks.json",
+    "layouts": 8,
+    "layout_size": "1440x1000",
+    "additional_widths": [800, 390],
+    "observed": [
+      "Canonical detail identity, edit cancellation, correction and earlier-value history.",
+      "Chat draft continuity across settled shell layouts, no horizontal overflow.",
+      "Conflict controls have identical before/after coordinates at desktop and 390px after observed jumps were fixed.",
+      "100 loaded rows: Forget of 080 returns to 081 at identical offset/scroll at desktop and 390px.",
+      "Source-changing correction preserves Search and Source and returns focus to Search when the replacement no longer matches.",
+      "Unknown Forget clears content and recovers via receipt read.",
+      "Long content wraps at 390px; keyboard Tab reaches Confirm fact.",
+      "Forward sentence transfer observed at entry (372.104,380.097) and settled (270,307)."
+    ],
+    "console": "No warnings or errors observed.",
+    "screenshots": [
+      "evidence/D-26/conflict-desktop.png",
+      "evidence/D-26/corrected-with-history.png",
+      "evidence/D-26/dark-expanded-closed.png",
+      "evidence/D-26/dark-expanded-open.png",
+      "evidence/D-26/dark-rail-closed.png",
+      "evidence/D-26/dark-rail-open.png",
+      "evidence/D-26/desktop-nearest-return.png",
+      "evidence/D-26/edit-desktop.png",
+      "evidence/D-26/figma-memory-detail.png",
+      "evidence/D-26/figma-ui35-coverage.png",
+      "evidence/D-26/figma-ui35-handoff.png",
+      "evidence/D-26/figma-ui35-limits.png",
+      "evidence/D-26/filtered-correction-return.png",
+      "evidence/D-26/final-detail.png",
+      "evidence/D-26/forget-local-confirmation.png",
+      "evidence/D-26/light-expanded-closed.png",
+      "evidence/D-26/light-expanded-open.png",
+      "evidence/D-26/light-rail-closed.png",
+      "evidence/D-26/light-rail-open.png",
+      "evidence/D-26/narrow-conflict.png",
+      "evidence/D-26/narrow-long-detail.png",
+      "evidence/D-26/narrow-nearest-return.png",
+      "evidence/D-26/receipt-recovered-800.png",
+      "evidence/D-26/sentence-transfer-entry.png",
+      "evidence/D-26/uncertain-forget-800.png"
+    ]
+  },
+  "not_run": [
+    "Live authenticated F17/F18/F19 deployment and real Forget",
+    "Atomic correction CAS (not supported by the legacy route)",
+    "Native OS reduced-motion setting; media-query behavior and interrupted return cancellation have React tests",
+    "Screen readers and other browsers",
+    "Frame-rate certification, rapid repeated interruption and velocity continuity",
+    "Full repository local test suite; GitHub CI reported separately"
+  ],
+  "preview": {
+    "command": "D25_PREVIEW_PORT=4416 bun run scripts/preview-brief-memory.ts",
+    "url": "http://127.0.0.1:4416/?brief=preview&specimen=memory-detail#/_brief_preview",
+    "isolation": "Loopback static fixture server, no daemon, API proxy or user vault."
+  },
+  "rollback": "Remove optional room registration or switch the host view gate to the legacy UI; revert card commits if needed. No migration/data reversal or effect replay.",
+  "next_card": "D-27 not started",
+  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged."
+}
