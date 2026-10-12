@@ -491,6 +491,39 @@ instead. The sub-agent's audit rows now record what happened: a call that
 needed approval is `approval_required` and not executed, and an allowed call
 is recorded after it ran.
 
+### Required nested workflow continuation (Q-10)
+
+`jarvis-trigger.run_workflow` keeps its asynchronous default. Opt into **Wait
+for completion** when the next step requires the child to succeed. The parent
+parks on a daemon-owned waitpoint; the timer scheduler resumes it through the
+ordinary outer worker only after the child reaches a terminal state. Failure,
+cancellation, missing child records and uncertain effects cannot produce parent
+success. Every `RUN_FLOW` job still has `maxAttempts: 1`.
+
+`workflow_child_run` links the child id and optional waitpoint to the parent's
+existing effect identity (run, step, loop path, route). Child creation, enqueue
+and linkage commit together. Re-entering a completed dispatch reads that child;
+it does not start a sibling. Required descendants propagate uncertainty through
+nested failures. `/api/workflow-runs/:runId/effects` includes their identity,
+status and outcome; the paused dashboard identifies the required child instead
+of offering an unusable webhook resume URL.
+
+Canceling a run atomically stops its required descendants, retires waitpoints
+and closes undispatched approval cards. An already-dispatched effect retains
+its receipt or uncertainty; cancellation never claims remote rollback.
+Recovery polling also stops required children whose parent failed or was deleted.
+Independent asynchronous children retain their existing lifecycle. Delegated
+agent uncertainty now stops the conversation and reaches the parent as an
+`unknown` outcome rather than becoming conversational success.
+
+This uses the current queue, effect boundary, agent loop and waitpoints; it
+introduces no orchestration service. No existing graph opts into required
+completion automatically. Build the Jarvis pieces and refresh the catalog when
+installing this version. Before reverting Q-10, cancel or finish active required
+parent/child runs and remove their `waitForCompletion` settings. Older binaries
+ignore that input and would otherwise restore asynchronous behavior. Retain the
+additive table and historical receipts; never retry an uncertain run as rollback.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,

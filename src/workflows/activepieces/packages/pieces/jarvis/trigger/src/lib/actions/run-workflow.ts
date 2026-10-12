@@ -1,7 +1,7 @@
 /**
  * `run_workflow` action -- POST `{ flowId, payload? }` to
- * `/v1/jarvis/workflows/start`. Fire-and-forget: returns the started
- * run id.
+ * `/v1/jarvis/workflows/start`. Returns the child run id, optionally parking
+ * until the child finishes successfully.
  *
  * Surface: a single `flow` input that holds the target flow's id. The
  * editor renders this as a searchable workflow picker (see the
@@ -18,9 +18,12 @@
  */
 
 import { createAction, Property } from "@activepieces/pieces-framework";
+import { assertActionSucceeded, type ActionOutcome } from '../../../../../../../../../actions/action-outcome';
 
 interface RunWorkflowResponse {
   runId: string | null;
+  waitpointId?: string;
+  child?: { outcome?: ActionOutcome };
   approval?: { effectId: string; approvalId: string; waitpointId: string };
 }
 
@@ -28,11 +31,8 @@ export const runWorkflowAction = createAction({
   name: "run_workflow",
   displayName: "Run another workflow",
   description:
-    "Trigger a saved workflow by id. Returns the started run id. Fire-and-forget; the called workflow runs asynchronously.",
-  // Fire-and-forget: response is just the queued run id. The called
-  // flow's own outputs are NOT available here -- a downstream step
-  // that needs the result must instead poll the run id, or the
-  // called flow can write to a shared store / send a notification.
+    "Trigger a saved workflow by id. Optionally wait for its completion and stop this step if the child fails.",
+  // The child receipt carries status and identity, not arbitrary child outputs.
   outputSample: {
     runId: "run_01HX...",
   },
@@ -41,6 +41,12 @@ export const runWorkflowAction = createAction({
       displayName: "Flow",
       description: "Pick a workflow to run.",
       required: true,
+    }),
+    waitForCompletion: Property.Checkbox({
+      displayName: "Wait for completion",
+      description: "Require the child workflow to succeed before continuing this workflow.",
+      required: false,
+      defaultValue: false,
     }),
     payload: Property.Json({
       displayName: "Payload",
@@ -64,6 +70,10 @@ export const runWorkflowAction = createAction({
       throw new Error("jarvis-trigger.run_workflow: `flow` is required");
     }
     const body: Record<string, unknown> = { flowId };
+    const waitForCompletion = context.propsValue["waitForCompletion"] ?? false;
+    if (typeof waitForCompletion !== 'boolean') throw new Error('waitForCompletion must be a boolean');
+    // Omission retains the identity of existing fire-and-forget effects.
+    if (waitForCompletion) body['waitForCompletion'] = true;
     if (payload !== undefined && payload !== null) {
       if (typeof payload !== "object" || Array.isArray(payload)) {
         throw new Error("jarvis-trigger.run_workflow: payload must be a JSON object if provided");
@@ -88,7 +98,18 @@ export const runWorkflowAction = createAction({
       );
     }
     const reply = (await response.json()) as RunWorkflowResponse;
-    if (reply.approval) context.run.waitForWaitpoint(reply.approval.waitpointId);
+    if (reply.approval) {
+      context.run.waitForWaitpoint(reply.approval.waitpointId);
+      return reply;
+    }
+    if (reply.waitpointId) {
+      context.run.waitForWaitpoint(reply.waitpointId);
+      return reply;
+    }
+    if (waitForCompletion) {
+      if (!reply.child?.outcome) throw new Error('Child completion receipt is unavailable');
+      assertActionSucceeded(reply.child.outcome);
+    }
     return reply;
   },
 });
