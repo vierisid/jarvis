@@ -1,0 +1,256 @@
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/memory/detail/MemoryExperience.test.tsx:
+(pass) sentence transfer is cancelled when returning during motion [147.31ms]
+(pass) reduced motion skips sentence transfer while preserving detail focus and return [84.61ms]
+(pass) direct canonical detail route loads, focuses its title and keeps source/use/history subordinate [48.37ms]
+(pass) cancel returns to the same filtered row with focus and a brief identification [163.83ms]
+(pass) saved correction renders fresh replacement and returns to its row without losing the query [168.41ms]
+263 |   await click("Edit memory");
+264 |   await fill("Correct value", "Keep emails concise.");
+265 |   await fill("Reason or source", "Owner correction");
+266 |   await submit();
+267 |   const replacement = fixture.controller.snapshot().factId!;
+268 |   expect(currentShell.route.selection.factId).toBe(replacement);
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-corrected-21"
+Received: "fixture-memory-0"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/MemoryExperience.test.tsx:268:47)
+(fail) correction updates the canonical route and preserves the next draft through remount [100.81ms]
+296 |   const replacement = fixture.controller.snapshot().factId!;
+297 |   await React.act(async () => {
+298 |     root.render(<Harness route={route} />);
+299 |     await wait();
+300 |   });
+301 |   expect(currentShell.route.selection.factId).toBe(replacement);
+                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "fixture-corrected-21"
+Received: "fixture-memory-0"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/MemoryExperience.test.tsx:301:47)
+(fail) a correction completed while unmounted updates its old route on remount [112.22ms]
+(pass) a late correction cannot navigate away from a different selected fact [131.78ms]
+(pass) Forget is a local confirmation, cancel is harmless, and deletion returns to nearest filtered neighbor [208.04ms]
+(pass) conflicts preserve text in the editor and disable submission until reload [118.94ms]
+(pass) all eight layout combinations keep an in-progress correction draft [276.52ms]
+(pass) fixture data cannot cross into a live shell [22.25ms]
+(pass) disabled per-fact writers stay disabled in the detail UI [68.30ms]
+(pass) scope replacement cannot display the old fact or old editor [99.03ms]
+(pass) return chooses corrected identity, then next/previous surviving neighbor, then empty fallback [0.45ms]
+(pass) detail remount preserves an unsubmitted draft for the same authenticated fact [103.68ms]
+(pass) return reloads the previously loaded page window and focuses a neighbor beyond page one [278.52ms]
+
+ui/src/brief/memory/detail/controller.test.ts:
+(pass) late detail and history cannot replace another canonical selection [0.95ms]
+(pass) a malformed or mismatched canonical read is never rendered [0.40ms]
+(pass) access loss clears drafts, provenance and pending late reads [0.34ms]
+(pass) read-only permissions prevent correction and Forget [0.24ms]
+(pass) history access loss clears visible content, drafts and cached stream rows [0.30ms]
+108 |       expect(state.history.state).toBe("idle");
+109 |       expect(state.object).toBe("");
+110 |       expect(state.reason).toBe("");
+111 |       expect(state.panel).toBeNull();
+112 |       expect(state.prepared).toBeNull();
+113 |       expect(f.controller.dirty).toBe(true);
+                                       ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:113:34)
+(fail) 401 during detail purges detail and the cached stream [1.19ms]
+102 |       if (stage === "prepare") f.port.prepareForget = denied.prepareForget;
+103 |       else f.port.read = denied.read;
+104 |       if (stage === "detail") await f.controller.open(id);
+105 |       else await f.controller.beginForget();
+106 |       const state = f.controller.snapshot();
+107 |       expect(state.read.state).toBe("unavailable");
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:107:32)
+(fail) 401 during prepare purges detail and the cached stream [0.52ms]
+102 |       if (stage === "prepare") f.port.prepareForget = denied.prepareForget;
+103 |       else f.port.read = denied.read;
+104 |       if (stage === "detail") await f.controller.open(id);
+105 |       else await f.controller.beginForget();
+106 |       const state = f.controller.snapshot();
+107 |       expect(state.read.state).toBe("unavailable");
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "conflict"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:107:32)
+(fail) 401 during recheck purges detail and the cached stream [0.43ms]
+108 |       expect(state.history.state).toBe("idle");
+109 |       expect(state.object).toBe("");
+110 |       expect(state.reason).toBe("");
+111 |       expect(state.panel).toBeNull();
+112 |       expect(state.prepared).toBeNull();
+113 |       expect(f.controller.dirty).toBe(true);
+                                       ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:113:34)
+(fail) 403 during detail purges detail and the cached stream [0.34ms]
+102 |       if (stage === "prepare") f.port.prepareForget = denied.prepareForget;
+103 |       else f.port.read = denied.read;
+104 |       if (stage === "detail") await f.controller.open(id);
+105 |       else await f.controller.beginForget();
+106 |       const state = f.controller.snapshot();
+107 |       expect(state.read.state).toBe("unavailable");
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:107:32)
+(fail) 403 during prepare purges detail and the cached stream [0.36ms]
+102 |       if (stage === "prepare") f.port.prepareForget = denied.prepareForget;
+103 |       else f.port.read = denied.read;
+104 |       if (stage === "detail") await f.controller.open(id);
+105 |       else await f.controller.beginForget();
+106 |       const state = f.controller.snapshot();
+107 |       expect(state.read.state).toBe("unavailable");
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "conflict"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:107:32)
+(fail) 403 during recheck purges detail and the cached stream [0.32ms]
+108 |       expect(state.history.state).toBe("idle");
+109 |       expect(state.object).toBe("");
+110 |       expect(state.reason).toBe("");
+111 |       expect(state.panel).toBeNull();
+112 |       expect(state.prepared).toBeNull();
+113 |       expect(f.controller.dirty).toBe(true);
+                                       ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:113:34)
+(fail) 503 during detail purges detail and the cached stream [0.32ms]
+102 |       if (stage === "prepare") f.port.prepareForget = denied.prepareForget;
+103 |       else f.port.read = denied.read;
+104 |       if (stage === "detail") await f.controller.open(id);
+105 |       else await f.controller.beginForget();
+106 |       const state = f.controller.snapshot();
+107 |       expect(state.read.state).toBe("unavailable");
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "ready"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:107:32)
+(fail) 503 during prepare purges detail and the cached stream [0.32ms]
+102 |       if (stage === "prepare") f.port.prepareForget = denied.prepareForget;
+103 |       else f.port.read = denied.read;
+104 |       if (stage === "detail") await f.controller.open(id);
+105 |       else await f.controller.beginForget();
+106 |       const state = f.controller.snapshot();
+107 |       expect(state.read.state).toBe("unavailable");
+                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "unavailable"
+Received: "conflict"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:107:32)
+(fail) 503 during recheck purges detail and the cached stream [0.35ms]
+128 |     f.controller.setDraft({ object: "New value", reason: "Checked" });
+129 |     const pending = f.controller.loadHistory();
+130 |     if (action === "cancel") f.controller.cancelPanel();
+131 |     else if (action === "forget") await f.controller.beginForget();
+132 |     else await f.controller.save();
+133 |     expect(f.controller.snapshot().history.state).toBe("idle");
+                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "idle"
+Received: "loading"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:133:51)
+(fail) cancel resets canceled history so it can be retried [0.41ms]
+128 |     f.controller.setDraft({ object: "New value", reason: "Checked" });
+129 |     const pending = f.controller.loadHistory();
+130 |     if (action === "cancel") f.controller.cancelPanel();
+131 |     else if (action === "forget") await f.controller.beginForget();
+132 |     else await f.controller.save();
+133 |     expect(f.controller.snapshot().history.state).toBe("idle");
+                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "idle"
+Received: "loading"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:133:51)
+(fail) forget resets canceled history so it can be retried [0.26ms]
+128 |     f.controller.setDraft({ object: "New value", reason: "Checked" });
+129 |     const pending = f.controller.loadHistory();
+130 |     if (action === "cancel") f.controller.cancelPanel();
+131 |     else if (action === "forget") await f.controller.beginForget();
+132 |     else await f.controller.save();
+133 |     expect(f.controller.snapshot().history.state).toBe("idle");
+                                                        ^
+error: expect(received).toBe(expected)
+
+Expected: "idle"
+Received: "loading"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-26/ui/src/brief/memory/detail/controller.test.ts:133:51)
+(fail) rejected-save resets canceled history so it can be retried [0.22ms]
+(pass) cancel preserves fact, evidence and filters without a write [0.28ms]
+(pass) correction follows replacement ID, retains earlier evidence, and invalidates stream text [0.34ms]
+(pass) explicit confirmation keeps identity and old evidence [0.29ms]
+(pass) validation and repeated submit do not duplicate writes [15.74ms]
+(pass) conflict preserves draft but requires reload before resubmission [0.38ms]
+(pass) a definite rejection keeps the editable draft [0.26ms]
+(pass) lost correction response is unknown, never retried automatically, and reload reveals supersession [0.35ms]
+(pass) Forget preparation and cancel send no mutation [0.30ms]
+(pass) a changed fact between display and Forget preparation requires a new review [0.30ms]
+(pass) an unknown future Forget scope fails closed [0.34ms]
+(pass) confirmed Forget purges detail/history/draft and keeps one receipt under repeated click [19.11ms]
+(pass) unknown Forget clears text and recovers only through a read receipt [1.05ms]
+(pass) retiring during a mutation prevents a late success from restoring content [10.69ms]
+(pass) missing detail removes potentially stale stream content [0.53ms]
+
+14 tests failed:
+(fail) correction updates the canonical route and preserves the next draft through remount [100.81ms]
+(fail) a correction completed while unmounted updates its old route on remount [112.22ms]
+(fail) 401 during detail purges detail and the cached stream [1.19ms]
+(fail) 401 during prepare purges detail and the cached stream [0.52ms]
+(fail) 401 during recheck purges detail and the cached stream [0.43ms]
+(fail) 403 during detail purges detail and the cached stream [0.34ms]
+(fail) 403 during prepare purges detail and the cached stream [0.36ms]
+(fail) 403 during recheck purges detail and the cached stream [0.32ms]
+(fail) 503 during detail purges detail and the cached stream [0.32ms]
+(fail) 503 during prepare purges detail and the cached stream [0.32ms]
+(fail) 503 during recheck purges detail and the cached stream [0.35ms]
+(fail) cancel resets canceled history so it can be retried [0.41ms]
+(fail) forget resets canceled history so it can be retried [0.26ms]
+(fail) rejected-save resets canceled history so it can be retried [0.22ms]
+
+ 34 pass
+ 14 fail
+ 157 expect() calls
+Ran 48 tests across 2 files. [2.44s]

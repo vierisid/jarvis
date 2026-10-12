@@ -1,0 +1,73 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 2 required path(s) present in the npm tarball (2336 files).
+[pre-commit] Running 2 related test file(s) (180s timeout)...
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/memory/detail/MemoryExperience.test.tsx:
+(pass) sentence transfer is cancelled when returning during motion [205.94ms]
+(pass) reduced motion skips sentence transfer while preserving detail focus and return [96.24ms]
+(pass) direct canonical detail route loads, focuses its title and keeps source/use/history subordinate [47.04ms]
+(pass) cancel returns to the same filtered row with focus and a brief identification [161.02ms]
+(pass) saved correction renders fresh replacement and returns to its row without losing the query [170.24ms]
+(pass) correction updates the canonical route and preserves the next draft through remount [221.35ms]
+(pass) a correction completed while unmounted updates its old route on remount [110.57ms]
+(pass) a late correction cannot navigate away from a different selected fact [149.48ms]
+(pass) canceling an editor during a history request makes the history button retryable [155.74ms]
+(pass) Forget is a local confirmation, cancel is harmless, and deletion returns to nearest filtered neighbor [210.07ms]
+(pass) conflicts preserve text in the editor and disable submission until reload [148.82ms]
+(pass) all eight layout combinations keep an in-progress correction draft [285.98ms]
+(pass) fixture data cannot cross into a live shell [33.06ms]
+(pass) disabled per-fact writers stay disabled in the detail UI [52.36ms]
+(pass) scope replacement cannot display the old fact or old editor [91.24ms]
+(pass) return chooses corrected identity, then next/previous surviving neighbor, then empty fallback [0.48ms]
+(pass) detail remount preserves an unsubmitted draft for the same authenticated fact [104.07ms]
+(pass) return reloads the previously loaded page window and focuses a neighbor beyond page one [266.07ms]
+
+ui/src/brief/memory/detail/controller.test.ts:
+(pass) late detail and history cannot replace another canonical selection [0.76ms]
+(pass) a malformed or mismatched canonical read is never rendered [0.27ms]
+(pass) access loss clears drafts, provenance and pending late reads [0.32ms]
+(pass) read-only permissions prevent correction and Forget [0.22ms]
+(pass) history access loss clears visible content, drafts and cached stream rows [0.34ms]
+(pass) 401 during detail purges detail and the cached stream [0.76ms]
+(pass) 401 during prepare purges detail and the cached stream [0.41ms]
+(pass) 401 during recheck purges detail and the cached stream [0.34ms]
+(pass) 403 during detail purges detail and the cached stream [0.32ms]
+(pass) 403 during prepare purges detail and the cached stream [0.28ms]
+(pass) 403 during recheck purges detail and the cached stream [0.29ms]
+(pass) 503 during detail purges detail and the cached stream [0.32ms]
+(pass) 503 during prepare purges detail and the cached stream [0.29ms]
+(pass) 503 during recheck purges detail and the cached stream [0.37ms]
+(pass) cancel resets canceled history so it can be retried [0.42ms]
+(pass) forget resets canceled history so it can be retried [0.26ms]
+(pass) rejected-save resets canceled history so it can be retried [0.25ms]
+(pass) cancel preserves fact, evidence and filters without a write [0.27ms]
+(pass) correction follows replacement ID, retains earlier evidence, and invalidates stream text [0.33ms]
+(pass) explicit confirmation keeps identity and old evidence [0.31ms]
+(pass) validation and repeated submit do not duplicate writes [18.52ms]
+(pass) conflict preserves draft but requires reload before resubmission [0.43ms]
+(pass) a definite rejection keeps the editable draft [0.35ms]
+(pass) lost correction response is unknown, never retried automatically, and reload reveals supersession [0.48ms]
+(pass) Forget preparation and cancel send no mutation [0.43ms]
+(pass) a changed fact between display and Forget preparation requires a new review [0.39ms]
+(pass) an unknown future Forget scope fails closed [0.51ms]
+(pass) confirmed Forget purges detail/history/draft and keeps one receipt under repeated click [17.95ms]
+(pass) unknown Forget clears text and recovers only through a read receipt [1.00ms]
+(pass) retiring during a mutation prevents a late success from restoring content [12.85ms]
+(pass) missing detail removes potentially stale stream content [0.54ms]
+
+ 49 pass
+ 0 fail
+ 240 expect() calls
+Ran 49 tests across 2 files. [2.83s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-26 025ebf38] fix(brief): address D-26 memory review findings
+ 4 files changed, 242 insertions(+), 16 deletions(-)
