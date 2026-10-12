@@ -265,3 +265,129 @@ test("exact filter entry applies with Enter, cancels with Escape, and restores f
   expect(fixture.requests).toHaveLength(1);
   expect(document.activeElement?.tagName).toBe("SELECT");
 });
+
+async function openExactFilter(label: "Source" | "Used in") {
+  const fieldLabel = [...host.querySelectorAll("label")].find(
+    (node) => node.textContent === label,
+  )!;
+  const select = document.getElementById(
+    fieldLabel.htmlFor,
+  ) as HTMLSelectElement;
+  await React.act(async () => {
+    select.value = "exact";
+    select.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  return host.querySelector(
+    label === "Source"
+      ? '[placeholder="Exact source label"]'
+      : '[placeholder="conversation:<id> or run:<id>"]',
+  ) as HTMLInputElement | HTMLTextAreaElement;
+}
+async function enterExactText(
+  editor: HTMLInputElement | HTMLTextAreaElement,
+  value: string,
+) {
+  await React.act(async () => {
+    const prototype =
+      editor.tagName === "TEXTAREA"
+        ? HTMLTextAreaElement.prototype
+        : HTMLInputElement.prototype;
+    Object.getOwnPropertyDescriptor(prototype, "value")!.set!.call(
+      editor,
+      value,
+    );
+    editor.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+test("exact Source entry preserves multiline whitespace without a source catalog", async () => {
+  await render();
+  const source = " \tLine 1\nLine 2\n ";
+  const editor = await openExactFilter("Source");
+  await enterExactText(editor, source);
+  expect(editor.value).toBe(source);
+  await React.act(async () => {
+    editor.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+    );
+    await wait();
+  });
+  expect(fixture.requests.at(-1)!.source).toBe(source);
+  expect(document.activeElement?.tagName).toBe("SELECT");
+  const reopened = await openExactFilter("Source");
+  expect(reopened.value).toBe(source);
+  await React.act(async () =>
+    reopened.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "Escape", bubbles: true }),
+    ),
+  );
+  expect(fixture.controller.snapshot().filters.source).toBe(source);
+  expect(document.activeElement?.tagName).toBe("SELECT");
+});
+test("Shift+Enter in Source permits a newline without submitting the filter", async () => {
+  await render();
+  const editor = await openExactFilter("Source");
+  await enterExactText(editor, "Line 1");
+  const event = new KeyboardEvent("keydown", {
+    key: "Enter",
+    shiftKey: true,
+    bubbles: true,
+    cancelable: true,
+  });
+  await React.act(async () => {
+    editor.dispatchEvent(event);
+    await wait();
+  });
+  expect(editor.tagName).toBe("TEXTAREA");
+  expect(event.defaultPrevented).toBe(false);
+  expect(editor.isConnected).toBe(true);
+  expect(fixture.requests).toHaveLength(1);
+});
+for (const label of ["Source", "Used in"] as const)
+  for (const key of ["Enter", "Escape"] as const)
+    test(`${label} ignores ${key} during IME composition and applies after composition`, async () => {
+      await render();
+      const editor = await openExactFilter(label);
+      const value = label === "Source" ? "会議メモ" : "run:会議";
+      await enterExactText(editor, value);
+      const event = new KeyboardEvent("keydown", {
+        key,
+        isComposing: true,
+        bubbles: true,
+        cancelable: true,
+      });
+      await React.act(async () => {
+        editor.dispatchEvent(event);
+        await wait();
+      });
+      expect(event.defaultPrevented).toBe(false);
+      expect(editor.isConnected).toBe(true);
+      expect(fixture.requests).toHaveLength(1);
+      await React.act(async () => {
+        editor.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Enter", bubbles: true }),
+        );
+        await wait();
+      });
+      expect(
+        fixture.requests.at(-1)![label === "Source" ? "source" : "usedIn"],
+      ).toBe(value);
+      expect(document.activeElement?.tagName).toBe("SELECT");
+    });
+test("legacy IME key code does not apply Source when isComposing is false", async () => {
+  await render();
+  const editor = await openExactFilter("Source");
+  await enterExactText(editor, "会議メモ");
+  const event = new KeyboardEvent("keydown", {
+    key: "Enter",
+    keyCode: 229,
+    bubbles: true,
+    cancelable: true,
+  });
+  await React.act(async () => {
+    editor.dispatchEvent(event);
+    await wait();
+  });
+  expect(event.defaultPrevented).toBe(false);
+  expect(editor.isConnected).toBe(true);
+  expect(fixture.requests).toHaveLength(1);
+});

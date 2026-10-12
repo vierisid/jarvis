@@ -4,7 +4,7 @@
   "date": "2026-10-12",
   "status": "implemented_verified_not_activated",
   "implementation_head": "784200e12a0a5e120a67b651a7e842153899b0e8",
-  "head": "Final receipt commit is the PR head; implementation_head identifies the tested code commit.",
+  "head": "Final receipt commit is the PR head; implementation_head identifies the initial tested code, and review_corrections.implementation_head identifies the tested fixes.",
   "branch": "brief/d-25",
   "target": "brief/d-24",
   "base_sha": "9717385f4145bda899db8f9cc2bfdfbf4b92e3a9",
@@ -198,5 +198,74 @@
   "rollback": "Remove optional memoryRegistrations/specimen dispatch or revert D-25 commits. Production defaults unchanged; no migration or backend writer reversal.",
   "quick_verify": "bun run build:ui && bun run scripts/preview-brief-memory.ts; open http://127.0.0.1:4415/?brief=preview&specimen=memory#/_brief_preview; search pilot with Meeting notes / Meeting follow-ups / Past 7 days for two matches; use many + needle for a match beyond page one.",
   "guide": "D-25.md",
-  "next": "D-26 not started"
+  "next": "D-26 not started",
+  "review_corrections": {
+    "reviewed_head": "ae6fa4083c3e5de86ca75d493c2c57d4fb8b72c5",
+    "pr": "https://github.com/vierisid/jarvis/pull/937",
+    "fixes": [
+      {
+        "id": "R1",
+        "result": "Source exact entry preserves line-feed labels using the shared textarea; Shift+Enter inserts a line; the control remains 44px high at the default text scale."
+      },
+      {
+        "id": "R2",
+        "result": "Source and Used in ignore Enter/Escape while isComposing or keyCode 229 is set; ordinary application and cancellation retain dropdown focus."
+      }
+    ],
+    "verification": [
+      {
+        "command": "bun test ui/src/brief/memory/stream/MemoryStreamRoom.test.tsx",
+        "phase": "before fix",
+        "result": "expected_failure",
+        "new_regression_failures": 7,
+        "evidence": "evidence/D-25/review-red.log"
+      },
+      {
+        "command": "bun test ui/src/brief/memory/stream",
+        "result": "pass",
+        "tests": 62,
+        "assertions": 196,
+        "evidence": "evidence/D-25/review-focused.log"
+      },
+      {
+        "command": "bun test ui/src/brief",
+        "result": "pass",
+        "tests": 613,
+        "skipped": 2,
+        "failed": 0,
+        "assertions": 5238,
+        "evidence": "evidence/D-25/review-regression.log"
+      },
+      {
+        "command": "bunx tsc --noEmit",
+        "result": "pass",
+        "evidence": "evidence/D-25/review-typecheck.log"
+      },
+      {
+        "command": "bun run build:ui",
+        "result": "pass",
+        "warnings": "Existing @theme/@tailwind at-rule warnings",
+        "evidence": "evidence/D-25/review-build.log"
+      }
+    ],
+    "browser": {
+      "result": "pass",
+      "evidence": "evidence/D-25/review-browser-checks.json",
+      "observed": [
+        "Multiline labels retained before and after apply",
+        "Shift+Enter inserts a line; Escape preserves the applied value",
+        "Enter/Escape return dropdown focus",
+        "Desktop and 390px controls/result-count geometry unchanged; no horizontal overflow"
+      ],
+      "screenshots": [
+        "evidence/D-25/review-multiline-desktop.png",
+        "evidence/D-25/review-multiline-narrow.png",
+        "evidence/D-25/review-final-preview.png"
+      ]
+    },
+    "limits": [
+      "Native OS IME not exercised; composition behavior verified through React DOM keyboard regression tests."
+    ],
+    "activation": "Unchanged: code remains unmerged, release disabled, no live F17/F18/provider effects."
+  }
 }

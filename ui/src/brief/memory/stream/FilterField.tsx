@@ -1,5 +1,9 @@
 import React, { useId, useRef, useState } from "react";
-import { BriefInput, BriefSelect } from "../../components/controls";
+import {
+  BriefInput,
+  BriefSelect,
+  BriefTextarea,
+} from "../../components/controls";
 
 /** Native dropdown plus exact entry: suggestions never limit the server query. */
 export function FilterField({
@@ -9,6 +13,7 @@ export function FilterField({
   value,
   options,
   maxLength,
+  multiline = false,
   onChange,
 }: {
   label: string;
@@ -17,6 +22,7 @@ export function FilterField({
   value: string;
   options: readonly { value: string; label: string }[];
   maxLength: number;
+  multiline?: boolean;
   onChange(value: string): void;
 }) {
   const [editing, setEditing] = useState(false),
@@ -37,26 +43,42 @@ export function FilterField({
     if (apply) onChange(draft);
     setEditing(false);
   };
-  if (editing)
-    return (
-      <BriefInput
-        label={label}
-        placeholder={placeholder}
-        autoFocus
-        maxLength={maxLength}
-        value={draft}
-        title="Enter to apply; Escape to cancel"
-        onChange={(event) => setDraft(event.target.value)}
-        onBlur={() => finish(true)}
-        onKeyDown={(event) => {
-          if (event.key === "Enter" || event.key === "Escape") {
-            event.preventDefault();
-            event.stopPropagation();
-            finish(event.key === "Enter", true);
-          }
-        }}
-      />
+  if (editing) {
+    const instructions = multiline
+      ? "Enter to apply; Shift+Enter for a new line; Escape to cancel"
+      : "Enter to apply; Escape to cancel";
+    const props = {
+      label,
+      placeholder,
+      autoFocus: true,
+      maxLength,
+      value: draft,
+      title: instructions,
+      "aria-description": instructions,
+      onChange: (
+        event: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
+      ) => setDraft(event.target.value),
+      onBlur: () => finish(true),
+      onKeyDown: (
+        event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+      ) => {
+        // Some IMEs report keyCode 229 on the final Enter after isComposing clears.
+        if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229)
+          return;
+        if (multiline && event.key === "Enter" && event.shiftKey) return;
+        if (event.key === "Enter" || event.key === "Escape") {
+          event.preventDefault();
+          event.stopPropagation();
+          finish(event.key === "Enter", true);
+        }
+      },
+    };
+    return multiline ? (
+      <BriefTextarea {...props} rows={1} />
+    ) : (
+      <BriefInput {...props} />
     );
+  }
   const values = [
     ...new Map(
       options

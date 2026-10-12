@@ -121,6 +121,7 @@ function ConnectedMemory({ binding }: { binding: MemoryBinding }) {
           anyLabel="Any source"
           placeholder="Exact source label"
           maxLength={4000}
+          multiline
           value={filters.source}
           options={(binding.sourceOptions ?? []).map((value) => ({
             value,

@@ -16,10 +16,16 @@
   min-width: 0;
 }
 .brief-root .brief-memory-filters input,
+.brief-root .brief-memory-filters textarea,
 .brief-root .brief-memory-filters select {
   min-width: 0;
   width: 100%;
   text-overflow: ellipsis;
+}
+.brief-root .brief-memory-filters .brief-field__surface textarea {
+  min-height: 44px;
+  height: calc(24px + 20px * var(--brief-text-scale, 1));
+  resize: none;
 }
 .brief-root .brief-memory-results-line {
   display: flex;
