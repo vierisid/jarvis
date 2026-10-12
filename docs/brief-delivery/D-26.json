@@ -3,7 +3,7 @@
   "title": "Connect memory to detail, edit and return",
   "date": "2026-10-12",
   "status": "implemented_verified_not_activated",
-  "implementation_head": "7d17c6908296486abc91bbc0db688e2beb6a4a36",
+  "implementation_head": "025ebf38e4128a0729939d92b02c1df2a8ac0ec3",
   "head": "Final receipt commit is the PR head; implementation_head identifies tested code.",
   "branch": "brief/d-26",
   "target": "brief/d-25",
@@ -77,35 +77,35 @@
     {
       "command": "bun test ui/src/brief/memory",
       "result": "pass",
-      "tests": 110,
-      "assertions": 366,
+      "tests": 126,
+      "assertions": 483,
       "failed": 0,
-      "evidence": "evidence/D-26/memory-tests.log"
+      "evidence": "evidence/D-26/review-memory-tests.log"
     },
     {
       "command": "bun test ui/src/brief",
       "result": "pass",
-      "tests": 661,
+      "tests": 677,
       "skipped": 2,
+      "assertions": 5525,
       "failed": 0,
-      "assertions": 5408,
-      "evidence": "evidence/D-26/brief-regression.log"
+      "evidence": "evidence/D-26/review-brief-regression.log"
     },
     {
       "command": "bunx tsc --noEmit",
       "result": "pass",
-      "evidence": "evidence/D-26/typecheck.log"
+      "evidence": "evidence/D-26/review-typecheck.log"
     },
     {
       "command": "bun run build:ui",
       "result": "pass",
       "warnings": "Existing @theme/@tailwind at-rule warnings",
-      "evidence": "evidence/D-26/build.log"
+      "evidence": "evidence/D-26/review-build.log"
     },
     {
-      "command": "bunx prettier --check ui/src/brief/memory/detail ui/src/brief/memory/stream/controller.ts docs/brief-delivery/D-26.md docs/brief-delivery/D-26.json docs/brief-delivery/evidence/D-26/browser-checks.json",
+      "command": "bunx prettier --check ui/src/brief/memory/detail docs/brief-delivery/D-26.md docs/brief-delivery/D-26.json",
       "result": "pass",
-      "evidence": "evidence/D-26/format-check.log"
+      "evidence": "evidence/D-26/review-format-check.log"
     },
     {
       "command": "git diff --cached --check",
@@ -114,10 +114,10 @@
   ],
   "commit_hooks": {
     "result": "pass",
-    "evidence": "evidence/D-26/hooks.log",
-    "note": "Normal hooks required; no bypass or OpenAI/ChatGPT coauthor trailer.",
-    "tests": 69,
-    "assertions": 225
+    "evidence": "evidence/D-26/review-code-hooks.log",
+    "note": "Normal hooks, including license, migration, template, package, related tests and typecheck; no bypass or coauthor trailer. Final evidence commit also uses normal hooks.",
+    "tests": 49,
+    "assertions": 240
   },
   "browser": {
     "result": "pass_with_recorded_limits",
@@ -180,5 +180,77 @@
   },
   "rollback": "Remove optional room registration or switch the host view gate to the legacy UI; revert card commits if needed. No migration/data reversal or effect replay.",
   "next_card": "D-27 not started",
-  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged."
+  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged.",
+  "initial_implementation_head": "7d17c6908296486abc91bbc0db688e2beb6a4a36",
+  "initial_verification": [
+    {
+      "command": "bun test ui/src/brief/memory",
+      "result": "pass",
+      "tests": 110,
+      "assertions": 366,
+      "failed": 0,
+      "evidence": "evidence/D-26/memory-tests.log"
+    },
+    {
+      "command": "bun test ui/src/brief",
+      "result": "pass",
+      "tests": 661,
+      "skipped": 2,
+      "failed": 0,
+      "assertions": 5408,
+      "evidence": "evidence/D-26/brief-regression.log"
+    },
+    {
+      "command": "bunx tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-26/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "warnings": "Existing @theme/@tailwind at-rule warnings",
+      "evidence": "evidence/D-26/build.log"
+    },
+    {
+      "command": "bunx prettier --check ui/src/brief/memory/detail ui/src/brief/memory/stream/controller.ts docs/brief-delivery/D-26.md docs/brief-delivery/D-26.json docs/brief-delivery/evidence/D-26/browser-checks.json",
+      "result": "pass",
+      "evidence": "evidence/D-26/format-check.log"
+    },
+    {
+      "command": "git diff --cached --check",
+      "result": "pass"
+    }
+  ],
+  "initial_commit_hooks": {
+    "result": "pass",
+    "evidence": "evidence/D-26/hooks.log",
+    "note": "Normal hooks required; no bypass or OpenAI/ChatGPT coauthor trailer.",
+    "tests": 69,
+    "assertions": 225
+  },
+  "review_corrections": {
+    "reviewed_head": "2371d272898577a2d0fdc3d2c02294a9e7cf6f22",
+    "implementation_head": "025ebf38e4128a0729939d92b02c1df2a8ac0ec3",
+    "pr": "https://github.com/vierisid/jarvis/pull/941",
+    "added_tests": 16,
+    "fixes": [
+      "R1: Purge detail, history, editor and prepared command and invalidate cached stream on unavailable detail/preparation/recheck reads; cover HTTP 401/403/503.",
+      "R2: Retain an explicit replacement route handoff across remounts, acknowledge the canonical selection, allow later history inspection and ignore late saves after selection changes.",
+      "R3: Reset canceled loading history while retaining completed history; ignore late responses and enable retry after Cancel, Forget preparation or rejected save."
+    ],
+    "before_fix": {
+      "result": "expected_regression_failures",
+      "failed": 14,
+      "passed": 34,
+      "evidence": "evidence/D-26/review-before-fixes.log",
+      "note": "The first 15 added regression cases ran against the reviewed code; 14 failed. The additional UI cancellation case was added during the correction pass."
+    },
+    "browser": "Original browser layout/motion evidence retained; this correction pass uses HTTP/controller and React DOM tests, with no new browser capture.",
+    "prior_head_ci": {
+      "head": "2371d272898577a2d0fdc3d2c02294a9e7cf6f22",
+      "result": "All active checks passed; conditional checks skipped.",
+      "evidence": "evidence/D-26/review-pr-before-push.json"
+    },
+    "current_head_ci": "Recheck on GitHub after push; prior-head success is not current-head success."
+  }
 }
