@@ -1,0 +1,146 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 2 required path(s) present in the npm tarball (2335 files).
+[pre-commit] Running 4 related test file(s) (180s timeout)...
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/memory/stream/controller.test.ts:
+(pass) late success cannot overwrite a newer query; abort is not the only race guard [26.43ms]
+(pass) a query edit invalidates an old response during debounce and retains all filters [44.41ms]
+(pass) late rejection cannot replace newer filters or results [27.56ms]
+(pass) revocation clears content and sensitive filters, ignores outstanding reads [16.45ms]
+(pass) retirement notifies subscribers and cannot be reactivated [8.86ms]
+(pass) server query finds a match beyond first page; no page-local search [19.28ms]
+(pass) bounded continuation repeats filters and immutable Updated bounds; all rows reachable [18.29ms]
+(pass) combined filters preserve exact server counts and exclude selected-only usage [25.99ms]
+(pass) continuation is single flight and late pagination cannot contaminate new search [34.60ms]
+(pass) stale clears cached rows without clearing applied filters [26.94ms]
+(pass) unavailable clears cached rows without clearing applied filters [25.06ms]
+(pass) unsupported clears cached rows without clearing applied filters [27.30ms]
+(pass) error clears cached rows without clearing applied filters [25.81ms]
+(pass) rejects duplicate violation instead of showing a partial vault [17.49ms]
+(pass) rejects count violation instead of showing a partial vault [21.85ms]
+(pass) rejects order violation instead of showing a partial vault [16.78ms]
+(pass) rejects permission violation instead of showing a partial vault [25.79ms]
+(pass) no match, empty vault and missing provider are distinct [26.33ms]
+(pass) exact whitespace labels roundtrip and special characters are URL encoded [1.82ms]
+(pass) query limits and invalid identities fail before network access [1.60ms]
+(pass) date groups use calendar boundaries and usage never claims reliance [0.42ms]
+
+ui/src/brief/memory/detail/http.test.ts:
+(pass) detail reads are authenticated/no-store and never follow server-supplied URLs [1.12ms]
+(pass) detail HTTP 401 is unavailable, never fixture data [0.12ms]
+(pass) detail HTTP 403 is unavailable, never fixture data [0.05ms]
+(pass) detail HTTP 404 is missing, never fixture data [0.04ms]
+(pass) detail HTTP 410 is forgotten, never fixture data [0.04ms]
+(pass) detail HTTP 409 is conflict, never fixture data [0.03ms]
+(pass) detail HTTP 501 is unsupported, never fixture data [0.04ms]
+(pass) detail HTTP 503 is unavailable, never fixture data [0.04ms]
+(pass) a changing projection or mismatched canonical identity fails closed [0.24ms]
+(pass) invalid or oversized history is rejected as a whole [0.68ms]
+(pass) server canCorrect=false prevents using the existing legacy writer [1.27ms]
+(pass) a stale edit revision stops before POST [2.44ms]
+(pass) Forget sends F19's exact prepared digest and explicit confirmation; request is not auto-retried [3.74ms]
+(pass) Forget revision conflict and ambiguous failure stay distinct [0.28ms]
+Database initialized at: /tmp/d26-memory-contract-apQGlr/vault.db
+Database initialized at: /tmp/d26-memory-contract-apQGlr/vault.db
+(pass) canonical correction survives restart and retains original provenance through supersession [22.83ms]
+
+ui/src/brief/memory/detail/MemoryExperience.test.tsx:
+(pass) sentence transfer is cancelled when returning during motion [149.85ms]
+(pass) reduced motion skips sentence transfer while preserving detail focus and return [94.33ms]
+(pass) direct canonical detail route loads, focuses its title and keeps source/use/history subordinate [39.58ms]
+(pass) cancel returns to the same filtered row with focus and a brief identification [201.25ms]
+(pass) saved correction renders fresh replacement and returns to its row without losing the query [205.22ms]
+(pass) Forget is a local confirmation, cancel is harmless, and deletion returns to nearest filtered neighbor [208.54ms]
+(pass) conflicts preserve text in the editor and disable submission until reload [125.42ms]
+(pass) all eight layout combinations keep an in-progress correction draft [278.77ms]
+(pass) fixture data cannot cross into a live shell [19.91ms]
+(pass) disabled per-fact writers stay disabled in the detail UI [61.01ms]
+(pass) scope replacement cannot display the old fact or old editor [100.67ms]
+(pass) return chooses corrected identity, then next/previous surviving neighbor, then empty fallback [0.48ms]
+(pass) detail remount preserves an unsubmitted draft for the same authenticated fact [132.40ms]
+(pass) return reloads the previously loaded page window and focuses a neighbor beyond page one [405.26ms]
+
+ui/src/brief/memory/detail/controller.test.ts:
+(pass) late detail and history cannot replace another canonical selection [1.09ms]
+(pass) a malformed or mismatched canonical read is never rendered [0.31ms]
+(pass) access loss clears drafts, provenance and pending late reads [0.42ms]
+(pass) read-only permissions prevent correction and Forget [0.26ms]
+(pass) history access loss clears visible content, drafts and cached stream rows [0.33ms]
+(pass) cancel preserves fact, evidence and filters without a write [0.30ms]
+(pass) correction follows replacement ID, retains earlier evidence, and invalidates stream text [0.39ms]
+(pass) explicit confirmation keeps identity and old evidence [0.32ms]
+(pass) validation and repeated submit do not duplicate writes [16.98ms]
+(pass) conflict preserves draft but requires reload before resubmission [0.62ms]
+(pass) a definite rejection keeps the editable draft [0.35ms]
+(pass) lost correction response is unknown, never retried automatically, and reload reveals supersession [0.37ms]
+(pass) Forget preparation and cancel send no mutation [0.37ms]
+(pass) a changed fact between display and Forget preparation requires a new review [0.28ms]
+(pass) an unknown future Forget scope fails closed [0.38ms]
+(pass) confirmed Forget purges detail/history/draft and keeps one receipt under repeated click [22.73ms]
+(pass) unknown Forget clears text and recovers only through a read receipt [1.75ms]
+(pass) retiring during a mutation prevents a late success from restoring content [10.65ms]
+(pass) missing detail removes potentially stale stream content [0.49ms]
+
+ 69 pass
+ 0 fail
+ 225 expect() calls
+Ran 69 tests across 4 files. [2.85s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-26 7d17c690] feat(brief): connect memory detail, decisions and return (D-26)
+ 49 files changed, 4888 insertions(+)
+ create mode 100644 docs/brief-delivery/D-26.json
+ create mode 100644 docs/brief-delivery/D-26.md
+ create mode 100644 docs/brief-delivery/evidence/D-26/brief-regression.log
+ create mode 100644 docs/brief-delivery/evidence/D-26/browser-checks.json
+ create mode 100644 docs/brief-delivery/evidence/D-26/build.log
+ create mode 100644 docs/brief-delivery/evidence/D-26/conflict-desktop.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/corrected-with-history.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/dark-expanded-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/dark-expanded-open.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/dark-rail-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/dark-rail-open.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/desktop-nearest-return.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/edit-desktop.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/f19-recheck.json
+ create mode 100644 docs/brief-delivery/evidence/D-26/figma-memory-detail.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/figma-ui35-coverage.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/figma-ui35-handoff.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/figma-ui35-limits.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/filtered-correction-return.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/final-detail.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/forget-local-confirmation.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/format-check.log
+ create mode 100644 docs/brief-delivery/evidence/D-26/install.log
+ create mode 100644 docs/brief-delivery/evidence/D-26/light-expanded-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/light-expanded-open.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/light-rail-closed.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/light-rail-open.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/memory-tests.log
+ create mode 100644 docs/brief-delivery/evidence/D-26/narrow-conflict.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/narrow-long-detail.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/narrow-nearest-return.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/parent-recheck.json
+ create mode 100644 docs/brief-delivery/evidence/D-26/receipt-recovered-800.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/sentence-transfer-entry.png
+ create mode 100644 docs/brief-delivery/evidence/D-26/typecheck.log
+ create mode 100644 docs/brief-delivery/evidence/D-26/uncertain-forget-800.png
+ create mode 100644 ui/src/brief/memory/detail/MemoryDetailRoom.tsx
+ create mode 100644 ui/src/brief/memory/detail/MemoryDetailSpecimen.tsx
+ create mode 100644 ui/src/brief/memory/detail/MemoryExperience.test.tsx
+ create mode 100644 ui/src/brief/memory/detail/MemoryExperience.tsx
+ create mode 100644 ui/src/brief/memory/detail/controller.test.ts
+ create mode 100644 ui/src/brief/memory/detail/controller.ts
+ create mode 100644 ui/src/brief/memory/detail/detail.css
+ create mode 100644 ui/src/brief/memory/detail/fixtures.ts
+ create mode 100644 ui/src/brief/memory/detail/http.test.ts
+ create mode 100644 ui/src/brief/memory/detail/http.ts
+ create mode 100644 ui/src/brief/memory/detail/model.ts
