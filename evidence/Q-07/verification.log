@@ -1,0 +1,81 @@
+Q-07 local verification, 12 October 2026; Bun 1.3.14 (0d9b296a)
+Baseline: 307353150cef19a92c42cc8c45dd22c260b47ead
+Implementation: 98fbd8cfb815a000262f14e306caabf90692bdcd
+Test cache: /tmp/jarvis-q07-engine-cache (test-only override)
+
+Final affected suite (74 files)
+(skip) engine bundle build > produces a runnable bundle that exits cleanly without SANDBOX_ID
+
+ 1527 pass
+ 2 skip
+ 0 fail
+ 17354 expect() calls
+Ran 1529 tests across 74 files. [268.59s]
+
+Explicit optional engine checks
+(pass) engine bundle build > vendored engine source exists at the expected path [0.26ms]
+(pass) engine bundle build > produces a runnable bundle that exits cleanly without SANDBOX_ID [263.15ms]
+
+ 26 pass
+ 0 fail
+ 96 expect() calls
+Ran 26 tests across 2 files. [5.70s]
+
+Focused recovery / guards / Today projections
+Database initialized at: /tmp/jarvis-q07-HMPBlg/fixture.db
+(pass) an inconclusive readback of a step receipt leaves the missing completion unknown [21.04ms]
+
+ 159 pass
+ 0 fail
+ 1572 expect() calls
+Ran 159 tests across 4 files. [3.33s]
+
+Real engine + authenticated API + fake provider
+(pass) real engine cannot resend after losing the completion request [3793.98ms]
+(pass) real engine cannot resend after losing the completion reply [3711.07ms]
+
+ 2 pass
+ 0 fail
+ 8 expect() calls
+Ran 2 tests across 1 file. [7.79s]
+
+Typecheck: bunx --no-install tsc --noEmit, exit 0 (no diagnostics).
+Final explicit guards: check:no-ee passed; check:migrations passed; lint:templates 100 templates, 0 errors/warnings; check:package 2373 files, required paths present.
+git diff --check: exit 0.
+
+Implementation commit required hooks:
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 2 required path(s) present in the npm tarball (2373 files).
+[pre-commit] Running 8 related test file(s) (180s timeout)...
+ 364 pass
+ 0 fail
+Ran 365 tests across 8 files. [35.09s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+
+Earlier broad run (not certified):
+
+ 1461 pass
+ 2 skip
+ 40 fail
+ 1 error
+ 17121 expect() calls
+Ran 1503 tests across 73 files. [363.01s]
+
+Three source-shape expectations were updated for the new engine wrapper. An engine build timeout stopped esbuild; dependent builds then failed. Fresh cache isolated writable staging from concurrent work.
+Fresh engine retest before final suite:
+1 tests failed:
+(fail) end to end, against a real process > reaps an engine whose owner really did die [57.21ms]
+
+ 231 pass
+ 1 fail
+ 850 expect() calls
+Ran 232 tests across 7 files. [105.73s]
+
+The remaining engine-reaper assertion was reproduced against the unchanged Q-08 source (baseline-reaper.log); it passed in the final 74-file run. No engine-reaper source was changed.

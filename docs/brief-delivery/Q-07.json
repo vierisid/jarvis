@@ -1,0 +1,139 @@
+{
+  "task": "Q-07",
+  "title": "Finish safe recovery for uncertain execution",
+  "date": "2026-10-12",
+  "branch": "brief/q-07",
+  "worktree": "dedicated sibling checkout .worktrees/jarvis-q-07; owner checkout left clean",
+  "baseline": "307353150cef19a92c42cc8c45dd22c260b47ead",
+  "baseline_ref": "origin/brief/q-08, verified open PR #891; includes Q-06 #806",
+  "head": {
+    "ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-07.json",
+    "implementation_resolve": "git log -1 --format=%H -- src/workflows/runtime/recovery.ts",
+    "implementation_sha": "98fbd8cfb815a000262f14e306caabf90692bdcd"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "capability_ready": "bounded completion tracking, exact provider readback, durable recovery choices and additive consumer projections",
+    "release_enabled": false,
+    "publication": "one PR from brief/q-07 targeting brief/q-08; resolve with gh pr view brief/q-07"
+  },
+  "design": {
+    "surface": "existing Today work items, Runs and additive Needs you recovery API",
+    "visual_changes": false,
+    "contract": "docs/workflow-recovery.md"
+  },
+  "ownership": {
+    "implementer": "Core-quality line",
+    "review": "implementation diff reviewed locally; independent review pending",
+    "seam": "Q-07 owns reconciliation writes; F-21 consumes the additive RecoveryProjection and does not implement another recovery state machine"
+  },
+  "merge_after": [
+    "Q-08 #891, which is stacked on Q-06 #806"
+  ],
+  "enable_after": [],
+  "integration": [
+    "Rechecked Q-08 at 307353150cef19a92c42cc8c45dd22c260b47ead, open against brief/q-06 with successful required checks; Q-06 is an ancestor. No existing Q-07 PR was found before implementation or publication preparation.",
+    "Q-08 is the integration base because Q-07 extends its effect boundary, emergency holds and Q-06 no-replay ledger. This is not a new product prerequisite. No stack-wide merge or rebase.",
+    "Verified current main at 75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0. Keep main's approve AND deny allowlists, exact short-ID matching, review-only restrictions, ApprovalGuard and argument/version binding when the stack is integrated. This PR changes no channel approval or decision endpoint and does not certify main plus the whole stack.",
+    "Deploy daemon and rebuilt engine together. New engines refuse selected sends without the completion protocol; legacy authorization records prevent acquisition of a new send identity.",
+    "The app's managed-worktree creation failed because the chat is attached to the Projects parent directory rather than the repository; attaching the manually created checkout was also refused as unmanaged. Used an isolated dedicated Git worktree instead; did not alter the owner's main checkout."
+  ],
+  "behavior": [
+    "Gmail send_email/gmail_send_email and Slack send_channel_message/slack_post_message acquire a durable piece-dispatch fence before provider execution. Reauthorization cannot dispatch again while the result is unknown. A saved completion is returned without another send even if its acknowledgement was lost.",
+    "Generic exceptions after direct dispatch remain unknown, not not-started. A secondary audit failure cannot erase a primary completion. Partial results survive crash/restart; RUN_FLOW maxAttempts stays ONE.",
+    "Exact native OAUTH2 readback is supported for Gmail 0.17.0 saved message IDs and Slack 0.21.0 bot top-level channel/timestamp receipts without file uploads. The credential must match the literal pinned connection and digest captured at dispatch. Only GET requests to fixed provider hosts are made.",
+    "A succeeded top-level run-step output may supply a missing direct receipt for exact provider readback. Confirmation updates the recovery projection, never the original dispatch fence or terminal run. Loop outputs are not guessed.",
+    "Unsupported or inconclusive evidence requires inspection and a new intentional run through existing checks. An inspection acknowledges current evidence without claiming that an action succeeded or did not happen. Late completion invalidates the acknowledgement.",
+    "Recovery choices are revision-bound and idempotent by request ID, with append-only audit receipts committed atomically. Concurrent or stale decisions cannot overwrite evidence. No recovery choice executes, resumes, enqueues or grants approval.",
+    "Run, effects and work-item views share one RecoveryProjection. The recovery inbox paginates terminal incomplete runs needing attention. No Brief UI is activated."
+  ],
+  "acceptance": [
+    {
+      "check": "Failure before dispatch, during provider work and after persisted receipt retains partial results and truthful uncertainty across restart",
+      "status": "passed",
+      "evidence": "recovery.test.ts spawns SIGKILL fixtures at all three boundaries; before=blocked/zero sends, during=unknown/one accepted send, after=recoverable/one saved receipt; no runnable retry after boot"
+    },
+    {
+      "check": "Lost responses never cause a second selected send",
+      "status": "passed",
+      "evidence": "all four aliases tested through guard/routes/backend and database restart; negative control sends twice without the fence and once with it; recovery-engine.test.ts runs the real engine through authenticated sandbox routes and a local provider, losing both completion request and reply"
+    },
+    {
+      "check": "Bounded real lookup adapters, unsupported cases, durable audit and repeated choices",
+      "status": "passed",
+      "evidence": "exact Gmail/Slack readback with fake responses; mismatch/404/malformed/unsupported version and modes; rotated credentials; duplicate/stale/concurrent choices; failed audit insert rollback; persisted inspection survives reopen; late evidence invalidation"
+    },
+    {
+      "check": "Emergency, approval and immutable identity remain enforced",
+      "status": "passed",
+      "evidence": "selected-send input/version edits and policy revocation fail closed; Pause parks sends and holds lookups; Kill blocks dispatch but accepts late evidence without reviving the run; Authority suites and Q-08 runtime tests pass; no approval-rule files weakened"
+    },
+    {
+      "check": "Coherent consumer projections and no generic retry expansion",
+      "status": "passed",
+      "evidence": "run/effects/recovery/work-item agreement; execution choice and oversized bodies rejected; Needs you acknowledgement persists; unchanged RUN_FLOW one-attempt rule exercised by crash fixtures and queue suite"
+    }
+  ],
+  "verification": [
+    {
+      "command": "bun install --frozen-lockfile",
+      "result": "passed using the branch CI pin Bun 1.3.14; lockfile unchanged"
+    },
+    {
+      "command": "JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q07-engine-cache bun test src/authority src/workflows/runtime src/workflows/api src/workflows/queue src/workflows/runner src/workflows/sandbox-api src/workflows/db src/goals/work-items.test.ts",
+      "result": "1527 pass, 2 skip, 0 fail; 17354 assertions across 74 files; 268.59 seconds",
+      "log": "evidence/Q-07/verification.log"
+    },
+    {
+      "command": "JARVIS_TEST_ENGINE_BUILD=1 JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q07-engine-cache bun test src/workflows/runner/engine-runtime/outer-worker-delay.test.ts src/workflows/runner/engine-runtime/build.test.ts",
+      "result": "26 pass, 0 fail; explicitly runs both tests skipped above; 96 assertions; 5.70 seconds",
+      "log": "evidence/Q-07/verification.log"
+    },
+    {
+      "command": "JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q07-engine-cache bun test src/workflows/runtime/recovery.test.ts src/workflows/runtime/governed-pieces.test.ts src/workflows/runtime/piece-executor-gate.drift.test.ts src/goals/work-items.test.ts",
+      "result": "159 pass, 0 fail; 1572 assertions; 3.33 seconds",
+      "log": "evidence/Q-07/recovery-tests.log"
+    },
+    {
+      "command": "JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q07-engine-cache bun test src/workflows/runtime/recovery-engine.test.ts",
+      "result": "2 pass, 0 fail; 8 assertions; 7.79 seconds",
+      "log": "evidence/Q-07/real-engine.log"
+    },
+    {
+      "command": "bunx --no-install tsc --noEmit; bun run check:no-ee; bun run check:migrations; bun run lint:templates; bun run check:package; git diff --check",
+      "result": "all passed; 100 templates, 0 errors/warnings; 2373 package files checked before delivery evidence",
+      "log": "evidence/Q-07/verification.log"
+    },
+    {
+      "command": "initial broad run and fresh-process engine retest; compare reaper test against untouched Q-08 baseline",
+      "result": "Initial run: 1461 pass, 2 skip, 40 fail, 1 error. Fixed three source-shape drift expectations; an engine-build timeout stopped esbuild and caused dependent failures. A test-only isolated cache was added. Fresh engine retest: 231 pass, 1 reaper timing failure. The identical reaper assertion also failed twice on untouched Q-08; a third isolated attempt passed. Final affected-suite run above passes including the reaper. No reaper code was changed.",
+      "log": "evidence/Q-07/baseline-reaper.log"
+    },
+    {
+      "command": "full repository suite / platform matrix / live provider or paid model evaluation",
+      "result": "not_run locally; PR CI owns the full suite and platform jobs. Fake providers and isolated fixture DBs only; no real external effects."
+    }
+  ],
+  "manual_checks": [
+    "Reviewed staged implementation and docs; owner checkout remains clean; no deploy, Brief activation, shared Drive writes or next-card work."
+  ],
+  "quick_verify": {
+    "cwd": "repository root on brief/q-07, Bun 1.3.14",
+    "command": "JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q07-verify bun test src/workflows/runtime/recovery.test.ts src/workflows/runtime/recovery-engine.test.ts",
+    "expected": "all recovery and real-engine boundary tests pass; cold engine build requires dependency network access",
+    "manual": "On an isolated dev daemon, inspect a terminal incomplete run via GET /api/workflow-runs/:runId/recovery; reconcile an eligible exact receipt, then inspect using the returned revision and a new requestId. The run stays terminal, canReplay stays false, and no job is queued.",
+    "screenshot": "not applicable: additive runtime/API contract only"
+  },
+  "migration": "Additive workflow_recovery_receipt table, unique (run_id, request_id), retained across run deletion for audit; optional providerBinding on effect records. No destructive DDL or rewriting unknown effects.",
+  "rollback": "Stop/drain workers, revert Q-07 and rebuild daemon/engine together. Retain audit/effect records. Never resume runs with piece-dispatch records on older binaries, which cannot enforce this fence; inspect them and start new intentional runs if appropriate.",
+  "limitations": [
+    "No general exactly-once external execution; provider SDK internal retries remain outside the Jarvis redispatch guarantee.",
+    "Missing provider IDs, permissions, deletions, timeouts, malformed/oversized responses and absent evidence remain inconclusive; no proof of no-send is inferred.",
+    "Managed/custom/dynamic credentials, rotated OAuth tokens, unverified connector versions, Slack user-token sends, threads and uploads, and other actions have no Q-07 lookup adapter.",
+    "Confirmation proves the exact provider message exists, not delivery/read, remaining-step completion or business success. Inspection never turns unknown into success.",
+    "Legacy authorization-only effects may already have executed and require inspection. Mixed old/new engine deployment is not certified. Main plus the full Brief stack requires separate integration verification.",
+    "Recovery views and audit history are additive APIs; this card does not ship a dashboard recovery UI."
+  ]
+}
