@@ -1,0 +1,86 @@
+bun test v1.3.14 (0d9b296a)
+
+src/authority/authority.test.ts:
+(pass) AuthorityEngine > allows action when level meets requirement [0.43ms]
+(pass) AuthorityEngine > denies action when level is below requirement [0.06ms]
+(pass) AuthorityEngine > requires approval for governed categories [0.04ms]
+(pass) AuthorityEngine > does not require approval for non-governed categories [0.03ms]
+(pass) AuthorityEngine > per-action override: explicit deny [0.06ms]
+(pass) AuthorityEngine > per-action override: explicit allow with approval [0.05ms]
+(pass) AuthorityEngine > per-action override: explicit allow without approval [0.04ms]
+(pass) AuthorityEngine > role-specific override takes priority over global [0.04ms]
+(pass) AuthorityEngine > temporary grants override everything [0.05ms]
+(pass) AuthorityEngine > context rule: time_range [0.11ms]
+(pass) AuthorityEngine > context rule: tool_name [0.05ms]
+(pass) AuthorityEngine > describeRulesForAgent returns readable text [0.25ms]
+(pass) AuthorityEngine > all 13 action categories are checkable [0.12ms]
+(pass) getActionForTool > maps known tools by name [0.12ms]
+(pass) getActionForTool > falls back to category map for unknown tools [0.05ms]
+(pass) getActionForTool > defaults to execute_command for completely unknown tools [0.02ms]
+(pass) getActionForTool > an inherited Object.prototype key is not a mapping [0.05ms]
+(pass) EmergencyController > starts in normal state [0.07ms]
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) EmergencyController > pause blocks execution [0.07ms]
+[EmergencyController] System PAUSED — all tool execution suspended
+[EmergencyController] System RESUMED — tool execution restored
+(pass) EmergencyController > resume restores execution [0.06ms]
+[EmergencyController] System KILLED — all agents terminated
+(pass) EmergencyController > kill blocks execution [0.05ms]
+[EmergencyController] System KILLED — all agents terminated
+(pass) EmergencyController > cannot pause from killed state [0.02ms]
+[EmergencyController] System KILLED — all agents terminated
+[EmergencyController] System RESET — back to normal
+(pass) EmergencyController > reset restores from killed [0.04ms]
+[EmergencyController] System PAUSED — all tool execution suspended
+[EmergencyController] System RESUMED — tool execution restored
+(pass) EmergencyController > fires state change callback [0.08ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > creates and retrieves approval request [17.43ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > approve changes status [14.06ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > deny changes status [11.83ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > cannot approve already decided request [12.55ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > getPending returns only pending [12.14ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > findByShortId works [12.90ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > execution_mode defaults to deferred and persists when set inline [11.59ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > demoteToDeferred succeeds only while pending [12.90ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > demoteToDeferred fails after approval (inline gate keeps execution) [11.72ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > markExecuted updates fields [12.77ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > inline flow: gate waits, approve flips status, executor runs tool once [24.54ms]
+Database initialized at: :memory:
+[EmergencyController] System PAUSED — all tool execution suspended
+(pass) ApprovalManager > executeApproved refuses to run while system is paused [13.00ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > waitForResolution returns early when the signal aborts [41.65ms]
+Database initialized at: :memory:
+(pass) ApprovalManager > expireOld expires old pending requests [10.46ms]
+Database initialized at: :memory:
+(pass) AuditTrail > logs and queries audit entries [9.64ms]
+Database initialized at: :memory:
+(pass) AuditTrail > getStats aggregates correctly [10.03ms]
+Database initialized at: :memory:
+(pass) AuthorityLearner > no suggestions below threshold [10.48ms]
+Database initialized at: :memory:
+(pass) AuthorityLearner > suggests after threshold consecutive approvals [10.70ms]
+Database initialized at: :memory:
+(pass) AuthorityLearner > denial resets consecutive count [9.94ms]
+Database initialized at: :memory:
+(pass) AuthorityLearner > markSuggestionSent prevents re-suggestion [10.02ms]
+(pass) approval learning exclusions > an ordinary approval trains the learner [0.66ms]
+(pass) approval learning exclusions > a taint-gated approval does not [0.26ms]
+(pass) approval learning exclusions > an above_level substitution does not [0.28ms]
+(pass) approval learning exclusions > and not when it also carries a profile label [0.27ms]
+
+ 48 pass
+ 0 fail
+ 119 expect() calls
+Ran 48 tests across 1 file. [381.00ms]

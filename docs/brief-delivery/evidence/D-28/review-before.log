@@ -1,0 +1,54 @@
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/authority/authority.test.ts:
+[EmergencyController] System PAUSED — all tool execution suspended
+42 |   };
+43 |   for (const change of [() => emergency.pause(), () => emergency.resume(), () => emergency.kill(), () => emergency.reset()]) {
+44 |     change();
+45 |     const result = await f.port.read(signal());
+46 |     expect(result.state).toBe("ready");
+47 |     if (result.state === "ready") expect(result.data.emergency_state).toBe(emergency.getState());
+                                                                           ^
+error: expect(received).toBe(expected)
+
+Expected: "paused"
+Received: "normal"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-28/ui/src/brief/authority/authority.test.ts:47:71)
+(fail) review regression: emergency status follows the live controller, not the engine startup copy [4.93ms]
+65 |   await c.save();
+66 |   expect(c.snapshot().phase).toBe("unknown");
+67 |   expect(f.current().default_level).toBe(1);
+68 |   expect(persisted).toBe(3);
+69 |   await c.refresh(true);
+70 |   expect(c.snapshot().phase).toBe("dirty");
+                                  ^
+error: expect(received).toBe(expected)
+
+Expected: "dirty"
+Received: "clean"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-28/ui/src/brief/authority/authority.test.ts:70:30)
+(fail) review regression: explicitly retry the same level after an in-memory apply and persistence failure [12.04ms]
+
+ui/src/brief/authority/AuthorityWorkspace.test.tsx:
+235 |   await React.act(async () => {
+236 |     fixture.failReads(true);
+237 |     await fixture.controller.refresh();
+238 |   });
+239 |   expect(host.textContent).toContain("Read-only settings");
+240 |   expect(host.textContent).toContain("Could not load current settings");
+                                 ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "Could not load current settings"
+Received: "AuthorityDefault authority level3 / 101 · Cautious5 · Balanced10 · TrustedGoverned actionsOn adds a governed approval requirement. Off uses the authority level and other rules. Existing overrides still apply.Read dataOnOffOffWrite dataOnOffOffDelete dataOnOffOffSend messagesOnOffOnSend emailOnOffOnRun commandsOnOffOffInstall softwareOnOffOffMake paymentsOnOffOnChange settingsOnOffOffCreate agentsOnOffOffStop agentsOnOffOffUse browserOnOffOffControl appsOnOffOffRead-only settingsReload settingsReload settingsSave changesSaving…SavedSave changesAdvanced overrides Advanced overrides Emergency controls Emergency controls "
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-d-28/ui/src/brief/authority/AuthorityWorkspace.test.tsx:240:28)
+(fail) review regression: read-only reports stale values and recovers without enabling writes [236.36ms]
+
+ 0 pass
+ 52 filtered out
+ 3 fail
+ 11 expect() calls
+Ran 3 tests across 2 files. [894.00ms]
