@@ -61,7 +61,7 @@ in the [sidecar protocol](sidecar/SIDECAR_PROTOCOL.md). Missing feature support
 blocks dispatch. Lost responses, disconnection after dispatch, and focus loss
 after clearing or inserting text retain possible partial effects.
 
-Approved desktop and routed browser actions also capture the canonical device and
+Reviewed desktop writes and routed browser UI actions also capture the canonical device and
 connection session at review. Missing/offline devices, capability loss, same-ID
 reconnection, and changed automatic defaults invalidate the approval before RPC.
 Local approvals cannot switch to a newly connected remote device. The existing

@@ -1,7 +1,7 @@
 Q-09 local delivery evidence (2026-10-12)
 Baseline: 75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0 (main)
 Initial implementation: 7589734105f28e94d48a06c8a3ad9c8e228db3e8
-Final implementation: d24d6cd4963432fbc682551a701c5648588706ab
+Core device-guard implementation: d24d6cd4963432fbc682551a701c5648588706ab
 Bun 1.4.2 (744846f84), Go 1.25.0, isolated engine cache and fixture databases.
 
 Command: NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/actions/action-verification.test.ts src/actions/browser src/actions/tools/sidecar-route.test.ts src/actions/tools/remote-snapshot-binding.test.ts src/actions/tools/sidecar-browser-playbook.test.ts src/actions/tools/browser-approval-guard.test.ts src/actions/tools/local-browser-guard.test.ts src/actions/tools/browser-template-delivery.test.ts src/authority src/workflows/runtime/ui-verification.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/effect-boundary.test.ts src/util/model-exec-env.test.ts src/roles/persisted-frame.test.ts
@@ -59,3 +59,18 @@ Command: bun test src/authority/ui-verification.test.ts
 Ran 19 tests across 1 file. [350.00ms]
 
 Device-affinity commit hooks: 175 passed, 0 failed; typecheck, no-EE/migration/template/package guards passed.
+
+First full CI (head da0cd3a2c99881e3f0cf23956d6c9248c1f533b5):
+https://github.com/vierisid/jarvis/actions/runs/38303394520
+8733 passed, 32 skipped, 3 failed, 59259 assertions, 454 files, 580.82s.
+Failures: inline app-launch manager fixture lacked getConnectionSessionId; two bounded-tool inventory checks rejected unnecessary captureApprovalGuard metadata on read-only desktop tools. Narrowed the guard to the five reviewed desktop writes; retained all actual device/session fences. No workflow capability rule was relaxed.
+Native Windows sidecar tests, macOS/other sidecar builds, Docker and AppleScript/plist/OCR-helper jobs passed on this head. This supersedes the local cross-compilation limitation for those CI checks only, not arbitrary platform UI behavior.
+
+CI correction is in the commit containing this evidence; resolve with git log -1 --format=%H -- evidence/Q-09/validation.log.
+
+Command: NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/actions/tools/desktop-launch-directive.test.ts src/workflows/runtime/bounded-tools.test.ts src/authority/ui-verification.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/actions/tools/browser-approval-guard.test.ts src/workflows/runtime/workflow-machine-binding.test.ts
+
+ 113 pass
+ 0 fail
+ 473 expect() calls
+Ran 113 tests across 6 files. [22.52s]

@@ -796,7 +796,6 @@ export const DESKTOP_TOOLS: ToolDefinition[] = [
 
 // The approval stays on the device/session the user reviewed. This also refuses
 // a local-to-remote default change; native element guards remain authoritative.
-for (const tool of DESKTOP_TOOLS) {
-  tool.captureApprovalGuard = params => captureMachineApprovalGuard(params.target,
-    tool.name === 'desktop_screenshot' ? 'screenshot' : 'desktop', tool.name);
+for (const tool of [desktopClickTool, desktopTypeTool, desktopPressKeysTool, desktopLaunchAppTool, desktopFocusWindowTool]) {
+  tool.captureApprovalGuard = params => captureMachineApprovalGuard(params.target, 'desktop', tool.name);
 }

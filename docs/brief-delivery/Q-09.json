@@ -7,9 +7,10 @@
   "baseline": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
   "baseline_ref": "origin/main",
   "head": {
-    "implementation_sha": "d24d6cd4963432fbc682551a701c5648588706ab",
     "ref": "commit containing this receipt",
-    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-09.json"
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-09.json",
+    "core_implementation_sha": "d24d6cd4963432fbc682551a701c5648588706ab",
+    "implementation_resolve": "git log -1 --format=%H -- src/actions/tools/desktop.ts"
   },
   "status": {
     "implementation": "verified locally",
@@ -117,6 +118,10 @@
     {
       "command": "required device-affinity commit hooks",
       "result": "175 passed, 0 failed; typecheck and four guards passed"
+    },
+    {
+      "command": "NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/actions/tools/desktop-launch-directive.test.ts src/workflows/runtime/bounded-tools.test.ts src/authority/ui-verification.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/actions/tools/browser-approval-guard.test.ts src/workflows/runtime/workflow-machine-binding.test.ts",
+      "result": "113 passed, 0 failed, 473 assertions, 6 files, 22.52s; CI integration corrections"
     }
   ],
   "evidence": [
@@ -135,5 +140,10 @@
     "NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/actions/action-verification.test.ts src/actions/browser src/actions/tools/sidecar-route.test.ts src/actions/tools/remote-snapshot-binding.test.ts src/actions/tools/sidecar-browser-playbook.test.ts src/actions/tools/browser-approval-guard.test.ts src/actions/tools/local-browser-guard.test.ts src/actions/tools/browser-template-delivery.test.ts src/authority src/workflows/runtime/ui-verification.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/effect-boundary.test.ts src/util/model-exec-env.test.ts src/roles/persisted-frame.test.ts",
     "Run the sidecar command under xvfb-run -a in an isolated session.",
     "Confirm PR targets main and remains unmerged; do not activate Brief."
-  ]
+  ],
+  "ci": {
+    "previous_head": "da0cd3a2c99881e3f0cf23956d6c9248c1f533b5",
+    "run": "https://github.com/vierisid/jarvis/actions/runs/38303394520",
+    "result": "8733 passed, 32 skipped, 3 failed; all platform/build jobs passed. Guard metadata narrowed to reviewed desktop writes and the inline launch fixture now supplies its connection session. The failing cases and affected machine/approval checks pass locally; current receipt head requires a new full CI run."
+  }
 }
