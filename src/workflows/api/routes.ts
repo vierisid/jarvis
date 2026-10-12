@@ -82,8 +82,9 @@ import {
   markWaitpointResumed,
 } from "../db/repos/waitpoint";
 import {
-  deleteConnection,
-  getConnection,
+  deleteConnectionInProject,
+  getConnectionInProject,
+  updateConnectionById,
   listConnections,
   upsertConnection,
   type AppConnectionStatus,
@@ -633,6 +634,8 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 }
 
 export interface CreateWorkflowRoutesOptions {
+  /** Server-owned scope for connection routes; default single-tenant project. Never read from the request body. */
+  callerProjectId?: (req: Request) => string;
   briefWorkflowContext?: WorkflowContext;
   briefCapabilities?: BriefCapabilities;
   /** Server-owned project, never a request query or body field. */
@@ -745,6 +748,8 @@ const MANAGED_MESSAGE =
 
 /** Build the workflow route map. Side-effect-free; spread into the daemon's main route table. */
 export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): WorkflowRouteMap {
+  // Connection guard backport from main (#692/#650); do not weaken during stack integration.
+  const callerProject = (req: Request): string => opts.callerProjectId?.(req) ?? DEFAULT_IDS.project;
   // Resolved ONCE per route map rather than per request: the shared dir comes
   // from config the daemon read at boot and cannot change under a running
   // process, and one value means the GET's shape and the mutations' guard can
@@ -1051,9 +1056,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // client -- only the metadata (id, externalId, type, displayName,
     // pieceName, etc.) ships out so the dashboard can show what's wired.
     "/api/workflows/connections": {
-      GET: () =>
+      GET: (req) =>
         trapErrors(() => {
-          const list = listConnections().map((c) => ({
+          const list = listConnections(callerProject(req)).map((c) => ({
             id: c.id,
             externalId: c.externalId,
             displayName: c.displayName,
@@ -1120,6 +1125,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const schemaError = validateConnectionValueShape(body.type, body.value);
           if (schemaError) return err(schemaError);
           const conn = upsertConnection({
+            projectId: callerProject(req),
             externalId: body.externalId,
             displayName: body.displayName,
             type: body.type,
@@ -1142,13 +1148,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // Both resolve `:id` inside the caller's project (#692), the same project
+    // the GET lists and the POST writes. They found the row by bare id, so an
+    // id from another project was reachable here while invisible to the list.
+    // A mismatch is a 404, not a 403: to this caller the row does not exist,
+    // and a distinct answer would confirm the id to someone guessing them.
     "/api/workflows/connections/:id": {
       DELETE: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const existing = getConnection(id);
-          if (!existing) return err("connection not found", 404);
-          deleteConnection(id);
+          if (!deleteConnectionInProject(callerProject(req), id)) return err("connection not found", 404);
           return ok({ id, deleted: true });
         }),
       // Update an existing connection in place. Used to rotate OAuth tokens
@@ -1159,7 +1168,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       PATCH: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const existing = getConnection(id);
+          const existing = getConnectionInProject(callerProject(req), id);
           if (!existing) return err("connection not found", 404);
           // Bounded before the parse, same budget and same reasoning as the
           // POST above (#635). The `.catch(() => ({}))` it replaces turned a
@@ -1194,23 +1203,31 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           ) {
             return err("displayName must be a non-empty string if provided");
           }
+          // Re-read after the body await: `existing` above is a snapshot from
+          // before it, and a DELETE or a POST that changed the type can have
+          // landed in between. Nothing from here to the write yields.
+          const current = getConnectionInProject(callerProject(req), id);
+          if (!current) return err("connection not found", 404);
           // Apply the same per-type schema check POST runs. Type can't change
-          // via PATCH (rotation, not re-creation), so we use existing.type.
+          // via PATCH (rotation, not re-creation), so we use the row's type.
           // Without this, a rotation could save an OAUTH2 connection with no
           // access_token that POST would have rejected.
           if (body.value !== undefined) {
-            const schemaError = validateConnectionValueShape(existing.type, body.value);
+            const schemaError = validateConnectionValueShape(current.type, body.value);
             if (schemaError) return err(schemaError);
           }
-          const merged = upsertConnection({
-            externalId: existing.externalId,
-            displayName: body.displayName ?? existing.displayName,
-            type: existing.type,
-            pieceName: existing.pieceName,
-            pieceVersion: existing.pieceVersion,
-            value: body.value ?? existing.value,
+          // By id, never by tuple (#650). This wrote through `upsertConnection`,
+          // which finds its target by (project, piece, externalId) with the
+          // project DEFAULTED and inserts on a miss -- so a row outside the
+          // default project got a COPY in the default project, carrying its
+          // decrypted secret re-sealed under the copy's identity. See
+          // `updateConnectionById` for the race this also closes.
+          const merged = updateConnectionById(callerProject(req), id, {
+            ...(body.displayName !== undefined ? { displayName: body.displayName } : {}),
+            ...(body.value !== undefined ? { value: body.value } : {}),
             ...(status ? { status } : {}),
           });
+          if (!merged) return err("connection not found", 404);
           return ok({
             id: merged.id,
             externalId: merged.externalId,

@@ -1,3 +1,4 @@
+import { CONNECTION_SETUP_EVENT, hasPieceSetup } from './connection-setup-request';
 /**
  * Workflows room (Phase 4 stage 1).
  *
@@ -85,10 +86,15 @@ export function WorkflowsRoomBody(): React.ReactElement {
   const data = useWorkflowsData();
   useEffect(() => {
     const flowId = new URLSearchParams(window.location.search).get('workflow');
-    if (flowId) data.setEditingFlowId(flowId);
+    if (flowId && tab === "flows") data.setEditingFlowId(flowId);
   }, [data.setEditingFlowId]);
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
-  const [tab, setTab] = useState<RoomTab>("flows");
+  const [tab, setTab] = useState<RoomTab>(() => hasPieceSetup() ? "connections" : "flows");
+  useEffect(() => {
+    const open = () => { data.setEditingFlowId(null); setTab('connections'); };
+    window.addEventListener(CONNECTION_SETUP_EVENT, open);
+    return () => window.removeEventListener(CONNECTION_SETUP_EVENT, open);
+  }, [data.setEditingFlowId]);
 
   const handleAction = async (label: string, fn: () => Promise<{ ok: boolean; message: string }>): Promise<void> => {
     const result = await fn();

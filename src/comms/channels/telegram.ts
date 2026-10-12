@@ -18,6 +18,8 @@ export interface ChannelAdapter {
   sendMessage(to: string, text: string): Promise<void>;
   onMessage(handler: ChannelHandler): void;
   isConnected(): boolean;
+  /** Credential/session evidence for read models; activity flags alone are not authentication. */
+  authenticationState?(): 'verified' | 'rejected' | 'unknown';
 }
 
 export class TelegramSendError extends Error {
@@ -96,6 +98,7 @@ export class TelegramAdapter implements ChannelAdapter {
   private token: string;
   private handler: ChannelHandler | null = null;
   private polling: boolean = false;
+  private authentication: 'verified' | 'rejected' | 'unknown' = 'unknown';
   private offset: number = 0;
   private baseUrl: string;
   private pollingInterval: number = 1000;
@@ -119,11 +122,13 @@ export class TelegramAdapter implements ChannelAdapter {
       return;
     }
 
+    this.authentication = 'unknown';
     // Verify bot token by calling getMe (with timeout so an unreachable
     // api.telegram.org or hung connection doesn't block daemon startup)
     try {
       const response = await fetchWithTimeout(`${this.baseUrl}/getMe`, {}, 10_000);
       const data = await response.json() as any;
+      this.observeAuthentication(response.status, data);
 
       if (!data.ok) {
         throw new Error(`Invalid bot token: ${data.description}`);
@@ -143,6 +148,7 @@ export class TelegramAdapter implements ChannelAdapter {
 
   async disconnect(): Promise<void> {
     this.polling = false;
+    this.authentication = 'unknown';
     console.log('[TelegramAdapter] Disconnected');
   }
 
@@ -165,6 +171,7 @@ export class TelegramAdapter implements ChannelAdapter {
         // A proxy/outage 5xx can carry a non-JSON body; map it through the
         // status code instead of letting the parse error escape unclassified.
         const data = await response.json().catch(() => null) as any;
+        this.observeAuthentication(response.status, data);
 
         if (!data?.ok) {
           // Retry without Markdown if parsing failed
@@ -174,7 +181,9 @@ export class TelegramAdapter implements ChannelAdapter {
               headers: { 'Content-Type': 'application/json' },
               body: JSON.stringify({ chat_id: chatId, text: chunk }),
             }, 15_000);
-            const fallbackError = telegramErrorFromResponse(fallback.status, await fallback.json().catch(() => null));
+            const fallbackData = await fallback.json().catch(() => null);
+            this.observeAuthentication(fallback.status, fallbackData);
+            const fallbackError = telegramErrorFromResponse(fallback.status, fallbackData);
             if (fallbackError) throw fallbackError;
           } else {
             const error = telegramErrorFromResponse(response.status, data);
@@ -202,6 +211,16 @@ export class TelegramAdapter implements ChannelAdapter {
     return this.polling;
   }
 
+  authenticationState(): 'verified' | 'rejected' | 'unknown' { return this.authentication; }
+
+  private observeAuthentication(status: number, body: unknown): void {
+    const data = body as { ok?: boolean; error_code?: number } | null;
+    // A token rejection is sticky for this adapter, including across older in-flight successes.
+    // A new adapter/token or explicit connect performs a new getMe validation.
+    if (status === 401 || data?.error_code === 401) this.authentication = 'rejected';
+    else if (this.authentication !== 'rejected' && data?.ok === true && status >= 200 && status < 300) this.authentication = 'verified';
+  }
+
   private async startPolling(): Promise<void> {
     console.log('[TelegramAdapter] Starting polling...');
 
@@ -213,6 +232,7 @@ export class TelegramAdapter implements ChannelAdapter {
           await this.processUpdate(update);
         }
       } catch (error) {
+        if (this.authentication !== 'rejected') this.authentication = 'unknown';
         console.error('[TelegramAdapter] Polling error:', error);
       }
 
@@ -236,6 +256,7 @@ export class TelegramAdapter implements ChannelAdapter {
     }, 35_000);
 
     const data: TelegramGetUpdatesResponse = await response.json() as TelegramGetUpdatesResponse;
+    this.observeAuthentication(response.status, data);
 
     if (!data.ok) {
       throw new Error('Failed to get updates');
