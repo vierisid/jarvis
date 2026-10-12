@@ -153,6 +153,27 @@ test("catalog search, selected identity, scroll and focus survive setup cancella
   expect(host.scrollTop).toBe(85);
   expect(document.activeElement?.getAttribute("data-service-id")).toBe("gmail");
 });
+test("restored setup with a missing catalog service still exposes cancellation and return", async () => {
+  fixture.data.catalog = [];
+  const ticket = {
+    attemptId: "missing-service",
+    serviceId: "gmail",
+    reconnectKey: null,
+    expiresAt: Date.now() + 60_000,
+  };
+  fixture.port.resume = async () => ({ state: "pending", ticket });
+  fixture.port.cancel = async () => ({ state: "cancelled", ticket });
+  await render();
+  expect(visibleText()).toContain("Service unavailable");
+  expect(button("Cancel setup").disabled).toBe(false);
+  await click("Cancel setup");
+  expect(visibleText()).toContain("Setup canceled");
+  expect(button("Start again").disabled).toBe(true);
+  await click("All services");
+  expect(visibleText()).toContain(
+    "No supported service setup is available here yet",
+  );
+});
 test("browser focus cannot claim connection success before a verified backend read", async () => {
   await render();
   await click("Connect a service");

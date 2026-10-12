@@ -335,4 +335,275 @@ describe.skipIf(!modulePath)("real F22 headless adapter integration", () => {
       ).connectionKey,
     ).toBe(connectionKey(target));
   });
+  for (const reload of [false, true]) {
+    for (const removeService of [false, true]) {
+      test(`missing reconnect target can be canceled and dismissed (reload=${reload}, service removed=${removeService})`, async () => {
+        const f = fixture();
+        let c = new ConnectionsController(f.port);
+        c.setAccess(true);
+        await idle(c);
+        c.select(command.serviceId, connectionKey(f.data.rows[1]!));
+        await c.start();
+        f.data.rows.splice(1, 1);
+        if (removeService) f.data.setup = [];
+        if (reload) {
+          c.retire();
+          c = new ConnectionsController(
+            createF22ConnectionsPort("fixture", f.binding),
+          );
+          c.setAccess(true);
+          await idle(c);
+        }
+        await c.check();
+        expect(c.snapshot().setupState).not.toBe("confirmed");
+        expect(c.snapshot().attemptId).not.toBeNull();
+        await c.cancel();
+        expect(c.snapshot().setupState).toBe("cancelled");
+        c.back();
+        c.catalog();
+        expect(c.snapshot().panel).toBe("catalog");
+        c.retire();
+        const restored = new ConnectionsController(
+          createF22ConnectionsPort("fixture", f.binding),
+        );
+        restored.setAccess(true);
+        await idle(restored);
+        expect(restored.snapshot().setupState).toBe("cancelled");
+        restored.back();
+        restored.catalog();
+        expect(restored.snapshot().panel).toBe("catalog");
+        expect(f.launches()).toBe(1);
+        restored.retire();
+      });
+    }
+  }
+  for (const previous of ["cancelled", "configured", "expired"] as const) {
+    for (const failure of ["read", "storage"] as const) {
+      test(`failed retry after ${previous} remains retryable (${failure})`, async () => {
+        const f = fixture();
+        let id = 0;
+        let port = f.port;
+        await port.start(command, signal());
+        if (previous === "cancelled")
+          await port.cancel(command.attemptId, signal());
+        if (previous === "expired") {
+          for (const [key, raw] of f.values)
+            f.values.set(
+              key,
+              JSON.stringify({
+                ...JSON.parse(raw),
+                expiresAt: Date.now() - 10,
+              }),
+            );
+          port = createF22ConnectionsPort("fixture", f.binding);
+        }
+        const c = new ConnectionsController(port, () => `retry-${++id}`);
+        c.setAccess(true);
+        await idle(c);
+        if (previous === "configured") {
+          await c.check();
+          c.selectAccount(connectionKey(f.data.rows[1]!));
+          await c.check();
+        }
+        expect(c.snapshot().setupState).toBe(previous);
+        const read = f.binding.read,
+          save = f.binding.storage.setItem;
+        if (failure === "read")
+          f.binding.read = async () => {
+            throw Error("temporary read failure");
+          };
+        else
+          f.binding.storage.setItem = () => {
+            throw Error("temporary storage failure");
+          };
+        await c.start();
+        expect(c.snapshot().setupState).toBe("cancelled");
+        expect(f.launches()).toBe(1);
+        f.binding.read = read;
+        f.binding.storage.setItem = save;
+        await c.start();
+        expect(c.snapshot().setupState).toBe("pending");
+        expect(c.snapshot().attemptId).toBe("retry-2");
+        expect(f.launches()).toBe(2);
+        c.retire();
+      });
+    }
+  }
+  test("unsuccessful verification keeps the account picker usable", async () => {
+    const f = fixture(),
+      wrong = f.data.rows[1]!;
+    wrong.status = "disconnected";
+    wrong.authenticated = false;
+    const other = {
+      ...wrong,
+      sourceId: "account:two",
+      accountId: "two",
+      status: "connected" as const,
+      authenticated: true,
+      availability: "ready" as const,
+    };
+    f.data.rows.push(other);
+    const c = new ConnectionsController(f.port);
+    c.setAccess(true);
+    await idle(c);
+    c.select(command.serviceId);
+    await c.start();
+    await c.check();
+    c.selectAccount(connectionKey(wrong));
+    await c.check();
+    expect(c.snapshot().setupState).toBe("pending");
+    expect(c.snapshot().candidateKeys).toEqual([
+      connectionKey(wrong),
+      connectionKey(other),
+    ]);
+    c.selectAccount(connectionKey(other));
+    await c.check();
+    expect(c.snapshot().setupState).toBe("confirmed");
+    expect(f.launches()).toBe(1);
+    c.retire();
+  });
+  test("account removed during verification clears selection and keeps other candidates", async () => {
+    const f = fixture(),
+      removed = f.data.rows[1]!;
+    const other = { ...removed, sourceId: "account:two", accountId: "two" };
+    f.data.rows.push(other);
+    const c = new ConnectionsController(f.port);
+    c.setAccess(true);
+    await idle(c);
+    c.select(command.serviceId);
+    await c.start();
+    await c.check();
+    c.selectAccount(connectionKey(removed));
+    const read = f.binding.read;
+    let reads = 0;
+    f.binding.read = async () => {
+      if (++reads === 2) f.data.rows.splice(1, 1);
+      return read();
+    };
+    await c.check();
+    expect(c.snapshot().candidateKeys).toEqual([connectionKey(other)]);
+    expect(c.snapshot().selectedKey).toBe("");
+    expect(c.snapshot().setupState).toBe("pending");
+    c.selectAccount(connectionKey(other));
+    await c.check();
+    expect(c.snapshot().setupState).toBe("configured");
+    c.retire();
+  });
+  test("canceling a retry awaiting its read resolves the new attempt without launching", async () => {
+    const f = fixture();
+    let id = 0;
+    const c = new ConnectionsController(f.port, () => `attempt-${++id}`);
+    c.setAccess(true);
+    await idle(c);
+    c.select(command.serviceId);
+    await c.start();
+    await c.cancel();
+    let release!: () => void;
+    const wait = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const read = f.binding.read;
+    f.binding.read = async () => {
+      await wait;
+      return read();
+    };
+    const retry = c.start();
+    await c.cancel();
+    expect(c.snapshot().setupState).toBe("cancelled");
+    expect(c.snapshot().attemptId).toBe("attempt-2");
+    release();
+    await retry;
+    expect(c.snapshot().setupState).toBe("cancelled");
+    expect(f.launches()).toBe(1);
+    c.retire();
+  });
+  test("expired reconnect is dismissible after its account and service disappear", async () => {
+    const f = fixture();
+    await f.port.start(
+      { ...command, reconnectKey: connectionKey(f.data.rows[1]!) },
+      signal(),
+    );
+    for (const [key, raw] of f.values)
+      f.values.set(
+        key,
+        JSON.stringify({ ...JSON.parse(raw), expiresAt: Date.now() - 10 }),
+      );
+    f.data.rows.splice(1, 1);
+    f.data.setup = [];
+    const c = new ConnectionsController(
+      createF22ConnectionsPort("fixture", f.binding),
+    );
+    c.setAccess(true);
+    await idle(c);
+    expect(c.snapshot().setupState).toBe("expired");
+    c.back();
+    c.catalog();
+    expect(c.snapshot().panel).toBe("catalog");
+    expect(f.launches()).toBe(1);
+    c.retire();
+  });
+  for (const stop of ["retire", "revoke"] as const) {
+    for (const navigation of [
+      "setup",
+      "inspect",
+      "update",
+      "revoke",
+      "add",
+    ] as const) {
+      test(`pending ${navigation} navigation is canceled on ${stop}`, async () => {
+        const f = fixture();
+        let deviceOpens = 0;
+        f.binding.manageDevice = async () => {
+          deviceOpens++;
+          return { state: "opened" };
+        };
+        f.binding.addDevice = async () => {
+          deviceOpens++;
+          return { state: "opened" };
+        };
+        f.binding.deviceDetails = () => ({
+          version: "1",
+          updateLabel: "Update",
+          canUpdate: true,
+        });
+        f.data.setup.push({
+          id: "setup:device",
+          label: "Device",
+          target: { kind: "device", flow: "enrollment" },
+          verifies: { kind: "device", serviceId: "sidecar" },
+        });
+        const c = new ConnectionsController(f.port);
+        c.setAccess(true);
+        await idle(c);
+        if (navigation === "setup") {
+          c.select(command.serviceId);
+          await c.start();
+        } else c.device(connectionKey(f.data.rows[2]!));
+        let release!: () => void;
+        const wait = new Promise<void>((resolve) => {
+          release = resolve;
+        });
+        const read = f.binding.read;
+        f.binding.read = async () => {
+          await wait;
+          return read();
+        };
+        const pending =
+          navigation === "setup"
+            ? c.handoff()
+            : navigation === "add"
+              ? c.addDevice()
+              : c.manageDevice(navigation);
+        expect(c.snapshot().busy).toBe(true);
+        if (stop === "retire") c.retire();
+        else c.setAccess(false);
+        release();
+        await pending;
+        expect(f.launches()).toBe(navigation === "setup" ? 1 : 0);
+        expect(deviceOpens).toBe(0);
+        expect(c.snapshot().read.state).toBe("unavailable");
+        c.retire();
+      });
+    }
+  }
 });

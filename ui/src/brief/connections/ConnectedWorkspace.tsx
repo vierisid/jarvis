@@ -410,13 +410,16 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
               )
             )}
           </div>
-          {state.panel === "setup" && state.service && (
+          {state.panel === "setup" && (state.service || state.attemptId) && (
             <div className="brief-connections-setup">
               <div className="brief-connections-service">
-                <ConnectionIcon icon={state.service.icon} />
+                <ConnectionIcon icon={state.service?.icon ?? "service"} />
                 <div>
-                  <h2>{state.service.name}</h2>
-                  <p>{state.service.description}</p>
+                  <h2>{state.service?.name ?? "Service unavailable"}</h2>
+                  <p>
+                    {state.service?.description ??
+                      "This service is no longer available. You can cancel this setup and return to Connected workspace."}
+                  </p>
                   {reconnectAccount && (
                     <p>
                       Reconnecting{" "}
@@ -432,16 +435,16 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                   <h3 ref={setupHeading} tabIndex={-1}>
                     {state.reconnectKey
                       ? "Reconnect your account"
-                      : `Connect ${state.service.name}`}
+                      : `Connect ${state.service?.name ?? "service"}`}
                   </h3>
                   <p>
-                    {state.service.setup === "browser"
+                    {state.service?.setup === "browser"
                       ? "Continue in your browser to choose an account and review access. You’ll return here to check the connection."
                       : "Open service settings to enter your credentials and finish setup."}
                   </p>
                   <BriefButton
                     variant="primary"
-                    disabled={!usable}
+                    disabled={!usable || !state.service}
                     onClick={() => void controller.start()}
                   >
                     Start setup
@@ -482,7 +485,7 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                   </p>
                   <BriefButton
                     variant="primary"
-                    disabled={!usable}
+                    disabled={!usable || !state.service}
                     onClick={() => void controller.start()}
                   >
                     Start again
@@ -537,18 +540,20 @@ function ConnectedBody({ controller }: { controller: ConnectionsController }) {
                     </label>
                   )}
                   <div className="brief-connections-buttons">
-                    {state.ticket && state.setupState === "pending" && (
-                      <BriefButton
-                        variant="primary"
-                        disabled={state.busy}
-                        onClick={() => void controller.handoff()}
-                      >
-                        {state.service.setup === "browser"
-                          ? "Continue in browser"
-                          : "Open service settings"}
-                        <ArrowUpRight size={16} aria-hidden="true" />
-                      </BriefButton>
-                    )}
+                    {state.ticket &&
+                      state.service &&
+                      state.setupState === "pending" && (
+                        <BriefButton
+                          variant="primary"
+                          disabled={state.busy}
+                          onClick={() => void controller.handoff()}
+                        >
+                          {state.service.setup === "browser"
+                            ? "Continue in browser"
+                            : "Open service settings"}
+                          <ArrowUpRight size={16} aria-hidden="true" />
+                        </BriefButton>
+                      )}
                     <BriefButton
                       variant="secondary"
                       disabled={state.busy}
