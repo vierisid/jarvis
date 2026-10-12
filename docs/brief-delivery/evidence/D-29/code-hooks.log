@@ -1,0 +1,84 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 2 required path(s) present in the npm tarball (2332 files).
+[pre-commit] Running 3 related test file(s) (180s timeout)...
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/account/profile/f23-integration.test.ts:
+(pass) D29 form roundtrips through the pinned actual F23 routes and SQLite owner [234.46ms]
+
+ui/src/brief/account/profile/ProfileWorkspace.test.tsx:
+(pass) renders the six approved accessible fields without fabricating account identity [99.31ms]
+(pass) typing submits only the changed canonical answer and remount reads saved values [100.15ms]
+(pass) validation retains a long pasted draft, associates the error, and blocks submission [36.93ms]
+(pass) chat, sidebar, theme and room remount retain the draft and ordinary rerenders retain focus [85.23ms]
+(pass) Cancel opens a modal; keep editing and Escape preserve the draft and return focus [124.48ms]
+(pass) discard only replaces the draft after a successful canonical reload [138.99ms]
+(pass) lost response retains edits and explicitly retrying can confirm the canonical save [85.67ms]
+(pass) new text entered while a save is pending remains editable and unsaved [224.96ms]
+(pass) navigation uses the shared guard and only leaves after explicit discard [82.88ms]
+(pass) a scope change between confirmation and navigation cancels the obsolete route [32.91ms]
+(pass) beforeunload warns only while a draft is dirty [66.72ms]
+(pass) read-only profile and stale reads cannot send a mutation [78.18ms]
+(pass) empty is represented without writable invented values [31.76ms]
+(pass) unavailable is represented without writable invented values [23.31ms]
+(pass) unsupported is represented without writable invented values [17.92ms]
+(pass) error is represented without writable invented values [35.35ms]
+(pass) live/fixture mixing, scope mismatch, and missing navigation guard fail closed and purge the old draft [64.24ms]
+(pass) live form requires the enabled F23 capability and loses its draft when that capability is removed [41.51ms]
+
+ui/src/brief/account/profile/profile.test.ts:
+(pass) missing F23 host stays unsupported without fabricated profile values [0.22ms]
+(pass) all six mappings must be explicit and sign-in identity never aliases assistant context [0.40ms]
+(pass) preferred_name writes only its canonical ID and preserves unrelated answers [7.00ms]
+(pass) company writes only its canonical ID and preserves unrelated answers [9.38ms]
+(pass) work_role writes only its canonical ID and preserves unrelated answers [6.25ms]
+(pass) current_projects writes only its canonical ID and preserves unrelated answers [8.63ms]
+(pass) communication_preferences writes only its canonical ID and preserves unrelated answers [6.25ms]
+(pass) identity, unknown fields and oversized values cannot be sent to F23 [2.17ms]
+(pass) dirty polls preserve draft and its comparison revision [5.76ms]
+(pass) typing during a pending poll cannot lose the edit or advance its revision [1.93ms]
+(pass) edits during save survive, including a return to the pre-save value [1.73ms]
+(pass) late poll after confirmed save cannot restore an old revision [3.99ms]
+(pass) save-failure keeps drafts; only explicit retry reconciles and saves [10.45ms]
+(pass) lost-response keeps drafts; only explicit retry reconciles and saves [7.35ms]
+(pass) uncertain retry never overwrites an intervening correction [6.38ms]
+(pass) lost acknowledgment retry preserves unrelated concurrent answers [6.14ms]
+(pass) cancel requires confirmation; failed discard reload never loses the draft [10.01ms]
+(pass) discard reload locks local editing until its canonical read completes [1.73ms]
+(pass) navigation can stay or explicitly discard, with no write [1.31ms]
+(pass) save in flight blocks departure and cancellation [1.46ms]
+(pass) scope loss cancels a leave prompt and prevents late read/save restoration [2.71ms]
+(pass) read-only cannot write [1.26ms]
+(pass) unavailable cannot write [1.11ms]
+(pass) unsupported cannot write [1.12ms]
+(pass) error cannot write [2.70ms]
+(pass) read failures retain stale drafts; permission loss purges them [3.06ms]
+(pass) bad acknowledgment, mismatched readback and forged port confirmation never say Saved [7.76ms]
+
+ 46 pass
+ 0 fail
+ 216 expect() calls
+Ran 46 tests across 3 files. [2.10s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-29 5eeb931a] feat(brief): build canonical Profile form for D-29
+ 13 files changed, 2314 insertions(+)
+ create mode 100644 scripts/check-d29-f23.ts
+ create mode 100644 ui/src/brief/account/profile/ProfileSpecimen.tsx
+ create mode 100644 ui/src/brief/account/profile/ProfileWorkspace.test.tsx
+ create mode 100644 ui/src/brief/account/profile/ProfileWorkspace.tsx
+ create mode 100644 ui/src/brief/account/profile/adapter.ts
+ create mode 100644 ui/src/brief/account/profile/controller.ts
+ create mode 100644 ui/src/brief/account/profile/f23-integration.test.ts
+ create mode 100644 ui/src/brief/account/profile/fixtures.ts
+ create mode 100644 ui/src/brief/account/profile/model.ts
+ create mode 100644 ui/src/brief/account/profile/navigation.ts
+ create mode 100644 ui/src/brief/account/profile/profile.css
+ create mode 100644 ui/src/brief/account/profile/profile.test.ts
