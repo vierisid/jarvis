@@ -36,7 +36,8 @@ function object(value: unknown): Record<string, unknown> | null {
   return value !== null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
 }
 
-export function providerReceipt(effect: WorkflowEffect): { provider: 'gmail' | 'slack'; id: string; channel?: string } | null {
+/** Typed completion evidence is broader than the modes supported by readback. */
+export function pieceCompletionReceipt(effect: WorkflowEffect): { provider: 'gmail' | 'slack'; id: string; channel?: string } | null {
   if (effect.route !== 'piece-dispatch' || !tracksPieceCompletion(effect.provenance.piece, effect.provenance.action)) return null;
   const raw = object(effect.result);
   const result = effect.provenance.piece === '@activepieces/piece-gmail' ? object(raw?.data) ?? raw : raw;
@@ -45,11 +46,16 @@ export function providerReceipt(effect: WorkflowEffect): { provider: 'gmail' | '
     if (effect.arguments.draft === true || typeof result.id !== 'string' || !/^[a-f0-9]{1,128}$/i.test(result.id)) return null;
     return { provider: 'gmail', id: result.id };
   }
-  if (effect.arguments.file || effect.arguments.threadTs || effect.arguments.sendAsUser === true
-    || effect.provenance.action === 'send_channel_message' && effect.arguments.sendAsBot !== true) return null;
   if (result.ok !== true || typeof result.ts !== 'string' || !/^\d{1,20}\.\d{1,10}$/.test(result.ts)
     || typeof result.channel !== 'string' || !/^[A-Z0-9]{1,80}$/.test(result.channel)) return null;
   return { provider: 'slack', id: result.ts, channel: result.channel };
+}
+
+export function providerReceipt(effect: WorkflowEffect): ReturnType<typeof pieceCompletionReceipt> {
+  const receipt = pieceCompletionReceipt(effect);
+  if (receipt?.provider === 'slack' && (effect.arguments.file || effect.arguments.threadTs || effect.arguments.sendAsUser === true
+    || effect.provenance.action === 'send_channel_message' && effect.arguments.sendAsBot !== true)) return null;
+  return receipt;
 }
 
 /** Only fixed provider hosts and GETs. Never accept a URL or credential from a recovery choice. */

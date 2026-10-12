@@ -22,7 +22,7 @@ import { createJarvisPieceAuthorizeRoute, createJarvisPieceReceiptRoute } from '
 import { decideRunRecovery, getRunRecovery, listRunRecoveries } from './recovery';
 import { createWorkflowRoutes } from '../api/routes';
 import { recordPieceCompletion } from './piece-completion';
-import { WorkflowEffectBoundary } from './effect-boundary';
+import { WorkflowEffectBoundary, workflowEffectId } from './effect-boundary';
 import { UNTRUSTED_OPEN, UNTRUSTED_CLOSE, wrapUntrusted } from '../../roles/untrusted';
 
 let dir: string;
@@ -319,15 +319,87 @@ test('unverified connector versions retain completions but have no lookup adapte
   expect(r.evidence.outcome).toBe('unsupported'); expect(getRunRecovery(f.run.id)!.effects[0]!.lookupSupported).toBe(false);
 });
 
-for (const unsupported of [{ sendAsUser: true }, { threadTs: '123456.000001' }, { file: 'fixture' }]) {
+for (const unsupported of [{ sendAsUser: true }, { threadTs: '123456.000001' }, { file: 'fixture' }, { sendAsBot: false }]) {
   test(`Slack lookup refuses unsupported mode ${JSON.stringify(unsupported)}`, async () => {
-    const f = fixture(SLACK, 'slack_post_message'); Object.assign(f.params.input, unsupported);
+    const f = fixture(SLACK, 'sendAsBot' in unsupported ? 'send_channel_message' : 'slack_post_message'); Object.assign(f.params.input, unsupported);
     await f.invoke(); f.fail(); let lookups = 0;
     const r = await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority,
       fetchImpl: (async () => { lookups++; return Response.json({}); }) as any });
     expect(r.evidence.outcome).toBe('unsupported'); expect(lookups).toBe(0);
+    expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'recoverable', effects: [{ status: 'completed', lookupSupported: false }] });
   });
 }
+
+test('malformed Slack results do not become completion evidence', async () => {
+  const f = fixture(SLACK, 'send_channel_message'); const permit = await authorizePieceDispatch(f.params) as any;
+  recordPieceCompletion(f.ctx, permit.effectId, { ok: false, error: 'not_sent' }); f.fail();
+  expect(getRunRecovery(f.run.id)!.effects[0]!.status).toBe('unknown');
+});
+
+test('confirmed send survives later inconclusive/blocked lookups, unrelated progress and restart', async () => {
+  const f = fixture(); await authorizePieceDispatch(f.params);
+  updateRun(f.run.id, { status: 'FAILED', steps: { send: { status: 'SUCCEEDED', output: f.result } } });
+  await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority,
+    fetchImpl: (async () => Response.json({ id: 'a123', labelIds: ['SENT'] })) as any });
+  await decideRunRecovery(f.run.id, f.choice('reconcile', 'lookup_0002'), { authority: f.authority,
+    fetchImpl: (async () => new Response('', { status: 404 })) as any });
+  f.emergency.pause();
+  await decideRunRecovery(f.run.id, f.choice('reconcile', 'lookup_0003'), { authority: f.authority });
+  await decideRunRecovery(f.run.id, f.choice('inspect', 'inspect_0004'));
+  updateRun(f.run.id, { steps: { send: { status: 'SUCCEEDED', output: f.result }, late: { output: 'unrelated evidence' } } });
+  closeWorkflowDb(); initWorkflowDb(join(dir, 'fixture.db'));
+  const recovery = getRunRecovery(f.run.id)!;
+  expect(recovery).toMatchObject({ state: 'recoverable', needsAttention: true,
+    effects: [{ status: 'completed', providerEvidence: { outcome: 'confirmed' } }] });
+  expect(recovery.receipts.map(r => r.evidence.outcome)).toEqual(['confirmed', 'inconclusive', 'blocked', 'inspected']);
+  expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('dispatching');
+  // A different provider ID must not borrow that historical confirmation.
+  updateRun(f.run.id, { steps: { send: { status: 'SUCCEEDED', output: { id: 'b234' } } } });
+  expect(getRunRecovery(f.run.id)!.effects[0]!.status).toBe('unknown');
+});
+
+test('legacy confirmation receipts remain valid for their original evidence snapshot', async () => {
+  const f = fixture(); await authorizePieceDispatch(f.params);
+  updateRun(f.run.id, { status: 'FAILED', steps: { send: { status: 'SUCCEEDED', output: f.result } } });
+  const receipt = await decideRunRecovery(f.run.id, f.choice('reconcile'), { authority: f.authority,
+    fetchImpl: (async () => Response.json({ id: 'a123', labelIds: ['SENT'] })) as any });
+  delete receipt.effectEvidenceVersion;
+  getWorkflowDb().run('UPDATE workflow_recovery_receipt SET record=? WHERE id=?', [JSON.stringify(receipt), receipt.id]);
+  await decideRunRecovery(f.run.id, f.choice('reconcile', 'lookup_0002'), { authority: f.authority,
+    fetchImpl: (async () => new Response('', { status: 404 })) as any });
+  expect(getRunRecovery(f.run.id)!.effects[0]!.status).toBe('completed');
+});
+
+test('an earlier loop completion cannot hide a later untracked failed instance', async () => {
+  const f = fixture(); await f.invoke();
+  const effect = listWorkflowEffects(f.run.id)[0]!;
+  const path: Array<[string, number]> = [['loop', 0]];
+  getWorkflowDb().run('DELETE FROM workflow_effect WHERE id=?', [effect.id]);
+  saveWorkflowEffect({ ...effect, id: workflowEffectId(f.run.id, 'send', path, effect.route), executionPath: path });
+  updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: {
+    name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '[1,2]' }, firstLoopAction: f.version.trigger.nextAction } } });
+  updateRun(f.run.id, { status: 'FAILED', failedStep: { name: 'send', displayName: 'Send' }, steps: {
+    loop: { output: { iterations: [{ send: { status: 'SUCCEEDED', output: f.result } }, { send: { status: 'FAILED' } }] } } } });
+  expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'unknown',
+    effects: [{ status: 'completed' }], untrackedSteps: [{ stepName: 'send', executionPath: [['loop', 1]], status: 'unknown' }] });
+  // If the last iteration's log is lost, failedStep still demands inspection.
+  updateRun(f.run.id, { steps: { loop: { output: { iterations: [{ send: { status: 'SUCCEEDED', output: f.result } }] } } } });
+  expect(getRunRecovery(f.run.id)!.untrackedSteps).toEqual([{ stepName: 'send', executionPath: null, status: 'unknown' }]);
+});
+
+test('untracked interrupted CODE progress is unknown even without a failedStep', async () => {
+  const f = fixture(); await f.invoke();
+  const trigger = structuredClone(f.version.trigger);
+  trigger.nextAction!.nextAction = { name: 'code', type: 'CODE', settings: {} };
+  updateDraftVersion(f.version.id, { trigger });
+  for (const status of ['RUNNING', undefined]) {
+    updateRun(f.run.id, { status: 'INTERNAL_ERROR', steps: { code: { status, output: 'partial' } } });
+    expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'unknown',
+      untrackedSteps: [{ stepName: 'code', executionPath: [], status: 'unknown' }] });
+  }
+  updateRun(f.run.id, { steps: { code: { status: 'SUCCEEDED', output: 'complete' } } });
+  expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'recoverable', untrackedSteps: [] });
+});
 
 test('an inconclusive readback of a step receipt leaves the missing completion unknown', async () => {
   const f = fixture(); await authorizePieceDispatch(f.params);

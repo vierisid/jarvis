@@ -44,6 +44,10 @@ return `null`; terminal incomplete runs return:
 - `effects`: stable effect/step IDs, `unknown` / `not_started` / `completed`,
   lookup capability and qualified provider evidence. A legacy authorization is
   never presented as a completed external effect.
+- `untrackedSteps`: failed or interrupted steps without a matching effect
+  record, including their loop path when retained evidence identifies it
+  (`null` means the path is unknown). These keep the run `unknown` even when
+  other effects completed. Status-less partial progress is not completion proof.
 - `needsAttention`, a revision bound to the actual evidence and last decision,
   immutable receipt history, `canReplay: false`, and `newRunRequired: true`.
 
@@ -69,6 +73,17 @@ blocks lookup. Inspect records the user's bounded note and acknowledges the
 current evidence; it does not turn an unknown outcome into success or no-effect.
 A late receipt invalidates that acknowledgement. Normal manual Run remains the
 only path to a new intentional run and all its readiness/approval guards apply.
+
+A successful typed completion receipt remains `completed` when its mode has no
+readback adapter, including Slack user-mode sends and threaded messages.
+`lookupSupported` describes only the ability to perform another provider lookup;
+it does not qualify an already saved completion. Malformed receipts stay unknown.
+For reconciliation, a confirmation is bound to the effect identity, request,
+version, connection binding and exact provider receipt. Later inconclusive or
+blocked lookups and unrelated run progress cannot erase that historical fact.
+`providerEvidence` retains the confirmation; all subsequent attempts remain in
+`receipts`. A different provider receipt cannot reuse it. Older recovery receipts
+without that binding remain usable only for their original evidence snapshot.
 
 The append-only `workflow_recovery_receipt` is the authoritative recovery audit:
 actor, choice, run/flow/version/effect IDs, evidence digest, time and result are

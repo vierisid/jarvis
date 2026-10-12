@@ -1,0 +1,26 @@
+Q-07 review corrections; Bun 1.3.14
+Reviewed base: 69feeba7a1720b7031dfac9af2204367ab3ee962
+Command: JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q07-engine-cache bun test src/workflows/runtime/recovery.test.ts src/workflows/runtime/recovery-engine.test.ts src/workflows/runtime/governed-pieces.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/piece-executor-gate.drift.test.ts src/workflows/api src/workflows/db src/goals/work-items.test.ts
+
+(pass) real engine retains an untracked uncertain send alongside a completed Gmail send [1934.31ms]
+(pass) SIGKILL before provider work preserves partial results and no-replay across boot [96.65ms]
+(pass) SIGKILL during provider work preserves partial results and no-replay across boot [99.34ms]
+(pass) SIGKILL after provider work preserves partial results and no-replay across boot [93.89ms]
+(pass) Slack lookup refuses unsupported mode {"sendAsUser":true} [20.45ms]
+(pass) Slack lookup refuses unsupported mode {"threadTs":"123456.000001"} [19.43ms]
+(pass) Slack lookup refuses unsupported mode {"file":"fixture"} [24.93ms]
+(pass) Slack lookup refuses unsupported mode {"sendAsBot":false} [19.81ms]
+(pass) malformed Slack results do not become completion evidence [19.67ms]
+(pass) confirmed send survives later inconclusive/blocked lookups, unrelated progress and restart [27.25ms]
+(pass) legacy confirmation receipts remain valid for their original evidence snapshot [19.68ms]
+(pass) an earlier loop completion cannot hide a later untracked failed instance [27.29ms]
+(pass) untracked interrupted CODE progress is unknown even without a failedStep [28.25ms]
+ 565 pass
+ 0 fail
+ 13513 expect() calls
+Ran 565 tests across 16 files. [44.84s]
+
+Typecheck: bunx --no-install tsc --noEmit, exit 0.
+git diff --check: exit 0.
+
+Initial focused iteration: 73 pass, 2 fail. Existing before/after SIGKILL tests caught the queue recovery synthetic failed-step marker being counted as an executed step. Restricted failed-step fallback to actual PIECE/CODE nodes; the final 565-test run above passes both original assertions.

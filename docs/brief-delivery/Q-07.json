@@ -26,7 +26,7 @@
   },
   "ownership": {
     "implementer": "Core-quality line",
-    "review": "implementation diff reviewed locally; independent review pending",
+    "review": "Implementation and follow-up diff reviewed locally; independent human review pending",
     "seam": "Q-07 owns reconciliation writes; F-21 consumes the additive RecoveryProjection and does not implement another recovery state machine"
   },
   "merge_after": [
@@ -47,7 +47,10 @@
     "A succeeded top-level run-step output may supply a missing direct receipt for exact provider readback. Confirmation updates the recovery projection, never the original dispatch fence or terminal run. Loop outputs are not guessed.",
     "Unsupported or inconclusive evidence requires inspection and a new intentional run through existing checks. An inspection acknowledges current evidence without claiming that an action succeeded or did not happen. Late completion invalidates the acknowledgement.",
     "Recovery choices are revision-bound and idempotent by request ID, with append-only audit receipts committed atomically. Concurrent or stale decisions cannot overwrite evidence. No recovery choice executes, resumes, enqueues or grants approval.",
-    "Run, effects and work-item views share one RecoveryProjection. The recovery inbox paginates terminal incomplete runs needing attention. No Brief UI is activated."
+    "Run, effects and work-item views share one RecoveryProjection. The recovery inbox paginates terminal incomplete runs needing attention. No Brief UI is activated.",
+    "Recovery includes untracked failed/interrupted graph steps, distinguishing loop instances and synthetic queue failure markers. A completed tracked action cannot hide uncertainty in another action.",
+    "Confirmed provider evidence is bound to the exact effect/request/version/connection/receipt and survives later inconclusive or blocked lookups and unrelated run progress. Every attempt remains auditable; changed provider receipts cannot borrow confirmation.",
+    "Typed Slack completion evidence remains completed for user-mode, threaded and upload-mode receipts even when readback is unsupported; malformed results remain unknown."
   ],
   "acceptance": [
     {
@@ -120,6 +123,12 @@
     {
       "command": "full repository suite / platform matrix / live provider or paid model evaluation",
       "result": "not_run locally; PR CI owns the full suite and platform jobs. Fake providers and isolated fixture DBs only; no real external effects."
+    },
+    {
+      "command": "JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q07-engine-cache bun test src/workflows/runtime/recovery.test.ts src/workflows/runtime/recovery-engine.test.ts src/workflows/runtime/governed-pieces.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/piece-executor-gate.drift.test.ts src/workflows/api src/workflows/db src/goals/work-items.test.ts",
+      "result": "565 pass, 0 fail; 13513 assertions across 16 files; 44.84 seconds. Covers all three review findings, real-engine mixed tracked/community failure, loop identity, restart durability, legacy confirmation compatibility, malformed receipts and existing crash/approval/API behavior. Typecheck and git diff --check also passed.",
+      "log": "evidence/Q-07/review-fixes.log",
+      "reviewed_base": "69feeba7a1720b7031dfac9af2204367ab3ee962"
     }
   ],
   "manual_checks": [
