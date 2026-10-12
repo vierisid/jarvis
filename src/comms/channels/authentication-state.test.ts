@@ -1,7 +1,8 @@
 import { expect, test } from 'bun:test';
 import { TelegramAdapter } from './telegram';
 import { DiscordAdapter } from './discord';
-import { Client } from 'discord.js';
+import { EventEmitter } from 'node:events';
+import { Client, Status } from 'discord.js';
 
 test('Telegram send rejection is retained and contains no provider error or token', async () => {
   const original = globalThis.fetch, adapter = new TelegramAdapter('fixture-secret');
@@ -29,5 +30,37 @@ test('Discord login token errors remain visible after failed adapter startup', a
   const adapter = new DiscordAdapter('fixture-token');
   try {
     await expect(adapter.connect()).rejects.toThrow('fixture'); expect(adapter.authenticationState()).toBe('rejected');
+  } finally { Client.prototype.login = login; await adapter.disconnect(); }
+});
+
+test('actual Discord SDK gateway close/resume handlers override latched manager readiness', async () => {
+  const login = Client.prototype.login;
+  let client: Client;
+  let transport: EventEmitter;
+  Client.prototype.login = async function () {
+    client = this;
+    transport = Object.assign(new EventEmitter(), { destroy: async () => {} });
+    (this.ws as any)._ws = transport;
+    this.ws.status = Status.Ready;
+    this.ws.shards.set(0, Object.assign(new EventEmitter(), { status: Status.Ready }) as any);
+    (this.ws as any).attachEvents();
+    this.emit('ready', this as any);
+    return 'fixture';
+  };
+  const adapter = new DiscordAdapter('fixture-token');
+  try {
+    await adapter.connect(); expect(adapter.authenticationState()).toBe('verified');
+    for (const code of [1006, 4014]) {
+      transport!.emit('closed', { code, shardId: 0 });
+      expect(client!.isReady()).toBe(true); expect(adapter.isConnected()).toBe(true);
+      expect(adapter.authenticationState()).toBe('unknown');
+      transport!.emit('resumed', { shardId: 0 });
+      expect(adapter.authenticationState()).toBe('verified');
+    }
+    client!.ws.shards.set(1, { status: Status.Connecting } as any);
+    expect(adapter.authenticationState()).toBe('unknown'); client!.ws.shards.delete(1);
+    transport!.emit('closed', { code: 4004, shardId: 0 });
+    expect(adapter.authenticationState()).toBe('rejected');
+    transport!.emit('resumed', { shardId: 0 }); expect(adapter.authenticationState()).toBe('rejected');
   } finally { Client.prototype.login = login; await adapter.disconnect(); }
 });

@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, MessageFlags, Partials, type Message } from 'discord.js';
+import { Client, GatewayIntentBits, MessageFlags, Partials, Status, type Message } from 'discord.js';
 import type { ChannelAdapter, ChannelHandler, ChannelMessage, SendOptions } from './telegram.ts';
 import type { STTProvider } from '../voice.ts';
 import { discordAllowList, type AllowList } from './allow-list.ts';
@@ -148,7 +148,11 @@ export class DiscordAdapter implements ChannelAdapter {
   }
 
   authenticationState(): 'verified' | 'rejected' | 'unknown' {
-    return this.authenticationRejected ? 'rejected' : this.client?.isReady() ? 'verified' : 'unknown';
+    if (this.authenticationRejected) return 'rejected';
+    // Client.isReady() stays latched through shard reconnects in discord.js v14.
+    // Require current shard readiness as well, including a non-empty shard set.
+    return this.client?.isReady() && this.client.ws.shards.size > 0 &&
+      this.client.ws.shards.every(shard => shard.status === Status.Ready) ? 'verified' : 'unknown';
   }
 
   private async processMessage(message: Message): Promise<void> {
