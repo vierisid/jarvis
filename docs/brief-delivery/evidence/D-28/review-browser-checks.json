@@ -1,0 +1,31 @@
+{
+  "date": "2026-10-12",
+  "method": "CUA in-app Chromium, documented Playwright locators, screenshots and read-only DOM inspection",
+  "url": "http://127.0.0.1:4418/?brief=preview&specimen=authority#/_brief_preview",
+  "isolation": "Static loopback fixture preview; no daemon APIs or persistent user settings",
+  "result": "pass",
+  "checks": [
+    "Persistence-failure fixture applies level 1 in memory but returns failure; UI remains unconfirmed with disabled edits.",
+    "Reload preserves level 1 and enables explicit Retry save. Restore saves plus Retry save confirms without changing the level.",
+    "Runtime pause appears while draft level 10 remains unsaved; runtime resume removes the banner. Fixture config emergency copy stays normal.",
+    "Read-only stale refresh displays both read-only permission and the current-read error; restore clears the error but leaves write controls disabled.",
+    "390x844 viewport: document scrollWidth equals 390; both retry controls fit inside the viewport; all thirteen read-only switches and slider remain disabled.",
+    "Discard retry leaves current level visible with an unconfirmed-persistence message and no Saved claim.",
+    "Temporary viewport reset; final normal save checked in default 1280x720 viewport."
+  ],
+  "console": "No warning or error entries observed",
+  "screenshots": [
+    "review-retry-ready.png",
+    "review-retry-confirmed.png",
+    "review-live-emergency.png",
+    "review-read-only-stale.png",
+    "review-read-only-stale-390.png",
+    "review-retry-ready-390.png",
+    "review-final-authority.png"
+  ],
+  "limitations": [
+    "Browser fixtures simulate persistence; separate persisted/in-memory behavior is checked in regression tests.",
+    "No live F25 host, real emergency effect or authority settings persistence exercised.",
+    "Original eight-layout and design-reference evidence retained; full matrix was not repeated for these targeted fixes."
+  ]
+}

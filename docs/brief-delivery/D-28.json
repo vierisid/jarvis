@@ -3,7 +3,7 @@
   "title": "Build Authority without changing policy",
   "date": "2026-10-12",
   "status": "implemented_verified_not_activated",
-  "implementation_head": "12a33173769227a98c41cd1d1598e48cae200bee",
+  "implementation_head": "6ca4eba56e3f888b1dfdecce4ba76435837fdf6c",
   "head": "Final evidence commit is the PR head; implementation_head identifies tested code.",
   "branch": "brief/d-28",
   "target": "brief/d-27",
@@ -20,7 +20,7 @@
     "base_decision": "Continue the staged D stack on corrected D27, preserving owner main. No isolated main compatibility claim."
   },
   "source_pins": {
-    "A-15": "Existing useAuthorityData.ts, authority engine, and /api/authority/config read/write contract at base_sha; relevant endpoint/engine also compared with current main.",
+    "A-15": "Existing /api/authority/status GET (top-level EmergencyController state plus engine config) and /api/authority/config POST, authority engine and EmergencyController at base_sha; backend remains unchanged.",
     "F-25": "No PR found in all-state inventory before publication; navigationCompatibility and exact advanced/emergency destinations remain required.",
     "Q-08": "Open PR #891 owns broad execution-entry certification; D28 does not alter or claim that certification.",
     "roadmap_audit": "69211511c95355776c6c319c01e1df5acd3b8f1e"
@@ -61,9 +61,9 @@
   "implementation": [
     "Canonical integer 1\u201310 values, continuous native pointer motion until release, keyboard arrows/Home/End, 80ms release snap and reduced-motion override.",
     "All thirteen current categories with readable On/Off/disabled state, 56px rows and 44x40 targets. Off changes membership, never grants permission.",
-    "Explicit save; changed-field-only POST after canonical preflight and acknowledgment plus fresh-read confirmation.",
-    "Unknown/conflict states never replay automatically; permission loss purges values; stale data disables editing.",
-    "Polling defers for dirty/unknown state, pointer gestures and focused controls; drafts survive remount/shell changes.",
+    "Explicit save; changed-field-only POST after canonical preflight and acknowledgment plus fresh live-status confirmation. An explicit retry resends the previously unconfirmed fields even when already applied in memory.",
+    "Unknown/conflict states never replay automatically; explicit reload offers Retry save or Discard retry; permission loss purges values; stale data disables editing and remains visibly stale in read-only mode.",
+    "Polling refreshes emergency status while preserving dirty/unknown/conflicting policy drafts and baselines; it defers during pointer gestures and focused controls. Drafts survive remount/shell changes.",
     "Advanced/emergency navigation stays available during read/save failures through the gated F25 host seam."
   ],
   "contract_limits": [
@@ -82,20 +82,20 @@
     {
       "command": "bun test ui/src/brief/authority",
       "result": "pass",
-      "tests": 52,
+      "tests": 67,
       "failed": 0,
       "skipped": 0,
-      "assertions": 327,
-      "evidence": "evidence/D-28/focused-tests.log"
+      "assertions": 517,
+      "evidence": "evidence/D-28/review-focused-tests.log"
     },
     {
       "command": "D27_F22_SETUP_MODULE=/tmp/d27-f22-pin/ui/src/brief/connections/setup.ts bun test ui/src/brief",
       "result": "pass",
-      "tests": 808,
+      "tests": 823,
       "failed": 0,
       "skipped": 2,
-      "assertions": 6208,
-      "evidence": "evidence/D-28/brief-tests.log",
+      "assertions": 6398,
+      "evidence": "evidence/D-28/review-brief-tests.log",
       "note": "F22 headless export pinned at 9f5b258e8548cd3b481c17b5a1653b20753206a2; see D-27.md for reproducible extraction. Two optional F07/F08 integrations skipped."
     },
     {
@@ -105,23 +105,23 @@
       "failed": 0,
       "skipped": 0,
       "assertions": 119,
-      "evidence": "evidence/D-28/policy-tests.log"
+      "evidence": "evidence/D-28/review-policy-tests.log"
     },
     {
       "command": "bunx tsc --noEmit",
       "result": "pass",
-      "evidence": "evidence/D-28/typecheck.log"
+      "evidence": "evidence/D-28/review-typecheck.log"
     },
     {
       "command": "bun run build:ui",
       "result": "pass",
-      "evidence": "evidence/D-28/build.log",
+      "evidence": "evidence/D-28/review-build.log",
       "warnings": "Existing @theme/@tailwind at-rule warnings."
     },
     {
       "command": "bunx prettier --check ui/src/brief/authority docs/brief-delivery/D-28.md docs/brief-delivery/D-28.json",
       "result": "pass",
-      "evidence": "evidence/D-28/format-check.log"
+      "evidence": "evidence/D-28/review-format-check.log"
     },
     {
       "command": "git diff --cached --check",
@@ -130,10 +130,10 @@
   ],
   "commit_hooks": {
     "result": "pass",
-    "evidence": "evidence/D-28/code-hooks.log",
+    "evidence": "evidence/D-28/review-code-hooks.log",
     "note": "Normal license, migration, template, package, related-test and type checks; no bypass or coauthor trailers. Evidence commit also uses normal hooks.",
-    "tests": 52,
-    "assertions": 327
+    "tests": 67,
+    "assertions": 517
   },
   "browser": {
     "result": "pass_with_recorded_limits",
@@ -163,7 +163,8 @@
       "evidence/D-28/read-only-390.png",
       "evidence/D-28/unconfirmed-save-800.png"
     ],
-    "final_build_check": "Rebuilt app reloaded; clean slider keyboard focus persisted beyond the five-second polling interval."
+    "final_build_check": "Rebuilt app reloaded; clean slider keyboard focus persisted beyond the five-second polling interval.",
+    "note": "Initial layout/design evidence retained. Targeted review fixes were browser-checked separately; see review_corrections.browser."
   },
   "not_run": [
     "Combined live authenticated F25 host and production activation",
@@ -179,5 +180,25 @@
   },
   "rollback": "Remove optional registration or switch back to existing Authority settings UI. Revert card commits if needed; no migration reversal or effect replay.",
   "next_card": "D-29 not started",
-  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged."
+  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged.",
+  "initial_implementation_head": "12a33173769227a98c41cd1d1598e48cae200bee",
+  "review_corrections": {
+    "reviewed_head": "c419638c670ce7b50f67ad26bace6f8ecf18745f",
+    "fix_commit": "6ca4eba56e3f888b1dfdecce4ba76435837fdf6c",
+    "same_pr": "https://github.com/vierisid/jarvis/pull/947",
+    "findings_addressed": 3,
+    "fixes": [
+      "Read live EmergencyController state from status instead of the stale config copy; preserve policy edits during emergency refresh.",
+      "Keep unconfirmed field intent through reload and allow an explicit persistence retry at unchanged values, with conflict and acknowledgment/readback checks.",
+      "Keep freshness errors visible in read-only mode, including disabled-control recovery and access loss."
+    ],
+    "regressions_before_fix": {
+      "failed": 3,
+      "evidence": "evidence/D-28/review-before.log"
+    },
+    "browser": "evidence/D-28/review-browser-checks.json",
+    "prior_head_ci": "All active checks passed on reviewed head c419638c; final pushed head status is recorded separately in private progress.",
+    "f25_recheck": "No F-25 PR found in all-state title search at review correction.",
+    "initial_evidence": "Original unprefixed logs/screenshots remain historical evidence; review-* logs and images record corrections."
+  }
 }
