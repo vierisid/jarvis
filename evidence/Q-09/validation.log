@@ -1,0 +1,61 @@
+Q-09 local delivery evidence (2026-10-12)
+Baseline: 75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0 (main)
+Initial implementation: 7589734105f28e94d48a06c8a3ad9c8e228db3e8
+Final implementation: d24d6cd4963432fbc682551a701c5648588706ab
+Bun 1.4.2 (744846f84), Go 1.25.0, isolated engine cache and fixture databases.
+
+Command: NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/actions/action-verification.test.ts src/actions/browser src/actions/tools/sidecar-route.test.ts src/actions/tools/remote-snapshot-binding.test.ts src/actions/tools/sidecar-browser-playbook.test.ts src/actions/tools/browser-approval-guard.test.ts src/actions/tools/local-browser-guard.test.ts src/actions/tools/browser-template-delivery.test.ts src/authority src/workflows/runtime/ui-verification.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/effect-boundary.test.ts src/util/model-exec-env.test.ts src/roles/persisted-frame.test.ts
+
+ 785 pass
+ 0 fail
+ 3223 expect() calls
+Ran 785 tests across 41 files. [117.18s]
+
+Command: bun test src/authority/ui-verification.test.ts
+
+ 11 pass
+ 0 fail
+ 39 expect() calls
+Ran 11 tests across 1 file. [160.00ms]
+This follow-up pins that an approved click still has no verified business postcondition.
+
+Command: xvfb-run -a go test -json -count=1 ./... (sidecar/)
+{'pass': 1116, 'skip': 8} test/subtest completions; 6 packages passed; no failed package.
+Skipped: TestDumpWizardPage, TestWizardPanelSaysWhatIsOnTheMachine, TestDumpBrandPages, TestProbeWindowOnceFlagsAMissingToolAsUnavailable, TestLinuxXHotkeyTestsAreEnforcedHere, TestPlatformOCRRunsWhenTesseractAvailable, TestIsBlockedPathCaseFolding, TestTitlebarGesture
+Command: JARVIS_REQUIRE_X_HOTKEY_TESTS=1 xvfb-run -a go test -run TestLinuxXHotkeyTestsAreEnforcedHere -count=1 .
+ok  	github.com/jarvis/sidecar	0.041s
+Command: go test -run 'TestReviewedClickOnTheReviewedSnapshotProceeds|TestBrowserOutcome' -count=1 .
+ok  	github.com/jarvis/sidecar	1.947s
+
+bunx tsc --noEmit --pretty false: exit 0, no diagnostics.
+git diff --check: passed.
+Implementation commit hooks: 270 passed, 1 optional engine-build skip, 0 failed; typecheck, no-EE, migration, template and package guards passed.
+The real engine/outer-worker tests ran in the affected suite using the isolated cache.
+
+Native Windows/macOS: not_run on Linux. Cross-compile attempts with GOOS=windows/darwin, CGO_ENABLED=0 could not run: webview_go requires the platform cgo build. This is not platform certification.
+Prior targeted rounds caught receipt-format assertions and unavailable direct workflow UI write fixtures. Those fixtures were corrected to preserve the existing opaque-write prohibition; no capability restriction was removed.
+Initial affected run: 748 passed, 1 failed (expected new approval receipt prefix); corrected and rerun green above.
+No real account UI, external sends, paid calls, deployment, merge or Brief activation.
+
+Command: NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/cancellation-authority.integration.test.ts src/workflows/runtime/workflow-skill-effect.test.ts src/workflows/runtime/cancellation.test.ts
+
+ 107 pass
+ 0 fail
+ 433 expect() calls
+Ran 107 tests across 4 files. [24.38s]
+
+Command: NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/authority src/actions/tools/browser-approval-guard.test.ts src/actions/tools/remote-snapshot-binding.test.ts src/actions/tools/sidecar-route.test.ts src/workflows/runtime/workflow-machine-binding.test.ts
+
+ 484 pass
+ 0 fail
+ 2089 expect() calls
+Ran 484 tests across 18 files. [24.44s]
+
+Command: bun test src/authority/ui-verification.test.ts
+
+ 19 pass
+ 0 fail
+ 63 expect() calls
+Ran 19 tests across 1 file. [350.00ms]
+
+Device-affinity commit hooks: 175 passed, 0 failed; typecheck, no-EE/migration/template/package guards passed.
