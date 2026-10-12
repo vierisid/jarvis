@@ -228,7 +228,34 @@ test("read-only keeps on/off values visible but all write controls disabled", as
   await click("Emergency controls");
   expect(fixture.navigations).toEqual(["emergency-controls"]);
 });
-for (const example of ["save-failure", "lost-response", "conflict"] as const)
+test("review regression: read-only reports stale values and recovers without enabling writes", async () => {
+  fixture.controller.retire();
+  fixture = makeAuthorityFixture("read-only");
+  await render();
+  await React.act(async () => {
+    fixture.failReads(true);
+    await fixture.controller.refresh();
+  });
+  expect(host.textContent).toContain("Read-only settings");
+  expect(host.textContent).toContain("Could not load current settings");
+  expect(slider().value).toBe("3");
+  expect(slider().disabled).toBe(true);
+  expect(button("Save changes").disabled).toBe(true);
+  fixture.failReads(false);
+  await click("Reload settings");
+  expect(host.textContent).not.toContain("Could not load current settings");
+  expect(host.textContent).toContain("Read-only settings");
+  expect(slider().disabled).toBe(true);
+  fixture.host.request = async () => new Response(null, { status: 403 });
+  await click("Reload settings");
+  expect(slider()).toBeNull();
+});
+for (const example of [
+  "save-failure",
+  "persistence-failure",
+  "lost-response",
+  "conflict",
+] as const)
   test(`${example} leaves editable values visible without claiming Saved`, async () => {
     fixture.controller.retire();
     fixture = makeAuthorityFixture(example);
@@ -240,12 +267,57 @@ for (const example of ["save-failure", "lost-response", "conflict"] as const)
     expect(host.querySelector(".brief-authority-save p")?.textContent).toMatch(
       /not confirmed|changed elsewhere/,
     );
-    expect(button("Save changes").disabled).toBe(true);
+    expect(
+      button(example === "conflict" ? "Save changes" : "Retry save").disabled,
+    ).toBe(true);
     await click("Advanced overrides");
     expect(fixture.navigations).toEqual(["advanced-authority"]);
     await click("Reload settings");
     expect(slider().disabled).toBe(false);
+    if (example !== "conflict") {
+      expect(slider().value).toBe("10");
+      expect(button("Retry save").disabled).toBe(false);
+      expect(button("Discard retry").disabled).toBe(false);
+      expect(fixture.writes).toHaveLength(1);
+      fixture.recoverWrites();
+      await click("Retry save");
+      expect(host.textContent).toContain("Changes saved and checked.");
+      expect(fixture.writes).toHaveLength(2);
+    }
   });
+test("live emergency banner changes while edits stay visible and unsaved", async () => {
+  await render();
+  await key("End");
+  for (const state of ["paused", "normal", "killed", "normal"] as const) {
+    await React.act(async () => {
+      fixture.changeEmergency(state);
+      await fixture.controller.refresh();
+    });
+    expect(host.textContent?.includes("Authority is paused.")).toBe(
+      state === "paused",
+    );
+    expect(host.textContent?.includes("Emergency stop is active.")).toBe(
+      state === "killed",
+    );
+    expect(slider().value).toBe("10");
+    expect(button("Save changes").disabled).toBe(false);
+    expect(fixture.writes).toHaveLength(0);
+  }
+});
+test("discard retry remains an explicit alternative without displaying Saved", async () => {
+  fixture.controller.retire();
+  fixture = makeAuthorityFixture("persistence-failure");
+  await render();
+  await key("Home");
+  await click("Save changes");
+  await click("Reload settings");
+  await click("Discard retry");
+  expect(slider().value).toBe("1");
+  expect(button("Save changes").disabled).toBe(true);
+  expect(host.textContent).toContain("previous save was not confirmed");
+  expect(host.textContent).not.toContain("Changes saved and checked.");
+  expect(fixture.writes).toHaveLength(1);
+});
 test("stale values are non-editable and permission loss removes their content", async () => {
   await render();
   await React.act(async () => {

@@ -7,6 +7,7 @@ import {
   validLevel,
   type ActionCategory,
   type AuthorityDestination,
+  type AuthorityField,
   type AuthorityPort,
   type AuthoritySettings,
   type AuthorityValues,
@@ -21,7 +22,14 @@ export interface AuthorityState {
   reading: boolean;
   message: string;
   navigationMessage: string;
+  retryFields: AuthorityField[];
 }
+const UNKNOWN_MESSAGE =
+  "Save not confirmed. Reload current settings before making another change.";
+const RETRY_MESSAGE =
+  "The previous save was not confirmed. Retry save to persist these values, or discard the retry.";
+const CONFLICT_MESSAGE =
+  "Settings changed elsewhere. Reload current settings before editing again.";
 const initial = (): AuthorityState => ({
   availability: "loading",
   saved: null,
@@ -30,6 +38,7 @@ const initial = (): AuthorityState => ({
   reading: false,
   message: "",
   navigationMessage: "",
+  retryFields: [],
 });
 export class AuthorityController {
   readonly source;
@@ -103,11 +112,16 @@ export class AuthorityController {
   };
   private edit(draft: AuthorityValues) {
     if (!this.editable() || !this.state.saved) return;
-    const dirty = !sameValues(draft, this.state.saved);
+    const dirty =
+      this.state.retryFields.length > 0 || !sameValues(draft, this.state.saved);
     this.publish({
       draft,
       phase: dirty ? "dirty" : "clean",
-      message: dirty ? "Unsaved changes" : "Current settings restored.",
+      message: this.state.retryFields.length
+        ? RETRY_MESSAGE
+        : dirty
+          ? "Unsaved changes"
+          : "Current settings restored.",
     });
   }
   setLevel(level: number) {
@@ -130,25 +144,61 @@ export class AuthorityController {
       !this.access ||
       this.interacting ||
       this.state.phase === "saving" ||
-      this.state.reading ||
-      (!discard && ["dirty", "unknown", "conflict"].includes(this.state.phase))
+      this.state.reading
     )
       return;
-    const wasUncertain = this.state.phase === "unknown",
+    const previous = this.state,
+      preserveEdits =
+        !discard && ["dirty", "unknown", "conflict"].includes(previous.phase),
       op = this.operation();
     this.publish({ reading: true });
     try {
       const result = await this.port.read(op.signal);
       if (!op.current()) return;
       const data = result.state === "ready" ? readSettings(result.data) : null;
-      if (data)
+      if (data && preserveEdits && previous.saved)
+        this.publish({
+          // Poll live emergency status without rebasing or discarding policy edits.
+          saved: { ...previous.saved, emergency_state: data.emergency_state },
+          availability: "ready",
+          message:
+            previous.phase === "unknown"
+              ? UNKNOWN_MESSAGE
+              : previous.phase === "conflict"
+                ? CONFLICT_MESSAGE
+                : previous.retryFields.length
+                  ? RETRY_MESSAGE
+                  : "Unsaved changes",
+        });
+      else if (
+        data &&
+        previous.phase === "unknown" &&
+        previous.draft &&
+        previous.retryFields.length
+      )
+        this.publish({
+          saved: data,
+          draft: {
+            ...data,
+            ...changedValues(
+              previous.draft,
+              previous.draft,
+              previous.retryFields,
+            ),
+          },
+          availability: "ready",
+          phase: "dirty",
+          message: RETRY_MESSAGE,
+        });
+      else if (data)
         this.publish({
           saved: data,
           draft: structuredClone(data),
           availability: "ready",
           phase: "clean",
-          message: wasUncertain
-            ? "Current settings loaded. The previous save was not confirmed."
+          retryFields: [],
+          message: previous.retryFields.length
+            ? "Retry discarded. Current settings loaded; the previous save was not confirmed."
             : "Current settings loaded.",
         });
       else if (result.state === "unavailable" || result.state === "unsupported")
@@ -179,44 +229,43 @@ export class AuthorityController {
       return;
     const base = structuredClone(this.state.saved),
       draft = structuredClone(this.state.draft),
+      retryFields = [...this.state.retryFields],
+      patch = changedValues(base, draft, retryFields),
+      attemptedFields = Object.keys(patch) as AuthorityField[],
       op = this.operation();
     this.publish({ phase: "saving", message: "Saving changes…" });
     try {
-      const result = await this.port.save(base, draft, op.signal);
+      const result = await this.port.save(base, draft, op.signal, retryFields);
       if (!op.current()) return;
       const data = "data" in result ? readSettings(result.data) : null;
-      if (
-        result.state === "confirmed" &&
-        data &&
-        matchesPatch(data, changedValues(base, draft))
-      ) {
+      if (result.state === "confirmed" && data && matchesPatch(data, patch)) {
         this.publish({
           saved: data,
           draft: structuredClone(data),
           phase: "saved",
+          retryFields: [],
           message: "Changes saved and checked.",
         });
       } else if (result.state === "conflict" && data) {
         this.publish({
           phase: "conflict",
-          message:
-            "Settings changed elsewhere. Reload current settings before editing again.",
+          message: CONFLICT_MESSAGE,
         });
       } else if (
         result.state === "unavailable" ||
         result.state === "unsupported"
       ) {
         this.publish({ ...initial(), availability: result.state });
-      } else this.unknown();
+      } else this.unknown(attemptedFields);
     } catch {
-      if (op.current()) this.unknown();
+      if (op.current()) this.unknown(attemptedFields);
     }
   }
-  private unknown() {
+  private unknown(retryFields: AuthorityField[]) {
     this.publish({
       phase: "unknown",
-      message:
-        "Save not confirmed. Reload current settings before making another change.",
+      retryFields,
+      message: UNKNOWN_MESSAGE,
     });
   }
   async navigate(destination: AuthorityDestination) {

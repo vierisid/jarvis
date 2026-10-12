@@ -158,7 +158,8 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
           </section>
           <div className="brief-authority-save">
             <p role="status" aria-live="polite">
-              {!controller.canWrite ? "Read-only settings" : state.message}
+              {!controller.canWrite && "Read-only settings. "}
+              {state.message}
             </p>
             <div>
               <BriefButton
@@ -167,7 +168,9 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
                 onClick={() => void controller.refresh(true)}
               >
                 {state.phase === "dirty"
-                  ? "Discard changes"
+                  ? state.retryFields.length
+                    ? "Discard retry"
+                    : "Discard changes"
                   : "Reload settings"}
               </BriefButton>
               <BriefButton
@@ -183,7 +186,7 @@ function AuthorityBody({ controller }: { controller: AuthorityController }) {
                 stateLabels={{ pending: "Saving…", success: "Saved" }}
                 onClick={() => void controller.save()}
               >
-                Save changes
+                {state.retryFields.length ? "Retry save" : "Save changes"}
               </BriefButton>
             </div>
           </div>
