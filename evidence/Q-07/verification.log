@@ -79,3 +79,15 @@ Fresh engine retest before final suite:
 Ran 232 tests across 7 files. [105.73s]
 
 The remaining engine-reaper assertion was reproduced against the unchanged Q-08 source (baseline-reaper.log); it passed in the final 74-file run. No engine-reaper source was changed.
+
+First full PR CI, head 9ada3900cd1bda009659e7172178894a0778c4cd:
+https://github.com/vierisid/jarvis/actions/runs/38290706880
+7990 pass, 31 skip, 3 fail across 430 files; 560.74 seconds.
+Failures: boundedReceiptText caller inventory; execution_result writer inventory; classification of JARVIS_TEST_ENGINE_CACHE_ROOT.
+Corrected the inventories without weakening either guard. The fixture env stays stripped from model-directed children. Added end-to-end assertions that both Q-07 receipt paths defang framing delimiters while preserving primary results.
+Focused follow-up command is in Q-07.json:
+
+ 117 pass
+ 0 fail
+ 536 expect() calls
+Ran 117 tests across 5 files. [3.44s]

@@ -112,6 +112,12 @@
       "log": "evidence/Q-07/baseline-reaper.log"
     },
     {
+      "command": "PR CI bun test --retry=2 at 9ada3900; then bun test src/roles/persisted-frame.test.ts src/roles/untrusted-import-guard.test.ts src/util/model-exec-env.test.ts src/util/subprocess-env.test.ts src/workflows/runtime/recovery.test.ts",
+      "result": "Initial full CI: 7990 pass, 31 skip, 3 fail across 430 files. All failures were explicit inventories: two new boundedReceiptText callers, one new markExecuted writer, and the test-only cache environment name. Registered the receipt callers/writer and classified the fixture variable as internal (still stripped from model-launched processes). Added a behavioral framing regression for both new receipt paths. Focused follow-up: 117 pass, 0 fail, 536 assertions; final PR checks report the subsequent full-suite verdict.",
+      "log": "evidence/Q-07/verification.log",
+      "ci_run": "https://github.com/vierisid/jarvis/actions/runs/38290706880"
+    },
+    {
       "command": "full repository suite / platform matrix / live provider or paid model evaluation",
       "result": "not_run locally; PR CI owns the full suite and platform jobs. Fake providers and isolated fixture DBs only; no real external effects."
     }

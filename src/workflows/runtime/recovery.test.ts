@@ -23,6 +23,7 @@ import { decideRunRecovery, getRunRecovery, listRunRecoveries } from './recovery
 import { createWorkflowRoutes } from '../api/routes';
 import { recordPieceCompletion } from './piece-completion';
 import { WorkflowEffectBoundary } from './effect-boundary';
+import { UNTRUSTED_OPEN, UNTRUSTED_CLOSE, wrapUntrusted } from '../../roles/untrusted';
 
 let dir: string;
 beforeEach(() => { setEncryptionKey(Buffer.alloc(32, 7)); dir = mkdtempSync(join(tmpdir(), 'jarvis-q07-')); initWorkflowDb(join(dir, 'fixture.db')); });
@@ -335,4 +336,21 @@ test('an inconclusive readback of a step receipt leaves the missing completion u
     fetchImpl: (async () => new Response('', { status: 404 })) as any });
   expect(r.evidence.outcome).toBe('inconclusive');
   expect(getRunRecovery(f.run.id)).toMatchObject({ state: 'unknown', effects: [{ status: 'unknown' }] });
+});
+
+test('completion approval receipts and inspection notes cannot persist active framing delimiters', async () => {
+  const f = fixture(); f.authority.setGovernedCategories(['send_email']);
+  const pending = await authorizePieceDispatch(f.params) as any;
+  f.approvals.approve(pending.approval.approvalId, 'user');
+  const permit = await authorizePieceDispatch(f.params) as any;
+  const result = { ...f.result, detail: wrapUntrusted('x'.repeat(4000), 'provider fixture') };
+  recordPieceCompletion(f.ctx, permit.effectId, result, { approvalManager: f.approvals });
+  const approvalReceipt = f.approvals.getRequest(pending.approval.approvalId)!.execution_result!;
+  expect(approvalReceipt.length).toBeLessThanOrEqual(2000);
+  expect(getWorkflowEffect(permit.effectId)!.result).toEqual(result);
+  f.fail();
+  const receipt = await decideRunRecovery(f.run.id, { ...f.choice('inspect'), note: wrapUntrusted('Inspection remains uncertain', 'inspection fixture') });
+  for (const text of [approvalReceipt, receipt.evidence.reason]) {
+    expect(text).not.toContain(UNTRUSTED_OPEN); expect(text).not.toContain(UNTRUSTED_CLOSE);
+  }
 });
