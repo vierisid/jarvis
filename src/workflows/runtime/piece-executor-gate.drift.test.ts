@@ -31,7 +31,7 @@ describe('engine piece-executor admission gate', () => {
   const source = readFileSync(PIECE_EXECUTOR, 'utf8');
 
   test('imports the guard from the daemon runtime, by a path that exists', () => {
-    const match = /import \{ authorizePieceDispatch \} from '([^']+)'/u.exec(source);
+    const match = /import \{ authorizePieceDispatch, executeAuthorizedPiece \} from '([^']+)'/u.exec(source);
     expect(match).not.toBeNull();
     const target = resolve(dirname(PIECE_EXECUTOR), `${match![1]!}.ts`);
     expect(target).toBe(resolve(__dirname, 'piece-effect-guard.ts'));
@@ -40,7 +40,7 @@ describe('engine piece-executor admission gate', () => {
 
   test('authorizes before the piece action runs, never after', () => {
     const flat = squash(source);
-    const authorizeAt = flat.indexOf('await authorizePieceDispatch({');
+    const authorizeAt = flat.indexOf('await authorizePieceDispatch(dispatchParams)');
     const runAt = flat.indexOf('runMethodToExecute(backwardCompatibleContext)');
     expect(authorizeAt).toBeGreaterThan(-1);
     expect(runAt).toBeGreaterThan(-1);
@@ -61,7 +61,7 @@ describe('engine piece-executor admission gate', () => {
     // the runtime proof is emergency-hold-engine.test.ts; this keeps a
     // re-vendor from dropping the patch unnoticed.
     expect(flat).toContain(
-      "const output = parked ? { approval: governance.approval, [JARVIS_PARKED]: isPaused ? { executionType: ExecutionType.RESUME, resumePayload } : { executionType: ExecutionType.BEGIN } } : await runMethodToExecute(backwardCompatibleContext)",
+      "const output = parked ? { approval: governance.approval, [JARVIS_PARKED]: isPaused ? { executionType: ExecutionType.RESUME, resumePayload } : { executionType: ExecutionType.BEGIN } } : await executeAuthorizedPiece(dispatchParams, governance, async () => runMethodToExecute(backwardCompatibleContext))",
     );
     expect(flat).toContain('const parkedBefore = jarvisParked(executionState.getStepOutput(action.name))');
     expect(flat).toContain('resumePayload: resumePayload!,');

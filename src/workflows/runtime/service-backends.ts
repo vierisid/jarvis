@@ -47,8 +47,10 @@ import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, surfaceBoundRefusal, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, governedPieceToolName, isWellFormedPieceActionName, reprojectPieceInput,
-  resolveGovernedPieceAction } from './piece-effects';
+  resolveGovernedPieceAction, tracksPieceCompletion } from './piece-effects';
 import { assertRecipientFactsCurrent, recipientAddresses, recipientFactPins, type FactPin } from './fact-bindings';
+import { captureProviderBinding } from './provider-reconciliation';
+import { recordPieceCompletion } from './piece-completion';
 import { defangPieceProjection } from './piece-effect-receipt';
 import { getFlowInProject } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
@@ -842,13 +844,25 @@ export function buildSandboxServiceBackends(
         throw error;
       }
     })();
+    const tracked = tracksPieceCompletion(req.piece, req.action);
+    const route = tracked ? 'piece-dispatch' : 'piece';
+    if (tracked && !req.inputDigest) throw new Error('A tracked send requires the complete input digest');
+    if (tracked && getWorkflowEffect(workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], 'piece'))) {
+      throw new Error('Legacy piece authorization may already have dispatched; inspect it and start a new intentional run');
+    }
+    const run = getFlowRun(ctx.runId);
+    if (!run || run.projectId !== ctx.projectId) throw new Error('Workflow step identity does not match the run');
+    const providerBinding = tracked ? captureProviderBinding({ projectId: ctx.projectId, versionId: run.flowVersionId,
+      stepName: ctx.stepName!, piece: req.piece, credentialDigest: req.credentialDigest }) : undefined;
     const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
-      route: 'piece', toolName: tool.name, category: capability.category, toolCategory: tool.category,
+      externalDispatch: tracked, providerBinding,
+      route, toolName: tool.name, category: capability.category, toolCategory: tool.category,
       // Digested over the projection AND the engine's digest of the whole
       // resolved input, so a change to any prop -- including the part of a
       // long body or a long recipient list the card cuts -- invalidates an
       // approval granted earlier (Q-08).
-      request: { piece: req.piece, action: req.action, input, ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}) },
+      request: { piece: req.piece, action: req.action, input, ...(req.inputDigest ? { inputDigest: req.inputDigest } : {}),
+        ...(tracked && req.credentialDigest ? { credentialDigest: req.credentialDigest } : {}) },
       prepare: () => {
         // Matched once, when the effect is recorded; resumes and retries recheck the record's facts.
         const facts = addressing ? recipientFactPins(recipientAddresses(input)) : [];
@@ -860,13 +874,20 @@ export function buildSandboxServiceBackends(
       revalidate: record => assertRecipientFactsCurrent((record.bindings as { facts?: FactPin[] } | undefined)?.facts),
       revalidateOnReplay: true,
       execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; } });
-    return reply.approval ? { governed: true, dispatch: 'approval_required', approval: reply.approval }
-      : { governed: true, dispatch: 'authorized' };
+    if (reply.approval) return { governed: true, dispatch: 'approval_required', approval: reply.approval };
+    if (tracked) {
+      const effectId = workflowEffectId(ctx.runId, ctx.stepName!, ctx.executionPath ?? [], route);
+      return getWorkflowEffect(effectId)?.status === 'succeeded'
+        ? { governed: true, dispatch: 'completed', result: reply.result }
+        : { governed: true, dispatch: 'authorized', effectId };
+    }
+    return { governed: true, dispatch: 'authorized' };
   };
 
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
     pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
+    pieceReceipt: (ctx, id, result) => recordPieceCompletion(ctx, id, result, opts),
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,

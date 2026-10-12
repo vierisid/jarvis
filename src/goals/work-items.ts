@@ -1,4 +1,5 @@
 /** Durable Today work, extending commitments instead of creating another task identity. */
+import { getRunRecovery, type RecoveryProjection } from '../workflows/runtime/recovery';
 import { getDb, generateId } from '../vault/schema.ts';
 import { getGoalApplication } from './application-service.ts';
 import { createCommitment, getCommitment } from '../vault/commitments.ts';
@@ -33,6 +34,7 @@ export type WorkItem = {
   input: Record<string, unknown>; decision: WorkDecision | null; runId: string | null;
   run: FlowRun | null; blocker: WorkBlocker | null;
   resultCheck: ResultCheck | null;
+  recovery: RecoveryProjection | null;
   status: 'proposed' | 'rejected' | 'ready' | 'running' | 'blocked' | 'needs_check' | 'verified' | 'failed';
   createdAt: number; updatedAt: number;
 };
@@ -77,6 +79,7 @@ export function getWorkItem(id: string): WorkItem {
   const decision = w.decision ? JSON.parse(w.decision) as WorkDecision : null;
   const resultCheck = w.result_check ? JSON.parse(w.result_check) as ResultCheck : null;
   const run = w.run_id && workflowAvailable() ? getFlowRun(w.run_id) : null;
+  const recovery = run ? getRunRecovery(run.id) : null;
   const waitpoint = run ? listWaitpointsByFlowRun(run.id, false)[0] : undefined;
   let blocker: WorkItem['blocker'] = w.blocker ? { kind: 'manual', ref: null, reason: w.blocker } : null;
   let status: WorkItem['status'] = decision ? decision.outcome === 'rejected' ? 'rejected' : 'ready' : 'proposed';
@@ -88,7 +91,7 @@ export function getWorkItem(id: string): WorkItem {
       // A terminal failure can leave waitpoints behind. Those cannot be resumed
       // and must not hide the failure or prevent recording its checked outcome.
       status = 'failed';
-      blocker = { kind: 'run_failure', ref: run.id, reason: run.failedStep?.errorMessage ?? cancelledReason(run) ?? run.status };
+      blocker = { kind: 'run_failure', ref: run.id, reason: run.failedStep?.errorMessage ?? cancelledReason(run) ?? recovery?.reason ?? run.status };
     } else if (run.status === 'PAUSED' || waitpoint) {
       blocker = { kind: 'waitpoint', ref: waitpoint?.id ?? run.id, reason: waitpoint ? `Waiting at ${waitpoint.stepName}` : 'Run is paused' };
       status = 'blocked';
@@ -106,7 +109,7 @@ export function getWorkItem(id: string): WorkItem {
   return {
     id, title: commitment.what, planId: w.plan_id, actionIndex: w.action_index, goalId: w.goal_id,
     mode: w.mode, workflowId: w.workflow_id, workflowVersionId: w.workflow_version_id,
-    input: JSON.parse(w.input), decision, runId: w.run_id, run, blocker, resultCheck, status,
+    input: JSON.parse(w.input), decision, runId: w.run_id, run, blocker, resultCheck, status, recovery,
     createdAt: commitment.created_at, updatedAt: Math.max(w.updated_at, run?.updated ?? 0),
   };
 }

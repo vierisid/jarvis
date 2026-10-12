@@ -22,6 +22,7 @@ import { EmergencyController, setActiveEmergencyController } from '../authority/
 import { DailyRhythm } from './rhythm.ts';
 import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, untrustedClose, unsafeUntrustedNoncesForTests } from '../roles/untrusted.ts';
 import { startWorkItemRun } from './workflow-bridge.ts';
+import { getRunRecovery } from '../workflows/runtime/recovery.ts';
 import { checkWorkResult, configureWorkItem, createPlannedWork, createWorkItem, decideWorkItem, getWorkItem, listWorkItems, setWorkBlocker } from './work-items.ts';
 
 let directory: string;
@@ -115,6 +116,8 @@ describe('Today work trace', () => {
     expect(recovered.blocker?.reason).toContain('interrupted');
     expect(recovered.run?.steps).toEqual({ prepared: { output: 42 } });
     expect(recovered.run?.finishTime).not.toBeNull();
+    expect(recovered.recovery).toEqual(getRunRecovery(run.id));
+    expect(recovered.recovery?.state).toBe('unknown');
     expect(startWorkItemRun(work.id, flow.id).id).toBe(run.id);
     expect(queueStats().queued).toBe(0);
     expect(() => checkWorkResult(work.id, result)).toThrow('failed run');

@@ -687,7 +687,7 @@ describe('workflow effect boundary', () => {
     await expect(f.invoke()).rejects.toThrow('remote timeout');
     await expect(f.invoke()).rejects.toThrow(/partial effects/);
     expect(f.calls).toHaveLength(1);
-    expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('failed');
+    expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('unknown');
     expect(new AuditTrail().query({ agentId: `workflow:${f.run.id}` }).every(entry => entry.executed === 0)).toBe(true);
   });
 

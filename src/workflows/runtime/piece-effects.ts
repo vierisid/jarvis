@@ -57,6 +57,12 @@ export const PIECE_AUTH_PROPERTY = 'auth';
 /** `toolCategory` recorded for every governed piece effect. */
 export const PIECE_TOOL_CATEGORY = 'workflow-piece';
 
+/** Q-07's bounded completion-receipt protocol. These actions never park themselves. */
+export function tracksPieceCompletion(piece: unknown, action: unknown): boolean {
+  return (piece === '@activepieces/piece-gmail' && (action === 'send_email' || action === 'gmail_send_email'))
+    || (piece === '@activepieces/piece-slack' && (action === 'send_channel_message' || action === 'slack_post_message'));
+}
+
 export interface GovernedPieceAdapter {
   /** Catalog id, as in `pieces-library/catalog-overrides.ts` `VERIFIED`. */
   catalogId: string;
