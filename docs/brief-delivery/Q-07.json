@@ -17,7 +17,7 @@
     "merge": "not_merged",
     "capability_ready": "bounded completion tracking, exact provider readback, durable recovery choices and additive consumer projections",
     "release_enabled": false,
-    "publication": "one PR from brief/q-07 targeting brief/q-08; resolve with gh pr view brief/q-07"
+    "publication": "PR #940 open against brief/q-08; https://github.com/vierisid/jarvis/pull/940"
   },
   "design": {
     "surface": "existing Today work items, Runs and additive Needs you recovery API",
