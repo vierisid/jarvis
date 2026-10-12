@@ -1,0 +1,16 @@
+{
+  "skill": "review-agent",
+  "command": "codex review -c sandbox_mode=read-only - (custom baseline/correction instructions on stdin)",
+  "baseline": "9f5b258e8548cd3b481c17b5a1653b20753206a2",
+  "pr": "https://github.com/vierisid/jarvis/pull/945",
+  "complete_diff_reviews": 2,
+  "targeted_correction_reviews": 2,
+  "findings_fixed": [
+    "Publish the canonical save response and invalidate older polls; a successful save must not retain an obsolete revision.",
+    "Track mutation generations from request initiation so a late save response cannot supersede a completed Clear.",
+    "Return the complete cleared profile/revision directly; a failed compatibility fallback read retains loaded state and explicitly requests refresh."
+  ],
+  "final_result": "No findings in the targeted changes against 7aa2aa0d. Canonical clear publication, concurrency guards, and failed fallback handling are consistent with the form behavior. All four UI regressions and two editor tests passed using Bun 1.3.14; no files were modified.",
+  "implementation_diff_sha256": "de8f8e14443c8a4c9f82730855b7adcbc9767683a3d1564a5960b55804a0dda5",
+  "limits": "Read-only reviewer could not rerun disk-backed fixtures; implementer ran those in isolated temp directories. Human review requested separately."
+}
