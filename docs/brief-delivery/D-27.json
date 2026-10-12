@@ -1,0 +1,187 @@
+{
+  "step": "D-27",
+  "title": "Build Connected workspace and service setup",
+  "date": "2026-10-12",
+  "status": "implemented_verified_not_activated",
+  "implementation_head": "4c78a3dbbbf8e984afec22dae920784df7a11bd3",
+  "head": "Final evidence commit is the PR head; implementation_head identifies tested code.",
+  "branch": "brief/d-27",
+  "target": "brief/d-26",
+  "base_sha": "a11354889e37911e7618234fa6e98964a020c7cf",
+  "main_inspected": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
+  "worktree": "/home/vieri-balboni/Projects/.worktrees/jarvis-d-27",
+  "github_recheck": {
+    "parent": "https://github.com/vierisid/jarvis/pull/941",
+    "state": "OPEN",
+    "parent_ci": "All active checks passed; conditional checks skipped.",
+    "duplicate_d27_prs": 0,
+    "evidence": "evidence/D-27/parent-recheck.json",
+    "base_decision": "Continue the staged D stack on corrected D26. Owner main preserved; no isolated D01 or main compatibility claim."
+  },
+  "source_pins": {
+    "F-22": {
+      "pr": "https://github.com/vierisid/jarvis/pull/943",
+      "head": "9f5b258e8548cd3b481c17b5a1653b20753206a2",
+      "state": "OPEN",
+      "actual_headless_export_tested": true
+    },
+    "F-25": "No all-state PR found by final title query; activation remains gated.",
+    "roadmap_audit": "69211511c95355776c6c319c01e1df5acd3b8f1e"
+  },
+  "ownership": [
+    "ui/src/brief/connections/**",
+    "ui/src/brief/preview/FoundationPreview.tsx: isolated import and specimen dispatch",
+    "docs/brief-delivery/D-27.* and evidence/D-27/**"
+  ],
+  "design_reference": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "connected": "81:4627",
+    "ui35_handoff": "898:379708",
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-4627",
+    "inspection": "Native Connected frame and UI35 handoff inspected in in-app browser; screenshots retained.",
+    "limits": "Eight runtime layouts, not eight native exports or a pixel diff. Complete UI35 coverage frame not inspected; dedicated setup subframes not individually certified."
+  },
+  "activation": {
+    "code_delivered": true,
+    "code_merged": false,
+    "capability_ready": false,
+    "release_enabled": false,
+    "production_registry_changed": false,
+    "capability_defaults_changed": false,
+    "real_effects_invoked": false,
+    "merge_prerequisite": "D-01",
+    "enable_after": ["F-22", "F-25"],
+    "required_capabilities": ["connections", "navigationCompatibility"],
+    "host_requirements": [
+      "Inject authenticated F22 v1 reader, real ConnectionSetup, per-tab sessionStorage and openLegacyConnectionSetup.",
+      "Retain controller per authenticated scope; retire on logout or replacement; never fall back to specimen data.",
+      "F25 supplies exact management navigation and current device update metadata.",
+      "Verify combined deployed contracts and existing OAuth/device behavior before release activation."
+    ]
+  },
+  "implementation": [
+    "Compact devices/services with actual device status, account labels and consistent icon/name across setup.",
+    "Search, scroll and focus restoration; cancel, expiry, reconnect, explicit canonical-account selection and verified completion.",
+    "Fresh exact canonical read before success; saved credentials and installed pieces never imply authentication.",
+    "Structural bridge delegates setup persistence and verification to F22; no hard dependency on unmerged exports or new durable engine.",
+    "Partial-source, stale, unsupported, unavailable and uncertain states stay distinct; scope loss purges visible accounts.",
+    "Device update/revoke/enrollment delegate to existing management owner without executing effects."
+  ],
+  "toolchain": {
+    "bun": "1.3.14",
+    "pin": ".github/actions/bun-setup/action.yml",
+    "install": "Frozen lockfile install passed",
+    "lockfile_changed": false,
+    "evidence": "evidence/D-27/install.log"
+  },
+  "verification": [
+    {
+      "command": "D27_F22_SETUP_MODULE=<pinned F22 setup.ts> bun test ui/src/brief/connections",
+      "result": "pass",
+      "tests": 53,
+      "assertions": 200,
+      "failed": 0,
+      "evidence": "evidence/D-27/connections-tests.log"
+    },
+    {
+      "command": "D27_F22_SETUP_MODULE=<pinned F22 setup.ts> bun test ui/src/brief",
+      "result": "pass",
+      "evidence": "evidence/D-27/brief-regression.log",
+      "tests": 730,
+      "skipped": 2,
+      "assertions": 5725,
+      "failed": 0
+    },
+    {
+      "command": "bunx tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-27/typecheck.log",
+      "note": "Also passed on implementation commit through the normal hooks."
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "warnings": "Existing @theme/@tailwind at-rule warnings",
+      "evidence": "evidence/D-27/build.log"
+    },
+    {
+      "command": "bunx prettier --check ui/src/brief/connections docs/brief-delivery/D-27.md docs/brief-delivery/D-27.json docs/brief-delivery/evidence/D-27/browser-checks.json",
+      "result": "pass",
+      "evidence": "evidence/D-27/format-check.log"
+    },
+    {
+      "command": "git diff --cached --check",
+      "result": "pass"
+    }
+  ],
+  "commit_hooks": {
+    "result": "pass",
+    "tests": 53,
+    "assertions": 200,
+    "evidence": "evidence/D-27/code-hooks.log",
+    "note": "Normal license, migration, template, package, related-test and type checks; no bypass or coauthor trailers. Final evidence commit also uses normal hooks."
+  },
+  "browser": {
+    "result": "pass_with_recorded_limits",
+    "method": "CUA in-app Chromium interaction and read-only DOM geometry",
+    "evidence": "evidence/D-27/browser-checks.json",
+    "layouts": 8,
+    "layout_size": "1440x1000",
+    "additional_widths": [800, 390],
+    "observed": [
+      "Catalog filter and return search, scroll and focus.",
+      "Identity across browser/setup/completion; unconfirmed return stays pending.",
+      "Remount does not lose the attempt; cancel, expiry and lost-start recovery.",
+      "Exact account picker; configured credentials stay distinct from authentication.",
+      "Visible offline device plus update/revoke/settings handoffs; no device effects.",
+      "Chat draft continuity across eight layouts; long content wraps without horizontal overflow.",
+      "Keyboard Tab reaches setup controls, terminal headings receive focus.",
+      "Partial-source warning, unavailable state, and light/dark narrow account selector."
+    ],
+    "console": "No warning/error logs observed.",
+    "screenshots": [
+      "evidence/D-27/catalog-filtered.jpg",
+      "evidence/D-27/configured-completion-800.jpg",
+      "evidence/D-27/dark-expanded-closed.jpg",
+      "evidence/D-27/dark-expanded-open.jpg",
+      "evidence/D-27/dark-narrow-account-selection.jpg",
+      "evidence/D-27/dark-rail-closed.jpg",
+      "evidence/D-27/dark-rail-open.jpg",
+      "evidence/D-27/device-offline-actions.jpg",
+      "evidence/D-27/expired-reconnect-800.jpg",
+      "evidence/D-27/figma-connected.jpg",
+      "evidence/D-27/figma-ui35-handoff.jpg",
+      "evidence/D-27/final-connected-workspace.jpg",
+      "evidence/D-27/light-expanded-closed.jpg",
+      "evidence/D-27/light-expanded-open.jpg",
+      "evidence/D-27/light-rail-closed.jpg",
+      "evidence/D-27/light-rail-open.jpg",
+      "evidence/D-27/narrow-account-selection.jpg",
+      "evidence/D-27/narrow-long-catalog.jpg",
+      "evidence/D-27/narrow-long-workspace.jpg",
+      "evidence/D-27/narrow-setup-keyboard.jpg",
+      "evidence/D-27/partial-sources-800.jpg",
+      "evidence/D-27/select-exact-account-800.jpg",
+      "evidence/D-27/setup-confirmed.jpg",
+      "evidence/D-27/setup-unconfirmed-return.jpg",
+      "evidence/D-27/unavailable-800.jpg",
+      "evidence/D-27/unknown-setup-800.jpg"
+    ]
+  },
+  "not_run": [
+    "Combined live authenticated F22/F25 deployment and production activation",
+    "Real OAuth grant, provider authentication, credential write, device enrollment/update/revoke",
+    "Native OS reduced-motion setting and inherited shell motion recertification",
+    "Cross-browser and screen-reader coverage",
+    "Full repository local suite; GitHub CI reported separately"
+  ],
+  "preview": {
+    "command": "D25_PREVIEW_PORT=4417 bun run scripts/preview-brief-memory.ts",
+    "url": "http://127.0.0.1:4417/?brief=preview&specimen=connections#/_brief_preview",
+    "isolation": "Loopback-only static fixture server; no daemon, API proxy or user vault."
+  },
+  "rollback": "Remove optional registration or switch back to existing settings UI. Revert card commits if needed; no migration reversal or effect replay.",
+  "next_card": "D-28 not started",
+  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged."
+}
