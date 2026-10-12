@@ -1,0 +1,183 @@
+{
+  "step": "D-28",
+  "title": "Build Authority without changing policy",
+  "date": "2026-10-12",
+  "status": "implemented_verified_not_activated",
+  "implementation_head": "12a33173769227a98c41cd1d1598e48cae200bee",
+  "head": "Final evidence commit is the PR head; implementation_head identifies tested code.",
+  "branch": "brief/d-28",
+  "target": "brief/d-27",
+  "base_sha": "0fe97910bb330d219f7134da9e1837905b89d628",
+  "main_inspected": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
+  "worktree": "/home/vieri-balboni/Projects/.worktrees/jarvis-d-28",
+  "github_recheck": {
+    "parent": "https://github.com/vierisid/jarvis/pull/944",
+    "state": "OPEN",
+    "parent_ci": "All active current-head checks passed; conditional jobs skipped.",
+    "duplicate_d28_prs": 0,
+    "f25_prs_found": 0,
+    "evidence": "evidence/D-28/parent-recheck.json",
+    "base_decision": "Continue the staged D stack on corrected D27, preserving owner main. No isolated main compatibility claim."
+  },
+  "source_pins": {
+    "A-15": "Existing useAuthorityData.ts, authority engine, and /api/authority/config read/write contract at base_sha; relevant endpoint/engine also compared with current main.",
+    "F-25": "No PR found in all-state inventory before publication; navigationCompatibility and exact advanced/emergency destinations remain required.",
+    "Q-08": "Open PR #891 owns broad execution-entry certification; D28 does not alter or claim that certification.",
+    "roadmap_audit": "69211511c95355776c6c319c01e1df5acd3b8f1e"
+  },
+  "ownership": [
+    "ui/src/brief/authority/**",
+    "ui/src/brief/preview/FoundationPreview.tsx: isolated import and specimen dispatch",
+    "docs/brief-delivery/D-28.* and evidence/D-28/**"
+  ],
+  "design_reference": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "authority": "81:4274",
+    "ui32_controls": "853:4451",
+    "ui32_notes": "855:5176",
+    "ui35_handoff": "898:379708",
+    "inspection": "Native Authority frame, UI32 precise control section/notes and light control reference, UI35 handoff inspected in Chrome. Screenshots retained.",
+    "limits": "Not a pixel diff or eight native exports. Complete UI35 coverage frame not inspected."
+  },
+  "activation": {
+    "code_delivered": true,
+    "code_merged": false,
+    "capability_ready": false,
+    "release_enabled": false,
+    "production_registry_changed": false,
+    "capability_defaults_changed": false,
+    "real_effects_invoked": false,
+    "merge_prerequisite": "D-01",
+    "enable_after": ["F-25"],
+    "required_capabilities": ["navigationCompatibility"],
+    "host_requirements": [
+      "Authenticated scope-bound request and write permission.",
+      "F25 supplies both existing advanced-authority and emergency-controls destinations; navigation callbacks honor cancellation.",
+      "Retain controller per authenticated scope; retire on logout or replacement. Never reuse another account transport.",
+      "Verify combined production host, existing controls and canonical persistence before activation."
+    ]
+  },
+  "implementation": [
+    "Canonical integer 1\u201310 values, continuous native pointer motion until release, keyboard arrows/Home/End, 80ms release snap and reduced-motion override.",
+    "All thirteen current categories with readable On/Off/disabled state, 56px rows and 44x40 targets. Off changes membership, never grants permission.",
+    "Explicit save; changed-field-only POST after canonical preflight and acknowledgment plus fresh-read confirmation.",
+    "Unknown/conflict states never replay automatically; permission loss purges values; stale data disables editing.",
+    "Polling defers for dirty/unknown state, pointer gestures and focused controls; drafts survive remount/shell changes.",
+    "Advanced/emergency navigation stays available during read/save failures through the gated F25 host seam."
+  ],
+  "contract_limits": [
+    "Existing endpoint has no revision/CAS; an external write between preflight and POST cannot be excluded.",
+    "The existing API may apply in-memory before a persistence failure; failed acknowledgments are never labeled Saved.",
+    "No backend, advanced-policy, emergency writer, migration or durable recovery engine change."
+  ],
+  "toolchain": {
+    "bun": "1.3.14",
+    "pin": ".github/actions/bun-setup/action.yml",
+    "install": "bun install --frozen-lockfile passed",
+    "lockfile_changed": false,
+    "evidence": "evidence/D-28/install.log"
+  },
+  "verification": [
+    {
+      "command": "bun test ui/src/brief/authority",
+      "result": "pass",
+      "tests": 52,
+      "failed": 0,
+      "skipped": 0,
+      "assertions": 327,
+      "evidence": "evidence/D-28/focused-tests.log"
+    },
+    {
+      "command": "D27_F22_SETUP_MODULE=/tmp/d27-f22-pin/ui/src/brief/connections/setup.ts bun test ui/src/brief",
+      "result": "pass",
+      "tests": 808,
+      "failed": 0,
+      "skipped": 2,
+      "assertions": 6208,
+      "evidence": "evidence/D-28/brief-tests.log",
+      "note": "F22 headless export pinned at 9f5b258e8548cd3b481c17b5a1653b20753206a2; see D-27.md for reproducible extraction. Two optional F07/F08 integrations skipped."
+    },
+    {
+      "command": "bun test src/authority/authority.test.ts",
+      "result": "pass",
+      "tests": 48,
+      "failed": 0,
+      "skipped": 0,
+      "assertions": 119,
+      "evidence": "evidence/D-28/policy-tests.log"
+    },
+    {
+      "command": "bunx tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-28/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-28/build.log",
+      "warnings": "Existing @theme/@tailwind at-rule warnings."
+    },
+    {
+      "command": "bunx prettier --check ui/src/brief/authority docs/brief-delivery/D-28.md docs/brief-delivery/D-28.json",
+      "result": "pass",
+      "evidence": "evidence/D-28/format-check.log"
+    },
+    {
+      "command": "git diff --cached --check",
+      "result": "pass"
+    }
+  ],
+  "commit_hooks": {
+    "result": "pass",
+    "evidence": "evidence/D-28/code-hooks.log",
+    "note": "Normal license, migration, template, package, related-test and type checks; no bypass or coauthor trailers. Evidence commit also uses normal hooks.",
+    "tests": 52,
+    "assertions": 327
+  },
+  "browser": {
+    "result": "pass_with_recorded_limits",
+    "method": "CUA in-app Chromium, native input, documented Playwright locators and read-only DOM geometry",
+    "evidence": "evidence/D-28/browser-checks.json",
+    "layouts": 8,
+    "layout_size": "1440x1000",
+    "additional_widths": [800, 390],
+    "final_room_size": "1440x1100",
+    "console": "No warning/error entries observed.",
+    "screenshots": [
+      "evidence/D-28/confirmed-save.png",
+      "evidence/D-28/conflict-800.png",
+      "evidence/D-28/dark-expanded-chat-closed.png",
+      "evidence/D-28/dark-expanded-chat-open.png",
+      "evidence/D-28/dark-rail-chat-closed.png",
+      "evidence/D-28/dark-rail-chat-open.png",
+      "evidence/D-28/emergency-stop-visible.png",
+      "evidence/D-28/figma-authority-controls.png",
+      "evidence/D-28/figma-ui35-handoff.png",
+      "evidence/D-28/final-authority.png",
+      "evidence/D-28/keyboard-focus-after-poll.png",
+      "evidence/D-28/light-expanded-chat-closed.png",
+      "evidence/D-28/light-expanded-chat-open.png",
+      "evidence/D-28/light-rail-chat-closed.png",
+      "evidence/D-28/light-rail-chat-open.png",
+      "evidence/D-28/read-only-390.png",
+      "evidence/D-28/unconfirmed-save-800.png"
+    ],
+    "final_build_check": "Rebuilt app reloaded; clean slider keyboard focus persisted beyond the five-second polling interval."
+  },
+  "not_run": [
+    "Combined live authenticated F25 host and production activation",
+    "Real authority configuration persistence, policy modification, advanced override or emergency effect",
+    "OS reduced-motion setting, physical touch device, screen readers or other browsers",
+    "Complete UI35 native coverage exports/pixel comparison",
+    "Full repository local suite; current PR CI reported separately"
+  ],
+  "preview": {
+    "command": "D25_PREVIEW_PORT=4418 bun run scripts/preview-brief-memory.ts",
+    "url": "http://127.0.0.1:4418/?brief=preview&specimen=authority#/_brief_preview",
+    "isolation": "Loopback-only static fixture server; no daemon, API proxy, user vault or persistent settings. Full-page reload resets in-memory fixtures."
+  },
+  "rollback": "Remove optional registration or switch back to existing Authority settings UI. Revert card commits if needed; no migration reversal or effect replay.",
+  "next_card": "D-29 not started",
+  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged."
+}

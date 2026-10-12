@@ -1,0 +1,3 @@
+bunx tsc --noEmit
+PASS with no diagnostics on implementation commit 12a33173769227a98c41cd1d1598e48cae200bee.
+Final invocation is captured in code-hooks.log.
