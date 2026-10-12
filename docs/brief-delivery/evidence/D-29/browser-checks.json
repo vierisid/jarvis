@@ -1,0 +1,1120 @@
+{
+  "card": "D-29",
+  "date": "2026-10-13",
+  "method": "CUA Chromium locators, native modal, read-only DOM geometry",
+  "checks": [
+    {
+      "name": "dark-rail-chat-open",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 394.5
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 394.5
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 394.5
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 394.5
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 813
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 813
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 778.3125,
+        "right": 923,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 778.3125,
+        "y": 1094
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "dark-rail-chat-closed",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 630.859375
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 630.8671875
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 630.859375
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 630.8671875
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 1285.7265625
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 1285.7265625
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 1251.0390625,
+        "right": 1395.7265625,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 1251.0390625,
+        "y": 1094
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "dark-expanded-chat-open",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 314.5
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 314.5
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 314.5
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 314.5
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 653
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 653
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 778.3125,
+        "right": 923,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 778.3125,
+        "y": 1094
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "dark-expanded-chat-closed",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 549.3359375
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 549.34375
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 549.3359375
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 549.34375
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 1122.6796875
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 1122.6796875
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 1247.9921875,
+        "right": 1392.6796875,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 1247.9921875,
+        "y": 1094
+      },
+      "theme": "dark"
+    },
+    {
+      "name": "light-rail-chat-open",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 394.5
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 394.5
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 394.5
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 394.5
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 813
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 813
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 778.3125,
+        "right": 923,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 778.3125,
+        "y": 1094
+      },
+      "theme": "light"
+    },
+    {
+      "name": "light-rail-chat-closed",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 631
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 631
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 631
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 631
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 1286
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 1286
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 1251.3125,
+        "right": 1396,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 1251.3125,
+        "y": 1094
+      },
+      "theme": "light"
+    },
+    {
+      "name": "light-expanded-chat-open",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 314.5
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 314.5
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 314.5
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 314.5
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 653
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 653
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 778.3125,
+        "right": 923,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 778.3125,
+        "y": 1094
+      },
+      "theme": "light"
+    },
+    {
+      "name": "light-expanded-chat-closed",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 550.2421875
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 550.25
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 550.2421875
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 550.25
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 1124.4921875
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 1124.4921875
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 1249.8046875,
+        "right": 1394.4921875,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 1249.8046875,
+        "y": 1094
+      },
+      "theme": "light"
+    },
+    {
+      "name": "validation-and-pending",
+      "before": {
+        "height": 72,
+        "label": "Save changesSaving…SavedRetry saveSave changes",
+        "status": "Unsaved changes",
+        "top": 692,
+        "width": 144.6875
+      },
+      "invalid": {
+        "height": 72,
+        "label": "Save changesSaving…SavedRetry saveSave changes",
+        "status": "Unsaved changes",
+        "top": 692,
+        "width": 144.6875
+      },
+      "pending": {
+        "height": 72,
+        "label": "Save changesSaving…SavedRetry saveSaving…",
+        "status": "Saving profile…",
+        "top": 692,
+        "width": 144.6875
+      }
+    },
+    {
+      "name": "confirmed-save",
+      "height": 72,
+      "label": "Save changesSaving…SavedRetry saveSaved",
+      "status": "Profile saved and checked.",
+      "top": 692,
+      "width": 144.6875
+    },
+    {
+      "name": "account-menu-return",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 551
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 551
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Draft studio — preserved through chat and sidebar",
+          "width": 551
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Designer\nResearcher",
+          "width": 551
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "A planning tool for small teams.\nA second project with multiple lines.",
+          "width": 1126
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 1126
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1134,
+        "height": 40,
+        "left": 1251.3125,
+        "right": 1396,
+        "top": 1094,
+        "width": 144.6875,
+        "x": 1251.3125,
+        "y": 1094
+      },
+      "theme": "light"
+    },
+    {
+      "name": "failed-save",
+      "height": 72,
+      "label": "Save changesSaving…SavedRetry saveRetry save",
+      "status": "Save not confirmed. Retry checks current values before saving again.",
+      "top": 692,
+      "width": 144.6875
+    },
+    {
+      "name": "explicit-retry-confirmed",
+      "height": 72,
+      "label": "Save changesSaving…SavedRetry saveSaved",
+      "status": "Profile saved and checked.",
+      "top": 692,
+      "width": 144.6875
+    },
+    {
+      "name": "conflict-800",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 486
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 486
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Keep conflict draft",
+          "width": 486
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 486
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 486
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 486
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 858,
+        "height": 40,
+        "left": 611.3125,
+        "right": 756,
+        "top": 818,
+        "width": 144.6875,
+        "x": 611.3125,
+        "y": 818
+      },
+      "theme": "light"
+    },
+    {
+      "name": "read-only-stale-390",
+      "chat": "Independent conversation draft",
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": "",
+          "width": 136.2734375
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex",
+          "width": 136.2734375
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Example studio",
+          "width": 136.2734375
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer",
+          "width": 136.2734375
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team.",
+          "width": 136.2734375
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding.",
+          "width": 136.2734375
+        }
+      ],
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "save": {
+        "bottom": 1862,
+        "height": 240,
+        "left": 222,
+        "right": 366,
+        "top": 1622,
+        "width": 144,
+        "x": 222,
+        "y": 1622
+      },
+      "theme": "light",
+      "note": "Initial resize-transition sample, before final action CSS. Final 390px and 320px measurements below supersede this sample."
+    },
+    {
+      "name": "final-actions-320",
+      "before": {
+        "buttons": [
+          {
+            "label": "Cancel",
+            "outsideForm": false,
+            "rect": {
+              "bottom": 1225.5,
+              "height": 40,
+              "left": 175,
+              "right": 296,
+              "top": 1185.5,
+              "width": 121,
+              "x": 175,
+              "y": 1185.5
+            }
+          },
+          {
+            "label": "Save changes",
+            "outsideForm": false,
+            "rect": {
+              "bottom": 1273.5,
+              "height": 40,
+              "left": 151.3125,
+              "right": 296,
+              "top": 1233.5,
+              "width": 144.6875,
+              "x": 151.3125,
+              "y": 1233.5
+            }
+          }
+        ],
+        "fields": [
+          {
+            "height": 44,
+            "label": "Full name",
+            "value": ""
+          },
+          {
+            "height": 44,
+            "label": "What should Jarvis call you?",
+            "value": "Alex"
+          },
+          {
+            "height": 44,
+            "label": "Company",
+            "value": "Narrow layout draft"
+          },
+          {
+            "height": 44,
+            "label": "Role",
+            "value": "Founder and designer"
+          },
+          {
+            "height": 96,
+            "label": "What are you building?",
+            "value": "Building a useful planning tool for a small team."
+          },
+          {
+            "height": 96,
+            "label": "How you like to work",
+            "value": "Clear answers, with time to think before deciding."
+          }
+        ],
+        "focus": "_r_k_",
+        "pageOverflow": false,
+        "roomOverflow": false,
+        "rowHeight": 156,
+        "rowTop": 940,
+        "status": "Unsaved changes",
+        "viewport": 320
+      },
+      "after": {
+        "buttons": [
+          {
+            "label": "Reload profile",
+            "outsideForm": false,
+            "rect": {
+              "bottom": 654,
+              "height": 40,
+              "left": 175,
+              "right": 296,
+              "top": 614,
+              "width": 121,
+              "x": 175,
+              "y": 614
+            }
+          },
+          {
+            "label": "Saved",
+            "outsideForm": false,
+            "rect": {
+              "bottom": 702,
+              "height": 40,
+              "left": 151.3125,
+              "right": 296,
+              "top": 662,
+              "width": 144.6875,
+              "x": 151.3125,
+              "y": 662
+            }
+          }
+        ],
+        "fields": [
+          {
+            "height": 44,
+            "label": "Full name",
+            "value": ""
+          },
+          {
+            "height": 44,
+            "label": "What should Jarvis call you?",
+            "value": "Alex"
+          },
+          {
+            "height": 44,
+            "label": "Company",
+            "value": "Narrow layout draft"
+          },
+          {
+            "height": 44,
+            "label": "Role",
+            "value": "Founder and designer"
+          },
+          {
+            "height": 96,
+            "label": "What are you building?",
+            "value": "Building a useful planning tool for a small team."
+          },
+          {
+            "height": 96,
+            "label": "How you like to work",
+            "value": "Clear answers, with time to think before deciding."
+          }
+        ],
+        "focus": "",
+        "pageOverflow": false,
+        "roomOverflow": false,
+        "rowHeight": 156,
+        "rowTop": 940,
+        "status": "Profile saved and checked.",
+        "viewport": 320
+      }
+    },
+    {
+      "name": "final-read-only-stale-390",
+      "buttons": [
+        {
+          "label": "Reload profile",
+          "outsideForm": false,
+          "rect": {
+            "bottom": 662,
+            "height": 40,
+            "left": 92.3125,
+            "right": 213.3125,
+            "top": 622,
+            "width": 121,
+            "x": 92.3125,
+            "y": 622
+          }
+        },
+        {
+          "label": "Save changes",
+          "outsideForm": false,
+          "rect": {
+            "bottom": 662,
+            "height": 40,
+            "left": 221.3125,
+            "right": 366,
+            "top": 622,
+            "width": 144.6875,
+            "x": 221.3125,
+            "y": 622
+          }
+        }
+      ],
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": ""
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex"
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Example studio"
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer"
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team."
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding."
+        }
+      ],
+      "focus": "",
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "rowHeight": 96,
+      "rowTop": 940,
+      "status": "Read-only profile. Could not load the current profile. Your edits are still here.",
+      "viewport": 390
+    },
+    {
+      "name": "final-lost-response",
+      "buttons": [
+        {
+          "label": "Cancel",
+          "outsideForm": false,
+          "rect": {
+            "bottom": 942,
+            "height": 40,
+            "left": 1122.3125,
+            "right": 1243.3125,
+            "top": 902,
+            "width": 121,
+            "x": 1122.3125,
+            "y": 902
+          }
+        },
+        {
+          "label": "Retry save",
+          "outsideForm": false,
+          "rect": {
+            "bottom": 942,
+            "height": 40,
+            "left": 1251.3125,
+            "right": 1396,
+            "top": 902,
+            "width": 144.6875,
+            "x": 1251.3125,
+            "y": 902
+          }
+        }
+      ],
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": ""
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex"
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Example design studio"
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer"
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team."
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding."
+        }
+      ],
+      "focus": "",
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "rowHeight": 72,
+      "rowTop": 692,
+      "status": "Save not confirmed. Retry checks current values before saving again.",
+      "viewport": 1440
+    },
+    {
+      "name": "final-lost-response-retry",
+      "buttons": [
+        {
+          "label": "Reload profile",
+          "outsideForm": false,
+          "rect": {
+            "bottom": 942,
+            "height": 40,
+            "left": 1122.3125,
+            "right": 1243.3125,
+            "top": 902,
+            "width": 121,
+            "x": 1122.3125,
+            "y": 902
+          }
+        },
+        {
+          "label": "Saved",
+          "outsideForm": false,
+          "rect": {
+            "bottom": 942,
+            "height": 40,
+            "left": 1251.3125,
+            "right": 1396,
+            "top": 902,
+            "width": 144.6875,
+            "x": 1251.3125,
+            "y": 902
+          }
+        }
+      ],
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": ""
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex"
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Example design studio"
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer"
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team."
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding."
+        }
+      ],
+      "focus": "",
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "rowHeight": 72,
+      "rowTop": 692,
+      "status": "Profile saved and checked.",
+      "viewport": 1440
+    },
+    {
+      "name": "focus-after-poll",
+      "buttons": [
+        {
+          "label": "Reload profile",
+          "outsideForm": false,
+          "rect": {
+            "bottom": 1134,
+            "height": 40,
+            "left": 1122.3125,
+            "right": 1243.3125,
+            "top": 1094,
+            "width": 121,
+            "x": 1122.3125,
+            "y": 1094
+          }
+        },
+        {
+          "label": "Save changes",
+          "outsideForm": false,
+          "rect": {
+            "bottom": 1134,
+            "height": 40,
+            "left": 1251.3125,
+            "right": 1396,
+            "top": 1094,
+            "width": 144.6875,
+            "x": 1251.3125,
+            "y": 1094
+          }
+        }
+      ],
+      "fields": [
+        {
+          "height": 44,
+          "label": "Full name",
+          "value": ""
+        },
+        {
+          "height": 44,
+          "label": "What should Jarvis call you?",
+          "value": "Alex"
+        },
+        {
+          "height": 44,
+          "label": "Company",
+          "value": "Example design studio"
+        },
+        {
+          "height": 44,
+          "label": "Role",
+          "value": "Founder and designer"
+        },
+        {
+          "height": 96,
+          "label": "What are you building?",
+          "value": "Building a useful planning tool for a small team."
+        },
+        {
+          "height": 96,
+          "label": "How you like to work",
+          "value": "Clear answers, with time to think before deciding."
+        }
+      ],
+      "focus": "_r_10_",
+      "pageOverflow": false,
+      "roomOverflow": false,
+      "rowHeight": 72,
+      "rowTop": 692,
+      "status": "Current profile loaded.",
+      "viewport": 1440
+    },
+    {
+      "name": "native-Escape-restores-focus",
+      "company": "Escape preserves this draft",
+      "dialogOpen": false,
+      "focus": "CancelCancel"
+    }
+  ],
+  "console": [],
+  "finalCss": "Action wrapping and reserved Cancel/Reload width verified after rebuild at 320 and 390px; earlier desktop matrix retained.",
+  "interactionProofs": [
+    "six accessible labels",
+    "long text validation does not move save row",
+    "typing preserves multiline",
+    "confirmed save and canonical remount",
+    "independent chat and profile drafts survive eight shell layouts",
+    "account menu leave prompt, stay focus return, sidebar explicit leave, account menu Profile return",
+    "conflict preserves draft, confirmed discard loads external canonical edit",
+    "failed and lost-response explicit retries",
+    "read-only stale feedback",
+    "focused clean field survives five-second polling"
+  ],
+  "limits": [
+    "Fixture browser transport only; actual F23 provider tested separately in temporary SQLite.",
+    "No production auth/session, OS reduced motion, physical touch or screen reader test.",
+    "Figma inspected visually; no pixel diff.",
+    "Preview server required a restart during rebuild; final checks use the restarted build."
+  ]
+}

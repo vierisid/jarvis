@@ -1,0 +1,19 @@
+{
+  "card": "D-29",
+  "provider": "13beb76554514227e0fb2fa476e7cd78f5432053",
+  "result": "pass",
+  "writes": 11,
+  "proofs": [
+    "actual F23 routes and canonical SQLite provider",
+    "six-field ownership contract",
+    "five editable canonical mappings",
+    "multiline and clear",
+    "hidden answers and interview preservation",
+    "restart/readback",
+    "dirty-poll CAS conflict",
+    "lost acknowledgment idempotent retry",
+    "atomic failure and explicit retry",
+    "disabled provider prevents save"
+  ],
+  "isolation": "temporary SQLite and secrets; no network or account writes"
+}
