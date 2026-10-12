@@ -7,7 +7,8 @@
   "baseline_ref": "origin/brief/q-09",
   "head": {
     "ref": "commit containing this receipt",
-    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-10.json"
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-10.json",
+    "implementation_sha": "df6d29bee769d14dfdb814eed32e71ddab40b454"
   },
   "status": {
     "implementation": "verified locally",
@@ -76,6 +77,10 @@
     {
       "command": "git diff --check",
       "result": "passed"
+    },
+    {
+      "command": "required implementation commit hooks (no bypass; engine coverage enabled)",
+      "result": "219 passed, 0 failed, 12082 assertions, 6 files, 129.68s; TypeScript and all four guards passed"
     }
   ],
   "review": {
@@ -116,5 +121,8 @@
     "NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q10-verify-engine-cache JARVIS_TEST_ENGINE_BUILD=1 bun test src/workflows/runtime/delegated-approval.test.ts src/workflows/runtime/child-run.test.ts",
     "bun test ui/src/v2/rooms/workflows/child-continuation.test.tsx && bunx tsc --noEmit",
     "Confirm the PR contains only Q-10 relative to brief/q-09 and remains unmerged."
-  ]
+  ],
+  "ci": {
+    "status": "See the PR checks for the current head; local evidence does not imply CI completion."
+  }
 }

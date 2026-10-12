@@ -27,7 +27,11 @@ The orphan finding was corrected; follow-up read found no remaining actionable d
 
 TypeScript: bunx tsc --noEmit — passed.
 Whitespace: git diff --check — passed.
-Commit hooks and PR CI: pending publication.
+Implementation commit: df6d29bee769d14dfdb814eed32e71ddab40b454.
+Required commit hooks: 219 passed, 0 failed, 12082 assertions, 6 files (129.68s).
+All four repository guards and TypeScript passed, without bypass.
+Hook run also set JARVIS_WORKFLOW_DATA_DIR=/tmp/jarvis-q10-hook-data.
+PR CI: inspect checks on the current PR head; local results do not certify CI.
 
 Manual inspection verified branch/base, scope, rollback, receipt boundaries and
 synthetic parent/child/card identity. Native UI visual walkthrough and deployed
