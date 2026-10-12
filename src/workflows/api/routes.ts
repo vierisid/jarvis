@@ -1,3 +1,7 @@
+import type { WorkflowContext } from '../../brief/workflow-context';
+import type { BriefCapabilities } from '../../brief/capabilities';
+import { requireWorkflowContext } from '../../brief/workflow-context-routes';
+import { WorkflowInspectionError } from '../../brief/inspection-values';
 /**
  * HTTP routes for the workflow runtime.
  *
@@ -26,7 +30,7 @@
  * `initWorkflowDb(...)` before routes serve traffic.
  */
 
-import { getWorkflowDb } from '../db';
+import { DEFAULT_IDS, getWorkflowDb } from '../db';
 import {
   createFlow,
   deleteFlow,
@@ -629,6 +633,10 @@ function sampleStepNameRefusal(stepName: string): Response | null {
 }
 
 export interface CreateWorkflowRoutesOptions {
+  briefWorkflowContext?: WorkflowContext;
+  briefCapabilities?: BriefCapabilities;
+  /** Server-owned project, never a request query or body field. */
+  projectId?: string;
   /**
    * Optional trigger manager. When provided, every flow status / version
    * change calls `triggerManager.refresh(flowId)` so cron/webhook/event
@@ -1793,8 +1801,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const flow = getFlow(id);
-          if (!flow) return err("flow not found", 404);
+          let flow = getFlow(id);
+          if (!flow || flow.project_id !== (opts.projectId ?? DEFAULT_IDS.project)) return err("flow not found", 404);
           // `payload` is one run's trigger input, JSON.stringify'd into
           // `workflow_job.payload`, so this body was unbounded STORAGE, not
           // just parse cost (#649). It is the same kind of thing a resume
@@ -1806,6 +1814,23 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // with input the caller did not send is worse than saying so.
           const read = await readWriteBody(req, WAITPOINT_RESUME_MAX_BODY_BYTES, { allowEmpty: true });
           if ("error" in read) return read.error;
+          flow = getFlow(id);
+          if (!flow || flow.project_id !== (opts.projectId ?? DEFAULT_IDS.project)) return err("flow not found", 404);
+          if (Object.hasOwn(read.body, 'brief')) {
+            let response: Response;
+            try {
+              const provider = requireWorkflowContext(opts.briefCapabilities, opts.briefWorkflowContext);
+              if (provider.projectId !== (opts.projectId ?? DEFAULT_IDS.project)) return err('flow not found', 404);
+              response = ok(provider.start(id, read.body), 202);
+            } catch (e) {
+              if (e instanceof WorkflowInspectionError) response = ok({ code: e.code }, e.status);
+              else if (e instanceof WorkflowReadinessError || e instanceof CodeStepsRefusedError) response = ok({ code: 'not_ready' }, 409);
+              else if (e instanceof Error && e.message === 'workflow_removed') response = ok({ code: 'workflow_removed' }, 409);
+              else response = ok({ code: 'unavailable' }, 503);
+            }
+            response.headers.set('Cache-Control', 'no-store');
+            return response;
+          }
           const body = read.body as {
             environment?: unknown;
             triggeredBy?: unknown;
@@ -1885,6 +1910,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           } : undefined);
           const run = createFlowRun({
             flowId: id,
+            projectId: flow.project_id,
             flowVersionId: versionId,
             environment: body.environment ?? "PRODUCTION",
             triggeredBy: body.triggeredBy,
