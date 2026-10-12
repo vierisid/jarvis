@@ -15,7 +15,7 @@
   "ownership": {
     "implementer": "Codex",
     "reviewer": "lapociampi",
-    "automated_review": "Initial PR reviewer found three P2 defects; all corrected with regressions. Follow-up reviewer and pushed-head CI are reported in PR description."
+    "automated_review": "All four actionable findings from two PR-reviewer passes fixed. Final targeted reviewer: No findings. Human review requested from lapociampi."
   },
   "dependencies": {
     "compile": [
@@ -65,17 +65,17 @@
     },
     "focused": {
       "command": "bun test --timeout 15000 src/brief/connected-workspace.test.ts src/daemon/api-brief-connections.test.ts ui/src/brief/connections/setup.test.ts src/comms/channels/authentication-state.test.ts",
-      "passed": 29,
+      "passed": 30,
       "failed": 0,
-      "assertions": 121,
+      "assertions": 133,
       "evidence": "evidence/F-22/focused.log"
     },
     "affected": {
       "command": "bun test --timeout 15000 src/brief src/workflows/api src/workflows/db src/daemon/api-brief-connections.test.ts src/daemon/api-google-oauth.test.ts src/integrations/google-oauth-flow.test.ts src/daemon/api-sidecar-enroll.test.ts src/daemon/api-sidecar-update.test.ts src/daemon/channel-service.test.ts src/comms/channels src/comms/channels.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts",
-      "passed": 906,
+      "passed": 907,
       "skipped": 6,
       "failed": 0,
-      "assertions": 15493,
+      "assertions": 15505,
       "files": 51,
       "evidence": "evidence/F-22/affected.log"
     },
@@ -112,8 +112,11 @@
     "review_corrections": [
       "Use shared secure-random UUID fallback in HTTP LAN contexts at both handoff sites.",
       "Add optional authentication evidence to existing channel adapters; old activity flags remain unknown, Telegram 401 is sticky and Discord uses current SDK readiness/token rejection.",
-      "Accept SemVer build metadata without rejecting unrelated account rows."
-    ]
+      "Accept SemVer build metadata without rejecting unrelated account rows.",
+      "Discord manager readiness is latched; require a nonempty set of currently Ready shards, tested through actual SDK close/resume handlers."
+    ],
+    "review_evidence": "evidence/F-22/review.json",
+    "hooks": "Initial commit: all guards, 176 related tests / 11,375 assertions, and TypeScript pass. Final correction uses normal hooks; outcome reported in PR."
   },
   "limitations": [
     "No full Connected room; D-27 owns layout, focus and visible return navigation. F-25 wider navigation remains separate.",
