@@ -512,6 +512,9 @@ Canceling a run atomically stops its required descendants, retires waitpoints
 and closes undispatched approval cards. An already-dispatched effect retains
 its receipt or uncertainty; cancellation never claims remote rollback.
 Recovery polling also stops required children whose parent failed or was deleted.
+For required children that already ended, it retires remaining waitpoints and
+undispatched approvals before continuing the parent. The child's terminal status,
+failure detail and any dispatched effect evidence remain intact.
 Independent asynchronous children retain their existing lifecycle. Delegated
 agent uncertainty now stops the conversation and reaches the parent as an
 `unknown` outcome rather than becoming conversational success.

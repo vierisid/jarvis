@@ -1,6 +1,6 @@
 import { getWorkflowDb } from '../db';
 import { getChildRun } from '../db/repos/child-run';
-import { cancelFlowRun } from '../db/repos/run-cancellation';
+import { cancelFlowRun, retireTerminalRunWaits } from '../db/repos/run-cancellation';
 import { getFlowRun } from '../db/repos/flow-run';
 import { enqueue } from '../db/repos/job-queue';
 import { markWaitpointResumed } from '../db/repos/waitpoint';
@@ -17,6 +17,16 @@ export function resumeCompletedChildRuns(): number {
       AND c.status IN ('QUEUED','RUNNING','PAUSED')
       AND (p.id IS NULL OR p.status NOT IN ('QUEUED','RUNNING','PAUSED'))`).all() as Array<{ id: string }>;
   for (const child of abandoned) cancelFlowRun(child.id);
+  // A child can create an approval and then fail before publishing PAUSED.
+  // Cancel refuses already-terminal runs, so retire their undispatched waits
+  // separately, including while the parent is still awaiting continuation.
+  const finished = db.query(`SELECT c.id FROM flow_run c
+    WHERE c.fail_parent_on_failure=1 AND c.parent_run_id IS NOT NULL
+      AND c.status NOT IN ('QUEUED','RUNNING','PAUSED')
+      AND (EXISTS (SELECT 1 FROM workflow_effect e WHERE e.run_id=c.id AND e.status='pending')
+        OR EXISTS (SELECT 1 FROM waitpoint w WHERE w.flow_run_id=c.id AND w.resumed_at IS NULL))`)
+    .all() as Array<{ id: string }>;
+  for (const child of finished) retireTerminalRunWaits(child.id);
   db.run(`UPDATE waitpoint SET resumed_at=? WHERE resumed_at IS NULL AND id IN (
     SELECT c.waitpoint_id FROM workflow_child_run c JOIN workflow_effect e ON e.id=c.effect_id
       JOIN flow_run p ON p.id=e.run_id WHERE p.status NOT IN ('QUEUED','RUNNING','PAUSED'))`, [Date.now()]);

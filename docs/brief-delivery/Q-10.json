@@ -1,7 +1,7 @@
 {
   "task": "Q-10",
   "title": "Exercise delegated and nested workflow continuation",
-  "date": "2026-10-12",
+  "date": "2026-10-13",
   "branch": "brief/q-10",
   "baseline": "2659d9af1a029de2852e71864b728f7f0aee5142",
   "baseline_ref": "origin/brief/q-09",
@@ -55,6 +55,11 @@
       "check": "Dashboard reports child wait and terminal failure",
       "status": "passed",
       "evidence": "Real route assertions plus rendered React tests verify child identity, loop path, status and absence of manual resume instructions; parent failedStep carries child id/uncertainty."
+    },
+    {
+      "check": "Terminal required children retire pending/approved waits after a lost pause upload",
+      "status": "passed",
+      "evidence": "Real backend and outer-worker fault injection covers pending and approved cards, unchanged terminal run evidence, continued parent failure, no leaf dispatch, repeat ticks and atomic rollback; dispatched/unknown/final effect records remain unchanged."
     }
   ],
   "validation": [
@@ -81,6 +86,18 @@
     {
       "command": "required implementation commit hooks (no bypass; engine coverage enabled)",
       "result": "219 passed, 0 failed, 12082 assertions, 6 files, 129.68s; TypeScript and all four guards passed"
+    },
+    {
+      "command": "NODE_ENV=test bun test src/workflows/runtime/child-run.test.ts",
+      "result": "11 passed, 0 failed, 83 assertions; includes 3 new regression cases"
+    },
+    {
+      "command": "See 13 October review correction in evidence/Q-10/validation.log",
+      "result": "404 passed, 0 failed, 2449 assertions, 16 files, 129.31s; real engine coverage enabled"
+    },
+    {
+      "command": "bunx tsc --noEmit; git diff --check (13 October correction)",
+      "result": "passed"
     }
   ],
   "review": {
@@ -88,7 +105,15 @@
     "mode": "read-only full merge-base diff, callers and tests; no delegated review",
     "finding": "P2: a failed/deleted parent could abandon an active required child and its approval.",
     "correction": "Scheduler stops required children whose parent is terminal or missing, retaining child ownership even after effect-link deletion. Their undispatched cards and waitpoints close.",
-    "follow_up": "Corrected diff re-read; no remaining actionable findings."
+    "follow_up": "Corrected diff re-read; no remaining actionable findings.",
+    "follow_ups": [
+      {
+        "date": "2026-10-13",
+        "finding": "P2: an already-terminal required child could retain an approval and waitpoint if its engine failed before the PAUSED upload.",
+        "correction": "Retire terminal required-child waits in a guarded transaction before parent continuation. Share undispatched-approval cleanup with cancellation; preserve run status, failure details, cancellation identity and dispatched effect evidence.",
+        "verification": "Three regression cases failed before correction. All 11 child lifecycle tests and the 404-test affected runtime suite pass afterward. Corrected diff, callers and tests re-reviewed with review-agent; no further findings."
+      }
+    ]
   },
   "manual_checks": [
     {

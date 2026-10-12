@@ -22,6 +22,39 @@ export function getRunCancellation(runId: string): RunCancellation | null {
   } : null;
 }
 
+/** Caller holds the transaction and has established that the run cannot continue. */
+function retireRunWaits(runId: string, ts: number, canceled: boolean): void {
+  const db = getWorkflowDb();
+  // Pending effects provably never dispatched. Leave in-flight and final
+  // effects alone: cleanup cannot certify rollback or replace their receipts.
+  for (const effect of listWorkflowEffects(runId)) {
+    if (effect.status !== 'pending') continue;
+    effect.status = 'blocked'; effect.finishedAt = ts;
+    effect.error = canceled ? 'Workflow canceled before dispatch' : 'Workflow ended before dispatch';
+    effect.outcome = { status: 'blocked', code: canceled ? 'WORKFLOW_CANCELED' : 'WORKFLOW_FINISHED',
+      message: effect.error, effect: 'not_started' };
+    saveWorkflowEffect(effect);
+    if (effect.approvalId) {
+      db.run(`UPDATE approval_requests SET status='denied', decided_at=?, decided_by=?
+        WHERE id=? AND execution_mode='workflow' AND status='pending'`,
+      [ts, canceled ? 'workflow-cancellation' : 'workflow-completion', effect.approvalId]);
+      db.run(`UPDATE approval_requests SET status='executed', executed_at=?, execution_result=?, execution_outcome='blocked'
+        WHERE id=? AND execution_mode='workflow' AND status='approved'`, [ts, effect.error, effect.approvalId]);
+    }
+  }
+  db.run('UPDATE waitpoint SET resumed_at=? WHERE flow_run_id=? AND resumed_at IS NULL', [ts, runId]);
+}
+
+/** Retire abandoned waits without changing a terminal run's status or failure evidence. */
+export function retireTerminalRunWaits(runId: string): void {
+  const db = getWorkflowDb();
+  db.transaction(() => {
+    const run = db.query<{ status: string }, [string]>('SELECT status FROM flow_run WHERE id=?').get(runId);
+    if (!run || ['QUEUED', 'RUNNING', 'PAUSED'].includes(run.status)) return;
+    retireRunWaits(runId, Date.now(), false);
+  }).immediate();
+}
+
 /** Atomically stop the run and ALL its queued attempts, including legacy jobs. */
 export function cancelFlowRun(runId: string): {
   accepted: boolean; jobCanceled: boolean; cancellation: RunCancellation | null;
@@ -49,22 +82,7 @@ export function cancelFlowRun(runId: string): {
         AND (flow_run_id = ? OR (flow_run_id IS NULL AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.runId') END = ?))`, [ts, runId, runId]);
     db.run("UPDATE flow_run SET status = 'STOPPED', finish_time = ?, updated = ? WHERE id = ?",
       [cancellation.acknowledgedAt, ts, runId]);
-    // Pending effects provably never dispatched. Close their cards without
-    // inventing a receipt for an in-flight effect, which may still complete.
-    for (const effect of listWorkflowEffects(runId)) {
-      if (effect.status !== 'pending') continue;
-      effect.status = 'blocked'; effect.finishedAt = ts;
-      effect.error = 'Workflow canceled before dispatch';
-      effect.outcome = { status: 'blocked', code: 'WORKFLOW_CANCELED', message: effect.error, effect: 'not_started' };
-      saveWorkflowEffect(effect);
-      if (effect.approvalId) {
-        db.run(`UPDATE approval_requests SET status='denied', decided_at=?, decided_by='workflow-cancellation'
-          WHERE id=? AND execution_mode='workflow' AND status='pending'`, [ts, effect.approvalId]);
-        db.run(`UPDATE approval_requests SET status='executed', executed_at=?, execution_result=?, execution_outcome='blocked'
-          WHERE id=? AND execution_mode='workflow' AND status='approved'`, [ts, effect.error, effect.approvalId]);
-      }
-    }
-    db.run('UPDATE waitpoint SET resumed_at=? WHERE flow_run_id=? AND resumed_at IS NULL', [ts, runId]);
+    retireRunWaits(runId, ts, true);
     stopped.push(runId);
     // A stopped run never resumes a delegated conversation; drop its log.
     deleteDelegations(runId);

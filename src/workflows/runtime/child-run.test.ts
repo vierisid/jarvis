@@ -1,12 +1,13 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb } from '../db';
 import { createFlow } from '../db/repos/flow';
-import { createDraftVersion } from '../db/repos/flow-version';
+import { createDraftVersion, type FlowTriggerNode } from '../db/repos/flow-version';
 import { createFlowRun, getFlowRun, updateRun } from '../db/repos/flow-run';
 import { getChildRun, listChildRuns } from '../db/repos/child-run';
 import { listWaitpointsByFlowRun, getWaitpoint } from '../db/repos/waitpoint';
 import { cancelFlowRun } from '../db/repos/run-cancellation';
-import { listWorkflowEffects } from '../db/repos/workflow-effect';
+import { listWorkflowEffects, saveWorkflowEffect } from '../db/repos/workflow-effect';
+import { configureWorkflowReadiness } from '../db/repos/flow-readiness';
 import { AuthorityEngine } from '../../authority/engine';
 import { ApprovalManager } from '../../authority/approval';
 import { AuditTrail } from '../../authority/audit';
@@ -16,12 +17,16 @@ import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends } from './service-backends';
 import { resumeCompletedChildRuns } from './child-run-scheduler';
 import { createJarvisWorkflowsStartRoute } from '../sandbox-api/routes/jarvis-workflows';
+import { PieceCatalog } from './piece-catalog';
+import { createRunFlowHandler } from '../runner/handler';
+import { Worker } from '../queue/worker';
+import { assertActionSucceeded } from '../../actions/action-outcome';
 
 beforeEach(() => initWorkflowDb(':memory:'));
 afterEach(() => closeWorkflowDb());
-function fixture(governed = false) {
+function fixture(governed = false, childTrigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY' }) {
   const target = createFlow();
-  createDraftVersion({ flowId: target.id, displayName: 'Child', trigger: { name: 'trigger', type: 'EMPTY' } });
+  createDraftVersion({ flowId: target.id, displayName: 'Child', trigger: childTrigger });
   const flow = createFlow();
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Parent', trigger: { name: 'trigger', type: 'EMPTY',
     nextAction: { name: 'child', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-trigger', pieceVersion: '0.0.1',
@@ -35,7 +40,7 @@ function fixture(governed = false) {
     llmManager: {} as any, channelService: {} as any, wsService: {} as any });
   const start = () => services.workflowsStart!({ flowId: target.id, waitForCompletion: true },
     { runId: run.id, projectId: run.projectId, stepName: 'child', executionPath: [] });
-  return { run, start, approvals, services };
+  return { run, start, approvals, services, authority };
 }
 
 test('completion before the parent parks is retained, and resume claim plus job is atomic', async () => {
@@ -123,4 +128,87 @@ for (const ending of ['failed', 'deleted'] as const) test(`a ${ending} parent ca
   expect(resumeCompletedChildRuns()).toBe(0);
   expect(getFlowRun(result.runId!)!.status).toBe('STOPPED');
   if (ending === 'failed') expect(listWaitpointsByFlowRun(f.run.id, false)).toHaveLength(0);
+});
+
+/** Real dispatch/approval/outer-worker paths, with a lost engine pause upload. */
+async function failedChildWithApproval(approved = false) {
+  const leaf = createFlow();
+  createDraftVersion({ flowId: leaf.id, displayName: 'Leaf', trigger: { name: 'trigger', type: 'EMPTY' } });
+  configureWorkflowReadiness({ pieces: new PieceCatalog([{ name: '@jarvispieces/piece-jarvis-trigger',
+    displayName: 'Trigger', description: '', actions: { run_workflow: { name: 'run_workflow', displayName: 'Run workflow',
+      description: '', inputSchema: { fields: [
+        { name: 'flow', label: 'Flow', type: 'flow_ref', required: true },
+        { name: 'waitForCompletion', label: 'Wait', type: 'boolean', required: false },
+      ] } } } }]) });
+  const f = fixture(false, { name: 'trigger', type: 'EMPTY', nextAction: { name: 'child', type: 'PIECE', settings: {
+    pieceName: '@jarvispieces/piece-jarvis-trigger', pieceVersion: '0.0.1', actionName: 'run_workflow',
+    input: { flow: leaf.id, waitForCompletion: true },
+  } } });
+  const child = await f.start();
+  updateRun(f.run.id, { status: 'PAUSED' });
+  f.authority.updateConfig({ ...f.authority.getConfig(), governed_categories: ['spawn_agent'] });
+  const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: {
+    async execute(ctx) {
+      const reply = await f.services.workflowsStart!({ flowId: leaf.id, waitForCompletion: true },
+        { runId: ctx.run.id, projectId: ctx.run.projectId, stepName: 'child', executionPath: [] });
+      expect(reply.approval).toBeDefined();
+      if (approved) f.approvals.approve(reply.approval!.approvalId, 'test');
+      throw new Error('Engine transport failed before PAUSED upload');
+    },
+  } }) } });
+  await worker.drain();
+  const failed = getFlowRun(child.runId!)!;
+  expect(failed.status).toBe('FAILED');
+  expect(failed.failedStep!.errorMessage).toContain('Engine transport failed');
+  const effect = listWorkflowEffects(failed.id)[0]!;
+  expect(effect.status).toBe('pending');
+  expect(listWaitpointsByFlowRun(failed.id, false)).toHaveLength(1);
+  return { ...f, child, failed, effect };
+}
+
+for (const approved of [false, true]) test(`terminal required children retire ${approved ? 'approved' : 'pending'} work before parent continuation`, async () => {
+  const f = await failedChildWithApproval(approved);
+  expect(resumeCompletedChildRuns()).toBe(1);
+  expect(resumeCompletedChildRuns()).toBe(0);
+  expect(getFlowRun(f.failed.id)).toEqual(f.failed);
+  expect(f.approvals.getRequest(f.effect.approvalId!)).toMatchObject(approved
+    ? { status: 'executed', execution_outcome: 'blocked' } : { status: 'denied' });
+  expect(listWorkflowEffects(f.failed.id)[0]).toMatchObject({ status: 'blocked',
+    outcome: { code: 'WORKFLOW_FINISHED', effect: 'not_started' } });
+  expect(listWaitpointsByFlowRun(f.failed.id, false)).toHaveLength(0);
+  expect(f.approvals.getPending()).toHaveLength(0);
+  // The normal continuation still propagates the child's original failure.
+  const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: {
+    async execute() {
+      const reply = await f.start();
+      assertActionSucceeded(reply.child!.outcome!);
+      return { steps: {}, stepsCount: 0 };
+    },
+  } }) } });
+  await worker.drain();
+  expect(getFlowRun(f.run.id)).toMatchObject({ status: 'FAILED' });
+  expect(getFlowRun(f.run.id)!.failedStep!.errorMessage).toContain(f.failed.id);
+  expect(listChildRuns(f.failed.id)).toHaveLength(0); // no approved leaf dispatch
+  expect(resumeCompletedChildRuns()).toBe(0);
+});
+
+test('terminal child cleanup rolls back on failure and preserves dispatched effect evidence', async () => {
+  const f = await failedChildWithApproval(true);
+  const receipts = (['dispatching', 'unknown', 'succeeded', 'failed'] as const).map(status => ({
+    ...f.effect, id: `${f.effect.id}-${status}`, route: status, status, approvalId: null, waitpointId: null,
+  }));
+  for (const receipt of receipts) saveWorkflowEffect(receipt);
+  getWorkflowDb().run(`CREATE TEMP TRIGGER reject_cleanup BEFORE UPDATE ON approval_requests
+    WHEN NEW.execution_outcome='blocked' BEGIN SELECT RAISE(ABORT, 'synthetic cleanup failure'); END`);
+  expect(() => resumeCompletedChildRuns()).toThrow('synthetic cleanup failure');
+  expect(listWorkflowEffects(f.failed.id)[0]).toEqual(f.effect);
+  expect(f.approvals.getRequest(f.effect.approvalId!)!.status).toBe('approved');
+  expect(listWaitpointsByFlowRun(f.failed.id, false)).toHaveLength(1);
+  expect(getWaitpoint(f.child.waitpointId!)!.resumedAt).toBeNull();
+  getWorkflowDb().run('DROP TRIGGER reject_cleanup');
+  expect(resumeCompletedChildRuns()).toBe(1);
+  expect(listWorkflowEffects(f.failed.id).slice(1)).toEqual(receipts);
+  expect(getFlowRun(f.failed.id)).toEqual(f.failed);
+  expect(listChildRuns(f.run.id)[0]!.outcome).toMatchObject({ status: 'unknown' });
+  expect(resumeCompletedChildRuns()).toBe(0);
 });
