@@ -71,7 +71,11 @@ polling, out-of-order reads, conflicts, and typing during a pending save. Explic
 discard/reload is the consumer's choice after showing any unsaved-edit warning.
 
 The existing `/api/user-profile` GET adds `revision`. Its current Settings form
-captures that revision with the edit draft and POSTs it back. Revision-bearing
+captures that revision with the edit draft and POSTs it back. A successful POST
+publishes the saved profile/revision immediately; mutation generations prevent
+older polls and delayed save replies from replacing a completed Clear. Clear also
+returns its canonical empty snapshot directly. Failed compatibility fallback reads
+retain loaded state and explicitly ask for refresh. Revision-bearing
 legacy saves patch only named answers. When F-23 is enabled, missing revisions
 receive HTTP 428 and require a reload; disabled F-23 retains the old unversioned
 POST behavior. Explicit Clear and onboarding replay retain their existing

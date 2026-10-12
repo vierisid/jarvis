@@ -14,7 +14,7 @@
   "ownership": {
     "implementer": "Codex",
     "reviewer": "lapociampi",
-    "automated_review": "Read-only Review Agent / codex review in progress; final findings and corrections will be recorded before delivery."
+    "automated_review": "Two complete baseline reviews plus two targeted correction reviews. Three P2 legacy profile concurrency/read-failure findings fixed. Final targeted Review Agent: No findings."
   },
   "dependencies": {
     "compile": [
@@ -73,13 +73,15 @@
       "command": "bun test --timeout 15000 src/brief/profile-settings.test.ts src/daemon/api-brief-profile-settings.test.ts ui/src/brief/profile-settings/editor.test.ts",
       "passed": 17,
       "failed": 0,
-      "assertions": 119
+      "assertions": 119,
+      "scope": "Rerun after all review corrections."
     },
     "ui": {
       "command": "bun test --timeout 15000 ui/src/brief/profile-settings/actions.test.tsx",
-      "passed": 3,
+      "passed": 4,
       "failed": 0,
-      "assertions": 9
+      "assertions": 32,
+      "scope": "Rerun after all review corrections; actual React form, Settings hook and canonical API with delayed/failed reads and reordered mutation responses."
     },
     "affected": {
       "command": "bun test --timeout 15000 src/brief src/vault/user-profile.test.ts src/daemon/api-brief-profile-settings.test.ts src/daemon/user-settings.test.ts src/daemon/usejarvis-ai.test.ts src/daemon/settings-reload.test.ts src/daemon/config-merge.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts",
@@ -87,7 +89,8 @@
       "skipped": 6,
       "failed": 0,
       "assertions": 4050,
-      "files": 41
+      "files": 41,
+      "scope": "Before the review correction; final focused and UI tests rerun after the save/poll fix."
     },
     "typescript": {
       "command": "bun x tsc --noEmit",
@@ -109,8 +112,26 @@
     },
     "runtime": "Real authenticated HTTP over temporary Unix socket, canonical SQLite save/restart and memory correction/forget, isolated encrypted keychain, fake TTS applier; actual legacy React form and replay/navigation helpers. No real external effect.",
     "intermediate_failures": "Fixed a test-only fetch cast reported by TypeScript; subsequent typecheck passed.",
-    "ci": "Pending initial PR; exact pushed-head result will be reported before delivery.",
-    "review_corrections": []
+    "ci": "Final corrected-head CI is reported in PR #945 after push; initial-head CI is separately recorded above.",
+    "review_corrections": [
+      "Publish the canonical save response and invalidate older polls; a successful save must not retain an obsolete revision.",
+      "Track mutation generations from request initiation so a late save response cannot supersede a completed Clear.",
+      "Return the complete cleared profile/revision directly; a failed compatibility fallback read retains loaded state and explicitly requests refresh."
+    ],
+    "hooks": "Initial implementation: all four guards, 40 related tests / 371 assertions, TypeScript passed. Follow-up uses the same normal hook.",
+    "evidence": "docs/brief-delivery/evidence/F-23 (focused/UI output, final review and check summaries); raw logs retained in the private F-track handoff.",
+    "initial_ci": {
+      "head": "7aa2aa0d9da42c5b6e0fb32a7a93e2ee458d655d",
+      "url": "https://github.com/vierisid/jarvis/actions/runs/38310974652",
+      "command": "bun test --retry=2",
+      "passed": 8560,
+      "skipped": 38,
+      "failed": 0,
+      "assertions": 60837,
+      "files": 487,
+      "all_applicable_checks": "passed"
+    },
+    "review_evidence": "docs/brief-delivery/evidence/F-23/review.json"
   },
   "rollback": "Disable the feature flag; new routes fail closed. No schema migration. Back up vault/keychain, preserve canonical rows, revert only this card. Older binaries may drop the additive Company answer if they rewrite the profile.",
   "quick_verification": [

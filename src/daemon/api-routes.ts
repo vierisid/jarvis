@@ -1105,6 +1105,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return json({
             ok: true,
             profile,
+            revision: readEditableProfile().revision,
+            questions: USER_PROFILE_QUESTIONS,
+            has_profile: hasUserProfile(profile),
             answered_count: countAnsweredUserProfileQuestions(profile),
             total_questions: USER_PROFILE_QUESTIONS.length,
             message: 'User profile saved.',
@@ -1119,7 +1122,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/user-profile/clear': {
       POST: () => {
         clearUserProfile();
-        return json({ ok: true, message: 'User profile cleared.' });
+        const { profile, revision } = readEditableProfile();
+        return json({ ok: true, message: 'User profile cleared.', profile, revision,
+          questions: USER_PROFILE_QUESTIONS, answered_count: 0,
+          total_questions: USER_PROFILE_QUESTIONS.length, has_profile: false });
       },
     },
 

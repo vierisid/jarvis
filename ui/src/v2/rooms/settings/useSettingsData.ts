@@ -502,10 +502,12 @@ export function useSettingsData() {
   const [profile, setProfile] = useState<UserProfileResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const inFlightRef = useRef(false);
+  const profileGenerationRef = useRef(0);
 
   const refresh = useCallback(async () => {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
+    const profileGeneration = profileGenerationRef.current;
     try {
       const [
         llmR,
@@ -551,7 +553,7 @@ export function useSettingsData() {
       if (roleR) setRole((p) => preserveRef(p, roleR));
       if (gR) setGoogle((p) => preserveRef(p, gR));
       if (scR) setSidecars((p) => preserveRef(p, scR));
-      if (profR) setProfile((p) => preserveRef(p, profR));
+      if (profR && profileGeneration === profileGenerationRef.current) setProfile((p) => preserveRef(p, profR));
     } finally {
       inFlightRef.current = false;
       setLoading(false);
@@ -978,33 +980,53 @@ export function useSettingsData() {
   }, [refresh]);
 
   // ── User profile ────────────────────────────────────────────────────
+  const publishProfile = useCallback(async (mutation: number, saved?: UserProfileResponse) => {
+    if (mutation !== profileGenerationRef.current) return 'superseded';
+    // Invalidate polls that started before or during the mutation. A settings
+    // refresh may already be running, so never rely on its in-flight shortcut.
+    const generation = ++profileGenerationRef.current;
+    const value = saved ?? await getJson<UserProfileResponse>("/api/user-profile");
+    if (generation !== profileGenerationRef.current) return 'superseded';
+    if (!value) return 'unavailable';
+    setProfile(value);
+    return 'published';
+  }, []);
+
   const saveProfile = useCallback(
     async (answers: Record<string, string>, revision?: string): Promise<ActionResult> => {
       try {
-        const r = await postJson<{ message: string }>("/api/user-profile", {
+        const mutation = ++profileGenerationRef.current;
+        const r = await postJson<UserProfileResponse & { message: string }>("/api/user-profile", {
           answers, revision,
         });
-        await refresh();
+        const publication = await publishProfile(mutation, r.revision && Array.isArray(r.questions) ? r : undefined);
+        if (publication !== 'published') return { ok: false, message: publication === 'unavailable'
+          ? "Profile was saved, but its latest state could not be loaded. Refresh before editing."
+          : "Another profile action started. Refresh before editing again." };
         return { ok: true, message: r.message || "Profile saved." };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }
     },
-    [refresh],
+    [publishProfile],
   );
 
   const clearProfile = useCallback(async (): Promise<ActionResult> => {
     try {
-      const r = await postJson<{ message: string }>(
+      const mutation = ++profileGenerationRef.current;
+      const r = await postJson<UserProfileResponse & { message: string }>(
         "/api/user-profile/clear",
         {},
       );
-      await refresh();
+      const publication = await publishProfile(mutation, r.revision && Array.isArray(r.questions) ? r : undefined);
+      if (publication !== 'published') return { ok: false, message: publication === 'unavailable'
+        ? "Profile was cleared, but its latest state could not be loaded. Refresh before editing."
+        : "Another profile action started. Refresh before editing again." };
       return { ok: true, message: r.message || "Profile cleared." };
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : "Failed" };
     }
-  }, [refresh]);
+  }, [publishProfile]);
 
   // ── Google integration ──────────────────────────────────────────────
   const saveGoogleCredentials = useCallback(
