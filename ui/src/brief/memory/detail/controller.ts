@@ -11,6 +11,7 @@ import {
   type ForgetRead,
   type HistoryRead,
   type MemoryDetailPort,
+  type ReadFailure,
 } from "./model";
 export type Panel = "correct" | "confirm" | "forget" | null;
 export interface ReturnOrigin {
@@ -22,6 +23,8 @@ export interface ReturnOrigin {
 }
 export interface DetailState {
   factId: string | null;
+  /** Successful correction awaiting route acknowledgment, retained across room remounts. */
+  replacement: { from: string; to: string } | null;
   read: DetailRead | { state: "loading" | "idle" };
   history: HistoryRead | { state: "idle" | "loading" };
   panel: Panel;
@@ -33,6 +36,7 @@ export interface DetailState {
 }
 const empty = (): DetailState => ({
   factId: null,
+  replacement: null,
   read: { state: "idle" },
   history: { state: "idle" },
   panel: null,
@@ -42,6 +46,16 @@ const empty = (): DetailState => ({
   message: "",
   prepared: null,
 });
+function staleRead(
+  read: DetailRead | HistoryRead | ForgetRead,
+): read is ReadFailure & {
+  state: "unavailable" | "missing" | "forgotten" | "conflict";
+} {
+  return (
+    "reason" in read &&
+    ["unavailable", "missing", "forgotten", "conflict"].includes(read.state)
+  );
+}
 /** One instance per authenticated scope, retained beside the stream controller across routes. */
 export class MemoryDetailController {
   readonly source;
@@ -83,6 +97,9 @@ export class MemoryDetailController {
     this.historyGeneration++;
     this.abort?.abort();
     this.historyAbort?.abort();
+    // Callers publish their next state synchronously; batch cancellation with that update.
+    if (this.state.history.state === "loading")
+      this.state = { ...this.state, history: { state: "idle" } };
   }
   private start() {
     this.cancel();
@@ -107,22 +124,46 @@ export class MemoryDetailController {
       });
     }
   }
-  async open(id: string) {
+  open(id: string) {
+    return this.load(id, null);
+  }
+  acknowledgeRoute(id: string) {
+    if (this.state.replacement?.to === id) this.publish({ replacement: null });
+  }
+  private discardRead(read: ReadFailure) {
+    this.cancel();
+    this.command = null;
+    this.invalidate();
+    this.publish({
+      ...empty(),
+      factId: this.state.factId,
+      replacement: this.state.replacement,
+      read,
+    });
+  }
+  private async load(id: string, replacement: DetailState["replacement"]) {
     if (!this.access || !this.alive) return;
     const { generation, signal } = this.start();
     this.command = null;
-    this.publish({ ...empty(), factId: id, read: { state: "loading" } });
+    this.publish({
+      ...empty(),
+      factId: id,
+      replacement,
+      read: { state: "loading" },
+    });
     try {
       const read = validFactId(id) ? await this.port.read(id, signal) : FAILURE;
       if (!this.current(generation)) return;
+      if (staleRead(read)) {
+        this.discardRead(read);
+        return;
+      }
       this.publish({
         read:
           read.state === "ready" && !validDetail(read.data, id)
             ? FAILURE
             : read,
       });
-      if (read.state === "forgotten" || read.state === "missing")
-        this.invalidate();
     } catch {
       if (this.current(generation))
         this.publish({
@@ -196,15 +237,8 @@ export class MemoryDetailController {
       const history = await this.port.history(id, this.historyAbort.signal);
       if (!this.access || !this.alive || generation !== this.historyGeneration)
         return;
-      if (
-        history.state === "unavailable" ||
-        history.state === "missing" ||
-        history.state === "forgotten" ||
-        history.state === "conflict"
-      ) {
-        this.cancel();
-        this.invalidate();
-        this.publish({ ...empty(), factId: id, read: history });
+      if (staleRead(history)) {
+        this.discardRead(history);
         return;
       }
       this.publish({
@@ -261,7 +295,10 @@ export class MemoryDetailController {
       if (!this.current(generation)) return;
       if (result.state === "saved" && validFactId(result.factId)) {
         this.returnId = result.factId;
-        await this.open(result.factId);
+        await this.load(
+          result.factId,
+          result.factId === factId ? null : { from: factId, to: result.factId },
+        );
         if (this.access && this.state.factId === result.factId)
           this.publish({
             message:
@@ -332,6 +369,10 @@ export class MemoryDetailController {
         this.forgotten();
         return;
       }
+      if (staleRead(prepared)) {
+        this.discardRead(prepared);
+        return;
+      }
       if (
         prepared.state !== "ready" ||
         prepared.factId !== factId ||
@@ -347,6 +388,10 @@ export class MemoryDetailController {
       // F17 stream revision includes usage; F19 uses a DIFFERENT source digest. Never substitute one for the other.
       const current = await this.port.read(factId, signal);
       if (!this.current(generation)) return;
+      if (staleRead(current)) {
+        this.discardRead(current);
+        return;
+      }
       if (
         current.state !== "ready" ||
         !validDetail(current.data, factId) ||

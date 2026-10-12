@@ -100,10 +100,22 @@ function ConnectedExperience({
   useLayoutEffect(() => {
     detail.setAccess(allowed);
     if (reading && allowed) {
-      scroller()?.scrollTo?.({ top: 0, behavior: "instant" });
+      const replacement = detail.snapshot().replacement;
+      if (replacement?.from === id) {
+        shell.navigate({
+          room: "memory-detail",
+          selection: { factId: replacement.to },
+        });
+        return;
+      }
+      detail.acknowledgeRoute(id);
       if (detail.snapshot().factId !== id) void detail.open(id);
     }
-  }, [reading, id, allowed, detail]);
+  }, [reading, id, allowed, detail, detailState.replacement, shell.navigate]);
+  useLayoutEffect(() => {
+    if (reading && allowed)
+      scroller()?.scrollTo?.({ top: 0, behavior: "instant" });
+  }, [reading, id, allowed]);
   useEffect(
     () => () => {
       if (highlight.current) clearTimeout(highlight.current);
