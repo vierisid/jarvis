@@ -1,0 +1,135 @@
+{
+  "task": "F-22",
+  "title": "Normalize connected services without merging credentials",
+  "date": "2026-10-12",
+  "branch": "brief/f-22",
+  "base_branch": "brief/f-21",
+  "baseline": "0acff262a10aafdb501788005e306f53d6a06946",
+  "main_reviewed": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
+  "head": {
+    "ref": "brief/f-22",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-22.json",
+    "published_head": "Recorded in PR description; receipt is included in that commit."
+  },
+  "worktree": "/home/vieri-balboni/Projects/.worktrees/jarvis-f-22",
+  "ownership": {
+    "implementer": "Codex",
+    "reviewer": "lapociampi",
+    "automated_review": "All four actionable findings from two PR-reviewer passes fixed. Final targeted reviewer: No findings. Human review requested from lapociampi."
+  },
+  "dependencies": {
+    "compile": [
+      "F-01"
+    ],
+    "enable": [],
+    "stack": "F-21 #939 is open/unmerged and passed all active CI checks at the baseline. Stacked directly on its final review fixes. D-26 #941 also rechecked green; D-27 consumes this contract and F-25."
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "81:4627",
+    "inspection": "Native link unavailable via web tool. Backend contract and existing canonical setup surfaces inspected; no new Connected layout or visual-fidelity claim."
+  },
+  "baseline_review": {
+    "existing_f22": "No PR or remote branch at initial/pre-delivery rechecks",
+    "main_guards": "Connection-specific isolation/update-by-ID guards copied from merged #691 and #728; no other stack imported. Tests prove foreign PATCH/DELETE refusal and no resurrection after body-read race."
+  },
+  "contract": {
+    "endpoint": "GET /api/brief/connections",
+    "read": "Stable separate device/native/channel/account/piece rows; per-source unavailable states, explicit status evidence, supported typed setup actions. No credential decrypt in metadata read.",
+    "setup": "Headless adapter persists per-tab return position before handoff. Existing Settings and Workflows forms own setup; nonce/expiry/cancel/reload/late-read handling; completion is fresh exact-row observation only.",
+    "manual": "Saved piece credentials are configured with unknown authentication. No generic OAuth broker or provider authentication assertion.",
+    "guide": "docs/brief-connected-workspace.md"
+  },
+  "activation": {
+    "capability": "connections",
+    "flag": "JARVIS_BRIEF_CONNECTIONS=1",
+    "default": "off",
+    "code_delivered": true,
+    "merged": false,
+    "capability_readiness": "Fixture-tested contract and legacy setup adapters. D-27 host binding, live providers and release verification pending.",
+    "release_enabled": false,
+    "deployed": false
+  },
+  "limits": {
+    "per_source_records": 1000,
+    "response_bytes": 2000000,
+    "label_chars": 160,
+    "identity_chars": 256,
+    "return_record_chars": 4096,
+    "setup_ttl_minutes": 10
+  },
+  "verification": {
+    "toolchain": {
+      "bun": "1.3.14",
+      "install": "bun install --frozen-lockfile; dedicated node_modules; no lock changes"
+    },
+    "focused": {
+      "command": "bun test --timeout 15000 src/brief/connected-workspace.test.ts src/daemon/api-brief-connections.test.ts ui/src/brief/connections/setup.test.ts src/comms/channels/authentication-state.test.ts",
+      "passed": 30,
+      "failed": 0,
+      "assertions": 133,
+      "evidence": "evidence/F-22/focused.log"
+    },
+    "affected": {
+      "command": "bun test --timeout 15000 src/brief src/workflows/api src/workflows/db src/daemon/api-brief-connections.test.ts src/daemon/api-google-oauth.test.ts src/integrations/google-oauth-flow.test.ts src/daemon/api-sidecar-enroll.test.ts src/daemon/api-sidecar-update.test.ts src/daemon/channel-service.test.ts src/comms/channels src/comms/channels.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts",
+      "passed": 907,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 15505,
+      "files": 51,
+      "evidence": "evidence/F-22/affected.log"
+    },
+    "ui_handoffs": {
+      "command": "bun test --timeout 15000 ui/src/brief/connections/legacy-setup.test.tsx ui/src/v2/rooms/settings/tabs/sidecar-add-device.test.ts",
+      "passed": 11,
+      "failed": 0,
+      "assertions": 32,
+      "evidence": "evidence/F-22/ui.log"
+    },
+    "typescript": {
+      "command": "bun x tsc --noEmit",
+      "status": "passed",
+      "evidence": "evidence/F-22/types.log"
+    },
+    "build": {
+      "command": "bun run build:ui",
+      "status": "passed",
+      "evidence": "evidence/F-22/build.log"
+    },
+    "guards": {
+      "commands": [
+        "bun run check:no-ee",
+        "bun run check:migrations",
+        "bun run lint:templates",
+        "bun run check:package"
+      ],
+      "status": "passed",
+      "evidence": "evidence/F-22/guards.log"
+    },
+    "runtime": "Real authenticated HTTP over temporary Unix socket feeds the actual setup adapter. Canonical Google token/reconnect files in a temporary directory. Real connection repository and API writes use an injected fixture encryption key. Actual existing React setup form receives precise piece/version/account with zero writes.",
+    "intermediate_failures": "Fixed a test WebSocket import path and injected the required temporary encryption key after the real-key protection correctly refused the fixture. No real key was accessed.",
+    "ci": "Exact pushed-head CI reported in the PR; no pre-push CI success claim.",
+    "review_corrections": [
+      "Use shared secure-random UUID fallback in HTTP LAN contexts at both handoff sites.",
+      "Add optional authentication evidence to existing channel adapters; old activity flags remain unknown, Telegram 401 is sticky and Discord uses current SDK readiness/token rejection.",
+      "Accept SemVer build metadata without rejecting unrelated account rows.",
+      "Discord manager readiness is latched; require a nonempty set of currently Ready shards, tested through actual SDK close/resume handlers."
+    ],
+    "review_evidence": "evidence/F-22/review.json",
+    "hooks": "Initial commit: all guards, 176 related tests / 11,375 assertions, and TypeScript pass. Final correction uses normal hooks; outcome reported in PR."
+  },
+  "limitations": [
+    "No full Connected room; D-27 owns layout, focus and visible return navigation. F-25 wider navigation remains separate.",
+    "No live hosted OAuth/enrollment/provider certification or paid model calls. Existing one-time state, PKCE and hosted enrollment nonce implementations are reused.",
+    "Google stored grant and channel adapter evidence are observations, not new remote probes. Manual credential values remain unverified.",
+    "Non-default project/owner scopes cannot launch instance-owned setup. Source failures/overflow are explicit unavailable states.",
+    "Six optional Q integration tests skipped because providers are absent from this staged base. Native Figma source unavailable."
+  ],
+  "rollback": "Disable JARVIS_BRIEF_CONNECTIONS and restart. Retain canonical credentials and history. No migration to undo. Preserve main connection isolation/update safety guards. Do not replay setup or effects.",
+  "quick_verification": [
+    "Run focused and ui_handoffs commands above.",
+    "In a fixture daemon with the flag enabled and authenticated access, inspect /api/brief/connections, then hand a supported action to ConnectionSetup with openLegacyConnectionSetup.",
+    "Confirm cancel/reload retains Connected position and verification rereads the exact row; saved credentials report configured, not connected."
+  ],
+  "evidence_policy": "Committed logs contain commands/verdicts and fixed metadata; private context, raw credentials and raw reviewer transcript excluded."
+}

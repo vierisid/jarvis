@@ -1,3 +1,6 @@
+import { ConnectedWorkspace } from '../brief/connected-workspace';
+import { connectedGoogle } from '../brief/connected-workspace-runtime';
+import { registerConnections } from '../brief/registrations/connections';
 import { WorkflowContext } from '../brief/workflow-context';
 import { registerWorkflowContext } from '../brief/registrations/workflow-context';
 import { WorkflowRemoval } from '../brief/workflow-removal';
@@ -5008,6 +5011,20 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const briefMemoryForget = new MemoryForget(getDb());
     briefWorkflowRemoval = new WorkflowRemoval(getDb());
     const briefWorkflowContext = new WorkflowContext(getDb());
+    let connectedPieces: import('../workflows/runtime/piece-catalog').PieceLookup | null = null;
+    const briefConnections = new ConnectedWorkspace(getDb(), {
+      devices: () => sidecarManager.listSidecars(),
+      google: () => connectedGoogle(jarvisConfig),
+      channels: () => {
+        const status = channelService.getChannelStatus();
+        return Object.fromEntries((['telegram', 'discord'] as const).map(name => [name, {
+          enabled: jarvisConfig.channels?.[name]?.enabled === true, connected: status[name] === true,
+          authentication: channelService.getManager().getChannel(name)?.authenticationState?.() ?? 'unknown',
+        }]));
+      },
+      pieces: () => connectedPieces,
+      hosted: () => isHostedInstall(jarvisConfig),
+    });
     const briefMemoryStream = new MemoryStream(getDb(), briefMemoryUsage, briefMemoryForget);
     const briefDecisions = new DecisionQueue(getDb(), { approvalManager, deferredExecutor, wsService });
     const briefDecisionDocuments = new DecisionDocuments(getDb(), briefDecisions, approvalManager, id => {
@@ -5040,6 +5057,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     if (process.env.JARVIS_BRIEF_MEMORY_STREAM === '1') briefEnabled.push('memoryStream');
     if (process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') briefEnabled.push('memoryUsage');
     if (process.env.JARVIS_BRIEF_MEMORY_FORGET === '1') briefEnabled.push('memoryForget');
+    if (process.env.JARVIS_BRIEF_CONNECTIONS === '1') briefEnabled.push('connections');
     if (process.env.JARVIS_BRIEF_WORKFLOW_CONTEXT === '1') briefEnabled.push('workflowContext');
     if (process.env.JARVIS_BRIEF_WORKFLOW_REMOVAL === '1') briefEnabled.push('workflowRemoval');
     if (process.env.JARVIS_BRIEF_OUTCOMES === '1') briefEnabled.push('outcomes');
@@ -5075,6 +5093,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ...registerMemoryForget(briefMemoryForget),
       ...registerWorkflowRemoval(briefWorkflowRemoval),
       ...registerWorkflowContext(briefWorkflowContext),
+      ...registerConnections(briefConnections),
       ...registerCompositionIngredients(briefWorkflowComposition),
     ], briefEnabled);
     wsService.setBriefChatTransport(briefChatTransport, briefCapabilities);
@@ -5087,6 +5106,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       briefMemoryForget,
       briefWorkflowRemoval,
       briefWorkflowContext,
+      briefConnections,
       briefDecisionDocuments,
       briefRecommendations,
       briefConversations,
@@ -5306,6 +5326,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // so the `onPieceLibraryChanged` callback can call `upsert()` / `remove()`
     // after runtime installs.
     const workflowPieceCatalog = engineBoot?.catalog ?? null;
+    connectedPieces = workflowPieceCatalog;
     configureWorkflowReadiness({
       pieces: workflowPieceCatalog ?? undefined,
       credentials: credentialResolver,

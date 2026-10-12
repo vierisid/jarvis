@@ -1,4 +1,4 @@
-import { Client, GatewayIntentBits, Partials, type Message } from 'discord.js';
+import { Client, GatewayIntentBits, Partials, Status, type Message } from 'discord.js';
 import type { ChannelAdapter, ChannelHandler, ChannelMessage } from './telegram.ts';
 import type { STTProvider } from '../voice.ts';
 
@@ -7,6 +7,7 @@ export class DiscordAdapter implements ChannelAdapter {
   private token: string;
   private handler: ChannelHandler | null = null;
   private connected: boolean = false;
+  private authenticationRejected = false;
   private client: Client | null = null;
   private allowedUsers: string[];
   private guildId: string | null;
@@ -33,6 +34,7 @@ export class DiscordAdapter implements ChannelAdapter {
       return;
     }
 
+    this.authenticationRejected = false;
     this.client = new Client({
       intents: [
         GatewayIntentBits.Guilds,
@@ -42,6 +44,8 @@ export class DiscordAdapter implements ChannelAdapter {
       ],
       partials: [Partials.Channel],
     });
+
+    this.client.on('shardDisconnect', event => { if (event.code === 4004) this.authenticationRejected = true; });
 
     // Wait for ready event
     let loginTimeout: ReturnType<typeof setTimeout> | null = null;
@@ -76,6 +80,7 @@ export class DiscordAdapter implements ChannelAdapter {
       await this.client.login(this.token);
       await readyPromise;
     } catch (err) {
+      if ((err as { code?: string })?.code === 'TokenInvalid') this.authenticationRejected = true;
       if (loginTimeout) clearTimeout(loginTimeout);
       try {
         await this.client?.destroy();
@@ -117,6 +122,14 @@ export class DiscordAdapter implements ChannelAdapter {
 
   isConnected(): boolean {
     return this.connected;
+  }
+
+  authenticationState(): 'verified' | 'rejected' | 'unknown' {
+    if (this.authenticationRejected) return 'rejected';
+    // Client.isReady() stays latched through shard reconnects in discord.js v14.
+    // Require current shard readiness as well, including a non-empty shard set.
+    return this.client?.isReady() && this.client.ws.shards.size > 0 &&
+      this.client.ws.shards.every(shard => shard.status === Status.Ready) ? 'verified' : 'unknown';
   }
 
   private async processMessage(message: Message): Promise<void> {
