@@ -246,6 +246,15 @@
         "result": "pass",
         "warnings": "Existing @theme/@tailwind at-rule warnings",
         "evidence": "evidence/D-25/review-build.log"
+      },
+      {
+        "command": "bunx prettier --check ui/src/brief/memory/stream docs/brief-delivery/D-25.md docs/brief-delivery/D-25.json docs/brief-delivery/evidence/D-25/review-browser-checks.json",
+        "result": "pass",
+        "evidence": "evidence/D-25/review-format.log"
+      },
+      {
+        "command": "git diff --cached --check",
+        "result": "pass"
       }
     ],
     "browser": {
@@ -266,6 +275,14 @@
     "limits": [
       "Native OS IME not exercised; composition behavior verified through React DOM keyboard regression tests."
     ],
-    "activation": "Unchanged: code remains unmerged, release disabled, no live F17/F18/provider effects."
+    "activation": "Unchanged: code remains unmerged, release disabled, no live F17/F18/provider effects.",
+    "implementation_head": "d99028f604db65d839cae5894e16bf15adeea497",
+    "commit_hooks": {
+      "result": "pass",
+      "tests": 23,
+      "assertions": 103,
+      "evidence": "evidence/D-25/review-hooks.log",
+      "note": "Normal license, migration, template, package, related-test and TypeScript checks; no bypass."
+    }
   }
 }
