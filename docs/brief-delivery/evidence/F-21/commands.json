@@ -11,5 +11,6 @@
   ],
   "install": "bun install --frozen-lockfile",
   "types": "bun x tsc --noEmit",
-  "build": "bun run build:ui"
+  "build": "bun run build:ui",
+  "env_classification": "bun test --timeout 15000 src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts"
 }
