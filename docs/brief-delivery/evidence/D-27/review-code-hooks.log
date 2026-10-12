@@ -1,0 +1,105 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 2 required path(s) present in the npm tarball (2337 files).
+[pre-commit] Running 3 related test file(s) (180s timeout)...
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/connections/f22-adapter.test.ts:
+(pass) F22 projection preserves configured, installed, offline and partial sources separately [1.10ms]
+(pass) F22 rejects foreign, invalid, and duplicate snapshots instead of treating them as empty [0.09ms]
+(pass) F22 projection only retains public presentation fields [0.14ms]
+(pass) missing F22 remains unsupported without importing an unmerged provider [0.22ms]
+(pass) real F22 headless adapter integration > persists before opening; reload restores search/scroll and never relaunches [3.32ms]
+(pass) real F22 headless adapter integration > requires explicit exact account selection and reports configured without connected [3.91ms]
+(pass) real F22 headless adapter integration > only a fresh exact account with authenticated connected evidence confirms [0.88ms]
+(pass) real F22 headless adapter integration > cancel survives reload and blocks stale checks and reopening [0.61ms]
+(pass) real F22 headless adapter integration > expiry survives reload and requires a fresh explicit attempt [0.70ms]
+(pass) real F22 headless adapter integration > lost start response recovers the same persisted attempt without replay [2.69ms]
+(pass) real F22 headless adapter integration > storage failure refuses external launch and unavailable reads purge accounts [0.47ms]
+(pass) real F22 headless adapter integration > revoked setup permission refuses launch without leaving an uncertain attempt [0.23ms]
+(pass) real F22 headless adapter integration > reconnect cannot confirm a different account [0.60ms]
+(pass) real F22 headless adapter integration > missing reconnect target can be canceled and dismissed (reload=false, service removed=false) [3.17ms]
+(pass) real F22 headless adapter integration > missing reconnect target can be canceled and dismissed (reload=false, service removed=true) [2.66ms]
+(pass) real F22 headless adapter integration > missing reconnect target can be canceled and dismissed (reload=true, service removed=false) [3.87ms]
+(pass) real F22 headless adapter integration > missing reconnect target can be canceled and dismissed (reload=true, service removed=true) [4.72ms]
+(pass) real F22 headless adapter integration > failed retry after cancelled remains retryable (read) [2.21ms]
+(pass) real F22 headless adapter integration > failed retry after cancelled remains retryable (storage) [1.75ms]
+(pass) real F22 headless adapter integration > failed retry after configured remains retryable (read) [2.04ms]
+(pass) real F22 headless adapter integration > failed retry after configured remains retryable (storage) [2.16ms]
+(pass) real F22 headless adapter integration > failed retry after expired remains retryable (read) [1.63ms]
+(pass) real F22 headless adapter integration > failed retry after expired remains retryable (storage) [1.70ms]
+(pass) real F22 headless adapter integration > unsuccessful verification keeps the account picker usable [2.40ms]
+(pass) real F22 headless adapter integration > account removed during verification clears selection and keeps other candidates [4.93ms]
+(pass) real F22 headless adapter integration > canceling a retry awaiting its read resolves the new attempt without launching [1.97ms]
+(pass) real F22 headless adapter integration > expired reconnect is dismissible after its account and service disappear [1.64ms]
+(pass) real F22 headless adapter integration > pending setup navigation is canceled on retire [2.12ms]
+(pass) real F22 headless adapter integration > pending inspect navigation is canceled on retire [1.75ms]
+(pass) real F22 headless adapter integration > pending update navigation is canceled on retire [1.26ms]
+(pass) real F22 headless adapter integration > pending revoke navigation is canceled on retire [1.25ms]
+(pass) real F22 headless adapter integration > pending add navigation is canceled on retire [1.50ms]
+(pass) real F22 headless adapter integration > pending setup navigation is canceled on revoke [2.24ms]
+(pass) real F22 headless adapter integration > pending inspect navigation is canceled on revoke [1.30ms]
+(pass) real F22 headless adapter integration > pending update navigation is canceled on revoke [1.42ms]
+(pass) real F22 headless adapter integration > pending revoke navigation is canceled on revoke [1.26ms]
+(pass) real F22 headless adapter integration > pending add navigation is canceled on revoke [1.25ms]
+
+ui/src/brief/connections/ConnectedWorkspace.test.tsx:
+(pass) workspace keeps real device status visible without a brain card, old tabs or offline footer [121.97ms]
+(pass) catalog search, selected identity, scroll and focus survive setup cancellation [221.02ms]
+(pass) restored setup with a missing catalog service still exposes cancellation and return [93.62ms]
+(pass) browser focus cannot claim connection success before a verified backend read [193.80ms]
+(pass) pending setup and search survive room remount and all eight shell layouts [496.22ms]
+(pass) expired setup offers an explicit fresh start and reconnect preserves service identity [120.10ms]
+(pass) device controls remain reachable and hand off the selected offline device [125.00ms]
+(pass) fixture and scope mismatches never leak preview accounts into a live shell [70.71ms]
+(pass) live adapter needs both connections and navigation compatibility gates [119.40ms]
+(pass) missing and empty providers render distinct states; setup remains disabled for stale data [84.02ms]
+(pass) saved credentials, explicit account selection and partial-source warnings remain honest [171.84ms]
+
+ui/src/brief/connections/controller.test.ts:
+(pass) missing provider is explicitly unsupported without a fabricated account [0.36ms]
+(pass) identity includes namespace and account, while display text never decides connectivity [0.13ms]
+(pass) projection rejects malformed and duplicate identities and strips unmodeled secrets [0.34ms]
+(pass) launch and unverified return keep account status unchanged and never duplicate start [7.00ms]
+(pass) confirmed callback waits for a fresh canonical account before publishing any success [9.34ms]
+(pass) confirmation rejects missing projection [7.76ms]
+(pass) confirmation rejects wrong-service projection [4.88ms]
+(pass) confirmation rejects unverified projection [6.89ms]
+(pass) confirmation rejects unavailable-account projection [4.93ms]
+(pass) confirmation rejects stale projection [5.06ms]
+(pass) confirmation rejects wrong-reconnect-account projection [7.35ms]
+(pass) reconnect confirms only the selected account and leaves sibling accounts alone [7.49ms]
+(pass) mismatched setup identity never replaces selected service or becomes connected [3.93ms]
+(pass) a confirmation cannot drop the reconnect identity even when the account is connected [6.04ms]
+(pass) cancel preserves catalog search and accounts and permits deliberate retry [4.93ms]
+(pass) expired setup requires a new attempt and never reports connection success [8.53ms]
+(pass) lost start response recovers the same backend attempt rather than replaying [5.06ms]
+(pass) lost cancellation is unknown until a status read recovers cancellation [6.35ms]
+(pass) a fresh controller resumes the backend attempt after reload without browser success parameters [7.98ms]
+(pass) failed resume prevents new setup until a backend read says no attempt exists [3.89ms]
+(pass) scope access loss clears account data and ignores late setup confirmation [3.91ms]
+(pass) backend access denial during verification purges visible cached account data [6.31ms]
+(pass) canceling a pending start ignores its late completion [3.06ms]
+(pass) device updates, revoke and enrollment hand off exact identity without changing reported status [2.93ms]
+(pass) device and reconnect permissions are honored without hiding actual offline status [2.66ms]
+(pass) stale and missing reads do not become empty success or allow setup [7.09ms]
+(pass) blocked handoff can retry and raw provider errors never render [4.22ms]
+(pass) a fresh permission or catalog change prevents starting a stale selection [5.10ms]
+(pass) repeated cancel shares one in-flight cancellation [7.08ms]
+(pass) browser access denial purges cached accounts [3.87ms]
+(pass) device access denial purges cached accounts [2.43ms]
+
+ 79 pass
+ 0 fail
+ 356 expect() calls
+Ran 79 tests across 3 files. [2.32s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-27 e7559cba] fix(brief): recover connection setup and cancel stale navigation
+ 7 files changed, 429 insertions(+), 64 deletions(-)

@@ -3,7 +3,7 @@
   "title": "Build Connected workspace and service setup",
   "date": "2026-10-12",
   "status": "implemented_verified_not_activated",
-  "implementation_head": "4c78a3dbbbf8e984afec22dae920784df7a11bd3",
+  "implementation_head": "e7559cba7124e7fdb3f1a940ced26f82ea58186f",
   "head": "Final evidence commit is the PR head; implementation_head identifies tested code.",
   "branch": "brief/d-27",
   "target": "brief/d-26",
@@ -79,36 +79,36 @@
     {
       "command": "D27_F22_SETUP_MODULE=<pinned F22 setup.ts> bun test ui/src/brief/connections",
       "result": "pass",
-      "tests": 53,
-      "assertions": 200,
+      "tests": 79,
+      "assertions": 356,
       "failed": 0,
-      "evidence": "evidence/D-27/connections-tests.log"
+      "evidence": "evidence/D-27/review-connections-tests.log"
     },
     {
       "command": "D27_F22_SETUP_MODULE=<pinned F22 setup.ts> bun test ui/src/brief",
       "result": "pass",
-      "evidence": "evidence/D-27/brief-regression.log",
-      "tests": 730,
+      "evidence": "evidence/D-27/review-brief-tests.log",
+      "tests": 756,
       "skipped": 2,
-      "assertions": 5725,
+      "assertions": 5881,
       "failed": 0
     },
     {
       "command": "bunx tsc --noEmit",
       "result": "pass",
-      "evidence": "evidence/D-27/typecheck.log",
+      "evidence": "evidence/D-27/review-typecheck.log",
       "note": "Also passed on implementation commit through the normal hooks."
     },
     {
       "command": "bun run build:ui",
       "result": "pass",
       "warnings": "Existing @theme/@tailwind at-rule warnings",
-      "evidence": "evidence/D-27/build.log"
+      "evidence": "evidence/D-27/review-build.log"
     },
     {
-      "command": "bunx prettier --check ui/src/brief/connections docs/brief-delivery/D-27.md docs/brief-delivery/D-27.json docs/brief-delivery/evidence/D-27/browser-checks.json",
+      "command": "bunx prettier --check ui/src/brief/connections docs/brief-delivery/D-27.md docs/brief-delivery/D-27.json",
       "result": "pass",
-      "evidence": "evidence/D-27/format-check.log"
+      "evidence": "evidence/D-27/review-format-check.log"
     },
     {
       "command": "git diff --cached --check",
@@ -117,9 +117,9 @@
   ],
   "commit_hooks": {
     "result": "pass",
-    "tests": 53,
-    "assertions": 200,
-    "evidence": "evidence/D-27/code-hooks.log",
+    "tests": 79,
+    "assertions": 356,
+    "evidence": "evidence/D-27/review-code-hooks.log",
     "note": "Normal license, migration, template, package, related-test and type checks; no bypass or coauthor trailers. Final evidence commit also uses normal hooks."
   },
   "browser": {
@@ -167,7 +167,8 @@
       "evidence/D-27/setup-unconfirmed-return.jpg",
       "evidence/D-27/unavailable-800.jpg",
       "evidence/D-27/unknown-setup-800.jpg"
-    ]
+    ],
+    "review_followup": "Original browser evidence retained; recovery control changes verified by React tests, no new browser certification."
   },
   "not_run": [
     "Combined live authenticated F22/F25 deployment and production activation",
@@ -183,5 +184,28 @@
   },
   "rollback": "Remove optional registration or switch back to existing settings UI. Revert card commits if needed; no migration reversal or effect replay.",
   "next_card": "D-28 not started",
-  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged."
+  "private_progress": "Updated outside product repository; shared Drive roadmap unchanged.",
+  "original_implementation_head": "4c78a3dbbbf8e984afec22dae920784df7a11bd3",
+  "review_corrections": {
+    "reviewed_head": "2d0793d846003e2eea9cf729b2ba8ebe7140d444",
+    "findings_fixed": 4,
+    "regression_cases_added": 26,
+    "initial_reproductions": {
+      "passed_before_fix": 0,
+      "failed_before_fix": 21,
+      "passed_after_fix": 21
+    },
+    "coverage": [
+      "Deleted reconnect accounts and catalog services remain cancelable/dismissible before and after reload; expiry also recovers.",
+      "Read/storage failures after canceled, expired or configured attempts allow explicit retry; cancel during retry resolves the current ID.",
+      "Negative verification preserves account choices; account removal during verification clears selection without dropping remaining choices.",
+      "Retirement and access revocation cancel delayed setup, inspect, update, revoke and enrollment navigation.",
+      "React recovery controls remain reachable when the catalog service is absent; confirmation cannot drop reconnect identity."
+    ],
+    "previous_head_ci": {
+      "test": "failure in unchanged src/actions/browser/chrome-sandbox.test.ts: Seccomp 0 instead of 2; not attributed to this diff",
+      "url": "https://github.com/vierisid/jarvis/actions/runs/38305935898/job/114999875465",
+      "current_head": "Check GitHub for current-head results; local passes are not CI certification."
+    }
+  }
 }
