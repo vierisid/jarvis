@@ -18,6 +18,7 @@ let Experience: typeof import("./MemoryExperience").MemoryExperience,
 let host: HTMLDivElement,
   root: Root,
   fixture: ReturnType<typeof makeMemoryDetailFixture>;
+let currentShell: BriefShellPort;
 const wait = () => new Promise((resolve) => setTimeout(resolve, 15));
 beforeAll(async () => {
   GlobalRegistrator.register();
@@ -77,6 +78,7 @@ function Harness({
     setSidebar() {},
     setChatOpen() {},
   };
+  currentShell = shell;
   return (
     <div className="brief-root brief-workspace-content">
       <Experience shell={shell} binding={bind} />
@@ -254,6 +256,113 @@ test("saved correction renders fresh replacement and returns to its row without 
   await React.act(wait);
   expect(document.activeElement?.getAttribute("data-fact-id")).toBe(id);
   expect(fixture.stream.snapshot().filters.search).toBe("emails");
+});
+test("correction updates the canonical route and preserves the next draft through remount", async () => {
+  await render();
+  await open();
+  await click("Edit memory");
+  await fill("Correct value", "Keep emails concise.");
+  await fill("Reason or source", "Owner correction");
+  await submit();
+  const replacement = fixture.controller.snapshot().factId!;
+  expect(currentShell.route.selection.factId).toBe(replacement);
+  await click("Edit memory");
+  await fill("Correct value", "Second draft");
+  await React.act(async () => {
+    root.render(<Harness key="after-correction" route={currentShell.route} />);
+    await wait();
+  });
+  expect(fixture.controller.snapshot().factId).toBe(replacement);
+  expect(fixture.controller.snapshot().object).toBe("Second draft");
+  await click("Cancel");
+  await click("Show earlier values");
+  await React.act(async () => {
+    currentShell.navigate({
+      room: "memory-detail",
+      selection: { factId: "fixture-memory-0" },
+    });
+    await wait();
+  });
+  expect(currentShell.route.selection.factId).toBe("fixture-memory-0");
+  expect(fixture.controller.snapshot().factId).toBe("fixture-memory-0");
+  expect(fixture.writes()).toBe(1);
+});
+test("a correction completed while unmounted updates its old route on remount", async () => {
+  await render();
+  await open();
+  await click("Edit memory");
+  await fill("Correct value", "Keep emails concise.");
+  await fill("Reason or source", "Owner correction");
+  const route = currentShell.route;
+  await React.act(async () => {
+    root.render(null);
+  });
+  await fixture.controller.save();
+  const replacement = fixture.controller.snapshot().factId!;
+  await React.act(async () => {
+    root.render(<Harness route={route} />);
+    await wait();
+  });
+  expect(currentShell.route.selection.factId).toBe(replacement);
+  expect(fixture.controller.snapshot().factId).toBe(replacement);
+  expect(host.querySelector(".brief-memory-detail-sentence")?.textContent).toBe(
+    "Keep emails concise.",
+  );
+});
+test("a late correction cannot navigate away from a different selected fact", async () => {
+  await render();
+  await open();
+  const decide = fixture.port.decide;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  fixture.port.decide = async (...args) => {
+    await blocked;
+    return decide(...args);
+  };
+  await click("Edit memory");
+  await fill("Correct value", "Keep emails concise.");
+  await fill("Reason or source", "Owner correction");
+  await submit();
+  await React.act(async () => {
+    currentShell.navigate({
+      room: "memory-detail",
+      selection: { factId: "fixture-memory-1" },
+    });
+    await wait();
+  });
+  await React.act(async () => {
+    release();
+    await wait();
+  });
+  expect(currentShell.route.selection.factId).toBe("fixture-memory-1");
+  expect(fixture.controller.snapshot().factId).toBe("fixture-memory-1");
+});
+test("canceling an editor during a history request makes the history button retryable", async () => {
+  await render();
+  await open();
+  const history = fixture.port.history;
+  let release!: () => void;
+  const blocked = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  fixture.port.history = async (...args) => {
+    await blocked;
+    return history(...args);
+  };
+  await click("Edit memory");
+  await click("Show earlier values");
+  expect(button("Show earlier values").disabled).toBe(true);
+  await click("Cancel");
+  expect(button("Show earlier values").disabled).toBe(false);
+  await React.act(async () => {
+    release();
+    await wait();
+  });
+  expect(button("Show earlier values").disabled).toBe(false);
+  await click("Show earlier values");
+  expect(fixture.controller.snapshot().history.state).toBe("ready");
 });
 test("Forget is a local confirmation, cancel is harmless, and deletion returns to nearest filtered neighbor", async () => {
   await render();

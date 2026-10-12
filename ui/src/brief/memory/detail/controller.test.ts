@@ -1,6 +1,7 @@
 import { test, expect } from "bun:test";
 import { MemoryDetailController } from "./controller";
 import { makeMemoryDetailFixture } from "./fixtures";
+import { memoryDetailHttpPort } from "./http";
 import type { DetailRead, HistoryRead } from "./model";
 const id = "fixture-memory-0";
 async function setup(
@@ -89,6 +90,65 @@ test("history access loss clears visible content, drafts and cached stream rows"
   expect(f.controller.dirty).toBe(true);
   expect(f.stream.snapshot().read.state).toBe("loading");
 });
+for (const status of [401, 403, 503]) {
+  for (const stage of ["detail", "prepare", "recheck"] as const) {
+    test(`${status} during ${stage} purges detail and the cached stream`, async () => {
+      const f = await setup();
+      await f.stream.refresh();
+      await f.controller.loadHistory();
+      f.controller.begin("correct");
+      f.controller.setDraft({
+        object: "private draft",
+        reason: "private source",
+      });
+      const denied = memoryDetailHttpPort(
+        "scope",
+        Object.assign(async () => Response.json({}, { status }), {
+          preconnect: fetch.preconnect,
+        }),
+      );
+      if (stage === "prepare") f.port.prepareForget = denied.prepareForget;
+      else f.port.read = denied.read;
+      if (stage === "detail") await f.controller.open(id);
+      else await f.controller.beginForget();
+      const state = f.controller.snapshot();
+      expect(state.read.state).toBe("unavailable");
+      expect(state.history.state).toBe("idle");
+      expect(state.object).toBe("");
+      expect(state.reason).toBe("");
+      expect(state.panel).toBeNull();
+      expect(state.prepared).toBeNull();
+      expect(f.controller.dirty).toBe(true);
+      expect(f.stream.snapshot().read.state).toBe("loading");
+      f.controller.close();
+      expect(f.stream.snapshot().read.state).toBe("loading");
+      expect(f.writes()).toBe(0);
+    });
+  }
+}
+for (const action of ["cancel", "forget", "rejected-save"] as const) {
+  test(`${action} resets canceled history so it can be retried`, async () => {
+    const f = await setup("save-error");
+    const slow = deferred<HistoryRead>();
+    const history = f.port.history;
+    f.port.history = () => slow.promise;
+    f.controller.begin("correct");
+    f.controller.setDraft({ object: "New value", reason: "Checked" });
+    const pending = f.controller.loadHistory();
+    if (action === "cancel") f.controller.cancelPanel();
+    else if (action === "forget") await f.controller.beginForget();
+    else await f.controller.save();
+    expect(f.controller.snapshot().history.state).toBe("idle");
+    slow.resolve({ state: "ready", items: [f.facts.get(id)!.item] });
+    await pending;
+    expect(f.controller.snapshot().history.state).toBe("idle");
+    f.port.history = history;
+    await f.controller.loadHistory();
+    expect(f.controller.snapshot().history.state).toBe("ready");
+    f.controller.cancelPanel();
+    expect(f.controller.snapshot().history.state).toBe("ready");
+  });
+}
 test("cancel preserves fact, evidence and filters without a write", async () => {
   const f = await setup();
   const before = structuredClone(f.facts.get(id));
