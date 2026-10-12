@@ -12,7 +12,10 @@ export function browserActionFailure(message: string, effect: ActionFailure['eff
   return message;
 }
 
-export function browserActionError(error: unknown): string {
+export function browserActionError(error: unknown, formatMessage: (message: string) => string = message => message): string {
   if (error instanceof ActionOutcomeError || error instanceof WorkflowCancellationError) throw error;
-  return browserActionFailure(`Error: ${error instanceof Error ? error.message : String(error)}`, 'may_have_occurred');
+  // Bound page-controlled messages before browserActionFailure can throw them.
+  // Existing typed outcomes and cancellation must keep their original verdict.
+  const message = formatMessage(`Error: ${error instanceof Error ? error.message : String(error)}`);
+  return browserActionFailure(message, 'may_have_occurred');
 }

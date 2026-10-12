@@ -74,3 +74,12 @@ Command: NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cach
  0 fail
  473 expect() calls
 Ran 113 tests across 6 files. [22.52s]
+
+PR review correction (reviewed dd016dfc):
+P2: browser_evaluate called the throwing typed-failure helper before its 20 KB cap.
+The message formatter now runs before conversion; existing typed verdicts retain identity.
+New regression tests failed before the fix (3 fail, 2 pass), then passed after it.
+Command: NODE_ENV=test JARVIS_TEST_ENGINE_CACHE_ROOT=/tmp/jarvis-q09-engine-cache bun test src/authority/approved-browser-error-bound.test.ts src/actions/action-verification.test.ts src/authority/ui-verification.test.ts src/workflows/runtime/ui-verification.test.ts src/actions/tools/browser-approval-guard.test.ts src/actions/tools/remote-snapshot-binding.test.ts
+70 passed, 0 failed, 238 assertions, 6 files, 2.74s.
+Tests cover oversized Error/string throws through DeferredExecutor, live callback and stored receipt bounds, uncertainty, ordinary text compatibility, original cancellation/refusal types, and no second dispatch.
+Current correction head CI is recorded in PR #942 after publication; this receipt does not claim that the new head has passed CI before it runs.

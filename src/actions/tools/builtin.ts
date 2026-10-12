@@ -1823,7 +1823,7 @@ export const browserEvaluateTool: ToolDefinition = {
       const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
       return truncateMarked(text, MAX_PAGE_CONTROLLED_REPLY);
     } catch (err) {
-      return truncateMarked(browserActionError(err), MAX_PAGE_CONTROLLED_REPLY);
+      return browserActionError(err, message => truncateMarked(message, MAX_PAGE_CONTROLLED_REPLY));
     }
   },
 };

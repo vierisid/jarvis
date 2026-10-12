@@ -10,7 +10,7 @@
     "ref": "commit containing this receipt",
     "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-09.json",
     "core_implementation_sha": "d24d6cd4963432fbc682551a701c5648588706ab",
-    "implementation_resolve": "git log -1 --format=%H -- src/actions/tools/desktop.ts"
+    "implementation_resolve": "git log -1 --format=%H -- src/actions"
   },
   "status": {
     "implementation": "verified locally",
@@ -145,5 +145,12 @@
     "previous_head": "da0cd3a2c99881e3f0cf23956d6c9248c1f533b5",
     "run": "https://github.com/vierisid/jarvis/actions/runs/38303394520",
     "result": "8733 passed, 32 skipped, 3 failed; all platform/build jobs passed. Guard metadata narrowed to reviewed desktop writes and the inline launch fixture now supplies its connection session. The failing cases and affected machine/approval checks pass locally; current receipt head requires a new full CI run."
+  },
+  "review_correction": {
+    "reviewed_head": "dd016dfcbdfdd1be385dfa0daf50353dc9e313f2",
+    "finding": "P2: approved browser_evaluate exceptions bypassed the page-controlled message cap when the typed failure helper threw before truncation.",
+    "fix": "Format and truncate ordinary error messages before converting them to typed failures. Preserve existing ActionOutcomeError and WorkflowCancellationError instances.",
+    "regression": "Before the fix: 3 failures and 2 passes in the new approval regression file. After the fix: 70 passed, zero failed, 238 assertions across six focused files, including 2.1 MB Error/string failures through the real DeferredExecutor, bounded live/stored receipts, uncertainty, ordinary reply compatibility and no duplicate dispatch.",
+    "previous_ci": "Full CI passed on reviewed head dd016dfc (8736 pass, 32 skip, 0 fail). The correction commit requires a fresh CI run; see PR #942 for its final result."
   }
 }
