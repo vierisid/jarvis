@@ -26,7 +26,7 @@ export function createAuthorityPort(
     if (!host) return { state: "unsupported" };
     if (signal.aborted) return { state: "error" };
     try {
-      const response = await host.request("/api/authority/config", {
+      const response = await host.request("/api/authority/status", {
         method: "GET",
         cache: "no-store",
         signal,
@@ -36,7 +36,20 @@ export function createAuthorityPort(
       if (response.status === 404 || response.status === 501)
         return { state: "unsupported" };
       if (!response.ok || signal.aborted) return { state: "error" };
-      const data = readSettings(await response.json());
+      const status = await response.json();
+      if (status?.enabled === false) return { state: "unavailable" };
+      if (
+        status?.enabled !== true ||
+        !status.config ||
+        typeof status.config !== "object"
+      )
+        return { state: "error" };
+      // The engine config contains a startup copy. Only EmergencyController's
+      // top-level status reflects subsequent pause/resume/kill/reset operations.
+      const data = readSettings({
+        ...status.config,
+        emergency_state: status.emergency_state,
+      });
       return data && !signal.aborted
         ? { state: "ready", data }
         : { state: "error" };
@@ -53,7 +66,7 @@ export function createAuthorityPort(
       "emergency-controls": false,
     },
     read,
-    async save(base, draft, signal) {
+    async save(base, draft, signal, retryFields = []) {
       if (!host) return { state: "unsupported" };
       if (!host.canWrite || signal.aborted) return { state: "unavailable" };
       if (
@@ -61,7 +74,7 @@ export function createAuthorityPort(
         !readSettings({ ...draft, emergency_state: "normal" })
       )
         return { state: "unknown" };
-      const patch = changedValues(base, draft);
+      const patch = changedValues(base, draft, retryFields);
       const fresh = await read(signal);
       if (fresh.state !== "ready")
         return { state: fresh.state === "error" ? "unknown" : fresh.state };

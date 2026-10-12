@@ -7,6 +7,7 @@ export const AUTHORITY_EXAMPLES = [
   "ready",
   "read-only",
   "save-failure",
+  "persistence-failure",
   "lost-response",
   "conflict",
   "paused",
@@ -23,20 +24,22 @@ export function makeAuthorityFixture(
   let config: AuthoritySettings = {
     default_level: 3,
     governed_categories: ["send_message", "send_email", "make_payment"],
-    emergency_state:
-      example === "paused"
-        ? "paused"
-        : example === "killed"
-          ? "killed"
-          : "normal",
+    emergency_state: "normal",
   };
+  let emergencyState: AuthoritySettings["emergency_state"] =
+    example === "paused"
+      ? "paused"
+      : example === "killed"
+        ? "killed"
+        : "normal";
   let readError = false;
+  let writesRecovered = false;
   const writes: unknown[] = [],
     navigations: AuthorityDestination[] = [];
   const host: AuthorityHost = {
     canWrite: example !== "read-only",
     destinations: { "advanced-authority": true, "emergency-controls": true },
-    async request(_path, init) {
+    async request(path, init) {
       await new Promise((r) => setTimeout(r, delay));
       if (init.signal?.aborted) throw Error("Canceled");
       if (example === "unavailable") return new Response(null, { status: 403 });
@@ -45,13 +48,20 @@ export function makeAuthorityFixture(
         return new Response(null, { status: 503 });
       if (init.method === "POST") {
         writes.push(JSON.parse(String(init.body)));
-        if (example === "save-failure")
+        if (!writesRecovered && example === "save-failure")
           return new Response(null, { status: 500 });
         config = { ...config, ...JSON.parse(String(init.body)) };
-        if (example === "lost-response") throw Error("Lost acknowledgment");
+        if (!writesRecovered && example === "persistence-failure")
+          return new Response(null, { status: 400 });
+        if (!writesRecovered && example === "lost-response")
+          throw Error("Lost acknowledgment");
         return Response.json({ ok: true, config });
       }
-      return Response.json(config);
+      return Response.json(
+        path === "/api/authority/status"
+          ? { enabled: true, config, emergency_state: emergencyState }
+          : config,
+      );
     },
     async navigate(destination, signal) {
       await new Promise((r) => setTimeout(r, delay));
@@ -83,6 +93,12 @@ export function makeAuthorityFixture(
     },
     failReads: (value: boolean) => {
       readError = value;
+    },
+    recoverWrites: () => {
+      writesRecovered = true;
+    },
+    changeEmergency: (value: AuthoritySettings["emergency_state"]) => {
+      emergencyState = value;
     },
   };
 }

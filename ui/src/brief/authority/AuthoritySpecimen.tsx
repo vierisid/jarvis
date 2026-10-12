@@ -85,6 +85,23 @@ export function AuthoritySpecimen() {
         <button onClick={() => setMount((value) => value + 1)}>
           Remount room
         </button>
+        <button onClick={() => fixture.recoverWrites()}>Restore saves</button>
+        <button
+          onClick={() => {
+            fixture.changeEmergency("paused");
+            void fixture.controller.refresh();
+          }}
+        >
+          Simulate runtime pause
+        </button>
+        <button
+          onClick={() => {
+            fixture.changeEmergency("normal");
+            void fixture.controller.refresh();
+          }}
+        >
+          Simulate runtime resume
+        </button>
         <small>
           Isolated settings only. Saves and advanced navigation are simulated.
         </small>

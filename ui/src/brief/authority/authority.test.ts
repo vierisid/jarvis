@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { AuthorityEngine } from "../../../../src/authority/engine";
+import { EmergencyController } from "../../../../src/authority/emergency";
 import { createAuthorityPort } from "./adapter";
 import { AuthorityController } from "./controller";
 import {
@@ -29,6 +30,75 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
+test("review regression: emergency status follows the live controller, not the engine startup copy", async () => {
+  const f = makeAuthorityFixture(),
+    emergency = new EmergencyController();
+  const engine = new AuthorityEngine({
+    ...f.current(),
+    governed_categories: ["send_email"],
+    overrides: [],
+    context_rules: [],
+    learning: { enabled: false, suggest_threshold: 3 },
+  });
+  const paths: string[] = [];
+  f.host.request = async (path) => {
+    paths.push(path);
+    return Response.json(
+      path === "/api/authority/status"
+        ? {
+            enabled: true,
+            config: engine.getConfig(),
+            emergency_state: emergency.getState(),
+          }
+        : engine.getConfig(),
+    );
+  };
+  for (const change of [
+    () => emergency.pause(),
+    () => emergency.resume(),
+    () => emergency.kill(),
+    () => emergency.reset(),
+  ]) {
+    change();
+    const result = await f.port.read(signal());
+    expect(result.state).toBe("ready");
+    if (result.state === "ready")
+      expect(result.data.emergency_state).toBe(emergency.getState());
+  }
+  expect(paths).toEqual(Array(4).fill("/api/authority/status"));
+  expect(engine.getConfig().emergency_state).toBe("normal");
+  f.controller.retire();
+});
+test("review regression: explicitly retry the same level after an in-memory apply and persistence failure", async () => {
+  const f = await fixture(),
+    c = f.controller,
+    request = f.host.request;
+  let persisted = 3,
+    fail = true;
+  f.host.request = async (...args) => {
+    const response = await request(...args);
+    if (args[1].method === "POST") {
+      if (fail) return new Response(null, { status: 400 });
+      persisted = f.current().default_level;
+    }
+    return response;
+  };
+  c.setLevel(1);
+  await c.save();
+  expect(c.snapshot().phase).toBe("unknown");
+  expect(f.current().default_level).toBe(1);
+  expect(persisted).toBe(3);
+  await c.refresh(true);
+  expect(c.snapshot().phase).toBe("dirty");
+  expect(c.snapshot().draft?.default_level).toBe(1);
+  expect(f.writes).toHaveLength(1);
+  fail = false;
+  await c.save();
+  expect(f.writes).toEqual([{ default_level: 1 }, { default_level: 1 }]);
+  expect(persisted).toBe(1);
+  expect(c.snapshot().phase).toBe("saved");
+  c.retire();
+});
 test("missing host is unsupported and cannot fabricate default settings", async () => {
   const p = createAuthorityPort("scope");
   expect(await p.read(signal())).toEqual({ state: "unsupported" });
@@ -174,7 +244,11 @@ test("unrelated changes are preserved by a partial save and appear in its canoni
   expect(f.writes).toEqual([{ default_level: 6 }]);
   c.retire();
 });
-for (const example of ["save-failure", "lost-response"] as const)
+for (const example of [
+  "save-failure",
+  "persistence-failure",
+  "lost-response",
+] as const)
   test(`${example} never appears saved and cannot silently retry`, async () => {
     const f = await fixture(example),
       c = f.controller;
@@ -185,12 +259,22 @@ for (const example of ["save-failure", "lost-response"] as const)
     expect(f.writes).toHaveLength(1);
     expect(c.snapshot().draft?.default_level).toBe(8);
     expect(c.snapshot().saved?.default_level).toBe(3);
+    await c.refresh();
+    expect(c.snapshot().phase).toBe("unknown");
+    expect(f.writes).toHaveLength(1);
     await c.refresh(true);
-    expect(c.snapshot().phase).toBe("clean");
+    expect(c.snapshot().phase).toBe("dirty");
     expect(c.snapshot().message).toContain("previous save was not confirmed");
-    expect(c.snapshot().draft?.default_level).toBe(
-      example === "lost-response" ? 8 : 3,
-    );
+    expect(c.snapshot().draft?.default_level).toBe(8);
+    expect(c.snapshot().retryFields).toEqual(["default_level"]);
+    await c.refresh();
+    expect(c.snapshot().phase).toBe("dirty");
+    expect(f.writes).toHaveLength(1);
+    f.recoverWrites();
+    await c.save();
+    expect(f.writes).toEqual([{ default_level: 8 }, { default_level: 8 }]);
+    expect(c.snapshot().phase).toBe("saved");
+    expect(c.snapshot().retryFields).toEqual([]);
     c.retire();
   });
 test("positive acknowledgment alone is insufficient; duplicate save waits for fresh readback", async () => {
@@ -211,7 +295,13 @@ test("positive acknowledgment alone is insufficient; duplicate save waits for fr
   await c.save();
   expect(c.snapshot().phase).toBe("saving");
   expect(f.writes).toHaveLength(1);
-  held.resolve(Response.json(f.current()));
+  held.resolve(
+    Response.json({
+      enabled: true,
+      config: f.current(),
+      emergency_state: "normal",
+    }),
+  );
   await save;
   expect(c.snapshot().phase).toBe("saved");
   c.retire();
@@ -271,7 +361,13 @@ test("retiring during the preflight prevents the write and drops late data", asy
   c.setLevel(10);
   const save = c.save();
   c.retire();
-  held.resolve(Response.json(f.current()));
+  held.resolve(
+    Response.json({
+      enabled: true,
+      config: f.current(),
+      emergency_state: "normal",
+    }),
+  );
   await save;
   expect(f.writes).toHaveLength(0);
   expect(c.snapshot().saved).toBeNull();
@@ -309,5 +405,147 @@ test("a forged port confirmation cannot mark another level saved", async () => {
   c.setLevel(9);
   await c.save();
   expect(c.snapshot().phase).toBe("unknown");
+  c.retire();
+});
+test("malformed or disabled live status never falls back to the config emergency copy", async () => {
+  const f = makeAuthorityFixture();
+  for (const status of [
+    null,
+    { enabled: true },
+    { config: f.current() },
+    { enabled: true, config: f.current() },
+    { enabled: true, config: f.current(), emergency_state: "invalid" },
+  ]) {
+    f.host.request = async () => Response.json(status);
+    expect(await f.port.read(signal())).toEqual({ state: "error" });
+  }
+  f.host.request = async () => Response.json({ enabled: false });
+  expect(await f.port.read(signal())).toEqual({ state: "unavailable" });
+  f.controller.retire();
+});
+test("emergency polling preserves a dirty or uncertain policy baseline and never retries", async () => {
+  const f = await fixture("lost-response"),
+    c = f.controller;
+  c.setLevel(6);
+  f.changeEmergency("paused");
+  await c.refresh();
+  expect(c.snapshot().saved?.emergency_state).toBe("paused");
+  expect(c.snapshot().phase).toBe("dirty");
+  expect(c.snapshot().draft?.default_level).toBe(6);
+  expect(c.snapshot().saved?.default_level).toBe(3);
+  await c.save();
+  expect(c.snapshot().phase).toBe("unknown");
+  f.changeEmergency("killed");
+  await c.refresh();
+  expect(c.snapshot().saved?.emergency_state).toBe("killed");
+  expect(c.snapshot().phase).toBe("unknown");
+  expect(c.snapshot().saved?.default_level).toBe(3);
+  expect(c.snapshot().draft?.default_level).toBe(6);
+  expect(f.writes).toHaveLength(1);
+  c.retire();
+});
+test("a category retry persists its original fields while preserving an unrelated external level", async () => {
+  const f = await fixture("persistence-failure"),
+    c = f.controller;
+  c.toggle("send_email", false);
+  await c.save();
+  f.change({ default_level: 9 });
+  await c.refresh(true);
+  expect(c.snapshot().saved?.default_level).toBe(9);
+  expect(c.snapshot().draft?.default_level).toBe(9);
+  const categories = f.current().governed_categories;
+  expect(categories).not.toContain("send_email");
+  c.setLevel(9);
+  expect(c.snapshot().phase).toBe("dirty");
+  f.recoverWrites();
+  await c.save();
+  expect(f.writes).toEqual([
+    { governed_categories: categories },
+    { governed_categories: categories },
+  ]);
+  expect(c.snapshot().phase).toBe("saved");
+  c.retire();
+});
+test("retry can include a new intentional edit and still verifies the previously attempted field", async () => {
+  const f = await fixture("lost-response"),
+    c = f.controller;
+  c.setLevel(1);
+  await c.save();
+  await c.refresh(true);
+  c.toggle("send_email", false);
+  f.recoverWrites();
+  await c.save();
+  expect(f.writes.at(-1)).toEqual({
+    default_level: 1,
+    governed_categories: ["send_message", "make_payment"],
+  });
+  expect(c.snapshot().phase).toBe("saved");
+  c.retire();
+});
+test("discarding a pending retry clears intent without claiming persistence or sending another write", async () => {
+  const f = await fixture("persistence-failure"),
+    c = f.controller;
+  c.setLevel(1);
+  await c.save();
+  await c.refresh(true);
+  await c.refresh(true);
+  expect(c.snapshot().phase).toBe("clean");
+  expect(c.snapshot().retryFields).toEqual([]);
+  expect(c.snapshot().draft?.default_level).toBe(1);
+  expect(c.snapshot().message).toContain("previous save was not confirmed");
+  await c.save();
+  expect(f.writes).toHaveLength(1);
+  c.retire();
+});
+test("retry still detects a conflict that occurs after reloading the uncertain write", async () => {
+  const f = await fixture("persistence-failure"),
+    c = f.controller;
+  c.setLevel(1);
+  await c.save();
+  await c.refresh(true);
+  f.change({ default_level: 7 });
+  f.recoverWrites();
+  await c.save();
+  expect(c.snapshot().phase).toBe("conflict");
+  expect(f.writes).toHaveLength(1);
+  await c.refresh(true);
+  expect(c.snapshot().draft?.default_level).toBe(7);
+  expect(c.snapshot().retryFields).toEqual([]);
+  c.retire();
+});
+test("failed retry reload retains intent, and scope loss purges it", async () => {
+  const f = await fixture("persistence-failure"),
+    c = f.controller;
+  c.setLevel(1);
+  await c.save();
+  f.failReads(true);
+  await c.refresh(true);
+  expect(c.snapshot().availability).toBe("stale");
+  expect(c.snapshot().phase).toBe("unknown");
+  expect(c.snapshot().retryFields).toEqual(["default_level"]);
+  expect(c.editable()).toBe(false);
+  f.failReads(false);
+  await c.refresh(true);
+  expect(c.snapshot().phase).toBe("dirty");
+  c.setAccess(false);
+  expect(c.snapshot().retryFields).toEqual([]);
+  expect(c.snapshot().draft).toBeNull();
+  await c.save();
+  expect(f.writes).toHaveLength(1);
+  c.retire();
+});
+test("a retry cannot report Saved from a forged confirmation when its base and draft already match", async () => {
+  const f = await fixture("persistence-failure"),
+    c = f.controller;
+  c.setLevel(1);
+  await c.save();
+  await c.refresh(true);
+  f.port.save = async () => ({
+    state: "confirmed",
+    data: { ...f.current(), default_level: 3 },
+  });
+  await c.save();
+  expect(c.snapshot().phase).toBe("unknown");
+  expect(c.snapshot().retryFields).toEqual(["default_level"]);
   c.retire();
 });

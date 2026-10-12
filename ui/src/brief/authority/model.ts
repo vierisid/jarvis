@@ -24,6 +24,7 @@ export interface AuthorityValues {
   // Preserve additive categories from newer servers, even though this view only edits the known thirteen.
   governed_categories: string[];
 }
+export type AuthorityField = keyof AuthorityValues;
 export interface AuthoritySettings extends AuthorityValues {
   emergency_state: "normal" | "paused" | "killed";
 }
@@ -45,6 +46,8 @@ export interface AuthorityPort {
     base: AuthorityValues,
     draft: AuthorityValues,
     signal: AbortSignal,
+    /** Explicit retry after an unconfirmed write; persist these fields even if already applied in memory. */
+    retryFields?: readonly AuthorityField[],
   ): Promise<SaveResult>;
   navigate(
     destination: AuthorityDestination,
@@ -81,12 +84,15 @@ export const sameValues = (a: AuthorityValues, b: AuthorityValues) =>
 export function changedValues(
   base: AuthorityValues,
   draft: AuthorityValues,
+  retryFields: readonly AuthorityField[] = [],
 ): Partial<AuthorityValues> {
   return {
-    ...(base.default_level !== draft.default_level
+    ...(retryFields.includes("default_level") ||
+    base.default_level !== draft.default_level
       ? { default_level: draft.default_level }
       : {}),
-    ...(!sameCategories(base.governed_categories, draft.governed_categories)
+    ...(retryFields.includes("governed_categories") ||
+    !sameCategories(base.governed_categories, draft.governed_categories)
       ? { governed_categories: [...draft.governed_categories] }
       : {}),
   };
