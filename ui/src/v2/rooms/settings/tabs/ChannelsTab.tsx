@@ -8,18 +8,7 @@ import type {
 import { allowedFieldText, parseDiscordIds, parseTelegramIds } from "./channel-ids";
 import { recipientNotice } from "./channel-recipient";
 
-// OpenAI-style voices the hosted Usejarvis TTS accepts (see createTTSProvider:
-// Edge neural names are rejected there, so this list is the whole picker).
-const UJ_VOICES = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"];
-
-const EDGE_VOICES = [
-  { id: "en-US-AriaNeural", label: "Aria (US Female)" },
-  { id: "en-US-GuyNeural", label: "Guy (US Male)" },
-  { id: "en-GB-SoniaNeural", label: "Sonia (UK Female)" },
-  { id: "en-AU-NatashaNeural", label: "Natasha (AU Female)" },
-  { id: "en-US-JennyNeural", label: "Jenny (US Female)" },
-  { id: "en-US-DavisNeural", label: "Davis (US Male)" },
-];
+import { UJ_VOICES, EDGE_VOICES } from "../../../../../../src/comms/voice-options";
 
 const EDGE_RATES = [
   { id: "-20%", label: "Slow" },

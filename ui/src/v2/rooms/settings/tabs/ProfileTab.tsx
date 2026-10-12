@@ -14,6 +14,7 @@ export function ProfileTab({
   const [editing, setEditing] = useState(false);
   const [stepIndex, setStepIndex] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string>>({});
+  const [draftRevision, setDraftRevision] = useState<string | undefined>();
   const [saving, setSaving] = useState(false);
 
   // Seed the local draft from the server profile, but NOT while the user is
@@ -26,6 +27,7 @@ export function ProfileTab({
     if (!profile) return;
     if (editing) return;
     setAnswers(profile.profile?.answers ?? {});
+    setDraftRevision(profile.revision);
   }, [profile, editing]);
 
   const steps = useMemo(() => {
@@ -55,7 +57,7 @@ export function ProfileTab({
 
   const handleSave = async () => {
     setSaving(true);
-    const r = await data.saveProfile(answers);
+    const r = await data.saveProfile(answers, draftRevision);
     onToast(r.message, r.ok ? "ok" : "warn");
     if (r.ok) setEditing(false);
     setSaving(false);
@@ -92,6 +94,7 @@ export function ProfileTab({
               type="button"
               className="v2-set__btn v2-set__btn--primary"
               onClick={() => {
+                if (editing || saving) return;
                 setEditing(true);
                 setStepIndex(0);
               }}
@@ -157,6 +160,7 @@ export function ProfileTab({
                 {q.multiline ? (
                   <textarea
                     className="v2-set__textarea"
+                    disabled={saving}
                     value={answers[q.id] ?? ""}
                     onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
                     placeholder={q.placeholder}
@@ -164,6 +168,7 @@ export function ProfileTab({
                 ) : (
                   <input
                     className="v2-set__input"
+                    disabled={saving}
                     value={answers[q.id] ?? ""}
                     onChange={(e) => setAnswers((p) => ({ ...p, [q.id]: e.target.value }))}
                     placeholder={q.placeholder}
