@@ -1,0 +1,68 @@
+{
+  "task": "F-27",
+  "date": "2026-10-13",
+  "repository": "vierisid/jarvis",
+  "base_branch": "brief/f-26",
+  "baseline": "70833765929908112de6ccf3b5c4739b00e892ef",
+  "main_rechecked": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+  "head": { "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-27.json", "reason": "Avoids a self-referential commit hash." },
+  "scope": "Optional Brief subscription and snapshot reconciliation only",
+  "merge_after": ["F-01"],
+  "enable_after": [],
+  "activation": {
+    "capability": "reconciliation", "default_enabled": false, "registered_in_daemon": false,
+    "host_readiness": ["snapshots", "sharedSocket", "identityLifecycle"],
+    "composition_owner": ["D-33", "F-28"], "code_merged": false, "release_enabled": false,
+    "production_readiness": "not_run"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa", "page": "81:2", "node": "81:3",
+    "native_inspection": "passed", "note": "Native Today canvas inspected after reload; no visible product layout changes."
+  },
+  "runtime": {
+    "bun": "1.3.14", "dependencies": "separate frozen installation; lockfile unchanged",
+    "fixture_port": 4427, "real_external_effects": false,
+    "poll_ms": 30000, "read_timeout_ms": 10000, "max_loaded_pages": 10
+  },
+  "checks": {
+    "focused": {
+      "command": "bun test ui/src/brief ui/src/hooks/useWebSocket.test.ts ui/src/hooks/useWebSocket.realtime-status.test.ts src/brief/capabilities.test.ts src/brief/decisions.test.ts src/brief/memory-stream.test.ts src/brief/workflow-context.test.ts src/brief/workflow-removal.test.ts",
+      "passed": 332, "failed": 0, "assertions": 2624, "files": 26
+    },
+    "typecheck": "passed: bunx tsc --noEmit",
+    "build_ui": "passed: bun run build:ui; pre-existing Tailwind directive warnings",
+    "review": { "status": "passed", "findings_fixed": 3, "final_review": "No findings", "independent_delegated_review": false },
+    "review_audio_followup": {
+      "command": "bun test ui/src/brief/reconciliation ui/src/brief/chat/provider.test.tsx ui/src/hooks/useWebSocket.test.ts ui/src/hooks/useWebSocket.realtime-status.test.ts src/brief/chat-transport.test.ts",
+      "red": "Both new regression tests failed before the correction",
+      "passed": 95, "failed": 0, "assertions": 292, "files": 7,
+      "typecheck": "passed: bunx tsc --noEmit"
+    },
+    "full_ci": { "source": "GitHub checks for the pushed PR head", "status": "reported after push in PR/handoff" }
+  },
+  "manual": [
+    "Dropped updates recover through canonical snapshots after reconnect",
+    "Duplicate and reordered sequence 1,4,4,2,3 does not duplicate approvals",
+    "Draft and selected flow/version/run remain unchanged",
+    "Selected run status refreshes to paused",
+    "Unavailable memory is stale with unknown count; recovered empty memory has server count zero"
+  ],
+  "evidence": [
+    "docs/brief-delivery/evidence/F-27/focused.log", "docs/brief-delivery/evidence/F-27/build.log",
+    "docs/brief-delivery/evidence/F-27/typecheck.log", "docs/brief-delivery/evidence/F-27/review.json",
+    "docs/brief-delivery/evidence/F-27/browser.json", "docs/brief-delivery/evidence/F-27/recovered.png",
+    "docs/brief-delivery/evidence/F-27/memory-unavailable.png", "docs/brief-delivery/evidence/F-27/memory-empty.png",
+    "docs/brief-delivery/evidence/F-27/review-audio-red.log", "docs/brief-delivery/evidence/F-27/review-audio-green.log",
+    "docs/brief-delivery/evidence/F-27/review-audio-typescript.log"
+  ],
+  "limitations": [
+    "Default-off optional host; no production or D-stack assembly/activation",
+    "No exactly-once delivery, immediate cross-client forgetting or cross-domain atomic snapshot guarantee",
+    "Polling repairs final dropped events and missing producers after successful reads; background tabs may throttle timers",
+    "Pagination is bounded and unknown totals remain null; legacy goals have a 100-row cap; opportunities retain their existing offset-cursor semantics",
+    "No paid models, real external effects, sidecar or hosted deployment checks",
+    "Behavior fixture is not visual/accessibility certification of assembled Brief rooms"
+  ],
+  "rollback": "Disable/unregister reconciliation or omit the host client; stop it to retire reads and clear its identity-local cache. Retain all canonical histories, drafts and compatibility readers.",
+  "next_card": "F-28 not started"
+}

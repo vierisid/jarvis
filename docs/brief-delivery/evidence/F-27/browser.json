@@ -1,0 +1,15 @@
+{
+  "task": "F-27", "date": "2026-10-13", "browser": "Chrome via cua_repl",
+  "fixture": "http://127.0.0.1:4427/", "data": "Synthetic in-memory fixture only",
+  "checks": [
+    { "action": "Edit draft then drop all canonical-update events", "observed": "Old snapshots remain until a reconciliation trigger; unfinished draft retained" },
+    { "action": "Close shared socket and automatically reconnect", "observed": "Two canonical approvals, selected run A paused, memory empty with exact count zero; draft unchanged" },
+    { "action": "Deliver goal sequence 1,4,4,2,3", "observed": "No duplicate approval and no run selection change" },
+    { "action": "Return memory unavailable", "observed": "Memory stale, cached content absent, count unavailable rather than zero" },
+    { "action": "Recover memory", "observed": "Memory empty with count zero, forgotten fact absent, draft retained" }
+  ],
+  "application_console_errors": [],
+  "unrelated_console_notes": ["Grammarly extension emitted its own warning/error"],
+  "native_figma": "Today node 81:3 loaded and visually inspected after native reload",
+  "visual_parity_claim": false
+}
