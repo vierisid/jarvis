@@ -11,6 +11,15 @@
  */
 
 import type { LLMTool } from '../llm/provider.ts';
+import { ROOM_TABS, type TabbedRoom } from './room-tabs.ts';
+
+/**
+ * A room's switch_tab entry, built from ROOM_TABS so the model is only offered
+ * tabs the room's handler accepts, and only rooms that have one (#965). The
+ * hand-typed list offered Workflows tabs that do not exist and left real
+ * Settings and Agents tabs out.
+ */
+const switchTab = (room: TabbedRoom): string => `switch_tab{tab: ${ROOM_TABS[room].join('|')}}`;
 
 /** Room keys that map 1:1 to RoomKey in src/voice/intent.ts. */
 export const REALTIME_ROOM_KEYS = [
@@ -29,13 +38,17 @@ export const REALTIME_NAV_TOOL_NAMES = new Set([
 // "matches ..." examples from the classifier are omitted to keep token cost
 // low; the GPT-5-class model infers usage from names + args).
 const ROOM_ACTION_REFERENCE = `Available actions by room (pass via dashboard_room_action):
-- settings: switch_tab{tab: general|profile|llm|channels|integrations|sidecar}, set_primary_llm{provider}, set_fallback_llm{fallback}, set_model{provider,model}, test_provider{provider}, enable_telegram, disable_telegram, enable_discord, disable_discord, set_stt_provider{provider}, enable_tts, disable_tts, set_tts_provider{provider}, set_tts_voice{voice}, set_heartbeat_interval{minutes}, set_heartbeat_aggressiveness{level: passive|moderate|aggressive}, restart_daemon, replay_onboarding{scope?: all|setup|profile|tutorial}. (Do NOT set API keys by voice.)
+- settings: ${switchTab('settings')}, set_primary_llm{provider}, set_fallback_llm{fallback}, set_model{provider,model}, test_provider{provider}, enable_telegram, disable_telegram, enable_discord, disable_discord, set_stt_provider{provider}, enable_tts, disable_tts, set_tts_provider{provider}, set_tts_voice{voice}, set_heartbeat_interval{minutes}, set_heartbeat_aggressiveness{level: passive|moderate|aggressive}, restart_daemon, replay_onboarding{scope?: all|setup|profile|tutorial}. (Do NOT set API keys by voice.)
 - tools: set_filter{filter: all|read|write|external|destructive}, search{query}, select{name}
-- workflows: switch_tab{tab: list|editor|builder}, search{query}, set_filter{filter: all|active|paused}, select{name}, run{name?}, pause{name?}, enable{name?}, create_from_nl{prompt}
-- agents: switch_tab{tab: command|orbital}, open_spawn_dialog, close_dialog, set_search{query}, spawn_agent{specialist,task?,context?}
+- workflows: search{query}, set_filter{filter: all|active|paused}, select{name}, run{name?}, pause{name?}, enable{name?}, create_from_nl{prompt}
+- agents: ${switchTab('agents')}, open_spawn_dialog, close_dialog, set_search{query}, spawn_agent{specialist,task?,context?}
 - content: switch_view{view: kanban|list}, search{query}, set_filter{field: stage|type, value}, select{name}, create_content{title,type?}, advance{name?}, regress{name?}, schedule{name?,when}
 - tasks: set_filter{status}, search{query}
-- goals: set_filter{health}`;
+- goals: ${switchTab('goals')}, set_filter{health}
+- memory: ${switchTab('memory')}`;
+// Authority is deliberately not listed, not even its tabs: its room also takes
+// grant_access/revoke_access, and advertising the room to the model would make
+// those easier to find on a path with no authority gating (#965 review).
 
 /**
  * Navigation + in-room-action tools. Appended to the realtime toolset so the
@@ -97,3 +110,13 @@ export const REALTIME_NAV_TOOLS: LLMTool[] = [
     },
   },
 ];
+
+/**
+ * The pebble's realtime session answers dashboard_room_action by opening the
+ * room only; it does not send the action (#965). The tool result says so, so
+ * the model does not report the action as done.
+ */
+export function pebbleRoomActionResult(opened: string, action: string): string {
+  const what = action ? `"${action}"` : 'the action';
+  return `${opened} I did not run ${what} inside it; tell the user it has not been done.`;
+}

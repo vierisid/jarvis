@@ -3,7 +3,7 @@
  * daemon can say whether the tab switched instead of assuming it did.
  */
 import { expect, test } from "bun:test";
-import { handlePanelRoomActionMessage } from "./panel-room-action";
+import { dispatchDashboardRoomAction, handlePanelRoomActionMessage } from "./panel-room-action";
 
 type Req = { room: string; action: string; args: Record<string, unknown> };
 
@@ -48,4 +48,37 @@ test("ignores anything that is not a room_action notification", () => {
     expect(dispatched).toEqual([]);
     expect(sent).toEqual([]);
   }
+});
+
+test("the dashboard answers only an action it was asked about (#965)", () => {
+  for (const verdict of [true, false]) {
+    const sent: unknown[] = [];
+    const dispatched: unknown[] = [];
+    dispatchDashboardRoomAction(
+      { room: "agents", action: "switch_tab", args: { tab: "builder" }, ts: 1, resultId: "r9" },
+      (req, onResult) => { dispatched.push(req); onResult?.(verdict); },
+      (text) => sent.push(JSON.parse(text)),
+    );
+    // The room sees the action, not the resultId.
+    expect(dispatched).toEqual([{ room: "agents", action: "switch_tab", args: { tab: "builder" }, ts: 1 }]);
+    expect(sent).toEqual([expect.objectContaining({ type: "room_action_result", payload: { resultId: "r9", accepted: verdict } })]);
+  }
+  const sent: unknown[] = [];
+  let callback: unknown = "unset";
+  dispatchDashboardRoomAction(
+    { room: "agents", action: "switch_tab", args: { tab: "builder" }, ts: 1 },
+    (_req, onResult) => { callback = onResult; onResult?.(true); },
+    (text) => sent.push(text),
+  );
+  expect(callback).toBeUndefined();
+  expect(sent).toEqual([]);
+});
+
+test("the dashboard shell wires daemon room actions through the answering dispatch (#965)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const shell = readFileSync(new URL("../shell/AppShell.tsx", import.meta.url), "utf8");
+  expect(shell).toContain("dispatchDashboardRoomAction(request, dispatch, (text) => {");
+  expect(shell).toContain("wsRef={live.wsRef}");
+  const ws = readFileSync(new URL("../../hooks/useWebSocket.ts", import.meta.url), "utf8");
+  expect(ws).toContain("const req = roomActionRequestFrom(payload, msg.timestamp);");
 });

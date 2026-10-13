@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer } from "./useWebSocket.ts";
+import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer, roomActionRequestFrom } from "./useWebSocket.ts";
 
 describe("finalizeStreamMessage", () => {
   test("recovers text from the done frame when every stream chunk was missed", () => {
@@ -298,5 +298,25 @@ describe("formatProviderErrorMessage — status-code brittleness fix", () => {
   test("DOES match '\\b401\\b' when it is a real status code", () => {
     const r = formatProviderErrorMessage("HTTP 401 Unauthorized");
     expect(r.summary).toContain("Check your API key and model settings");
+  });
+});
+
+describe("roomActionRequestFrom (#965)", () => {
+  const base = { source: "room_action", room: "settings", action: "switch_tab", args: { tab: "voice" } };
+
+  test("keeps the resultId only when the daemon asked this dashboard", () => {
+    expect(roomActionRequestFrom({ ...base, resultId: "r1", resultFrom: "dashboard" }, 5))
+      .toEqual({ room: "settings", action: "switch_tab", args: { tab: "voice" }, ts: 5, resultId: "r1" });
+    // The pebble's requests are for native panels to answer, not the dashboard.
+    for (const extra of [{ resultId: "r1" }, { resultId: "r1", resultFrom: "panel" }, { resultId: "", resultFrom: "dashboard" }, { resultId: 7, resultFrom: "dashboard" }, {}]) {
+      expect(roomActionRequestFrom({ ...base, ...extra }, 5)).toEqual({ room: "settings", action: "switch_tab", args: { tab: "voice" }, ts: 5 });
+    }
+  });
+
+  test("drops malformed actions", () => {
+    expect(roomActionRequestFrom(null, 1)).toBeNull();
+    expect(roomActionRequestFrom({ room: "settings" }, 1)).toBeNull();
+    expect(roomActionRequestFrom({ room: 1, action: "x" }, 1)).toBeNull();
+    expect(roomActionRequestFrom({ room: "tools", action: "search", args: "nope" }, 1)?.args).toEqual({});
   });
 });

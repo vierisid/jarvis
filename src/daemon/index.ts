@@ -33,7 +33,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
-import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
+import { pebbleRoomActionResult, REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -111,6 +111,7 @@ import {
   parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
+import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
 import { osFamily } from "../util/execution-environment.ts";
 import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
@@ -1024,9 +1025,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           case 'open_dashboard_room':
             return openRoom(String(args.room ?? ''));
           case 'dashboard_room_action':
-            // In-room actions target the dashboard SPA, which a native panel
-            // doesn't receive — opening the room is the useful part here.
-            return openRoom(String(args.room ?? ''));
+            // Only the room is opened here; the action itself is not sent. The
+            // model is told so, or "Opened Settings." reads as the TTS toggle
+            // it asked for having happened (#965).
+            return pebbleRoomActionResult(await openRoom(String(args.room ?? '')), String(args.action ?? ''));
           case 'control_dashboard_window': {
             const action = String(args.action ?? '');
             const target = findPanel(sidecarId, args.target ? String(args.target) : undefined);
@@ -2760,25 +2762,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         },
       });
 
-      const speakConfirmation = async (sidecarId: string, text: string, ctrl: { cancelled: boolean }) => {
-        await setState(sidecarId, 'speaking', text);
-        try { wsService.broadcastHeartbeat(text); } catch { /* ignore */ }
-        if (pebbleTTS && !ctrl.cancelled) {
-          try {
-            const audio = await pebbleTTS.synthesize(text);
-            await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
-              data: audio.toString('base64'),
-              mime_type: ttsMimeType(jarvisConfig.tts),
-              blocking: false,
-            });
-          } catch (err) {
-            console.warn('[ambient-ui] confirmation TTS failed:', err);
-          }
-        }
-        if (ctrl.cancelled) return;
-        await new Promise<void>(r => setTimeout(r, Math.max(800, text.length * 60)));
-        if (!ctrl.cancelled) await setState(sidecarId, 'idle', '');
-      };
+      // The one confirmation every fast path speaks; a cancelled turn leaves
+      // the pebble to whoever cancelled it (#964). See pebble-confirmation.ts.
+      const speakConfirmation = makeSpeakConfirmation({
+        setState,
+        heartbeat: (text) => wsService.broadcastHeartbeat(text),
+        synthesizer: () => {
+          const tts = pebbleTTS;
+          return tts ? (text) => tts.synthesize(text) : null;
+        },
+        play: async (sidecarId, audio) => {
+          await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
+            data: audio.toString('base64'),
+            mime_type: ttsMimeType(jarvisConfig.tts),
+            blocking: false,
+          });
+        },
+        hold: (ms) => new Promise<void>((r) => setTimeout(r, ms)),
+        warn: (message, err) => console.warn(message, err),
+      });
 
       // tryHandleSubPebbleCloseIntent — close one or more backgrounded
       // sub-agents by voice. Matches:
@@ -3059,7 +3061,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.log(`[ambient-ui] panel intent: ${roomAction} ${key} (matched "${m[0]}")`);
 
         // Speak the confirmation through the queue-based TTS path so the
-        // user hears feedback even before the window finishes spawning.
+        // user hears feedback even before the window finishes spawning. A turn
+        // already cancelled is left to whoever cancelled it (#964).
+        if (ctrl.cancelled) return true;
         await setState(sidecarId, 'thinking', '');
         try { wsService.broadcastHeartbeat(confirm); } catch { /* ignore */ }
 
@@ -3102,27 +3106,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           }
         }
 
-        if (ctrl.cancelled) return true;
-
-        // Speak the confirmation (single sentence, fits in one TTS clip).
-        if (pebbleTTS) {
-          try {
-            const audio = await pebbleTTS.synthesize(confirm);
-            await sidecarManager.dispatchRPC(sidecarId, 'pebble.play_audio', {
-              data: audio.toString('base64'),
-              mime_type: ttsMimeType(jarvisConfig.tts),
-              blocking: false,
-            });
-          } catch (err) {
-            console.warn('[ambient-ui] panel-intent TTS failed:', err);
-          }
-        }
-        await setState(sidecarId, 'speaking', confirm);
-        // Hold speaking just long enough for the short confirmation to play.
-        const holdMs = Math.max(800, confirm.length * 60);
-        await new Promise<void>(r => setTimeout(r, holdMs));
-        if (ctrl.cancelled) return true;
-        await setState(sidecarId, 'idle', '');
+        // Speak the confirmation (single sentence, fits in one TTS clip). This
+        // was its own copy, which set `speaking` after the clip was synthesized
+        // without looking at the flag again, so a turn cancelled meanwhile was
+        // left in `speaking` (#964). The confirm was already broadcast above, so
+        // no second heartbeat.
+        await speakConfirmation(sidecarId, confirm, ctrl, { heartbeat: false });
         return true;
       };
 
