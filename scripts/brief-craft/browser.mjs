@@ -13,7 +13,7 @@ export async function inspect(tab, room) {
       if (!element || element.closest('[inert], [aria-hidden="true"]')) return false;
       for (let node = element; node; node = node.parentElement) {
         const style = getComputedStyle(node);
-        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+        if (style.display === "none" || style.visibility === "hidden") return false;
       }
       // SVG edges can be visible/focusable with a zero-width bounding box.
       // Positive two-dimensional geometry is required for panels below.
@@ -23,7 +23,15 @@ export async function inspect(tab, room) {
       const rect = element?.getBoundingClientRect();
       return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
     };
-    const measure = element => ({ visible: visible(element), bounds: bounds(element) });
+    const measure = element => {
+      // Conversation surfaces must actually paint. General keyboard controls
+      // may use a transparent native input over a visible, labelled custom UI.
+      let painted = visible(element);
+      for (let node = element; node && painted; node = node.parentElement) {
+        if (getComputedStyle(node).opacity === "0") painted = false;
+      }
+      return { visible: painted, bounds: bounds(element) };
+    };
     const pebble = navigation?.querySelector("[data-pebble-layout]");
     const surface = pebble?.querySelector(".brief-pebble-surface");
     const composers = surface?.querySelectorAll(".brief-pebble-content textarea") ?? [];
