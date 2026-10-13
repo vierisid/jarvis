@@ -99,13 +99,13 @@ env:
   REHEARSAL_REGISTRY_IMAGE: registry:3.1.2@sha256:ddf754342cfc8acc51a56d5d0ab6af06826461864460636d8bd5c546dab2a7b8
   SIDECAR_BIN: jarvis
   # The one dry-run decision (#685), spelled the same everywhere it has to be
-  # made: here, the sidecar call input, discord-notify's `if:` and
-  # publish-brain's environment name. Those three cannot read this env (a
+  # made: here, the two sidecar call inputs (#952), discord-notify's `if:`
+  # and publish-brain's environment name. Those four cannot read this env (a
   # job-level `if:`, a reusable-workflow `with:` and `environment.name` do not
   # get the `env` context), so they repeat `inputs.dry_run == true` instead.
   # On a tag push there are no inputs and it is false. Every step reads
   # DRY_RUN, only ever compared with 'true'. release-exec.test.sh evaluates
-  # all four under a push, a real dispatch and a dry dispatch and fails unless
+  # all five under a push, a real dispatch and a dry dispatch and fails unless
   # they agree: a half-dry release could announce a version it never
   # published, or publish one it never announced.
   DRY_RUN: ${{ inputs.dry_run == true }}
@@ -699,7 +699,23 @@ jobs:
   # smoke test like the brain publish. Idempotent: a no-op when that version is
   # already on npm, so a brain release ships the sidecar only when it actually
   # changed. See sidecar-release.yml.
-  sidecar:
+  #
+  # Called twice, so that one `release` approval can cover both npm publishes
+  # (#952). Approving an environment releases every job waiting on it at that
+  # moment, so the two publishers have to come due together: publish-sidecar
+  # and publish-brain wait for exactly the same jobs (sidecar-build and
+  # pack-brain, and through them everything before), and release-exec.test.sh
+  # holds them to that. Not to the second, though: inside the publish call
+  # its resolve job runs first (8s on v0.16.0's run, plus a runner), so the
+  # sidecar request appears a few seconds after the brain one. Approve once
+  # both are listed as waiting, or the sidecar asks again. When the sidecar was one call, pack-brain and
+  # publish-brain waited for the whole of it, its publish included, so the
+  # second approval could not even be requested until the first was given.
+  #
+  # sidecar-build builds, signs and verifies, and publishes nothing; its
+  # `digests` output carries the build jobs' sha256 outputs to the second
+  # call, which builds nothing and checks each artifact against them.
+  sidecar-build:
     needs: [test, smoke-image]
     permissions:
       contents: read
@@ -723,6 +739,47 @@ jobs:
       ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
     with:
       dry_run: ${{ inputs.dry_run == true }}
+      publish: false
+
+  # The second call publishes what sidecar-build built (#952). Its needs are
+  # publish-brain's needs, so the two approvals come due together; it waits
+  # for pack-brain too, so nothing pack-brain started can still be running
+  # while this downloads. Brain and sidecar then reach npm seconds apart in
+  # either order. Neither package depends on the other, but a brain
+  # advertises the sidecar it ships with (SIDECAR_LATEST_VERSION) and
+  # connecting sidecars offer to install it; a sidecar that is told of a
+  # version not yet on npm reports it unavailable and retries hourly
+  # (sidecar/updater.go), so brain landing first is a short wait, not a
+  # failure. And since the two publish side by side, one can fail after the
+  # other succeeded: a failed sidecar publish leaves brain on npm with
+  # publish-docker and github-release skipped. Re-run the failed jobs; every
+  # npm publish here treats "already on npm" as success.
+  #
+  # id-token for publish-sidecar's Trusted Publishing. The signing secrets
+  # are passed because workflow-hardening.test.sh requires a call to pass
+  # exactly what the called workflow declares; on this call the only jobs
+  # that read them, the build legs, are skipped. The single call before #952
+  # passed the same five to the same workflow, so nothing new can read them.
+  #
+  # Its outputs (released, version, sums) are the ones github-release reads:
+  # this call's resolve decides whether it publishes, and its publish-sidecar
+  # records the digests of what it published.
+  publish-sidecar:
+    needs: [validate-tag, sidecar-build, pack-brain]
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/sidecar-release.yml
+    secrets:
+      APPLE_CERT_P12: ${{ secrets.APPLE_CERT_P12 }}
+      APPLE_CERT_PASSWORD: ${{ secrets.APPLE_CERT_PASSWORD }}
+      ASC_KEY_ID: ${{ secrets.ASC_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.ASC_ISSUER_ID }}
+      ASC_API_KEY_P8: ${{ secrets.ASC_API_KEY_P8 }}
+    with:
+      dry_run: ${{ inputs.dry_run == true }}
+      publish_only: true
+      digests: ${{ needs.sidecar-build.outputs.digests }}
 
   # --- Build the brain tarball (no OIDC) ---
   # Split from publish-brain (#682). Everything that runs repository and
@@ -733,13 +790,22 @@ jobs:
   # lifecycle scripts when publishing a tarball, only a directory.
   #
   # It runs dependency code, and every job in this run can write this run's
-  # artifacts, so it starts only once the sidecar workflow has published and
-  # smoke-image is done: a lifecycle script left running here must not be
-  # able to swap the sidecar binaries between their upload and
-  # publish-sidecar's download. publish-brain waits for both anyway, so this
-  # costs no time. The timeout bounds how long anything it starts can linger.
+  # artifacts. It used to start only once the sidecar workflow had published,
+  # so that nothing it started could swap a sidecar binary between its upload
+  # and publish-sidecar's download. Since #952 it runs beside sidecar-build
+  # instead, because waiting for the sidecar publish serialised the two
+  # approvals. That window covers every artifact handoff inside sidecar-build
+  # too: sign-sidecar-windows (holding the KMS-federating token) taking
+  # unsigned-win32-x64, verify-sidecar-windows taking the signed binary, and
+  # publish-sidecar taking all five. A swap there is caught, not prevented:
+  # each checks the bytes against the producing job's sha256 output (#781),
+  # and github-release against publish-sidecar's sums (#682), job outputs no
+  # other job can set. A planted extra sidecar-* artifact fails publish-sidecar
+  # closed, and stays in the run, so recovery is a new run, not a re-run. publish-sidecar also waits for this
+  # job, so nothing here is still running while it downloads. The timeout
+  # bounds how long anything it starts can linger.
   pack-brain:
-    needs: [validate-tag, test, smoke-image, sidecar]
+    needs: [validate-tag, test, smoke-image]
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -816,17 +882,19 @@ jobs:
           retention-days: 7
 
   # ─── Publish main brain package to npm ─────────────────────────
-  # After the sidecar: a published brain advertises the sidecar it ships with
-  # (SIDECAR_LATEST_VERSION) to every connecting sidecar, which offers to
-  # install it, so that sidecar has to be on npm first. The sidecar job is a
-  # no-op success when its version is already published.
+  # Waits for exactly what publish-sidecar waits for (#952), so the two
+  # `release` approvals come due together and one click releases both. It
+  # waits for sidecar-build so that a failed sidecar build stops it: brain
+  # must not reach npm alone, with publish-docker and github-release then
+  # skipped behind the failure. It does not wait for publish-sidecar, which
+  # would serialise the approvals again; release-exec.test.sh refuses that.
   #
   # The only job here that can mint an OIDC token for npm, so it checks out
   # nothing, installs no dependencies and runs no repository code (#682): it
   # verifies pack-brain's tarball against the digest pack-brain reported and
   # publishes it.
   publish-brain:
-    needs: [validate-tag, pack-brain, smoke-image, sidecar]
+    needs: [validate-tag, sidecar-build, pack-brain]
     runs-on: ubuntu-latest
     # npm Trusted Publishing for @usejarvis/brain requires this environment, so
     # the OIDC token this job mints must carry the claim or npm refuses the
@@ -908,7 +976,7 @@ jobs:
   # release with no separate sidecar tag. The sidecar itself ships via npm
   # (sidecar-release.yml).
   github-release:
-    needs: [validate-tag, publish-docker, sidecar]
+    needs: [validate-tag, publish-docker, publish-sidecar]
     runs-on: ubuntu-latest
     # Creating the release (and its generated notes) is a contents write. The
     # sidecar artifacts come from this same run, which needs no token scope.
@@ -925,10 +993,10 @@ jobs:
           persist-credentials: false
 
       # The sidecar binaries are uploaded as artifacts by the reusable
-      # sidecar-release workflow (same run); pull them in only when it actually
-      # built this run.
+      # sidecar-release workflow (same run, its sidecar-build call); pull them
+      # in only when the publish-sidecar call says it released them.
       - name: Download sidecar binaries
-        if: needs.sidecar.outputs.released == 'true'
+        if: needs.publish-sidecar.outputs.released == 'true'
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: artifacts
@@ -936,12 +1004,12 @@ jobs:
 
       # Exactly the bytes publish-sidecar published (#682): its digests come
       # as a job output; the artifacts themselves could have been replaced by
-      # any job in this run since -- pack-brain runs dependency code in
-      # between.
+      # any job in this run since they were uploaded -- pack-brain runs
+      # dependency code while they sit in the store.
       - name: Verify sidecar binaries
-        if: needs.sidecar.outputs.released == 'true'
+        if: needs.publish-sidecar.outputs.released == 'true'
         env:
-          SUMS: ${{ needs.sidecar.outputs.sums }}
+          SUMS: ${{ needs.publish-sidecar.outputs.sums }}
         run: |
           set -euo pipefail
           [ -n "$SUMS" ] || { echo "::error::the sidecar workflow reported no digests"; exit 1; }
@@ -949,9 +1017,9 @@ jobs:
           printf '%s' "$SUMS" | base64 -d | sha256sum --strict -c -
 
       - name: Package sidecar assets
-        if: needs.sidecar.outputs.released == 'true'
+        if: needs.publish-sidecar.outputs.released == 'true'
         env:
-          SIDECAR_VERSION: ${{ needs.sidecar.outputs.version }}
+          SIDECAR_VERSION: ${{ needs.publish-sidecar.outputs.version }}
         run: |
           set -euo pipefail
           mkdir -p release
@@ -1052,7 +1120,7 @@ jobs:
   # On a dry run nothing is downloaded, pushed or tagged: the rehearsal in
   # smoke-image is the dry run of this job.
   publish-docker:
-    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]
+    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]
     runs-on: ubuntu-latest
     # No checkout and no build: the registry write is the whole job.
     permissions:

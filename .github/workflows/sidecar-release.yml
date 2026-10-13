@@ -4,9 +4,17 @@ name: Sidecar Release
 # from sidecar/VERSION. Distributed via npm only — no sidecar-v* git tag or
 # GitHub release. Driven two ways:
 #   * Called by the brain's Release Executor (release-exec.yml) so a brain
-#     release also ships the current sidecar (its own version).
+#     release also ships the current sidecar (its own version). It is called
+#     TWICE there (#952): once with `publish: false`, which builds, signs and
+#     verifies and reports the five digests as its `digests` output, and once
+#     with `publish_only: true`, which builds nothing and publishes those
+#     artifacts, checked against those digests. The second call waits for
+#     the same two jobs as the brain publish, so the two `release` approvals
+#     come due seconds apart (this call runs resolve first) and one click,
+#     once both are waiting, releases both.
 #   * Dispatched manually to ship a sidecar-only release without touching the
-#     brain.
+#     brain. Neither input above exists on a dispatch, and absent they mean
+#     build and publish in one go, as before.
 # Idempotent: if sidecar/VERSION is already on npm it stops as a no-op success
 # instead of failing — so calling it on every brain release is safe even when
 # the sidecar hasn't changed. Partial publishes self-heal: the per-package
@@ -19,6 +27,22 @@ on:
         description: "Build and validate without publishing"
         type: boolean
         default: false
+      # The two halves (#952). resolve turns these into its build and
+      # publish outputs, which every job below gates on, so an absent input
+      # (a dispatch declares neither) is read in exactly one place, by a
+      # script release-exec.test.sh runs verbatim.
+      publish:
+        description: "Publish to npm. false builds, signs and verifies only, and reports the digests output"
+        type: boolean
+        default: true
+      publish_only:
+        description: "Build nothing; publish what an earlier call in this run built, by its digests output"
+        type: boolean
+        default: false
+      digests:
+        description: "With publish_only: the digests output of the call that built the artifacts"
+        type: string
+        default: ""
     outputs:
       released:
         description: "true when a new sidecar version was (re)built this run"
@@ -29,6 +53,16 @@ on:
       sums:
         description: "base64 sha256sum manifest of the sidecar-* artifacts publish-sidecar published"
         value: ${{ jobs.publish-sidecar.outputs.sums }}
+      # Each digest is the job output of the one job that produced those
+      # bytes (#781), labelled with its leg by this format string and nothing
+      # else; publish-sidecar parses it back by label on a publish_only call.
+      # Evaluated by GitHub from job outputs, so no step of any job in the
+      # run can write it. Empty when this call built nothing (the version is
+      # already on npm), which tells the publish_only call there is nothing
+      # to publish without it asking npm a second time.
+      digests:
+        description: "the five sidecar-* artifact sha256 digests, by leg, for a later publish_only call; empty when nothing was built"
+        value: ${{ jobs.resolve.outputs.build == 'true' && format('linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}', jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.build-sidecar-darwin-arm64.outputs.sha256, jobs.build-sidecar-darwin-x64.outputs.sha256, jobs.sign-sidecar-windows.outputs.sha256) || '' }}
     # Every secret this workflow reads, declared so the caller can pass exactly
     # these instead of `secrets: inherit` (#682). All optional: absent, the
     # macOS bundle ships unsigned with a warning, as on a fork. A secret read
@@ -81,11 +115,21 @@ jobs:
     outputs:
       version: ${{ steps.v.outputs.version }}
       should_release: ${{ steps.v.outputs.should_release }}
+      # What this call does (#952): build is false on a publish_only call,
+      # publish false on a publish: false call, and both false when there is
+      # nothing to release. The build legs gate on build and publish-sidecar
+      # on publish.
+      build: ${{ steps.v.outputs.build }}
+      publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - id: v
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
+          DIGESTS: ${{ inputs.digests }}
         run: |
           set -euo pipefail
           export LC_ALL=C
@@ -102,19 +146,51 @@ jobs:
             printf '::error::sidecar/VERSION is not a plain semver: %q\n' "$VERSION"
             exit 1
           fi
-          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
-          if [ "${DRY_RUN}" = "true" ]; then
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "::notice::Dry run — building/validating sidecar v${VERSION} without publishing."
-            exit 0
+          # Which half of the work this call does (#952). Compared with the
+          # one value that changes the default and nothing else, so an input
+          # a dispatch never declares (an empty string here) means build and
+          # publish, as it did before the inputs existed.
+          build=true
+          publish=true
+          if [ "${PUBLISH_ONLY:-}" = "true" ]; then build=false; fi
+          if [ "${PUBLISH:-}" = "false" ]; then publish=false; fi
+          if [ "$build" = false ] && [ "$publish" = false ]; then
+            echo "::error::publish: false and publish_only: true together would neither build nor publish"
+            exit 1
           fi
-          if npm view "@usejarvis/sidecar@${VERSION}" version >/dev/null 2>&1; then
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          if [ "$build" = false ]; then
+            # A publish_only call publishes exactly when the call that builds
+            # built, which its digests output says by being non-empty. It asks
+            # npm nothing of its own: a second `npm view` could disagree with
+            # the first (one that fails transiently reads as "not published"),
+            # and would then send this call to publish artifacts nobody built.
+            # A non-empty value is checked strictly by publish-sidecar. Ahead
+            # of the dry-run branch, so a rehearsal decides exactly as a
+            # real run would.
+            if [ -n "${DIGESTS:-}" ]; then
+              should_release=true
+              echo "Publishing the sidecar v${VERSION} that the build call built."
+            else
+              should_release=false
+              echo "::notice::The build call built no sidecar (v${VERSION} is already on npm), so there is nothing to publish."
+            fi
+          elif [ "${DRY_RUN}" = "true" ]; then
+            should_release=true
+            echo "::notice::Dry run — building/validating sidecar v${VERSION} without publishing."
+          elif npm view "@usejarvis/sidecar@${VERSION}" version >/dev/null 2>&1; then
+            should_release=false
             echo "::notice::@usejarvis/sidecar@${VERSION} is already published — skipping sidecar release (no-op)."
           else
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            should_release=true
             echo "Sidecar v${VERSION} is not yet on npm — releasing."
           fi
+          if [ "$should_release" != true ]; then build=false; publish=false; fi
+          {
+            echo "should_release=${should_release}"
+            echo "build=${build}"
+            echo "publish=${publish}"
+          } >> "$GITHUB_OUTPUT"
 
   # ─── Cross-compile Go sidecars (cgo) ───────────────────────────
   # The sidecar is a cgo program (webview_go, GTK/Cocoa overlays), so it CANNOT
@@ -136,9 +212,13 @@ jobs:
   # then sign-sidecar-windows, the only one of the two with id-token), and
   # these four -- two of which run Swift and Apple tooling on macOS -- cannot
   # mint an OIDC token at all.
+  #
+  # The five jobs that build (these four and build-sidecar-windows), the
+  # signer and the post-sign check all gate on resolve's build output, false
+  # on a publish_only call (#952).
   build-sidecar-linux-x64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -348,7 +428,7 @@ jobs:
 
   build-sidecar-linux-arm64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -368,7 +448,7 @@ jobs:
 
   build-sidecar-darwin-arm64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -388,7 +468,7 @@ jobs:
 
   build-sidecar-darwin-x64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -414,7 +494,7 @@ jobs:
   # binary crosses to sign-sidecar-windows with its digest as a job output.
   build-sidecar-windows:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -483,7 +563,10 @@ jobs:
   # (#817).
   sign-sidecar-windows:
     needs: [resolve, build-sidecar-windows]
-    if: needs.resolve.outputs.should_release == 'true'
+    # build, not should_release (#952): on a publish_only call this job,
+    # which holds the KMS-federating token, must not run even if someone
+    # later adds a status function that would carry it past its skipped need.
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
     # OIDC, for google-github-actions/auth: Windows signing federates into
     # Google Cloud KMS with no stored credential at all. Declared here rather
@@ -640,7 +723,7 @@ jobs:
   # into a skipped check.
   verify-sidecar-windows:
     needs: [resolve, sign-sidecar-windows]
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -724,7 +807,19 @@ jobs:
     environment:
       name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
     needs: [resolve, verify-sidecar-windows, build-sidecar-linux-x64, build-sidecar-linux-arm64, build-sidecar-darwin-arm64, build-sidecar-darwin-x64, sign-sidecar-windows]
-    if: needs.resolve.outputs.should_release == 'true'
+    # Two ways to run, and only two (#952):
+    #   * success(): every job above succeeded in THIS call -- the build and
+    #     publish of a dispatch, exactly the condition this job had before.
+    #   * a publish_only call, where the build jobs above are skipped by
+    #     design and success() is therefore false. It runs only if none of
+    #     them failed or was cancelled; what vouches for the build is the
+    #     caller, which starts this call only after the publish: false call
+    #     succeeded as a whole (verify-sidecar-windows included), and the
+    #     digests it hands over, checked below as strictly as job outputs.
+    # The `inputs.publish_only == true` term is what keeps the status
+    # functions away from every other call: release-exec.test.sh pins this
+    # line byte for byte.
+    if: needs.resolve.outputs.publish == 'true' && (success() || (inputs.publish_only == true && !cancelled() && !failure()))
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -762,6 +857,14 @@ jobs:
       # artifact so named, and Prepare copies a whole directory into each
       # package. release-exec.test.sh runs this script against tampered,
       # extra, missing and undigested fixtures.
+      #
+      # On a publish_only call (#952) the build jobs ran in the caller's
+      # publish: false call, so their job outputs arrive as the digests
+      # input: the caller passes that call's digests output, which GitHub
+      # composes from the same job outputs, and no step anywhere can write
+      # either. Exactly one source per call: a publish_only call refuses a
+      # digest from a build job of its own, any other call refuses the
+      # input, and the input must name all five legs, each a sha256.
       - name: Verify sidecar artifacts
         env:
           SHA_LINUX_X64: ${{ needs.build-sidecar-linux-x64.outputs.sha256 }}
@@ -769,9 +872,31 @@ jobs:
           SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}
           SHA_DARWIN_X64: ${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}
           SHA_WIN32_X64: ${{ needs.sign-sidecar-windows.outputs.sha256 }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
+          DIGESTS: ${{ inputs.digests }}
         run: |
           set -euo pipefail
           export LC_ALL=C
+          if [ "${PUBLISH_ONLY:-}" = "true" ]; then
+            if [ -n "${SHA_LINUX_X64}${SHA_LINUX_ARM64}${SHA_DARWIN_ARM64}${SHA_DARWIN_X64}${SHA_WIN32_X64}" ]; then
+              echo "::error::a publish_only call takes its digests from the digests input, yet a build job of this call reported one"
+              exit 1
+            fi
+            h='([0-9a-f]{64})'
+            re="^linux-x64=${h} linux-arm64=${h} darwin-arm64=${h} darwin-x64=${h} win32-x64=${h}\$"
+            if ! [[ "${DIGESTS:-}" =~ $re ]]; then
+              printf '::error::the digests input is not one sha256 for each of the five legs: %q\n' "${DIGESTS:-}"
+              exit 1
+            fi
+            SHA_LINUX_X64="${BASH_REMATCH[1]}"
+            SHA_LINUX_ARM64="${BASH_REMATCH[2]}"
+            SHA_DARWIN_ARM64="${BASH_REMATCH[3]}"
+            SHA_DARWIN_X64="${BASH_REMATCH[4]}"
+            SHA_WIN32_X64="${BASH_REMATCH[5]}"
+          elif [ -n "${DIGESTS:-}" ]; then
+            echo "::error::the digests input is for a publish_only call; this call built its own artifacts"
+            exit 1
+          fi
           manifest=""
           expect() {
             [[ "$1" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no digest was reported for $2"; exit 1; }
@@ -799,9 +924,9 @@ jobs:
 
       # The digests of exactly what this job publishes, handed to the brain's
       # github-release job as a job output (#682). Artifacts are writable by
-      # every job in the run, and release-exec.yml's pack-brain runs
-      # dependency code after this job and before github-release downloads
-      # the same artifacts to attach them; job outputs only this job can set.
+      # every job in the run -- release-exec.yml's pack-brain runs dependency
+      # code while they sit in the store, and github-release downloads them
+      # again later to attach them; job outputs only this job can set.
       - name: Record artifact digests
         id: sums
         run: |

@@ -108,7 +108,7 @@ if (mode === "run-expressions") {
 }
 if (mode === "dry-run") {
   // #685: one dry-run decision. Every place that must make it (DRY_RUN, and
-  // where `env` is not available: the sidecar call input, discord-notify,
+  // where `env` is not available: the sidecar call inputs, discord-notify,
   // the environment names) spells it `inputs.dry_run == true`, each is
   // EVALUATED under every way the workflow starts, and they must agree. No
   // other expression reads dry_run, nothing redefines DRY_RUN, and every
@@ -121,7 +121,10 @@ if (mode === "dry-run") {
   // [description, getter, canonical text, kind]
   const sites = [["env.DRY_RUN", (d) => d.env?.DRY_RUN, FLAG, "env"]];
   if (file === "release-exec.yml") sites.push(
-    ["jobs.sidecar.with.dry_run", (d) => d.jobs?.sidecar?.with?.dry_run, FLAG, "flag"],
+    // #952: the sidecar workflow is called twice, once to build and once to
+    // publish, and each call is told the decision on its own.
+    ["jobs.sidecar-build.with.dry_run", (d) => d.jobs?.["sidecar-build"]?.with?.dry_run, FLAG, "flag"],
+    ["jobs.publish-sidecar.with.dry_run", (d) => d.jobs?.["publish-sidecar"]?.with?.dry_run, FLAG, "flag"],
     ["jobs.discord-notify.if", (d) => d.jobs?.["discord-notify"]?.if, "${{ inputs.dry_run != true }}", "notify"],
     ["jobs.publish-brain.environment.name", (d) => d.jobs?.["publish-brain"]?.environment?.name, ENV_NAME, "environment"]);
   else if (file === "sidecar-release.yml") sites.push(
@@ -305,8 +308,37 @@ if (mode === "sidecar-digests") {
         if (v.env?.[k] !== "${{ " + ref + " }}")
           out.push("publish-sidecar: the artifact check must take " + k + " from ${{ " + ref + " }} (got " + JSON.stringify(v.env?.[k]) + ")");
       }
+      // #952: on a publish_only call the same five arrive as the digests
+      // input, and the script decides which source it reads from the input
+      // itself. The fixtures below run both ways.
+      for (const [k, want] of [["PUBLISH_ONLY", "${{ inputs.publish_only }}"], ["DIGESTS", "${{ inputs.digests }}"]])
+        if (v.env?.[k] !== want)
+          out.push("publish-sidecar: the artifact check must take " + k + " from " + want + " (got " + JSON.stringify(v.env?.[k]) + ")");
+      if (Object.keys(v.env ?? {}).length !== 7)
+        out.push("publish-sidecar: the artifact check env must be exactly the five SHA_ digests, PUBLISH_ONLY and DIGESTS (got " + JSON.stringify(Object.keys(v.env ?? {})) + ")");
     }
   }
+  // #952: the digests output, which a publish_only call checks against, is
+  // composed from the same five job outputs, each under the label of the leg
+  // that job built, so the parse back by label cannot cross two legs over.
+  // It is empty exactly when this call built nothing, which is how the
+  // publish_only call learns there is nothing to publish.
+  const DIGESTS_OUT = "${{ jobs.resolve.outputs.build == \x27true\x27 && format(\x27linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}\x27, jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.build-sidecar-darwin-arm64.outputs.sha256, jobs.build-sidecar-darwin-x64.outputs.sha256, jobs.sign-sidecar-windows.outputs.sha256) || \x27\x27 }}";
+  const wc = (doc.on ?? doc[true] ?? {}).workflow_call ?? {};
+  if (wc.outputs?.digests?.value !== DIGESTS_OUT)
+    out.push("the digests output must be exactly " + DIGESTS_OUT + " (got " + JSON.stringify(wc.outputs?.digests?.value) + ")");
+  // The build half is skipped on a publish_only call by resolve, and only
+  // there: each of the five jobs that build gates on its build output, which
+  // resolve takes from the step that release-exec.test.sh runs verbatim.
+  for (const j of ["build-sidecar-linux-x64", "build-sidecar-linux-arm64", "build-sidecar-darwin-arm64", "build-sidecar-darwin-x64", "build-sidecar-windows"])
+    if (jobs[j] && (jobs[j].if !== "needs.resolve.outputs.build == \x27true\x27" || JSON.stringify(needsOf(j)) !== JSON.stringify(["resolve"])))
+      out.push(j + ": must need resolve alone and run under exactly needs.resolve.outputs.build == \x27true\x27 (got if " + JSON.stringify(jobs[j].if) + ")");
+  for (const k of ["build", "publish"])
+    if (jobs.resolve?.outputs?.[k] !== "${{ steps.v.outputs." + k + " }}")
+      out.push("resolve: output " + k + " must be ${{ steps.v.outputs." + k + " }} (got " + JSON.stringify(jobs.resolve?.outputs?.[k]) + ")");
+  const rv = (jobs.resolve?.steps ?? []).find((st) => st.id === "v");
+  if (JSON.stringify(Object.entries(rv?.env ?? {}).sort()) !== JSON.stringify([["DIGESTS", "${{ inputs.digests }}"], ["PUBLISH", "${{ inputs.publish }}"], ["PUBLISH_ONLY", "${{ inputs.publish_only }}"]]))
+    out.push("resolve: the v step env must be exactly DIGESTS, PUBLISH and PUBLISH_ONLY from their inputs (got " + JSON.stringify(rv?.env) + ")");
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
 }
@@ -578,11 +610,54 @@ if (mode === "image") {
     if (pd.some((st) => lc(st).startsWith("actions/checkout@") || lc(st).startsWith("docker/setup-")))
       out.push("publish-docker: checks out or sets up a builder, and it builds nothing");
   }
-  // The gates in front of every publisher.
-  for (const j of ["sidecar", "pack-brain", "publish-brain", "publish-docker", "github-release"])
-    if (jobs[j] && !upstream(j, "smoke-image")) out.push(j + ": does not run after smoke-image, so it can publish an image nobody ran");
+  // The gates in front of every publisher. Each job is required to exist,
+  // so a rename cannot quietly drop it from the list.
+  for (const j of ["sidecar-build", "publish-sidecar", "pack-brain", "publish-brain", "publish-docker", "github-release"])
+    if (!jobs[j]) out.push("no " + j + " job");
+    else if (!upstream(j, "smoke-image")) out.push(j + ": does not run after smoke-image, so it can publish an image nobody ran");
   if (jobs["publish-docker"] && !upstream("publish-docker", "publish-brain")) out.push("publish-docker: does not run after publish-brain, the approval gate");
+  if (jobs["publish-docker"] && !upstream("publish-docker", "publish-sidecar")) out.push("publish-docker: does not run after publish-sidecar, so an image can ship with its sidecar not on npm");
   if (jobs["github-release"] && !upstream("github-release", "publish-docker")) out.push("github-release: does not run after publish-docker");
+  // #952: one approval for both npm publishes. Approving the release
+  // environment releases every job waiting on it at that moment, so the two
+  // publishers must come due at the same moment: they wait for exactly the
+  // same jobs, all the way up. Neither brain job may wait for publish-sidecar,
+  // which is how the two approvals used to be serialised (pack-brain and
+  // publish-brain needed the whole sidecar call). And publish-brain waits for
+  // sidecar-build, so a failed sidecar build cannot leave brain published
+  // alone, with publish-docker and github-release skipped behind it.
+  const closure = (j) => {
+    const seen = new Set();
+    const walk = (k) => { for (const n of needsOf(k)) if (!seen.has(n)) { seen.add(n); walk(n); } };
+    walk(j);
+    return seen;
+  };
+  if (jobs["publish-sidecar"] && jobs["publish-brain"]) {
+    for (const j of ["pack-brain", "publish-brain"])
+      if (jobs[j] && upstream(j, "publish-sidecar"))
+        out.push(j + ": runs after publish-sidecar, so the brain approval cannot be requested until the sidecar one is given (#952)");
+    if (!upstream("publish-brain", "sidecar-build"))
+      out.push("publish-brain: does not run after sidecar-build, so brain can reach npm while the sidecar build failed (#952)");
+    const a = closure("publish-sidecar"), b = closure("publish-brain");
+    const onlyA = [...a].filter((n) => !b.has(n)).sort(), onlyB = [...b].filter((n) => !a.has(n)).sort();
+    if (onlyA.length || onlyB.length)
+      out.push("publish-sidecar and publish-brain wait for different jobs (only publish-sidecar: " + JSON.stringify(onlyA) + ", only publish-brain: " + JSON.stringify(onlyB) + "), so their approvals do not come due together (#952)");
+  }
+  // The two calls: the first builds and must not publish, the second must
+  // build nothing and take its digests from the first, by that call output
+  // and nothing else (a job output no step can write).
+  const SIDECAR_CALL = "./.github/workflows/sidecar-release.yml";
+  const sb = jobs["sidecar-build"], ps = jobs["publish-sidecar"];
+  if (sb && (sb.uses !== SIDECAR_CALL || sb.with?.publish !== false || "publish_only" in (sb.with ?? {}) || "digests" in (sb.with ?? {})))
+    out.push("sidecar-build: must call " + SIDECAR_CALL + " with publish: false and neither publish_only nor digests (got uses " + JSON.stringify(sb.uses) + ", with " + JSON.stringify(sb.with) + ")");
+  if (ps && (ps.uses !== SIDECAR_CALL || ps.with?.publish_only !== true || ps.with?.digests !== "${{ needs.sidecar-build.outputs.digests }}" || "publish" in (ps.with ?? {})))
+    out.push("publish-sidecar: must call " + SIDECAR_CALL + " with publish_only: true and digests: ${{ needs.sidecar-build.outputs.digests }} (got uses " + JSON.stringify(ps.uses) + ", with " + JSON.stringify(ps.with) + ")");
+  // The needs context holds direct dependencies only: a job reading the
+  // outputs of either call must list it, or it reads empty strings.
+  for (const [name, job] of Object.entries(jobs))
+    for (const c of ["sidecar-build", "publish-sidecar"])
+      if (new RegExp("needs\\s*(?:\\.\\s*" + c + "|\\[\\s*\\\\?[\\x27\\x22]" + c + "\\\\?[\\x27\\x22]\\s*\\])\\s*\\.\\s*outputs\\b").test(JSON.stringify(job)) && !needsOf(name).includes(c))
+        out.push(name + ": reads needs." + c + ".outputs but does not list " + c + " in needs");
   for (const j of ["build-image", "smoke-image", "publish-docker"])
     if (/\b(always|failure|cancelled)\s*\(|\bsuccess\s*\(\s*\)\s*\|\|/.test(String(jobs[j]?.if ?? ""))) out.push(j + ": can run after a failed gate (if: " + jobs[j].if + ")");
   if (out.length) console.log(out.join("\n"));
@@ -691,9 +766,23 @@ if (mode === "postsign") {
   // the publisher must not run past a failed or skipped dependency.
   for (const j of [T.sign, T.verify, T.publish])
     if (jobs[j]?.["continue-on-error"] !== undefined) out.push(j + ": continue-on-error on the job, so a failure there does not stop the publish");
-  const SHOULD = "needs.resolve.outputs.should_release == \x27true\x27";
+  // The sidecar verify job gates on build (#952): false on a publish_only
+  // call, equal to should_release on every other.
+  const SHOULD = T.verify === "verify-sidecar-windows" ? "needs.resolve.outputs.build == \x27true\x27" : "needs.resolve.outputs.should_release == \x27true\x27";
+  if (jobs[T.sign] && T.sign === "sign-sidecar-windows" && jobs[T.sign].if !== SHOULD) out.push(T.sign + ": runs under " + JSON.stringify(jobs[T.sign].if) + ", not exactly " + SHOULD);
   if (v && v.if !== SHOULD) out.push(T.verify + ": runs under " + JSON.stringify(v.if) + ", not exactly " + SHOULD);
-  if (/\b(?:always|failure|cancelled)\s*\(/.test(String(jobs[T.publish]?.if ?? "")))
+  // publish-sidecar is the one publisher allowed a status function, and only
+  // this one expression (#952). On a publish_only call its build jobs are
+  // skipped by design, so success() is false there and it has to run past
+  // skipped dependencies; the inputs.publish_only term confines that to such
+  // a call, and !cancelled() && !failure() still stop it after a failed or
+  // cancelled one. Every other call keeps plain success(). Pinned byte for
+  // byte: any edit to it, including the ones a regex would miss, is reported.
+  const PUBLISH_IF = "needs.resolve.outputs.publish == \x27true\x27 && (success() || (inputs.publish_only == true && !cancelled() && !failure()))";
+  if (T.publish === "publish-sidecar") {
+    if (jobs[T.publish]?.if !== PUBLISH_IF)
+      out.push(T.publish + ": runs under " + JSON.stringify(jobs[T.publish]?.if) + ", not exactly " + PUBLISH_IF);
+  } else if (/\b(?:always|failure|cancelled)\s*\(/.test(String(jobs[T.publish]?.if ?? "")))
     out.push(T.publish + ": can run after a failed dependency (if: " + jobs[T.publish].if + ")");
   if (out.length) console.log(out.join("\n"));
   process.exit(0);
@@ -785,22 +874,49 @@ const reaches = (j, seen = new Set()) => {
 for (const name of Object.keys(jobs))
   if (name !== "validate-tag" && !reaches(name)) out.push(name + ": does not run downstream of validate-tag");
 // #682: every job that installs dependencies runs either before the sidecar
-// workflow starts (upstream of it) or after it has published (downstream).
-// Running alongside it, a lifecycle script could swap a sidecar artifact
-// between its upload and the download in publish-sidecar.
+// publish call starts (upstream of it) or after it has published
+// (downstream), never alongside it. Until #952 the line was drawn around the
+// whole sidecar workflow, builds included. #952 split it into sidecar-build
+// and publish-sidecar so that the two approvals come due together, and
+// pack-brain now runs beside sidecar-build: a lifecycle script there could
+// replace a sidecar artifact between its upload and the download in
+// publish-sidecar, and that is caught by the digest checks (#781) rather than
+// prevented. A missing publish-sidecar is reported, not skipped, so renaming
+// it cannot switch this rule off.
+//
+// publish-brain now runs beside publish-sidecar too, by design: the two are
+// released by one approval. The only command of its that this rule counts is
+// the pinned npm install, `npm install -g "npm@${NPM_VERSION}"`, which
+// publish-sidecar runs itself, and NPM_VERSION is an exact version that
+// workflow-hardening.test.sh holds both workflows to. That one line, spelled
+// exactly so on a line of its own and in publish-brain alone, is not
+// counted; anything else still is. The pin is the workflow-level env, so no
+// job or step may set NPM_VERSION over it, or the exempt line would install
+// whatever that names.
 const upstreamOf = (j, target, seen = new Set()) => {
   if (j === target) return true;
   if (seen.has(j)) return false;
   seen.add(j);
   return needsOf(j).some((n) => upstreamOf(n, target, seen));
 };
+if (!jobs["publish-sidecar"]) out.push("no publish-sidecar job, so nothing can be ordered around the sidecar publish");
 for (const [name, job] of Object.entries(jobs)) {
-  const runs = (job.steps ?? []).map((st) => typeof st.run === "string" ? st.run : "").join("\n");
+  const runs = (job.steps ?? []).map((st) => typeof st.run === "string" ? st.run : "").join("\n")
+    .split("\n").filter((l) => name !== "publish-brain" || !/^\s*npm install -g "npm@\$\{NPM_VERSION\}"\s*$/.test(l)).join("\n");
+  if (job.env && "NPM_VERSION" in job.env) out.push(name + ": sets NPM_VERSION over the workflow pin");
+  for (const st of job.steps ?? []) if (st.env && "NPM_VERSION" in st.env) out.push(name + ": a step sets NPM_VERSION over the workflow pin");
   const depCode = /\b(?:bun\s+(?:install|i|add|run|test|x)|bunx|npx|npm\s+(?:ci|install|i|run|run-script|test|pack|exec|x))\b/;
-  if (!depCode.test(runs) || !jobs.sidecar) continue;
-  if (!upstreamOf("sidecar", name) && !upstreamOf(name, "sidecar"))
-    out.push(name + ": installs dependencies while the sidecar workflow may still be running (neither before nor after it)");
+  if (!depCode.test(runs) || !jobs["publish-sidecar"]) continue;
+  if (!upstreamOf("publish-sidecar", name) && !upstreamOf(name, "publish-sidecar"))
+    out.push(name + ": installs dependencies while the sidecar publish may still be running (neither before nor after publish-sidecar)");
+  // The trade #952 made covers pack-brain alone. Any other job that runs
+  // dependency code stays out of the build window too: before sidecar-build
+  // starts or after it has finished, which also keeps it away from the
+  // signer and its KMS token.
+  if (name !== "pack-brain" && jobs["sidecar-build"] && !upstreamOf("sidecar-build", name) && !upstreamOf(name, "sidecar-build"))
+    out.push(name + ": installs dependencies while the sidecar build may still be running (neither before nor after sidecar-build; only pack-brain may)");
 }
+if (!jobs["sidecar-build"]) out.push("no sidecar-build job, so nothing can be ordered around the sidecar build");
 // ...and ordering covers only publish-sidecar. A job that consumes the
 // sidecar-* artifacts later (github-release attaches them) checks them
 // against the digests publish-sidecar recorded, which arrive as a job output.
@@ -820,8 +936,8 @@ for (const [name, job] of Object.entries(jobs)) {
   // on its own.
   const cond = steps[dl].if;
   const v = steps.findIndex((st, i) => i > dl && typeof st.run === "string" && /\bsha256sum\b[^\n]*-c\b/.test(st.run) &&
-    /needs\.sidecar\.outputs\.sums/.test(JSON.stringify(st.env ?? {})) && (st.if === undefined || st.if === cond));
-  if (v < 0) out.push(name + ": uses the sidecar artifacts without checking them against needs.sidecar.outputs.sums");
+    /needs\.publish-sidecar\.outputs\.sums/.test(JSON.stringify(st.env ?? {})) && (st.if === undefined || st.if === cond));
+  if (v < 0) out.push(name + ": uses the sidecar artifacts without checking them against needs.publish-sidecar.outputs.sums");
   else if (steps.slice(dl + 1, v).some((st) => st.run !== undefined || st.uses))
     out.push(name + ": does something with the sidecar artifacts before checking their digests");
 }
@@ -1084,7 +1200,7 @@ ${found}"
 	mutant 'a ${{ }} expression back inside a run:' \
 		'run: npm version "$VERSION"' 'run: npm version "${{ needs.validate-tag.outputs.version }}"'
 	mutant 'a consumer that does not list validate-tag in needs' \
-		'needs: [validate-tag, pack-brain, smoke-image, sidecar]' 'needs: [pack-brain, smoke-image, sidecar]'
+		$'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]' $'  publish-brain:\n    needs: [sidecar-build, pack-brain]'
 	mutant 'RELEASE_TAG back in the workflow env' \
 		'  DRY_RUN: ${{ inputs.dry_run == true }}' '  DRY_RUN: ${{ inputs.dry_run == true }}
   RELEASE_TAG: ${{ inputs.tag || github.ref_name }}'
@@ -1116,7 +1232,7 @@ ${found}"
 		'      - name: Validate the release tag' '      - uses: actions/checkout@v5
       - name: Validate the release tag'
 	mutant 'a consumer that runs after a failed gate' \
-		'    needs: [validate-tag, publish-docker, sidecar]' '    needs: [validate-tag, publish-docker, sidecar]
+		'    needs: [validate-tag, publish-docker, publish-sidecar]' '    needs: [validate-tag, publish-docker, publish-sidecar]
     if: always()'
 	mutant 'a misspelt output name' \
 		'enable=${{ needs.validate-tag.outputs.prerelease' 'enable=${{ needs.validate-tag.outputs.prerelaese'
@@ -1137,12 +1253,36 @@ ${found}"
 ' ''
 	mutant 'cancel-in-progress on the publish group (#645)' \
 		'  cancel-in-progress: false' '  cancel-in-progress: true'
-	mutant 'the brain build running alongside the sidecar workflow (#682)' \
-		'    needs: [validate-tag, test, smoke-image, sidecar]' '    needs: [validate-tag, test, smoke-image]'
+	mutant 'the brain build running alongside the sidecar publish (#682, #952)' \
+		$'  publish-sidecar:\n    needs: [validate-tag, sidecar-build, pack-brain]' $'  publish-sidecar:\n    needs: [validate-tag, sidecar-build]' \
+		'pack-brain: installs dependencies while the sidecar publish may still be running'
+	mutant 'the brain publish running dependency code beside the sidecar publish (#952)' \
+		'          npm install -g "npm@${NPM_VERSION}"
+          got="$(npm --version)"
+          [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
+
+      - uses: actions/download-artifact' '          npm install -g "npm@${NPM_VERSION}" left-pad
+          got="$(npm --version)"
+          [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
+
+      - uses: actions/download-artifact' \
+		'publish-brain: installs dependencies while the sidecar publish may still be running'
+	mutant 'a second dependency-code job beside the sidecar build (#952 review)' \
+		$'  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' $'  lint-extra:\n    needs: [validate-tag, smoke-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: bun install --frozen-lockfile\n  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' \
+		'lint-extra: installs dependencies while the sidecar build may still be running'
+	mutant 'the exempt npm install pointed somewhere else by a job env (#952 review)' \
+		$'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]\n' $'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]\n    env:\n      NPM_VERSION: "file:/tmp/x"\n' \
+		'publish-brain: sets NPM_VERSION over the workflow pin'
+	mutant 'the exempt npm install pointed somewhere else by a step env (#952 review)' \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          NPM_VERSION: "file:/tmp/x"\n        run: |' \
+		'publish-brain: a step sets NPM_VERSION over the workflow pin'
+	mutant 'the sidecar publish call renamed, which used to switch the ordering rule off (#952)' \
+		$'  publish-sidecar:\n    needs: [validate-tag, sidecar-build, pack-brain]' $'  sidecar-publish:\n    needs: [validate-tag, sidecar-build, pack-brain]' \
+		'no publish-sidecar job, so nothing can be ordered around the sidecar publish'
 	mutant 'the GitHub Release attaching sidecar binaries without checking their digests (#682)' \
 		"printf '%s' \"\$SUMS\" | base64 -d | sha256sum --strict -c -" "true"
 	mutant 'the sidecar digest check switched off on its own (#682)' \
-		$'      - name: Verify sidecar binaries\n        if: needs.sidecar.outputs.released == \'true\'' $'      - name: Verify sidecar binaries\n        if: false'
+		$'      - name: Verify sidecar binaries\n        if: needs.publish-sidecar.outputs.released == \'true\'' $'      - name: Verify sidecar binaries\n        if: false'
 	mutant 'a download of every artifact attached without a digest check (#682)' \
 		$'          path: artifacts\n          pattern: sidecar-*\n\n      # Exactly the bytes' $'          path: artifacts\n\n      - run: ls artifacts\n\n      # Exactly the bytes'
 	mutant 'a job no longer downstream of the gate' \
@@ -1225,8 +1365,8 @@ fi
 		"$DL_FROM" "$DL_TO_LOGIN" \
 		'smoke-image: logs in to a registry'
 	mutant 'a third job holding packages: write (#680)' \
-		$'  github-release:\n    needs: [validate-tag, publish-docker, sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
-		$'  github-release:\n    needs: [validate-tag, publish-docker, sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
+		$'  github-release:\n    needs: [validate-tag, publish-docker, publish-sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
+		$'  github-release:\n    needs: [validate-tag, publish-docker, publish-sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write\n      packages: write' \
 		'github-release: holds packages: write'
 	mutant 'a docker push from a run: step in the build job (#680)' \
 		'      - name: Upload the archive' $'      - run: docker push ghcr.io/vierisid/jarvis:latest\n      - name: Upload the archive' \
@@ -1347,13 +1487,13 @@ fi
 		'REHEARSAL_REGISTRY_IMAGE is not pinned by tag and digest'
 	# publish-docker: after the approval chain, by digest, the rehearsed script.
 	mutant 'publish-docker pushing before the approval chain (#680)' \
-		'    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image]' \
+		'    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image]' \
 		'publish-docker: does not list publish-brain in needs'
 	mutant 'publish-docker not waiting for the smoke test (#680)' \
-		'    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]' '    needs: [validate-tag, build-image, sidecar, publish-brain]' \
+		'    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, publish-sidecar, publish-brain]' \
 		'publish-docker: does not list smoke-image in needs'
 	mutant 'the push job allowed to run after a failed smoke test (#680)' \
-		$'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]\n' $'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, sidecar, publish-brain]\n    if: ${{ !cancelled() && needs.build-image.result == \'success\' }}\n' \
+		$'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]\n' $'  publish-docker:\n    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]\n    if: ${{ !cancelled() && needs.build-image.result == \'success\' }}\n' \
 		'publish-docker: can run after a failed gate'
 	mutant 'publish-docker given contents: write as well (#680)' \
 		$'    permissions:\n      packages: write\n' $'    permissions:\n      contents: write\n      packages: write\n' \
@@ -1431,11 +1571,46 @@ fi
 		$'      - name: Verify the archive\n        if: env.DRY_RUN != \'true\'\n' $'      - name: Verify the archive\n        if: false\n' \
 		'publish-docker: steps must be exactly'
 	mutant 'the GitHub Release no longer after the image push (#680)' \
-		'    needs: [validate-tag, publish-docker, sidecar]' '    needs: [validate-tag, publish-brain, sidecar]' \
+		'    needs: [validate-tag, publish-docker, publish-sidecar]' '    needs: [validate-tag, publish-brain, publish-sidecar]' \
 		'github-release: does not run after publish-docker'
-	mutant 'the sidecar no longer gated on the smoke test (#680)' \
+	mutant 'the sidecar build no longer gated on the smoke test (#680)' \
 		'    needs: [test, smoke-image]' '    needs: [test, build-image]' \
-		'sidecar: does not run after smoke-image'
+		'sidecar-build: does not run after smoke-image'
+	mutant 'publish-docker no longer after the sidecar publish (#952)' \
+		'    needs: [validate-tag, build-image, smoke-image, publish-sidecar, publish-brain]' '    needs: [validate-tag, build-image, smoke-image, sidecar-build, publish-brain]' \
+		'publish-docker: does not run after publish-sidecar'
+	# #952: one approval for both publishes. Each mutant puts back one way
+	# the two gates came apart, or one way the split could lose atomicity.
+	mutant 'pack-brain waiting for the sidecar publish again, serialising the approvals (#952)' \
+		$'  pack-brain:\n    needs: [validate-tag, test, smoke-image]' $'  pack-brain:\n    needs: [validate-tag, test, smoke-image, publish-sidecar]' \
+		'pack-brain: runs after publish-sidecar, so the brain approval cannot be requested until the sidecar one is given'
+	mutant 'publish-brain waiting for the sidecar publish again, serialising the approvals (#952)' \
+		$'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]' $'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain, publish-sidecar]' \
+		'publish-brain: runs after publish-sidecar, so the brain approval cannot be requested until the sidecar one is given'
+	mutant 'publish-brain no longer after the sidecar build, so brain can publish alone (#952)' \
+		$'  publish-brain:\n    needs: [validate-tag, sidecar-build, pack-brain]' $'  publish-brain:\n    needs: [validate-tag, pack-brain]' \
+		'publish-brain: does not run after sidecar-build, so brain can reach npm while the sidecar build failed'
+	mutant 'the sidecar publish no longer waiting for pack-brain, so the gates come due apart (#952)' \
+		$'  publish-sidecar:\n    needs: [validate-tag, sidecar-build, pack-brain]' $'  publish-sidecar:\n    needs: [validate-tag, sidecar-build]' \
+		'publish-sidecar and publish-brain wait for different jobs (only publish-sidecar: [], only publish-brain: ["pack-brain"])'
+	mutant 'the sidecar build call publishing on its own (#952)' \
+		$'      dry_run: ${{ inputs.dry_run == true }}\n      publish: false\n' $'      dry_run: ${{ inputs.dry_run == true }}\n' \
+		'sidecar-build: must call ./.github/workflows/sidecar-release.yml with publish: false'
+	mutant 'the sidecar publish call building again (#952)' \
+		$'      publish_only: true\n' '' \
+		'publish-sidecar: must call ./.github/workflows/sidecar-release.yml with publish_only: true'
+	mutant 'the sidecar publish call checking against digests from another job (#952)' \
+		'      digests: ${{ needs.sidecar-build.outputs.digests }}' '      digests: ${{ needs.pack-brain.outputs.sha256 }}' \
+		'publish-sidecar: must call ./.github/workflows/sidecar-release.yml with publish_only: true and digests: ${{ needs.sidecar-build.outputs.digests }}'
+	mutant 'a job reading the sidecar publish outputs by bracket, without waiting for it (#952 review)' \
+		'          SHA256: ${{ needs.pack-brain.outputs.sha256 }}' $'          SHA256: ${{ needs.pack-brain.outputs.sha256 }}\n          SIDECAR_SUMS: ${{ needs[\'publish-sidecar\'].outputs.sums }}' \
+		'publish-brain: reads needs.publish-sidecar.outputs but does not list publish-sidecar in needs'
+	mutant 'a job reading the sidecar publish outputs by double-quoted bracket (#952 review)' \
+		'          SHA256: ${{ needs.pack-brain.outputs.sha256 }}' $'          SHA256: ${{ needs.pack-brain.outputs.sha256 }}\n          SIDECAR_SUMS: ${{ needs["publish-sidecar"].outputs.sums }}' \
+		'publish-brain: reads needs.publish-sidecar.outputs but does not list publish-sidecar in needs'
+	mutant 'github-release reading the sidecar publish outputs without waiting for it (#952)' \
+		'    needs: [validate-tag, publish-docker, publish-sidecar]' '    needs: [validate-tag, publish-docker]' \
+		'github-release: reads needs.publish-sidecar.outputs but does not list publish-sidecar in needs'
 	unset MUTANT_MODE
 }
 
@@ -1750,10 +1925,18 @@ done
 		'    if: ${{ inputs.dry_run != true }}' '    if: ${{ inputs.dry_run }}'
 	mutant 'DRY_RUN compared with the string, so a dry dispatch publishes (#685)' \
 		'  DRY_RUN: ${{ inputs.dry_run == true }}' "  DRY_RUN: \${{ inputs.dry_run == 'true' }}"
-	mutant 'the sidecar told a constant instead of the input (#685)' \
-		'      dry_run: ${{ inputs.dry_run == true }}' '      dry_run: ${{ false }}'
-	mutant 'the sidecar dry-run input dropped, so it defaults to a real publish (#685)' \
-		$'    with:\n      dry_run: ${{ inputs.dry_run == true }}\n' ''
+	mutant 'the sidecar build told a constant instead of the input (#685)' \
+		$'      dry_run: ${{ inputs.dry_run == true }}\n      publish: false\n' $'      dry_run: ${{ false }}\n      publish: false\n' \
+		'jobs.sidecar-build.with.dry_run is'
+	mutant 'the sidecar publish told a constant instead of the input (#685, #952)' \
+		$'      dry_run: ${{ inputs.dry_run == true }}\n      publish_only: true\n' $'      dry_run: ${{ false }}\n      publish_only: true\n' \
+		'jobs.publish-sidecar.with.dry_run is'
+	mutant 'the sidecar build dry-run input dropped, so it defaults to a real run (#685)' \
+		$'    with:\n      dry_run: ${{ inputs.dry_run == true }}\n      publish: false\n' $'    with:\n      publish: false\n' \
+		'jobs.sidecar-build.with.dry_run is missing'
+	mutant 'the sidecar publish dry-run input dropped, so a dry dispatch publishes (#685, #952)' \
+		$'    with:\n      dry_run: ${{ inputs.dry_run == true }}\n      publish_only: true\n' $'    with:\n      publish_only: true\n' \
+		'jobs.publish-sidecar.with.dry_run is missing'
 	mutant 'a real-run environment on a dry dispatch (#685)' \
 		"      name: \${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}" "      name: \${{ inputs.dry_run == false && 'release-dry-run' || 'release' }}"
 	mutant 'an equivalent but second spelling of the decision (#685)' \
@@ -1863,8 +2046,8 @@ fi
 		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n' \
 		$'            npm_pkg: linux-x64\n            runner: ubuntu-latest\n            setup: linux\n        shard: [a, b]\n'
 	mutant 'a leg job whose output is not its digest step (#781)' \
-		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}' \
-		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.other.outputs.sha256 }}'
+		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.digest.outputs.sha256 }}' \
+		$'  build-sidecar-linux-arm64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ${{ matrix.runner }}\n    permissions:\n      contents: read\n    outputs:\n      sha256: ${{ steps.other.outputs.sha256 }}'
 	mutant 'publish-sidecar not waiting for one leg, so its digest reads empty (#781)' \
 		' build-sidecar-darwin-x64, sign-sidecar-windows]' ' sign-sidecar-windows]'
 	mutant 'the digest taken before the bundle is packaged (#781)' \
@@ -1875,6 +2058,37 @@ fi
 		$'      - name: Verify sidecar artifacts\n        env:' $'      - name: Verify sidecar artifacts\n        if: false\n        env:'
 	mutant 'the artifact check allowed to fail (#781 review)' \
 		$'      - name: Verify sidecar artifacts\n        env:' $'      - name: Verify sidecar artifacts\n        continue-on-error: true\n        env:'
+	# #952: the publish_only half.
+	mutant 'the digests output with two legs crossed over (#952)' \
+		'jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256,' 'jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.build-sidecar-linux-x64.outputs.sha256,' \
+		'the digests output must be exactly'
+	mutant 'the digests output carrying the unsigned Windows digest (#952)' \
+		'jobs.sign-sidecar-windows.outputs.sha256) ||' 'jobs.build-sidecar-windows.outputs.sha256) ||' \
+		'the digests output must be exactly'
+	mutant 'the digests output never empty, so a release with no sidecar change fails at the artifact check (#952)' \
+		"value: \${{ jobs.resolve.outputs.build == 'true' && format(" 'value: ${{ format(' \
+		'the digests output must be exactly'
+	mutant 'the artifact check reading the digests from somewhere other than the input (#952)' \
+		$'          DIGESTS: ${{ inputs.digests }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          if' $'          DIGESTS: ${{ needs.resolve.outputs.version }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          if' \
+		'publish-sidecar: the artifact check must take DIGESTS from ${{ inputs.digests }}'
+	mutant 'the artifact check told it is always a publish_only call (#952)' \
+		$'          PUBLISH_ONLY: ${{ inputs.publish_only }}\n          DIGESTS: ${{ inputs.digests }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          if' $'          PUBLISH_ONLY: "true"\n          DIGESTS: ${{ inputs.digests }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          if' \
+		'publish-sidecar: the artifact check must take PUBLISH_ONLY from ${{ inputs.publish_only }}'
+	mutant 'a sixth variable in the artifact check env (#952)' \
+		$'          DIGESTS: ${{ inputs.digests }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          if' $'          DIGESTS: ${{ inputs.digests }}\n          SIDECAR_BIN: evil\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          if' \
+		'publish-sidecar: the artifact check env must be exactly'
+	mutant 'a build leg that still builds on a publish_only call (#952)' \
+		$'  build-sidecar-darwin-x64:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n' $'  build-sidecar-darwin-x64:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \'true\'\n' \
+		'build-sidecar-darwin-x64: must need resolve alone and run under exactly needs.resolve.outputs.build'
+	mutant 'the Windows build still building on a publish_only call (#952)' \
+		$'  build-sidecar-windows:\n    needs: resolve\n    if: needs.resolve.outputs.build == \'true\'\n' $'  build-sidecar-windows:\n    needs: resolve\n    if: needs.resolve.outputs.should_release == \'true\'\n' \
+		'build-sidecar-windows: must need resolve alone and run under exactly needs.resolve.outputs.build'
+	mutant 'resolve build output taken from somewhere other than its step (#952)' \
+		'      build: ${{ steps.v.outputs.build }}' '      build: "true"' \
+		'resolve: output build must be ${{ steps.v.outputs.build }}'
+	mutant 'resolve told publish_only by something other than the input (#952)' \
+		$'          PUBLISH_ONLY: ${{ inputs.publish_only }}\n          DIGESTS: ${{ inputs.digests }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          VERSION=' $'          PUBLISH_ONLY: "false"\n          DIGESTS: ${{ inputs.digests }}\n        run: |\n          set -euo pipefail\n          export LC_ALL=C\n          VERSION=' \
+		'resolve: the v step env must be exactly DIGESTS, PUBLISH and PUBLISH_ONLY from their inputs'
 	unset MUTANT_MODE MUTANT_FROM
 }
 
@@ -1900,12 +2114,23 @@ else
 		SUM_DARWIN_X64="$(sha256sum "${WORK}/pub/artifacts/sidecar-darwin-x64/jarvis-app.tar.gz" | cut -d' ' -f1)"
 		SUM_WIN32_X64="$(sha256sum "${WORK}/pub/artifacts/sidecar-win32-x64/jarvis.exe" | cut -d' ' -f1)"
 	}
-	# run_verify: run the step as the runner would; sets RC.
+	# run_verify: run the step as the runner would; sets RC. On a call that
+	# builds, the digests are the five job outputs, PUBLISH_ONLY is the
+	# input (false from release-exec.yml, empty on a dispatch, which does not
+	# declare it) and DIGESTS is empty. PO_MODE=1 runs it as a publish_only
+	# call (#952): the build jobs did not run, so the five job outputs are
+	# empty, and the digests come as the input, which is $PO_DIGESTS.
 	run_verify() {
-		(cd "${WORK}/pub" && env -i PATH="$PATH" SIDECAR_BIN=jarvis \
-			SHA_LINUX_X64="$SUM_LINUX_X64" SHA_LINUX_ARM64="$SUM_LINUX_ARM64" \
-			SHA_DARWIN_ARM64="$SUM_DARWIN_ARM64" SHA_DARWIN_X64="$SUM_DARWIN_X64" \
-			SHA_WIN32_X64="$SUM_WIN32_X64" bash -c "$VERIFY") >"${WORK}/pub.log" 2>&1
+		local -a e=(PATH="$PATH" SIDECAR_BIN=jarvis)
+		if [ -n "${PO_MODE:-}" ]; then
+			e+=(SHA_LINUX_X64="${PO_SHA:-}" SHA_LINUX_ARM64= SHA_DARWIN_ARM64= SHA_DARWIN_X64= SHA_WIN32_X64=
+				PUBLISH_ONLY=true DIGESTS="$PO_DIGESTS")
+		else
+			e+=(SHA_LINUX_X64="$SUM_LINUX_X64" SHA_LINUX_ARM64="$SUM_LINUX_ARM64"
+				SHA_DARWIN_ARM64="$SUM_DARWIN_ARM64" SHA_DARWIN_X64="$SUM_DARWIN_X64"
+				SHA_WIN32_X64="$SUM_WIN32_X64" PUBLISH_ONLY="${PO_INPUT-false}" DIGESTS="${PO_DIGESTS:-}")
+		fi
+		(cd "${WORK}/pub" && env -i "${e[@]}" bash -c "$VERIFY") >"${WORK}/pub.log" 2>&1
 		RC=$?
 	}
 	fixture
@@ -1953,6 +2178,91 @@ else
 	SUM_LINUX_X64="$SUM_LINUX_ARM64"
 	SUM_LINUX_ARM64="$tmp"
 	expect_refused "two legs digests crossed over" "FAILED"
+	# A dispatch declares neither publish_only nor digests: both empty.
+	fixture
+	PO_INPUT=""
+	run_verify
+	if [ "$RC" -eq 0 ]; then
+		ok "the artifact check passes on a dispatch, where publish_only and digests are not declared"
+	else
+		no "the artifact check passes on a dispatch, where publish_only and digests are not declared" "$(cat "${WORK}/pub.log")"
+	fi
+	unset PO_INPUT
+	# A call that builds never takes the input, even a well-formed one.
+	fixture
+	PO_DIGESTS="linux-x64=${SUM_LINUX_X64} linux-arm64=${SUM_LINUX_ARM64} darwin-arm64=${SUM_DARWIN_ARM64} darwin-x64=${SUM_DARWIN_X64} win32-x64=${SUM_WIN32_X64}"
+	expect_refused "a digests input on a call that built its own" "::error::the digests input is for a publish_only call"
+	unset PO_DIGESTS
+
+	# #952: a publish_only call, the build half done by an earlier call whose
+	# digests output arrives as the input. Same artifacts, same strictness.
+	# po_digests: the input exactly as sidecar-release.yml composes it.
+	po_digests() {
+		PO_DIGESTS="linux-x64=${SUM_LINUX_X64} linux-arm64=${SUM_LINUX_ARM64} darwin-arm64=${SUM_DARWIN_ARM64} darwin-x64=${SUM_DARWIN_X64} win32-x64=${SUM_WIN32_X64}"
+	}
+	PO_MODE=1
+	fixture
+	po_digests
+	run_verify
+	if [ "$RC" -eq 0 ]; then
+		ok "publish_only: the artifact check passes the five artifacts, by the digests the build call reported"
+	else
+		no "publish_only: the artifact check passes the five artifacts, by the digests the build call reported" "$(cat "${WORK}/pub.log")"
+	fi
+	fixture
+	po_digests
+	printf 'swapped\n' >"${WORK}/pub/artifacts/sidecar-darwin-arm64/jarvis-app.tar.gz"
+	expect_refused "publish_only: a leg replaced after the build call hashed it" "FAILED"
+	fixture
+	po_digests
+	printf 'swapped\n' >"${WORK}/pub/artifacts/sidecar-win32-x64/jarvis.exe"
+	expect_refused "publish_only: the signed Windows binary replaced after signing" "FAILED"
+	fixture
+	SUM_DARWIN_X64=""
+	po_digests
+	expect_refused "publish_only: a leg the build call reported no digest for" "::error::the digests input is not one sha256 for each of the five legs"
+	fixture
+	PO_DIGESTS=""
+	expect_refused "publish_only: no digests input at all" "::error::the digests input is not one sha256 for each of the five legs"
+	# Crossed over by label: the parse binds each label to its own leg, so a
+	# swap of two values is a mismatch, not a quiet reassignment.
+	fixture
+	PO_DIGESTS="linux-x64=${SUM_LINUX_ARM64} linux-arm64=${SUM_LINUX_X64} darwin-arm64=${SUM_DARWIN_ARM64} darwin-x64=${SUM_DARWIN_X64} win32-x64=${SUM_WIN32_X64}"
+	expect_refused "publish_only: two legs digests crossed over" "FAILED"
+	# Out of order, an extra leg, a trailing newline, upper-case hex, a
+	# short digest: the input is one exact shape, nothing near it.
+	fixture
+	PO_DIGESTS="linux-arm64=${SUM_LINUX_ARM64} linux-x64=${SUM_LINUX_X64} darwin-arm64=${SUM_DARWIN_ARM64} darwin-x64=${SUM_DARWIN_X64} win32-x64=${SUM_WIN32_X64}"
+	expect_refused "publish_only: the legs out of order" "::error::the digests input is not one sha256 for each of the five legs"
+	fixture
+	po_digests
+	PO_DIGESTS="${PO_DIGESTS} evil=${SUM_LINUX_X64}"
+	expect_refused "publish_only: a sixth entry in the digests input" "::error::the digests input is not one sha256 for each of the five legs"
+	fixture
+	po_digests
+	PO_DIGESTS="${PO_DIGESTS}"$'\n'
+	expect_refused "publish_only: a trailing newline in the digests input" "::error::the digests input is not one sha256 for each of the five legs"
+	fixture
+	po_digests
+	PO_DIGESTS="${PO_DIGESTS^^}"
+	expect_refused "publish_only: upper-case labels and hex" "::error::the digests input is not one sha256 for each of the five legs"
+	fixture
+	SUM_LINUX_X64="${SUM_LINUX_X64:0:63}"
+	po_digests
+	expect_refused "publish_only: a digest one character short" "::error::the digests input is not one sha256 for each of the five legs"
+	# One source per call: a build job of a publish_only call reporting a
+	# digest means the build half ran here after all.
+	fixture
+	po_digests
+	PO_SHA="$SUM_LINUX_X64"
+	expect_refused "publish_only: a digest from a build job of its own" "::error::a publish_only call takes its digests from the digests input"
+	unset PO_SHA
+	# The download is still held to exactly the five files.
+	fixture
+	po_digests
+	mkdir -p "${WORK}/pub/artifacts/sidecar-evil" && printf 'x\n' >"${WORK}/pub/artifacts/sidecar-evil/jarvis"
+	expect_refused "publish_only: an extra sidecar-* artifact in the download" "not exactly the five"
+	unset PO_MODE PO_DIGESTS
 fi
 # The other three digest checks on the release path, executed verbatim too
 # (#781 re-review): the structure rules see their shape, and only running
@@ -2153,24 +2463,43 @@ done
 {
 	MUTANT_MODE=postsign
 	MUTANT_FROM="$SIDECAR_WORKFLOW"
+	mutant 'the KMS signer left to skip on a publish_only call only by propagation (#952 review)' \
+		$'    # later adds a status function that would carry it past its skipped need.\n    if: needs.resolve.outputs.build == \'true\'' $'    # later adds a status function that would carry it past its skipped need.\n    if: needs.resolve.outputs.should_release == \'true\'' \
+		'sign-sidecar-windows: runs under'
 	mutant 'publish-sidecar not waiting for the signature check (#817)' \
 		'    needs: [resolve, verify-sidecar-windows, build-sidecar-linux-x64,' '    needs: [resolve, build-sidecar-linux-x64,'
 	mutant 'the sidecar signer verifying in place again, in the job holding id-token (#817)' \
 		'scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' 'scripts/sign-windows.sh "${SIDECAR_BIN}.exe"'
 	mutant 'the sidecar signature check given id-token (#817)' \
-		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
-		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n'
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n'
 	mutant 'the sidecar signer reporting it never signs, so the check always skips (#817)' \
 		'      signed: ${{ steps.winsign.outputs.ready }}' '      signed: "false"'
 	mutant 'the sidecar signature check verifying an artifact other than the one that ships (#817)' \
 		$'          name: sidecar-win32-x64\n          path: ${{ runner.temp }}/signed\n' $'          name: unsigned-win32-x64\n          path: ${{ runner.temp }}/signed\n'
 	mutant 'the sidecar signature check job allowed to fail as a whole (#817 review)' \
 		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    continue-on-error: true\n'
+	# The one status-function form publish-sidecar may carry (#952) is pinned
+	# whole; each of these is a nearby edit that would let it run past a
+	# failed or skipped dependency on a call that is not publish_only.
+	PS_IF="    if: needs.resolve.outputs.publish == 'true' && (success() || (inputs.publish_only == true && !cancelled() && !failure()))"
 	mutant 'publish-sidecar running past a failed signature check (#817 review)' \
-		$'    if: needs.resolve.outputs.should_release == \'true\'\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      sums:' \
-		$'    if: ${{ !cancelled() && needs.resolve.outputs.should_release == \'true\' }}\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      id-token: write\n    outputs:\n      sums:'
+		"$PS_IF" "    if: \${{ !cancelled() && needs.resolve.outputs.publish == 'true' }}" \
+		'publish-sidecar: runs under'
+	mutant 'publish-sidecar running past skipped jobs on any call, the publish_only term dropped (#952)' \
+		"$PS_IF" "    if: needs.resolve.outputs.publish == 'true' && (success() || (!cancelled() && !failure()))" \
+		'publish-sidecar: runs under'
+	mutant 'publish-sidecar running past a failed build on a publish_only call (#952)' \
+		"$PS_IF" "    if: needs.resolve.outputs.publish == 'true' && (success() || (inputs.publish_only == true && !cancelled()))" \
+		'publish-sidecar: runs under'
+	mutant 'publish-sidecar running whatever happened above it (#952)' \
+		"$PS_IF" "    if: always() && needs.resolve.outputs.publish == 'true'" \
+		'publish-sidecar: runs under'
+	mutant 'publish-sidecar no longer gated on the publish half (#952)' \
+		"$PS_IF" "    if: needs.resolve.outputs.should_release == 'true' && (success() || (inputs.publish_only == true && !cancelled() && !failure()))" \
+		'publish-sidecar: runs under'
 	mutant 'the sidecar signature check job run under a condition of its own (#817 review)' \
-		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.should_release == \'true\'\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: always()\n'
+		$'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: needs.resolve.outputs.build == \'true\'\n' $'  verify-sidecar-windows:\n    needs: [resolve, sign-sidecar-windows]\n    if: always()\n'
 	mutant 'the sidecar signature check relaxed to an untrusted chain (#817)' \
 		$'          SIGN_REQUIRE_TRUSTED_CHAIN: "1"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]' $'          SIGN_REQUIRE_TRUSTED_CHAIN: "0"\n        run: |\n          if [ -z "${SIGNING_PUBLISHER_CN}" ]'
 	MUTANT_FROM="$INSTALLER_WORKFLOW"
@@ -2383,11 +2712,15 @@ if [ -z "$RESOLVE" ]; then
 else
 	# sidecar_resolve <file contents>: sets RC and OUT.
 	# sidecar_resolve <file contents> [locale]
+	# RESOLVE_ENV (an array of VAR=value, default none) adds the inputs, as
+	# the mode cases below do; with none, PUBLISH and PUBLISH_ONLY are unset,
+	# which is how a dispatch that declares neither reaches the script.
+	RESOLVE_ENV=()
 	sidecar_resolve() {
 		rm -rf "${WORK}/sc" && mkdir -p "${WORK}/sc/sidecar"
 		printf '%s' "$1" >"${WORK}/sc/sidecar/VERSION"
 		: >"${WORK}/sc/out"
-		local -a envs=(PATH="$PATH" GITHUB_OUTPUT="${WORK}/sc/out" DRY_RUN=true)
+		local -a envs=(PATH="$PATH" GITHUB_OUTPUT="${WORK}/sc/out" DRY_RUN=true ${RESOLVE_ENV[@]+"${RESOLVE_ENV[@]}"})
 		[ -n "${2:-}" ] && envs+=(LC_ALL="$2" LANG="$2")
 		(cd "${WORK}/sc" && env -i "${envs[@]}" bash -c "$RESOLVE") >"${WORK}/sc/log" 2>&1
 		RC=$?
@@ -2396,7 +2729,7 @@ else
 	for v in 0.10.0 $'0.10.0\n' 1.2.3-rc.1 1.2.3-alpha-1.beta.11 10.20.30; do
 		sidecar_resolve "$v"
 		# The file normally ends in a newline, which $(cat) drops.
-		if [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=%s\nshould_release=true' "${v%$'\n'}")" ]; then
+		if [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=%s\nshould_release=true\nbuild=true\npublish=true' "${v%$'\n'}")" ]; then
 			ok "sidecar resolve accepts $(printf '%q' "$v")"
 		else
 			no "sidecar resolve accepts $(printf '%q' "$v")" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/sc/log")"
@@ -2410,6 +2743,73 @@ else
 			ok "sidecar resolve rejects $(printf '%q' "$v") without writing outputs"
 		else
 			no "sidecar resolve rejects $(printf '%q' "$v")" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/sc/log")"
+		fi
+	done
+	# #952: which half of the work a call does. A dispatch passes neither
+	# input (unset here, an empty string on the runner) and must still build
+	# and publish; release-exec.yml builds in one call and publishes in the
+	# other; and the one combination that would do nothing is refused.
+	# mode_case <label> <want rc> <want build> <want publish> [VAR=value ...]
+	mode_case() {
+		local label="$1" rc="$2" b="$3" p="$4"
+		shift 4
+		RESOLVE_ENV=("$@")
+		sidecar_resolve 1.2.3
+		RESOLVE_ENV=()
+		if [ "$rc" = 0 ] && [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=1.2.3\nshould_release=true\nbuild=%s\npublish=%s' "$b" "$p")" ]; then
+			ok "sidecar resolve: ${label}"
+		elif [ "$rc" != 0 ] && [ "$RC" -ne 0 ] && [ -z "$OUT" ] && grep -qF '::error::publish: false and publish_only: true together' "${WORK}/sc/log"; then
+			ok "sidecar resolve: ${label}"
+		else
+			no "sidecar resolve: ${label}" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/sc/log")"
+		fi
+	}
+	mode_case "a dispatch, neither input declared, builds and publishes" 0 true true
+	mode_case "both inputs empty, as the runner gives undeclared ones, builds and publishes" 0 true true PUBLISH= PUBLISH_ONLY=
+	mode_case "the defaults (publish true, publish_only false) build and publish" 0 true true PUBLISH=true PUBLISH_ONLY=false
+	mode_case "publish: false builds and does not publish" 0 true false PUBLISH=false PUBLISH_ONLY=false
+	mode_case "publish_only: true with digests publishes and builds nothing" 0 false true PUBLISH=true PUBLISH_ONLY=true DIGESTS=x
+	mode_case "publish: false with publish_only: true is refused" 1 - - PUBLISH=false PUBLISH_ONLY=true
+	# A dry publish_only call with empty digests decides as a real one does:
+	# the build call built nothing, so there is nothing to publish.
+	RESOLVE_ENV=(PUBLISH=true PUBLISH_ONLY=true DIGESTS=)
+	sidecar_resolve 1.2.3
+	RESOLVE_ENV=()
+	if [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=1.2.3\nshould_release=false\nbuild=false\npublish=false')" ]; then
+		ok "sidecar resolve: a dry publish_only call with empty digests publishes nothing, as a real one"
+	else
+		no "sidecar resolve: a dry publish_only call with empty digests publishes nothing, as a real one" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/sc/log")"
+	fi
+	# A real publish_only call follows the build call, by whether its digests
+	# output is empty, and asks npm nothing: the stub records any call.
+	mkdir -p "${WORK}/npmspy" && printf '#!/bin/sh\necho called >>"%s"\nexit 1\n' "${WORK}/npmspy/log" >"${WORK}/npmspy/npm" && chmod +x "${WORK}/npmspy/npm"
+	for c in "x:true:false:true" ":false:false:false"; do
+		dg="${c%%:*}" && rest="${c#*:}"
+		want="$(printf 'version=1.2.3\nshould_release=%s\nbuild=%s\npublish=%s' "${rest%%:*}" "$(cut -d: -f2 <<<"$rest")" "${rest##*:}")"
+		rm -rf "${WORK}/sc" "${WORK}/npmspy/log" && mkdir -p "${WORK}/sc/sidecar" && printf '1.2.3' >"${WORK}/sc/sidecar/VERSION" && : >"${WORK}/sc/out"
+		(cd "${WORK}/sc" && env -i PATH="${WORK}/npmspy:$PATH" GITHUB_OUTPUT="${WORK}/sc/out" DRY_RUN=false PUBLISH=true PUBLISH_ONLY=true DIGESTS="$dg" bash -c "$RESOLVE") >"${WORK}/sc/log" 2>&1
+		RC=$?
+		OUT="$(cat "${WORK}/sc/out")"
+		if [ "$RC" -eq 0 ] && [ "$OUT" = "$want" ] && [ ! -e "${WORK}/npmspy/log" ]; then
+			if [ -n "$dg" ]; then ok "sidecar resolve: a real publish_only call with digests publishes what was built, without asking npm"
+			else ok "sidecar resolve: a real publish_only call with empty digests publishes nothing, without asking npm"; fi
+		else
+			no "sidecar resolve: a real publish_only call with ${dg:+non-}empty digests" "exit ${RC}; output: ${OUT}; npm: $(cat "${WORK}/npmspy/log" 2>/dev/null); log: $(cat "${WORK}/sc/log")"
+		fi
+	done
+	# Nothing to release (the version is already on npm): neither half runs,
+	# whatever the call asked for. A real run asks npm; a stub answers yes.
+	mkdir -p "${WORK}/npmstub" && printf '#!/bin/sh\necho 1.2.3\n' >"${WORK}/npmstub/npm" && chmod +x "${WORK}/npmstub/npm"
+	for m in "PUBLISH=false PUBLISH_ONLY=false" ""; do
+		rm -rf "${WORK}/sc" && mkdir -p "${WORK}/sc/sidecar" && printf '1.2.3' >"${WORK}/sc/sidecar/VERSION" && : >"${WORK}/sc/out"
+		# shellcheck disable=SC2086 # m is a list of VAR=value words on purpose.
+		(cd "${WORK}/sc" && env -i PATH="${WORK}/npmstub:$PATH" GITHUB_OUTPUT="${WORK}/sc/out" DRY_RUN=false $m bash -c "$RESOLVE") >"${WORK}/sc/log" 2>&1
+		RC=$?
+		OUT="$(cat "${WORK}/sc/out")"
+		if [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=1.2.3\nshould_release=false\nbuild=false\npublish=false')" ]; then
+			ok "sidecar resolve: a version already on npm runs neither half (${m:-no inputs})"
+		else
+			no "sidecar resolve: a version already on npm runs neither half (${m:-no inputs})" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/sc/log")"
 		fi
 	done
 	# Under a UTF-8 locale glibc's [A-Za-z] and [0-9] match more than ASCII;
