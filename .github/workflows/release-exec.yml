@@ -754,8 +754,13 @@ jobs:
   # (sidecar/updater.go), so brain landing first is a short wait, not a
   # failure. And since the two publish side by side, one can fail after the
   # other succeeded: a failed sidecar publish leaves brain on npm with
-  # publish-docker and github-release skipped. Re-run the failed jobs; every
-  # npm publish here treats "already on npm" as success.
+  # publish-docker and github-release skipped. Re-run the failed jobs (not
+  # all jobs): the brain publish treats "already on npm" as success, and the
+  # sidecar platform packages do when npm serves exactly the files this run
+  # built (#958), which a re-run of failed jobs reuses. A new run cannot
+  # finish such a partial sidecar publish, since its build is not
+  # byte-identical: until sidecar/VERSION is bumped, every later release
+  # fails at publish-sidecar and skips github-release.
   #
   # id-token for publish-sidecar's Trusted Publishing. The signing secrets
   # are passed because workflow-hardening.test.sh requires a call to pass

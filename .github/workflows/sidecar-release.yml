@@ -18,8 +18,11 @@ name: Sidecar Release
 #     build and publish in one go, as before.
 # Idempotent: if sidecar/VERSION is already on npm it stops as a no-op success
 # instead of failing — so calling it on every brain release is safe even when
-# the sidecar hasn't changed. Partial publishes self-heal: the per-package
-# "already on npm" guards no-op, and the wrapper (published last) is the gate.
+# the sidecar hasn't changed. Partial publishes self-heal when the failed jobs
+# of the run that started them are re-run (not all jobs, which rebuilds): the per-package "already on npm" guards no-op once
+# npm is found to serve exactly that run's files (#958), and the wrapper
+# (published last) is the gate. A new run cannot finish another run's partial
+# publish, since its build is not byte-identical; bump sidecar/VERSION.
 
 on:
   workflow_call:
@@ -846,9 +849,10 @@ jobs:
       # it is set only if this job ran, and the call fails unless it
       # finished, so true here means this job published, or found the
       # version already on npm and took that as success (the fallback in the
-      # publish steps). In that second case the bytes on npm need not be the
-      # ones this run built, a race with a concurrent standalone dispatch of
-      # the same version that predates #952.
+      # publish steps). That fallback holds on a real run only when npm
+      # serves exactly the platform files this job verified (#958), so a
+      # concurrent standalone dispatch of the same version can no longer
+      # leave github-release attaching binaries npm does not serve.
       released: "true"
       version: ${{ steps.version.outputs.version }}
     steps:
@@ -1075,6 +1079,25 @@ jobs:
       # any other failure of a rehearsed publish still fails the run. npm's
       # output goes through tee so the log stays live and the refusal can
       # be read back; the publish's own status is PIPESTATUS[0].
+      #
+      # On a real run a package already on npm counts as published only if
+      # npm serves exactly the files this job verified (#958): this job then
+      # reports released and these artifacts' sums, and github-release
+      # attaches them as the release. Another run of the same version (a
+      # standalone dispatch beside a release, or a fresh run finishing a
+      # partial publish) built other bytes: the sidecar is not reproducible
+      # across runs (the Go binaries embed the commit, the macOS bundle and
+      # the Windows binary carry signing timestamps), so the comparison is
+      # with what npm serves, never with a rebuild. Re-running the failed
+      # jobs of the run that published the version reuses its artifacts and
+      # matches; re-running all jobs rebuilds, and does not. The tarball
+      # is fetched from the registry, checked against dist.integrity, and
+      # compared entry by entry (type, path, sha256) with ours. On a
+      # dry run the comparison is only reported: a fresh build never matches,
+      # and #966 says the rehearsal does not fail for a version npm has.
+      #
+      # The wrapper carries no artifact bytes and is published last, so the
+      # race is caught here, before it.
       - name: Publish platform packages
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -1083,6 +1106,54 @@ jobs:
           if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
           if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi
           err="$(mktemp)"
+
+          # manifest <dir>: every entry of the package in <dir> but
+          # directories, by type and path, then every file by sha256. Fails
+          # without package.json and a file in bin/ (nothing compared is not
+          # a match), or on a name with a character that is not printable
+          # (it would reach the log raw).
+          manifest() (
+            set -o pipefail
+            cd -P "$1" && [ -f package.json ] || exit 1
+            [ -n "$(find bin -type f -print -quit 2>/dev/null)" ] || exit 1
+            [ -z "$(LC_ALL=C find . -name '*[![:print:]]*' -print -quit)" ] || exit 1
+            find . -mindepth 1 -not -type d -printf '%y %P\n' | LC_ALL=C sort || exit 1
+            find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum || exit 1
+          )
+          # same_as_npm <pkg>, from its package directory: 0 when npm serves
+          # exactly this package (package.json and bin/, which is all npm
+          # packs of it and which it does not rewrite) for pkg@VERSION, 1
+          # when it serves another, 2 when that could not be established.
+          # npm installs a tarball by stripping its first path component and
+          # dropping links, so it must hold one real directory, package, or
+          # what GNU tar shows here is not what npm installs.
+          same_as_npm() {
+            local url integrity tmp got names types ours theirs
+            url="$(npm view "${1}@${VERSION}" dist.tarball)" || return 2
+            integrity="$(npm view "${1}@${VERSION}" dist.integrity)" || return 2
+            [[ "$url" =~ ^https://registry\.npmjs\.org/[^[:space:]]+\.tgz$ ]] || return 2
+            [[ "$integrity" =~ ^sha512-[A-Za-z0-9+/]{86}==$ ]] || return 2
+            tmp="$(mktemp -d)" || return 2
+            curl -fsSL --proto '=https' --retry 3 --max-time 300 --max-filesize 268435456 -o "${tmp}/npm.tgz" "$url" || return 2
+            got="$(openssl dgst -sha512 -binary "${tmp}/npm.tgz" | base64 -w0)" || return 2
+            [ "sha512-${got}" = "$integrity" ] || return 2
+            # The listing first, as npm reads it: every member under
+            # package/ (no ./, no other root), and only files and
+            # directories, since npm drops links and GNU tar would follow a
+            # hard link to a member sent again later.
+            names="$(tar --quoting-style=escape -tzf "${tmp}/npm.tgz")" || return 2
+            types="$(tar --quoting-style=escape -tvzf "${tmp}/npm.tgz" | cut -c1)" || return 2
+            if grep -qv '^package/' <<<"$names"; then return 1; fi
+            if grep -qv '^[-d]$' <<<"$types"; then return 1; fi
+            mkdir "${tmp}/x" && tar -xzf "${tmp}/npm.tgz" -C "${tmp}/x" --no-same-owner --no-same-permissions || return 2
+            [ "$(find "${tmp}/x" -mindepth 1 -maxdepth 1 -printf '%P %y\n')" = "package d" ] || return 1
+            ours="$(manifest .)" || return 2
+            theirs="$(manifest "${tmp}/x/package")" || return 1
+            if [ "$ours" != "$theirs" ]; then
+              diff <(printf '%s\n' "$ours") <(printf '%s\n' "$theirs") || true
+              return 1
+            fi
+          }
 
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
             pkg="@usejarvis/sidecar-${platform}"
@@ -1093,9 +1164,28 @@ jobs:
               if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
                 exit 1
               elif [ "$DRY_RUN" != "true" ]; then
-                echo "${pkg}@${VERSION} is already on npm; treating as success."
+                same=0
+                same_as_npm "$pkg" || same=$?
+                if [ "$same" -eq 0 ]; then
+                  echo "${pkg}@${VERSION} is already on npm with exactly the files this run verified; treating as success."
+                elif [ "$same" -eq 1 ]; then
+                  echo "::error::${pkg}@${VERSION} is already on npm with files other than the ones this run built and verified, so this run cannot report them as released (#958). Another run, or an earlier attempt of this one, published this version: to finish a partial publish, re-run the failed jobs (not all jobs) of the run that started it; otherwise bump sidecar/VERSION."
+                  exit 1
+                else
+                  echo "::error::${pkg}@${VERSION} is already on npm, and whether it holds the files this run verified could not be established (#958); re-run this job."
+                  exit 1
+                fi
               elif grep -qF "You cannot publish over the previously published versions" "$err"; then
                 echo "::notice::${pkg}@${VERSION} is already on npm, so this dry run cannot rehearse publishing it; packing it was rehearsed."
+                same=0
+                same_as_npm "$pkg" || same=$?
+                if [ "$same" -eq 0 ]; then
+                  echo "::notice::${pkg}@${VERSION} on npm is byte for byte this build, so a real run would take it as published."
+                elif [ "$same" -eq 1 ]; then
+                  echo "::notice::${pkg}@${VERSION} on npm is not byte for byte this build, so a real run finding it there would stop (#958). Expected when another run built it: the sidecar is not reproducible across runs."
+                else
+                  echo "::warning::could not establish whether ${pkg}@${VERSION} on npm is this build; a real run would stop here (#958)."
+                fi
               else
                 exit 1
               fi
