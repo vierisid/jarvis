@@ -1,0 +1,32 @@
+{
+  "pre-brief": {
+    "revision": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "sources": {
+      "src/vault/schema.ts": "deb6a50652e60841f11bd16ca61a0607a4672fc729fa187c6760a467e821c10a",
+      "src/vault/fact-schema.ts": "45aff0b2966849a92295d6d96648d144f289d17cc31afe0f222995cfc0165777",
+      "src/vault/fact-policy.ts": "2e0ee2e94c712b706eaf30841f2a4cc9ece28fc81419964a174a820ed94dd196",
+      "src/vault/goal-event-schema.ts": "5066a7ad0b66409fe74616341a608ecfd19325afbd972e6b65ad320a26ad54db",
+      "src/vault/suggestion-schema.ts": "52be345969eb88756c4cf023c99770e9a880c803b141f8e731904b3df4d47a35",
+      "src/user/profile.ts": "75fbd8622daaecc6826a117ff2e47d40d0f0b4e7169af51cbcf1829f5130748f",
+      "src/workflows/db/schema.ts": "258c699d98867bee68ee1ea27cafdd5fcb752a057f0cf256f948abe1ca691256",
+      "src/workflows/db/flow-graph.ts": "d84b2ea483fa0db42050179138c74be96fbbdf36abe8b88693894c17990765af",
+      "src/vault/conversations.ts": "91e8634bfe73c17814ddca70fd5721179e0e8fad103a26a4480cad85f2724e40"
+    },
+    "schemaSha256": "393e554d735fee92391c459a27cfbebf982545a7d8ed1eb8c69772666b45e243"
+  },
+  "main": {
+    "revision": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+    "sources": {
+      "src/vault/schema.ts": "ccf01eb18c9597889834636cad9a77ef82c821897d281f825d9f926e426dbb89",
+      "src/vault/fact-schema.ts": "45aff0b2966849a92295d6d96648d144f289d17cc31afe0f222995cfc0165777",
+      "src/vault/fact-policy.ts": "2e0ee2e94c712b706eaf30841f2a4cc9ece28fc81419964a174a820ed94dd196",
+      "src/vault/goal-event-schema.ts": "5066a7ad0b66409fe74616341a608ecfd19325afbd972e6b65ad320a26ad54db",
+      "src/vault/suggestion-schema.ts": "52be345969eb88756c4cf023c99770e9a880c803b141f8e731904b3df4d47a35",
+      "src/user/profile.ts": "75fbd8622daaecc6826a117ff2e47d40d0f0b4e7169af51cbcf1829f5130748f",
+      "src/workflows/db/schema.ts": "4e668ac7e3e6197471497ccbc9d6b96b51353515211ccfb90430c21d1e6fa221",
+      "src/workflows/db/flow-graph.ts": "d84b2ea483fa0db42050179138c74be96fbbdf36abe8b88693894c17990765af",
+      "src/vault/conversations.ts": "5658c4954355a2b831d1afe4cc324d322678f5abf5355eb21870c8036007433e"
+    },
+    "schemaSha256": "29e01094aec9a3f034beb4e761ab379593e9fcb8feb7ee505af6278c23324342"
+  }
+}
