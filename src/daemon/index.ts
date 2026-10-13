@@ -2787,9 +2787,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       //   "close the (amber|sage|...) one"             -> close by color
       //   "close the (research|legal|...) one|agent"   -> close by agent-name
       //                                                   substring match
-      //   "dismiss / kill / get rid of / cancel" -- same verbs
+      //   "dismiss / get rid of" -- same verbs
+      //   "cancel / kill" (or stop, abort, ...) -- never hides: closing only
+      //     removes the overlay, not the task, so these get told that (#934)
       // A bare "this"/"that" or "agents" no longer counts (#926); see
-      // planSubPebbleClose. Closing only removes the overlay, not the task.
+      // planSubPebbleClose.
       // Returns true when handled (skips LLM).
       const tryHandleSubPebbleCloseIntent = async (
         sidecarId: string,
@@ -2808,7 +2810,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           for (const [id, slot] of used.entries()) {
             const task = tm.getTask(id);
             if (!task) continue;
-            cands.push({ id, slot, color: colorForTask(id), agentName: task.agentName });
+            cands.push({ id, slot, color: colorForTask(id), agentName: task.agentName, running: task.status === 'running' });
           }
         }
         const plan = planSubPebbleClose(userText, cands);
@@ -2819,7 +2821,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         if (!used) return false;
 
-        const closeOne = async (cand: SubPebbleCand, label: string): Promise<void> => {
+        // Closing destroys the overlay only; the task keeps running, and the
+        // plan's reply says so (#934).
+        const closeOne = async (cand: SubPebbleCand, reply: string): Promise<void> => {
           try {
             await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.close', { id: cand.id });
             const closedSlot = used.get(cand.id);
@@ -2834,10 +2838,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 if (slot > closedSlot) used.set(otherId, slot - 1);
               }
             }
-            await speakConfirmation(sidecarId, `Closed the ${label} background agent.`, ctrl);
+            await speakConfirmation(sidecarId, reply, ctrl);
           } catch (err) {
             console.warn(`[sub-pebble] close ${cand.id} failed:`, err);
-            await speakConfirmation(sidecarId, "I couldn't close that background agent.", ctrl);
+            await speakConfirmation(sidecarId, "I couldn't hide that background agent.", ctrl);
           }
         };
 
@@ -2845,14 +2849,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           try {
             await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.close_all', {});
             used.clear();
-            await speakConfirmation(sidecarId, `Closed all ${plan.count} background ${plan.count === 1 ? 'agent' : 'agents'}.`, ctrl);
+            await speakConfirmation(sidecarId, plan.reply, ctrl);
           } catch (err) {
             console.warn('[sub-pebble] close_all failed:', err);
-            await speakConfirmation(sidecarId, "I couldn't close them.", ctrl);
+            await speakConfirmation(sidecarId, "I couldn't hide them.", ctrl);
           }
           return true;
         }
-        await closeOne(plan.cand, plan.label);
+        await closeOne(plan.cand, plan.reply);
         return true;
       };
 

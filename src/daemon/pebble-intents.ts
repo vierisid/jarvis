@@ -385,7 +385,8 @@ export function planWindowAction(text: string, lookups: PanelLookups): WindowPla
 // Closing background agents (sub-pebbles)
 // ---------------------------------------------------------------------------
 
-export type SubPebbleCand = { id: string; slot: number; color: string; agentName: string };
+/** A background agent's overlay. `running` is its task's state: hiding the overlay does not change it. */
+export type SubPebbleCand = { id: string; slot: number; color: string; agentName: string; running: boolean };
 
 export const SUB_PEBBLE_COLORS = ['amber', 'sage', 'violet', 'mustard', 'teal', 'vermilion'] as const;
 
@@ -399,16 +400,69 @@ const RESERVED_HINTS = new Set([
   'newest', 'latest', 'last', 'recent', 'current', 'running', 'other', 'first', 'oldest', 'old',
 ]);
 
+/**
+ * Words that ask for the work to stop, not for the overlay to go away (#934).
+ * Closing a sub-pebble only hides it; the task behind it keeps running, and
+ * nothing here can stop it. So none of these may reach a hide: "cancel the
+ * background agent" used to hide it and answer "Closed the ... background
+ * agent." while it carried on.
+ */
+const CANCEL_WORD =
+  /\b(?:cancel\w*|kill\w*|stop(?:s|ped|ping)?|abort\w*|terminat\w*|halt\w*|quit|nuke|scrap|put an end to|for good|permanently|shut(?:ting)?\s+(?:(?:it|them)\s+)?down|end(?:s|ed|ing)?\s+(?:it|them|the\s+(?:task|agent|job|work)))\b/;
+
+/**
+ * A cancel word the user negated asks for nothing to stop: "close it, don't
+ * stop it" and "close it without killing it" mean hide. Removed before the
+ * test above, so they hide as asked.
+ */
+const NEGATED_CANCEL = new RegExp(
+  `\\b(?:don'?t|do not|without|but not|never|no need to)\\s+(?:\\w+\\s+)?${CANCEL_WORD.source.replace(/^\\b/, '')}`,
+  'g',
+);
+
+function asksToStop(text: string): boolean {
+  return CANCEL_WORD.test(text.toLowerCase().replace(NEGATED_CANCEL, ' '));
+}
+
+/** What JARVIS says when asked to stop a background agent it can only hide. */
+export const CANNOT_STOP_AGENT =
+  "I can't stop a background agent by voice. Closing it only hides it, and it keeps running.";
+
+/**
+ * `reply` is what to say once the overlay is gone. It says "Hid", and whether
+ * the task is still running, because that is all closing does. `label` and
+ * `count` are not spoken; they stay for the log and the tests.
+ */
 export type SubPebbleClosePlan =
-  | { kind: 'close_all'; count: number }
-  | { kind: 'close_one'; cand: SubPebbleCand; label: string }
+  | { kind: 'close_all'; count: number; reply: string }
+  | { kind: 'close_one'; cand: SubPebbleCand; label: string; reply: string }
   | SayPlan;
+
+function stillRunning(running: number, total: number): string {
+  if (running === 0) return '';
+  if (running === total) return total === 1 ? " It's still running." : " They're still running.";
+  return ` ${running} of them ${running === 1 ? 'is' : 'are'} still running.`;
+}
+
+function hideOne(cand: SubPebbleCand, label: string): SubPebbleClosePlan {
+  return { kind: 'close_one', cand, label, reply: `Hid the ${label} background agent.${stillRunning(cand.running ? 1 : 0, 1)}` };
+}
 
 /**
  * `cands` is null when the slot table is empty for this pebble, and the live
  * candidates otherwise (possibly none, when every slot's task is gone).
  */
 export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[] | null): SubPebbleClosePlan | null {
+  const plan = planSubPebbleTarget(text, cands);
+  // Asked to stop it: hiding it would be doing something else and calling it
+  // done. A plan that is already an answer ("there's no amber one") stands.
+  if (plan && plan.kind !== 'say' && asksToStop(text)) {
+    return { kind: 'say', text: CANNOT_STOP_AGENT };
+  }
+  return plan;
+}
+
+function planSubPebbleTarget(text: string, cands: readonly SubPebbleCand[] | null): SubPebbleClosePlan | null {
   const t = text.toLowerCase().trim();
   if (!/\b(close|dismiss|kill|get rid of|cancel)\b/.test(t)) return null;
 
@@ -421,7 +475,13 @@ export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[]
   const live = cands ?? [];
 
   if (named && /\b(all|every|everything)\b/.test(t) && live.length > 0) {
-    return { kind: 'close_all', count: live.length };
+    const n = live.length;
+    const running = live.filter((c) => c.running).length;
+    return {
+      kind: 'close_all',
+      count: n,
+      reply: `Hid ${n === 1 ? 'the background agent' : `all ${n} background agents`}.${stillRunning(running, n)}`,
+    };
   }
 
   // "close the amber one". A colour that is running is certain; a colour
@@ -430,7 +490,7 @@ export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[]
   const colour = new RegExp(`\\b(${SUB_PEBBLE_COLORS.join('|')})\\s+${AGENT_NOUN}\\b`).exec(t);
   if (colour) {
     const match = live.find((c) => c.color === colour[1]);
-    if (match) return { kind: 'close_one', cand: match, label: colour[1]! };
+    if (match) return hideOne(match, colour[1]!);
     return named ? { kind: 'say', text: `There's no ${colour[1]} background agent running.` } : null;
   }
 
@@ -439,7 +499,7 @@ export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[]
   if (m && m[1] && !RESERVED_HINTS.has(m[1])) {
     const hint = m[1];
     const match = live.find((c) => c.agentName.toLowerCase().includes(hint));
-    if (match) return { kind: 'close_one', cand: match, label: match.agentName.toLowerCase() };
+    if (match) return hideOne(match, match.agentName.toLowerCase());
     if (named) return { kind: 'say', text: `There's no ${hint} background agent running.` };
     return null;
   }
@@ -449,7 +509,7 @@ export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[]
   if (cands === null) return { kind: 'say', text: 'There are no background agents running.' };
   if (cands.length === 0) return { kind: 'say', text: 'There are no background agents to close.' };
   const newest = cands.slice().sort((a, b) => b.slot - a.slot)[0]!;
-  return { kind: 'close_one', cand: newest, label: 'most recent' };
+  return hideOne(newest, 'most recent');
 }
 
 // ---------------------------------------------------------------------------

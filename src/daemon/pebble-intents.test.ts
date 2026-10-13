@@ -14,7 +14,7 @@ import { readFileSync } from 'node:fs';
 import { wakeCommandFrom } from '../voice/wake-phrase.ts';
 import {
   exactRoomKey, findRoomKey, parseBackgroundTask, parseSettingsIntent, PEBBLE_ROOMS,
-  planInPanelAction, planSubPebbleClose, planWindowAction, SPOKEN_TABS, spokenTab, tabSwitchReply,
+  CANNOT_STOP_AGENT, planInPanelAction, planSubPebbleClose, planWindowAction, SPOKEN_TABS, spokenTab, tabSwitchReply,
   type PanelLookups, type PanelRef, type SubPebbleCand,
 } from './pebble-intents.ts';
 import { isRoomTab, ROOM_TABS, roomTabs, type TabbedRoom } from './room-tabs.ts';
@@ -319,8 +319,8 @@ describe('window management', () => {
 });
 
 describe('closing background agents', () => {
-  const research: SubPebbleCand = { id: 't1', slot: 0, color: 'amber', agentName: 'Research Analyst' };
-  const writer: SubPebbleCand = { id: 't2', slot: 1, color: 'sage', agentName: 'Content Writer' };
+  const research: SubPebbleCand = { id: 't1', slot: 0, color: 'amber', agentName: 'Research Analyst', running: true };
+  const writer: SubPebbleCand = { id: 't2', slot: 1, color: 'sage', agentName: 'Content Writer', running: true };
   const running = [research, writer];
 
   test.each([
@@ -377,7 +377,79 @@ describe('closing background agents', () => {
       expect({ said, plan: planSubPebbleClose(said, running) })
         .toMatchObject({ said, plan: { kind: 'close_one', cand: { id }, label } });
     }
-    expect(planSubPebbleClose('close all background agents', running)).toEqual({ kind: 'close_all', count: 2 });
+    expect(planSubPebbleClose('close all background agents', running)).toMatchObject({ kind: 'close_all', count: 2 });
+  });
+
+  // #934: closing a sub-pebble destroys its overlay; the task keeps running.
+  test.each([
+    'cancel the background agent',
+    'kill the background agent',
+    'kill the research agent',
+    'cancel the amber one',
+    'cancel the research one',
+    'kill all background agents',
+    'cancel all background agents',
+    'close the background agent and stop it',
+    'close and cancel the amber agent',
+    'dismiss the sub-agent, abort it',
+    'get rid of the background task and terminate it',
+    // Inflections, STT spellings and other ways of asking for it to end.
+    'close the background agent and cancels it',
+    'close the background agent, I canceled it',
+    'close the background agent, cancelling it',
+    'close the background agent and kills it',
+    'close the background agent and stopping it',
+    'close the background agent and shut it down',
+    'close and shut down the background agent',
+    'close the background agent and end the task',
+    'dismiss the background agent permanently',
+    'get rid of the background task for good',
+    'kill off the background agent',
+  ])('"%s" is not carried out by hiding the agent', (said) => {
+    expect(planSubPebbleClose(said, running)).toEqual({ kind: 'say', text: CANNOT_STOP_AGENT });
+  });
+
+  test('a negated cancel word asks only for the overlay to go', () => {
+    for (const said of [
+      "close the background agent, don't stop it",
+      "close the background agent but don't kill it",
+      'close the background agent without stopping it',
+    ]) {
+      expect({ said, kind: planSubPebbleClose(said, running)?.kind }).toEqual({ said, kind: 'close_one' });
+    }
+  });
+
+  test('the refusal does not claim the agent was stopped or hidden', () => {
+    expect(CANNOT_STOP_AGENT).toContain("can't stop");
+    expect(CANNOT_STOP_AGENT).toContain('keeps running');
+    expect(CANNOT_STOP_AGENT).not.toMatch(/\b(closed|hid|cancelled|stopped)\b/i);
+  });
+
+  test('a cancel for an agent that is not there still gets the true answer', () => {
+    expect(planSubPebbleClose('cancel the teal background agent', running))
+      .toEqual({ kind: 'say', text: "There's no teal background agent running." });
+    expect(planSubPebbleClose('cancel the background agent', null))
+      .toEqual({ kind: 'say', text: 'There are no background agents running.' });
+    // Not about an agent at all: still the model's.
+    expect(planSubPebbleClose('cancel this order', running)).toBeNull();
+  });
+
+  test('closing says it hid the agent, and whether its task is still running', () => {
+    const done: SubPebbleCand = { ...writer, running: false };
+    expect(planSubPebbleClose('close the amber one', running))
+      .toMatchObject({ kind: 'close_one', reply: "Hid the amber background agent. It's still running." });
+    expect(planSubPebbleClose('close the content agent', [research, done]))
+      .toMatchObject({ kind: 'close_one', reply: 'Hid the content writer background agent.' });
+    expect(planSubPebbleClose('close all background agents', running))
+      .toMatchObject({ kind: 'close_all', reply: "Hid all 2 background agents. They're still running." });
+    expect(planSubPebbleClose('close all background agents', [research, done]))
+      .toMatchObject({ kind: 'close_all', reply: 'Hid all 2 background agents. 1 of them is still running.' });
+    expect(planSubPebbleClose('close all background agents', [done]))
+      .toMatchObject({ kind: 'close_all', reply: 'Hid the background agent.' });
+    for (const said of ['close the background agent', 'dismiss the sub-agent', 'close all background agents']) {
+      const plan = planSubPebbleClose(said, running);
+      expect(plan?.kind === 'close_one' || plan?.kind === 'close_all' ? plan.reply : '').toMatch(/^Hid /);
+    }
   });
 });
 
@@ -392,6 +464,14 @@ describe('the daemon uses these plans', () => {
     expect(src).toContain('planSubPebbleClose(userText, cands)');
     expect(src).toContain('parseBackgroundTask(userText)');
     expect(src).toContain('planWindowAction(lower, panelLookups(sidecarId))');
+  });
+
+  test('hiding a background agent speaks the plan\'s reply, never "Closed" (#934)', () => {
+    expect(src).toContain('await speakConfirmation(sidecarId, reply, ctrl);');
+    expect(src).toContain('await speakConfirmation(sidecarId, plan.reply, ctrl);');
+    expect(src).not.toContain('Closed the ${label} background agent.');
+    expect(src).not.toContain('Closed all ${plan.count} background');
+    expect(src).toContain("running: task.status === 'running'");
   });
 
   test('a tab switch waits for the room and reports what it said (#933)', () => {
