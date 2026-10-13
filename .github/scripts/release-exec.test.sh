@@ -1185,14 +1185,44 @@ fi
 		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n' \
 		$'  smoke-image:\n    needs: [validate-tag, build-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n      packages: read\n' \
 		'smoke-image: permissions must be exactly contents: read'
-	mutant 'the smoke job logging in to GHCR again (#868)' \
-		'      - name: Download the archive
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+	# The download-artifact pin is READ OUT of the workflow, never spelled here.
+	# Dependabot bumps it, and an anchor carrying the SHA turns every bump into
+	# a guard failure that looks like a real one: #936 (v8.0.1 -> v8.0.2) failed
+	# as "the workflow no longer has the text it mutates" on these two mutants
+	# and nothing else. The two share one anchor because their `from` is the
+	# same block.
+	DL_PIN="$(grep -oE 'actions/download-artifact@[0-9a-f]{40} # v[0-9][0-9.]*' "$WORKFLOW" | head -1)"
+	if [ -z "$DL_PIN" ]; then
+		echo "could not read the actions/download-artifact pin out of $WORKFLOW" >&2
+		exit 1
+	fi
+	DL_FROM="      - name: Download the archive
+        uses: ${DL_PIN}
         with:
           name: release-image-oci
-          path: ${{ runner.temp }}/release-image
+          path: \${{ runner.temp }}/release-image
 
-      # The amd64' $'      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0\n        with:\n          registry: ghcr.io\n      - name: Download the archive\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-image-oci\n          path: ${{ runner.temp }}/release-image\n\n      # The amd64' \
+      # The amd64"
+	DL_TO_LOGIN="      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+      - name: Download the archive
+        uses: ${DL_PIN}
+        with:
+          name: release-image-oci
+          path: \${{ runner.temp }}/release-image
+
+      # The amd64"
+	DL_TO_GATED="      - name: Download the archive
+        if: env.DRY_RUN == 'true'
+        uses: ${DL_PIN}
+        with:
+          name: release-image-oci
+          path: \${{ runner.temp }}/release-image
+
+      # The amd64"
+	mutant 'the smoke job logging in to GHCR again (#868)' \
+		"$DL_FROM" "$DL_TO_LOGIN" \
 		'smoke-image: logs in to a registry'
 	mutant 'a third job holding packages: write (#680)' \
 		$'  github-release:\n    needs: [validate-tag, publish-docker, sidecar]\n    runs-on: ubuntu-latest\n    # Creating the release (and its generated notes) is a contents write. The\n    # sidecar artifacts come from this same run, which needs no token scope.\n    permissions:\n      contents: write' \
@@ -1273,8 +1303,7 @@ fi
 		$'      - name: Load the image from its archive\n' $'      - name: Load the image from its archive\n        if: env.DRY_RUN == \'true\'\n' \
 		'smoke-image: the archive load runs under'
 	mutant 'the archive download skipped on a real run, as before #868' \
-		$'      - name: Download the archive\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-image-oci\n          path: ${{ runner.temp }}/release-image\n\n      # The amd64' \
-		$'      - name: Download the archive\n        if: env.DRY_RUN == \'true\'\n        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1\n        with:\n          name: release-image-oci\n          path: ${{ runner.temp }}/release-image\n\n      # The amd64' \
+		"$DL_FROM" "$DL_TO_GATED" \
 		'smoke-image: the archive load is not right after an unconditional release-image-oci download'
 	mutant 'the archive loaded without its content checks (#680)' \
 		'          echo "${DIGEST#sha256:}  $(blob "$DIGEST")" | sha256sum -c -' '          true' \
