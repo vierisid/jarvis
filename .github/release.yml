@@ -1,5 +1,12 @@
 changelog:
   categories:
+    # First on purpose. GitHub puts a PR in the FIRST category whose labels it
+    # matches, so a breaking change moves out of Bug Fixes and to the top of
+    # the notes instead of being one bullet among dozens. v0.16.0 would have
+    # published #881 and #918 -- an open channel stops serving, and proactive
+    # delivery narrows -- as lines 43 and 47 of a 73-line body.
+    - title: "⚠️ Breaking Changes"
+      labels: [breaking-change]
     - title: "🚀 Features"
       labels: [feature]
     - title: "🐛 Bug Fixes"
