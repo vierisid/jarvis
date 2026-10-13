@@ -225,6 +225,75 @@ test("lost acknowledgment retry preserves unrelated concurrent answers", async (
   expect(Object.keys(f.writes.at(-1)!.answers)).toEqual(["company"]);
   c.retire();
 });
+for (const correctedElsewhere of [false, true])
+  test(`editing an uncertain draft retains reconciliation (external correction: ${correctedElsewhere})`, async () => {
+    const f = await fixture("lost-response"),
+      c = f.controller,
+      original = c.value("company");
+    c.edit("company", "Submitted");
+    await c.save();
+    c.edit("current_projects", "x".repeat(4001));
+    await c.save();
+    expect(c.snapshot().phase).toBe("unknown");
+    expect(f.writes).toHaveLength(1);
+    c.edit("current_projects", "Corrected length");
+    c.edit("company", original);
+    expect(c.snapshot().draft.company).toBe(original);
+    expect(c.snapshot().phase).toBe("unknown");
+    if (correctedElsewhere) f.change({ company: "External correction" });
+    f.recoverWrites();
+    await c.save();
+    expect(c.snapshot().phase).toBe(correctedElsewhere ? "conflict" : "saved");
+    expect(f.current().answers.company).toBe(
+      correctedElsewhere ? "External correction" : original,
+    );
+    expect(f.writes).toHaveLength(correctedElsewhere ? 1 : 2);
+    if (!correctedElsewhere)
+      expect(f.current().answers.current_projects).toBe("Corrected length");
+    c.retire();
+  });
+for (const discardFails of [false, true])
+  test(`confirmed cancel supersedes a pending poll (discard read fails: ${discardFails})`, async () => {
+    const f = await fixture(),
+      c = f.controller,
+      pollResult = deferred<ProfileRead>(),
+      discardResult = deferred<ProfileRead>();
+    let pollSignal: AbortSignal | undefined,
+      reads = 0;
+    c.edit("company", "Local draft");
+    c.cancel();
+    f.port.read = (signal) => {
+      if (++reads === 1) {
+        pollSignal = signal;
+        return pollResult.promise;
+      }
+      return discardResult.promise;
+    };
+    const poll = c.refresh(),
+      discard = c.resolvePrompt(true);
+    expect(pollSignal?.aborted).toBe(true);
+    expect(c.snapshot().discarding).toBe(true);
+    expect(c.editable()).toBe(false);
+    f.change({ company: "Latest canonical" });
+    discardResult.resolve(
+      discardFails ? { state: "error" } : { state: "ready", data: f.current() },
+    );
+    await discard;
+    const afterDiscard = c.snapshot();
+    pollResult.resolve({
+      state: "ready",
+      data: { ...f.current(), answers: { company: "Obsolete poll" } },
+    });
+    await poll;
+    expect(c.snapshot()).toEqual(afterDiscard);
+    expect(c.value("company")).toBe(
+      discardFails ? "Local draft" : "Latest canonical",
+    );
+    expect(c.snapshot().phase).toBe(discardFails ? "dirty" : "clean");
+    expect(c.snapshot().availability).toBe(discardFails ? "stale" : "ready");
+    expect(f.writes).toHaveLength(0);
+    c.retire();
+  });
 test("cancel requires confirmation; failed discard reload never loses the draft", async () => {
   const f = await fixture(),
     c = f.controller;

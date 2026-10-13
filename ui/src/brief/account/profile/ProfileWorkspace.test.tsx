@@ -210,7 +210,7 @@ test("lost response retains edits and explicitly retrying can confirm the canoni
   await edit("Company", "Saved studio");
   await click("Save changes");
   expect(field("Company").value).toBe("Saved studio");
-  expect(field("Company").readOnly).toBe(true);
+  expect(field("Company").readOnly).toBe(false);
   expect(fixture.writes).toHaveLength(1);
   fixture.recoverWrites();
   await click("Retry save");
@@ -232,6 +232,66 @@ test("new text entered while a save is pending remains editable and unsaved", as
   expect(fixture.current().answers.company).toBe("Submitted");
   expect(button("Save changes").disabled).toBe(false);
 });
+for (const example of ["save-failure", "lost-response"] as const)
+  test(`${example} allows an oversized newer draft to be corrected and retried`, async () => {
+    fixture = makeProfileFixture(example);
+    const originalSave = fixture.port.save;
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    fixture.port.save = async (...args) => {
+      const result = await originalSave(...args);
+      await held;
+      return result;
+    };
+    await render();
+    await edit("Company", "Valid submission");
+    await React.act(async () => {
+      button("Save changes").click();
+    });
+    await edit("What are you building?", "x".repeat(4001));
+    await React.act(async () => {
+      release();
+      await settle();
+    });
+    expect(fixture.controller.snapshot().phase).toBe("unknown");
+    expect(field("What are you building?").readOnly).toBe(false);
+    expect(button("Retry save").disabled).toBe(true);
+    await edit("What are you building?", "Corrected project");
+    expect(button("Retry save").disabled).toBe(false);
+    expect(fixture.controller.snapshot().phase).toBe("unknown");
+    expect(fixture.writes).toHaveLength(1);
+    fixture.recoverWrites();
+    await click("Retry save");
+    expect(button("Saved").disabled).toBe(true);
+    expect(fixture.current().answers.company).toBe("Valid submission");
+    expect(fixture.current().answers.current_projects).toBe(
+      "Corrected project",
+    );
+  });
+for (const [label, questionId] of [
+  ["Company", "company"],
+  ["What should Jarvis call you?", "preferred_name"],
+])
+  test(`${label} retains its element, focus and selection when removing its last newline`, async () => {
+    fixture.change({ [questionId!]: "First line\nSecond line" });
+    await render();
+    const input = field(label!);
+    input.focus();
+    await edit(label!, "First lineSecond line");
+    input.setSelectionRange(10, 10);
+    expect(field(label!) === input).toBe(true);
+    expect(document.activeElement === input).toBe(true);
+    await React.act(async () => {
+      await fixture.controller.refresh();
+    });
+    expect(document.activeElement === input).toBe(true);
+    expect(input.selectionStart).toBe(10);
+    expect(input.selectionEnd).toBe(10);
+    await edit(label!, "First line edited Second line");
+    expect(input.value).toBe("First line edited Second line");
+  });
 test("navigation uses the shared guard and only leaves after explicit discard", async () => {
   const routes: string[] = [];
   const port = guardProfileNavigation(
