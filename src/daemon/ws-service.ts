@@ -57,7 +57,7 @@ import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-cont
 import type { FileEntry } from '../sites/types.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
-import { isRoomAction } from './room-actions.ts';
+import { isPresentationRoomAction, isRoomAction } from './room-actions.ts';
 
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
@@ -1947,14 +1947,14 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // mirroring the classifier path so the qualifier isn't dropped. The
         // dashboard this session runs on says whether the room ran it, and
         // the model is told that, not "Done" (#965).
-        this.broadcastRoomNavigation(room as RoomKey, reqId);
         const ra = { room, action, args: innerArgs };
+        this.navigateForRoomAction(ra, ws, reqId);
         // Shorter than the realtime session's wait for sibling tool results,
         // so a slow room cannot leave this result to be voiced on its own
         // (and the model, seeing none, calling the tool again).
         const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
         const reply = roomActionReply(ra, outcome);
-        return outcome === 'accepted' && action !== 'switch_tab'
+        return outcome === 'accepted' && !isPresentationRoomAction(room, action)
           ? `${reply} (${roomTitle(room)} accepted it and started it; it shows the result on screen.)`
           : reply;
       }
@@ -2790,11 +2790,24 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * RoomKey) — bypasses the chat agent.
    */
   broadcastRoomNavigation(key: RoomKey, requestId?: string): void {
-    this.wsServer.broadcast({
-      type: 'notification',
-      payload: { source: 'navigate_room', key, requestId },
-      timestamp: Date.now(),
-    });
+    this.wsServer.broadcast(navigateRoomNotice(key, requestId));
+  }
+
+  /**
+   * Open the room a voice room action is for, on the same dashboards the
+   * action goes to (#974): every one for a presentation action, only
+   * `client` for any other, which no other dashboard runs.
+   */
+  private navigateForRoomAction(
+    ra: { room: string; action: string },
+    client: ServerWebSocket<unknown>,
+    requestId?: string,
+  ): void {
+    if (isPresentationRoomAction(ra.room, ra.action)) {
+      this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
+      return;
+    }
+    this.wsServer.sendToClient(client, navigateRoomNotice(ra.room, requestId));
   }
 
   /**
@@ -2828,16 +2841,23 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
-   * Broadcast a room action and wait to hear whether a room ran it (#933).
+   * Send a room action and wait to hear whether a room ran it (#933).
    * Resolves `accepted` or `rejected` on the first answer, and `no_answer`
    * when none comes: nobody connected who could answer, or a room that never
    * mounted.
    *
    * Without `client` the native panels answer (the pebble's tab switch). With
-   * `client`, the action still goes to everyone, but only that dashboard gets
-   * the resultId, is asked to answer (`resultFrom: 'dashboard'`), and is
-   * listened to (#965): a dashboard voice turn asks the dashboard the user
-   * spoke to.
+   * `client`, only that dashboard gets the resultId, is asked to answer
+   * (`resultFrom: 'dashboard'`), and is listened to (#965): a dashboard voice
+   * turn asks the dashboard the user spoke to.
+   *
+   * Who else gets it depends on what the action does (#974). A presentation
+   * action (ROOM_ACTIONS `view`, such as `switch_tab`) goes to every
+   * dashboard and panel too, so they stay in step. Any other goes to `client`
+   * alone: every dashboard with the room mounted, or mounting it within the
+   * bus's queue TTL, runs the handler it is sent, so a broadcast `create_task`
+   * made one task per open dashboard while the user heard one answer. Without
+   * a `client` such an action has nobody to go to and is refused.
    */
   requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
@@ -2851,6 +2871,14 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       return Promise.resolve('rejected');
     }
     const client = opts?.client;
+    const presentation = isPresentationRoomAction(action.room, action.action);
+    if (!presentation && !client) {
+      // Reported as `rejected`, the same as a room declining it: no caller
+      // sends one without a client today, so nobody hears this as the room's
+      // answer. A caller that could must say why itself.
+      console.warn(`[WSService] refused room action ${action.room}/${action.action}: it changes more than the screen, and no dashboard was named to run it`);
+      return Promise.resolve('rejected');
+    }
     const { id, outcome } = this.roomActionResults.open(timeoutMs, client);
     const payload = {
       source: 'room_action',
@@ -2860,7 +2888,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     };
     let reached: boolean;
     if (client) {
-      this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
+      if (presentation) this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
       reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
         type: 'notification',
         payload: { ...payload, resultId: id, resultFrom: 'dashboard' },
@@ -2897,7 +2925,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       this.broadcastAssistantAck(refused, requestId);
       return;
     }
-    this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
+    this.navigateForRoomAction(ra, ws, requestId);
     const outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
     console.log(`[WSService] room action ${ra.room}/${ra.action}: ${outcome}`);
     this.broadcastAssistantAck(roomActionReply(ra, outcome), requestId);
@@ -3072,6 +3100,11 @@ function ackForWindowControl(ctrl: WindowControl): string {
     case 'reorder':
       return `Tidying up. Bringing all rooms back inline.`;
   }
+}
+
+/** The dashboard's instruction to open a room. */
+function navigateRoomNotice(key: string, requestId?: string): WSMessage {
+  return { type: 'notification', payload: { source: 'navigate_room', key, requestId }, timestamp: Date.now() };
 }
 
 /**

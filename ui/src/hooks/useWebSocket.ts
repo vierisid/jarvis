@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { uuid } from "../lib/uuid";
+import { isPresentationRoomAction } from "../../../src/daemon/room-actions";
 
 export type MessageRole = "user" | "assistant" | "system";
 
@@ -1336,6 +1337,8 @@ function buildIntentLabel(
  * set only when the daemon asked THIS dashboard to say whether the room ran it
  * (`resultFrom: "dashboard"`, #965); the pebble's requests carry a resultId
  * for the native panels to answer, and the dashboard must not answer those.
+ * Null for a malformed action, and for one that is not presentation and was
+ * not addressed to this dashboard (#974).
  */
 export type DashboardRoomActionRequest = {
   room: string;
@@ -1356,5 +1359,9 @@ export function roomActionRequestFrom(payload: unknown, ts: number): DashboardRo
     ts,
   };
   if (p.resultFrom === "dashboard" && typeof p.resultId === "string" && p.resultId) req.resultId = p.resultId;
+  // An action that changes more than the screen is run only by the dashboard
+  // the daemon addressed (#974); the daemon sends it nowhere else, and this
+  // keeps it so if one ever reaches another dashboard.
+  if (!req.resultId && !isPresentationRoomAction(req.room, req.action)) return null;
   return req;
 }

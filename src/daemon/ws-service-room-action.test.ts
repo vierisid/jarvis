@@ -117,13 +117,13 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
 
   test('only the dashboard that spoke is asked, and only its answer counts', async () => {
     const { svc, speaker, other, actionTo, answer } = setup();
-    const pending = svc.requestRoomAction({ room: 'settings', action: 'enable_tts' }, 200, { client: speaker.ws as never });
+    const pending = svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 200, { client: speaker.ws as never });
     const mine = actionTo(speaker)!;
     const theirs = actionTo(other)!;
-    // Everyone still receives the action; only the speaker is asked.
-    expect(mine.payload).toMatchObject({ room: 'settings', action: 'enable_tts', resultFrom: 'dashboard' });
+    // A tab switch still reaches everyone (#974); only the speaker is asked.
+    expect(mine.payload).toMatchObject({ room: 'settings', action: 'switch_tab', resultFrom: 'dashboard' });
     expect(typeof mine.payload.resultId).toBe('string');
-    expect(theirs.payload).toMatchObject({ room: 'settings', action: 'enable_tts' });
+    expect(theirs.payload).toMatchObject({ room: 'settings', action: 'switch_tab' });
     expect(theirs.payload.resultId).toBeUndefined();
     // Another client that learned the id does not settle it.
     await answer(other, mine.payload.resultId, false);
@@ -154,6 +154,14 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
         'dashboard_room_action', { room: 'settings', action: 'disable_tts', args: {} }, speaker.ws);
       expect(reply).toBe(said);
     }
+  });
+
+  test('an accepted presentation action is not reported as work started', async () => {
+    const { internals, speaker, answerWhenSent } = setup();
+    answerWhenSent(speaker, true);
+    const reply = await internals.executeRealtimeNavTool(
+      'dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'pending' } }, speaker.ws);
+    expect(reply).not.toContain('started it');
   });
 
   test('a tab switch by the realtime tool reads like the pebble\'s', async () => {
@@ -356,5 +364,79 @@ describe('realtime navigation says it asked, not that it happened (#969)', () =>
     expect(await nav('control_dashboard_window', { action: 'delete' })).toBe('There is no "delete" window action.');
     expect(await nav('control_dashboard_window', { action: 'close', target: 'billing' })).toBe('There is no "billing" room.');
     expect(sent).toEqual([]);
+  });
+});
+
+// #974: every dashboard with the room mounted runs the handler it is sent, so
+// a broadcast side-effecting action ran once per open dashboard while the user
+// heard one answer. Only presentation actions may go to everyone.
+describe('a side-effecting room action runs on one dashboard only (#974)', () => {
+  type Sent = { type: string; payload: Record<string, unknown> };
+  const setup = () => {
+    const base = makeService();
+    base.internals.wsServer.getClients().clear();
+    const mk = () => {
+      const sent: Sent[] = [];
+      return { sent, ws: { send: (raw: string) => { sent.push(JSON.parse(raw)); return raw.length; }, sendBinary: () => {} } };
+    };
+    const speaker = mk();
+    const other = mk();
+    const panel = mk();
+    for (const c of [speaker, other, panel]) base.internals.wsServer.getClients().add(c.ws);
+    const internals = base.svc as unknown as {
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+      handleVoiceRoomAction: (ra: unknown, requestId: string, ws: unknown) => Promise<void>;
+    };
+    const real = base.svc.requestRoomAction.bind(base.svc);
+    (base.svc as unknown as { requestRoomAction: typeof real }).requestRoomAction = (a, _t, o) => real(a, 20, o);
+    const frames = (c: { sent: Sent[] }) => c.sent
+      .filter((m) => m.payload?.source === 'room_action' || m.payload?.source === 'navigate_room')
+      .map((m) => `${m.payload.source}:${String(m.payload.action ?? m.payload.key)}`);
+    return { svc: base.svc, internals, speaker, other, panel, frames };
+  };
+
+  const sideEffecting = [
+    ['tasks', 'create_task', { title: 'Pay rent', when: 'tomorrow' }],
+    ['agents', 'spawn_agent', { specialist: 'research', task: 'look' }],
+    ['workspaces', 'create_project', { name: 'demo' }],
+    ['settings', 'enable_tts', {}],
+  ] as const;
+
+  test('the realtime tool sends a side-effecting action, and its navigation, to the speaker alone', async () => {
+    for (const [room, action, args] of sideEffecting) {
+      const { internals, speaker, other, panel, frames } = setup();
+      await internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args }, speaker.ws);
+      expect(frames(speaker)).toEqual([`navigate_room:${room}`, `room_action:${action}`]);
+      expect(frames(other)).toEqual([]);
+      expect(frames(panel)).toEqual([]);
+    }
+  });
+
+  test('the classifier path sends a side-effecting action, and its navigation, to the speaker alone', async () => {
+    for (const [room, action, args] of sideEffecting) {
+      const { internals, speaker, other, panel, frames } = setup();
+      await internals.handleVoiceRoomAction({ room, action, args }, 'req-974', speaker.ws);
+      expect(frames(speaker)).toEqual([`navigate_room:${room}`, `room_action:${action}`]);
+      expect(frames(other)).toEqual([]);
+      expect(frames(panel)).toEqual([]);
+    }
+  });
+
+  test('a tab switch still goes to every dashboard and panel, with the room opened on each', async () => {
+    const { internals, speaker, other, panel, frames } = setup();
+    await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'agents', action: 'switch_tab', args: { tab: 'builder' } }, speaker.ws);
+    for (const c of [speaker, other, panel]) expect(frames(c)).toEqual(['navigate_room:agents', 'room_action:switch_tab']);
+    // Only the speaker is asked to answer.
+    expect(speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultFrom).toBe('dashboard');
+    expect(other.sent.find((m) => m.payload?.source === 'room_action')!.payload.resultId).toBeUndefined();
+  });
+
+  test('requestRoomAction refuses a side-effecting action with nobody named to run it', async () => {
+    const { svc, speaker, other, panel, frames } = setup();
+    expect(await svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 20)).toBe('rejected');
+    for (const c of [speaker, other, panel]) expect(frames(c)).toEqual([]);
+    // A presentation action with nobody named still goes to the panels.
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20)).toBe('no_answer');
+    for (const c of [speaker, other, panel]) expect(frames(c)).toEqual(['room_action:switch_tab']);
   });
 });
