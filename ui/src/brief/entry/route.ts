@@ -1,6 +1,6 @@
 import { BRIEF_ROOM_IDS, type BriefRoute, type BriefSelection } from "../contracts";
 
-export type BriefEntryRoute = { kind: "legacy" } | { kind: "preview" } | { kind: "brief"; route: BriefRoute };
+export type BriefEntryRoute = { kind: "legacy" } | { kind: "preview" } | { kind: "navigation-preview" } | { kind: "moved" } | { kind: "brief"; route: BriefRoute };
 const IDS: ReadonlySet<string> = new Set(BRIEF_ROOM_IDS);
 const SELECTION_KEYS = ["flowId", "versionId", "runId", "goalId", "factId", "approvalId", "workItemId", "opportunityId"] as const;
 
@@ -9,10 +9,11 @@ export function resolveBriefEntry(href: string): BriefEntryRoute {
   // Keep the existing reset/resume owner. Never mount a second reset handler.
   if (url.searchParams.has("onboarding")) return { kind: "legacy" };
   const flag = url.searchParams.get("brief");
+  if (flag === "preview" && url.hash === "#/_brief_navigation_preview") return { kind: "navigation-preview" };
   if (flag === "preview" && url.hash === "#/_brief_preview") return { kind: "preview" };
   if (flag !== "1" || !url.hash.startsWith("#/brief/")) return { kind: "legacy" };
   const [room, query = ""] = url.hash.slice("#/brief/".length).split("?");
-  if (!room || !IDS.has(room)) return { kind: "legacy" };
+  if (!room || !IDS.has(room)) return { kind: "moved" };
   const params = new URLSearchParams(query);
   const selection: BriefSelection = {};
   for (const key of SELECTION_KEYS) {

@@ -1,0 +1,133 @@
+{
+  "task": "F-25",
+  "date": "2026-10-13",
+  "repository": "vierisid/jarvis",
+  "base_branch": "brief/f-23",
+  "baseline": "13beb76554514227e0fb2fa476e7cd78f5432053",
+  "main_rechecked": "f74044de53615dfa91430d2b543f05deffc0c49c",
+  "head": {
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-25.json",
+    "reason": "Receipt commit identifies the delivered head without a self-referential hash."
+  },
+  "scope": "Navigation compatibility, retained Settings/support destinations and notification routing only.",
+  "merge_after": [
+    "F-01"
+  ],
+  "staged_base": "Existing F track through F-23; no D-stack imports or main voice/security patch replacement.",
+  "enable_after": [],
+  "activation": {
+    "capability": "navigationCompatibility",
+    "default_enabled": false,
+    "registered_in_daemon": false,
+    "readiness": [
+      "destinations",
+      "guardedNavigation",
+      "roomIntents",
+      "notificationsOutsideChat"
+    ],
+    "composition_owner": [
+      "D-33",
+      "F-28"
+    ],
+    "code_merged": false,
+    "release_enabled": false,
+    "production_readiness": "not_run"
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "node": "392:4296",
+    "native_inspection": "passed",
+    "note": "Existing compact navigation and Settings Authority/Connected workspace entries retained. Behavioral specimen is not dashboard design certification."
+  },
+  "runtime": {
+    "bun": "1.3.14",
+    "dependencies": "frozen lockfile; unchanged",
+    "fixture_port": 4425,
+    "real_external_effects": false
+  },
+  "checks": {
+    "focused": {
+      "command": "bun test ui/src/brief/navigation/navigation.test.ts ui/src/brief/navigation/Navigation.test.tsx ui/src/brief/entry/route.test.ts ui/src/brief/entry/DashboardEntry.test.tsx src/brief/capabilities.test.ts ui/src/v2/shell/sidecar-update.test.ts",
+      "passed": 79,
+      "failed": 0,
+      "assertions": 876
+    },
+    "cross_stack": {
+      "result": "passed",
+      "d29": "2168db73bb2430a96a862ca80da19aa016e315b3",
+      "d30": "db9f59100091a18e45a9a7a633bd5e74726898d3",
+      "main": "f74044de53615dfa91430d2b543f05deffc0c49c",
+      "checks": [
+        "D27 device identity/projection",
+        "D28 retained emergency handoff",
+        "D29 cancel/discard draft guard",
+        "D30 Settings opened/unavailable handoff",
+        "main canonical voice tab names"
+      ],
+      "writes": 0
+    },
+    "typecheck": "passed",
+    "build_ui": "passed; existing @theme/@tailwind warnings",
+    "guards": "EE license, migrations and 100 template checks passed",
+    "review": {
+      "status": "passed",
+      "full_review_findings": 2,
+      "followup_findings": 3,
+      "all_findings_fixed": true,
+      "final_review": "Both findings from the fresh 07782464 branch review corrected; correction diff audit found no additional issues.",
+      "evidence": "docs/brief-delivery/evidence/F-25/review.json",
+      "notification_regressions": [
+        "Unavailable or incomplete workflow run history leaves notification unread",
+        "Run-history readiness rechecked after the draft guard",
+        "Retry opens the original run once its room becomes ready",
+        "Overlapping IDs dispatch read state to the matching source owner"
+      ]
+    },
+    "full_ci": {
+      "source": "GitHub checks for the PR head",
+      "url": "https://github.com/vierisid/jarvis/pull/980/checks",
+      "note": "Final current-head result is recorded in the delivery handoff after push; do not infer CI from this receipt alone."
+    },
+    "legacy_regressions": {
+      "passed": 40,
+      "failed": 0,
+      "assertions": 133,
+      "command": "bun test ui/src/brief/connections/legacy-setup.test.tsx ui/src/brief/connections/setup.test.ts ui/src/v2/shell/SidecarUpdatePill.test.tsx ui/src/v2/rooms/settings/tabs/sidecar-add-device.test.ts ui/src/v2/rooms/settings/tabs/voice-realtime-copy.test.ts ui/src/brief/profile-settings/actions.test.tsx"
+    },
+    "main_compatibility_limit": "Canonical tabs verified at f74044de; newer main room-action cancellation/ack guards are untouched. No whole-stack main merge certification.",
+    "d30_followup": "D30 advanced to 93a04bc during review. Adapter.ts is byte-unchanged versus pinned db9f591; reproducible integration run used a temporary clean detached checkout of the recorded pin, then removed it.",
+    "notification_correction_browser": "No additional manual browser run; actual notification-center hook and attention component exercised in DOM regressions. No layout changes."
+  },
+  "manual": [
+    "Chat closed: approval -> Authority, failure -> task detail, update -> Sidecar Settings",
+    "Draft guard cancellation leaves the notification and current target intact",
+    "Stale notifications are unavailable, never a zero count",
+    "Obsolete Arrange request explains retained Advanced settings/support destination",
+    "Actual SettingsRoom: inline observer preserves sidecar request for expanded destination",
+    "Actual Chrome Back restores Voice; leaving through Logs and reopening Settings preserves the restored tab"
+  ],
+  "evidence": [
+    "docs/brief-delivery/F-25.md",
+    "docs/brief-delivery/evidence/F-25/chat-closed.jpg",
+    "docs/brief-delivery/evidence/F-25/cancelled-navigation.jpg",
+    "docs/brief-delivery/evidence/F-25/stale-and-obsolete.jpg",
+    "docs/brief-delivery/evidence/F-25/settings-handoff.jpg",
+    "docs/brief-delivery/evidence/F-25/settings-back.jpg",
+    "docs/brief-delivery/evidence/F-25/settings-remount.jpg",
+    "docs/brief-delivery/evidence/F-25/focused.log",
+    "docs/brief-delivery/evidence/F-25/legacy-regressions.log",
+    "docs/brief-delivery/evidence/F-25/cross-stack.json",
+    "docs/brief-delivery/evidence/F-25/build.log",
+    "docs/brief-delivery/evidence/F-25/review.json"
+  ],
+  "limitations": [
+    "Optional module is not assembled/live-activated; D-33/F-28 still own default dashboard composition and activation.",
+    "No real emergency, device update/revoke, OAuth, credential or hosted deployment effects run.",
+    "Final placement of attention/support in the assembled Brief dashboard still needs design review.",
+    "F-27 owns live missed-event reconciliation; no claim of exactly-once event delivery."
+  ],
+  "rollback": "Disable/unregister navigationCompatibility or revert this card; retain legacy access and data. No migrations, resets, replay or deletion.",
+  "next_card": "F-26 not started",
+  "pull_request": "https://github.com/vierisid/jarvis/pull/980"
+}

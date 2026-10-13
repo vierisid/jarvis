@@ -11,9 +11,19 @@ export const SETTINGS_TAB_EVENT = "jarvis:settings-tab";
 
 let pending: SettingsTab | null = null;
 
+/** An explicit compatibility navigation replaces any older ephemeral request. */
+export function clearRequestedSettingsTab(): void { pending = null; }
+
 export function requestSettingsTab(tab: SettingsTab): void {
   pending = tab;
   if (typeof window !== "undefined") {
+    // When a canonical deep link is already present, an explicit tab request
+    // replaces it too. Otherwise an old query could win on a later remount.
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("settingsTab")) {
+      url.searchParams.set("settingsTab", tab);
+      window.history.replaceState(window.history.state, "", url);
+    }
     window.dispatchEvent(new CustomEvent<SettingsTab>(SETTINGS_TAB_EVENT, { detail: tab }));
   }
 }
@@ -22,7 +32,16 @@ export function requestSettingsTab(tab: SettingsTab): void {
 export function takeRequestedSettingsTab(): SettingsTab | null {
   const tab = pending;
   pending = null;
-  return tab;
+  // A restored history/deep-link entry is authoritative over an older request.
+  return (typeof window !== "undefined" ? settingsTabFromHref(window.location.href) : null) ?? tab;
+}
+
+/** Additive deep link; native panel/room hashes keep their existing parser and voice ownership. */
+export function settingsTabFromHref(href: string): SettingsTab | null {
+  const url = new URL(href, "http://localhost");
+  if (!["#/_room_settings", "#/_panel_settings"].includes(url.hash)) return null;
+  const tab = url.searchParams.get("settingsTab");
+  return tab && ["general", "profile", "llm", "channels", "voice", "integrations", "billing", "sidecar"].includes(tab) ? tab as SettingsTab : null;
 }
 
 /** Sidecar data changed by an action (an update request); pollers refresh. */
