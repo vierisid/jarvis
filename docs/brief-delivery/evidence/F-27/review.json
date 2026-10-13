@@ -18,6 +18,14 @@
       "pre_fix_line": 89,
       "scenario": "A provider returns HTTP 501 after a successful read. Unsupported status previously retained cached records because the HTTP failure did not set clear.",
       "resolution": "Unsupported failures always clear cached data. Regression covers success followed by 501."
+    },
+    {
+      "priority": 2,
+      "title": "Track audio sequences before declaring a chat gap",
+      "file": "ui/src/brief/reconciliation/events.ts",
+      "pre_fix_line": 17,
+      "scenario": "Delivered audio advances the canonical conversation sequence. Ignoring those frames makes the next chat event trigger a false gap and clear selected inspection.",
+      "resolution": "Event and audio frames share the reconciliation cursor; only chat events select domain invalidations. Regression tests demonstrate red-to-green snapshot retention, real audio-exposed gaps, per-conversation isolation and duplicate/reordered frames. Corrective diff rechecked against the canonical producer and shared observer; no further findings."
     }
   ],
   "final_findings": [], "final_result": "No findings",

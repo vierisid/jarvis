@@ -14,10 +14,13 @@ export class EventHints {
     let stream: string | undefined;
     if (frame?.type === 'goal_event') { domains = all; stream = 'goals'; }
     else if (frame?.type === 'workflow_event') domains = ['today', 'decisions', 'workflows', 'runs', 'memory'];
-    else if (frame?.type === 'brief_chat_event') {
+    else if (frame?.type === 'brief_chat_event' || frame?.type === 'brief_chat_audio') {
+      // The producer allocates one sequence for both event and transient audio frames.
       if (typeof p.conversationId === 'string') stream = `chat:${p.conversationId}`;
-      if (record(p.payload).kind === 'approval') domains = ['decisions', 'today', 'runs'];
-      else if (record(p.payload).kind === 'terminal') domains = ['today', 'opportunities', 'memory'];
+      if (frame.type === 'brief_chat_event') {
+        if (record(p.payload).kind === 'approval') domains = ['decisions', 'today', 'runs'];
+        else if (record(p.payload).kind === 'terminal') domains = ['today', 'opportunities', 'memory'];
+      }
     } else if (frame?.type === 'notification') {
       if (p.source === 'approval_request' || p.source === 'approval_update') domains = ['decisions', 'today', 'runs'];
       else if (p.source === 'awareness_event') domains = ['opportunities', 'memory', 'today'];
