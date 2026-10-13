@@ -39,6 +39,17 @@ export function memoryFactRef(fact: Fact, subjectName: string): MemoryFactRef {
   return { factId: fact.id, sourceRevision: memoryDigest([subjectName, row,
     [...evidence].sort((a, b) => a.id.localeCompare(b.id)), basis, binding_eligible]) };
 }
+/** Safety at consumption is independent of whether usage telemetry is enabled. */
+export function assertCurrentMemoryFacts(db: Database, refs: readonly MemoryFactRef[]): void {
+  if (db !== getDb()) throw new MemoryUsageError('Memory context belongs to a replaced vault');
+  const now = Date.now();
+  for (const ref of refs) {
+    const fact = getFact(ref.factId), entity = fact && db.query<{ name: string }, [string]>('SELECT name FROM entities WHERE id = ?').get(fact.subject_id);
+    if (!fact || !entity || !isCurrentRecallFact(fact, now) || memoryFactRef(fact, entity.name).sourceRevision !== ref.sourceRevision) {
+      throw new MemoryUsageError('Memory changed before consumption; refresh the context');
+    }
+  }
+}
 const project = (r: Stored): MemoryUseRecord => ({ useId: r.use_id, factId: r.fact_id,
   sourceRevision: r.source_revision, stage: r.stage, purpose: r.purpose, workflowId: r.workflow_id,
   callId: r.call_id, runId: r.run_id, at: r.recorded_at,
@@ -95,14 +106,9 @@ export class MemoryUsageLedger implements MemoryUsageReader {
     if (!['selected', 'supplied'].includes(stage) || refs.length > 54 || refs.some(ref => !validId(ref.factId) || !/^[a-f0-9]{64}$/.test(ref.sourceRevision))) throw new MemoryUsageError('Invalid memory evidence');
     this.db.transaction(() => {
       this.checkTarget(target);
+      if (stage === 'supplied') assertCurrentMemoryFacts(this.db, refs);
       const now = Date.now();
       for (const ref of refs) {
-        if (stage === 'supplied') {
-          const fact = getFact(ref.factId), entity = fact && this.db.query<{ name: string }, [string]>('SELECT name FROM entities WHERE id = ?').get(fact.subject_id);
-          if (!fact || !entity || !isCurrentRecallFact(fact, now) || memoryFactRef(fact, entity.name).sourceRevision !== ref.sourceRevision) {
-            throw new MemoryUsageError('Memory changed before provider handoff; refresh the context');
-          }
-        }
         const id = memoryDigest([target.purpose, target.turn?.conversationId ?? null, target.turn?.turnId ?? null, target.turn?.requestId ?? null,
           target.runId, target.workflowId, target.callId, ref.factId, ref.sourceRevision, stage]);
         this.db.run(`INSERT OR IGNORE INTO memory_use_events

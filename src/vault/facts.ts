@@ -1,4 +1,4 @@
-import { assertAutomaticFactAllowed } from './memory-suppression';
+import { assertAutomaticFactAllowed, AUTOMATIC_FACT_SOURCES } from './memory-suppression';
 import { createHash } from 'node:crypto';
 import { getDb, generateId } from './schema.ts';
 import { findEntities } from './entities.ts';
@@ -90,6 +90,23 @@ export function createFact(subject_id: string, predicate: string, object: string
       { source: options.source, source_ref: options.sourceRef, quote: options.quote, replay: options.replay });
     const key = predicateKey(predicate), value = valueKey(predicate, object), scope = options.scope?.trim() ?? '';
     const from = options.validFrom ?? null, to = options.validTo ?? null, now = Date.now();
+    // A retired assertion replayed from the same automatic source revision is
+    // history, not new evidence against the user's correction. A later source
+    // or explicit confirmation still goes through the normal writer below.
+    // Goal completion has no source ref: its subject ID identifies the episode.
+    // Other unidentified legacy evidence cannot be proven to be the same input;
+    // retain its existing qualified/contested semantics.
+    if (options.source && AUTOMATIC_FACT_SOURCES.has(options.source) && (options.sourceRef || options.source === 'goal_completion')) {
+      const retired = getDb().query<FactRow, [string, string, string, string, number | null, number | null, string, string | null, string | null, string | null, string | null]>(`SELECT f.* FROM facts f
+        JOIN fact_evidence e ON e.fact_id = f.id
+        WHERE f.subject_id = ? AND f.predicate_key = ? AND f.scope = ? AND f.value_key = ?
+          AND f.valid_from IS ? AND f.valid_to IS ? AND f.status = 'superseded'
+          AND e.source = ? AND (e.source_ref IS ? OR (? IS NULL AND e.replay_source_ref = ?))
+          AND (e.source != 'user_profile' OR e.quote IS ?)
+        ORDER BY f.created_at, f.id LIMIT 1`).get(subject_id, key, scope, value, from, to,
+          options.source, options.sourceRef ?? null, options.replay?.sourceRef ?? null, options.sourceRef ?? null, options.quote ?? null);
+      if (retired) return decorate(retired);
+    }
     const existing = getDb().query<FactRow, [string, string, string, string, number | null, number | null]>(`SELECT * FROM facts
       WHERE subject_id = ? AND predicate_key = ? AND scope = ? AND value_key = ?
         AND valid_from IS ? AND valid_to IS ? AND status != 'superseded' ORDER BY created_at, id LIMIT 1`

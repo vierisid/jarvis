@@ -1,15 +1,17 @@
 import { getDb } from './schema';
-import { assertNoForgottenMemory, assertNoForgottenProfileSources, automaticSourceKey, profileSourceRef } from './memory-suppression';
+import { getUserProfile } from './user-profile';
+import { assertNoForgottenMemory, assertNoForgottenProfileSources, automaticSourceKey, profileSourceRef, profileSourceSuperseded } from './memory-suppression';
 import type { Database } from 'bun:sqlite';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentBriefTurn, type BriefExecutionContext } from '../brief/chat-context';
 import { defangDelimiters } from '../roles/untrusted';
 import type { LLMMessage } from '../llm/provider';
 import type { PackedRecall } from './recall-context';
-import { getMemoryUsageLedger, memoryDigest, MEMORY_USE_LIMITS, MemoryUsageError,
+import { assertCurrentMemoryFacts, getMemoryUsageLedger, memoryDigest, MEMORY_USE_LIMITS, MemoryUsageError,
   type MemoryUseTarget } from './memory-usage';
 
-type Capture = { target: MemoryUseTarget | null; db: Database; packs: Map<string, PackedRecall>; profileSources: Set<string> };
+type Capture = { target: MemoryUseTarget | null; db: Database; packs: Map<string, PackedRecall>; profileSources: Set<string>;
+  profileFields: Map<string, { revision: string; digest: string }> };
 const recalls = new AsyncLocalStorage<Capture>();
 const workflows = new AsyncLocalStorage<Capture | null>();
 const turns = new WeakMap<BriefExecutionContext, Capture>();
@@ -22,7 +24,7 @@ function current(): Capture | undefined {
   if (!capture) {
     const { conversationId, turnId, requestId } = turn;
     capture = { target: { purpose: 'conversation_context', turn: { conversationId, turnId, requestId },
-      runId: null, workflowId: null, callId: turnId }, db: getDb(), packs: new Map(), profileSources: new Set() };
+      runId: null, workflowId: null, callId: turnId }, db: getDb(), packs: new Map(), profileSources: new Set(), profileFields: new Map() };
     turns.set(turn, capture);
   }
   return capture;
@@ -30,7 +32,7 @@ function current(): Capture | undefined {
 /** Called only inside the governed workflow effect, with its authenticated run identity. */
 export function withWorkflowMemory<T>(runId: string, workflowId: string, callId: string, run: () => T): T {
   return workflows.run({ target: { purpose: 'workflow_context', turn: null, runId, workflowId, callId },
-    db: getDb(), packs: new Map(), profileSources: new Set() }, run);
+    db: getDb(), packs: new Map(), profileSources: new Set(), profileFields: new Map() }, run);
 }
 /** Retrieval alone records selection, never supply. Text lives only in this bounded execution scope. */
 export function capturePackedMemory(packed: PackedRecall): void {
@@ -42,16 +44,33 @@ export function capturePackedMemory(packed: PackedRecall): void {
   if (capture.target && process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') getMemoryUsageLedger().record(capture.target, packed.selected, 'selected');
   capture.packs.set(key, packed);
 }
-/** The manifest is made by the packer. The exact whole-block check only verifies
- * that this request still carries it (raw ambient block or the role builder's
- * delimiter-neutralized form). It never derives IDs or associations from text.
- * Handoff means supplied to the provider adapter, not receipt, reliance or success.
- */
-export function recordMemoryHandoff(messages: readonly LLMMessage[]): void {
+/** Fence all memory dependencies before provider or tool entry, including derived requests. */
+export function assertCurrentMemoryContext(): void {
   const capture = current();
   if (!capture) return;
   if (capture.db !== getDb()) throw new MemoryUsageError('Memory context belongs to a replaced vault');
   assertNoForgottenProfileSources(capture.db, capture.profileSources);
+  if (capture.profileFields.size) {
+    const answers: Record<string, string | undefined> | undefined = getUserProfile()?.answers;
+    for (const [field, expected] of capture.profileFields) {
+      if (profileSourceRef(capture.db, 'answer', field) !== expected.revision || memoryDigest(answers?.[field] ?? null) !== expected.digest
+        || profileSourceSuperseded(capture.db, field, answers?.[field] ?? '')) {
+        throw new MemoryUsageError('Profile memory changed before consumption; refresh the context');
+      }
+    }
+  }
+  // Derived requests and tool arguments can depend on an earlier pack without
+  // carrying its original block. Invalidate that execution, never rewrite it.
+  const refs = [...capture.packs.values()].flatMap(pack => pack.included);
+  assertNoForgottenMemory(capture.db, refs.map(ref => ref.factId));
+  assertCurrentMemoryFacts(capture.db, refs);
+}
+/** The packer owns the manifest; whole-block matching only establishes actual
+ * supply to the provider adapter, never receipt, reliance or successful action. */
+export function recordMemoryHandoff(messages: readonly LLMMessage[]): void {
+  const capture = current();
+  if (!capture) return;
+  assertCurrentMemoryContext();
   const system = messages.filter(m => m.role === 'system' && typeof m.content === 'string');
   const refs = new Map<string, PackedRecall['included'][number]>();
   for (const pack of capture.packs.values()) {
@@ -60,7 +79,6 @@ export function recordMemoryHandoff(messages: readonly LLMMessage[]): void {
     }
   }
   if (refs.size) {
-    assertNoForgottenMemory(capture.db, [...refs.values()].map(ref => ref.factId));
     if (capture.target && process.env.JARVIS_BRIEF_MEMORY_USAGE === '1') getMemoryUsageLedger().record(capture.target, [...refs.values()], 'supplied');
   }
 }
@@ -70,7 +88,7 @@ export function withMemoryRecall<T>(run: () => T): T {
   if (current()) return run();
   let db: Database;
   try { db = getDb(); } catch { return run(); } // No initialized vault has no recall to capture.
-  return recalls.run({ target: null, db, packs: new Map(), profileSources: new Set() }, run);
+  return recalls.run({ target: null, db, packs: new Map(), profileSources: new Set(), profileFields: new Map() }, run);
 }
 /** Async iterators execute on consumption, after the preparation scope has returned. */
 export function bindMemoryRecallStream<T>(stream: AsyncIterable<T>): AsyncIterable<T> {
@@ -87,7 +105,9 @@ export function bindMemoryRecallStream<T>(stream: AsyncIterable<T>): AsyncIterab
 }
 export function captureProfileSources(answers: Record<string, string | undefined>): void {
   const capture = current(); if (!capture) return;
+  assertCurrentMemoryContext();
   for (const [field, answer] of Object.entries(answers)) if (answer) {
+    capture.profileFields.set(field, { revision: profileSourceRef(capture.db, 'answer', field), digest: memoryDigest(answer) });
     for (const kind of ['answer', 'derived']) capture.profileSources.add(automaticSourceKey(capture.db,
       { source: 'user_profile', source_ref: profileSourceRef(capture.db, kind, field), quote: answer })!);
   }

@@ -1,4 +1,8 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { MemoryForget } from '../../brief/memory-forget';
 import { closeWorkflowDb, initWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion, type FlowTriggerNode } from '../db/repos/flow-version';
@@ -13,15 +17,15 @@ import { buildSandboxServiceBackends } from './service-backends';
 import { createJarvisLlmChatRoute } from '../sandbox-api/routes/jarvis-llm';
 import { LLMManager } from '../../llm/manager';
 import { createEntity } from '../../vault/entities';
-import { createFact } from '../../vault/facts';
+import { createFact, correctFact } from '../../vault/facts';
 import { getKnowledgeForMessage } from '../../vault/retrieval';
 import { getMemoryUsageLedger } from '../../vault/memory-usage';
 import { getDb } from '../../vault/schema';
 
-let saved: string | undefined;
-beforeEach(() => { saved = process.env.JARVIS_BRIEF_MEMORY_USAGE; process.env.JARVIS_BRIEF_MEMORY_USAGE = '1'; initWorkflowDb(':memory:'); });
-afterEach(() => { closeWorkflowDb(); if (saved === undefined) delete process.env.JARVIS_BRIEF_MEMORY_USAGE; else process.env.JARVIS_BRIEF_MEMORY_USAGE = saved; });
-function fixture(overrideSystem = false, blocked = false) {
+let saved: string | undefined, dir: string, file: string;
+beforeEach(() => { saved = process.env.JARVIS_BRIEF_MEMORY_USAGE; process.env.JARVIS_BRIEF_MEMORY_USAGE = '1'; dir = mkdtempSync(join(tmpdir(), 'q16-workflow-')); file = join(dir, 'vault.db'); initWorkflowDb(file); });
+afterEach(() => { closeWorkflowDb(); rmSync(dir, { recursive: true, force: true }); if (saved === undefined) delete process.env.JARVIS_BRIEF_MEMORY_USAGE; else process.env.JARVIS_BRIEF_MEMORY_USAGE = saved; });
+function fixture(overrideSystem = false, blocked = false, afterBuild?: (id: string) => void) {
   const fact = createFact(createEntity('person', 'Ada').id, 'editor', 'Emacs', { confirmed: true });
   const input = { prompt: 'Ada editor', ...(overrideSystem ? { overrideSystem: true, system: 'Generic only' } : {}) };
   const action: FlowTriggerNode = { name: 'ask', type: 'PIECE', settings: { pieceName: '@jarvispieces/piece-jarvis-ask', pieceVersion: '0.0.1', actionName: 'ask', input } };
@@ -32,7 +36,7 @@ function fixture(overrideSystem = false, blocked = false) {
   const services = buildSandboxServiceBackends({ authorityEngine: new AuthorityEngine({ default_level: blocked ? 1 : 10, governed_categories: blocked ? ['read_data'] : [], overrides: [], context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
     approvalManager: new ApprovalManager(), emergencyController: new EmergencyController(), auditTrail: new AuditTrail(),
     credentialResolver: new CredentialResolver(), eventBuffer: new WorkflowEventBuffer(), llmManager: manager,
-    channelService: {} as any, wsService: {} as any, buildJarvisSystemPrompt: text => { builds++; return { static: 'Jarvis fixture', dynamic: getKnowledgeForMessage(text) }; } });
+    channelService: {} as any, wsService: {} as any, buildJarvisSystemPrompt: text => { builds++; const dynamic = getKnowledgeForMessage(text); afterBuild?.(fact.id); return { static: 'Jarvis fixture', dynamic }; } });
   const call = () => createJarvisLlmChatRoute({ llmChat: services.llmChat! })({ req: new Request('http://localhost/v1/jarvis/llm/chat', { method: 'POST',
     headers: { 'X-Jarvis-Step-Name': 'ask', 'X-Jarvis-Execution-Path': '[]' }, body: JSON.stringify(input) }),
     claims: { runId: run.id, projectId: DEFAULT_IDS.project, sandboxId: 'fixture' } as any, params: {} });
@@ -56,3 +60,42 @@ test('pending Authority approval cannot record selected or supplied context', as
   expect(body.approval).toBeDefined(); expect(f.calls()).toBe(0); expect(f.builds()).toBe(0);
   expect(getDb().query('SELECT * FROM memory_use_events').all()).toEqual([]);
 });
+
+function mutate(id: string, mutation: 'correct' | 'forget') {
+  if (mutation === 'correct') { correctFact(id, 'Vim', 'Owner correction'); return; }
+  const forget = new MemoryForget(getDb(), () => true), ready = forget.get(id);
+  if (ready.state !== 'ready') throw Error('Missing fact');
+  forget.forget(id, { requestId: crypto.randomUUID(), expectedRevision: ready.revision, confirmed: true });
+}
+for (const mutation of ['correct', 'forget'] as const) {
+  test(`governed ask rejects ${mutation} between context preparation and provider handoff without usage logging`, async () => {
+    delete process.env.JARVIS_BRIEF_MEMORY_USAGE;
+    const f = fixture(false, false, id => mutate(id, mutation));
+    await expect(f.call()).rejects.toThrow(/changed|forgotten/); expect(f.calls()).toBe(0);
+    expect(getDb().query('SELECT * FROM memory_use_events').all()).toEqual([]);
+  });
+  test(`queued ask selects current memory after ${mutation} and disk restart`, async () => {
+    const f = fixture(); mutate(f.fact.id, mutation);
+    closeWorkflowDb(); initWorkflowDb(file);
+    expect((await f.call()).status).toBe(200); expect(f.calls()).toBe(1);
+    expect(JSON.stringify(f.seen)).not.toContain('Emacs');
+    if (mutation === 'correct') expect(JSON.stringify(f.seen)).toContain('Vim');
+    const history = getMemoryUsageLedger().readTarget({ runId: f.run.id });
+    expect(history.data?.uses.some(use => use.factId === f.fact.id)).toBe(false);
+  });
+  test(`immutable effect replay and historical use references survive ${mutation} and disk restart`, async () => {
+    const f = fixture(); expect((await f.call()).status).toBe(200);
+    const effects = getDb().query('SELECT * FROM workflow_effect WHERE run_id = ?').all(f.run.id);
+    const version = getDb().query('SELECT * FROM flow_version WHERE flow_id = ?').all(f.flow.id);
+    const uses = getDb().query('SELECT * FROM memory_use_events').all();
+    expect(effects).toHaveLength(1); expect(uses).toHaveLength(2);
+    mutate(f.fact.id, mutation); closeWorkflowDb(); initWorkflowDb(file);
+    expect((await f.call()).status).toBe(200); expect(f.calls()).toBe(1); expect(f.builds()).toBe(1);
+    expect(getDb().query('SELECT * FROM workflow_effect WHERE run_id = ?').all(f.run.id)).toEqual(effects);
+    expect(getDb().query('SELECT * FROM flow_version WHERE flow_id = ?').all(f.flow.id)).toEqual(version);
+    expect(getDb().query('SELECT * FROM memory_use_events').all()).toEqual(uses);
+    const history = getMemoryUsageLedger().readTarget({ runId: f.run.id });
+    expect(history.data?.uses.every(use => use.factState === (mutation === 'correct' ? 'superseded' : 'forgotten'))).toBe(true);
+    expect(JSON.stringify(uses)).not.toContain('Emacs');
+  });
+}
