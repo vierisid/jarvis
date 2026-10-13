@@ -3,7 +3,7 @@
   "title": "Build the Profile form",
   "date": "2026-10-13",
   "status": "implemented_verified_not_activated",
-  "implementation_head": "5eeb931ad0dd27ed67255d883afc92dce51c35a9",
+  "implementation_head": "76c543bc722c4957ef1c79a54a5acff58f3080eb",
   "head": "The final evidence commit is the PR head; implementation_head identifies the tested code.",
   "branch": "brief/d-29",
   "target": "brief/d-28",
@@ -32,6 +32,7 @@
     "ui/src/brief/account/profile/**",
     "ui/src/brief/preview/FoundationPreview.tsx: isolated import and dispatch",
     "scripts/check-d29-f23.ts: optional pinned cross-stack proof",
+    "src/util/model-exec-env.ts: classify the F23 non-secret feature setting used by the proof",
     "docs/brief-delivery/D-29.* and evidence/D-29/**"
   ],
   "design_reference": {
@@ -167,5 +168,45 @@
   },
   "rollback": "Remove optional Profile registration or restore existing profile settings surface. Revert card commits; no migration or data rollback.",
   "next_card": "D-30 not started",
-  "private_progress": "Kept outside product repository; shared Drive roadmap unchanged."
+  "private_progress": "Kept outside product repository; shared Drive roadmap unchanged.",
+  "review_corrections": {
+    "date": "2026-10-13",
+    "pr": "https://github.com/vierisid/jarvis/pull/948",
+    "findings_fixed": 4,
+    "new_regression_cases": 8,
+    "fixes": [
+      "Classify F23 setting without feature activation.",
+      "Confirmed Cancel supersedes pending polling; failed discard reads retain drafts.",
+      "Uncertain drafts remain editable and keep required reconciliation, including validation and return-to-base edits.",
+      "Stable textarea elements retain focus and selection when removing legacy newlines; 44px/96px geometry unchanged."
+    ],
+    "focused_tests": {
+      "passed": 74,
+      "assertions": 482,
+      "includes": "D29 actual pinned F23 integration and environment policy"
+    },
+    "brief_tests": {
+      "passed": 877,
+      "skipped": 2,
+      "assertions": 6679,
+      "note": "Before final validation-message simplification, covered by final focused tests/hooks."
+    },
+    "normal_hooks": {
+      "passed": true,
+      "tests": 73,
+      "typecheck": "pass"
+    },
+    "build": "pass, existing at-rule warnings",
+    "browser": "Focus/selection, editable invalid drafts after uncertainty, correction/retry, canonical refresh, desktop and 390px geometry; no console warnings/errors observed.",
+    "evidence": [
+      "review-fixes-tests.log",
+      "review-fixes-brief-tests.log",
+      "review-fixes-hooks.log",
+      "review-fixes-build.log",
+      "review-fixes-browser.json",
+      "review-fixes-desktop.png",
+      "review-fixes-390.png"
+    ],
+    "ci": "See current PR checks; no whole repository suite run locally."
+  }
 }
