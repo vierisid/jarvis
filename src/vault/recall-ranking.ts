@@ -109,8 +109,10 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
   if (!query.size && !selfOverview) return [];
   const normalized = normalizeRecallText(message);
   const queryPhrase = phrase(message);
-  const namedPeople = entities.filter(entity => entity.type === 'person'
-    && phrase(entity.name).trim().split(' ').length > 1 && queryPhrase.includes(phrase(entity.name)));
+  const entityPhrases = new Map(entities.map(entity => [entity.id, phrase(entity.name)]));
+  const namedPeople = [...new Set(entities.filter(entity => entity.type === 'person')
+    .map(entity => entityPhrases.get(entity.id)!)
+    .filter(name => name.trim().split(' ').length > 1 && queryPhrase.includes(name)))];
   const current = facts.filter(fact => isCurrentRecallFact(fact, at));
   // Superseded and out-of-period rows never reach the prompt, but they are still
   // records this subject has: the block has to admit it is not the whole ledger.
@@ -165,10 +167,13 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
     // other person's unrelated contact details. Non-person task subjects retain
     // their existing relevance ranking.
     const scopePerson = namedPeople.length > 0 && entity.type === 'person'
-      && !queryPhrase.includes(phrase(entity.name)) && !ownProfile
+      && !queryPhrase.includes(entityPhrases.get(entity.id)!) && !ownProfile
       && !aliasMatches.some(doc => queryPhrase.includes(phrase(doc.fact.object)));
-    const eligibleDocs = scopePerson ? entityDocs.filter(doc => namedPeople.some(person =>
-      [doc.fact.predicate, doc.fact.object, doc.fact.scope ?? ''].some(text => phrase(text).includes(phrase(person.name))))) : entityDocs;
+    const eligibleDocs = scopePerson ? entityDocs.filter(doc => {
+      // Normalize each field once, regardless of how many people the query names.
+      const fields = [doc.fact.predicate, doc.fact.object, doc.fact.scope ?? ''].map(phrase);
+      return namedPeople.some(name => fields.some(text => text.includes(name)));
+    }) : entityDocs;
     if (scopePerson && (eligibleDocs.length < entityDocs.length || nameMatch)) scopedOut = true;
     const matchedTerms = new Set<string>();
     const scored = eligibleDocs.map(doc => {

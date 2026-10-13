@@ -8,6 +8,7 @@ import type { Fact, FactOptions } from '../facts.ts';
 import type { EntityType } from '../entities.ts';
 
 export const FOUNDER_RECALL_PROTOCOL = 'founder-recall-v1';
+export const FOUNDER_RECALL_SCORING = 'founder-recall-scoring-v2';
 export const IMPLEMENTATION_ROOT = resolve(import.meta.dir, '../../..');
 const tokenizer = new Tiktoken(cl100k);
 const digest = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
@@ -108,21 +109,38 @@ export function evaluateFounderCase(engine: Engine, fixture: FounderCase, corpus
     const refs = seedCase(engine, fixture, order);
     const before = truthSnapshot(engine);
     const records = refs.map(ref => ({ ...ref, fact: engine.facts.getFact(ref.factId)! }));
+    const headings = new Map(records.map(({ fact }) => {
+      const entity = engine.entities.getEntity(fact.subject_id)!;
+      return [entity.id, `**${engine.format.defangFactText(entity.name)}** (${entity.type})`];
+    }));
     return fixture.queries.map(query => {
       const started = performance.now();
       const profiles = engine.retrieval.retrieveForMessage(query);
       const context = transform(engine.retrieval.formatKnowledgeContext(profiles, fixture.maxChars));
       const elapsedMs = performance.now() - started;
-      const lines = context.split('\n').filter(line => line.startsWith('  - ') && !line.includes('No current facts recorded.') && !line.startsWith('  - Unverified relationship:'));
+      const lines: Array<{ text: string; heading: string | null }> = [];
+      let heading: string | null = null;
+      for (const text of context.split('\n')) {
+        if (text.startsWith('  - ')) {
+          // Only the exact structural marker is empty; values/evidence may contain its text.
+          if (text === '  - No current facts recorded.') continue;
+          if (text.startsWith('  - Unverified relationship:') && !text.includes(' | {"id":')) continue;
+          lines.push({ text, heading });
+        } else if (text.trim()) heading = text.startsWith('**') ? text : null;
+      }
       const selected = new Set(profiles.flatMap(profile => profile.facts.map(fact => fact.id)));
-      const found = records.filter(r => lines.some(line => line.includes(` | {"id":${JSON.stringify(r.factId)},`)));
-      const unqualified = found.filter(r => !lines.includes(`  - ${engine.format.formatFact(r.fact)}`)).map(r => r.key);
-      const unidentifiedLines = lines.filter(line => !found.some(r => line.includes(` | {"id":${JSON.stringify(r.factId)},`))).length;
+      const occurrences = records.map(record => ({ ...record,
+        lines: lines.filter(line => line.text.includes(` | {"id":${JSON.stringify(record.factId)},`)) }));
+      const found = occurrences.filter(r => r.lines.length > 0);
+      // Check every occurrence: a correct copy must not conceal a corrupted duplicate.
+      const unqualified = found.filter(r => r.lines.some(line => line.text !== `  - ${engine.format.formatFact(r.fact)}`)).map(r => r.key);
+      const misattributed = found.filter(r => r.lines.some(line => line.heading !== headings.get(r.fact.subject_id))).map(r => r.key);
+      const unidentifiedLines = lines.filter(line => !found.some(r => r.lines.includes(line))).length;
       const keys = found.map(r => r.key).sort();
       const missing = fixture.required.filter(key => !keys.includes(key));
       const irrelevant = keys.filter(key => !(fixture.allowed ?? fixture.required).includes(key));
       const forbidden = keys.filter(key => fixture.forbidden?.includes(key));
-      const wrongPerson = found.filter(r => fixture.forbiddenSubjects?.includes(r.subject)).map(r => r.key);
+      const wrongPerson = found.filter(r => fixture.forbiddenSubjects?.includes(r.subject) || misattributed.includes(r.key)).map(r => r.key);
       const bindings = (fixture.bindings ?? []).map(binding => {
         const fact = engine.facts.queryFact(binding.subject, binding.predicate, binding.scope);
         const expectedId = binding.expected ? refs.find(r => r.key === binding.expected)!.factId : null;
@@ -135,7 +153,8 @@ export function evaluateFounderCase(engine: Engine, fixture: FounderCase, corpus
         reason: r.fact.status === 'superseded' || r.fact.superseded_by ? 'superseded'
           : r.fact.valid_from !== null && r.fact.valid_from > corpus.now || r.fact.valid_to !== null && r.fact.valid_to <= corpus.now ? 'outside_validity'
             : selected.has(r.factId) ? 'context_limit_or_dependency' : 'not_selected_by_ranking' }));
-      const qualified = unqualified.length === 0 && unidentifiedLines === 0 && (!found.length || context.startsWith(engine.format.MEMORY_USE_RULES));
+      const qualified = unqualified.length === 0 && misattributed.length === 0 && unidentifiedLines === 0
+        && (!found.length || context.startsWith(engine.format.MEMORY_USE_RULES));
       const pass = !missing.length && !irrelevant.length && !forbidden.length && !wrongPerson.length && qualified && budgetPassed
         && bindings.every(b => b.pass) && (!fixture.abstain || context === '')
         && (!fixture.expectEmptySubject || context.includes('No current facts recorded.')) && (!fixture.expectOmission || omissionDisclosed);
@@ -143,7 +162,7 @@ export function evaluateFounderCase(engine: Engine, fixture: FounderCase, corpus
       return { id: fixture.id, category: fixture.category, query, order, pass, required: fixture.required,
         found: found.map(r => ({ key: r.key, factId: r.factId, subjectId: r.fact.subject_id,
           ledgerEvidenceIds: r.fact.evidence.map(e => e.id).sort() })).sort((a, b) => a.key.localeCompare(b.key)),
-        missing, irrelevant, forbidden, wrongPerson, unqualified, unidentifiedLines, qualified, bindings,
+        missing, irrelevant, forbidden, wrongPerson, misattributed, unqualified, unidentifiedLines, qualified, bindings,
         omissionDisclosed, omissions, chars: context.length, tokens, budgetPassed, elapsedMs, contextSha256: digest(context) };
     });
   } finally { engine.schema.closeDb(); Date.now = originalClock; }
@@ -185,7 +204,7 @@ export async function runFounderRecallBenchmark(split: 'development' | 'heldout'
   const sourceHashes = Object.fromEntries(['facts', 'fact-policy', 'fact-format', 'recall-ranking', 'recall-context', 'retrieval']
     .map(file => [file, digest(readFileSync(resolve(root, `src/vault/${file}.ts`)))]));
   const rows = corpus.cases.flatMap(fixture => corpus.orders.flatMap(order => evaluateFounderCase(engine, fixture, corpus, order)));
-  return { protocol: FOUNDER_RECALL_PROTOCOL, split, corpusSha256: sha256, sourceHashes,
+  return { protocol: FOUNDER_RECALL_PROTOCOL, scoring: FOUNDER_RECALL_SCORING, split, corpusSha256: sha256, sourceHashes,
     harnessSha256: digest(readFileSync(import.meta.path)), now: corpus.now, provenance: corpus.provenance,
     tokenizer: { package: 'js-tiktoken@1.0.21', encoding: corpus.tokenizer, maxTokens: corpus.maxTokens,
       scope: 'Exact reference-encoding tokens for the memory block only; not deployed-profile billing or full-prompt tokens.' },
@@ -194,7 +213,8 @@ export async function runFounderRecallBenchmark(split: 'development' | 'heldout'
 }
 export type FounderReport = Awaited<ReturnType<typeof runFounderRecallBenchmark>>;
 export function compareFounderReports(baseline: FounderReport, candidate: FounderReport) {
-  if (baseline.protocol !== candidate.protocol || baseline.corpusSha256 !== candidate.corpusSha256
+  if (baseline.protocol !== candidate.protocol || baseline.scoring !== FOUNDER_RECALL_SCORING
+    || candidate.scoring !== FOUNDER_RECALL_SCORING || baseline.corpusSha256 !== candidate.corpusSha256
     || baseline.harnessSha256 !== candidate.harnessSha256 || baseline.split !== candidate.split
     || baseline.now !== candidate.now || JSON.stringify(baseline.tokenizer) !== JSON.stringify(candidate.tokenizer)) throw new Error('Unmatched benchmark protocol/corpus');
   const key = (r: Row) => JSON.stringify([r.id, r.query, r.order]);
