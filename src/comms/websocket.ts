@@ -17,6 +17,9 @@ export type WSMessage = {
       // send `interview_listen`; the daemon answers `interview_listen_state`
       // with reason 'text-only' so it stops waiting on a microphone.
       | 'interview_listen' | 'interview_listen_stop' | 'interview_listen_state'
+      // A native panel's answer to a room_action that carried a resultId:
+      // { resultId, accepted }. See src/daemon/room-action-results.ts.
+      | 'room_action_result'
       | 'thinking_start' | 'thinking_end'
       | 'workflow_event'
       | 'goal_event'

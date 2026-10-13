@@ -14,9 +14,10 @@ import { readFileSync } from 'node:fs';
 import { wakeCommandFrom } from '../voice/wake-phrase.ts';
 import {
   exactRoomKey, findRoomKey, parseBackgroundTask, parseSettingsIntent, PEBBLE_ROOMS,
-  planInPanelAction, planSubPebbleClose, planWindowAction,
+  planInPanelAction, planSubPebbleClose, planWindowAction, SPOKEN_TABS, spokenTab, tabSwitchReply,
   type PanelLookups, type PanelRef, type SubPebbleCand,
 } from './pebble-intents.ts';
+import { isRoomTab, ROOM_TABS, roomTabs, type TabbedRoom } from './room-tabs.ts';
 
 // The daemon's open-panel inventory, over the real room table: the same
 // shape as panelLookups() in index.ts.
@@ -28,6 +29,7 @@ function lookups(open: string[]): PanelLookups {
       const key = findRoomKey(hint);
       return key ? [...panels].reverse().find((p) => p.key === key) ?? null : null;
     },
+    openPanels: () => [...panels].reverse(),
     roomTitle: (phrase) => {
       const key = exactRoomKey(phrase);
       return key ? PEBBLE_ROOMS[key]!.title : null;
@@ -162,6 +164,108 @@ describe('in-panel navigation', () => {
   });
 });
 
+describe('in-panel navigation names only tabs the room has (#933)', () => {
+  const ROOM_KEYS = Object.keys(PEBBLE_ROOMS);
+  // Every phrase the old flat table knew, plus every real tab and label. Each
+  // used to be sent to whichever panel was open, whatever that room's tabs.
+  const PHRASES = [
+    'editor', 'edit', 'edit view', 'builder', 'agent builder', 'list', 'all', 'logs', 'history',
+    'settings', 'general', 'tts', 'stt', 'voice', 'llm', 'tools', 'channels',
+    ...Object.values(ROOM_TABS).flat(), 'command center',
+  ];
+
+  test('every spoken tab is a tab its room accepts, and every tab answers to its own name', () => {
+    for (const [room, table] of Object.entries(SPOKEN_TABS)) {
+      for (const tab of Object.values(table)) expect(isRoomTab(room as TabbedRoom, tab)).toBe(true);
+      for (const tab of ROOM_TABS[room as TabbedRoom]) expect(spokenTab(room, tab)).toBe(tab);
+    }
+    expect(spokenTab('workflows', 'editor')).toBeNull();
+    expect(spokenTab('settings', 'constructor')).toBeNull();
+  });
+
+  test('no plan, with any one room open, switches it to a tab it does not have', () => {
+    let switches = 0;
+    for (const key of ROOM_KEYS) {
+      for (const phrase of PHRASES) {
+        for (const said of [`switch to the ${phrase} tab`, `switch to the ${phrase} tab in ${PEBBLE_ROOMS[key]!.aliases[0]}`]) {
+          const plan = planInPanelAction(said, lookups([key]));
+          if (plan?.kind !== 'switch_tab') continue;
+          switches++;
+          const tabs = roomTabs(plan.target.key);
+          if (!tabs?.includes(plan.tab)) throw new Error(`"${said}" with ${key} open switched ${plan.target.key} to ${plan.tab}`);
+        }
+      }
+    }
+    // Not vacuous: the real tabs do switch.
+    expect(switches).toBeGreaterThan(20);
+  });
+
+  test('without a room named, the open panel that has the tab is the one switched', () => {
+    // Agents is the most recent, and has no voice tab. This used to send
+    // "voice" to Agents and say "Switched Agents to voice."
+    expect(planInPanelAction('switch to the voice tab', lookups(['settings', 'agents'])))
+      .toMatchObject({ kind: 'switch_tab', tab: 'voice', target: { key: 'settings' } });
+    expect(planInPanelAction('switch to the voice tab', lookups(['agents']))).toBeNull();
+    // Shared tab names go to the most recent room that has them.
+    expect(planInPanelAction('switch to the constellation tab', lookups(['memory', 'goals'])))
+      .toMatchObject({ kind: 'switch_tab', tab: 'constellation', target: { key: 'goals' } });
+  });
+
+  test('a room named outright that lacks the tab is answered, not switched', () => {
+    expect(planInPanelAction('switch to the voice tab in agents', lookups(['agents', 'settings'])))
+      .toEqual({ kind: 'say', text: "Agents doesn't have a voice tab." });
+    // Workflows has no tab handler at all.
+    expect(planInPanelAction('switch to the voice tab in the workflows window', lookups(['workflows'])))
+      .toEqual({ kind: 'say', text: "Workflows doesn't have tabs I can switch." });
+    // But a phrase that is no room's tab may be a place inside the room, so
+    // the model gets it rather than a refusal.
+    for (const said of [
+      'switch to the editor tab in the workflows window',
+      'go to the failed runs section of workflows',
+      'go to the errors section in logs',
+    ]) {
+      expect(planInPanelAction(said, lookups(['workflows', 'logs']))).toBeNull();
+    }
+    // A place inside a tab is not a tab; the model can say where it lives.
+    expect(planInPanelAction('go to the telegram section of settings', lookups(['settings']))).toBeNull();
+  });
+
+  test('every tab can be reached by a whole sentence with its room open', () => {
+    // The table alone could hold a tab no sentence reaches. One is known:
+    // "browser" is the browser-tab guard's word, so Memory's Browser tab is
+    // left to the model rather than risk "open the browser tab".
+    const unreachable = new Set(['memory:browser']);
+    for (const [room, roomTabList] of Object.entries(ROOM_TABS)) {
+      for (const tab of roomTabList) {
+        const plan = planInPanelAction(`switch to the ${tab} tab`, lookups([room]));
+        if (unreachable.has(`${room}:${tab}`)) expect(plan).toBeNull();
+        else expect(plan).toMatchObject({ kind: 'switch_tab', tab, target: { key: room } });
+      }
+    }
+  });
+
+  test('tab labels read off the screen work', () => {
+    expect(planInPanelAction('go to the agent builder tab', lookups(['agents'])))
+      .toMatchObject({ kind: 'switch_tab', tab: 'builder' });
+    expect(planInPanelAction('open the command center view', lookups(['agents'])))
+      .toMatchObject({ kind: 'switch_tab', tab: 'command' });
+  });
+
+  test('a tab that shares a room alias is the tab while that room is open', () => {
+    // "approvals" also names the Authority room.
+    expect(planInPanelAction('switch to the approvals tab', lookups(['authority'])))
+      .toMatchObject({ kind: 'switch_tab', tab: 'approvals', target: { key: 'authority' } });
+    expect(planInPanelAction('open the approvals page', lookups(['settings']))).toBeNull();
+  });
+
+  test('only a switch the room accepted is announced as done', () => {
+    expect(tabSwitchReply('Settings', 'voice', 'accepted')).toBe('Switched Settings to voice.');
+    expect(tabSwitchReply('Settings', 'billing', 'rejected')).toBe("Settings didn't switch to billing.");
+    expect(tabSwitchReply('Settings', 'voice', 'no_answer'))
+      .toBe("I asked Settings to switch to voice, but it didn't answer.");
+  });
+});
+
 describe('window management', () => {
   test.each(['can you expand on that', 'expand it', 'expand on this idea', 'make it bigger'])(
     'with nothing open, "%s" goes to the model',
@@ -288,6 +392,24 @@ describe('the daemon uses these plans', () => {
     expect(src).toContain('planSubPebbleClose(userText, cands)');
     expect(src).toContain('parseBackgroundTask(userText)');
     expect(src).toContain('planWindowAction(lower, panelLookups(sidecarId))');
+  });
+
+  test('a tab switch waits for the room and reports what it said (#933)', () => {
+    expect(src).toContain('await wsService.requestRoomAction({');
+    expect(src).toContain('tabSwitchReply(target.title, tabRaw, outcome)');
+    // A turn cancelled during the wait says nothing.
+    const wait = src.indexOf('await wsService.requestRoomAction({');
+    const reply = src.indexOf('tabSwitchReply(target.title, tabRaw, outcome)');
+    expect(src.slice(wait, reply)).toContain('if (ctrl.cancelled) return true;');
+    expect(src).not.toContain('`Switched ${target.title} to ${tabRaw}.`');
+  });
+
+  test('opening a room by voice resolves the alias with findRoomKey (#933)', () => {
+    // The inline copy's escape never escaped anything (a broken character
+    // class and replacement). No alias has a regex metacharacter, so it never
+    // fired; this keeps the one correct copy the only one.
+    expect(src).toContain('const key = findRoomKey(tail);');
+    expect(src).not.toContain('orderedAliases');
   });
 
   test('no copy of the old patterns is left behind', () => {

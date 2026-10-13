@@ -7,6 +7,7 @@ import React, {
   useRef,
 } from "react";
 import type { RoomKey } from "../router";
+import { ROOM_ACTION_QUEUE_TTL_MS } from "../../../../src/daemon/room-action-results";
 
 /**
  * Phase 6.3.5 — Room control via voice.
@@ -42,11 +43,22 @@ export type RoomActionHandler = (
   args: Record<string, unknown>,
 ) => boolean | string | void;
 
+/**
+ * Told whether the room carried an action out (#933): true for `true` or a
+ * string ack, false for anything else. Called once, when a handler runs; an
+ * action that waits in the queue and expires is never reported, so a caller
+ * waiting on this needs its own timeout.
+ */
+export type RoomActionResultCallback = (accepted: boolean) => void;
+
+const accepted = (result: boolean | string | void): boolean =>
+  result === true || typeof result === "string";
+
 interface BusInternal {
   /** Most-recent handler per RoomKey wins. */
   register: (room: RoomKey, handler: RoomActionHandler) => () => void;
   /** AppShell calls this when a WS room_action arrives. */
-  dispatch: (req: RoomActionRequest) => void;
+  dispatch: (req: RoomActionRequest, onResult?: RoomActionResultCallback) => void;
 }
 
 const BusContext = createContext<BusInternal | null>(null);
@@ -65,9 +77,10 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
   // frame, but the SettingsRoom body needs a tick or two to mount + run
   // its `useRoomActions` effect. Without queueing, the action lands in
   // the void and the user sees the room open but TTS not toggle.
-  const QUEUE_TTL_MS = 5000;
+  // Shared with the daemon, which waits this long for a room to answer.
+  const QUEUE_TTL_MS = ROOM_ACTION_QUEUE_TTL_MS;
   const queueRef = useRef<
-    Partial<Record<RoomKey, Array<{ req: RoomActionRequest; queuedAt: number }>>>
+    Partial<Record<RoomKey, Array<{ req: RoomActionRequest; queuedAt: number; onResult?: RoomActionResultCallback }>>>
   >({});
 
   const drainQueue = useCallback((room: RoomKey, handler: RoomActionHandler) => {
@@ -76,11 +89,12 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
     const now = Date.now();
     const fresh = queue.filter((q) => now - q.queuedAt < QUEUE_TTL_MS);
     queueRef.current[room] = [];
-    for (const { req } of fresh) {
+    for (const { req, onResult } of fresh) {
       console.log(
         `[RoomActionBus] Draining queued action "${req.action}" for room "${req.room}"`,
       );
       const result = handler(req.action, req.args);
+      onResult?.(accepted(result));
       if (result === false) {
         console.warn(
           `[RoomActionBus] Queued action "${req.action}" rejected by "${req.room}"`,
@@ -105,7 +119,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
     [drainQueue],
   );
 
-  const dispatch = useCallback((req: RoomActionRequest) => {
+  const dispatch = useCallback((req: RoomActionRequest, onResult?: RoomActionResultCallback) => {
     const stack = handlersRef.current[req.room as RoomKey];
     if (!stack || stack.length === 0) {
       // No handler yet — queue and wait for one to register. Common
@@ -113,7 +127,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
       // the target room's body hasn't finished mounting yet (lazy chunk
       // load + Suspense + effect timing).
       const list = queueRef.current[req.room as RoomKey] ?? [];
-      list.push({ req, queuedAt: Date.now() });
+      list.push({ req, queuedAt: Date.now(), onResult });
       queueRef.current[req.room as RoomKey] = list;
       console.log(
         `[RoomActionBus] Queued action "${req.action}" for room "${req.room}" (no handler yet)`,
@@ -122,6 +136,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
     }
     const top = stack[stack.length - 1]!;
     const result = top(req.action, req.args);
+    onResult?.(accepted(result));
     if (result === false) {
       console.warn(
         `[RoomActionBus] Room "${req.room}" rejected action "${req.action}"`,
@@ -143,7 +158,7 @@ export function useRoomActionDispatcher() {
   if (!bus) {
     // Tolerable in mock shells / SSR — bus not mounted means no voice
     // control, which is the same as "no daemon connected".
-    return { dispatch: (_req: RoomActionRequest) => {} };
+    return { dispatch: (_req: RoomActionRequest, _onResult?: RoomActionResultCallback) => {} };
   }
   return { dispatch: bus.dispatch };
 }

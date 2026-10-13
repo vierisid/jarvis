@@ -31,6 +31,7 @@ import {
   type SpecialistInfo,
 } from "./useAgentsData";
 import "./AgentsRoom.css";
+import { isRoomTab, ROOM_TABS, type RoomTab } from "../../../../../src/daemon/room-tabs";
 
 /** Each role gets a quiet lucide glyph in place of the legacy emojis. */
 const ROLE_ICON: Record<string, LucideIcon> = {
@@ -55,8 +56,8 @@ function initials(name: string): string {
   return (name.trim().slice(0, 2) || "··").toUpperCase();
 }
 
-type TabId = "command" | "orbital" | "builder";
-const AGENTS_TAB_KEYS: ReadonlyArray<TabId> = ["command", "orbital", "builder"];
+type TabId = RoomTab<"agents">;
+const AGENTS_TAB_KEYS: ReadonlyArray<TabId> = ROOM_TABS.agents;
 
 export type RoomBodyMode = "inline" | "expanded";
 
@@ -108,8 +109,8 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useRoomActions("agents", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const tab = String(args.tab);
-        if (tab === "command" || tab === "orbital" || tab === "builder") {
+        const tab = args.tab;
+        if (isRoomTab("agents", tab)) {
           setActiveTab(tab);
           return true;
         }

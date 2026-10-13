@@ -34,8 +34,9 @@ import {
 } from "./useAuthorityData";
 import "./AuthorityRoom.css";
 import { ApprovalWhy } from "../../thread/ApprovalWhy";
+import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
 
-type TabId = "approvals" | "audit" | "grants" | "learning";
+type TabId = RoomTab<"authority">;
 
 const TAB_LABEL: Record<TabId, string> = {
   approvals: "Approvals",
@@ -88,8 +89,8 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
   useRoomActions("authority", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const t = String(args.tab);
-        if (t === "approvals" || t === "audit" || t === "grants" || t === "learning") {
+        const t = args.tab;
+        if (isRoomTab("authority", t)) {
           setActiveTab(t);
           return true;
         }

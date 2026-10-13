@@ -6,6 +6,7 @@ import { ConfirmHost } from "./ui/ConfirmDialog";
 import { PrimitivesPage } from "./pages/PrimitivesPage";
 import { RoomDispatcher } from "./rooms/RoomDispatcher";
 import { RoomActionBusProvider, useRoomActionDispatcher } from "./rooms/useRoomActionBus";
+import { handlePanelRoomActionMessage } from "./rooms/panel-room-action";
 import { getRoomBody } from "./rooms/RoomBodyRegistry";
 import { maybeRunUrlReset } from "./onboarding/resetClient";
 import { OnboardingGate } from "./onboarding/OnboardingGate";
@@ -49,7 +50,7 @@ export function AppShellV2() {
   // Thread/Rail/Composer chrome, no voice handlers — so the pebble's
   // sidecar-side voice loop stays the only voice surface. The
   // PanelRoomActionBridge wires this panel's RoomActionBus to the
-  // daemon's WS so voice-driven actions ("switch to editor tab") can
+  // daemon's WS so voice-driven actions ("switch to the voice tab") can
   // reach the room's handler — the same path AppShell uses, minus the
   // chrome.
   if (route.kind === "panel") {
@@ -156,7 +157,7 @@ export function AppShellV2() {
 /**
  * T20c — Panel-mode WS bridge. Opens a WebSocket to the daemon and
  * forwards every `room_action` notification into the panel's
- * RoomActionBus, so voice commands like "switch to the editor tab"
+ * RoomActionBus, so voice commands like "switch to the voice tab"
  * reach the room's `useRoomActions` handler the same way they do in
  * the full dashboard. Only mounted inside the panel-mode branch above,
  * so the regular dashboard's WS plumbing isn't doubled up.
@@ -173,18 +174,10 @@ function PanelRoomActionBridge() {
     const connect = () => {
       ws = new WebSocket(url);
       ws.addEventListener("message", (e) => {
-        let msg: unknown;
-        try { msg = JSON.parse(typeof e.data === "string" ? e.data : ""); }
-        catch { return; }
-        if (!msg || typeof msg !== "object") return;
-        const m = msg as { type?: string; payload?: { source?: string; room?: string; action?: string; args?: Record<string, unknown> } };
-        if (m.type !== "notification" || m.payload?.source !== "room_action") return;
-        if (!m.payload.room || !m.payload.action) return;
-        dispatch({
-          room: m.payload.room,
-          action: m.payload.action,
-          args: m.payload.args ?? {},
-          ts: Date.now(),
+        // The answer may come after a reconnect (a queued action drains when
+        // the room mounts), so it goes out on whichever socket is live then.
+        handlePanelRoomActionMessage(e.data, dispatch, (text) => {
+          if (ws?.readyState === WebSocket.OPEN) ws.send(text);
         });
       });
       ws.addEventListener("close", () => {

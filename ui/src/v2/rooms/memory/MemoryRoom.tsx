@@ -26,8 +26,9 @@ import {
 } from "./useMemoryData";
 import "./MemoryRoom.css";
 import { FactDetails } from './FactDetails';
+import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
 
-type TabId = "constellation" | "explorer" | "browser";
+type TabId = RoomTab<"memory">;
 
 const TAB_LABEL: Record<TabId, string> = {
   constellation: "Constellation",
@@ -142,8 +143,8 @@ export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
   useRoomActions("memory", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const t = String(args.tab);
-        if (t === "constellation" || t === "explorer" || t === "browser") {
+        const t = args.tab;
+        if (isRoomTab("memory", t)) {
           setActiveTab(t);
           return true;
         }

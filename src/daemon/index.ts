@@ -108,7 +108,7 @@ import {
   logSafeLabel, MAX_POINT_COORD, PEBBLE_SCREEN_SPACE, pointingGuidance, pointTagRegex,
 } from "./pebble-point-prompt.ts";
 import {
-  parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction,
+  parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { osFamily } from "../util/execution-environment.ts";
@@ -2214,9 +2214,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // for most rooms (workflows, goals, settings, authority, etc.);
       // we broadcast a `room_action` over WS and the panel-mode bridge
       // (PanelRoomActionBridge in AppShellV2) forwards it to whichever
-      // room's handler is mounted. Rooms internally validate the tab
-      // name and silently reject unknown tabs, so we can be liberal
-      // about matching.
+      // room's handler is mounted. The plan only names tabs the room
+      // has (room-tabs.ts), and the panel answers whether it switched,
+      // so the reply says what happened rather than assuming it (#933).
       const tryHandleInPanelAction = async (
         sidecarId: string,
         userText: string,
@@ -2237,13 +2237,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         try {
           // The bus broadcasts to all dashboard clients (including all
           // open panels). useRoomActions is keyed on `room`, so only
-          // the matching room's handler fires.
-          wsService.broadcastRoomAction({
+          // the matching room's handler fires, and the panel answers
+          // whether it switched (#933). The wait is normally a round trip
+          // but can run to the bus's queue TTL, so show it is working, and
+          // drop the reply if the turn was cancelled meanwhile.
+          await setState(sidecarId, 'thinking', '');
+          const outcome = await wsService.requestRoomAction({
             room: target.key,
             action: 'switch_tab',
             args: { tab },
           });
-          await speakConfirmation(sidecarId, `Switched ${target.title} to ${tabRaw}.`, ctrl);
+          console.log(`[ambient-ui] in-panel action: switch_tab tab="${tab}" on ${target.title}: ${outcome}`);
+          if (ctrl.cancelled) return true;
+          await speakConfirmation(sidecarId, tabSwitchReply(target.title, tabRaw, outcome), ctrl);
         } catch (err) {
           console.warn('[ambient-ui] in-panel action failed:', err);
           await speakConfirmation(sidecarId, "I couldn't navigate the panel.", ctrl);
@@ -2301,14 +2307,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // The room table lives in pebble-intents.ts so the planners resolve the
       // same aliases the daemon does (#926).
       const ROOMS = PEBBLE_ROOMS;
-
-      // Match aliases longest-first so "tool catalog" wins over "tools" when
-      // both appear in the input.
-      const orderedAliases: { alias: string; key: string }[] = [];
-      for (const [key, meta] of Object.entries(ROOMS)) {
-        for (const alias of meta.aliases) orderedAliases.push({ alias, key });
-      }
-      orderedAliases.sort((a, b) => b.alias.length - a.alias.length);
 
       const dashboardURL = (key: string): string => {
         // _panel_<key> renders ONLY the RoomBody inside the spawned native
@@ -2755,6 +2753,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // What the fast-path planners in pebble-intents.ts may ask about panels.
       const panelLookups = (sidecarId: string): PanelLookups => ({
         findPanel: (hint) => findPanel(sidecarId, hint),
+        openPanels: () => [...(panelsBySidecar.get(sidecarId) ?? [])].reverse(),
         roomTitle: (phrase) => {
           const key = exactRoomKey(phrase);
           return key ? ROOMS[key]!.title : null;
@@ -3044,13 +3043,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const tail = m[2];
         if (!tail) return false;
 
-        let key: string | null = null;
-        for (const { alias, key: roomKey } of orderedAliases) {
-          // Word-boundary match against the captured tail so "open settings page"
-          // matches "settings" cleanly without grabbing the trailing words.
-          const aliasRe = new RegExp(`\\b${alias.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&')}\\b`);
-          if (aliasRe.test(tail)) { key = roomKey; break; }
-        }
+        // Word-boundary match against the captured tail, longest alias first,
+        // so "open settings page" matches "settings" cleanly without grabbing
+        // the trailing words. findRoomKey escapes each alias properly; the
+        // copy that lived here did not (#933).
+        const key = findRoomKey(tail);
         if (!key) return false;
 
         const meta = ROOMS[key]!;
