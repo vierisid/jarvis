@@ -5,7 +5,7 @@ import { NavigationCompatibility } from "./controller";
 import { DESTINATIONS, type DestinationId } from "./destinations";
 import { AttentionRoutes } from "./AttentionRoutes";
 import { MaintenanceLinks } from "./MaintenanceLinks";
-import type { AttentionSnapshot } from "./notifications";
+import { attentionKey, type AttentionSnapshot } from "./notifications";
 import "./preview.css";
 
 /** Isolated F-25 behavior specimen. No runtime settings, network, voice or account effects. */
@@ -31,9 +31,9 @@ export function NavigationPreview() {
   }, []);
   const snapshot: AttentionSnapshot = stale ? { status: "stale" } : {
     status: "ready", items: [
-      { id: "approval-fixture", source: "approval", kind: "approval", title: "Review a pending approval", text: "Fixture permission request", timestamp: 1, tone: "warn", unread: !read.includes("approval-fixture") },
-      { id: "failure-fixture", source: "failure", kind: "system", title: "Inspect a failed task", text: "Fixture failure; opening does not retry it", timestamp: 2, tone: "warn", unread: !read.includes("failure-fixture"), refs: { taskId: "task-fixture" } },
-      { id: "update-fixture", source: "update", kind: "system", title: "Inspect a device update", text: "Fixture update; opening does not install it", timestamp: 3, tone: "neutral", unread: !read.includes("update-fixture") },
+      { id: "approval-fixture", source: "approval", kind: "approval", title: "Review a pending approval", text: "Fixture permission request", timestamp: 1, tone: "warn", unread: !read.includes("approval:approval-fixture") },
+      { id: "failure-fixture", source: "failure", kind: "system", title: "Inspect a failed task", text: "Fixture failure; opening does not retry it", timestamp: 2, tone: "warn", unread: !read.includes("failure:failure-fixture"), refs: { taskId: "task-fixture" } },
+      { id: "update-fixture", source: "update", kind: "system", title: "Inspect a device update", text: "Fixture update; opening does not install it", timestamp: 3, tone: "neutral", unread: !read.includes("update:update-fixture") },
     ],
   };
   return <main className="brief-foundation brief-navigation-preview">
@@ -45,7 +45,7 @@ export function NavigationPreview() {
       <button onClick={() => setDirty(!dirty)}>Draft guard: {dirty ? "cancel" : "allow"}</button>
     </div>
     {chatOpen && <aside>Fixture conversation</aside>}
-    <AttentionRoutes snapshot={snapshot} navigation={navigation} roomAvailable={() => false} markRead={id => setRead(ids => [...ids, id])} />
+    <AttentionRoutes snapshot={snapshot} navigation={navigation} roomAvailable={() => false} markRead={identity => setRead(ids => [...ids, attentionKey(identity)])} />
     <section aria-label="Navigation checks">
       <label>Room request <input value={intent} onChange={e => setIntent(e.target.value)} /></label>
       <button onClick={() => void navigation.intent(intent)}>Open room request</button>

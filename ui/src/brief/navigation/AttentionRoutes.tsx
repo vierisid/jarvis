@@ -1,5 +1,5 @@
 import React, { useState } from "react";
-import { attentionKey, attentionView, openNotification, type AttentionSnapshot } from "./notifications";
+import { attentionKey, attentionView, openNotification, type AttentionIdentity, type AttentionSnapshot } from "./notifications";
 import type { NavigationCompatibility } from "./controller";
 import type { RoomAvailability } from "./destinations";
 
@@ -10,7 +10,8 @@ export function AttentionRoutes({ snapshot, navigation, roomAvailable, markRead 
   snapshot: AttentionSnapshot;
   navigation: NavigationCompatibility;
   roomAvailable: RoomAvailability;
-  markRead(id: string): void;
+  /** Dispatch to the matching notification owner; IDs are only unique within a source. */
+  markRead(identity: AttentionIdentity): void;
 }) {
   const [message, setMessage] = useState<string | null>(null);
   const view = attentionView(snapshot);
@@ -26,7 +27,7 @@ export function AttentionRoutes({ snapshot, navigation, roomAvailable, markRead 
           const result = await openNotification(attentionKey(item), {
             snapshot: () => latest.current.snapshot,
             roomAvailable: room => latest.current.roomAvailable(room),
-            markRead: id => latest.current.markRead(id),
+            markRead: identity => latest.current.markRead(identity),
           }, navigation);
           setMessage(result.state === "opened" ? null : result.state === "cancelled" ? "Navigation cancelled. The notification is still available." : "This notification could not be opened. Refresh or use the retained controls.");
         }}>{item.title}</button>

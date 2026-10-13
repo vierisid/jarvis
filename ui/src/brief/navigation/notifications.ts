@@ -7,10 +7,11 @@ export type AttentionItem = NotificationItem & {
   source: "approval" | "clarifier" | "repeat-back" | "system" | "failure" | "update";
   refs?: { taskId?: string; flowId?: string; versionId?: string; runId?: string };
 };
+export type AttentionIdentity = Readonly<Pick<AttentionItem, "source" | "id">>;
 export type AttentionSnapshot =
   | { status: "ready"; items: readonly AttentionItem[] }
   | { status: "loading" | "stale" | "unavailable" | "unsupported" };
-export const attentionKey = (item: AttentionItem) => `${item.source}:${item.id}`;
+export const attentionKey = (item: AttentionIdentity) => `${item.source}:${item.id}`;
 
 /** Consume the existing notification owner's rows; no text heuristics or synthetic timestamps. */
 export const fromNotificationCenter = (items: readonly NotificationItem[]): AttentionItem[] =>
@@ -27,9 +28,15 @@ export function notificationTarget(item: AttentionItem, available: RoomAvailabil
   if (item.source === "update") return destination("devices", available);
   if (item.source === "failure") {
     const refs = item.refs;
-    if (refs?.flowId && refs.versionId && refs.runId && available("workflow-runs")) return brief({
-      room: "workflow-runs", selection: { flowId: refs.flowId, versionId: refs.versionId, runId: refs.runId },
-    });
+    if (refs?.flowId || refs?.versionId || refs?.runId) {
+      // A workflow run is not a commitment or an agent task. Keep its identity
+      // and unread state until its inspection destination can actually open.
+      if (!refs.flowId || !refs.versionId || !refs.runId || !available("workflow-runs"))
+        throw new Error("Workflow run history is unavailable");
+      return brief({
+        room: "workflow-runs", selection: { flowId: refs.flowId, versionId: refs.versionId, runId: refs.runId },
+      });
+    }
     if (refs?.taskId && /^[a-zA-Z0-9_-]+$/.test(refs.taskId)) return { target: { kind: "legacy", hash: `#/_task_${refs.taskId}` }, message: "Opening task recovery in the current dashboard." };
     return destination("tasks", available);
   }
@@ -45,7 +52,7 @@ export function attentionView(snapshot: AttentionSnapshot) {
 
 export async function openNotification(
   key: string,
-  host: { snapshot(): AttentionSnapshot; roomAvailable: RoomAvailability; markRead(id: string): void },
+  host: { snapshot(): AttentionSnapshot; roomAvailable: RoomAvailability; markRead(identity: AttentionIdentity): void },
   navigation: NavigationCompatibility,
 ) {
   let selected: AttentionItem | undefined;
@@ -55,6 +62,6 @@ export async function openNotification(
     if (!selected) throw new Error("Notification is no longer available");
     return notificationTarget(selected, host.roomAvailable);
   });
-  if (result.state === "opened" && selected) host.markRead(selected.id);
+  if (result.state === "opened" && selected) host.markRead({ source: selected.source, id: selected.id });
   return result;
 }

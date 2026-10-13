@@ -49,9 +49,9 @@
   "checks": {
     "focused": {
       "command": "bun test ui/src/brief/navigation/navigation.test.ts ui/src/brief/navigation/Navigation.test.tsx ui/src/brief/entry/route.test.ts ui/src/brief/entry/DashboardEntry.test.tsx src/brief/capabilities.test.ts ui/src/v2/shell/sidecar-update.test.ts",
-      "passed": 75,
+      "passed": 79,
       "failed": 0,
-      "assertions": 842
+      "assertions": 876
     },
     "cross_stack": {
       "result": "passed",
@@ -73,10 +73,16 @@
     "review": {
       "status": "passed",
       "full_review_findings": 2,
-      "followup_findings": 1,
+      "followup_findings": 3,
       "all_findings_fixed": true,
-      "final_review": "No findings",
-      "evidence": "docs/brief-delivery/evidence/F-25/review.json"
+      "final_review": "Both findings from the fresh 07782464 branch review corrected; correction diff audit found no additional issues.",
+      "evidence": "docs/brief-delivery/evidence/F-25/review.json",
+      "notification_regressions": [
+        "Unavailable or incomplete workflow run history leaves notification unread",
+        "Run-history readiness rechecked after the draft guard",
+        "Retry opens the original run once its room becomes ready",
+        "Overlapping IDs dispatch read state to the matching source owner"
+      ]
     },
     "full_ci": {
       "source": "GitHub checks for the PR head",
@@ -90,7 +96,8 @@
       "command": "bun test ui/src/brief/connections/legacy-setup.test.tsx ui/src/brief/connections/setup.test.ts ui/src/v2/shell/SidecarUpdatePill.test.tsx ui/src/v2/rooms/settings/tabs/sidecar-add-device.test.ts ui/src/v2/rooms/settings/tabs/voice-realtime-copy.test.ts ui/src/brief/profile-settings/actions.test.tsx"
     },
     "main_compatibility_limit": "Canonical tabs verified at f74044de; newer main room-action cancellation/ack guards are untouched. No whole-stack main merge certification.",
-    "d30_followup": "D30 advanced to 93a04bc during review. Adapter.ts is byte-unchanged versus pinned db9f591; reproducible integration run used a temporary clean detached checkout of the recorded pin, then removed it."
+    "d30_followup": "D30 advanced to 93a04bc during review. Adapter.ts is byte-unchanged versus pinned db9f591; reproducible integration run used a temporary clean detached checkout of the recorded pin, then removed it.",
+    "notification_correction_browser": "No additional manual browser run; actual notification-center hook and attention component exercised in DOM regressions. No layout changes."
   },
   "manual": [
     "Chat closed: approval -> Authority, failure -> task detail, update -> Sidecar Settings",
