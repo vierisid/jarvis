@@ -2,10 +2,10 @@ import { afterAll, afterEach, beforeAll, beforeEach, expect, test } from 'bun:te
 import { GlobalRegistrator } from '@happy-dom/global-registrator';
 import { BriefCapabilities } from '../../../../src/brief/capabilities';
 import { registerOnboarding } from '../../../../src/brief/registrations/onboarding';
-import { OnboardingDraft } from './draft';
+import { OnboardingDraft, type OnboardingComposition } from './draft';
 import { ONBOARDING_TARGETS, TUTORIAL_STEPS, tutorialStepId } from './targets';
 import type { OnboardingStatus } from '../../v2/onboarding/useOnboardingStatus';
-import type { BriefComposeRequest } from '../../../../src/brief/composition-contracts';
+import type { BriefComposeRequest, BriefCompositionJob } from '../../../../src/brief/composition-contracts';
 GlobalRegistrator.register({ url: 'http://localhost/' });
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let act: typeof import('react').act, createRoot: typeof import('react-dom/client').createRoot;
@@ -15,6 +15,7 @@ const realFetch = globalThis.fetch, realSocket = globalThis.WebSocket, realAudio
 let root: ReturnType<typeof createRoot>, container: HTMLElement;
 let status: OnboardingStatus, hosted: boolean, failProgress: boolean, failStatus: boolean, failCompose: boolean, failOpen: boolean;
 let posts: Array<{ url: string; body: any }>, requests: BriefComposeRequest[], opened: unknown[], draft: OnboardingDraft;
+let composition: OnboardingComposition;
 const complete: OnboardingStatus = { setup_completed: true, setup_completed_at: 1, setup_skipped_profile: false,
   profile_completed: true, tutorial_completed: false, tutorial_completed_at: null, tutorial_dismissed: false,
   tutorial_progress_step: null, last_reset_at: null, post_setup_services_ready: true };
@@ -34,16 +35,17 @@ beforeEach(() => {
     ...registerOnboarding(() => ({ targets: true, progress: true, draftHandoff: true })),
     { id: 'workflowComposition', provider: { readiness: () => 'ready' } },
   ], ['onboarding', 'workflowComposition']);
-  let saved: string | null = null;
-  draft = new OnboardingDraft('fixture', { read: () => saved, write: v => { saved = v; } }, {
-    capabilities: () => capabilities.snapshot(), roomAvailable: () => true,
-    canLeave: async () => !failOpen, commit: route => { opened.push(route); },
-  }, { submit: async request => {
+  composition = { submit: async request => {
     requests.push(request); if (failCompose) throw Error('Setup unavailable');
     return { jobId: 'job', requestId: request.requestId, specification: { name: 'Draft', prompt: request.prompt },
       state: 'draft_ready', progress: { checkedCandidates: 1 }, compositionId: 'composition',
       workflow: { flowId: 'flow', versionId: 'version' }, blocker: null, createdAt: 1, updatedAt: 2 };
-  }, read: async () => { throw Error('Unexpected read'); } }, () => 'fixture-request');
+  }, read: async () => { throw Error('Unexpected read'); } };
+  let saved: string | null = null, requestNumber = 0;
+  draft = new OnboardingDraft('fixture', { read: () => saved, write: v => { saved = v; } }, {
+    capabilities: () => capabilities.snapshot(), roomAvailable: () => true,
+    canLeave: async () => !failOpen, commit: route => { opened.push(route); },
+  }, composition, () => `fixture-request-${++requestNumber}`);
   globalThis.fetch = (async (input: string, init?: RequestInit) => {
     const url = String(input); const body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (init?.method === 'POST') posts.push({ url, body });
@@ -150,6 +152,45 @@ test('completed replay restores a saved unsent prompt; Explore requires no compo
   expect(container.querySelector('textarea')!.value).toBe('Retained before setup failed');
   await click('Explore Jarvis first'); expect(container.textContent).toBe('Live shell'); expect(requests).toEqual([]);
   expect(posts).toEqual([]); expect(draft.getSnapshot().request).toBeNull();
+});
+
+test('Explore ignores a late background poll and tutorial replay can prepare a new task', async () => {
+  const submit = composition.submit;
+  let receipt!: BriefCompositionJob, resolveRead: ((job: BriefCompositionJob) => void) | undefined;
+  composition.submit = async request => {
+    receipt = await submit(request);
+    return { ...receipt, state: 'queued', workflow: null };
+  };
+  composition.read = () => new Promise(resolve => { resolveRead = resolve; });
+  await mountGate(); await click('Skip tour'); await enter('Draft weekly notes'); await click('Prepare draft');
+
+  // Hold the final status refresh long enough for the existing poll timer to start.
+  const normalFetch = globalThis.fetch;
+  let resolveStatus!: (response: Response) => void;
+  globalThis.fetch = (async (url: string, init?: RequestInit) => url === '/api/onboarding/status'
+    ? new Promise<Response>(resolve => { resolveStatus = resolve; }) : normalFetch(url, init)) as typeof fetch;
+  try {
+    await click('Explore Jarvis first'); await waitFor(() => !!resolveRead);
+    await act(async () => { resolveStatus(Response.json(status)); });
+    expect(container.textContent).toBe('Live shell');
+    const cleared = draft.getSnapshot();
+    expect(cleared).toMatchObject({ routine: '', request: null, job: null });
+    await act(async () => { resolveRead!(receipt); });
+    expect(draft.getSnapshot()).toBe(cleared);
+  } finally { globalThis.fetch = normalFetch; }
+
+  status.tutorial_completed = false; status.tutorial_dismissed = false; status.last_reset_at = 99;
+  const peer = new BroadcastChannel('v2-onboarding-status');
+  try {
+    await act(async () => { peer.postMessage({ type: 'reset', scope: 'tutorial' }); await new Promise(r => setTimeout(r, 30)); });
+    await click('Skip tour');
+    expect(container.querySelector('textarea')!.disabled).toBe(false);
+    composition.submit = submit;
+    await enter('Prepare a different task'); await click('Prepare draft');
+    expect(requests.map(request => request.prompt)).toEqual(['Draft weekly notes', 'Prepare a different task']);
+    expect(requests[1]!.requestId).not.toBe(requests[0]!.requestId);
+    expect(button('Review draft').disabled).toBe(false);
+  } finally { peer.close(); }
 });
 
 for (const flag of [false, true]) test(`tutorial replay with Brief flag ${flag} preserves canonical dismissal and completion`, async () => {

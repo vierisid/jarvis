@@ -50,16 +50,16 @@
   "checks": {
     "focused": {
       "command": "bun test ui/src/brief/onboarding ui/src/v2/onboarding ui/src/brief/entry ui/src/brief/profile-settings/actions.test.tsx src/brief/composition.test.ts src/brief/capabilities.test.ts",
-      "passed": 179,
+      "passed": 183,
       "failed": 0,
-      "assertions": 1281,
+      "assertions": 1313,
       "files": 17
     },
     "typecheck": "passed",
     "build_ui": "passed with pre-existing Tailwind directive warnings",
     "review": {
       "status": "passed",
-      "findings_fixed": 2,
+      "findings_fixed": 3,
       "final_review": "No findings",
       "independent_delegated_review": false
     },

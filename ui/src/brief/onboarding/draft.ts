@@ -116,11 +116,15 @@ export class OnboardingDraft {
     await this.readResult(() => this.api.read(job.jobId), request);
   };
   private async readResult(operation: () => Promise<BriefCompositionJob>, request: BriefComposeRequest) {
+    const ownsRequest = () => !this.retired && this.state.request === request;
     try {
-      const job = validateJob(await operation(), request, this.state.job);
-      if (this.retired) return;
+      const result = await operation();
+      if (!ownsRequest()) return;
+      const job = validateJob(result, request, this.state.job);
       this.update({ job, busy: false });
-    } catch { this.update({ busy: false, error: 'Could not confirm the draft. Your task is kept. Check this request before starting another.' }); }
+    } catch {
+      if (ownsRequest()) this.update({ busy: false, error: 'Could not confirm the draft. Your task is kept. Check this request before starting another.' });
+    }
   }
   openDraft = async () => {
     const job = this.state.job;
@@ -139,6 +143,7 @@ export class OnboardingDraft {
       this.update({ storageFailed: true, error: 'Your task is kept. Restore session storage and try again.' });
       throw Error('Could not clear the saved handoff');
     }
+    // Dropping the request invalidates pending reads only after storage clearing succeeds.
     this.update(initial());
   };
   dispose = () => { this.retired = true; this.navigation.abort(); this.listeners.clear(); };
