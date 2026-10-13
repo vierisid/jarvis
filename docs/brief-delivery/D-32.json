@@ -3,7 +3,7 @@
   "title": "Verify runtime craft and accessibility",
   "date": "2026-10-13",
   "status": "harness_delivered_release_verification_blocked",
-  "implementation_head": "49e55f4d1f19404710dd735080daef9114fc44dd",
+  "implementation_head": "bae0364c454f41358fead7411e7c944186a3aa06",
   "branch": "brief/d-32",
   "target": "brief/d-31",
   "base_sha": "aa4685232e4b826d6dc8a178253f4b4ce9c05eb4",
@@ -45,6 +45,12 @@
   "verification": [
     {
       "command": "bun test ui/src/brief/verification",
+      "passed": 19,
+      "assertions": 279,
+      "evidence": "evidence/D-32/review-fixes/focused-tests.log"
+    },
+    {
+      "command": "bun test ui/src/brief/verification",
       "passed": 12,
       "assertions": 252,
       "evidence": "evidence/D-32/focused-tests.log"
@@ -71,13 +77,23 @@
       "command": "normal pre-commit hooks",
       "result": "pass; no bypass",
       "evidence": "evidence/D-32/code-hooks.log"
+    },
+    {
+      "command": "normal correction pre-commit hooks including TypeScript",
+      "result": "pass; no bypass",
+      "evidence": "evidence/D-32/review-fixes/painted-hooks.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass; existing CSS warnings",
+      "evidence": "evidence/D-32/review-fixes/build.log"
     }
   ],
   "browser": {
     "required": 988,
-    "passed": 672,
+    "passed": 670,
     "blocked": 316,
-    "failed": 0,
+    "failed": 2,
     "missing": 0,
     "invalid_evidence": 0,
     "release_ready": false,
@@ -90,21 +106,25 @@
     "layouts": {
       "required": 608,
       "passed": 464,
+      "failed": 0,
       "blocked": 144
     },
     "viewports": {
       "required": 228,
-      "passed": 174,
+      "passed": 172,
+      "failed": 2,
       "blocked": 54
     },
     "repeat_20": {
       "required": 19,
       "passed": 17,
+      "failed": 0,
       "blocked": 2
     },
     "keyboard": {
       "required": 19,
       "passed": 17,
+      "failed": 0,
       "blocked": 2
     },
     "manual_runtime": {
@@ -114,7 +134,21 @@
     },
     "limits": "Fixture geometry/name/keyboard checks only; no live account, screen reader, actual OS reduced motion, verified 200% zoom, Jarvis WebView or full approved visual comparison. 17 traces contain long frames; no 60fps or CPU/GPU profile claim."
   },
-  "release_gate": "Verifier exit 1 is expected: all required rows are present and all artifact paths resolve, but missing bodies/states, enabled capabilities and manual host evidence block release. No skip counts as a pass.",
+  "release_gate": "Verifier exit 1 is expected: existing Today 390px composer clipping fails two cases; missing bodies/states, enabled capabilities and manual host evidence also block release. All required rows and artifacts are present.",
   "rollback": "Revert D32 or remove the craft=1 preview wrapper and verification files. No data, schema, rollout or provider changes.",
-  "next_card": "D-33 not started. D32 release evidence must become complete on enabled features before activation."
+  "next_card": "D-33 not started. D32 release evidence must become complete on enabled features before activation.",
+  "original_implementation_head": "49e55f4d1f19404710dd735080daef9114fc44dd",
+  "review_fixes": {
+    "findings_resolved": 2,
+    "conversation": "Verify actual availability/open state and visible nonzero panel/content/close/composer bounds within the workspace and viewport.",
+    "workflow_selection": "Select a non-trigger node and assert its stable ID while chat is open and closed in every one of 20 cycles.",
+    "regressions": "Missing/hidden/transparent/zero-sized/offscreen/clipped conversation, missing composer, changed/lost node, SVG edges and custom native radio inputs.",
+    "fresh_full_matrix": true,
+    "summary": "evidence/D-32/review-fixes/summary.json",
+    "remaining_fixture_failures": [
+      "today/viewport/ready/390",
+      "today/viewport/long/390"
+    ],
+    "failure_scope": "Existing Today specimen composer is clipped at 390px with ready and long content. No room styling changed; fail-closed evidence retains these failures."
+  }
 }
