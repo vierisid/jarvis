@@ -4,9 +4,18 @@ name: Sidecar Release
 # from sidecar/VERSION. Distributed via npm only — no sidecar-v* git tag or
 # GitHub release. Driven two ways:
 #   * Called by the brain's Release Executor (release-exec.yml) so a brain
-#     release also ships the current sidecar (its own version).
+#     release also ships the current sidecar (its own version). It is called
+#     TWICE there (#952): once with `publish: false`, which builds, signs and
+#     verifies and reports the five digests as its `digests` output, and once
+#     with `publish_only: true`, which builds nothing and publishes those
+#     artifacts, checked against those digests. The second call waits for
+#     the same two jobs as the brain publish, and runs no job of its own
+#     before publish-sidecar (resolve is skipped, and everything else needs
+#     it), so the two `release` approvals come due together and one click
+#     releases both.
 #   * Dispatched manually to ship a sidecar-only release without touching the
-#     brain.
+#     brain. Neither input above exists on a dispatch, and absent they mean
+#     build and publish in one go, as before.
 # Idempotent: if sidecar/VERSION is already on npm it stops as a no-op success
 # instead of failing — so calling it on every brain release is safe even when
 # the sidecar hasn't changed. Partial publishes self-heal: the per-package
@@ -19,16 +28,52 @@ on:
         description: "Build and validate without publishing"
         type: boolean
         default: false
+      # The two halves (#952). Read by resolve (its if: and its script),
+      # by publish-sidecar (its if: and its version and verify steps), and
+      # nowhere else; each of those is pinned or run verbatim by
+      # release-exec.test.sh, including for a dispatch, which declares none
+      # of them, so they arrive null or empty and mean build and publish.
+      publish:
+        description: "Publish to npm. false builds, signs and verifies only, and reports the digests output"
+        type: boolean
+        default: true
+      publish_only:
+        description: "Build nothing; publish what an earlier call in this run built, by its digests output"
+        type: boolean
+        default: false
+      digests:
+        description: "With publish_only: the digests output of the call that built the artifacts"
+        type: string
+        default: ""
+      version:
+        description: "With publish_only: the version output of the call that built the artifacts"
+        type: string
+        default: ""
+    # released and version come from publish-sidecar when it ran, and from
+    # resolve otherwise (#952): a publish_only call runs no resolve, and a
+    # publish: false call no publish-sidecar. github-release reads them from
+    # the publish_only call, where publish-sidecar ran exactly when it
+    # published.
     outputs:
       released:
-        description: "true when a new sidecar version was (re)built this run"
-        value: ${{ jobs.resolve.outputs.should_release }}
+        description: "true when this call published a new sidecar version (on a dry run, rehearsed publishing it), or, on a call that does not publish, built one"
+        value: ${{ jobs.publish-sidecar.outputs.released || jobs.resolve.outputs.should_release }}
       version:
-        description: "the sidecar version (from sidecar/VERSION)"
-        value: ${{ jobs.resolve.outputs.version }}
+        description: "the sidecar version (from sidecar/VERSION, by way of the build call on a publish_only call)"
+        value: ${{ jobs.publish-sidecar.outputs.version || jobs.resolve.outputs.version }}
       sums:
         description: "base64 sha256sum manifest of the sidecar-* artifacts publish-sidecar published"
         value: ${{ jobs.publish-sidecar.outputs.sums }}
+      # Each digest is the job output of the one job that produced those
+      # bytes (#781), labelled with its leg by this format string and nothing
+      # else; publish-sidecar parses it back by label on a publish_only call.
+      # Evaluated by GitHub from job outputs, so no step of any job in the
+      # run can write it. Empty when this call built nothing (the version is
+      # already on npm), which tells the publish_only call there is nothing
+      # to publish without it asking npm a second time.
+      digests:
+        description: "the five sidecar-* artifact sha256 digests, by leg, for a later publish_only call; empty when nothing was built"
+        value: ${{ jobs.resolve.outputs.build == 'true' && format('linux-x64={0} linux-arm64={1} darwin-arm64={2} darwin-x64={3} win32-x64={4}', jobs.build-sidecar-linux-x64.outputs.sha256, jobs.build-sidecar-linux-arm64.outputs.sha256, jobs.build-sidecar-darwin-arm64.outputs.sha256, jobs.build-sidecar-darwin-x64.outputs.sha256, jobs.sign-sidecar-windows.outputs.sha256) || '' }}
     # Every secret this workflow reads, declared so the caller can pass exactly
     # these instead of `secrets: inherit` (#682). All optional: absent, the
     # macOS bundle ships unsigned with a warning, as on a fork. A secret read
@@ -76,16 +121,34 @@ jobs:
   # ─── Resolve version + idempotency gate ────────────────────────
   # The whole release is skipped (no-op success) when sidecar/VERSION is already
   # published, so the brain's release-exec can call this unconditionally.
+  #
+  # Skipped on a publish_only call (#952), and with it every job but
+  # publish-sidecar, since they all need it: a skipped job takes no runner,
+  # so the publish is the first job of that call to reach the `release` gate,
+  # at the same moment as publish-brain. That call takes the version and the
+  # decision from the build call instead. It still runs for publish: false
+  # with publish_only: true, only to refuse that combination. On a dispatch
+  # publish_only is null, which is not true, so it runs.
   resolve:
+    if: inputs.publish_only != true || inputs.publish == false
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.v.outputs.version }}
       should_release: ${{ steps.v.outputs.should_release }}
+      # What this call does (#952): publish is false on a publish: false
+      # call, and both are false when there is nothing to release. The build
+      # legs gate on build and publish-sidecar on publish. resolve does not
+      # run on a publish_only call at all.
+      build: ${{ steps.v.outputs.build }}
+      publish: ${{ steps.v.outputs.publish }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - id: v
+        env:
+          PUBLISH: ${{ inputs.publish }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
         run: |
           set -euo pipefail
           export LC_ALL=C
@@ -102,19 +165,41 @@ jobs:
             printf '::error::sidecar/VERSION is not a plain semver: %q\n' "$VERSION"
             exit 1
           fi
+          # Which half of the work this call does (#952). Compared with the
+          # one value that changes the default and nothing else, so an input
+          # a dispatch never declares (an empty string here) means build and
+          # publish, as it did before the inputs existed.
+          build=true
+          publish=true
+          if [ "${PUBLISH_ONLY:-}" = "true" ]; then build=false; fi
+          if [ "${PUBLISH:-}" = "false" ]; then publish=false; fi
+          if [ "$build" = false ] && [ "$publish" = false ]; then
+            echo "::error::publish: false and publish_only: true together would neither build nor publish"
+            exit 1
+          fi
+          # The job's if: skips it on every other publish_only call; a
+          # publish_only call decides in publish-sidecar, from the build call.
+          if [ "$build" = false ]; then
+            echo "::error::resolve does not run on a publish_only call; publish-sidecar takes the version and the decision from the build call"
+            exit 1
+          fi
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           if [ "${DRY_RUN}" = "true" ]; then
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            should_release=true
             echo "::notice::Dry run — building/validating sidecar v${VERSION} without publishing."
-            exit 0
-          fi
-          if npm view "@usejarvis/sidecar@${VERSION}" version >/dev/null 2>&1; then
-            echo "should_release=false" >> "$GITHUB_OUTPUT"
+          elif npm view "@usejarvis/sidecar@${VERSION}" version >/dev/null 2>&1; then
+            should_release=false
             echo "::notice::@usejarvis/sidecar@${VERSION} is already published — skipping sidecar release (no-op)."
           else
-            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            should_release=true
             echo "Sidecar v${VERSION} is not yet on npm — releasing."
           fi
+          if [ "$should_release" != true ]; then build=false; publish=false; fi
+          {
+            echo "should_release=${should_release}"
+            echo "build=${build}"
+            echo "publish=${publish}"
+          } >> "$GITHUB_OUTPUT"
 
   # ─── Cross-compile Go sidecars (cgo) ───────────────────────────
   # The sidecar is a cgo program (webview_go, GTK/Cocoa overlays), so it CANNOT
@@ -136,9 +221,14 @@ jobs:
   # then sign-sidecar-windows, the only one of the two with id-token), and
   # these four -- two of which run Swift and Apple tooling on macOS -- cannot
   # mint an OIDC token at all.
+  #
+  # The five jobs that build (these four and build-sidecar-windows), the
+  # signer and the post-sign check all gate on resolve's build output, and on
+  # a publish_only call skip with the skipped resolve, taking no runner
+  # (#952).
   build-sidecar-linux-x64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -348,7 +438,7 @@ jobs:
 
   build-sidecar-linux-arm64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -368,7 +458,7 @@ jobs:
 
   build-sidecar-darwin-arm64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -388,7 +478,7 @@ jobs:
 
   build-sidecar-darwin-x64:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
@@ -414,7 +504,7 @@ jobs:
   # binary crosses to sign-sidecar-windows with its digest as a job output.
   build-sidecar-windows:
     needs: resolve
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -483,7 +573,10 @@ jobs:
   # (#817).
   sign-sidecar-windows:
     needs: [resolve, build-sidecar-windows]
-    if: needs.resolve.outputs.should_release == 'true'
+    # build, not should_release (#952): on a publish_only call this job,
+    # which holds the KMS-federating token, must not run even if someone
+    # later adds a status function that would carry it past its skipped need.
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
     # OIDC, for google-github-actions/auth: Windows signing federates into
     # Google Cloud KMS with no stored credential at all. Declared here rather
@@ -640,7 +733,7 @@ jobs:
   # into a skipped check.
   verify-sidecar-windows:
     needs: [resolve, sign-sidecar-windows]
-    if: needs.resolve.outputs.should_release == 'true'
+    if: needs.resolve.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -724,14 +817,76 @@ jobs:
     environment:
       name: ${{ inputs.dry_run == true && 'release-dry-run' || 'release' }}
     needs: [resolve, verify-sidecar-windows, build-sidecar-linux-x64, build-sidecar-linux-arm64, build-sidecar-darwin-arm64, build-sidecar-darwin-x64, sign-sidecar-windows]
-    if: needs.resolve.outputs.should_release == 'true'
+    # Two ways to run, and only two (#952):
+    #   * resolve said publish and every job above succeeded in THIS call --
+    #     the build and publish of a dispatch, the condition this job had
+    #     before.
+    #   * a publish_only call, where every job above is skipped by design
+    #     (resolve included), so neither success() nor resolve can decide.
+    #     It publishes exactly when the build call built, which that call
+    #     says by a non-empty digests output, and never asks npm a second
+    #     time: a second `npm view` could disagree with the first (one that
+    #     fails transiently reads as "not published") and send this call to
+    #     publish artifacts nobody built. It runs only if nothing above failed
+    #     or was cancelled; what vouches for the build is the caller, which
+    #     starts this call only after the publish: false call succeeded as a
+    #     whole (verify-sidecar-windows included), and the digests it hands
+    #     over, checked below as strictly as job outputs.
+    # The `inputs.publish_only == true` term is what keeps the status
+    # functions away from every other call: release-exec.test.sh pins this
+    # line byte for byte.
+    if: (needs.resolve.outputs.publish == 'true' && success()) || (inputs.publish_only == true && inputs.publish == true && inputs.digests != '' && !cancelled() && !failure())
     runs-on: ubuntu-latest
     permissions:
       contents: read
       id-token: write
     outputs:
       sums: ${{ steps.sums.outputs.sums }}
+      # The call outputs github-release reads (#952). released is literal:
+      # it is set only if this job ran, and the call fails unless it
+      # finished, so true here means this job published, or found the
+      # version already on npm and took that as success (the fallback in the
+      # publish steps). In that second case the bytes on npm need not be the
+      # ones this run built, a race with a concurrent standalone dispatch of
+      # the same version that predates #952.
+      released: "true"
+      version: ${{ steps.version.outputs.version }}
     steps:
+      # The one place this job learns its version (#952). A publish_only call
+      # ran no resolve, so it takes the build call's, passed through the
+      # caller as the version input; every other call takes resolve's.
+      # Exactly one source per call, and the value is checked again as resolve
+      # checks it (#684), because it still names npm packages and lands in a
+      # sed expression. First, so nothing runs before it is known.
+      - name: Resolve the version this call publishes
+        id: version
+        env:
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
+          BUILT_VERSION: ${{ needs.resolve.outputs.version }}
+          GIVEN_VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C
+          if [ "${PUBLISH_ONLY:-}" = "true" ]; then
+            if [ -n "${BUILT_VERSION:-}" ]; then
+              echo "::error::a publish_only call takes its version from the version input, yet resolve ran in this call"
+              exit 1
+            fi
+            VERSION="${GIVEN_VERSION:-}"
+          else
+            if [ -n "${GIVEN_VERSION:-}" ]; then
+              echo "::error::the version input is for a publish_only call; this call resolved its own"
+              exit 1
+            fi
+            VERSION="${BUILT_VERSION:-}"
+          fi
+          id='(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)'
+          if ! [[ "$VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-${id}(\.${id})*)?$ ]]; then
+            printf '::error::the sidecar version to publish is not a plain semver: %q\n' "$VERSION"
+            exit 1
+          fi
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -748,20 +903,60 @@ jobs:
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 
-      - name: Download all sidecar binaries
+      # By exact name, each into its own directory (#952 follow-up), never
+      # `pattern: sidecar-*`: a glob takes in any artifact so named, and any
+      # job in this run can upload one -- pack-brain runs dependency code
+      # beside sidecar-build -- so a planted sidecar-* artifact used to fail
+      # this publish closed after the shared approval had released brain, and
+      # stayed in the run, so a re-run failed the same way. By name it is
+      # never downloaded. Same layout as the glob gave (artifacts/<name>/),
+      # so the check below is unchanged.
+      - name: Download sidecar-linux-x64
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: artifacts
-          pattern: sidecar-*
+          name: sidecar-linux-x64
+          path: artifacts/sidecar-linux-x64
+
+      - name: Download sidecar-linux-arm64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-linux-arm64
+          path: artifacts/sidecar-linux-arm64
+
+      - name: Download sidecar-darwin-arm64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-darwin-arm64
+          path: artifacts/sidecar-darwin-arm64
+
+      - name: Download sidecar-darwin-x64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-darwin-x64
+          path: artifacts/sidecar-darwin-x64
+
+      - name: Download sidecar-win32-x64
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: sidecar-win32-x64
+          path: artifacts/sidecar-win32-x64
 
       # Before anything reads them (#781): each artifact must be the file its
       # build job hashed, by a digest that arrives as that job output (which
       # only that job can set), not through the artifact store (which every
       # job in this run can write). The download must also hold exactly the
-      # five expected files: `pattern: sidecar-*` would bring in any other
-      # artifact so named, and Prepare copies a whole directory into each
-      # package. release-exec.test.sh runs this script against tampered,
+      # five expected files: an artifact is a zip any job can replace with
+      # one holding more files, and Prepare copies a whole directory into
+      # each package. release-exec.test.sh runs this script against tampered,
       # extra, missing and undigested fixtures.
+      #
+      # On a publish_only call (#952) the build jobs ran in the caller's
+      # publish: false call, so their job outputs arrive as the digests
+      # input: the caller passes that call's digests output, which GitHub
+      # composes from the same job outputs, and no step anywhere can write
+      # either. Exactly one source per call: a publish_only call refuses a
+      # digest from a build job of its own, any other call refuses the
+      # input, and the input must name all five legs, each a sha256.
       - name: Verify sidecar artifacts
         env:
           SHA_LINUX_X64: ${{ needs.build-sidecar-linux-x64.outputs.sha256 }}
@@ -769,9 +964,31 @@ jobs:
           SHA_DARWIN_ARM64: ${{ needs.build-sidecar-darwin-arm64.outputs.sha256 }}
           SHA_DARWIN_X64: ${{ needs.build-sidecar-darwin-x64.outputs.sha256 }}
           SHA_WIN32_X64: ${{ needs.sign-sidecar-windows.outputs.sha256 }}
+          PUBLISH_ONLY: ${{ inputs.publish_only }}
+          DIGESTS: ${{ inputs.digests }}
         run: |
           set -euo pipefail
           export LC_ALL=C
+          if [ "${PUBLISH_ONLY:-}" = "true" ]; then
+            if [ -n "${SHA_LINUX_X64}${SHA_LINUX_ARM64}${SHA_DARWIN_ARM64}${SHA_DARWIN_X64}${SHA_WIN32_X64}" ]; then
+              echo "::error::a publish_only call takes its digests from the digests input, yet a build job of this call reported one"
+              exit 1
+            fi
+            h='([0-9a-f]{64})'
+            re="^linux-x64=${h} linux-arm64=${h} darwin-arm64=${h} darwin-x64=${h} win32-x64=${h}\$"
+            if ! [[ "${DIGESTS:-}" =~ $re ]]; then
+              printf '::error::the digests input is not one sha256 for each of the five legs: %q\n' "${DIGESTS:-}"
+              exit 1
+            fi
+            SHA_LINUX_X64="${BASH_REMATCH[1]}"
+            SHA_LINUX_ARM64="${BASH_REMATCH[2]}"
+            SHA_DARWIN_ARM64="${BASH_REMATCH[3]}"
+            SHA_DARWIN_X64="${BASH_REMATCH[4]}"
+            SHA_WIN32_X64="${BASH_REMATCH[5]}"
+          elif [ -n "${DIGESTS:-}" ]; then
+            echo "::error::the digests input is for a publish_only call; this call built its own artifacts"
+            exit 1
+          fi
           manifest=""
           expect() {
             [[ "$1" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::no digest was reported for $2"; exit 1; }
@@ -799,9 +1016,9 @@ jobs:
 
       # The digests of exactly what this job publishes, handed to the brain's
       # github-release job as a job output (#682). Artifacts are writable by
-      # every job in the run, and release-exec.yml's pack-brain runs
-      # dependency code after this job and before github-release downloads
-      # the same artifacts to attach them; job outputs only this job can set.
+      # every job in the run -- release-exec.yml's pack-brain runs dependency
+      # code while they sit in the store, and github-release downloads them
+      # again later to attach them; job outputs only this job can set.
       - name: Record artifact digests
         id: sums
         run: |
@@ -810,10 +1027,11 @@ jobs:
           echo "sums=${sums}" >> "$GITHUB_OUTPUT"
 
       # VERSION reaches every script below through env:, never as ${{ }} in
-      # the script text (#684), and was checked as a plain semver by resolve.
+      # the script text (#684), and was checked as a plain semver by the
+      # first step of this job.
       - name: Prepare platform packages
         env:
-          VERSION: ${{ needs.resolve.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           set -euo pipefail
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
@@ -851,7 +1069,7 @@ jobs:
 
       - name: Publish platform packages
         env:
-          VERSION: ${{ needs.resolve.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           flags=()
           if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
@@ -873,7 +1091,7 @@ jobs:
 
       - name: Publish wrapper package
         env:
-          VERSION: ${{ needs.resolve.outputs.version }}
+          VERSION: ${{ steps.version.outputs.version }}
         run: |
           flags=()
           if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi

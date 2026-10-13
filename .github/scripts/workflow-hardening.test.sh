@@ -517,7 +517,26 @@ if (rule === "narrow") {
       const isDownload = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/download-artifact@");
       for (const [i, st] of steps.entries()) {
         if (!isDownload(st)) continue;
-        const next = steps[i + 1];
+        // A run of downloads is checked by the one step after the run
+        // (#952 follow-up: publish-sidecar takes its five artifacts by name,
+        // one download each). Only downloads may sit in between: they
+        // extract and run nothing that reads what they fetched, and each one
+        // is held below to the same condition as the check and to no
+        // continue-on-error, as a lone download is. In a run of more than
+        // one, each download names its artifact, no two alike, and the check
+        // names every one of them, so a download slipped in front of an
+        // existing check that never looks at it is still reported.
+        let a = i, j = i + 1;
+        while (a > 0 && isDownload(steps[a - 1])) a--;
+        while (j < steps.length && isDownload(steps[j])) j++;
+        const next = steps[j];
+        if (j - a > 1) {
+          const runNames = steps.slice(a, j).map((d) => d.with?.name);
+          const nextCode = typeof next?.run === "string" ? next.run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n") : "";
+          const nm = st.with?.name;
+          if (typeof nm !== "string" || !nm || runNames.filter((x) => x === nm).length !== 1 || !nextCode.includes(nm))
+            out.push(name + ": download " + JSON.stringify(nm ?? st.with?.pattern ?? "(all)") + " sits in a run of downloads, and is not one distinct artifact by name that the check after the run names");
+        }
         const label = name + ": download " + JSON.stringify(st.with?.name ?? st.with?.pattern ?? "(all)");
         // The check, on a line that is not a comment, not excused by || true.
         const code = typeof next?.run === "string" ? next.run.split("\n").filter((l) => !/^\s*#/.test(l)).join("\n") : "";
@@ -1292,8 +1311,28 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'          SHA256: ${{ needs.build-sidecar-windows.outputs.sha256 }}' '          SHA256: ${{ vars.EXPECTED_SHA256 }}' \
 		'is checked against no needs.<job>.outputs digest'
 	expect_caught 'the release attaching sidecar binaries whose check can be switched off alone (#781)' narrow "$WORKFLOWS/release-exec.yml" \
-		$'      - name: Verify sidecar binaries\n        if: needs.sidecar.outputs.released == \'true\'' $'      - name: Verify sidecar binaries\n        if: false' \
+		$'      - name: Verify sidecar binaries\n        if: needs.publish-sidecar.outputs.released == \'true\'' $'      - name: Verify sidecar binaries\n        if: false' \
 		'is checked under a different condition'
+	# #952 follow-up: publish-sidecar downloads its five artifacts by name,
+	# one step each, checked by the one step after the run.
+	expect_caught 'a step run inside the run of sidecar downloads, before the check (#952)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          path: artifacts/sidecar-linux-arm64\n\n      - name: Download sidecar-darwin-arm64\n' $'          path: artifacts/sidecar-linux-arm64\n\n      - run: ls artifacts\n\n      - name: Download sidecar-darwin-arm64\n' \
+		'download "sidecar-linux-x64" is not followed at once by a sha256sum -c'
+	expect_caught 'one download of the run under a condition of its own (#952)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Download sidecar-darwin-arm64\n' $'      - name: Download sidecar-darwin-arm64\n        if: always()\n' \
+		'download "sidecar-darwin-arm64" is checked under a different condition'
+	expect_caught 'one download of the run allowed to fail (#952)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Download sidecar-darwin-x64\n' $'      - name: Download sidecar-darwin-x64\n        continue-on-error: true\n' \
+		'download "sidecar-darwin-x64": continue-on-error on'
+	expect_caught 'a download slipped in front of the npm publish job tarball download, which its check never looks at (#952 review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'          name: brain-tarball\n          path: ${{ runner.temp }}/brain-pack\n' $'          name: brain-tarball\n          path: ${{ runner.temp }}/brain-pack\n      - uses: actions/download-artifact@0000000000000000000000000000000000000000 # v0\n        with:\n          name: other\n          path: ${{ runner.temp }}/other\n' \
+		'download "other" sits in a run of downloads'
+	expect_caught 'a sixth download in the sidecar run that the check never names (#952 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          path: artifacts/sidecar-win32-x64\n' $'          path: artifacts/sidecar-win32-x64\n      - uses: actions/download-artifact@0000000000000000000000000000000000000000 # v0\n        with:\n          name: extra\n          path: extra\n' \
+		'download "extra" sits in a run of downloads'
+	expect_caught 'a sidecar download in the run by glob, not by name (#952 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'          name: sidecar-linux-x64\n          path: artifacts/sidecar-linux-x64\n' $'          pattern: sidecar-*\n          path: artifacts\n' \
+		'download "sidecar-*" sits in a run of downloads'
 	expect_caught 'the npm publish job doing something between the tarball download and its check (#781)' narrow "$WORKFLOWS/release-exec.yml" \
 		'      - name: Verify the tarball' $'      - run: ls\n      - name: Verify the tarball' \
 		'is not followed at once by a sha256sum -c'
