@@ -1067,6 +1067,14 @@ jobs:
             sed -i "s|\"@usejarvis/sidecar-${platform}\": \".*\"|\"@usejarvis/sidecar-${platform}\": \"${VERSION}\"|" package.json
           done
 
+      # A version npm already has refuses the publish, dry or real. On a dry
+      # run that refusal, and only that one, is a notice (#966): `resolve`
+      # sends every dry run here, so without it every rehearsal after a
+      # release failed until sidecar/VERSION moved, and a dry run is the only
+      # rehearsal this workflow has. The text is what NPM_VERSION prints;
+      # any other failure of a rehearsed publish still fails the run. npm's
+      # output goes through tee so the log stays live and the refusal can
+      # be read back; the publish's own status is PIPESTATUS[0].
       - name: Publish platform packages
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -1074,14 +1082,20 @@ jobs:
           flags=()
           if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi
           if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi
+          err="$(mktemp)"
 
           for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do
             pkg="@usejarvis/sidecar-${platform}"
             echo "Publishing ${pkg}@${VERSION}... ${flags[*]}"
             cd "sidecar/npm/${platform}"
-            if ! npm publish --access public "${flags[@]}"; then
-              if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+            npm publish --access public "${flags[@]}" 2>&1 | tee "$err"
+            if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+              if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+                exit 1
+              elif [ "$DRY_RUN" != "true" ]; then
                 echo "${pkg}@${VERSION} is already on npm; treating as success."
+              elif grep -qF "You cannot publish over the previously published versions" "$err"; then
+                echo "::notice::${pkg}@${VERSION} is already on npm, so this dry run cannot rehearse publishing it; packing it was rehearsed."
               else
                 exit 1
               fi
@@ -1098,10 +1112,18 @@ jobs:
           if [[ "$VERSION" == *-* ]]; then flags+=(--tag next); fi
           pkg="@usejarvis/sidecar"
 
+          err="$(mktemp)"
+
+          # As for the platform packages (#966).
           cd sidecar/npm/jarvis-sidecar
-          if ! npm publish --access public "${flags[@]}"; then
-            if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+          npm publish --access public "${flags[@]}" 2>&1 | tee "$err"
+          if [ "${PIPESTATUS[0]}" -ne 0 ]; then
+            if ! npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+              exit 1
+            elif [ "$DRY_RUN" != "true" ]; then
               echo "${pkg}@${VERSION} is already on npm; treating as success."
+            elif grep -qF "You cannot publish over the previously published versions" "$err"; then
+              echo "::notice::${pkg}@${VERSION} is already on npm, so this dry run cannot rehearse publishing it; packing it was rehearsed."
             else
               exit 1
             fi
