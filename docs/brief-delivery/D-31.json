@@ -1,0 +1,134 @@
+{
+  "step": "D-31",
+  "title": "Build Billing from the existing read model",
+  "date": "2026-10-13",
+  "status": "implemented_verified_opt_in",
+  "implementation_head": "926f77ae3a354dbd64c9539237f60798beca596c",
+  "head": "The following evidence-only commit is the PR head.",
+  "branch": "brief/d-31",
+  "target": "brief/d-30",
+  "base_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+  "main_inspected": "b6a687827ac52c4091cb46ec57ac8f513bc386e5",
+  "github_recheck": {
+    "parent": "https://github.com/vierisid/jarvis/pull/976",
+    "state": "OPEN",
+    "parent_ci": "All active exact-head checks passed; conditional checks skipped.",
+    "duplicate_d31_prs": 0,
+    "base_decision": "Continue the corrected unmerged D30 stack in a dedicated worktree. No claim of standalone-main compatibility.",
+    "evidence": "evidence/D-31/parent-recheck.json"
+  },
+  "source_pins": {
+    "roadmap_audit": "69211511c95355776c6c319c01e1df5acd3b8f1e",
+    "A21_hosting": "13e5857e08a3eb165d1864371e9e22e0b9e83e57",
+    "F-24": {
+      "pr": "https://github.com/usejarvis/hosting/pull/22",
+      "head": "58a9ff39709f7a6013aff4db2e4dfa7cff83f9ab",
+      "provider_base": "4d5c74c325679e9818aae6972f22c74b47868bf3",
+      "state": "OPEN",
+      "use": "Read existing compatibility evidence and provider source. No F24 branch code imported."
+    },
+    "F-23": {
+      "pr": "https://github.com/vierisid/jarvis/pull/945",
+      "head": "13beb76554514227e0fb2fa476e7cd78f5432053",
+      "state": "OPEN"
+    },
+    "F-25": {
+      "pr": "https://github.com/vierisid/jarvis/pull/980",
+      "head": "07782464692835a571d71dd2c3c9394806f88633",
+      "state": "OPEN",
+      "use": "Rechecked navigation work; no F-stack merge or policy change."
+    }
+  },
+  "ownership": [
+    "ui/src/brief/account/billing/**",
+    "ui/src/brief/rooms/billing/registration.ts: room-local Body",
+    "ui/src/brief/preview/FoundationPreview.tsx: two preview dispatch lines",
+    "docs/brief-delivery/D-31.* and evidence/D-31/**"
+  ],
+  "design_reference": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "billing": "392:4599",
+    "inspection": "Native Figma 17 · Billing inspected in Chrome. Reference screenshot remains private.",
+    "adaptation": "Existing usage contract reports two window percentages, not token totals or a text/voice split. All screenshot amounts and invoices are explicit synthetic preview data.",
+    "limits": "Visual comparison, not pixel diff or full UI35 export."
+  },
+  "activation": {
+    "code_delivered": true,
+    "code_merged": false,
+    "room_body_registered": true,
+    "default_dashboard_enabled": false,
+    "central_registry_changed": false,
+    "capability_defaults_changed": false,
+    "real_billing_writes": false,
+    "merge_prerequisite": "D-01",
+    "enable_after": [],
+    "integration": "Existing opt-in Brief Billing room uses useBilling and useHostedBudget; existing daemon authentication/system-owned hosted config and external browser handoff remain the owners."
+  },
+  "mapping": {
+    "plan_renewal": "billing-view planTitle/recurringTotal/formatPrice/planMeta; currency-aware minor units and quantities; separate mixed-currency/interval prices.",
+    "usage": "useHostedBudget percentage windows; null is unavailable, last reported values are not labeled fresh, restricted accounts do not promise recovery at reset.",
+    "payment": "Canonical methods, default/expiry, unreadable versus none.",
+    "history": "Canonical paid payments/refunds, net+tax gross, HTTPS receipt links, stable IDs and accessible headers, expansion retains focus.",
+    "actions": "Supplied page/manage/changePlan/paymentMethod/cancel URLs via existing openExternal and openedOrHandedOff. GET-only brain reads; no billing mutations or invented success."
+  },
+  "verification": [
+    {
+      "command": "bun test ui/src/brief/account/billing",
+      "passed": 32,
+      "assertions": 168,
+      "evidence": "evidence/D-31/focused-tests.log"
+    },
+    {
+      "command": "D27_F22_SETUP_MODULE=/path/to/pinned/f22/setup.ts D29_F23_ROOT=/path/to/pinned/f23 D30_F23_ROOT=/path/to/pinned/f23 bun test ui/src/brief ui/src/v2/shell/useTheme.test.tsx ui/src/v2/billing ui/src/v2/rooms/usage/hosted-budget.test.ts ui/src/v2/onboarding/external-open.test.ts",
+      "passed": 1014,
+      "skipped": 2,
+      "assertions": 7231,
+      "evidence": "evidence/D-31/brief-tests.log",
+      "note": "Existing optional F07/F08 integration skips; inherited F22/F23 proofs enabled."
+    },
+    {
+      "command": "bun test --preload ./src/test-preload.ts src/daemon/hosted-billing.test.ts src/daemon/api-billing.test.ts src/daemon/hosted-usage.test.ts",
+      "passed": 32,
+      "assertions": 111,
+      "evidence": "evidence/D-31/bridge-tests.log"
+    },
+    {
+      "command": "bunx tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-31/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-31/build.log",
+      "note": "Existing @theme/@tailwind at-rule warnings only."
+    },
+    {
+      "command": "normal pre-commit hooks",
+      "result": "pass",
+      "evidence": "evidence/D-31/code-hooks.log",
+      "note": "License, migrations, template/package checks, 32 related tests and TypeScript. No bypass."
+    }
+  ],
+  "browser": {
+    "evidence": "evidence/D-31/browser-checks.json",
+    "layouts": "Eight light/dark × expanded/rail × chat-open/closed at 1440×1100. Table header/cell coordinates align in every layout.",
+    "narrow": "800/390/320px long names and 18 invoices: no page, room or table horizontal overflow.",
+    "interactions": "Keyboard cancellation, blocked handoff recovery, history expansion, canonical state examples. Fixture server rejects API calls.",
+    "console": "No warning/error entries in final preview."
+  },
+  "limitations": [
+    "No real hosted account or payment transaction; no production deployment or default rollout.",
+    "No physical screen reader/touch or cross-browser certification, full repository suite locally, pixel diff or full UI35 export.",
+    "The existing usage hook retains last-good readings without a freshness flag; UI says Last reported usage and does not claim a successful refresh.",
+    "Hosted schema cannot provide monthly token totals or text/voice breakdown; no fabricated counts."
+  ],
+  "rollback": "Remove the Billing room-local Body or revert D31 commits and use existing Settings → Billing. No data/schema migration. Existing billing store and hosted bridge remain unchanged.",
+  "quick_verification": [
+    "Use Bun 1.3.14 and bun install --frozen-lockfile.",
+    "bun run build:ui",
+    "D25_PREVIEW_PORT=4421 bun scripts/preview-brief-memory.ts",
+    "Open http://127.0.0.1:4421/?brief=preview&specimen=billing#/_brief_preview and exercise the example selector, theme, sidebar, chat, history and simulated browser block."
+  ],
+  "next_card": "D-32 not started."
+}

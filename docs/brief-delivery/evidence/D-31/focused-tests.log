@@ -1,0 +1,42 @@
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/account/billing/BillingWorkspace.test.tsx:
+(pass) plan, usage, payment and history use provided data and every action hands off exactly once [74.09ms]
+(pass) active renders without requests or sample fallback [22.39ms]
+(pass) trial renders without requests or sample fallback [19.12ms]
+(pass) grace renders without requests or sample fallback [17.41ms]
+(pass) past-due renders without requests or sample fallback [12.50ms]
+(pass) canceling renders without requests or sample fallback [22.11ms]
+(pass) incomplete renders without requests or sample fallback [12.86ms]
+(pass) restricted renders without requests or sample fallback [13.64ms]
+(pass) blocked renders without requests or sample fallback [12.32ms]
+(pass) no-plan renders without requests or sample fallback [4.27ms]
+(pass) self-hosted renders without requests or sample fallback [1.51ms]
+(pass) loading renders without requests or sample fallback [2.40ms]
+(pass) missing renders without requests or sample fallback [2.90ms]
+(pass) degraded renders without requests or sample fallback [12.37ms]
+(pass) old-response renders without requests or sample fallback [8.12ms]
+(pass) mixed-currency renders without requests or sample fallback [14.15ms]
+(pass) long-history renders without requests or sample fallback [22.26ms]
+(pass) fixture/live mixing and preview without a fixture fail closed without requests [4.78ms]
+(pass) restricted accounts never imply a reset restores service; missing session usage is never zero [22.74ms]
+(pass) history expansion and focused control survive every shell combination [198.53ms]
+(pass) blocked and throwing external openers show recovery, without claiming cancellation [33.07ms]
+(pass) malformed summaries and unsafe receipt links are unavailable [10.62ms]
+(pass) live room shares the canonical billing store, reads only GET and refreshes on return; desktop handoff is accepted [52.64ms]
+(pass) a new payment does not remount the focused invoice action [22.54ms]
+(pass) trial, grace and scheduled cancellation keep their distinct labels and canonical actions [23.18ms]
+
+ui/src/brief/account/billing/model.test.ts:
+(pass) actual daemon parser and Brief tolerate sparse older provider responses [0.53ms]
+(pass) currency exponent, quantity, mixed currencies and refunds remain canonical [0.45ms]
+(pass) missing or malformed values cannot become live prices, empty history or unrenderable fields [0.19ms]
+(pass) invalid optional dates and expiry are unavailable, not misleading calendar values [0.07ms]
+(pass) grace expiry and scheduled cancellation follow existing policy decisions [0.30ms]
+(pass) untrusted document and action URLs cannot execute or expose embedded credentials [0.18ms]
+(pass) usage null is unknown, legacy restrictions are optional, invalid readings fail closed [0.13ms]
+
+ 32 pass
+ 0 fail
+ 168 expect() calls
+Ran 32 tests across 2 files. [989.00ms]

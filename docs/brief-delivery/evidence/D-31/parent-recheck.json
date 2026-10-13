@@ -1,0 +1,99 @@
+{
+  "parent": {
+    "baseRefName": "brief/d-29",
+    "headRefName": "brief/d-30",
+    "headRefOid": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+    "mergedAt": null,
+    "number": 976,
+    "state": "OPEN",
+    "url": "https://github.com/vierisid/jarvis/pull/976"
+  },
+  "main": "b6a687827ac52c4091cb46ec57ac8f513bc386e5",
+  "duplicate_d31_prs": [],
+  "checks": [
+    {
+      "name": "daemon-cli-darwin",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "skipped",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357812937"
+    },
+    {
+      "name": "sidecar-build-darwin",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "skipped",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357812546"
+    },
+    {
+      "name": "ocr-helper",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "skipped",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357811894"
+    },
+    {
+      "name": "plist-lint",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "skipped",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357811539"
+    },
+    {
+      "name": "toast-windows",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "skipped",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357811472"
+    },
+    {
+      "name": "sidecar-build",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "skipped",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357811220"
+    },
+    {
+      "name": "test",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "success",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357712240"
+    },
+    {
+      "name": "applescript-check",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "success",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357711863"
+    },
+    {
+      "name": "changes",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "success",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357711620"
+    },
+    {
+      "name": "sidecar-test-windows",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "success",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415208735/job/115357711363"
+    },
+    {
+      "name": "docker-build",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "success",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415207393/job/115357706012"
+    },
+    {
+      "name": "label",
+      "head_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
+      "status": "completed",
+      "conclusion": "success",
+      "details_url": "https://github.com/vierisid/jarvis/actions/runs/38415205207/job/115357701006"
+    }
+  ]
+}
