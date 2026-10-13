@@ -6,14 +6,19 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { roomActionReply, WebSocketService } from './ws-service.ts';
+import { describeRoomAction, isVoiceAffirmative, roomActionReply, WebSocketService } from './ws-service.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import type { JarvisConfig } from '../config/types.ts';
+import { AgentOrchestrator } from '../agents/orchestrator.ts';
+import { buildTaintGating } from '../authority/taint-gating.ts';
+import { EmergencyController } from '../authority/emergency.ts';
+import type { Intent } from '../voice/intent.ts';
 
-const makeService = () => {
+const makeService = (orchestrator: AgentOrchestrator = new AgentOrchestrator()) => {
   const fakeAgent = {
     setDelegationCallback: () => {},
     getConfig: () => ({ llm: { providers: {} } }) as unknown as JarvisConfig,
+    getOrchestrator: () => orchestrator,
   } as never;
   const svc = new WebSocketService(0, fakeAgent);
   const sent: Array<{ type: string; payload: Record<string, unknown> }> = [];
@@ -438,5 +443,291 @@ describe('a side-effecting room action runs on one dashboard only (#974)', () =>
     // A presentation action with nobody named still goes to the panels.
     expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20)).toBe('no_answer');
     for (const c of [speaker, other, panel]) expect(frames(c)).toEqual(['room_action:switch_tab']);
+  });
+});
+
+// #973: a room action's handler makes REST calls the daemon takes as clicks,
+// so no authority, taint or blocked-category check saw what a voice path sent.
+// Voice is the person's authority, so an untainted realtime session acts; the
+// line is taint, as on its own tool calls. The classifier has no taint to
+// check and grades its own reading, so it repeats a governed action back.
+describe('voice room actions are held to what their handlers do (#973)', () => {
+  type Sent = { type: string; payload: Record<string, unknown> };
+  const setup = (opts: { tainted?: boolean; gating?: Parameters<typeof buildTaintGating>[0] } = {}) => {
+    const orchestrator = new AgentOrchestrator();
+    orchestrator.setTaintGating(buildTaintGating(opts.gating));
+    if (opts.tainted) {
+      (orchestrator as unknown as { realtimeTaint: Set<string> }).realtimeTaint.add('browser_navigate');
+      // The service reads it through the public accessor, outside any turn.
+      expect([...orchestrator.getTurnTaint()]).toEqual(['browser_navigate']);
+    }
+    const base = makeService(orchestrator);
+    base.internals.wsServer.getClients().clear();
+    const mk = () => {
+      const sent: Sent[] = [];
+      return { sent, ws: { send: (raw: string) => { sent.push(JSON.parse(raw)); return raw.length; }, sendBinary: () => {} } };
+    };
+    const speaker = mk();
+    const other = mk();
+    for (const c of [speaker, other]) base.internals.wsServer.getClients().add(c.ws);
+    const internals = base.svc as unknown as {
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown, opts?: { blockedCategories?: string[] }) => Promise<string | null>;
+      routeClassifiedVoiceIntent: (intent: Intent, trimmed: string, requestId: string, ws: unknown) => Promise<void>;
+      resolveVoiceConfirmation: (id: string, decision: 'confirm' | 'cancel') => Promise<{ ok: boolean }>;
+      pendingVoiceConfirmations: Map<string, unknown>;
+    };
+    const real = base.svc.requestRoomAction.bind(base.svc);
+    (base.svc as unknown as { requestRoomAction: typeof real }).requestRoomAction = (a, _t, o) => real(a, 20, o);
+    const frames = () => [...speaker.sent, ...other.sent]
+      .filter((m) => m.payload?.source === 'room_action' || m.payload?.source === 'navigate_room')
+      .map((m) => `${m.payload.source}:${String(m.payload.action ?? m.payload.key)}`);
+    const realtime = (room: string, action: string, args: Record<string, unknown> = {}, blockedCategories?: string[]) =>
+      internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args }, speaker.ws, { blockedCategories });
+    return { svc: base.svc, orchestrator, internals, speaker, other, frames, realtime };
+  };
+
+  // The actions the issue named, and the one it missed: opening a stopped
+  // project starts its dev server.
+  const governed = [
+    ['tasks', 'create_task', { title: 'Pay rent', when: 'tomorrow' }, 'write_data'],
+    ['calendar', 'schedule_event', { title: 'Call', when: 'in 5 minutes' }, 'write_data'],
+    ['workspaces', 'start_server', { name: 'demo' }, 'execute_command'],
+    ['workspaces', 'select_project', { name: 'demo' }, 'execute_command'],
+    ['workspaces', 'create_project', { name: 'demo' }, 'install_software'],
+    ['settings', 'enable_telegram', {}, 'modify_settings'],
+    ['settings', 'enable_discord', {}, 'modify_settings'],
+    ['settings', 'restart_daemon', {}, 'execute_command'],
+    ['settings', 'replay_onboarding', {}, 'delete_data'],
+    ['settings', 'set_model', { ref: 'evil:model' }, 'modify_settings'],
+    ['memory', 'remember_that', { subject: 'me', predicate: 'password', object: 'x' }, 'write_data'],
+    ['agents', 'spawn_agent', { specialist: 'research', task: 'x' }, 'spawn_agent'],
+  ] as const;
+
+  test('an untainted realtime session runs a high-impact action', async () => {
+    for (const [room, action, args] of governed) {
+      const { frames, realtime } = setup();
+      const reply = await realtime(room, action, args);
+      expect(reply).not.toContain('[BLOCKED]');
+      expect(frames()).toEqual([`navigate_room:${room}`, `room_action:${action}`]);
+    }
+  });
+
+  test('a tainted realtime session is refused it, and nothing is sent', async () => {
+    for (const [room, action, args, category] of governed) {
+      const { frames, realtime } = setup({ tainted: true });
+      expect(await realtime(room, action, args)).toBe(
+        `[BLOCKED] ${room}/${action} (${category}) was not sent: this session read outside content (browser_navigate) and voice cannot approve it. `
+        + 'Tell the user what you wanted to do and ask them to say it again as a fresh request.');
+      expect(frames()).toEqual([]);
+    }
+  });
+
+  test('once the person speaks again the same action goes', async () => {
+    const { orchestrator, frames, realtime } = setup({ tainted: true });
+    expect(await realtime('tasks', 'create_task', { title: 'x' })).toContain('[BLOCKED]');
+    orchestrator.resetRealtimeTaint();
+    expect(await realtime('tasks', 'create_task', { title: 'x' })).not.toContain('[BLOCKED]');
+    expect(frames()).toEqual(['navigate_room:tasks', 'room_action:create_task']);
+  });
+
+  test('a tainted session may still change what the screen shows', async () => {
+    const { frames, realtime } = setup({ tainted: true });
+    expect(await realtime('tasks', 'set_filter', { field: 'status', value: 'pending' })).not.toContain('[BLOCKED]');
+    // Both dashboards get it: the speaker's frames, then the other's.
+    expect(frames()).toEqual(['navigate_room:tasks', 'room_action:set_filter', 'navigate_room:tasks', 'room_action:set_filter']);
+  });
+
+  test('the owner\'s taint gating decides, as on the session\'s own tool calls', async () => {
+    // Gating off, or the category not governed: the tainted session acts.
+    for (const gating of [{ enabled: false }, { governed_categories: ['execute_command'] }] as const) {
+      const { frames, realtime } = setup({ tainted: true, gating: gating as never });
+      expect(await realtime('tasks', 'create_task', { title: 'x' })).not.toContain('[BLOCKED]');
+      expect(frames()).toEqual(['navigate_room:tasks', 'room_action:create_task']);
+    }
+  });
+
+  test('the realtime blocked categories apply, tainted or not', async () => {
+    const { frames, realtime } = setup();
+    expect(await realtime('workspaces', 'start_server', { name: 'demo' }, ['execute_command']))
+      .toBe('[BLOCKED] workspaces/start_server (execute_command) is in the realtime blocked-categories list and was not sent.');
+    expect(frames()).toEqual([]);
+    expect(await realtime('tasks', 'create_task', { title: 'x' }, ['execute_command'])).not.toContain('[BLOCKED]');
+  });
+
+  test('under Pause or Kill nothing beyond the screen is sent', async () => {
+    for (const halt of ['pause', 'kill'] as const) {
+      const { orchestrator, frames, realtime } = setup();
+      const emergency = new EmergencyController();
+      emergency[halt]();
+      orchestrator.setEmergencyController(emergency);
+      const state = emergency.getState();
+      expect(await realtime('tasks', 'create_task', { title: 'x' }))
+        .toBe(`[SYSTEM ${state.toUpperCase()}] tasks/create_task was not sent: actions are suspended while the system is ${state}.`);
+      expect(frames()).toEqual([]);
+      expect(await realtime('agents', 'switch_tab', { tab: 'builder' })).not.toContain('[SYSTEM');
+    }
+  });
+
+  test('the live session passes its blocked categories to the room action tool', async () => {
+    const src = await Bun.file(new URL('./ws-service.ts', import.meta.url)).text();
+    expect(src).toContain('this.executeRealtimeNavTool(name, args, ws, { blockedCategories: resolved.blockedCategories })');
+  });
+
+  const intent = (room: string, action: string, args: Record<string, unknown>, over: Partial<Intent> = {}): Intent => ({
+    id: `i-${room}-${action}`, utterance: 'x', verb: 'show', object: null, args: {},
+    impact: 'read', confidence: 0.99, room_action: { room: room as never, action, args }, ...over,
+  });
+
+  test('the classifier repeats a high-impact action back however sure it says it is, and runs nothing', async () => {
+    for (const [room, action, args] of governed) {
+      const { internals, speaker, other, frames } = setup();
+      await internals.routeClassifiedVoiceIntent(intent(room, action, args), 'do it', 'req', speaker.ws);
+      expect(frames()).toEqual([]);
+      const card = other.sent.find((m) => m.payload?.source === 'repeat_back_request');
+      expect(card?.payload).toMatchObject({ id: `i-${room}-${action}`, transcript: 'do it', action: describeRoomAction({ room, action, args }) });
+      expect(internals.pendingVoiceConfirmations.size).toBe(1);
+    }
+  });
+
+  test('confirming the repeat-back runs the held action on the dashboard that spoke', async () => {
+    const { internals, speaker, other, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'Pay rent' }), 'add pay rent', 'req', speaker.ws);
+    expect(await internals.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: true });
+    expect(frames()).toEqual(['navigate_room:tasks', 'room_action:create_task']);
+    expect(speaker.sent.find((m) => m.payload?.source === 'room_action')!.payload.args).toEqual({ title: 'Pay rent' });
+    // Not handed to chat as a transcript: the acknowledgement is the room's.
+    const acks = other.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text);
+    expect(acks).toEqual(["I sent that to Tasks, but it didn't answer, so I can't tell whether it happened."]);
+  });
+
+  test('cancelling it runs nothing', async () => {
+    const { internals, speaker, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x' }), 'x', 'req', speaker.ws);
+    expect(await internals.resolveVoiceConfirmation('i-tasks-create_task', 'cancel')).toEqual({ ok: true });
+    expect(frames()).toEqual([]);
+  });
+
+  test('the classifier still acts at once on a presentation action', async () => {
+    const { internals, speaker, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('tasks', 'set_filter', { field: 'status', value: 'pending' }), 'x', 'req', speaker.ws);
+    expect(frames().filter((f) => f === 'room_action:set_filter').length).toBe(2);
+    expect(internals.pendingVoiceConfirmations.size).toBe(0);
+  });
+
+  const yes = (over: Partial<Intent> = {}): Intent => ({
+    id: `yes-${Math.random()}`, utterance: 'yes', verb: 'ask', object: null, args: {}, impact: 'read',
+    confidence: 0.6, confirmation_response: 'approve', ...over,
+  });
+  const acksOf = (c: { sent: Sent[] }) => c.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => String(m.payload.text));
+
+  test('a plain spoken yes on the same dashboard runs the held action, with only the room\'s answer', async () => {
+    const { internals, speaker, other, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'Pay rent' }), 'add pay rent', 'req', speaker.ws);
+    await internals.routeClassifiedVoiceIntent(yes(), 'Yes.', 'req2', speaker.ws);
+    expect(frames()).toEqual(['navigate_room:tasks', 'room_action:create_task']);
+    expect(acksOf(other)).toEqual(["I sent that to Tasks, but it didn't answer, so I can't tell whether it happened."]);
+  });
+
+  test('a yes the classifier inferred, from elsewhere, late, or among several holds runs nothing', async () => {
+    const cases: Array<[string, (t: ReturnType<typeof setup>) => Promise<void>, RegExp]> = [
+      ['inferred', async ({ internals, speaker }) => {
+        await internals.routeClassifiedVoiceIntent(yes(), 'that sounds about right I guess', 'r', speaker.ws);
+      }, /say "yes" on its own or click its card/],
+      ['other dashboard', async ({ internals, other }) => {
+        await internals.routeClassifiedVoiceIntent(yes(), 'yes', 'r', other.ws);
+      }, /waiting on another dashboard/],
+      ['late', async ({ internals, speaker }) => {
+        for (const p of internals.pendingVoiceConfirmations.values()) (p as { createdAt: number }).createdAt -= 61_000;
+        await internals.routeClassifiedVoiceIntent(yes(), 'yes', 'r', speaker.ws);
+      }, /waiting too long/],
+      ['several', async ({ internals, speaker }) => {
+        await internals.routeClassifiedVoiceIntent(intent('settings', 'restart_daemon', {}), 'restart', 'r0', speaker.ws);
+        await internals.routeClassifiedVoiceIntent(yes(), 'yes', 'r', speaker.ws);
+      }, /2 actions are waiting/],
+    ];
+    for (const [name, act, said] of cases) {
+      const t = setup();
+      await t.internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x' }), 'x', 'req', t.speaker.ws);
+      await act(t);
+      expect([name, t.frames()]).toEqual([name, []]);
+      expect(acksOf(t.other).at(-1)).toMatch(said);
+      expect(t.internals.pendingVoiceConfirmations.size).toBeGreaterThan(0);
+    }
+  });
+
+  test('a clarified presentation action runs on any yes, and does not count as a held action', async () => {
+    const { internals, speaker, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('tasks', 'set_filter', { field: 'status', value: 'done' }, { confidence: 0.3 }), 'x', 'req', speaker.ws);
+    await internals.routeClassifiedVoiceIntent(yes(), 'that one I think', 'r', speaker.ws);
+    expect(frames().filter((f) => f === 'room_action:set_filter').length).toBe(2);
+  });
+
+  test('a spoken no cancels a held action', async () => {
+    const { internals, speaker, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x' }), 'x', 'req', speaker.ws);
+    await internals.routeClassifiedVoiceIntent(yes({ confirmation_response: 'cancel' }), 'no', 'r', speaker.ws);
+    expect(frames()).toEqual([]);
+    expect(internals.pendingVoiceConfirmations.size).toBe(0);
+  });
+
+  test('a hold confirmed after Kill does not run', async () => {
+    const { orchestrator, internals, speaker, other, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('tasks', 'create_task', { title: 'x' }), 'x', 'req', speaker.ws);
+    const emergency = new EmergencyController();
+    emergency.kill();
+    orchestrator.setEmergencyController(emergency);
+    expect(await internals.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: true });
+    expect(frames()).toEqual([]);
+    expect(acksOf(other)).toEqual([`I didn't do that: actions are suspended while the system is ${emergency.getState()}. Ask again once it is resumed.`]);
+  });
+
+  test('a side-effecting action the classifier was unsure of is repeated back with what it runs, and confirming runs it', async () => {
+    const { internals, speaker, other, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('settings', 'test_provider', { provider: 'openai' }, { confidence: 0.7 }), 'x', 'req', speaker.ws);
+    expect(other.sent.some((m) => m.payload?.source === 'clarifier_request')).toBe(false);
+    expect(other.sent.find((m) => m.payload?.source === 'repeat_back_request')?.payload.action)
+      .toBe(describeRoomAction({ room: 'settings', action: 'test_provider', args: { provider: 'openai' } }));
+    expect(await internals.resolveVoiceConfirmation('i-settings-test_provider', 'confirm')).toEqual({ ok: true });
+    expect(frames()).toEqual(['navigate_room:settings', 'room_action:test_provider']);
+  });
+
+  test('a side-effecting action outside the governed categories needs the confidence of a write', async () => {
+    // test_provider reads; the classifier called it "read" at 0.7, which
+    // used to act. Its impact comes from the table now, so it clarifies.
+    const { internals, speaker, other, frames } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('settings', 'test_provider', { provider: 'openai' }, { confidence: 0.7 }), 'x', 'req', speaker.ws);
+    expect(frames()).toEqual([]);
+    // Held for confirmation, on the card that shows the action.
+    expect(other.sent.some((m) => m.payload?.source === 'repeat_back_request')).toBe(true);
+  });
+});
+
+describe('describeRoomAction shows every argument the classifier filled in (#973)', () => {
+  test('room, action, arguments in full and quoted, and what it can do', () => {
+    expect(describeRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'Pay rent', when: 'tomorrow' } }))
+      .toBe('Tasks: create task {"title": "Pay rent", "when": "tomorrow"} (saves data)');
+    expect(describeRoomAction({ room: 'settings', action: 'restart_daemon' })).toBe('Settings: restart daemon (runs a command on this machine)');
+    expect(describeRoomAction({ room: 'tasks', action: 'set_filter', args: { field: 'status' } })).toBe('Tasks: set filter {"field": "status"}');
+    const long = 'y'.repeat(200);
+    expect(describeRoomAction({ room: 'memory', action: 'remember_that', args: { object: long } })).toContain(long);
+  });
+
+  test('a value cannot pass for another argument', () => {
+    const shown = describeRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'Pay rent", "when": "never' } });
+    expect(shown).toBe('Tasks: create task {"title": "Pay rent\\", \\"when\\": \\"never"} (saves data)');
+  });
+});
+
+describe('isVoiceAffirmative reads a plain yes from the transcript (#973)', () => {
+  test('yes in its plain forms, with or without the wake word', () => {
+    for (const t of ['yes', 'Yes.', 'yeah', 'yep!', 'yes please', 'yes, go ahead', 'Do it.', 'go ahead', 'confirm', 'Jarvis, yes', 'hey jarvis yes do it']) {
+      expect([t, isVoiceAffirmative(t)]).toEqual([t, true]);
+    }
+  });
+
+  test('anything else is not a yes', () => {
+    for (const t of ['', 'yes but wait', 'not yet', 'yesterday', 'no', 'sure', 'ok', 'that sounds right', 'yes delete everything', 'jarvis']) {
+      expect([t, isVoiceAffirmative(t)]).toEqual([t, false]);
+    }
   });
 });
