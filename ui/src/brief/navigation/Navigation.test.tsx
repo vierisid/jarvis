@@ -17,6 +17,7 @@ let Attention: typeof import("./AttentionRoutes").AttentionRoutes;
 let Maintenance: typeof import("./MaintenanceLinks").MaintenanceLinks;
 let Entry: typeof import("../entry/DashboardEntry").DashboardEntry;
 let Sidecars: typeof import("../../v2/rooms/settings/tabs/SidecarTab").SidecarTab;
+let Settings: typeof import("../../v2/rooms/settings/SettingsRoom").SettingsRoomBody;
 let root: ReturnType<typeof createRoot>, element: HTMLDivElement;
 const originalFetch = globalThis.fetch, originalSocket = globalThis.WebSocket;
 const cap = new BriefCapabilities(registerNavigationCompatibility(() => ({ destinations: true, guardedNavigation: true, roomIntents: true, notificationsOutsideChat: true })), ["navigationCompatibility"]).snapshot();
@@ -31,6 +32,7 @@ beforeAll(async () => {
   ({ MaintenanceLinks: Maintenance } = await import("./MaintenanceLinks"));
   ({ DashboardEntry: Entry } = await import("../entry/DashboardEntry"));
   ({ SidecarTab: Sidecars } = await import("../../v2/rooms/settings/tabs/SidecarTab"));
+  ({ SettingsRoomBody: Settings } = await import("../../v2/rooms/settings/SettingsRoom"));
 });
 beforeEach(() => {
   history.replaceState(null, "", "http://localhost:4425/?brief=1#/brief/settings");
@@ -113,4 +115,45 @@ test("F-25 explicit preview mounts no legacy/voice owner and chat closure leaves
   expect(element.querySelector("pre")?.textContent).toContain('"settingsTab":"sidecar"');
   await click("Conversation: closed"); await click("Conversation: open");
   expect(element.textContent).toContain("Review a pending approval");
+});
+
+test("an inline Settings observer preserves the sidecar pill request for the expanded destination mount", async () => {
+  const { requestSettingsTab, clearRequestedSettingsTab } = await import("../../v2/shell/settings-tab-request");
+  clearRequestedSettingsTab();
+  history.replaceState(null, "", "http://localhost:4425/#/");
+  globalThis.fetch = (async (_: unknown, init?: RequestInit) => {
+    expect(init?.method ?? "GET").toBe("GET"); return new Response(null, { status: 503 });
+  }) as typeof fetch;
+  await mount(<section id="inline"><Settings mode="inline" /></section>);
+  await React.act(async () => {
+    requestSettingsTab("sidecar");
+    history.replaceState(null, "", "http://localhost:4425/#/_room_settings");
+    root.render(<><section id="inline"><Settings mode="inline" /></section><section id="expanded"><Settings mode="expanded" /></section></>);
+  });
+  expect(element.querySelector('#expanded [aria-selected="true"]')?.textContent).toBe("Sidecar");
+  clearRequestedSettingsTab();
+});
+
+test("an accepted history entry restores the real Settings tab without remounting the room", async () => {
+  const { clearRequestedSettingsTab } = await import("../../v2/shell/settings-tab-request");
+  clearRequestedSettingsTab();
+  history.replaceState(null, "", "http://localhost:4425/#/_room_settings");
+  globalThis.fetch = (async (_: unknown, init?: RequestInit) => {
+    expect(init?.method ?? "GET").toBe("GET"); return new Response(null, { status: 503 });
+  }) as typeof fetch;
+  await mount(<Settings mode="expanded" />);
+  const nav = new NavigationCompatibility(browserNavigationHost({ roomAvailable: () => false, canLeave: async () => true, explain() {}, revealConversationItem() {} })); nav.setAccess(cap);
+  await React.act(async () => { await nav.navigate("realtime-voice"); });
+  const voiceURL = location.href;
+  expect(element.querySelector('[aria-selected="true"]')?.textContent).toBe("Voice");
+  await React.act(async () => { await nav.navigate("devices"); });
+  const settingsRoot = element.firstElementChild;
+  expect(element.querySelector('[aria-selected="true"]')?.textContent).toBe("Sidecar");
+  await React.act(async () => {
+    history.replaceState(null, "", voiceURL);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  expect(element.firstElementChild).toBe(settingsRoot);
+  expect(element.querySelector('[aria-selected="true"]')?.textContent).toBe("Voice");
+  clearRequestedSettingsTab();
 });
