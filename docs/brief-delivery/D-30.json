@@ -157,5 +157,35 @@
   "rollback": "Remove optional registration or restore existing Settings. Revert card commits including shared theme subscriber if needed; no migration/data rollback.",
   "next_card": "D-31 not started",
   "private_progress": "Outside product repository; shared Drive roadmap unchanged.",
-  "main_initially_inspected": "c78fbe1849a4c940304e54049e96f3c770aba48f"
+  "main_initially_inspected": "c78fbe1849a4c940304e54049e96f3c770aba48f",
+  "review_corrections": {
+    "date": "2026-10-13",
+    "fixes": [
+      "Read current canonical storage when processing queued theme events; preserve in-memory state if storage cannot be read.",
+      "Revalidate tutorial replay eligibility at confirmation; stale or withdrawn support cannot reset the tutorial, and recovery requires a new explicit request."
+    ],
+    "focused": {
+      "passed": 48,
+      "assertions": 214,
+      "evidence": "evidence/D-30/review-focused.log"
+    },
+    "regression": {
+      "passed": 925,
+      "skipped": 2,
+      "assertions": 6893,
+      "evidence": "evidence/D-30/review-regression.log",
+      "note": "Existing optional F07/F08 skips; before only strengthening unrelated/session event assertions, which passed in the final focused run."
+    },
+    "typecheck": {
+      "result": "pass",
+      "evidence": "evidence/D-30/review-typecheck.log"
+    },
+    "build": {
+      "result": "pass",
+      "evidence": "evidence/D-30/review-build.log",
+      "warnings": "Existing @theme/@tailwind warnings."
+    },
+    "browser": "No additional browser/layout run for these state-handling fixes; prior evidence and production integration limits remain.",
+    "activation": "Unchanged; D31 not started."
+  }
 }

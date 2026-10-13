@@ -250,6 +250,41 @@ test("tutorial replay requires confirmation, preserves scope and cannot automati
   expect(f.replays).toHaveLength(1);
   c.retire();
 });
+test("tutorial confirmation rechecks freshness and requires a new request after recovery", async () => {
+  const f = await fixture(),
+    c = f.controller;
+  c.requestReplay();
+  f.failReads(true);
+  await c.refresh();
+  expect(c.snapshot().availability).toBe("stale");
+  await c.confirmReplay(true);
+  expect(f.replays).toHaveLength(0);
+  expect(c.snapshot().replay).toBe("idle");
+  expect(c.snapshot().actionMessage).toContain("Refresh settings");
+  f.failReads(false);
+  await c.refresh();
+  await c.confirmReplay(true);
+  expect(f.replays).toHaveLength(0);
+  c.requestReplay();
+  await c.confirmReplay(true);
+  expect(f.replays).toEqual(["tutorial"]);
+  c.retire();
+});
+test("tutorial confirmation rechecks the latest supported replay scopes", async () => {
+  const f = await fixture(),
+    c = f.controller;
+  c.requestReplay();
+  f.port.read = async () => ({
+    state: "ready",
+    data: { ...f.current(), replay: ["profile"] },
+  });
+  await c.refresh();
+  expect(c.snapshot().availability).toBe("ready");
+  await c.confirmReplay(true);
+  expect(f.replays).toHaveLength(0);
+  expect(c.snapshot().replay).toBe("idle");
+  c.retire();
+});
 test("unavailable/read-only tutorial and missing destinations do not execute", async () => {
   const f = await fixture("read-only"),
     c = f.controller;

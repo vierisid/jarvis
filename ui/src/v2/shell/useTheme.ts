@@ -33,16 +33,20 @@ function setTheme(next?: Theme) {
 function subscribe(changed: () => void) {
   const storage = (event: StorageEvent) => {
     if (event.key !== KEY && event.key !== null) return;
+    let stored: string | null;
     try {
       if (event.storageArea && event.storageArea !== window.localStorage)
         return;
+      // Events may be queued behind a newer choice in this or another tab.
+      stored = window.localStorage.getItem(KEY);
     } catch {
+      // Keep the in-memory choice when storage is inaccessible.
       return;
     }
     // Storage removal/clear uses the same fallback as the before-paint bootstrap.
     document.documentElement.setAttribute(
       "data-theme",
-      valid(event.newValue) ? event.newValue : systemTheme(),
+      valid(stored) ? stored : systemTheme(),
     );
     changed();
   };

@@ -165,6 +165,26 @@ test("hosted controls never expose provider selection; tutorial requires confirm
   expect(f.replays).toEqual(["tutorial"]);
   expect(f.writes).toHaveLength(0);
 });
+test("a polling failure while the tutorial dialog is open prevents replay", async () => {
+  await render();
+  await click("Replay");
+  f.failReads(true);
+  await React.act(async () => {
+    await f.controller.refresh();
+  });
+  expect(host.querySelector("dialog")!.open).toBe(true);
+  await click("Replay tutorial");
+  expect(f.replays).toHaveLength(0);
+  expect(host.querySelector("dialog")!.open).toBe(false);
+  expect(button("Replay").disabled).toBe(true);
+  expect(host.textContent).toContain("Refresh settings and try again");
+  f.failReads(false);
+  await click("Refresh settings");
+  expect(f.replays).toHaveLength(0);
+  await click("Replay");
+  await click("Replay tutorial");
+  expect(f.replays).toEqual(["tutorial"]);
+});
 test("read-only and stale settings cannot mutate or replay", async () => {
   f = makeSettingsFixture("read-only");
   await render();
