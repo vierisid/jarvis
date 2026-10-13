@@ -16,9 +16,20 @@
         "room unavailable",
         "guard cancelled"
       ]
+    },
+    {
+      "priority": "P2",
+      "title": "Ignore late polling results after clearing the handoff",
+      "regressions": [
+        "Explore followed by a late poll leaves tutorial replay editable and able to prepare a new request",
+        "Late polling receipt cannot overwrite a newer pending handoff",
+        "Late polling error cannot clear the busy state or set an error on a newer handoff",
+        "Failed storage clear preserves ownership of the pending read"
+      ],
+      "verification": "Three new regression cases failed before the fix; all four pass after request-ownership checks. Focused suite: 183 passed, 0 failed, 1313 assertions."
     }
   ],
-  "final_review": "No findings. Complete change and correction diff inspected.",
+  "final_review": "No additional findings after inspecting the correction diff and request ownership across success, error, clear failure and account disposal.",
   "independent_delegated_review": false,
   "limitations": [
     "Full production host assembly remains D-33/F-28 work.",

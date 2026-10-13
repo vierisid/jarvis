@@ -81,6 +81,37 @@ test('pending jobs read by job identity without creating another workflow', asyn
   expect(f.calls).toHaveLength(1); expect(draft.getSnapshot().job?.state).toBe('draft_ready');
 });
 
+for (const outcome of ['receipt', 'error'] as const) test(`a late polling ${outcome} cannot alter a new handoff after clear`, async () => {
+  const f = setup(), draft = f.make();
+  f.api.submit = async request => { f.calls.push(request); return job(request, 'queued'); };
+  let resolveRead!: (value: BriefCompositionJob) => void, rejectRead!: (error: Error) => void;
+  f.api.read = () => new Promise((resolve, reject) => { resolveRead = resolve; rejectRead = reject; });
+  draft.setRoutine('Old task'); await draft.prepare();
+  const oldRequest = f.calls[0]!, polling = draft.check();
+  draft.clear(); draft.setRoutine('New task');
+  let resolveSubmit!: (value: BriefCompositionJob) => void;
+  f.api.submit = request => { f.calls.push(request); return new Promise(resolve => { resolveSubmit = resolve; }); };
+  const preparing = draft.prepare(), current = draft.getSnapshot();
+  expect(current.busy).toBe(true);
+  if (outcome === 'receipt') resolveRead(job(oldRequest)); else rejectRead(Error('Late network failure'));
+  await polling;
+  expect(draft.getSnapshot()).toBe(current);
+  resolveSubmit(job(f.calls[1]!)); await preparing;
+  expect(draft.getSnapshot()).toMatchObject({ routine: 'New task', busy: false, error: null, job: { requestId: 'request-2' } });
+});
+
+test('a failed clear keeps the pending read owned by the retained handoff', async () => {
+  const f = setup(), draft = f.make();
+  f.api.submit = async request => { f.calls.push(request); return job(request, 'queued'); };
+  let resolveRead!: (value: BriefCompositionJob) => void;
+  f.api.read = () => new Promise(resolve => { resolveRead = resolve; });
+  draft.setRoutine('Keep my task'); await draft.prepare();
+  const polling = draft.check(); f.failStorage();
+  expect(() => draft.clear()).toThrow('Could not clear');
+  resolveRead(job(f.calls[0]!)); await polling;
+  expect(draft.getSnapshot()).toMatchObject({ routine: 'Keep my task', storageFailed: true, job: { state: 'draft_ready' } });
+});
+
 test('missing/stale access, invalid receipts and unready destinations cannot create or open a misleading result', async () => {
   const f = setup(), draft = f.make(); draft.setRoutine('Draft notes'); f.snapshot(null);
   await draft.prepare(); expect(f.calls).toEqual([]); expect(draft.getSnapshot().routine).toBe('Draft notes');
