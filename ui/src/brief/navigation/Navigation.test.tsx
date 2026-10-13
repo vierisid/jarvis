@@ -155,5 +155,17 @@ test("an accepted history entry restores the real Settings tab without remountin
   });
   expect(element.firstElementChild).toBe(settingsRoot);
   expect(element.querySelector('[aria-selected="true"]')?.textContent).toBe("Voice");
+  await mount(<p>Another retained room</p>);
+  await mount(<Settings mode="expanded" />);
+  expect(element.querySelector('[aria-selected="true"]')?.textContent).toBe("Voice");
+  const { requestSettingsTab } = await import("../../v2/shell/settings-tab-request");
+  await React.act(async () => { requestSettingsTab("sidecar"); });
+  await mount(<p>Another retained room</p>);
+  await mount(<Settings mode="expanded" />);
+  expect(element.querySelector('[aria-selected="true"]')?.textContent).toBe("Sidecar");
+  expect(new URL(location.href).searchParams.get("settingsTab")).toBe("sidecar");
+  history.replaceState(null, "", "http://localhost:4425/#/_room_logs");
+  const { takeRequestedSettingsTab } = await import("../../v2/shell/settings-tab-request");
+  expect(takeRequestedSettingsTab()).toBeNull();
   clearRequestedSettingsTab();
 });
