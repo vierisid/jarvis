@@ -14,6 +14,29 @@ export type JobSignal = {
   routine?: RoutineSignalEvidence;
 };
 
+export type GoalCandidate = {
+  goalId: string;
+  title: string;
+  reason: string;
+  evidenceCaptureIds: string[];
+  basis: 'text_overlap_requires_confirmation' | 'causal_contribution_requires_confirmation';
+  grounding?: {
+    policy: 'goal-contribution-v1';
+    objectiveId: string;
+    path: Array<{ goalId: string; title: string; updatedAt: number }>;
+    requiredOutcome: { goalId: string; field: 'success_criteria' | 'title'; text: string };
+    contribution: string;
+    uncertainty: string;
+  };
+};
+
+export type GoalRelevance = {
+  policy: 'goal-contribution-v1';
+  assessedAt: number;
+  status: 'candidate' | 'competing_goals' | 'no_supported_goal' | 'insufficient_evidence' | 'incomplete_goal_context';
+  competingGoalIds: string[];
+};
+
 export type JobHypothesis = {
   schemaVersion: 1;
   assessedAt: number;
@@ -34,13 +57,9 @@ export type JobHypothesis = {
     windowDays: 14;
     basis: 'observed_activity';
   };
-  goalCandidates: Array<{
-    goalId: string;
-    title: string;
-    reason: string;
-    evidenceCaptureIds: string[];
-    basis: 'text_overlap_requires_confirmation';
-  }>;
+  goalCandidates: GoalCandidate[];
+  /** Optional for persisted older hypotheses. Current reads recompute this projection. */
+  goalRelevance?: GoalRelevance;
   feasibility: {
     status: 'unverified';
     requiredChecks: string[];

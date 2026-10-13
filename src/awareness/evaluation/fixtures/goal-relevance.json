@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "provenance": "Hand-labeled synthetic development fixtures, author-visible. No customer data, independent human review or production accuracy claim.",
+  "cases": [
+    { "id": "invoice-outcome-not-title-overlap", "kind": "invoice_review", "goals": [
+      { "id": "article", "title": "Overdue invoices", "success_criteria": "Publish a tutorial about overdue invoices" },
+      { "id": "cash", "title": "Cash discipline", "success_criteria": "Reduce overdue invoices to zero" }
+    ], "expected": "cash", "status": "candidate" },
+    { "id": "current-objective-path", "kind": "invoice_review", "goals": [
+      { "id": "company", "title": "Improve operating cash flow" },
+      { "id": "receivables", "title": "Collect unpaid invoices", "level": "key_result", "parent_id": "company", "success_criteria": "Reduce overdue invoices to zero" }
+    ], "expected": "receivables", "status": "candidate" },
+    { "id": "prefer-specific-step", "kind": "invoice_review", "goals": [
+      { "id": "root", "title": "Improve cash collection" },
+      { "id": "step", "title": "Review overdue invoices weekly", "level": "task", "parent_id": "root" }
+    ], "expected": "step", "status": "candidate" },
+    { "id": "competing-businesses", "kind": "invoice_review", "goals": [
+      { "id": "north", "title": "Collect unpaid invoices", "description": "North division" },
+      { "id": "south", "title": "Collect unpaid invoices", "description": "South division" }
+    ], "expected": null, "status": "competing_goals" },
+    { "id": "required-outcome-outranks-title", "kind": "invoice_review", "goals": [
+      { "id": "vague", "title": "Review overdue invoices" },
+      { "id": "required", "title": "Receivables", "success_criteria": "Collect unpaid invoices" }
+    ], "expected": "required", "status": "candidate" },
+    { "id": "title-cannot-override-outcome", "kind": "invoice_review", "goals": [
+      { "id": "wrong", "title": "Collect unpaid invoices", "success_criteria": "Increase website conversions" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "completed-goal", "kind": "invoice_review", "goals": [
+      { "id": "done", "title": "Collect unpaid invoices", "status": "completed" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "expired-deadline", "kind": "invoice_review", "goals": [
+      { "id": "late", "title": "Collect unpaid invoices", "deadlineDays": -1 }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "unreviewed-goal", "kind": "invoice_review", "goals": [
+      { "id": "old", "title": "Collect unpaid invoices", "ageDays": 91 }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "paused-parent", "kind": "invoice_review", "goals": [
+      { "id": "paused", "title": "Improve cash collection", "status": "paused" },
+      { "id": "active-child", "title": "Collect unpaid invoices", "level": "key_result", "parent_id": "paused" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "stale-parent", "kind": "invoice_review", "goals": [
+      { "id": "old", "title": "Cash flow", "ageDays": 91 },
+      { "id": "child", "title": "Collect unpaid invoices", "level": "task", "parent_id": "old" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "unrelated-parent-context", "kind": "invoice_review", "goals": [
+      { "id": "research", "title": "Write an article about accounting" },
+      { "id": "child", "title": "Reduce overdue invoices", "level": "task", "parent_id": "research" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "missing-parent", "kind": "invoice_review", "goals": [
+      { "id": "orphan", "title": "Collect unpaid invoices", "level": "task", "parent_id": "missing" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "cycle", "kind": "invoice_review", "goals": [
+      { "id": "a", "title": "Collect unpaid invoices", "parent_id": "b" },
+      { "id": "b", "title": "Collect unpaid invoices", "parent_id": "a" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "no-goals", "kind": "invoice_review", "goals": [], "expected": null, "status": "no_supported_goal" },
+    { "id": "no-required-action", "kind": "invoice_review", "goals": [
+      { "id": "cue", "title": "Overdue invoices" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "negated-work", "kind": "invoice_review", "goals": [
+      { "id": "avoid", "title": "Do not collect unpaid invoices" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "app-name-only", "kind": "invoice_review", "goals": [
+      { "id": "app", "title": "Use Accounting every day" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "lead-contribution", "kind": "lead_followup", "goals": [
+      { "id": "sales", "title": "Improve lead conversion" }
+    ], "expected": "sales", "status": "candidate" },
+    { "id": "report-contribution", "kind": "recurring_report", "goals": [
+      { "id": "report", "title": "Produce a weekly sales report" }
+    ], "expected": "report", "status": "candidate" },
+    { "id": "meeting-contribution", "kind": "meeting_followup", "goals": [
+      { "id": "meeting", "title": "Assign owners to meeting actions" }
+    ], "expected": "meeting", "status": "candidate" },
+    { "id": "expense-contribution", "kind": "expense_reconciliation", "goals": [
+      { "id": "expense", "title": "Reconcile business expenses" }
+    ], "expected": "expense", "status": "candidate" },
+    { "id": "support-contribution", "kind": "support_triage", "goals": [
+      { "id": "support", "title": "Reduce the ticket backlog" }
+    ], "expected": "support", "status": "candidate" },
+    { "id": "unsupported-paraphrase", "kind": "invoice_review", "goals": [
+      { "id": "cash", "title": "Get customers to pay what they owe" }
+    ], "expected": null, "status": "no_supported_goal", "limitation": "Useful relation not recognized by this bounded vocabulary" }
+  ]
+}

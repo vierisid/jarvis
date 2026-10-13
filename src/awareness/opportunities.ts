@@ -3,6 +3,8 @@ import { createSuggestion, findAutomationSuggestion } from '../vault/awareness.t
 import { findGoals, getGoal } from '../vault/goals.ts';
 import { getOpportunityObservations, pruneOpportunityObservations } from '../vault/opportunity-observations.ts';
 import { assessJobHypotheses } from './job-hypotheses.ts';
+import { GOAL_CONTEXT_LIMIT, rankOpportunityGoals } from './goal-relevance.ts';
+import type { Goal } from '../goals/types.ts';
 import type { JobHypothesis, Opportunity, OpportunityValidation } from './opportunity-types.ts';
 import type { Suggestion } from './types.ts';
 
@@ -15,7 +17,7 @@ type Row = {
   created_at: number; dismissed: number; acted_on: number;
 };
 
-function fromRow(row: Row): Opportunity {
+function fromRow(row: Row, goals: Goal[], now: number): Opportunity {
   const validation = row.validation ? JSON.parse(row.validation) as OpportunityValidation : null;
   // Preserve the historical confirmation in feedback, but never expose a stale
   // or inactive goal as a current usable relation.
@@ -23,8 +25,9 @@ function fromRow(row: Row): Opportunity {
     const goal = getGoal(validation.goalLink.goalId);
     validation.goalLink = goal?.status === 'active' ? { ...validation.goalLink, title: goal.title } : null;
   }
+  const stored = JSON.parse(row.hypothesis) as JobHypothesis;
   return {
-    id: row.suggestion_id, hypothesis: JSON.parse(row.hypothesis), validation,
+    id: row.suggestion_id, hypothesis: { ...stored, ...rankOpportunityGoals(stored, goals, now) }, validation,
     status: row.dismissed ? 'dismissed' : validation ? 'validated' : row.acted_on ? 'interested' : 'proposed',
     createdAt: row.created_at,
   };
@@ -35,17 +38,19 @@ const SELECT = `SELECT h.*, s.dismissed, s.acted_on FROM opportunity_hypotheses 
 
 export function getOpportunity(id: string): Opportunity | null {
   const row = getDb().prepare(`${SELECT} WHERE h.suggestion_id = ?`).get(id) as Row | null;
-  return row ? fromRow(row) : null;
+  return row ? fromRow(row, findGoals({ limit: GOAL_CONTEXT_LIMIT }), Date.now()) : null;
 }
 
 export function listOpportunities(limit = 50): Opportunity[] {
+  const goals = findGoals({ limit: GOAL_CONTEXT_LIMIT });
+  const now = Date.now();
   return (getDb().prepare(`${SELECT} ORDER BY h.created_at DESC, h.suggestion_id LIMIT ?`)
-    .all(limit) as Row[]).map(fromRow);
+    .all(limit) as Row[]).map(row => fromRow(row, goals, now));
 }
 
 export function assessOpportunities(now = Date.now()) {
   const known = getDb().prepare('SELECT pattern_key FROM opportunity_hypotheses').all() as Array<{ pattern_key: string }>;
-  return assessJobHypotheses(getOpportunityObservations(now), findGoals({ status: 'active' }),
+  return assessJobHypotheses(getOpportunityObservations(now), findGoals({ limit: GOAL_CONTEXT_LIMIT }),
     new Set(known.map(r => r.pattern_key)), now);
 }
 
