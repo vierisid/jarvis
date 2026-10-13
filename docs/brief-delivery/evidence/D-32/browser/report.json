@@ -1,9 +1,9 @@
 {
   "schema": "brief-craft-v1",
-  "head": "49e55f4d1f19404710dd735080daef9114fc44dd",
+  "head": "bae0364c454f41358fead7411e7c944186a3aa06",
   "source": "fixture",
   "environment": "browser",
-  "capturedAt": "2026-10-13T19:50:47.703Z",
+  "capturedAt": "2026-10-13T20:58:20.501Z",
   "cases": [
     {
       "id": "today/layout/ready/light/expanded/closed",
@@ -315,7 +315,8 @@
     },
     {
       "id": "today/viewport/ready/390",
-      "status": "passed",
+      "status": "failed",
+      "reason": "Conversation composer is missing, hidden, collapsed or clipped.",
       "evidence": [
         "observations/today.jsonl",
         "today--viewport--ready--390.work.png",
@@ -375,7 +376,8 @@
     },
     {
       "id": "today/viewport/long/390",
-      "status": "passed",
+      "status": "failed",
+      "reason": "Conversation composer is missing, hidden, collapsed or clipped.",
       "evidence": [
         "observations/today.jsonl",
         "today--viewport--long--390.work.png",
@@ -402,50 +404,38 @@
     {
       "id": "today/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "today/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "today/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "today/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "today/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "today/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflows/layout/ready/light/expanded/closed",
@@ -844,50 +834,38 @@
     {
       "id": "workflows/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflows/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflows/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflows/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflows/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflows/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow/layout/ready/light/expanded/closed",
@@ -1254,50 +1232,38 @@
     {
       "id": "workflow/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-preview/layout/ready/light/expanded/closed",
@@ -2280,50 +2246,38 @@
     {
       "id": "workflow-runs/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-runs/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-runs/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-runs/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-runs/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-runs/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-context/layout/ready/light/expanded/closed",
@@ -2722,50 +2676,38 @@
     {
       "id": "workflow-context/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-context/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-context/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-context/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-context/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "workflow-context/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "all-workflows/layout/ready/light/expanded/closed",
@@ -3164,50 +3106,38 @@
     {
       "id": "all-workflows/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "all-workflows/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "all-workflows/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "all-workflows/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "all-workflows/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "all-workflows/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "opportunities/layout/ready/light/expanded/closed",
@@ -3606,50 +3536,38 @@
     {
       "id": "opportunities/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "opportunities/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "opportunities/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "opportunities/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "opportunities/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "opportunities/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "needs-you/layout/ready/light/expanded/closed",
@@ -4048,50 +3966,38 @@
     {
       "id": "needs-you/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "needs-you/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "needs-you/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "needs-you/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "needs-you/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "needs-you/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "goals/layout/ready/light/expanded/closed",
@@ -4490,50 +4396,38 @@
     {
       "id": "goals/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "goals/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "goals/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "goals/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "goals/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "goals/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "completed-goals/layout/ready/light/expanded/closed",
@@ -4892,50 +4786,38 @@
     {
       "id": "completed-goals/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "completed-goals/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "completed-goals/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "completed-goals/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "completed-goals/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "completed-goals/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory/layout/ready/light/expanded/closed",
@@ -5334,50 +5216,38 @@
     {
       "id": "memory/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory-detail/layout/ready/light/expanded/closed",
@@ -5760,50 +5630,38 @@
     {
       "id": "memory-detail/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory-detail/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory-detail/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory-detail/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory-detail/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "memory-detail/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "connected-workspace/layout/ready/light/expanded/closed",
@@ -6202,50 +6060,38 @@
     {
       "id": "connected-workspace/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "connected-workspace/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "connected-workspace/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "connected-workspace/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "connected-workspace/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "connected-workspace/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "authority/layout/ready/light/expanded/closed",
@@ -6588,50 +6434,38 @@
     {
       "id": "authority/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "authority/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "authority/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "authority/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "authority/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "authority/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "profile/layout/ready/light/expanded/closed",
@@ -6990,50 +6824,38 @@
     {
       "id": "profile/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "profile/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "profile/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "profile/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "profile/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "profile/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "settings/layout/ready/light/expanded/closed",
@@ -7376,50 +7198,38 @@
     {
       "id": "settings/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "settings/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "settings/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "settings/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "settings/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "settings/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "billing/layout/ready/light/expanded/closed",
@@ -7818,57 +7628,47 @@
     {
       "id": "billing/journey",
       "status": "blocked",
-      "reason": "Enabled-account end-to-end journey not available on this isolated fixture stack. Room-specific journey remains required.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "billing/screen-reader",
       "status": "blocked",
-      "reason": "No real screen-reader session; DOM names and keyboard probes cannot substitute.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "billing/reduced-motion",
       "status": "blocked",
-      "reason": "Actual OS/browser reduced-motion preference and the full journey were not verified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "billing/zoom-200",
       "status": "blocked",
-      "reason": "Native Ctrl+plus probe did not change the browser viewport/DPR. Actual 200% browser zoom and journeys remain unverified.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "billing/webview",
       "status": "blocked",
-      "reason": "Supported Jarvis sidecar WebView was not available for this run; the development-tool browser is not host proof.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     },
     {
       "id": "billing/visual-reference",
       "status": "blocked",
-      "reason": "UI35 coverage sheet and captured room baselines were inspected, but the full approved eight-endpoint comparison remains outstanding.",
-      "evidence": [
-        "host-checks.json"
-      ]
+      "reason": "Requires explicit browser/host evidence; fixture geometry cannot certify this case.",
+      "evidence": []
     }
   ],
   "capabilities": [],
   "notes": [
-    "Fixture-only runtime evidence; release remains blocked. No live account or provider writes.",
-    "Captured against the unchanged UI implementation tree committed as 49e55f4d1f19404710dd735080daef9114fc44dd. Runner readiness/native-keyboard/checkpoint corrections were made during the run; affected incomplete/loading observations were rerun.",
-    "Per-room observations/*.jsonl preserve metrics, accessibility snapshots, keyboard stops and traces. Each line is keyed by case id; observationKey selects the record. Screenshots retain original bytes.",
-    "Automated geometry/name/keyboard probes have the limits documented in scripts/brief-craft/README.md. Recorded frame intervals include long frames and are not a performance acceptance certificate."
+    "Complete fresh fixture run at bae0364c454f41358fead7411e7c944186a3aa06 after both D32 review findings were fixed. Supersedes the original 672-pass capture; no previous rows were carried forward.",
+    "Actual open conversation surfaces, reading/content regions, close buttons and composers require visible in-bounds geometry. The corrected harness records existing Today 390px composer clipping as failed, not passed or blocked.",
+    "Workflow repeats first select a non-trigger node. Its stable ID is checked and recorded while chat is both open and closed in every cycle.",
+    "Per-room observation JSONL preserves original metrics, accessibility snapshots, keyboard stops and traces keyed by case ID. PNG bytes are unchanged from capture.",
+    "Fixture-only evidence cannot authorize release. Enabled journeys, real screen reader, OS reduced motion, 200% zoom, Jarvis WebView and full approved-reference review remain blocked. The earlier host-checks.json is historical, not a new manual pass.",
+    "Frame intervals/long-task entries under automation are not a CPU/GPU profile or a 60fps guarantee."
   ]
 }
