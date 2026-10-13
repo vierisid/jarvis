@@ -50,7 +50,8 @@ describe('requestRoomAction', () => {
 
   test('with no answer it says so instead of assuming success', async () => {
     const { svc } = makeService();
-    expect(await svc.requestRoomAction({ room: 'workflows', action: 'switch_tab', args: { tab: 'editor' } }, 10))
+    // A real action (#969 refuses workflows/switch_tab, which no handler runs).
+    expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 10))
       .toBe('no_answer');
   });
 
@@ -180,7 +181,8 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
   test('with no answer the classifier path says it cannot tell', async () => {
     const { svc, internals, speaker, other } = setup();
     shortWait(svc);
-    await internals.handleVoiceRoomAction({ room: 'workflows', action: 'run', args: { name: 'morning brief' } }, 'req-2', speaker.ws);
+    // A real action (#969 refuses workflows/run, which no handler runs).
+    await internals.handleVoiceRoomAction({ room: 'workflows', action: 'create_from_nl', args: { prompt: '' } }, 'req-2', speaker.ws);
     const acks = other.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text);
     expect(acks).toEqual(["I sent that to Workflows, but it didn't answer, so I can't tell whether it happened."]);
   });
@@ -240,5 +242,119 @@ describe('roomActionReply claims no more than the room said (#965)', () => {
 
   test('a tab switch with no tab still reads as a sentence', () => {
     expect(roomActionReply({ room: 'agents', action: 'switch_tab', args: {} }, 'rejected')).toBe("Agents didn't switch to that tab.");
+  });
+});
+
+// #969: the realtime tool and the classifier path both reached the dashboard
+// with any action the model named, authority grants included, and nothing
+// on either path consults the authority engine. Only actions a room's handler
+// carries out (ROOM_ACTIONS) are sent; anything else is refused before a
+// single frame goes out, so no room is opened and no action broadcast.
+describe('voice room actions are limited to what the rooms carry out (#969)', () => {
+  type Sent = { type: string; payload: Record<string, unknown> };
+  const setup = () => {
+    const base = makeService();
+    base.internals.wsServer.getClients().clear();
+    const mk = () => {
+      const sent: Sent[] = [];
+      return { sent, ws: { send: (raw: string) => { sent.push(JSON.parse(raw)); return raw.length; }, sendBinary: () => {} } };
+    };
+    const speaker = mk();
+    const other = mk();
+    base.internals.wsServer.getClients().add(speaker.ws);
+    base.internals.wsServer.getClients().add(other.ws);
+    const internals = base.svc as unknown as {
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+      handleVoiceRoomAction: (ra: unknown, requestId: string, ws: unknown) => Promise<void>;
+    };
+    const roomFrames = () => [...speaker.sent, ...other.sent]
+      .filter((m) => m.payload?.source === 'room_action' || m.payload?.source === 'navigate_room');
+    return { svc: base.svc, internals, speaker, other, roomFrames };
+  };
+
+  test('the realtime tool refuses an authority grant or revoke and broadcasts nothing', async () => {
+    for (const action of ['grant_access', 'revoke_access']) {
+      const { internals, speaker, roomFrames } = setup();
+      const reply = await internals.executeRealtimeNavTool(
+        'dashboard_room_action', { room: 'authority', action, args: { action: 'send_email' } }, speaker.ws);
+      expect(roomFrames()).toEqual([]);
+      expect(reply).toBe("Permissions can't be changed by voice. Tell the user to use the Grants tab in Authority.");
+    }
+  });
+
+  test('the realtime tool refuses an action the room does not carry out and broadcasts nothing', async () => {
+    for (const [room, action] of [['settings', 'set_primary_llm'], ['workflows', 'run'], ['usage', 'switch_tab']] as const) {
+      const { internals, speaker, roomFrames } = setup();
+      const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room, action, args: {} }, speaker.ws);
+      expect(roomFrames()).toEqual([]);
+      expect(reply).toMatch(/^.+ has no "\w+" action, so I did not send it\.$/);
+    }
+  });
+
+  test('the classifier path refuses an authority grant from plain speech and broadcasts nothing', async () => {
+    const { internals, speaker, other, roomFrames } = setup();
+    await internals.handleVoiceRoomAction(
+      { room: 'authority', action: 'grant_access', args: { action: 'send_email' } }, 'req-969', speaker.ws);
+    expect(roomFrames()).toEqual([]);
+    const acks = other.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text);
+    expect(acks).toEqual(["Permissions can't be changed by voice. Use the Grants tab in Authority."]);
+  });
+
+  test('requestRoomAction itself refuses an unlisted action without sending it', async () => {
+    const { svc, speaker, roomFrames } = setup();
+    expect(await svc.requestRoomAction({ room: 'authority', action: 'grant_access', args: { action: 'send_email' } }, 60_000))
+      .toBe('rejected');
+    expect(await svc.requestRoomAction({ room: 'authority', action: 'revoke_access' }, 60_000, { client: speaker.ws as never }))
+      .toBe('rejected');
+    expect(roomFrames()).toEqual([]);
+  });
+
+  test('a listed action still goes out', async () => {
+    const { svc, speaker, roomFrames } = setup();
+    expect(await svc.requestRoomAction({ room: 'authority', action: 'switch_tab', args: { tab: 'audit' } }, 10, { client: speaker.ws as never }))
+      .toBe('no_answer');
+    expect(roomFrames().map((m) => m.payload.action)).toEqual(['switch_tab', 'switch_tab']);
+  });
+});
+
+// #969: navigation has no answer to wait for, so the realtime tools say they
+// asked rather than that it happened ("Opened the settings room.", "close
+// done."), and a room or window action that does not exist is not broadcast.
+describe('realtime navigation says it asked, not that it happened (#969)', () => {
+  const setup = () => {
+    const base = makeService();
+    const internals = base.svc as unknown as {
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+    };
+    return { ...base, nav: (name: string, args: Record<string, unknown>) => internals.executeRealtimeNavTool(name, args, base.ws) };
+  };
+  const unconfirmed = /^Asked the dashboard to .+; it does not report back whether it did\.$/;
+
+  test('opening a room', async () => {
+    const { nav, sent } = setup();
+    const reply = await nav('open_dashboard_room', { room: 'settings' });
+    expect(reply).toMatch(unconfirmed);
+    expect(reply).toContain('Settings');
+    expect(sent.map((m) => m.payload.source)).toEqual(['navigate_room']);
+  });
+
+  test('going back to the thread', async () => {
+    const { nav, sent } = setup();
+    expect(await nav('go_back_to_thread', {})).toMatch(unconfirmed);
+    expect(sent).toHaveLength(1);
+  });
+
+  test('a window control', async () => {
+    const { nav, sent } = setup();
+    expect(await nav('control_dashboard_window', { action: 'close' })).toMatch(unconfirmed);
+    expect(sent).toHaveLength(1);
+  });
+
+  test('a room or window action that does not exist goes nowhere', async () => {
+    const { nav, sent } = setup();
+    expect(await nav('open_dashboard_room', { room: 'billing' })).toBe('There is no "billing" room.');
+    expect(await nav('control_dashboard_window', { action: 'delete' })).toBe('There is no "delete" window action.');
+    expect(await nav('control_dashboard_window', { action: 'close', target: 'billing' })).toBe('There is no "billing" room.');
+    expect(sent).toEqual([]);
   });
 });

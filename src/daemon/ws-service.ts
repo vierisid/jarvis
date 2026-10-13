@@ -45,7 +45,7 @@ import { realtimeEnablement } from './usejarvis-ai.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import { tagRealtimePcm } from '../comms/realtime-frame.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
-import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES, REALTIME_ROOM_KEYS } from './realtime-nav-tools.ts';
+import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES, REALTIME_ROOM_KEYS, REALTIME_WINDOW_ACTIONS } from './realtime-nav-tools.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { RealtimeBudgetTracker } from './realtime-budget.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
@@ -57,6 +57,7 @@ import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-cont
 import type { FileEntry } from '../sites/types.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
+import { isRoomAction } from './room-actions.ts';
 
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
@@ -1906,23 +1907,30 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   ): Promise<string | null> {
     if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
     const reqId = crypto.randomUUID();
+    const isRoom = (room: string) => (REALTIME_ROOM_KEYS as readonly string[]).includes(room);
+    // Navigation is not answered, so the model is told it was asked for, not
+    // that it happened (#969).
+    const asked = (what: string) => `Asked the dashboard to ${what}; it does not report back whether it did.`;
     switch (name) {
       case 'open_dashboard_room': {
         const room = String(args.room ?? '');
         if (!room) return 'No room specified.';
+        if (!isRoom(room)) return `There is no "${room}" room.`;
         this.broadcastRoomNavigation(room as RoomKey, reqId);
-        return `Opened the ${room} room.`;
+        return asked(`open ${roomTitle(room)}`);
       }
       case 'go_back_to_thread': {
         this.broadcastNavigateHome(reqId);
-        return 'Back to the thread.';
+        return asked('go back to the thread');
       }
       case 'control_dashboard_window': {
         const action = String(args.action ?? '');
-        const target = (args.target ? String(args.target) : 'most_recent') as RoomKey | 'most_recent';
+        const target = args.target ? String(args.target) : 'most_recent';
         if (!action) return 'No window action specified.';
-        this.broadcastWindowControl({ action: action as WindowControl['action'], target }, reqId);
-        return `${action} done.`;
+        if (!(REALTIME_WINDOW_ACTIONS as readonly string[]).includes(action)) return `There is no "${action}" window action.`;
+        if (target !== 'most_recent' && !isRoom(target)) return `There is no "${target}" room.`;
+        this.broadcastWindowControl({ action: action as WindowControl['action'], target: target as RoomKey | 'most_recent' }, reqId);
+        return asked(`${action} ${target === 'most_recent' ? 'the most recent window' : roomTitle(target)}`);
       }
       case 'dashboard_room_action': {
         const room = String(args.room ?? '');
@@ -1930,6 +1938,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         if (!room || !action) return 'Room and action are required.';
         const innerArgs = (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {};
         if (!(REALTIME_ROOM_KEYS as readonly string[]).includes(room)) return `There is no "${room}" room.`;
+        // Only what the room's handler carries out is sent (#969): nothing on
+        // this path consults the authority engine, so an authority grant, or
+        // anything else no handler runs, is refused before the room opens.
+        const refused = roomActionRefusal({ room, action }, 'model');
+        if (refused) return refused;
         // Auto-open the room first (no-op if already open), then dispatch,
         // mirroring the classifier path so the qualifier isn't dropped. The
         // dashboard this session runs on says whether the room ran it, and
@@ -2831,6 +2844,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
     opts?: { client?: ServerWebSocket<unknown> },
   ): Promise<RoomActionOutcome> {
+    // Backstop for every caller (#969): an action no room handler carries out
+    // is never broadcast, whoever asked for it.
+    if (!isRoomAction(action.room, action.action)) {
+      console.warn(`[WSService] refused room action ${action.room}/${action.action}: not a room action`);
+      return Promise.resolve('rejected');
+    }
     const client = opts?.client;
     const { id, outcome } = this.roomActionResults.open(timeoutMs, client);
     const payload = {
@@ -2870,6 +2889,14 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     requestId: string,
     ws: ServerWebSocket<unknown>,
   ): Promise<void> {
+    // The classifier turns plain speech into this with no confirmation, so
+    // it is held to the same list as the realtime tool (#969).
+    const refused = roomActionRefusal(ra, 'user');
+    if (refused) {
+      console.warn(`[WSService] refused voice room action ${ra.room}/${ra.action}: not a room action`);
+      this.broadcastAssistantAck(refused, requestId);
+      return;
+    }
     this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
     const outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
     console.log(`[WSService] room action ${ra.room}/${ra.action}: ${outcome}`);
@@ -3069,6 +3096,27 @@ export function roomActionReply(
   }
 }
 
+/**
+ * Why a voice room action may not be sent, or null when it may (#969). Only
+ * actions a room's handler carries out (ROOM_ACTIONS) go out. Authority
+ * grants and revokes are named, because they are the ones a voice path must
+ * never reach: they write a lasting override into config.yaml and no voice
+ * path is gated by the authority engine. `to` picks who reads it: the user,
+ * or the realtime model, which has to be told what to say.
+ */
+export function roomActionRefusal(
+  ra: { room: string; action: string },
+  to: 'user' | 'model',
+): string | null {
+  if (isRoomAction(ra.room, ra.action)) return null;
+  if (ra.room === 'authority' && (ra.action === 'grant_access' || ra.action === 'revoke_access')) {
+    return to === 'user'
+      ? "Permissions can't be changed by voice. Use the Grants tab in Authority."
+      : "Permissions can't be changed by voice. Tell the user to use the Grants tab in Authority.";
+  }
+  return `${roomTitle(ra.room)} has no "${ra.action}" action, so I did not send it.`;
+}
+
 function roomTitle(room: string): string {
   return Object.hasOwn(PEBBLE_ROOMS, room) ? PEBBLE_ROOMS[room]!.title : room;
 }
@@ -3114,12 +3162,6 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return `Toggling live tail.`;
     case 'refresh':
       return `Refreshing.`;
-    case 'run':
-      return a.name ? `Running ${String(a.name)}.` : `Running the selected workflow.`;
-    case 'pause':
-      return a.name ? `Pausing ${String(a.name)}.` : `Pausing the selected workflow.`;
-    case 'enable':
-      return a.name ? `Enabling ${String(a.name)}.` : `Enabling the selected workflow.`;
     case 'create_from_nl':
       return a.prompt
         // The room creates an empty workflow and points to chat for the
@@ -3130,14 +3172,6 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.subject && a.predicate && a.object
         ? `Saving that ${String(a.subject)}'s ${String(a.predicate)} is ${String(a.object)}.`
         : `Remembering that.`;
-    case 'grant_access':
-      return a.action
-        ? `Granting ${String(a.action).replace(/_/g, ' ')}.`
-        : `Granting access.`;
-    case 'revoke_access':
-      return a.action
-        ? `Revoking ${String(a.action).replace(/_/g, ' ')}.`
-        : `Revoking access.`;
     case 'switch_view':
       return `Switching to ${String(a.view ?? 'view')} view.`;
     case 'select_event':
@@ -3195,10 +3229,6 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.name ? `Stopping "${String(a.name)}".` : `Stopping the dev server.`;
     case 'read_status':
       return `Reading current settings.`;
-    case 'set_primary_llm':
-      return a.provider ? `Setting primary LLM to ${String(a.provider)}.` : `Setting primary LLM.`;
-    case 'set_fallback_llm':
-      return `Updating fallback chain.`;
     case 'set_model':
       return a.provider && a.model
         ? `Setting ${String(a.provider)} model to ${String(a.model)}.`
