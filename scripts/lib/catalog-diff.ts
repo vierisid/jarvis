@@ -206,8 +206,6 @@ export interface ReportOptions {
     removed: string[];
     reasons: ReadonlyArray<{ kind: string }>;
   }>;
-  /** Where the Tests runs for this PR's branch are listed. */
-  testsUrl?: string;
 }
 
 /** Collapse a list into a `<details>` block once it gets long. */
@@ -255,9 +253,8 @@ export function renderReport(
     p(
       `> **Safe to merge.** No pieces were added, removed, or relicensed, every ` +
         `verified bump passed the adapter check, and the pinned SHA is unchanged -- ` +
-        `${bumps}. Merge on a green Tests run only: nothing blocks merging a red one, ` +
-        `and a bot PR does not show its checks.` +
-        (opts.testsUrl ? ` [Tests runs for this branch](${opts.testsUrl}).` : ""),
+        `${bumps}. Merge on a green Tests run: main requires its \`test\` check to pass ` +
+        `before this can merge.`,
     );
   } else {
     p("> [!WARNING]");

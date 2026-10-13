@@ -52,6 +52,11 @@
 #      inputs substituted. A local action that cannot be read, is not
 #      composite, or nests too deep is reported rather than skipped. Rule 5
 #      also refuses actions/cache restores where authority is held.
+#   8. The catalog PR is opened with RELEASE_PR_TOKEN, never GITHUB_TOKEN, so
+#      its CI runs and main's required `test` check can pass (#935); a step
+#      before it refuses an empty secret; the PAT is read nowhere else; and
+#      rule 4 counts a job that reads any non-GITHUB_TOKEN secret as holding
+#      write, where no JavaScript runtime may run at all.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -83,7 +88,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | untrusted | mutable
-#          | narrow | pushcache
+#          | narrow | pushcache | catalog-pr
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -149,6 +154,48 @@ if (rule === "authority") {
       triggers.includes("pull_request_target") || secret || Object.values(jobs).some((j) => j.secrets === "inherit"))
     out.push("yes");
 }
+if (rule === "catalog-pr") {
+  // The catalog PR is opened with RELEASE_PR_TOKEN, never GITHUB_TOKEN: GitHub
+  // holds the CI of a PR that GITHUB_TOKEN opens or pushes for approval, so
+  // main never sees its required `test` check and the PR cannot merge (#935).
+  // No fallback to GITHUB_TOKEN either, which would reopen that silently. And
+  // the job refuses first, through env and a run step (the secrets context is
+  // not dependable in an `if:`), under the same condition as the PR step, so
+  // a missing secret fails with a reason instead of opening a dead PR.
+  const pat = /^\$\{\{\s*secrets\.RELEASE_PR_TOKEN\s*\}\}$/;
+  let prSteps = 0;
+  for (const [name, job] of Object.entries(jobs)) {
+    const steps = flatSteps(job.steps).map((x) => x.st);
+    steps.forEach((s, i) => {
+      if (!String(s.uses ?? "").toLowerCase().startsWith("peter-evans/create-pull-request@")) return;
+      prSteps++;
+      const label = name + ": step " + (s.name ?? s.id ?? String(i));
+      for (const k of ["token", "branch-token"])
+        if ((k === "token" || s.with?.[k] !== undefined) && !pat.test(String(s.with?.[k] ?? "")))
+          out.push(label + ": " + k + " is " + JSON.stringify(s.with?.[k] ?? "the default github.token") + ", not secrets.RELEASE_PR_TOKEN alone");
+      // The exit 1 has to sit inside the [ -z ] branch, and neither the step
+      // nor the job may carry continue-on-error, which turns the refusal
+      // into a warning and lets the dead PR open anyway.
+      const refuses = !job["continue-on-error"] && steps.slice(0, i).some((r) => {
+        const vars = Object.entries(r.env ?? {}).filter(([, v]) => pat.test(String(v))).map(([k]) => k);
+        // Comments dropped first, so an `exit 1` in one does not count.
+        const run = (typeof r.run === "string" ? r.run : "").split("\n").map((l) => l.replace(/(^|\s)#.*$/, "")).join("\n");
+        return vars.some((v) => new RegExp("\\[ -z \"\\$\\{?" + v + "\\}?\" \\][^\\n]*\\bthen\\b(?:(?!\\bfi\\b)[^])*?\\bexit 1\\b[^]*?\\bfi\\b").test(run)) &&
+          !r["continue-on-error"] && (r.if === undefined || r.if === s.if);
+      });
+      if (!refuses)
+        out.push(label + ": no earlier step refuses when RELEASE_PR_TOKEN is empty (env, a [ -z ] test and exit 1, under the same condition)");
+    });
+  }
+  if (prSteps === 0) out.push("no peter-evans/create-pull-request step, so nothing here opens the catalog PR");
+  // The PAT appears exactly twice: the PR step token and the refusal env.
+  // Anywhere else it reaches code this rule has not looked at.
+  const patUses = [...JSON.stringify({ env: doc.env, jobs }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)]
+    .filter((m) => /\bsecrets\s*(?:\.\s*RELEASE_PR_TOKEN\b|\[\s*[\x27"]RELEASE_PR_TOKEN[\x27"]\s*\])/i.test(m[1])).length;
+  if ([...JSON.stringify({ env: doc.env, jobs }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)].some((m) => /\bsecrets\b\s*(?![\s.\[])/i.test(m[1])))
+    out.push("the whole secrets context is read somewhere (toJSON(secrets) or similar), which includes RELEASE_PR_TOKEN");
+  if (patUses !== 2) out.push("secrets.RELEASE_PR_TOKEN is read " + patUses + " times; expected 2 (the PR step token and the refusal env)");
+}
 if (rule === "untrusted") {
   // A job that installs dependencies (whose lifecycle scripts run arbitrary
   // code from the registry) or processes third-party data holds no write scope
@@ -198,9 +245,15 @@ if (rule === "untrusted") {
       }
       return [l, expanded];
     });
+  // A job holds write when its GITHUB_TOKEN does, and also when it reads any
+  // other secret: the catalog PR is pushed with a PAT, so a publish job whose
+  // GITHUB_TOKEN is read-only still holds a credential that can write.
+  const secretRef = (x) => [...JSON.stringify(x ?? null).matchAll(/\$\{\{([\s\S]*?)\}\}/g)]
+    .some((m) => /\bsecrets\b(?!\s*\.\s*GITHUB_TOKEN\b)/i.test(m[1]));
   for (const [name, job] of Object.entries(jobs)) {
     const perm = job.permissions ?? doc.permissions;
-    const held = writes(perm);
+    // Workflow-level env reaches every job, so a secret there is held by all.
+    const held = writes(perm) || secretRef({ env: doc.env, job });
     // Local composite actions are part of the job (#687): flatSteps expands
     // them, recursively, with inputs substituted.
     for (const [i, { st: s, via: path }] of flatSteps(job.steps).entries()) {
@@ -208,11 +261,29 @@ if (rule === "untrusted") {
       const run = typeof s.run === "string" ? s.run : "";
       const via = path ? " (inside " + path.slice(0, -3) + ")" : "";
       for (const [t, bare] of lines(run)) {
-        if (held && install.test(bare)) out.push(label + via + ": installs dependencies in a job holding " + JSON.stringify(perm) + ": " + t);
-        if (held && thirdParty.test(bare)) out.push(label + via + ": processes third-party data in a job holding " + JSON.stringify(perm) + ": " + t);
+        const holding = writes(perm) ? JSON.stringify(perm) : "a secret other than GITHUB_TOKEN";
+        if (held && install.test(bare)) out.push(label + via + ": installs dependencies in a job holding " + holding + ": " + t);
+        if (held && thirdParty.test(bare)) out.push(label + via + ": processes third-party data in a job holding " + holding + ": " + t);
+        // The write job takes generated TypeScript from a read-only job, and
+        // the first thing to run it must be the PR CI, not this job: no
+        // JavaScript runtime at all here, whatever script it is pointed at.
+        if (held && (/(?:^|[\s;&|(/])(?:bun|bunx|node|npx|deno)(?=$|\s)/.test(bare) ||
+            // A script file in command position runs through its shebang.
+            /(?:^|[;&|(]\s*|\b(?:then|do|else|exec)\s+)[^\s;&|()]+\.(?:[cm]?[jt]s|tsx|jsx)(?=$|[\s;&|)])/.test(bare)))
+          out.push(label + via + ": runs JavaScript in a job holding " + holding + ": " + t);
         if (bunInstall.test(bare) && !frozen.test(bare)) out.push(label + via + ": bun install without --frozen-lockfile: " + t);
       }
     }
+    // A JavaScript runtime reached without a run line naming it: as the
+    // step shell, or through an action that exists to run inline scripts.
+    if (held)
+      for (const [i, { st: s }] of flatSteps(job.steps).entries()) {
+        const label = name + ": step " + (s.name ?? s.id ?? s.uses ?? String(i));
+        if (/\b(?:bun|bunx|node|deno)\b/.test(String(s.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell ?? "")))
+          out.push(label + ": runs JavaScript (as its shell) in a job holding a write scope or a secret");
+        if (String(s.uses ?? "").toLowerCase().startsWith("actions/github-script@"))
+          out.push(label + ": runs JavaScript (github-script) in a job holding a write scope or a secret");
+      }
     // #821: a job holding a write scope takes what a read-only job produced,
     // so its checkout leaves no token on disk for anything it then runs to
     // find. Nothing there needs one: create-pull-request hides any persisted
@@ -1004,6 +1075,11 @@ expect_clean "sync-pieces-catalog.yml: no job that installs dependencies or runs
 	untrusted "$WORKFLOWS/sync-pieces-catalog.yml"
 
 echo
+echo "the catalog PR is opened with a token whose CI runs"
+expect_clean "sync-pieces-catalog.yml: create-pull-request takes RELEASE_PR_TOKEN alone, after a step that refuses without it" \
+	catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml"
+
+echo
 echo "each rule reports the hole it exists for (mutated copies)"
 expect_caught 'a workflow and job with no permissions anywhere' scoped "$WORKFLOWS/test.yml" \
 	$'permissions:\n  contents: read\n' ''
@@ -1385,6 +1461,87 @@ expect_caught 'the catalog write job checking out with the default, which persis
 	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n        with:\n          persist-credentials: false\n' \
 	$'GH_TOKEN from its step env.\n      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1\n' \
 	'publish: checkout leaves the write token in .git/config'
+expect_caught 'a job reading a PAT, with a read-only GITHUB_TOKEN, installing dependencies' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'    permissions:\n      contents: read\n      # The held-verified-bumps tracking issue.\n      issues: write\n    steps:\n' \
+	$'    permissions:\n      contents: read\n    steps:\n      - run: bun install --frozen-lockfile\n' \
+	'installs dependencies in a job holding a secret other than GITHUB_TOKEN'
+expect_caught 'a PAT in workflow-level env, reaching the jobs that install' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'env:\n  # Pinned, matching test.yml' $'env:\n  LEAK: ${{ secrets.RELEASE_PR_TOKEN }}\n  # Pinned, matching test.yml' \
+	'inspect: step 2: installs dependencies in a job holding a secret other than GITHUB_TOKEN'
+expect_caught 'the catalog tests run from the write job, on the generated files' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Update or close the review issue' $'      - run: bun test src/workflows/pieces-library/catalog.test.ts\n      - name: Update or close the review issue' \
+	'runs JavaScript in a job holding'
+expect_caught 'node run from the write job' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Update or close the review issue' $'      - run: cd src && node -e 1\n      - name: Update or close the review issue' \
+	'runs JavaScript in a job holding'
+expect_caught 'the PAT handed to a later step' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HELD_COUNT:' '          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          HELD_COUNT:' \
+	'secrets.RELEASE_PR_TOKEN is read 3 times'
+expect_caught 'a refusal whose exit 1 is only a comment' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'on this repository."\n            exit 1\n' $'on this repository."\n            : # exit 1 later\n' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'bun as the step shell in the write job' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Update or close the review issue' $'      - shell: bun {0}\n        run: console.log(1)\n      - name: Update or close the review issue' \
+	'runs JavaScript (as its shell)'
+expect_caught 'github-script in the write job' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Update or close the review issue' $'      - uses: actions/github-script@f28e40c7f34bde8b3046d885e986cb6290c5673b\n        with:\n          script: return 1\n      - name: Update or close the review issue' \
+	'runs JavaScript (github-script)'
+expect_caught 'node by absolute path in the write job' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Update or close the review issue' $'      - run: /usr/bin/node -e 1\n      - name: Update or close the review issue' \
+	'runs JavaScript in a job holding'
+expect_caught 'a TypeScript file run by its shebang in the write job' untrusted "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Update or close the review issue' $'      - run: ./scripts/render-review-issue.ts x\n      - name: Update or close the review issue' \
+	'runs JavaScript in a job holding'
+expect_caught 'the PAT read by bracket in a later step' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}\n          HELD_COUNT:' $'          GH_TOKEN: ${{ secrets[\'RELEASE_PR_TOKEN\'] }}\n          HELD_COUNT:' \
+	'secrets.RELEASE_PR_TOKEN is read 3 times'
+expect_caught 'the whole secrets context handed to a step' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HELD_COUNT:' '          GH_TOKEN: ${{ toJSON(secrets) }}
+          HELD_COUNT:' \
+	'the whole secrets context is read somewhere'
+expect_caught 'a refusal whose exit 1 is in a later, unrelated if' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'on this repository."\n            exit 1\n          fi\n' $'on this repository."\n          fi\n          if false; then exit 1; fi\n' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'the catalog PR opened with GITHUB_TOKEN (#935)' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          token: ${{ secrets.RELEASE_PR_TOKEN }}' '          token: ${{ secrets.GITHUB_TOKEN }}' \
+	'publish: step Open PR with catalog changes: token is'
+expect_caught 'the catalog PR opened with the default token (#935)' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n' '' \
+	'token is "the default github.token"'
+expect_caught 'the catalog PR falling back to GITHUB_TOKEN (#935)' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          token: ${{ secrets.RELEASE_PR_TOKEN }}' '          token: ${{ secrets.RELEASE_PR_TOKEN || secrets.GITHUB_TOKEN }}' \
+	'not secrets.RELEASE_PR_TOKEN alone'
+expect_caught 'the catalog branch pushed with another token (#935)' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          token: ${{ secrets.RELEASE_PR_TOKEN }}' $'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n          branch-token: ${{ github.token }}' \
+	'branch-token is'
+expect_caught 'the catalog PR with no refusal when its token is missing' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          if [ -z "$CATALOG_PR_TOKEN" ]; then' '          if false; then' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'a refusal that only warns' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'on this repository."\n            exit 1\n' $'on this repository."\n' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'a refusal under another condition than the PR step' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - name: Refuse without the catalog PR token\n        if: needs.generate.outputs.has_changes == \'true\'\n' \
+	$'      - name: Refuse without the catalog PR token\n        if: needs.generate.outputs.held_count != \'0\'\n' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'a refusal that cannot fail its step' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'      - name: Refuse without the catalog PR token\n' $'      - name: Refuse without the catalog PR token\n        continue-on-error: true\n' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'a refusal in a job that cannot fail' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'    timeout-minutes: 15\n    # GITHUB_TOKEN only reads' $'    timeout-minutes: 15\n    continue-on-error: true\n    # GITHUB_TOKEN only reads' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'a refusal whose exit 1 is outside its test' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	$'on this repository."\n            exit 1\n          fi\n' $'on this repository."\n          fi\n          true || exit 1\n' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'a refusal that tests GITHUB_TOKEN instead' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'          CATALOG_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}' '          CATALOG_PR_TOKEN: ${{ secrets.GITHUB_TOKEN }}' \
+	'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+expect_caught 'a PR opened before the refusal runs' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
+	'      - name: Refuse without the catalog PR token' $'      - name: Open early\n        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1\n        with:\n          token: ${{ secrets.RELEASE_PR_TOKEN }}\n      - name: Refuse without the catalog PR token' \
+	'publish: step Open early: no earlier step refuses when RELEASE_PR_TOKEN is empty'
 
 echo
 echo "${pass} passed, ${fail} failed"

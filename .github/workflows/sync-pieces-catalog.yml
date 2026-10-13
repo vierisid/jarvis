@@ -44,16 +44,16 @@
 #             renders the PR body and the review issue. Its outputs are an
 #             artifact of those files and four step outputs.
 #   publish   holds the write scopes: it copies the two generated files into
-#             its own checkout, opens the PR, dispatches the tests and keeps
-#             the review issue current. It installs nothing and runs no
-#             JavaScript, so the only third-party code that ever runs with
-#             the write token is the SHA-pinned actions and the gh CLI.
+#             its own checkout, opens the PR with RELEASE_PR_TOKEN and keeps
+#             the review issue current with GITHUB_TOKEN. It installs nothing
+#             and runs no JavaScript, so the only third-party code that ever
+#             runs with either token is the SHA-pinned actions and the gh CLI.
 # The generated files still cross from a read-only job into a write job --
 # that is the point of the workflow -- and they are TypeScript, so they are
 # data only until something imports them. Only the two named paths are
 # committed, to the PR branch, never to main; the first thing that runs them
-# is test.yml dispatched on that branch, with a read-only token, before a
-# person has reviewed the PR.
+# is the PR's own test.yml run, with a read-only token, before a person has
+# reviewed the PR.
 #
 # Why a PR (not a direct commit):
 #   - Every catalog change is reviewable. Pieces can be renamed or removed
@@ -227,14 +227,33 @@ jobs:
     needs: generate
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    # GITHUB_TOKEN only reads the checkout and keeps the review issue. The
+    # branch push and the PR go through RELEASE_PR_TOKEN (see the step that
+    # opens the PR), so this token needs no contents or pull-requests write.
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
       # The held-verified-bumps tracking issue.
       issues: write
-      # Needed by the "Trigger tests" step to dispatch test.yml on the PR branch.
-      actions: write
     steps:
+      # Refuse now, with a reason, rather than open a PR whose CI never runs
+      # and that can never merge (main requires `test`). Only a run that
+      # would open or update the PR needs the token; a run with nothing to
+      # change still keeps the review issue with GITHUB_TOKEN.
+      # Through env, not an `if:`: the secrets context is not dependable in a
+      # step condition. Same shape as release.yml (#929). This catches only an
+      # empty secret; an expired or revoked PAT fails loudly inside
+      # create-pull-request instead, on the same day as release.yml.
+      - name: Refuse without the catalog PR token
+        if: needs.generate.outputs.has_changes == 'true'
+        env:
+          CATALOG_PR_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+        run: |
+          if [ -z "$CATALOG_PR_TOKEN" ]; then
+            echo "::error::RELEASE_PR_TOKEN is not set, so the catalog PR would open without CI and could never merge."
+            echo "Add a fine-grained PAT with Contents: read and write, and Pull requests: read and write, on this repository."
+            exit 1
+          fi
+
       # No token left in .git/config (#821). This job copies in files a
       # read-only job produced, so nothing it runs should find the write
       # token on disk, and nothing here needs it there: create-pull-request
@@ -289,11 +308,34 @@ jobs:
       # body is the markdown the sync script wrote (body-path), so reviewers
       # see "safe to merge" vs "manual review required" at a glance. Only the
       # two generated files are committed, whatever else the run touched.
+      #
+      # Opened with RELEASE_PR_TOKEN, not GITHUB_TOKEN. GitHub does not start
+      # `pull_request` CI on its own for a PR that GITHUB_TOKEN opens or
+      # pushes: the run is created as `action_required` and waits for a
+      # maintainer to approve it (measured on #935: run 38129917454). The
+      # test.yml run this workflow used to dispatch at the branch instead
+      # attached its checks to the head commit, but GitHub left them off the
+      # PR, so main's required `test` check was never satisfied and #935
+      # could not merge. With the PAT, the branch push and the PR are by a
+      # real user, CI starts natively and its checks are the PR's checks
+      # (measured on #951, the release PR opened the same way). Nothing
+      # dispatches test.yml any more: the dispatched run never counted, and
+      # its concurrency group (refs/heads/...) differs from the PR run's
+      # (refs/pull/N/merge), so both would run in full.
+      # The PAT reaches only this step and the empty-check at the top of the
+      # job, which runs no third-party code. The action writes it to
+      # .git/config for its own pushes and removes it before it exits
+      # (git-config-helper.ts close(), in a finally, at the pinned SHA).
+      # If `test` never starts on the PR, it was not opened or last pushed by
+      # this token: dispatching test.yml by hand does not help (its checks
+      # stay off the PR, measured on #935); close the PR and re-run this
+      # workflow so it opens a fresh one.
       - name: Open PR with catalog changes
         id: cpr
         if: needs.generate.outputs.has_changes == 'true'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
+          token: ${{ secrets.RELEASE_PR_TOKEN }}
           commit-message: "chore: refresh pieces catalog"
           title: "${{ needs.generate.outputs.verdict == 'safe' && 'chore: refresh pieces catalog (safe)' || 'chore: refresh pieces catalog (review needed)' }}"
           body-path: ${{ runner.temp }}/catalog-sync/catalog-pr-body.md
@@ -305,21 +347,6 @@ jobs:
             pieces-catalog
             dependencies
           delete-branch: true
-
-      # PRs authored by github-actions[bot] with GITHUB_TOKEN don't get their
-      # `pull_request` CI started automatically -- the runs sit "awaiting
-      # approval" until a maintainer clicks through. GitHub's suppression rule
-      # explicitly exempts workflow_dispatch, so kick the test workflow at the
-      # PR branch ourselves. Its check runs attach to the same head commit, but
-      # GitHub does not list them on the PR (its check rollup stays empty), so
-      # the PR body links the runs instead. (Alternative if this ever breaks:
-      # create the PR with a fine-grained PAT via the `token:` input above,
-      # which makes CI trigger natively and show on the PR.)
-      - name: Trigger tests on the PR branch
-        if: needs.generate.outputs.has_changes == 'true'
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: gh workflow run test.yml --ref chore/sync-pieces-catalog -R "$GITHUB_REPOSITORY"
 
       # Rewrite the issue in full (it always describes the newest npm release),
       # or close it once a run holds nothing. A run that could not decide about

@@ -83,13 +83,12 @@ describe("diffCatalogs", () => {
     expect(verdictFor(diffCatalogs(oldE, newE, meta))).toBe("safe");
   });
 
-  test("the report lists verified upgrades taken and held, and links the Tests runs", () => {
+  test("the report lists verified upgrades taken and held, and leans on the PR's own required check", () => {
     const oldE = [entry({ id: "notion", latestVersion: "0.6.10" })];
     const newE = [entry({ id: "notion", latestVersion: "0.7.3" })];
     const diff = diffCatalogs(oldE, newE, { ...meta, verified: new Set(["notion"]), checked: new Set(["notion"]) });
     const { verdict, markdown } = renderReport(diff, {
       ...reportOpts,
-      testsUrl: "https://example.test/tests",
       verifiedUpgrades: [
         { id: "notion", from: "0.6.10", to: "0.7.3", ok: true, added: [], removed: [], reasons: [] },
         { id: "gmail", from: "0.15.0", to: "0.17.0", ok: false, added: ["gmail_trash_message"], removed: [],
@@ -100,7 +99,13 @@ describe("diffCatalogs", () => {
     expect(markdown).toContain("| Verified upgrades | 1 taken, 1 held |");
     expect(markdown).toContain("- `notion` -- `0.6.10` -> `0.7.3` -- same action set");
     expect(markdown).toContain("- `gmail` -- stays at `0.15.0`, `0.17.0` available -- unmapped\n");
-    expect(markdown).toContain("[Tests runs for this branch](https://example.test/tests)");
+    // The PR is opened with a token whose CI runs, so its checks are on the
+    // PR and main's required `test` check holds a red one back. The banner
+    // says so, and no longer claims the checks are hidden or links elsewhere.
+    expect(markdown).toContain("main requires its `test` check to pass before this can merge");
+    expect(markdown).not.toContain("does not show its checks");
+    expect(markdown).not.toContain("nothing blocks merging a red one");
+    expect(markdown).not.toContain("Tests runs for this branch");
   });
 
   test("an added piece flips the verdict to review", () => {
@@ -180,8 +185,10 @@ describe("renderReport", () => {
     expect(verdict).toBe("safe");
     expect(markdown).toContain("> [!NOTE]");
     expect(markdown).toContain("Safe to merge");
-    // It used to say CI "still gates this PR", which nothing enforced.
-    expect(markdown).toContain("Merge on a green Tests run only");
+    // It used to say CI "still gates this PR", which nothing enforced. Now
+    // the PR carries its own checks, and what holds a red one back is main's
+    // required `test` check, which is what the banner names.
+    expect(markdown).toContain("Merge on a green Tests run: main requires its `test` check");
     expect(markdown).not.toContain("gates this PR");
     expect(markdown).toContain("`0.4.7` -> `0.4.8`");
     expect(markdown).not.toContain("[!WARNING]");
