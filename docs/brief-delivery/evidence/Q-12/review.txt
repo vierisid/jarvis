@@ -6,6 +6,10 @@ Reviewed: complete changed runtime/types, fixture corpus/evaluator/tests, persis
 The schema permits NULL description/success_criteria. Accessing .length threw during assessment and opportunity reads. Reproduced against real in-memory SQLite; both nullable-field regressions failed before correction (review-red.log).
 
 Resolution: require string fields before evaluating a candidate. Incomplete legacy goal data abstains; no schema or goal writes were added. Both SQLite regressions pass, including pure ranking and persisted/list reads.
+[P2] Do not map billing volume or supplier settlement to collections — src/awareness/goal-contributions.ts:6
+The optional unpaid qualifier and settlement verb admitted unrelated goals (reducing invoice count by batching bills, and paying suppliers) to an overdue-reminder contribution. Both labeled negatives selected a candidate before the correction (invoice-review-red.log).
+
+Resolution: require an unpaid/overdue/outstanding qualifier for the supported invoice actions, retain explicit cash collection, and exclude settlement/reconciliation from this collections rule. Both negatives now abstain. Other labeled cases retain their results; fixture paths use canonical parent/child levels.
 Corrected diff and call paths reviewed: No findings.
 
 Residual limits: author-visible synthetic development fixtures, bounded English vocabulary and 90-day updated_at heuristic; no independent human/blinded field assessment. Declared objective paths and screen activity cannot establish real business contribution, verified progress or readiness. Current main's catalog-license change is unrelated; Q-11 is the deliberate stack prerequisite. No merged/deployed runtime certification.

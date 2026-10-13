@@ -1,11 +1,11 @@
 {
   "policy": "goal-contribution-v1",
-  "corpusSha256": "81af4cddc8cd3781a20d38bed878eeec7b92f1895e90894e95cb8949775943a1",
+  "corpusSha256": "0c8889ddfe1fb009029217ab198475bf14a287dec67001deb774a6b3a8e0b1cc",
   "provenance": "Hand-labeled synthetic development fixtures, author-visible. No customer data, independent human review or production accuracy claim.",
-  "total": 24,
-  "passed": 24,
+  "total": 26,
+  "passed": 26,
   "proposedLinks": 9,
-  "expectedAbstentions": 15,
+  "expectedAbstentions": 17,
   "knownUnsupportedUsefulRelations": 1,
   "cases": [
     {
@@ -530,6 +530,24 @@
           "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness."
         }
       }
+    },
+    {
+      "id": "billing-volume-is-not-collections",
+      "expected": null,
+      "actual": null,
+      "status": "no_supported_goal",
+      "passed": true,
+      "limitation": null,
+      "candidate": null
+    },
+    {
+      "id": "supplier-payments-are-not-collections",
+      "expected": null,
+      "actual": null,
+      "status": "no_supported_goal",
+      "passed": true,
+      "limitation": null,
+      "candidate": null
     },
     {
       "id": "unsupported-paraphrase",

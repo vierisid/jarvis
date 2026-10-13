@@ -31,7 +31,9 @@ set. The previous first-100 active-goal page is no longer used for ranking.
 ## Ranking and explanation
 
 A bounded English outcome vocabulary maps each routine's proposed draft output to
-a possible contribution. An explicit success criterion must match; a matching title
+a possible contribution. Invoice collection requires an unpaid/overdue/outstanding
+qualifier (or explicit cash collection); generic billing-volume reduction and
+supplier-payment settlement cannot borrow the reminder contribution. An explicit success criterion must match; a matching title
 cannot override an unrelated criterion. When the criterion is empty, an operational
 title may supply the required outcome. Description text can exclude a research,
 negated or non-operational context, but cannot supply the outcome by itself.
@@ -94,8 +96,8 @@ bunx tsc --noEmit
 You can see this change in the evaluation JSON, then inspect
 `invoice-outcome-not-title-overlap`, `current-objective-path` and
 `competing-businesses`. The report contains labels, selected IDs, abstention states,
-full explanations, provenance and a corpus hash. All 24 labeled development cases
-pass: nine candidate links and 15 expected abstentions. One abstention is an explicit
+full explanations, provenance and a corpus hash. All 26 labeled development cases
+pass: nine candidate links and 17 expected abstentions. One abstention is an explicit
 known useful paraphrase miss. These are hand-authored, author-visible synthetic
 policy checks, not measured field precision, a blinded holdout, independent human
 review or a production accuracy certificate. No paid model evaluation was run.

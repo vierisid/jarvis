@@ -12,7 +12,7 @@
     ], "expected": "receivables", "status": "candidate" },
     { "id": "prefer-specific-step", "kind": "invoice_review", "goals": [
       { "id": "root", "title": "Improve cash collection" },
-      { "id": "step", "title": "Review overdue invoices weekly", "level": "task", "parent_id": "root" }
+      { "id": "step", "title": "Review overdue invoices weekly", "level": "key_result", "parent_id": "root" }
     ], "expected": "step", "status": "candidate" },
     { "id": "competing-businesses", "kind": "invoice_review", "goals": [
       { "id": "north", "title": "Collect unpaid invoices", "description": "North division" },
@@ -40,14 +40,14 @@
     ], "expected": null, "status": "no_supported_goal" },
     { "id": "stale-parent", "kind": "invoice_review", "goals": [
       { "id": "old", "title": "Cash flow", "ageDays": 91 },
-      { "id": "child", "title": "Collect unpaid invoices", "level": "task", "parent_id": "old" }
+      { "id": "child", "title": "Collect unpaid invoices", "level": "key_result", "parent_id": "old" }
     ], "expected": null, "status": "no_supported_goal" },
     { "id": "unrelated-parent-context", "kind": "invoice_review", "goals": [
       { "id": "research", "title": "Write an article about accounting" },
-      { "id": "child", "title": "Reduce overdue invoices", "level": "task", "parent_id": "research" }
+      { "id": "child", "title": "Reduce overdue invoices", "level": "key_result", "parent_id": "research" }
     ], "expected": null, "status": "no_supported_goal" },
     { "id": "missing-parent", "kind": "invoice_review", "goals": [
-      { "id": "orphan", "title": "Collect unpaid invoices", "level": "task", "parent_id": "missing" }
+      { "id": "orphan", "title": "Collect unpaid invoices", "level": "key_result", "parent_id": "missing" }
     ], "expected": null, "status": "no_supported_goal" },
     { "id": "cycle", "kind": "invoice_review", "goals": [
       { "id": "a", "title": "Collect unpaid invoices", "parent_id": "b" },
@@ -78,6 +78,12 @@
     { "id": "support-contribution", "kind": "support_triage", "goals": [
       { "id": "support", "title": "Reduce the ticket backlog" }
     ], "expected": "support", "status": "candidate" },
+    { "id": "billing-volume-is-not-collections", "kind": "invoice_review", "goals": [
+      { "id": "billing", "title": "Reduce invoices by combining bills" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "supplier-payments-are-not-collections", "kind": "invoice_review", "goals": [
+      { "id": "payables", "title": "Settle overdue invoices from suppliers" }
+    ], "expected": null, "status": "no_supported_goal" },
     { "id": "unsupported-paraphrase", "kind": "invoice_review", "goals": [
       { "id": "cash", "title": "Get customers to pay what they owe" }
     ], "expected": null, "status": "no_supported_goal", "limitation": "Useful relation not recognized by this bounded vocabulary" }

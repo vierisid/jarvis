@@ -12,7 +12,7 @@ export function fixtureGoal(input: GoalFixture, now = EVALUATION_NOW): Goal {
   return { parent_id: null, level: 'objective', description: '', success_criteria: '', time_horizon: 'monthly',
     score: 0.4, score_reason: null, status: 'active', health: 'on_track', deadline: deadlineDays === undefined ? null : now + deadlineDays * 86_400_000,
     started_at: null, estimated_hours: null, actual_hours: 0, authority_level: 0, tags: [], dependencies: [],
-    escalation_stage: 'none', escalation_started_at: null, sort_order: 0, created_at: now - 86_400_000,
+    escalation_stage: 'none', escalation_started_at: null, sort_order: 0, created_at: now - Math.max(1, ageDays) * 86_400_000,
     updated_at: now - ageDays * 86_400_000, completed_at: null, ...fields };
 }
 export function fixtureSignals(kind: JobKind) {

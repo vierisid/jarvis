@@ -3,7 +3,7 @@ import type { JobKind } from './opportunity-types.ts';
 /** Bounded outcome vocabulary, not a semantic model or a promise of business impact. */
 export const GOAL_CONTRIBUTIONS: Record<JobKind, { outcome: RegExp; contribution: string }> = {
   invoice_review: {
-    outcome: /\b(?:(?:reduce|clear|collect|recover|settle|review|reconcile) (?:the |all |our )?(?:unpaid |overdue |outstanding )?invoices?|improve cash collection)\b/i,
+    outcome: /\b(?:(?:reduce|clear|collect|recover|review) (?:the |all |our )?(?:unpaid |overdue |outstanding )invoices?|improve cash collection)\b/i,
     contribution: 'Reviewed invoice reminders could help collect outstanding balances',
   },
   lead_followup: {

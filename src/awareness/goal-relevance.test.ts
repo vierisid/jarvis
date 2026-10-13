@@ -24,10 +24,10 @@ afterEach(closeDb);
 
 test('labeled cases cover all six families, competing/no-goal cases and stale/unrelated paths', () => {
   const report = goalRelevanceReport();
-  expect(report.total).toBe(24);
+  expect(report.total).toBe(26);
   expect(report.cases.filter(c => !c.passed)).toEqual([]);
   expect(report.proposedLinks).toBe(9);
-  expect(report.expectedAbstentions).toBe(15);
+  expect(report.expectedAbstentions).toBe(17);
   expect(report.knownUnsupportedUsefulRelations).toBe(1);
 });
 

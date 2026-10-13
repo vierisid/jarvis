@@ -7,15 +7,16 @@
   "baseline_ref": "origin/brief/q-11",
   "main_audit": "4aee7e6be06666ac434570d3fada6ba86da05a41",
   "head": {
-    "implementation_sha": "0f390d96cdae86559631e142b835d83eaf7428b7",
     "delivery_ref": "commit containing this receipt",
-    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-12.json"
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-12.json",
+    "initial_implementation_sha": "0f390d96cdae86559631e142b835d83eaf7428b7",
+    "implementation_ref": "commit containing this receipt includes the final invoice-rule correction"
   },
   "status": {
     "implementation": "verified locally",
     "merge": "not_merged",
     "release_enabled": false,
-    "publication": "one PR from brief/q-12 to brief/q-11; resolve with gh pr view brief/q-12 --json url",
+    "publication": "PR #977 against brief/q-11; remains unmerged",
     "ci": "pending publication; inspect current PR head checks"
   },
   "worktree": "Dedicated .worktrees/jarvis-q-12, own frozen-lockfile dependencies and temporary/in-memory SQLite fixtures. Managed worktree creation was unavailable because the parent Projects folder is not a Git repository. Owner checkout preserved.",
@@ -48,7 +49,7 @@
     {
       "check": "No-goal and competing-goal cases are truthful",
       "status": "passed",
-      "evidence": "Fifteen expected abstentions, including competing business goals and one documented unsupported useful paraphrase. Ties never use app names, score or ID order to invent relevance."
+      "evidence": "Seventeen expected abstentions, including competing business goals, billing-volume reduction, supplier settlement and one documented unsupported useful paraphrase. Ties never use app names, score or ID order to invent relevance."
     },
     {
       "check": "No goal progress or automatic link mutation",
@@ -72,7 +73,7 @@
     },
     {
       "command": "bun run scripts/evaluate-goal-relevance.ts",
-      "result": "24/24 labeled policy checks; 9 candidate links, 15 abstentions, 1 explicit known useful paraphrase miss. Author-visible synthetic development data, not field accuracy."
+      "result": "26/26 labeled policy checks; 9 candidate links, 17 abstentions, 1 explicit known useful paraphrase miss. Author-visible synthetic development data, not field accuracy."
     },
     {
       "command": "bunx tsc --noEmit; git diff --check",
@@ -84,14 +85,14 @@
     },
     {
       "command": "temporary integration with origin/main 4aee7e6b: affected suite plus catalog.test.ts, TypeScript and diff check",
-      "result": "208 passed, 0 failed, 8660 assertions across 13 files; TypeScript and diff check passed. Temporary integration removed before delivery."
+      "result": "On initial implementation 0f390d96 (before final invoice-rule correction): 208 passed, 0 failed, 8660 assertions across 13 files; TypeScript and diff check passed. Temporary integration removed. Final policy correction rechecked with the 173-test affected suite and TypeScript."
     }
   ],
   "review": {
     "skill": "review-agent",
     "mode": "read-only complete diff/callers, no delegation or independent human review claimed",
-    "finding": "P2: nullable legacy goal description/success_criteria could throw",
-    "resolution": "String guards make incomplete legacy text abstain; both pre-fix SQLite regressions fail in review-red.log and pass after correction. Corrected diff/callers: No findings."
+    "finding": "Two P2 findings: nullable legacy goal text could throw; generic invoice reduction/payment outcomes could borrow a collections contribution",
+    "resolution": "String guards make nullable historical text abstain. Invoice outcomes require a collections-oriented qualifier/action; billing consolidation and supplier settlement abstain. Both corrections have preserved red results and passing regressions; corrected diff/callers: No findings."
   },
   "evidence": [
     "evidence/Q-12/evaluation.json",
@@ -99,7 +100,8 @@
     "evidence/Q-12/review-red.log",
     "evidence/Q-12/review.txt",
     "evidence/Q-12/commit-hooks.log",
-    "evidence/Q-12/main-integration.log"
+    "evidence/Q-12/main-integration.log",
+    "evidence/Q-12/invoice-review-red.log"
   ],
   "manual_checks": [
     {
