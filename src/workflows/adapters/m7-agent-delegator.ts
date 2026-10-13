@@ -24,7 +24,7 @@
  *   6. Walk the agent's message log to extract `{name, args, result, error}`
  *      tuples for each tool call (zip assistant `tool_calls` with subsequent
  *      `tool` messages by `tool_call_id`).
- *   7. `orchestrator.terminateAgent(child.id)` in `finally` so a thrown
+ *   7. `orchestrator.reapAgent(child.id)` in `finally` so a thrown
  *      exception still cleans up the hierarchy.
  *
  * Concurrency: each `delegate()` call spawns + terminates its own sub-agent;
@@ -376,12 +376,13 @@ export class M7AgentDelegator implements PieceAgentDelegator {
       const msg = e instanceof Error ? e.message : String(e);
       return errorResult(`delegate failed: ${msg}`);
     } finally {
-      // Always clean up. terminateAgent recursively removes children, so even
+      // Always clean up. reapAgent (not gated: this is our own finished
+      // child) recursively removes children, so even
       // if runSubAgent itself spawned grand-children (it doesn't today), they
       // get torn down too.
       if (childId !== null) {
         try {
-          this.orchestrator.terminateAgent(childId);
+          this.orchestrator.reapAgent(childId);
         } catch {
           // Ignore cleanup errors -- the orchestrator will surface them via
           // its own logging; we don't want to mask the original return.

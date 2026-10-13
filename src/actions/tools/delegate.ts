@@ -88,7 +88,10 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
       }
 
       // Spawn sub-agent
-      const subAgent = deps.orchestrator.spawnSubAgent(primary.id, specialistRole);
+      // Named for the sink's context rules, as the tool layer judged it. No
+      // arguments: a synchronous delegation is not re-runnable from a card,
+      // so a spawn that still needs approval here is refused, not queued.
+      const subAgent = deps.orchestrator.spawnSubAgent(primary.id, specialistRole, { via: { toolName: 'delegate_task' } });
 
       // Create scoped tool registry based on specialist's allowed tools
       const scopedRegistry = createScopedToolRegistry(subAgent.agent.authority.allowed_tools);
@@ -120,7 +123,7 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
         });
 
         // Terminate sub-agent after completion
-        deps.orchestrator.terminateAgent(subAgent.id);
+        deps.orchestrator.reapAgent(subAgent.id);
 
         // Format result for the PA
         const toolsList = result.toolsUsed.length > 0
@@ -148,7 +151,7 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
       } catch (err) {
         // Clean up on error
         try {
-          deps.orchestrator.terminateAgent(subAgent.id);
+          deps.orchestrator.reapAgent(subAgent.id);
         } catch { /* ignore cleanup errors */ }
 
         const errorMsg = err instanceof Error ? err.message : String(err);

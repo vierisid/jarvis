@@ -211,6 +211,13 @@ export type RunSubAgentOptions = {
   onTurn?: (state: SubAgentCheckpoint) => void;
   /** Continue a run from its saved state instead of starting one. */
   resume?: SubAgentResume;
+  /**
+   * Stops the run (#963). Aborts the model call in flight and is checked at
+   * every point the loop would start something new, so once it fires the run
+   * makes no further model call and dispatches no further tool. A tool already
+   * running is not interrupted; the loop stops when it returns.
+   */
+  signal?: AbortSignal;
 };
 
 /**
@@ -615,6 +622,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     governedTools,
     onTurn,
     resume,
+    signal,
   } = opts;
 
   // Build authority context if engine provided
@@ -718,7 +726,10 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
 
   // A cancellation is not an agent error: the caller stopped the run and
   // must not record anything for it.
-  const fence = () => { try { checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); } };
+  const fence = () => {
+    if (signal?.aborted) throw new SubAgentCanceled(signal.reason ?? 'cancelled');
+    try { checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); }
+  };
 
   const noteToolCall = (tc: LLMToolCall) => {
     toolsUsed.push(tc.name);
@@ -890,7 +901,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     // Tool execution loop
     for (let iteration = startIteration; iteration < maxIterations; iteration++) {
       fence();
-      const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
+      const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools, ...(signal ? { signal } : {}) });
       fence();
       // The model has now been shown every image in the transcript (#709).
       // Replaced, not mutated in place: the request just made held these.
@@ -943,7 +954,12 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     console.error(`[SubAgent:${agentName}] Error:`, errorMsg);
 
     return finish({ success: false, response: `Sub-agent error: ${errorMsg}`, terminationReason: 'error',
-      ...(err instanceof GovernedDispatchError ? { dispatchError: true } : err instanceof SubAgentCanceled ? { canceled: true } : {}) });
+      ...(err instanceof GovernedDispatchError ? { dispatchError: true }
+        // An aborted model call rejects with the provider's abort error, not
+        // SubAgentCanceled; the signal says which it was. An unrelated error
+        // that lands after the abort is reported as the cancel too: the run
+        // was being stopped either way.
+        : err instanceof SubAgentCanceled || signal?.aborted ? { canceled: true } : {}) });
   } finally {
     agent.idle();
   }

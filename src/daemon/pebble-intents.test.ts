@@ -13,11 +13,13 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { wakeCommandFrom } from '../voice/wake-phrase.ts';
 import {
-  exactRoomKey, findRoomKey, parseBackgroundTask, parseSettingsIntent, PEBBLE_ROOMS,
-  CANNOT_STOP_AGENT, planInPanelAction, planSubPebbleClose, planWindowAction, SPOKEN_TABS, spokenTab, tabSwitchReply,
+  backgroundRefusalReply, exactRoomKey, findRoomKey, parseBackgroundTask, parseSettingsIntent, PEBBLE_ROOMS,
+  cancelCardReply, cancelRefusalReply, planInPanelAction, planSubPebbleClose, planWindowAction, SPOKEN_TABS, spokenTab, tabSwitchReply,
   type PanelLookups, type PanelRef, type SubPebbleCand,
 } from './pebble-intents.ts';
 import { isRoomTab, ROOM_TABS, roomTabs, type TabbedRoom } from './room-tabs.ts';
+import { AgentLifecycleRefusal } from '../agents/lifecycle-gate.ts';
+import { TaskHaltedError } from '../agents/task-manager.ts';
 
 // The daemon's open-panel inventory, over the real room table: the same
 // shape as panelLookups() in index.ts.
@@ -380,7 +382,11 @@ describe('closing background agents', () => {
     expect(planSubPebbleClose('close all background agents', running)).toMatchObject({ kind: 'close_all', count: 2 });
   });
 
-  // #934: closing a sub-pebble destroys its overlay; the task keeps running.
+  // #934: closing a sub-pebble destroys its overlay; the task keeps running,
+  // so none of these may be carried out by hiding. #963: they now ask for a
+  // card to stop the agent. The assertion was `say CANNOT_STOP_AGENT`; it is
+  // now `cancel`, which is just as much "not a hide" (a hide is close_one /
+  // close_all) and also pins that the request reaches the card.
   test.each([
     'cancel the background agent',
     'kill the background agent',
@@ -405,8 +411,25 @@ describe('closing background agents', () => {
     'dismiss the background agent permanently',
     'get rid of the background task for good',
     'kill off the background agent',
-  ])('"%s" is not carried out by hiding the agent', (said) => {
-    expect(planSubPebbleClose(said, running)).toEqual({ kind: 'say', text: CANNOT_STOP_AGENT });
+  ])('"%s" is not carried out by hiding the agent: it asks for a card to stop it', (said) => {
+    const plan = planSubPebbleClose(said, running);
+    expect(plan?.kind).toBe('cancel');
+    expect(plan && 'cands' in plan ? plan.cands.length : 0).toBeGreaterThan(0);
+  });
+
+  test('a stop asks about the agent it names, and only running ones', () => {
+    expect(planSubPebbleClose('cancel the amber one', running)).toEqual({ kind: 'cancel', cands: [research], label: 'amber' });
+    expect(planSubPebbleClose('kill the research agent', running))
+      .toEqual({ kind: 'cancel', cands: [research], label: 'research analyst' });
+    expect(planSubPebbleClose('cancel the background agent', running))
+      .toEqual({ kind: 'cancel', cands: [writer], label: 'most recent' });
+    const done: SubPebbleCand = { ...writer, running: false };
+    expect(planSubPebbleClose('cancel all background agents', [research, done]))
+      .toEqual({ kind: 'cancel', cands: [research], label: 'background' });
+    expect(planSubPebbleClose('cancel the content agent', [research, done]))
+      .toEqual({ kind: 'say', text: "The content writer background agent isn't running any more." });
+    expect(planSubPebbleClose('cancel all background agents', [done]))
+      .toEqual({ kind: 'say', text: 'None of the background agents is still running.' });
   });
 
   test('a negated cancel word asks only for the overlay to go', () => {
@@ -419,10 +442,17 @@ describe('closing background agents', () => {
     }
   });
 
-  test('the refusal does not claim the agent was stopped or hidden', () => {
-    expect(CANNOT_STOP_AGENT).toContain("can't stop");
-    expect(CANNOT_STOP_AGENT).toContain('keeps running');
-    expect(CANNOT_STOP_AGENT).not.toMatch(/\b(closed|hid|cancelled|stopped)\b/i);
+  test('the card reply does not claim the agent was stopped or hidden', () => {
+    for (const reply of [cancelCardReply('amber', 1), cancelCardReply('background', 2)]) {
+      expect(reply).toContain('card');
+      expect(reply).toMatch(/keeps? running until you click/);
+      expect(reply).not.toMatch(/\b(closed|hid|cancelled|stopped)\b/i);
+    }
+    expect(cancelRefusalReply(new AgentLifecycleRefusal('terminate_agent', 'denied', 'x'))).toContain('not allowed');
+    expect(cancelRefusalReply(new AgentLifecycleRefusal('terminate_agent', 'approval_required', 'x'))).toContain("can't ask");
+    for (const reply of [cancelRefusalReply(new Error('x')), cancelRefusalReply(new AgentLifecycleRefusal('terminate_agent', 'denied', 'x'))]) {
+      expect(reply).not.toMatch(/\b(closed|hid|cancelled|stopped)\b/i);
+    }
   });
 
   test('a cancel for an agent that is not there still gets the true answer', () => {
@@ -492,9 +522,48 @@ describe('the daemon uses these plans', () => {
     expect(src).not.toContain('orderedAliases');
   });
 
+  // #932: "in the background, X" has no model and no gesture in front of it,
+  // so it must reach the spawn through the shared, gated entry and nothing
+  // that skips it.
+  // #963: a spoken stop raises a card through the stop sink, and never calls
+  // the stop itself.
+  test('a spoken stop asks for a card and stops nothing directly', () => {
+    expect(src).toContain('orchestrator.requestTerminationApproval(agentId, stopCall(agentId, cand.id))');
+    expect(src).not.toContain('terminatePersistentAgent(');
+    expect(src).not.toContain('.terminateAgent(');
+    expect(src).not.toContain('cancelAgentTasks(');
+    expect(src).not.toMatch(/\btm\??\.cancel\(/);
+  });
+
+  test('the background fast path spawns only through startPersistentAgent', () => {
+    expect(src).toContain('await startPersistentAgent(deps, { specialist: specialistId, task });');
+    expect(src).toContain('await speakConfirmation(sidecarId, backgroundRefusalReply(err), ctrl);');
+    expect(src).not.toContain('spawnPersistentAgent(');
+    expect(src).not.toContain('spawnSubAgent(');
+    expect(src).not.toContain('taskManagerLocal.launch(');
+  });
+
   test('no copy of the old patterns is left behind', () => {
     expect(src).not.toContain('in the background[,:]?');
     expect(src).not.toContain('voice (?:output|response)?');
     expect(src).not.toContain('tryParseWindowAction');
+  });
+});
+
+describe('what the pebble says when a background agent was not started (#932)', () => {
+  test('a spawn waiting on a card says so, and never that it is running', () => {
+    const reply = backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'approval_required', 'x', 'req-1'));
+    expect(reply).toContain('needs your approval');
+    expect(reply).toContain('card');
+    expect(reply).not.toMatch(/running|started|got it/i);
+  });
+
+  test('approval with nobody to ask, a halted system and a deny each get their own answer', () => {
+    expect(backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'approval_required', 'x')))
+      .toContain("can't ask");
+    expect(backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'halted', 'x'))).toContain('paused');
+    expect(backgroundRefusalReply(new TaskHaltedError('paused'))).toContain('paused');
+    expect(backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'denied', 'x'))).toContain('not allowed');
+    expect(backgroundRefusalReply(new Error('boom'))).toBe("I couldn't start that background task.");
   });
 });

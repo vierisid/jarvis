@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import "./AgentStripRoom.css";
 
-type TaskStatus = "running" | "completed" | "failed";
+type TaskStatus = "running" | "completed" | "failed" | "cancelled";
 
 type StripTask = {
   task_id: string;
@@ -123,7 +123,8 @@ export function AgentStripRoom(_: { mode?: RoomBodyMode }) {
       .filter((t) => t.status === "completed")
       .sort((a, b) => (b.completed_at ?? 0) - (a.completed_at ?? 0));
     const failed = payload.tasks
-      .filter((t) => t.status === "failed")
+      // A cancelled task (#963) is finished work too; it sorts with failures.
+      .filter((t) => t.status === "failed" || t.status === "cancelled")
       .sort((a, b) => (b.completed_at ?? 0) - (a.completed_at ?? 0));
     return [...running, ...completed, ...failed];
   }, [payload]);
@@ -189,7 +190,7 @@ export function AgentStripRoom(_: { mode?: RoomBodyMode }) {
         {sortedTasks.map((task) => {
           const isRunning = task.status === "running";
           const isCompleted = task.status === "completed";
-          const isFailed = task.status === "failed";
+          const isFailed = task.status === "failed" || task.status === "cancelled";
           const expanded = expandedResults.has(task.task_id);
           const hasResult = !!task.result_preview;
           const liveElapsed = isRunning && task.completed_at === null

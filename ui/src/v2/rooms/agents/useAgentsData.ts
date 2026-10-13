@@ -243,7 +243,16 @@ export function useAgentsData() {
         const text = await resp.text();
         throw new Error(text || `HTTP ${resp.status}`);
       }
-      const data = await resp.json() as { assignment?: { message?: string } | null };
+      const data = await resp.json() as {
+        assignment?: { message?: string } | null;
+        approval_required?: boolean;
+        message?: string;
+      };
+      // 202: the spawn needs approval and a card is waiting for it. Nothing
+      // was spawned, so say that rather than "Agent spawned." (#932).
+      if (data.approval_required) {
+        return { ok: true, message: data.message ?? "Spawning this agent needs your approval. A card is waiting." };
+      }
       // Refresh roster so the new agent shows up immediately.
       refresh();
       return { ok: true, message: data.assignment?.message ?? "Agent spawned." };
@@ -264,8 +273,14 @@ export function useAgentsData() {
         const text = await resp.text();
         throw new Error(text || `HTTP ${resp.status}`);
       }
+      const data = await resp.json() as { approval_required?: boolean; message?: string };
+      // 202: stopping needs approval and a card is waiting; the agent keeps
+      // running until it is approved (#963).
+      if (data.approval_required) {
+        return { ok: true, message: data.message ?? "Stopping this agent needs your approval. A card is waiting." };
+      }
       refresh();
-      return { ok: true, message: "Agent terminated." };
+      return { ok: true, message: data.message ?? "Agent terminated." };
     } catch (err) {
       return {
         ok: false,

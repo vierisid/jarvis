@@ -660,7 +660,7 @@ describe('workflow effect boundary', () => {
     let requests = 0, spawns = 0;
     const options = { ...f.options,
       agentSpecialists: new Map([[role.id, role]]) as any,
-      agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), terminateAgent: () => {}, spawnSubAgent: () => {
+      agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), reapAgent: () => {}, spawnSubAgent: () => {
         spawns++;
         return { id: 'child', agent: { role, authority: { allowed_tools: ['file-ops'], max_authority_level: 10 } },
           setTask: () => {}, activate: () => {}, addMessage: () => {}, getMessages: () => [], idle: () => {} };

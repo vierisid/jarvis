@@ -9,7 +9,7 @@ type TaskRecord = {
   agent_name: string;
   specialist: string;
   task: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | "cancelled";
   started_at: number;
   completed_at: number | null;
   elapsed_seconds: number;
@@ -98,7 +98,7 @@ export function TaskResultRoom({ taskId }: { taskId: string }) {
   const elapsedLabel = formatElapsed(task.elapsed_seconds);
   const statusTone =
     task.status === "running" ? "running" :
-    task.status === "failed" ? "failed" : "completed";
+    task.status === "failed" || task.status === "cancelled" ? "failed" : "completed";
 
   return (
     <div className="task-result">

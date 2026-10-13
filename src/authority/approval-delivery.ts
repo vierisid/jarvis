@@ -513,7 +513,7 @@ function synthesizeApprovalIntent(request: ApprovalRequest): string {
       return amount ? `Pay ${amount} to ${to}` : `Make a payment to ${to}`;
     }
     case 'spawn_agent': {
-      const role = labelOf(args.role) ?? 'an agent';
+      const role = labelOf(args.role) ?? labelOf(args.specialist) ?? 'an agent';
       return `Spawn ${role}`;
     }
     default: {

@@ -33,6 +33,8 @@
 
 import { ROOM_TABS, roomTabs, type RoomTab, type TabbedRoom } from './room-tabs.ts';
 import type { RoomActionOutcome } from './room-action-results.ts';
+import { AgentLifecycleRefusal } from '../agents/lifecycle-gate.ts';
+import { TaskHaltedError } from '../agents/task-manager.ts';
 
 /**
  * Words that may come before a command without making it part of a sentence:
@@ -402,10 +404,11 @@ const RESERVED_HINTS = new Set([
 
 /**
  * Words that ask for the work to stop, not for the overlay to go away (#934).
- * Closing a sub-pebble only hides it; the task behind it keeps running, and
- * nothing here can stop it. So none of these may reach a hide: "cancel the
- * background agent" used to hide it and answer "Closed the ... background
- * agent." while it carried on.
+ * Closing a sub-pebble only hides it; the task behind it keeps running. So
+ * none of these may reach a hide: "cancel the background agent" used to hide
+ * it and answer "Closed the ... background agent." while it carried on. Since
+ * #963 they raise an approval card to stop it instead: never a spoken fast
+ * path that stops it directly.
  */
 const CANCEL_WORD =
   /\b(?:cancel\w*|kill\w*|stop(?:s|ped|ping)?|abort\w*|terminat\w*|halt\w*|quit|nuke|scrap|put an end to|for good|permanently|shut(?:ting)?\s+(?:(?:it|them)\s+)?down|end(?:s|ed|ing)?\s+(?:it|them|the\s+(?:task|agent|job|work)))\b/;
@@ -424,9 +427,26 @@ function asksToStop(text: string): boolean {
   return CANCEL_WORD.test(text.toLowerCase().replace(NEGATED_CANCEL, ' '));
 }
 
-/** What JARVIS says when asked to stop a background agent it can only hide. */
-export const CANNOT_STOP_AGENT =
-  "I can't stop a background agent by voice. Closing it only hides it, and it keeps running.";
+/**
+ * What JARVIS says once it has put up the card(s) to stop background agents
+ * (#963). It must not say anything was stopped: nothing is, until the person
+ * clicks the card.
+ */
+export function cancelCardReply(label: string, cards: number): string {
+  return cards === 1
+    ? `I've put up a card to stop the ${label} background agent. It keeps running until you click it.`
+    : `I've put up ${cards} cards to stop the background agents. They keep running until you click them.`;
+}
+
+/** What JARVIS says when it could not even ask to stop one (#963). */
+export function cancelRefusalReply(err: unknown): string {
+  if (err instanceof AgentLifecycleRefusal) {
+    return err.kind === 'denied'
+      ? "I'm not allowed to stop background agents."
+      : "Stopping a background agent needs your approval, and I can't ask for it from here.";
+  }
+  return "I couldn't ask to stop that background agent.";
+}
 
 /**
  * `reply` is what to say once the overlay is gone. It says "Hid", and whether
@@ -436,6 +456,8 @@ export const CANNOT_STOP_AGENT =
 export type SubPebbleClosePlan =
   | { kind: 'close_all'; count: number; reply: string }
   | { kind: 'close_one'; cand: SubPebbleCand; label: string; reply: string }
+  /** Asked to STOP them (#963): raise a card per running agent, hide nothing. */
+  | { kind: 'cancel'; cands: SubPebbleCand[]; label: string }
   | SayPlan;
 
 function stillRunning(running: number, total: number): string {
@@ -455,9 +477,18 @@ function hideOne(cand: SubPebbleCand, label: string): SubPebbleClosePlan {
 export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[] | null): SubPebbleClosePlan | null {
   const plan = planSubPebbleTarget(text, cands);
   // Asked to stop it: hiding it would be doing something else and calling it
-  // done. A plan that is already an answer ("there's no amber one") stands.
+  // done, so it becomes a request for a card to stop it (#963). A plan that is
+  // already an answer ("there's no amber one") stands.
   if (plan && plan.kind !== 'say' && asksToStop(text)) {
-    return { kind: 'say', text: CANNOT_STOP_AGENT };
+    if (plan.kind === 'close_one') {
+      return plan.cand.running
+        ? { kind: 'cancel', cands: [plan.cand], label: plan.label }
+        : { kind: 'say', text: `The ${plan.label} background agent isn't running any more.` };
+    }
+    const running = (cands ?? []).filter((c) => c.running);
+    return running.length > 0
+      ? { kind: 'cancel', cands: running, label: 'background' }
+      : { kind: 'say', text: 'None of the background agents is still running.' };
   }
   return plan;
 }
@@ -539,4 +570,23 @@ export function parseBackgroundTask(text: string): string | null {
   if (!m) return null;
   const task = (m[1] ?? '').trim();
   return task.length < 3 ? null : task;
+}
+
+/**
+ * What the pebble says when a voice "in the background, X" was not started
+ * (#932). It never says the agent is running. A spawn that needs approval
+ * has raised a card for the whole request, and says so.
+ */
+export function backgroundRefusalReply(err: unknown): string {
+  if (err instanceof AgentLifecycleRefusal) {
+    if (err.kind === 'approval_required') {
+      return err.approvalId
+        ? "Starting that background agent needs your approval. I've put up a card for it."
+        : "Starting that background agent needs your approval, and I can't ask for it from here.";
+    }
+    if (err.kind === 'halted') return "Jarvis is paused, so I can't start a background agent.";
+    return "I'm not allowed to start background agents.";
+  }
+  if (err instanceof TaskHaltedError) return "Jarvis is paused, so I can't start a background agent.";
+  return "I couldn't start that background task.";
 }

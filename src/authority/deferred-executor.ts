@@ -15,6 +15,7 @@ import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
 import { boundedReceiptText, splitToolReturn } from '../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scope.ts';
 import { runAsReviewed } from '../actions/tools/reviewed-call-scope.ts';
+import { runAsApproved } from './approved-action-scope.ts';
 
 // Defined next to substituteAboveLevel, which writes it; re-exported here,
 // where the approval learner reads it.
@@ -86,6 +87,23 @@ function multiModalReceiptText(content: ContentBlock[]): string {
     : block.type === 'image'
       ? `[image: ${block.source?.media_type ?? 'unknown type'}, ${block.source?.data?.length ?? 0} base64 characters, not stored]`
       : `[${String((block as { type?: unknown }).type)}]`)).join('\n');
+}
+
+/**
+ * An approved `manage_agents terminate` and nothing else: the exact call the
+ * stop sink raises a card for (`stopCall` in actions/tools/agents.ts), with no
+ * other key, so the emergency exemption cannot carry anything but a stop.
+ */
+export function isAgentStopCard(request: Pick<ApprovalRequest, 'tool_name' | 'action_category' | 'tool_arguments'>): boolean {
+  if (request.tool_name !== 'manage_agents' || request.action_category !== 'terminate_agent') return false;
+  try {
+    const args = JSON.parse(request.tool_arguments) as Record<string, unknown>;
+    const keys = Object.keys(args).sort().join(',');
+    return args.action === 'terminate' && typeof args.agent_id === 'string'
+      && (keys === 'action,agent_id' || (keys === 'action,agent_id,task_id' && typeof args.task_id === 'string'));
+  } catch {
+    return false;
+  }
 }
 
 export class DeferredExecutor {
@@ -170,7 +188,11 @@ export class DeferredExecutor {
     // Emergency gate: an approval clicked while the system is paused/killed
     // must not execute. Close the request out (mirroring the error path)
     // so it doesn't linger as an approved-but-never-executed zombie.
-    if (this.emergencyController && !this.emergencyController.canExecute()) {
+    // One exemption (#963): a card that only STOPS a background agent. Under
+    // Pause or Kill the agent's model loop still runs, and at the shipped
+    // levels a card is the only way to stop it, so blocking that card would
+    // leave the halted system spending tokens with no way to end it.
+    if (this.emergencyController && !this.emergencyController.canExecute() && !isAgentStopCard(request)) {
       const state = this.emergencyController.getState();
       const blocked = `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`;
       this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
@@ -257,8 +279,12 @@ export class DeferredExecutor {
       // navigate would be refused above anyway, its binding gone with the old
       // process; `browser_snapshot` is not one, and is why the demotion exists.
       const dispatch = () => registry.execute(request.tool_name, args);
-      const raw = await runAsReviewed(uiExecution?.reviewed,
-        () => request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch));
+      // Inside the approval it bought (#932, #963): a lifecycle sink this
+      // call reaches (spawn, terminate) reads the scope instead of raising a
+      // second card for the act the person just approved.
+      const grant = { categories: [request.action_category as ActionCategory], approvalId: requestId, source: 'approval' as const };
+      const raw = await runAsApproved(grant, () => runAsReviewed(uiExecution?.reviewed,
+        () => request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch)));
       // Collapsed to one string for the consumers that show it -- the
       // notification and the execute route -- with any trusted trailer back
       // in band, where it is framed as data along with the rest if anything

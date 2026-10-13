@@ -228,6 +228,10 @@ export class AgentService implements Service, IAgentService {
 
         // Register manage_agents tool for persistent/async agents
         this.taskManager = new AgentTaskManager();
+        // Stopping an agent aborts its task loops (#963); without this a
+        // terminated agent's loop kept calling the model until it finished.
+        const taskManager = this.taskManager;
+        this.orchestrator.setTaskCanceller((agentId) => { taskManager.cancelAgentTasks(agentId, 'agent stopped'); });
         const agentToolDeps: AgentToolDeps = {
           orchestrator: this.orchestrator,
           llmManager: this.llmManager,
@@ -265,7 +269,7 @@ export class AgentService implements Service, IAgentService {
     this._status = 'stopping';
     const primary = this.orchestrator.getPrimary();
     if (primary) {
-      this.orchestrator.terminateAgent(primary.id);
+      this.orchestrator.reapAgent(primary.id);
     }
 
     // Disconnect browser (stops auto-launched Chrome if any)

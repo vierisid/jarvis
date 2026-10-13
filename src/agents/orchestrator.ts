@@ -55,6 +55,8 @@ import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { runAsApproved } from '../authority/approved-action-scope.ts';
+import { askLifecycleApproval, gateLifecycle, type LifecycleGateDeps, type LifecycleVia } from './lifecycle-gate.ts';
 
 /**
  * Convert a system prompt (legacy string or static/dynamic parts) into the
@@ -433,50 +435,53 @@ export class AgentOrchestrator {
     return agent;
   }
 
+  /** What the lifecycle gate needs from this orchestrator; see lifecycle-gate.ts. */
+  private lifecycleDeps(): LifecycleGateDeps {
+    return {
+      engine: this.authorityEngine,
+      approvalManager: this.approvalManager,
+      auditTrail: this.auditTrail,
+      emergency: this.emergencyController,
+      toolRegistry: this.toolRegistry,
+      temporaryGrants: this.temporaryGrants,
+      profile: this.getEffectiveProfile(),
+      onApprovalNeeded: this.onApprovalNeeded,
+      auditName: (roleName) => this.auditAgentName(roleName),
+    };
+  }
+
   /**
-   * Spawn a sub-agent under a parent
+   * Spawn a sub-agent under a parent.
+   *
+   * This is the SINK for starting an agent, so it is where the gate lives
+   * (#932), not at each path that reaches it: the tool layer, the dashboard
+   * spawn dialog, the pebble's voice fast path, a workflow step. See
+   * lifecycle-gate.ts for what is decided. The authority engine is the PRIME
+   * decider: the user's explicit configuration wins over the role-derived
+   * capability flag in BOTH directions, and the flag is only the fallback when
+   * no engine is wired (tests, embedded use).
+   *
+   * A decision that needs approval is satisfied only by an approval already
+   * given for this act (the tool layer's card, run inside its scope). Otherwise
+   * it throws `AgentLifecycleRefusal`, after raising a card for `via` when the
+   * caller supplied the call that redoes the spawn once approved.
    */
   spawnSubAgent(
     parentId: string,
     role: RoleDefinition,
-    opts?: { memory_scope?: string[] }
+    opts?: { memory_scope?: string[]; via?: LifecycleVia }
   ): AgentInstance {
     const parent = this.hierarchy.getAgent(parentId);
     if (!parent) {
       throw new Error(`Parent agent not found: ${parentId}`);
     }
 
-    // The authority engine is the PRIME decider for spawning. The user's
-    // explicit configuration (per-action overrides, context rules, the
-    // authority slider) wins over the role-derived capability flag in
-    // BOTH directions: a `spawn_agent` deny blocks a delegation-capable
-    // role, and an allow unblocks a role that never declared delegation.
-    // This also covers spawn paths that bypass the tool-level gate
-    // (dashboard spawn dialog, workflow delegator). The role flag is
-    // only the fallback when no engine is wired (tests, embedded use).
-    if (this.authorityEngine) {
-      const decision = this.authorityEngine.checkAuthority({
-        agentId: parent.id,
-        agentAuthorityLevel: parent.agent.authority.max_authority_level,
-        agentRoleId: parent.agent.role.id,
-        toolName: 'spawn_sub_agent',
-        toolCategory: 'delegation',
-        actionCategory: 'spawn_agent',
-        temporaryGrants: this.temporaryGrants,
-        profile: this.getEffectiveProfile(),
-      });
-      if (!decision.allowed) {
-        throw new Error(`Authority denied spawning a sub-agent: ${decision.reason}`);
-      }
-      // `requiresApproval` is intentionally treated as allowed here: the
-      // soft gate runs at the TOOL layer (executeTool intercepts
-      // delegate_task/manage_agents before they execute), so by the time
-      // we get here the approval either wasn't needed or was granted.
-    } else if (!parent.agent.authority.can_spawn_children) {
-      throw new Error(
-        `Agent role "${parent.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
-      );
-    }
+    const recordSpawn = gateLifecycle(this.lifecycleDeps(), {
+      action: 'spawn_agent', actor: parent, subject: role.id, via: opts?.via,
+    }, {
+      allowed: parent.agent.authority.can_spawn_children,
+      message: `Agent role "${parent.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
+    });
 
     // Create child agent with reduced authority
     const childAuthority = {
@@ -499,6 +504,7 @@ export class AgentOrchestrator {
     });
 
     this.hierarchy.addAgent(agent);
+    recordSpawn();
 
     // Add system message with role context for sub-agents. Communication
     // style is optional - only inject the line when the role declares one.
@@ -514,9 +520,61 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Terminate an agent and its children
+   * Stops the background task loops an agent is running; set by the agent
+   * service, which owns the task manager. Without it a terminated agent's loop
+   * kept calling the model until it finished (#963).
    */
-  terminateAgent(agentId: string): void {
+  private taskCanceller: ((agentId: string) => void) | null = null;
+
+  setTaskCanceller(cancel: ((agentId: string) => void) | null): void {
+    this.taskCanceller = cancel;
+  }
+
+  /**
+   * Stop an agent at someone's request: the SINK for stopping one (#963),
+   * gated as `terminate_agent` for the agent asking (the primary). A hard deny
+   * throws; a decision that needs approval is satisfied only by a card already
+   * approved for this act, otherwise a card is raised for `via` and this throws
+   * `AgentLifecycleRefusal`. When it goes ahead, the agent's running task loops
+   * are aborted, not just its record removed.
+   *
+   * Cleanup of an agent the caller itself spawned and whose run is over is
+   * `reapAgent`, which is not a decision anyone needs to approve.
+   */
+  terminateAgent(agentId: string, opts?: { via?: LifecycleVia }): void {
+    const agent = this.hierarchy.getAgent(agentId);
+    if (!agent) {
+      throw new Error(`Agent not found: ${agentId}`);
+    }
+    const actor = this.getPrimary() ?? agent;
+    const recordStop = gateLifecycle(this.lifecycleDeps(), {
+      action: 'terminate_agent', actor, subject: agent.agent.role.id, via: opts?.via,
+    }, { allowed: true, message: '' });
+    this.reapAgent(agentId);
+    recordStop();
+  }
+
+  /**
+   * Raise a card to stop `agentId` without stopping it, whatever the engine
+   * would allow: voice may stop an agent only through a card (#963). Returns
+   * the request; throws `AgentLifecycleRefusal` on a hard deny or when there
+   * is nobody to ask.
+   */
+  requestTerminationApproval(agentId: string, via: Required<LifecycleVia>): ApprovalRequest {
+    const agent = this.hierarchy.getAgent(agentId);
+    if (!agent) throw new Error(`Agent not found: ${agentId}`);
+    return askLifecycleApproval(this.lifecycleDeps(), {
+      action: 'terminate_agent', actor: this.getPrimary() ?? agent, subject: agent.agent.role.id, via,
+    });
+  }
+
+  /**
+   * Remove an agent and its children, aborting any task loop they run. Not
+   * gated: for an agent the caller spawned itself and has finished with
+   * (delegate_task, a workflow delegation, shutdown). Anything stopping an
+   * agent on someone's behalf goes through `terminateAgent`.
+   */
+  reapAgent(agentId: string): void {
     const agent = this.hierarchy.getAgent(agentId);
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`);
@@ -525,7 +583,13 @@ export class AgentOrchestrator {
     // Recursively terminate children first
     const children = this.hierarchy.getChildren(agentId);
     for (const child of children) {
-      this.terminateAgent(child.id);
+      this.reapAgent(child.id);
+    }
+
+    try {
+      this.taskCanceller?.(agentId);
+    } catch (err) {
+      console.warn(`[Orchestrator] could not cancel the tasks of ${agentId}:`, err instanceof Error ? err.message : err);
     }
 
     // Terminate this agent
@@ -1983,9 +2047,40 @@ export class AgentOrchestrator {
       return `[BLOCKED] ${name} needs the user's confirmation in the dashboard and cannot be started from a voice session. Tell the user what you wanted to do and ask them to confirm it there.`;
     }
 
+    // 2c. Stopping an agent is never auto-approved by a voice session
+    // (#963): voice may stop one only through a card, which the person clicks
+    // (terminate_agent is destructive, so the card cannot be approved by voice
+    // either). Raised here, deferred, so the audio loop does not block.
+    if (gate.categories.includes('terminate_agent') && primary) {
+      // Only a real sub-agent, and only the canonical stop call: a card for an
+      // invented id, or carrying extra keys, would be noise on every approval
+      // surface (and defeat the dedupe of a card already waiting).
+      const target = typeof args.agent_id === 'string' ? this.getAgent(args.agent_id) : undefined;
+      if (name !== 'manage_agents' || !target || target.id === primary.id) {
+        logAudit('denied', false);
+        return `Error: there is no background agent "${String(args.agent_id ?? '')}" to stop.`;
+      }
+      const toolArguments = { action: 'terminate', agent_id: target.id,
+        ...(typeof args.task_id === 'string' ? { task_id: args.task_id } : {}) };
+      try {
+        // askLifecycleApproval writes the audit row, whichever way it goes.
+        const card = askLifecycleApproval(this.lifecycleDeps(), {
+          action: 'terminate_agent', actor: primary, subject: target.agent.role.id,
+          via: { toolName: name, toolArguments },
+        });
+        return `[AWAITING_APPROVAL] Request #${card.id.slice(0, 8)} submitted. Stopping an agent needs the user to click the approval card in the dashboard; it keeps running until they do. Tell them that.`;
+      } catch (err) {
+        return `[AUTHORITY DENIED] Cannot execute ${name}: ${err instanceof Error ? err.message : String(err)}`;
+      }
+    }
+
     // 3. Authority check — hard denies enforced; approval auto-granted.
+    // The categories auto-granted here, for the lifecycle sinks the call may
+    // reach (#932): without the scope, a voice `manage_agents spawn` the
+    // realtime policy auto-approved would be refused again at the spawn sink.
+    let autoApproved: ActionCategory[] | null = null;
     if (this.authorityEngine && primary) {
-      const decision = combineDecisions(gate.categories.map((category) => this.authorityEngine!.checkAuthority({
+      const perCategory = gate.categories.map((category) => this.authorityEngine!.checkAuthority({
         agentId: primary.id,
         agentAuthorityLevel: primary.agent.authority.max_authority_level,
         agentRoleId: primary.agent.role.id,
@@ -1994,7 +2089,8 @@ export class AgentOrchestrator {
         actionCategory: category,
         temporaryGrants: this.temporaryGrants,
         profile: this.getEffectiveProfile(),
-      })));
+      }));
+      const decision = combineDecisions(perCategory);
 
       if (!decision.allowed) {
         logAudit('denied', false);
@@ -2012,11 +2108,17 @@ export class AgentOrchestrator {
 
       // Other requiresApproval -> auto-approved in realtime; audited as such.
       logAudit(decision.requiresApproval ? 'approval_required' : 'allowed', true);
+      // Only the categories that asked for approval were auto-approved.
+      if (decision.requiresApproval) autoApproved = perCategory.filter((d) => d.requiresApproval).map((d) => d.actionCategory);
     }
 
     // 4. Execute.
     try {
-      const raw = await this.toolRegistry.execute(name, args);
+      const registry = this.toolRegistry;
+      const raw = await (autoApproved
+        ? runAsApproved({ categories: autoApproved, approvalId: null, source: 'realtime_auto' },
+          () => registry.execute(name, args))
+        : registry.execute(name, args));
       const category = tool?.category;
       this.noteTaint(name, category);
       if (isToolResult(raw)) {

@@ -414,7 +414,7 @@ test('delegated agent tool calls inherit the same run binding', async () => {
   updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: action } });
   const backend = buildSandboxServiceBackends({ ...f.options,
     agentSpecialists: new Map([[role.id, role]]) as any,
-    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), terminateAgent: () => {}, spawnSubAgent: () => ({
+    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), reapAgent: () => {}, spawnSubAgent: () => ({
       id: 'child', agent: { role, authority: { allowed_tools: ['desktop'], max_authority_level: 10 } },
       setTask: () => {}, activate: () => {}, addMessage: () => {}, getMessages: () => [], idle: () => {},
     }) } as any,
