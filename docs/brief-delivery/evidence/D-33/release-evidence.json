@@ -1,0 +1,53 @@
+{
+  "schema": "d33-release-evidence-v1",
+  "implementation_head": "6655313e03b54a8ddddf2a54da5f63c1ca9a551a",
+  "production_candidate": null,
+  "rollout": "off",
+  "release_ready": false,
+  "gates": {
+    "D-32": {
+      "status": "blocked",
+      "source": "fixture",
+      "pr": 995,
+      "head": "4c3b124401e2ae2007343a28ccde150b13d719f1",
+      "artifact": "../D-32/browser/report.json",
+      "passed": 670,
+      "blocked": 316,
+      "failed": 2,
+      "required": 988,
+      "limits": [
+        "Today ready/long 390px composer clipping",
+        "Live enabled-feature and manual screen-reader, reduced-motion, zoom, WebView and full-reference evidence missing"
+      ]
+    },
+    "F-28": {
+      "status": "not_run",
+      "pr": null,
+      "reason": "No activation/migration release record delivered"
+    },
+    "Q-22": {
+      "status": "not_run",
+      "pr": null,
+      "reason": "No final quality report delivered"
+    }
+  },
+  "production_combinations": [],
+  "production_combination_status": "not_run: no authenticated integrated runtime or supported-version evidence available",
+  "composition": "blocked: default registry has 18 missing room bodies, no live navigation or conversation binding, and no runtime binding",
+  "deployment_approval": "not_requested: prerequisites not satisfied; no deployment performed",
+  "synthetic_checks": {
+    "source": "fixture",
+    "status": "passed",
+    "browser": "Codex in-app browser, 1280x720",
+    "artifact": "browser/observations.json",
+    "meaning": "Switch/route behavior only; not live migration, hosted, connector, WebView or product-quality evidence"
+  },
+  "rollback": {
+    "configured_flag": "off",
+    "per_session_override": "brief=0",
+    "applies": "next document load after saving, with normal beforeunload guards",
+    "data_changes": false,
+    "down_migrations": false,
+    "effect_replay": false
+  }
+}

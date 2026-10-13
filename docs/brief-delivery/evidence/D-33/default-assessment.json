@@ -1,0 +1,12 @@
+{
+  "rollout": "off",
+  "blockers": [
+    "release_disabled",
+    "candidate_missing",
+    "D-32_evidence_required",
+    "F-28_evidence_required",
+    "Q-22_evidence_required",
+    "deployment_approval_required",
+    "runtime_unverified"
+  ]
+}
