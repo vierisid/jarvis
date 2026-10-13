@@ -847,6 +847,10 @@ jobs:
       - name: Install the pinned npm
         run: |
           set -euo pipefail
+          # Checked where it is used (#960): whatever set it, an alias, a
+          # path or a URL here would install some other package globally.
+          # The digits are listed, not a range: a range follows the locale.
+          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }
           npm install -g "npm@${NPM_VERSION}"
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
@@ -941,6 +945,10 @@ jobs:
       - name: Ensure npm supports Trusted Publishing
         run: |
           set -euo pipefail
+          # Checked where it is used (#960): whatever set it, an alias, a
+          # path or a URL here would install some other package globally.
+          # The digits are listed, not a range: a range follows the locale.
+          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }
           npm install -g "npm@${NPM_VERSION}"
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }

