@@ -31,7 +31,7 @@ function role(id: string, tools: string[]): RoleDefinition {
   } as unknown as RoleDefinition;
 }
 
-function harness(overrides: AuthorityConfig['overrides'] = []) {
+function harness(overrides: AuthorityConfig['overrides'] = [], opts: { llm?: LLMManager } = {}) {
   const orch = new AgentOrchestrator();
   orch.setAuthorityEngine(new AuthorityEngine({
     default_level: 5, governed_categories: [], overrides, context_rules: [],
@@ -46,18 +46,22 @@ function harness(overrides: AuthorityConfig['overrides'] = []) {
   const primary = orch.createPrimary(role('pa', ['delegation']));
   const specialists = new Map([['spec', role('spec', ['browser'])]]);
   let loops = 0;
-  const taskManager = new AgentTaskManager((() => { loops++; return new Promise(() => {}); }) as never);
+  // With `opts.llm` the task runs the REAL sub-agent loop on that model.
+  const taskManager = opts.llm ? new AgentTaskManager()
+    : new AgentTaskManager((() => { loops++; return new Promise(() => {}); }) as never);
+  const llm = opts.llm ?? ({} as LLMManager);
   const registry = new ToolRegistry();
-  registry.register(createManageAgentsTool({ orchestrator: orch, llmManager: {} as LLMManager, specialists, taskManager }));
+  registry.register(createManageAgentsTool({ orchestrator: orch, llmManager: llm, specialists, taskManager }));
   orch.setToolRegistry(registry);
   const routes = createApiRoutes({
     daemonStartedAt: Date.now(),
     healthMonitor: {} as ApiContext['healthMonitor'],
     config: { llm: { providers: {} } } as JarvisConfig,
+    emergencyController: emergency,
     agentService: {
       getTaskManager: () => taskManager,
       getOrchestrator: () => orch,
-      getLLMManager: () => ({}) as LLMManager,
+      getLLMManager: () => llm,
       getSpecialists: () => specialists,
     },
   } as unknown as ApiContext);
@@ -66,7 +70,9 @@ function harness(overrides: AuthorityConfig['overrides'] = []) {
     method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
   }));
   const subAgents = () => orch.getAllAgents().filter((a) => a.id !== primary.id);
-  return { spawn, cards, emergency, subAgents, loops: () => loops };
+  const emergencyRoute = (action: 'kill') =>
+    (routes[`/api/authority/emergency/${action}`] as { POST: Handler }).POST(new Request(`http://localhost/api/authority/emergency/${action}`, { method: 'POST' }));
+  return { spawn, cards, emergency, emergencyRoute, subAgents, taskManager, loops: () => loops };
 }
 
 describe('POST /api/agents goes through the spawn sink (#932)', () => {
@@ -104,5 +110,36 @@ describe('POST /api/agents goes through the spawn sink (#932)', () => {
     expect(h.subAgents()).toHaveLength(1);
     expect(h.loops()).toBe(1);
     expect(h.cards).toHaveLength(0);
+  });
+});
+
+describe('the dashboard Kill stops a running background task (#987)', () => {
+  it('cancels the task, and its loop makes no model call after Kill', async () => {
+    let calls = 0;
+    const llm = {
+      chatTier: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 1));
+        return { content: '', finish_reason: 'tool_use', model: 'm',
+          tool_calls: [{ id: `c${calls}`, name: 'noop', arguments: {} }], usage: { input_tokens: 1, output_tokens: 1 } };
+      },
+    } as unknown as LLMManager;
+    const h = harness([], { llm });
+    const res = await h.spawn({ specialist: 'spec', task: 'look into it' });
+    expect(res.status).toBe(201);
+    const [task] = h.taskManager.listTasks();
+    for (let i = 0; i < 200 && calls < 3; i++) await new Promise((r) => setTimeout(r, 2));
+    expect(calls).toBeGreaterThanOrEqual(3);
+
+    const atKill = calls;
+    expect((await h.emergencyRoute('kill')).status).toBe(200);
+    for (let i = 0; i < 500 && task!.status === 'running'; i++) await new Promise((r) => setTimeout(r, 2));
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Without the cancel the loop ran on to its 100-call cap with every tool
+    // refused, and the task then reported `completed`.
+    expect(calls).toBe(atKill);
+    expect(task!.status).toBe('cancelled');
+    expect(h.taskManager.runningCount()).toBe(0);
   });
 });

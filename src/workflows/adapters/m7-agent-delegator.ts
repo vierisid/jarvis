@@ -355,8 +355,9 @@ export class M7AgentDelegator implements PieceAgentDelegator {
       }
 
       if (result.terminationReason === "error" && result.canceled) {
-        // The run was stopped between turns. Its delegation rows are already
-        // gone; nothing is written back.
+        // The run was stopped between turns. By a run cancel: its delegation
+        // rows are already gone, and nothing is written back. By an emergency
+        // Kill (#987): the last checkpoint is left as a crash would leave it.
         const canceled: PieceAgentDelegateResult = { finalMessage: "", toolCalls, status: "canceled", error: result.response };
         canceled.outcome = delegationOutcome(canceled, input.requiredTools);
         return canceled;

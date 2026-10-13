@@ -2,6 +2,8 @@ import { describe, expect, test } from 'bun:test';
 import { AgentTaskManager, MAX_RUNNING_TASKS, TaskCapacityError } from './task-manager.ts';
 import { AgentInstance } from './agent.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
+import { AuthorityEngine } from '../authority/engine.ts';
+import { EmergencyController } from '../authority/emergency.ts';
 
 /** A runner whose tasks finish only when the test says so. */
 function controllableRunner() {
@@ -172,5 +174,158 @@ describe('AgentTaskManager.cancel stops the loop', () => {
     expect(manager.getTask(id)!.status).toBe('cancelled');
     expect(manager.runningCount()).toBe(0);
     expect(model.calls()).toBe(atCancel);
+  });
+});
+
+/**
+ * #987: Kill cancels every task started under that controller. Before, Kill
+ * refused the tools and left the loop calling the model to its iteration cap
+ * (measured: 97 more model calls after Kill, then status `completed`).
+ */
+describe('emergency Kill cancels running tasks', () => {
+  function busyModel() {
+    let calls = 0;
+    const llmManager = {
+      chatTier: async () => {
+        calls++;
+        await new Promise((r) => setTimeout(r, 1));
+        return { content: '', finish_reason: 'tool_use', model: 'm',
+          tool_calls: [{ id: `c${calls}`, name: 'noop', arguments: {} }], usage: { input_tokens: 1, output_tokens: 1 } };
+      },
+    };
+    return { llmManager, calls: () => calls };
+  }
+  const registry = new ToolRegistry();
+  registry.register({ name: 'noop', description: 'does nothing', category: 'general', parameters: {}, execute: async () => 'ok' });
+  const agent = () => new AgentInstance({ id: 'spec', name: 'Spec', description: 'd', responsibilities: [], autonomous_actions: [],
+    approval_required: [], tools: [], authority_level: 3 } as never);
+  // The production shape: an engine is wired, so a halted system refuses the tools.
+  const engine = () => new AuthorityEngine({ default_level: 10, governed_categories: [], overrides: [], context_rules: [],
+    learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
+  const launchUnder = (manager: AgentTaskManager, emergency: EmergencyController, model: ReturnType<typeof busyModel>) =>
+    manager.launch({ agent: agent(), task: 't', context: '', llmManager: model.llmManager as never, toolRegistry: registry,
+      authority: { authorityEngine: engine(), emergencyController: emergency } });
+  const until = async (done: () => boolean) => {
+    for (let i = 0; i < 500 && !done(); i++) await new Promise((r) => setTimeout(r, 2));
+  };
+
+  test('Kill cancels a running task and no model call follows it', async () => {
+    const emergency = new EmergencyController();
+    const model = busyModel();
+    const manager = new AgentTaskManager();
+    const id = launchUnder(manager, emergency, model);
+    await until(() => model.calls() >= 3);
+    expect(model.calls()).toBeGreaterThanOrEqual(3);
+
+    const atKill = model.calls();
+    emergency.kill();
+    await until(() => manager.getTask(id)!.status !== 'running');
+    await new Promise((r) => setTimeout(r, 50));
+
+    expect(model.calls()).toBe(atKill);
+    const task = manager.getTask(id)!;
+    expect(task.status).toBe('cancelled');
+    expect(task.result?.response).toContain('the system was killed');
+    expect(manager.runningCount()).toBe(0);
+  });
+
+  test('Kill stops only the tasks started under that controller', async () => {
+    const killed = new EmergencyController();
+    const other = new EmergencyController();
+    const a = busyModel();
+    const b = busyModel();
+    const manager = new AgentTaskManager();
+    const ta = launchUnder(manager, killed, a);
+    const tb = launchUnder(manager, other, b);
+    await until(() => a.calls() >= 2 && b.calls() >= 2);
+    killed.kill();
+    await until(() => manager.getTask(ta)!.status !== 'running');
+    expect(manager.getTask(ta)!.status).toBe('cancelled');
+    expect(manager.getTask(tb)!.status).toBe('running');
+    const bAt = b.calls();
+    await until(() => b.calls() > bAt);
+    expect(b.calls()).toBeGreaterThan(bAt);
+    manager.cancel(tb);
+    await until(() => manager.getTask(tb)!.status !== 'running');
+  });
+
+  test('Pause does not cancel a running task (the owner has not decided that, #987)', async () => {
+    const emergency = new EmergencyController();
+    const model = busyModel();
+    const manager = new AgentTaskManager();
+    const id = launchUnder(manager, emergency, model);
+    await until(() => model.calls() >= 2);
+    emergency.pause();
+    const atPause = model.calls();
+    await until(() => model.calls() > atPause + 2);
+    expect(model.calls()).toBeGreaterThan(atPause + 2);
+    expect(manager.getTask(id)!.status).toBe('running');
+    expect(manager.getTask(id)!.cancelRequested).toBeUndefined();
+    emergency.resume();
+    manager.cancel(id);
+    await until(() => manager.getTask(id)!.status !== 'running');
+  });
+});
+
+/**
+ * #987 at the sink: a sub-agent run with NO signal -- what `delegate_task`
+ * and a workflow delegation make -- also stops at its next fence on Kill.
+ * Before, it ran on to its iteration cap with every tool refused.
+ */
+describe('emergency Kill stops a sub-agent run that has no signal', () => {
+  test('no model call follows Kill, and the run reports a cancel', async () => {
+    const { runSubAgent } = await import('./sub-agent-runner.ts');
+    let calls = 0;
+    const emergency = new EmergencyController();
+    const llmManager = {
+      chatTier: async () => {
+        calls++;
+        if (calls === 3) emergency.kill();
+        await new Promise((r) => setTimeout(r, 1));
+        return { content: '', finish_reason: 'tool_use', model: 'm',
+          tool_calls: [{ id: `c${calls}`, name: 'noop', arguments: {} }], usage: { input_tokens: 1, output_tokens: 1 } };
+      },
+    };
+    const registry = new ToolRegistry();
+    let toolRuns = 0;
+    registry.register({ name: 'noop', description: 'd', category: 'general', parameters: {}, execute: async () => { toolRuns++; return 'ok'; } });
+    const result = await runSubAgent({
+      agent: new AgentInstance({ id: 'spec', name: 'Spec', description: 'd', responsibilities: [], autonomous_actions: [],
+        approval_required: [], tools: [], authority_level: 3 } as never),
+      task: 't', context: '', llmManager: llmManager as never, toolRegistry: registry,
+      authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: [], overrides: [], context_rules: [],
+        learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
+      emergencyController: emergency,
+    });
+    expect(calls).toBe(3);
+    // The turn returned by the call that issued Kill dispatched nothing.
+    expect(toolRuns).toBe(2);
+    expect(result.canceled).toBe(true);
+    expect(result.success).toBe(false);
+    expect(result.response).toContain('the system was killed');
+  });
+
+  test('a Kill then Reset during one model call still stops the run', async () => {
+    const { runSubAgent } = await import('./sub-agent-runner.ts');
+    let calls = 0;
+    const emergency = new EmergencyController();
+    const llmManager = {
+      chatTier: async () => {
+        calls++;
+        if (calls === 2) { emergency.kill(); emergency.reset(); }
+        await new Promise((r) => setTimeout(r, 1));
+        return { content: '', finish_reason: 'tool_use', model: 'm',
+          tool_calls: [{ id: `c${calls}`, name: 'noop', arguments: {} }], usage: { input_tokens: 1, output_tokens: 1 } };
+      },
+    };
+    const registry = new ToolRegistry();
+    registry.register({ name: 'noop', description: 'd', category: 'general', parameters: {}, execute: async () => 'ok' });
+    const result = await runSubAgent({
+      agent: new AgentInstance({ id: 'spec', name: 'Spec', description: 'd', responsibilities: [], autonomous_actions: [],
+        approval_required: [], tools: [], authority_level: 3 } as never),
+      task: 't', context: '', llmManager: llmManager as never, toolRegistry: registry, emergencyController: emergency,
+    });
+    expect(calls).toBe(2);
+    expect(result.canceled).toBe(true);
   });
 });

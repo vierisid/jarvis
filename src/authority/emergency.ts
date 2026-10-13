@@ -7,6 +7,8 @@ export type EmergencyState = 'normal' | 'paused' | 'killed';
 export class EmergencyController {
   private state: EmergencyState = 'normal';
   private onStateChange: ((state: EmergencyState) => void) | null = null;
+  /** Everything else that acts on a state change (#987); see `subscribe`. */
+  private listeners = new Set<(state: EmergencyState) => void>();
 
   getState(): EmergencyState {
     return this.state;
@@ -14,12 +16,14 @@ export class EmergencyController {
 
   /**
    * Pause: freeze all agent tool execution. Agents can still receive messages
-   * but all tools return [SYSTEM PAUSED].
+   * but all tools return [SYSTEM PAUSED]. A background task already running
+   * is NOT stopped: its loop keeps calling the model with every tool refused
+   * (#987 left whether Pause should cancel it to the owner).
    */
   pause(): void {
     if (this.state === 'killed') return; // Can't pause from killed
     this.state = 'paused';
-    this.onStateChange?.(this.state);
+    this.notify();
     console.log('[EmergencyController] System PAUSED — all tool execution suspended');
   }
 
@@ -29,18 +33,25 @@ export class EmergencyController {
   resume(): void {
     if (this.state !== 'paused') return;
     this.state = 'normal';
-    this.onStateChange?.(this.state);
+    this.notify();
     console.log('[EmergencyController] System RESUMED — tool execution restored');
   }
 
   /**
-   * Kill: terminate all agents, cancel all pending.
-   * Requires explicit reset() to recover.
+   * Kill: refuse every tool call and every new agent, and stop every
+   * sub-agent loop run under this controller (#987). The task manager
+   * subscribes and aborts its `manage_agents` tasks, model call in flight
+   * included; any other sub-agent run (`delegate_task`, a workflow
+   * delegation) stops at its next fence in `runSubAgent`. The orchestrator's
+   * own loops are NOT stopped: a chat turn, a background-agent turn and a
+   * conversation-tier task keep calling the model with every tool refused.
+   * Requires explicit reset() to recover. Pending approval cards are NOT
+   * cancelled; the approval executor refuses to run them while killed.
    */
   kill(): void {
     this.state = 'killed';
-    this.onStateChange?.(this.state);
-    console.log('[EmergencyController] System KILLED — all agents terminated');
+    this.notify();
+    console.log('[EmergencyController] System KILLED - tools refused, sub-agent runs stopped');
   }
 
   /**
@@ -49,7 +60,7 @@ export class EmergencyController {
   reset(): void {
     if (this.state !== 'killed') return;
     this.state = 'normal';
-    this.onStateChange?.(this.state);
+    this.notify();
     console.log('[EmergencyController] System RESET — back to normal');
   }
 
@@ -62,5 +73,26 @@ export class EmergencyController {
 
   setStateChangeCallback(cb: (state: EmergencyState) => void): void {
     this.onStateChange = cb;
+  }
+
+  /**
+   * Be told of every state change, alongside the one persistence callback.
+   * Returns the unsubscribe function. A listener that throws is logged and
+   * does not stop the others: Kill must reach every task it stops.
+   */
+  subscribe(listener: (state: EmergencyState) => void): () => void {
+    this.listeners.add(listener);
+    return () => { this.listeners.delete(listener); };
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(this.state);
+      } catch (err) {
+        console.error('[EmergencyController] state listener failed:', err instanceof Error ? err.message : err);
+      }
+    }
+    this.onStateChange?.(this.state);
   }
 }
