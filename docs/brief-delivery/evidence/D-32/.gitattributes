@@ -1,0 +1,3 @@
+browser/observations/** linguist-generated=true
+browser/*.png linguist-generated=true
+browser/report.json linguist-generated=true

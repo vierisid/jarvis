@@ -1,0 +1,11 @@
+{
+  "captured_at": "2026-10-13T19:52:44.173596+00:00",
+  "parent": "https://github.com/vierisid/jarvis/pull/992",
+  "state": "OPEN",
+  "base": "brief/d-30",
+  "branch": "brief/d-31",
+  "head": "aa4685232e4b826d6dc8a178253f4b4ce9c05eb4",
+  "parent_checks": "All active checks passed on the D32 starting recheck, read through the code-review CI connector. Conditional jobs skipped.",
+  "main_inspected": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+  "duplicate_d32_prs": 0
+}

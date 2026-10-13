@@ -1,0 +1,41 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 2 required path(s) present in the npm tarball (2332 files).
+[pre-commit] Running 1 related test file(s) (180s timeout)...
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/verification/craft.test.ts:
+(pass) every registered room has all 32 content/layout cases and all viewport/interaction requirements [3.17ms]
+(pass) unimplemented rooms, missing data states and manual checks cannot disappear or pass [0.66ms]
+(pass) an empty report and a fully successful fixture report both block release [19.23ms]
+(pass) only complete current runtime evidence with enabled capabilities can pass [22.19ms]
+(pass) missing, failed, blocked, skipped, duplicate and unknown cases cannot pass [36.35ms]
+(pass) evidence needs a known schema, exact revision, capture time and artifact paths [33.87ms]
+(pass) completion retains failures and explicitly blocks every unexecuted case [18.10ms]
+(pass) layout assertions reject placeholders, lost state, loading, overflow, unnamed controls and hidden actions [0.36ms]
+(pass) compact adaptation requires a real single-panel conversation and restores the work on close [0.08ms]
+(pass) an infrastructure failure stops the batch and preserves its failing case [4.06ms]
+(pass) the fixture runner refuses an external host before opening any URL [0.97ms]
+(pass) CLI verifies real artifacts and rejects missing files, symlinks outside the report, and malformed input [259.60ms]
+
+ 12 pass
+ 0 fail
+ 252 expect() calls
+Ran 12 tests across 1 file. [514.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-32 49e55f4d] test(brief): add D32 runtime craft and accessibility harness
+ 8 files changed, 644 insertions(+)
+ create mode 100644 scripts/brief-craft/README.md
+ create mode 100644 scripts/brief-craft/browser.mjs
+ create mode 100644 scripts/brief-craft/matrix.mjs
+ create mode 100644 scripts/brief-craft/report.mjs
+ create mode 100644 scripts/brief-craft/verify.mjs
+ create mode 100644 ui/src/brief/verification/CraftTrace.tsx
+ create mode 100644 ui/src/brief/verification/craft.test.ts
