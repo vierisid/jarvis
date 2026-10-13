@@ -49,9 +49,9 @@
   "checks": {
     "focused": {
       "command": "bun test ui/src/brief/navigation/navigation.test.ts ui/src/brief/navigation/Navigation.test.tsx ui/src/brief/entry/route.test.ts ui/src/brief/entry/DashboardEntry.test.tsx src/brief/capabilities.test.ts ui/src/v2/shell/sidecar-update.test.ts",
-      "passed": 73,
+      "passed": 75,
       "failed": 0,
-      "assertions": 764
+      "assertions": 842
     },
     "cross_stack": {
       "result": "passed",
@@ -70,20 +70,49 @@
     "typecheck": "passed",
     "build_ui": "passed; existing @theme/@tailwind warnings",
     "guards": "EE license, migrations and 100 template checks passed",
-    "review": "in_progress",
-    "full_ci": "not_run"
+    "review": {
+      "status": "passed",
+      "full_review_findings": 2,
+      "followup_findings": 1,
+      "all_findings_fixed": true,
+      "final_review": "No findings",
+      "evidence": "docs/brief-delivery/evidence/F-25/review.json"
+    },
+    "full_ci": {
+      "source": "GitHub checks for the PR head",
+      "url": "https://github.com/vierisid/jarvis/pull/980/checks",
+      "note": "Final current-head result is recorded in the delivery handoff after push; do not infer CI from this receipt alone."
+    },
+    "legacy_regressions": {
+      "passed": 40,
+      "failed": 0,
+      "assertions": 133,
+      "command": "bun test ui/src/brief/connections/legacy-setup.test.tsx ui/src/brief/connections/setup.test.ts ui/src/v2/shell/SidecarUpdatePill.test.tsx ui/src/v2/rooms/settings/tabs/sidecar-add-device.test.ts ui/src/v2/rooms/settings/tabs/voice-realtime-copy.test.ts ui/src/brief/profile-settings/actions.test.tsx"
+    },
+    "main_compatibility_limit": "Canonical tabs verified at f74044de; newer main room-action cancellation/ack guards are untouched. No whole-stack main merge certification.",
+    "d30_followup": "D30 advanced to 93a04bc during review. Adapter.ts is byte-unchanged versus pinned db9f591; reproducible integration run used a temporary clean detached checkout of the recorded pin, then removed it."
   },
   "manual": [
     "Chat closed: approval -> Authority, failure -> task detail, update -> Sidecar Settings",
     "Draft guard cancellation leaves the notification and current target intact",
     "Stale notifications are unavailable, never a zero count",
-    "Obsolete Arrange request explains retained Advanced settings/support destination"
+    "Obsolete Arrange request explains retained Advanced settings/support destination",
+    "Actual SettingsRoom: inline observer preserves sidecar request for expanded destination",
+    "Actual Chrome Back restores Voice; leaving through Logs and reopening Settings preserves the restored tab"
   ],
   "evidence": [
     "docs/brief-delivery/F-25.md",
     "docs/brief-delivery/evidence/F-25/chat-closed.jpg",
     "docs/brief-delivery/evidence/F-25/cancelled-navigation.jpg",
-    "docs/brief-delivery/evidence/F-25/stale-and-obsolete.jpg"
+    "docs/brief-delivery/evidence/F-25/stale-and-obsolete.jpg",
+    "docs/brief-delivery/evidence/F-25/settings-handoff.jpg",
+    "docs/brief-delivery/evidence/F-25/settings-back.jpg",
+    "docs/brief-delivery/evidence/F-25/settings-remount.jpg",
+    "docs/brief-delivery/evidence/F-25/focused.log",
+    "docs/brief-delivery/evidence/F-25/legacy-regressions.log",
+    "docs/brief-delivery/evidence/F-25/cross-stack.json",
+    "docs/brief-delivery/evidence/F-25/build.log",
+    "docs/brief-delivery/evidence/F-25/review.json"
   ],
   "limitations": [
     "Optional module is not assembled/live-activated; D-33/F-28 still own default dashboard composition and activation.",
@@ -92,5 +121,6 @@
     "F-27 owns live missed-event reconciliation; no claim of exactly-once event delivery."
   ],
   "rollback": "Disable/unregister navigationCompatibility or revert this card; retain legacy access and data. No migrations, resets, replay or deletion.",
-  "next_card": "F-26 not started"
+  "next_card": "F-26 not started",
+  "pull_request": "https://github.com/vierisid/jarvis/pull/980"
 }

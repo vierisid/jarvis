@@ -31,7 +31,7 @@ import { SidecarTab } from "./tabs/SidecarTab";
 import { BillingTab } from "./tabs/BillingTab";
 import { useBilling } from "../../billing/useBilling";
 import { billingTabVisible } from "../../billing/billing-view";
-import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab, settingsTabFromHref } from "../../shell/settings-tab-request";
+import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab, settingsTabFromHref, clearRequestedSettingsTab } from "../../shell/settings-tab-request";
 import { isRoomTab, ROOM_TABS, type RoomTab } from "../../../../../src/daemon/room-tabs";
 import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 import "./SettingsRoom.css";
@@ -66,7 +66,12 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useEffect(() => {
     const onRequest = (e: Event) => {
       const t = (e as CustomEvent<SettingsTab>).detail;
-      if (VALID_TABS.has(t)) setTab(t);
+      if (VALID_TABS.has(t)) {
+        // Inline observers must leave it for the destination mount. An expanded
+        // destination has already received it and must not leak it to a later room.
+        if (mode === "expanded") clearRequestedSettingsTab();
+        setTab(t);
+      }
     };
     const onLocation = () => {
       const t = settingsTabFromHref(window.location.href);
@@ -80,7 +85,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
       window.removeEventListener("popstate", onLocation);
       window.removeEventListener("hashchange", onLocation);
     };
-  }, []);
+  }, [mode]);
   // A self-hosted install has no bill, so it gets no Billing tab. Same shared
   // store as the shell banner, and refreshOnMount: false so opening Settings
   // does not itself trigger a read; see billingTabVisible for why the tab stays

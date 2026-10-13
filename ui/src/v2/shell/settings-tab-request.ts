@@ -17,6 +17,13 @@ export function clearRequestedSettingsTab(): void { pending = null; }
 export function requestSettingsTab(tab: SettingsTab): void {
   pending = tab;
   if (typeof window !== "undefined") {
+    // When a canonical deep link is already present, an explicit tab request
+    // replaces it too. Otherwise an old query could win on a later remount.
+    const url = new URL(window.location.href);
+    if (url.searchParams.has("settingsTab")) {
+      url.searchParams.set("settingsTab", tab);
+      window.history.replaceState(window.history.state, "", url);
+    }
     window.dispatchEvent(new CustomEvent<SettingsTab>(SETTINGS_TAB_EVENT, { detail: tab }));
   }
 }
@@ -25,7 +32,8 @@ export function requestSettingsTab(tab: SettingsTab): void {
 export function takeRequestedSettingsTab(): SettingsTab | null {
   const tab = pending;
   pending = null;
-  return tab ?? (typeof window !== "undefined" ? settingsTabFromHref(window.location.href) : null);
+  // A restored history/deep-link entry is authoritative over an older request.
+  return (typeof window !== "undefined" ? settingsTabFromHref(window.location.href) : null) ?? tab;
 }
 
 /** Additive deep link; native panel/room hashes keep their existing parser and voice ownership. */
