@@ -5,8 +5,12 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { CATALOG, catalogById, findCatalogEntry } from "./catalog";
+import { GENERATED, GENERATED_FROM_SHA, type GeneratedCatalogEntry } from "./catalog-generated";
 import { EXCLUDED, VERIFIED, VERIFIED_METADATA } from "./catalog-overrides";
+import { UPSTREAM_PIN_SHA } from "../activepieces/upstream-pin";
+import { EE_SEGMENT } from "../../../scripts/lib/ee-path";
 
 const SEMVER_RANGE = /^[\^~]?\d+\.\d+\.\d+$/;
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/;
@@ -143,5 +147,120 @@ describe("CATALOG ordering", () => {
       if (entry.tier === "community") sawCommunity = true;
       else expect(sawCommunity).toBe(false); // verified must precede any community
     }
+  });
+});
+
+/**
+ * License. Activepieces is dual-licensed: everything outside `packages/ee/` and
+ * `packages/server/api/src/app/ee` is MIT, those two are the Enterprise License,
+ * which forbids redistribution. We only offer MIT pieces.
+ *
+ * Upstream pieces declare no `license` in their package.json, so `licenseSpdx`
+ * is empty for every generated entry and an allow-list on it alone proves
+ * nothing. What actually makes a piece MIT is WHERE it lives upstream, so the
+ * load-bearing checks are on `sourceUrl`: no `/ee/` segment, the pinned SHA,
+ * the community tree. The license field is still checked, so a piece that ever
+ * declares something other than MIT has to be excluded (or this test changed
+ * on purpose) before it can ship.
+ */
+const ALLOWED_LICENSES: ReadonlySet<string> = new Set(["", "MIT"]);
+const COMMUNITY_TREE = `https://github.com/activepieces/activepieces/tree/${GENERATED_FROM_SHA}/packages/pieces/community/`;
+
+/** Why `g` may not ship, or null. Excluded ids never reach CATALOG, so they are skipped. */
+function licenseViolation(g: GeneratedCatalogEntry, excluded: ReadonlySet<string>): string | null {
+  if (excluded.has(g.id)) return null;
+  if (!ALLOWED_LICENSES.has(g.licenseSpdx)) return `${g.id}: license "${g.licenseSpdx}" is not MIT`;
+  // Before the tree check, so an Enterprise source is named as one rather
+  // than as merely being somewhere unexpected.
+  if (EE_SEGMENT.test(new URL(g.sourceUrl).pathname)) return `${g.id}: source ${g.sourceUrl} is under an /ee/ path`;
+  if (!g.sourceUrl.startsWith(COMMUNITY_TREE)) return `${g.id}: source ${g.sourceUrl} is outside the pinned community tree`;
+  if (g.sourceUrl.slice(COMMUNITY_TREE.length) !== g.id) return `${g.id}: source ${g.sourceUrl} is not the piece's own folder`;
+  if (!g.npmPackage.startsWith("@activepieces/piece-")) return `${g.id}: ${g.npmPackage} is not an upstream piece package`;
+  return null;
+}
+
+/** The carve-outs upstream's LICENSE lists before granting MIT, one per `* ` bullet. */
+const UPSTREAM_LICENSE_BULLETS = [
+  `All content that resides under the "packages/ee/" and "packages/server/api/src/app/ee" directory of this repository, if that directory exists, is licensed under the license defined in packages/ee/LICENSE`,
+  `All third party components incorporated into the Activepieces Inc Software are licensed under the original license provided by the owner of the applicable component.`,
+  `Content outside of the above mentioned directories or restrictions above is available under the "MIT Expat" license as defined below.`,
+];
+
+describe("CATALOG license", () => {
+  test("every generated piece is MIT by license field and by upstream location, or excluded", () => {
+    const violations = GENERATED.map((g) => licenseViolation(g, EXCLUDED)).filter((v) => v !== null);
+    expect(violations).toEqual([]);
+  });
+
+  test("every catalog entry comes from the generated list, so the check above covers it", () => {
+    const generated = new Map(GENERATED.map((g) => [g.id, g]));
+    for (const entry of CATALOG) {
+      const g = generated.get(entry.id);
+      expect(g).toBeDefined();
+      expect(entry.licenseSpdx).toBe(g!.licenseSpdx);
+      expect(entry.sourceUrl).toBe(g!.sourceUrl);
+      expect(entry.npmPackage).toBe(g!.npmPackage);
+    }
+  });
+
+  test("the catalog is generated from the same upstream commit that was vendored", () => {
+    // The LICENSE read below is the vendored copy. It only speaks for the
+    // catalog when both describe the same commit, which the sync script asks
+    // for in a comment on its PINNED_SHA and this makes binding.
+    expect(GENERATED_FROM_SHA).toBe(UPSTREAM_PIN_SHA);
+  });
+
+  test("the vendored upstream LICENSE carves out only ee and grants MIT for the rest", () => {
+    // Exactly these bullets: a new carve-out (say, a stricter license for some
+    // pieces) adds one and fails here on the next vendor sync, while prose
+    // elsewhere in the file can change without a false alarm.
+    const text = readFileSync(new URL("../activepieces/LICENSE.activepieces", import.meta.url), "utf8");
+    const bullets = text.split("\n").filter((line) => line.startsWith("* ")).map((line) => line.slice(2).trim());
+    expect(bullets).toEqual(UPSTREAM_LICENSE_BULLETS);
+  });
+
+  describe("the check is not vacuous", () => {
+    const ok: GeneratedCatalogEntry = {
+      id: "acme", npmPackage: "@activepieces/piece-acme", versionRange: "^1.0.0", latestVersion: "1.0.0",
+      displayName: "Acme", description: "", sourceUrl: `${COMMUNITY_TREE}acme`, licenseSpdx: "",
+    };
+    const none = new Set<string>();
+    const tree = "https://github.com/activepieces/activepieces/tree/";
+
+    test("an empty or MIT license in the community tree passes", () => {
+      expect(licenseViolation(ok, none)).toBeNull();
+      expect(licenseViolation({ ...ok, licenseSpdx: "MIT" }, none)).toBeNull();
+    });
+
+    test.each(["GPL-3.0", "AGPL-3.0", "Apache-2.0", "SEE LICENSE IN LICENSE", "Commercial"])("license %s fails", (license) => {
+      expect(licenseViolation({ ...ok, licenseSpdx: license }, none)).toContain("is not MIT");
+    });
+
+    test("a non-MIT piece passes once it is excluded", () => {
+      expect(licenseViolation({ ...ok, licenseSpdx: "GPL-3.0" }, new Set(["acme"]))).toBeNull();
+    });
+
+    test.each([
+      `${tree}${GENERATED_FROM_SHA}/packages/ee/pieces/acme`,
+      `${tree}${GENERATED_FROM_SHA}/packages/server/api/src/app/ee/pieces/acme`,
+    ])("an Enterprise source fails as one: %s", (sourceUrl) => {
+      expect(licenseViolation({ ...ok, sourceUrl }, none)).toContain("under an /ee/ path");
+    });
+
+    test.each([
+      `${tree}${GENERATED_FROM_SHA}/packages/pieces/custom/acme`,
+      `${tree}0000000000000000000000000000000000000000/packages/pieces/community/acme`,
+      `https://github.com/someone/fork/tree/${GENERATED_FROM_SHA}/packages/pieces/community/acme`,
+    ])("a source outside the pinned community tree fails: %s", (sourceUrl) => {
+      expect(licenseViolation({ ...ok, sourceUrl }, none)).toContain("outside the pinned community tree");
+    });
+
+    test("a source that is not the piece's own folder fails", () => {
+      expect(licenseViolation({ ...ok, sourceUrl: `${COMMUNITY_TREE}other` }, none)).toContain("own folder");
+    });
+
+    test("a package outside @activepieces/piece-* fails", () => {
+      expect(licenseViolation({ ...ok, npmPackage: "@someone/piece-acme" }, none)).toContain("not an upstream piece package");
+    });
   });
 });

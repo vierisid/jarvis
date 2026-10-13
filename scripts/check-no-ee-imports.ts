@@ -21,6 +21,7 @@
 
 import { readdirSync, statSync, readFileSync } from "node:fs";
 import { join, relative } from "node:path";
+import { EE_SEGMENT } from "./lib/ee-path";
 
 const REPO_ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 const VENDOR_DIR = join(REPO_ROOT, "src/workflows/activepieces");
@@ -35,7 +36,6 @@ const SKIP_DIR_NAMES = new Set([
   "ui/dist",
 ]);
 
-const EE_SEGMENT = /(^|\/)ee(\/|$)/;
 // Matches: import ... from "...activepieces.../ee/..."
 //          require("...activepieces.../ee/...")
 //          import("...activepieces.../ee/...")

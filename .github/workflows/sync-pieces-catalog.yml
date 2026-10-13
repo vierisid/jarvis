@@ -14,7 +14,10 @@
 #      `held.json` (see scripts/lib/verified-upgrade.ts).
 #   2. `bun test` and `tsc --noEmit` -- the catalog tests in
 #      `pieces-library/catalog.test.ts` guard against malformed entries
-#      (bad semver, missing displayName, ids that collide, etc.), and
+#      (bad semver, missing displayName, ids that collide, etc.) and against
+#      any piece that is not MIT, by its license field or by where it lives
+#      upstream (an /ee/ path, outside packages/pieces/community, or a SHA
+#      other than the vendored one), and
 #      `governed-pieces.test.ts` that every verified piece's installed actions
 #      are mapped, which the hold in step 1 should always leave true.
 #   3. Open a PR ONLY when an entry actually changed (`has_changes == true`).
@@ -184,7 +187,7 @@ jobs:
             --held "$RUNNER_TEMP/catalog-sync/held.json"
 
       # Make sure the regenerated catalog still passes the catalog tests
-      # (id uniqueness, semver shape, etc.), that every verified piece's
+      # (id uniqueness, semver shape, MIT-only license, etc.), that every verified piece's
       # installed actions are mapped, and the wider type check.
       - name: Validate
         run: |
