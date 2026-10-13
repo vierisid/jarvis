@@ -15,6 +15,7 @@ import {
   BILLING_LINKS,
 } from "./fixtures";
 import type { BillingFixture } from "./BillingWorkspace";
+import { formatDate } from "../../../v2/billing/billing-view";
 let React: typeof import("react"),
   createRoot: typeof import("react-dom/client").createRoot,
   Workspace: typeof import("./BillingWorkspace").BillingWorkspace,
@@ -305,4 +306,106 @@ test("trial, grace and scheduled cancellation keep their distinct labels and can
   expect(host.textContent).toContain("Canceling");
   expect(button("Resume subscription")).toBeDefined();
   expect(host.textContent).not.toContain("Cancel subscription");
+});
+
+test("a single plan retains every reported price interval and currency", async () => {
+  const plan = fixture.billing.summary!.plans[0]!;
+  plan.quantity = 2;
+  plan.prices.push({ unitAmount: 85000, currency: "EUR", interval: "year" });
+  await render();
+  expect(
+    host.querySelector(".brief-billing-plan-lines")!.textContent,
+  ).toContain("€85.00 / mo · €850.00 / yr each");
+  plan.prices[1] = { unitAmount: 1200, currency: "JPY", interval: "year" };
+  await render({ chatOpen: true });
+  expect(
+    host.querySelector(".brief-billing-plan-lines")!.textContent,
+  ).toContain("€85.00 / mo · ¥1,200 / yr each");
+});
+
+test("no-plan and ended subscriptions open the billing page while payment recovery keeps its portal", async () => {
+  const subscription = fixture.billing.summary!.subscription!;
+  fixture.billing.summary!.subscription = null;
+  fixture.billing.summary!.plans = [];
+  await render();
+  await click("Open billing");
+  expect(opened).toEqual([BILLING_LINKS.page]);
+  fixture.billing.summary!.subscription = {
+    ...subscription,
+    status: "canceled",
+  };
+  await render();
+  await click("Open billing");
+  expect(opened.at(-1)).toBe(BILLING_LINKS.page);
+  for (const [status, label] of [
+    ["incomplete", "Complete payment"],
+    ["past_due", "Open billing"],
+  ]) {
+    fixture.billing.summary!.subscription.status = status!;
+    await render();
+    await click(label!);
+    expect(opened.at(-1)).toBe(BILLING_LINKS.manage);
+  }
+});
+
+for (const status of ["active", "trialing"])
+  test(`${status} retains a known upcoming amount without a charge date`, async () => {
+    const summary = fixture.billing.summary!;
+    summary.subscription!.status = status;
+    summary.upcomingInvoice = {
+      amountDueCents: 10370,
+      currency: "EUR",
+      date: null,
+    };
+    for (const periodEnd of [summary.subscription!.currentPeriodEnd, null]) {
+      summary.subscription!.currentPeriodEnd = periodEnd;
+      await render();
+      const copy = host.querySelector(".brief-billing-plan")!.textContent!;
+      expect(copy).toContain("Next charge €103.70");
+      expect(copy).toContain("Charge date unavailable");
+      expect(copy.match(/€103\.70/g)).toHaveLength(1);
+    }
+    summary.upcomingInvoice.date = "bad date";
+    summary.upcomingInvoice.amountDueCents = 1200;
+    summary.upcomingInvoice.currency = "JPY";
+    await render();
+    expect(host.querySelector(".brief-billing-plan")!.textContent).toContain(
+      "Next charge ¥1,200",
+    );
+    expect(host.textContent).not.toContain("Invalid Date");
+  });
+
+test("a known charge date keeps the canonical next-charge copy without duplication", async () => {
+  const date = "2026-11-01T12:00:00Z";
+  fixture.billing.summary!.upcomingInvoice = {
+    amountDueCents: 10370,
+    currency: "EUR",
+    date,
+  };
+  await render();
+  const copy = host.querySelector(".brief-billing-plan")!.textContent!;
+  expect(copy).toContain(`Next charge €103.70 on ${formatDate(date)}`);
+  expect(copy.match(/€103\.70/g)).toHaveLength(1);
+  expect(copy).not.toContain("Charge date unavailable");
+});
+
+test("an undated preview cannot promise a charge for a non-renewing subscription", async () => {
+  fixture.billing.summary!.upcomingInvoice = {
+    amountDueCents: 10370,
+    currency: "EUR",
+    date: null,
+  };
+  for (const status of ["canceled", "past_due", "incomplete"]) {
+    fixture.billing.summary!.subscription!.status = status;
+    await render();
+    expect(
+      host.querySelector(".brief-billing-plan")!.textContent,
+    ).not.toContain("Next charge");
+  }
+  fixture.billing.summary!.subscription!.status = "active";
+  fixture.billing.summary!.subscription!.cancelAtPeriodEnd = true;
+  await render();
+  expect(host.querySelector(".brief-billing-plan")!.textContent).not.toContain(
+    "Next charge",
+  );
 });
