@@ -785,12 +785,16 @@ export class WebSocketServer {
     this.broadcastWithReceipt(message);
   }
 
-  /** Number of sockets accepting the frame, including queued backpressure. Not a read receipt. */
-  broadcastWithReceipt(message: WSMessage): number {
+  /**
+   * Number of sockets accepting the frame, including queued backpressure. Not a
+   * read receipt. `except` is left out: the caller sends it its own copy.
+   */
+  broadcastWithReceipt(message: WSMessage, except?: ServerWebSocket<unknown>): number {
     const payload = JSON.stringify(message);
     let sent = 0;
 
     for (const client of this.clients) {
+      if (client === except) continue;
       try {
         if (client.send(payload) !== 0) sent++;
       } catch (error) {
@@ -799,7 +803,7 @@ export class WebSocketServer {
     }
 
     // Only log errors or when no clients received the message
-    if (sent === 0 && this.clients.size > 0) {
+    if (sent === 0 && this.clients.size > (except && this.clients.has(except) ? 1 : 0)) {
       console.warn(`[WebSocketServer] Broadcast failed: 0/${this.clients.size} clients received message`);
     }
     return sent;
@@ -815,12 +819,14 @@ export class WebSocketServer {
 
   /**
    * Unicast a JSON message to a specific client (e.g. tts_start/tts_end signals).
+   * True when the socket accepted the frame (as broadcastWithReceipt counts it).
    */
-  sendToClient(ws: ServerWebSocket<unknown>, message: WSMessage): void {
+  sendToClient(ws: ServerWebSocket<unknown>, message: WSMessage): boolean {
     try {
-      ws.send(JSON.stringify(message));
+      return ws.send(JSON.stringify(message)) !== 0;
     } catch (error) {
       console.error('[WebSocketServer] Error unicasting to client:', error);
+      return false;
     }
   }
 

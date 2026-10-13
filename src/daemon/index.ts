@@ -33,7 +33,7 @@ import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts'
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
-import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
+import { pebbleRoomActionResult, REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
 import { CommitmentExecutor } from "./commitment-executor.ts";
@@ -1025,9 +1025,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           case 'open_dashboard_room':
             return openRoom(String(args.room ?? ''));
           case 'dashboard_room_action':
-            // In-room actions target the dashboard SPA, which a native panel
-            // doesn't receive — opening the room is the useful part here.
-            return openRoom(String(args.room ?? ''));
+            // Only the room is opened here; the action itself is not sent. The
+            // model is told so, or "Opened Settings." reads as the TTS toggle
+            // it asked for having happened (#965).
+            return pebbleRoomActionResult(await openRoom(String(args.room ?? '')), String(args.action ?? ''));
           case 'control_dashboard_window': {
             const action = String(args.action ?? '');
             const target = findPanel(sidecarId, args.target ? String(args.target) : undefined);

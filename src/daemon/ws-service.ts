@@ -45,7 +45,8 @@ import { realtimeEnablement } from './usejarvis-ai.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import { tagRealtimePcm } from '../comms/realtime-frame.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
-import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from './realtime-nav-tools.ts';
+import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES, REALTIME_ROOM_KEYS } from './realtime-nav-tools.ts';
+import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { RealtimeBudgetTracker } from './realtime-budget.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import { classifyErrorString } from '../llm/provider.ts';
@@ -55,6 +56,10 @@ import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
 import type { FileEntry } from '../sites/types.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
+import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
+
+/** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
+const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
 
 type VoiceSession = {
   requestId: string;
@@ -548,6 +553,9 @@ export class WebSocketService implements Service {
         },
         onDisconnect: (ws) => {
           this.cancelActiveChat(ws, 'disconnect', false);
+          // A room action this dashboard was asked about can no longer be
+          // answered: say so now rather than after the wait (#965).
+          this.roomActionResults.abandonAnswerer(ws);
           // Tear down any realtime voice session (closes the OpenAI WS + timer).
           this.closeRealtimeVoice(ws);
           // Clean up every per-socket map so a long-running daemon doesn't
@@ -1193,10 +1201,11 @@ export class WebSocketService implements Service {
       }
 
       case 'room_action_result': {
-        // A panel's answer to requestRoomAction. Malformed or unknown ids are
+        // A panel's or dashboard's answer to requestRoomAction. Malformed or
+        // unknown ids, and answers from a client that was not asked, are
         // dropped inside answer(); nothing is sent back either way.
         const p = msg.payload as { resultId?: unknown; accepted?: unknown } | undefined;
-        this.roomActionResults.answer(p?.resultId, p?.accepted);
+        this.roomActionResults.answer(p?.resultId, p?.accepted, ws);
         return undefined;
       }
 
@@ -1824,8 +1833,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       executeToolCall: (name, args) => {
         // Dashboard nav/in-room actions are handled here (they broadcast to the
         // dashboard); everything else goes through the auto-approve tool bridge.
-        const nav = this.executeRealtimeNavTool(name, args);
-        if (nav !== null) return Promise.resolve(nav);
+        if (REALTIME_NAV_TOOL_NAMES.has(name)) {
+          return this.executeRealtimeNavTool(name, args, ws).then((nav) => nav ?? 'Unknown navigation tool.');
+        }
         return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories });
       },
       // Voice has no turn objects: the user starting to speak is the taint
@@ -1889,7 +1899,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * normal tool bridge). Reuses the same broadcast* methods the standard voice
    * path uses, so the dashboard reacts identically.
    */
-  private executeRealtimeNavTool(name: string, args: Record<string, unknown>): string | null {
+  private async executeRealtimeNavTool(
+    name: string,
+    args: Record<string, unknown>,
+    ws: ServerWebSocket<unknown>,
+  ): Promise<string | null> {
     if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
     const reqId = crypto.randomUUID();
     switch (name) {
@@ -1915,11 +1929,21 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         const action = String(args.action ?? '');
         if (!room || !action) return 'Room and action are required.';
         const innerArgs = (args.args && typeof args.args === 'object') ? args.args as Record<string, unknown> : {};
-        // Auto-open the room first (no-op if already open), then dispatch —
-        // mirrors the classifier path so the qualifier isn't dropped.
+        if (!(REALTIME_ROOM_KEYS as readonly string[]).includes(room)) return `There is no "${room}" room.`;
+        // Auto-open the room first (no-op if already open), then dispatch,
+        // mirroring the classifier path so the qualifier isn't dropped. The
+        // dashboard this session runs on says whether the room ran it, and
+        // the model is told that, not "Done" (#965).
         this.broadcastRoomNavigation(room as RoomKey, reqId);
-        this.broadcastRoomAction({ room, action, args: innerArgs }, reqId);
-        return `Done: ${action} in ${room}.`;
+        const ra = { room, action, args: innerArgs };
+        // Shorter than the realtime session's wait for sibling tool results,
+        // so a slow room cannot leave this result to be voiced on its own
+        // (and the model, seeing none, calling the tool again).
+        const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
+        const reply = roomActionReply(ra, outcome);
+        return outcome === 'accepted' && action !== 'switch_tab'
+          ? `${reply} (${roomTitle(room)} accepted it and started it; it shows the result on screen.)`
+          : reply;
       }
       default:
         return null;
@@ -2371,14 +2395,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // an unfiltered Room. Classifier emits room_action only when it's
     // confident the user wants in-room behavior, so trust it.
     if (route === 'act' && intent.room_action) {
-      const ra = intent.room_action;
-      // Auto-open the room (no-op if already open) so a "go to settings
-      // and disable TTS"-style compound voice command also works when
-      // the user is on the home thread. The UI bus queues the action
-      // until the body mounts.
-      this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
-      this.broadcastRoomAction(ra, requestId);
-      this.broadcastAssistantAck(ackForRoomAction(ra), requestId);
+      await this.handleVoiceRoomAction(intent.room_action, requestId, ws);
       this.broadcastThinkingEnd(requestId);
       return;
     }
@@ -2798,52 +2815,65 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
-   * Phase 6.3.5 — drive a Room's UI directly from voice. The dashboard's
-   * action bus dispatches to whichever Room is currently mounted matching
-   * `room`. Args are per-action and validated client-side.
-   */
-  broadcastRoomAction(
-    action: { room: string; action: string; args?: Record<string, unknown> },
-    requestId?: string,
-  ): void {
-    this.wsServer.broadcast({
-      type: 'notification',
-      payload: {
-        source: 'room_action',
-        room: action.room,
-        action: action.action,
-        args: action.args ?? {},
-        requestId,
-      },
-      timestamp: Date.now(),
-    });
-  }
-
-  /**
-   * Broadcast a room action and wait for a panel to say whether its room ran
-   * it (#933). Resolves `accepted` or `rejected` on the first answer, and
-   * `no_answer` when none comes: no panel of that room connected, or one that
-   * never mounted the room. Only native panels answer.
+   * Broadcast a room action and wait to hear whether a room ran it (#933).
+   * Resolves `accepted` or `rejected` on the first answer, and `no_answer`
+   * when none comes: nobody connected who could answer, or a room that never
+   * mounted.
+   *
+   * Without `client` the native panels answer (the pebble's tab switch). With
+   * `client`, the action still goes to everyone, but only that dashboard gets
+   * the resultId, is asked to answer (`resultFrom: 'dashboard'`), and is
+   * listened to (#965): a dashboard voice turn asks the dashboard the user
+   * spoke to.
    */
   requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
     timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
+    opts?: { client?: ServerWebSocket<unknown> },
   ): Promise<RoomActionOutcome> {
-    const { id, outcome } = this.roomActionResults.open(timeoutMs);
-    const reached = this.wsServer.broadcastWithReceipt({
-      type: 'notification',
-      payload: {
-        source: 'room_action',
-        room: action.room,
-        action: action.action,
-        args: action.args ?? {},
-        resultId: id,
-      },
-      timestamp: Date.now(),
-    });
+    const client = opts?.client;
+    const { id, outcome } = this.roomActionResults.open(timeoutMs, client);
+    const payload = {
+      source: 'room_action',
+      room: action.room,
+      action: action.action,
+      args: action.args ?? {},
+    };
+    let reached: boolean;
+    if (client) {
+      this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
+      reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
+        type: 'notification',
+        payload: { ...payload, resultId: id, resultFrom: 'dashboard' },
+        timestamp: Date.now(),
+      });
+    } else {
+      reached = this.wsServer.broadcastWithReceipt({
+        type: 'notification',
+        payload: { ...payload, resultId: id },
+        timestamp: Date.now(),
+      }) > 0;
+    }
     // Nobody connected to answer: say so now rather than after the timeout.
-    if (reached === 0) this.roomActionResults.abandon(id);
+    if (!reached) this.roomActionResults.abandon(id);
     return outcome;
+  }
+
+  /**
+   * A dashboard voice turn the classifier read as an in-room action. Opens the
+   * room (no-op if open) so "go to settings and disable TTS" works from the
+   * home thread, sends the action, and acknowledges what the dashboard said
+   * happened (#965). It used to acknowledge before any room had seen it.
+   */
+  private async handleVoiceRoomAction(
+    ra: { room: string; action: string; args?: Record<string, unknown> },
+    requestId: string,
+    ws: ServerWebSocket<unknown>,
+  ): Promise<void> {
+    this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
+    const outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
+    console.log(`[WSService] room action ${ra.room}/${ra.action}: ${outcome}`);
+    this.broadcastAssistantAck(roomActionReply(ra, outcome), requestId);
   }
 
   /**
@@ -3018,16 +3048,41 @@ function ackForWindowControl(ctrl: WindowControl): string {
 }
 
 /**
- * Phase 6.3.5 — short ack for Room action voice commands. Reads naturally
- * for the most common per-Room actions; falls back to a generic "Done" for
- * anything not enumerated so future Room action vocabularies don't need
- * code changes here.
+ * What to say about a room action once the room has answered, or not (#965).
+ * Only an accepted action gets the action's own acknowledgement; a rejected
+ * one says so, and with no answer it says it cannot tell. A tab switch reads
+ * the same as the pebble's (tabSwitchReply).
  */
-function ackForRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
+export function roomActionReply(
+  ra: { room: string; action: string; args?: Record<string, unknown> },
+  outcome: RoomActionOutcome,
+): string {
+  const title = roomTitle(ra.room);
+  if (ra.action === 'switch_tab') return tabSwitchReply(title, String(ra.args?.tab ?? '') || 'that tab', outcome);
+  switch (outcome) {
+    case 'accepted':
+      return ackForRoomAction(ra, title);
+    case 'rejected':
+      return `${title} didn't accept that.`;
+    case 'no_answer':
+      return `I sent that to ${title}, but it didn't answer, so I can't tell whether it happened.`;
+  }
+}
+
+function roomTitle(room: string): string {
+  return Object.hasOwn(PEBBLE_ROOMS, room) ? PEBBLE_ROOMS[room]!.title : room;
+}
+
+/**
+ * Phase 6.3.5 - short ack for a Room action the room accepted. Accepted
+ * means its handler took the action, and many handlers only start async work
+ * that reports its own result on screen, so these say what is under way
+ * rather than that it is done (#965). Anything not enumerated gets a generic
+ * acknowledgement, so future Room action vocabularies need no code here.
+ */
+function ackForRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }, title: string): string {
   const a = ra.args ?? {};
   switch (ra.action) {
-    case 'switch_tab':
-      return `Switching to ${String(a.tab ?? 'tab')} view.`;
     case 'open_spawn_dialog':
       return `Opening the spawn dialog.`;
     case 'close_dialog':
@@ -3067,11 +3122,13 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return a.name ? `Enabling ${String(a.name)}.` : `Enabling the selected workflow.`;
     case 'create_from_nl':
       return a.prompt
-        ? `Creating a workflow that ${String(a.prompt)}.`
+        // The room creates an empty workflow and points to chat for the
+        // rest (WorkflowsRoom); it does not build what was described.
+        ? `Creating an empty workflow. To have me build "${String(a.prompt)}", ask me in chat.`
         : `Creating a new workflow.`;
     case 'remember_that':
       return a.subject && a.predicate && a.object
-        ? `Remembered that ${String(a.subject)}'s ${String(a.predicate)} is ${String(a.object)}.`
+        ? `Saving that ${String(a.subject)}'s ${String(a.predicate)} is ${String(a.object)}.`
         : `Remembering that.`;
     case 'grant_access':
       return a.action
@@ -3187,6 +3244,6 @@ function ackForRoomAction(ra: { room: string; action: string; args?: Record<stri
       return `Replaying ${label}. The dashboard will reload in a moment.`;
     }
     default:
-      return `Done.`;
+      return `${title} took that.`;
   }
 }

@@ -9,10 +9,11 @@
  * answer opens an entry here, sends its `resultId` with the action, and the
  * panel that ran it replies with `room_action_result`.
  *
- * The first answer settles the entry. Only native panels answer (the full
- * dashboard does not), but the action is broadcast, so every open panel of
- * that room answers: a second panel of it on this sidecar, or one on another
- * sidecar. They run the same check and agree, except that Settings shows its
+ * The first answer settles the entry. For the pebble's requests only native
+ * panels answer (a dashboard answers only a request addressed to it, and then
+ * only its answer counts: see `answerer`, #965). The action is broadcast, so
+ * every open panel of that room answers: a second panel of it on this
+ * sidecar, or one on another sidecar. They run the same check and agree, except that Settings shows its
  * billing tab per client. Addressing the action to the one panel the pebble
  * meant would need the panel to know its native id, which it does not.
  *
@@ -33,12 +34,16 @@ export const ROOM_ACTION_QUEUE_TTL_MS = 5000;
 export type RoomActionOutcome = 'accepted' | 'rejected' | 'no_answer';
 
 export class RoomActionResults {
-  private pending = new Map<string, { settle: (o: RoomActionOutcome) => void }>();
+  private pending = new Map<string, { settle: (o: RoomActionOutcome) => void; answerer?: unknown }>();
 
   constructor(private readonly newId: () => string = () => crypto.randomUUID()) {}
 
-  /** Start waiting. `outcome` resolves on the first answer, or `no_answer` after `timeoutMs`. */
-  open(timeoutMs: number): { id: string; outcome: Promise<RoomActionOutcome> } {
+  /**
+   * Start waiting. `outcome` resolves on the first answer, or `no_answer` after
+   * `timeoutMs`. With `answerer`, only an answer from that client counts
+   * (#965): a dashboard voice turn asks the dashboard the user spoke to.
+   */
+  open(timeoutMs: number, answerer?: unknown): { id: string; outcome: Promise<RoomActionOutcome> } {
     const id = this.newId();
     const outcome = new Promise<RoomActionOutcome>((resolve) => {
       const timer = setTimeout(() => this.finish(id, 'no_answer'), timeoutMs);
@@ -49,6 +54,7 @@ export class RoomActionResults {
           clearTimeout(timer);
           resolve(o);
         },
+        answerer,
       });
     });
     return { id, outcome };
@@ -59,14 +65,24 @@ export class RoomActionResults {
    * this arrives over the dashboard socket, so it is not trusted to be well
    * formed, and an answer for an entry already settled changes nothing.
    */
-  answer(id: unknown, accepted: unknown): void {
+  answer(id: unknown, accepted: unknown, from?: unknown): void {
     if (typeof id !== 'string' || typeof accepted !== 'boolean') return;
+    const entry = this.pending.get(id);
+    if (entry?.answerer !== undefined && entry.answerer !== from) return;
     this.finish(id, accepted ? 'accepted' : 'rejected');
   }
 
   /** Stop waiting now: the action reached no one who could answer. */
   abandon(id: string): void {
     this.finish(id, 'no_answer');
+  }
+
+  /** Stop waiting on everything only `answerer` could answer: it has gone. */
+  abandonAnswerer(answerer: unknown): void {
+    if (answerer === undefined) return;
+    for (const [id, entry] of [...this.pending]) {
+      if (entry.answerer === answerer) this.finish(id, 'no_answer');
+    }
   }
 
   /** Entries still waiting. */
