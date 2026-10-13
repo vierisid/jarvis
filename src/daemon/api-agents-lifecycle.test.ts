@@ -7,9 +7,10 @@ import { AuthorityEngine, type AuthorityConfig } from '../authority/engine.ts';
 import { ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
 import { AuditTrail } from '../authority/audit.ts';
 import { EmergencyController } from '../authority/emergency.ts';
-import { AgentTaskManager } from '../agents/task-manager.ts';
+import { AgentTaskManager, MAX_RUNNING_TASKS } from '../agents/task-manager.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
-import { createManageAgentsTool } from '../actions/tools/agents.ts';
+import { AGENT_CONTEXT_MAX_CHARS, AGENT_TASK_MAX_CHARS, createManageAgentsTool } from '../actions/tools/agents.ts';
+import { maxWaitingSpawnCards } from '../agents/lifecycle-gate.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 import type { LLMManager } from '../llm/manager.ts';
 
@@ -37,8 +38,10 @@ function harness(overrides: AuthorityConfig['overrides'] = [], opts: { llm?: LLM
     default_level: 5, governed_categories: [], overrides, context_rules: [],
     learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal',
   }));
-  orch.setApprovalManager(new ApprovalManager());
-  orch.setAuditTrail(new AuditTrail());
+  const approvals = new ApprovalManager();
+  orch.setApprovalManager(approvals);
+  const audit = new AuditTrail();
+  orch.setAuditTrail(audit);
   const emergency = new EmergencyController();
   orch.setEmergencyController(emergency);
   const cards: ApprovalRequest[] = [];
@@ -72,7 +75,9 @@ function harness(overrides: AuthorityConfig['overrides'] = [], opts: { llm?: LLM
   const subAgents = () => orch.getAllAgents().filter((a) => a.id !== primary.id);
   const emergencyRoute = (action: 'kill') =>
     (routes[`/api/authority/emergency/${action}`] as { POST: Handler }).POST(new Request(`http://localhost/api/authority/emergency/${action}`, { method: 'POST' }));
-  return { spawn, cards, emergency, emergencyRoute, subAgents, taskManager, loops: () => loops };
+  const stop = (id: string) => (routes['/api/agents/:id'] as { DELETE: Handler }).DELETE(
+    Object.assign(new Request(`http://localhost/api/agents/${id}`, { method: 'DELETE' }), { params: { id } }));
+  return { spawn, stop, registry, audit, cards, approvals, primary, emergency, emergencyRoute, subAgents, taskManager, loops: () => loops };
 }
 
 describe('POST /api/agents goes through the spawn sink (#932)', () => {
@@ -141,5 +146,130 @@ describe('the dashboard Kill stops a running background task (#987)', () => {
     expect(calls).toBe(atKill);
     expect(task!.status).toBe('cancelled');
     expect(h.taskManager.runningCount()).toBe(0);
+  });
+});
+
+describe('lifecycle cards are capped per source, and their text is bounded (#989)', () => {
+  const needsApproval: AuthorityConfig['overrides'] = [{ action: 'spawn_agent', allowed: true, requires_approval: true }];
+
+  it(`refuses a distinct spawn card past ${maxWaitingSpawnCards()} waiting, raising no card and notifying nobody`, async () => {
+    const h = harness(needsApproval);
+    const cap = maxWaitingSpawnCards();
+    expect(cap).toBe(MAX_RUNNING_TASKS);
+    for (let i = 0; i < cap; i++) expect((await h.spawn({ specialist: 'spec', task: `task number ${i}` })).status).toBe(202);
+    expect(h.cards).toHaveLength(cap);
+
+    const rowsBefore = h.audit.getStats().total;
+    const over = await h.spawn({ specialist: 'spec', task: 'one more, different again' });
+    expect(over.status).toBe(429);
+    // The refusal is on the record: one row, nothing executed, no card.
+    const rows = h.audit.query({ limit: 5 }).filter((r) => r.action_category === 'spawn_agent');
+    expect(h.audit.getStats().total).toBe(rowsBefore + 1);
+    expect(rows[0]).toMatchObject({ authority_decision: 'denied', approval_id: null, tool_name: 'spawn_agent(spec)' });
+    expect(Boolean(rows[0]!.executed)).toBe(false);
+    expect(((await over.json()) as { error: string }).error).toContain('already waiting');
+    expect(h.cards).toHaveLength(cap);
+    expect(h.approvals.getPending()).toHaveLength(cap);
+    expect(h.subAgents()).toHaveLength(0);
+
+    // The same request again is the same question: answered with its card, not refused.
+    const again = await h.spawn({ specialist: 'spec', task: 'task number 0' });
+    expect(again.status).toBe(202);
+    expect(((await again.json()) as { approval_id: string }).approval_id).toBe(h.cards[0]!.id);
+
+    // Deciding one frees a place.
+    h.approvals.deny(h.cards[1]!.id, 'test');
+    expect((await h.spawn({ specialist: 'spec', task: 'now there is room' })).status).toBe(202);
+    expect(h.cards).toHaveLength(cap + 1);
+  });
+
+  it('counts waiting cards by the source the card names, so a restart does not reset the budget', async () => {
+    const h = harness(needsApproval);
+    // Cards left by an earlier process: same role name, an id that no longer exists.
+    for (let i = 0; i < maxWaitingSpawnCards(); i++) {
+      h.approvals.createRequest({ agentId: `old-primary-${i}`, agentName: h.primary.agent.role.name, toolName: 'manage_agents',
+        toolArguments: { action: 'spawn', specialist: 'spec', task: `old ${i}` }, actionCategory: 'spawn_agent',
+        urgency: 'normal', reason: 'r', context: 'c', executionMode: 'deferred' });
+    }
+    expect((await h.spawn({ specialist: 'spec', task: 'a new one' })).status).toBe(429);
+    expect(h.cards).toHaveLength(0);
+  });
+
+  it('does not count a request_approval card under spawn_agent against the budget', async () => {
+    const h = harness(needsApproval);
+    for (let i = 0; i < maxWaitingSpawnCards(); i++) {
+      h.approvals.createRequest({ agentId: h.primary.id, agentName: h.primary.agent.role.name, toolName: 'request_approval',
+        toolArguments: { action_category: 'spawn_agent', reason: `asked ${i}` }, actionCategory: 'spawn_agent',
+        urgency: 'normal', reason: 'r', context: 'c', executionMode: 'deferred' });
+    }
+    expect((await h.spawn({ specialist: 'spec', task: 'mine' })).status).toBe(202);
+  });
+
+  it('runs exactly what the card shows: characters a card cannot display are removed (#989)', async () => {
+    const h = harness(needsApproval);
+    // Tag characters spell hidden ASCII ("evil") that no card displays.
+    const hidden = [...'evil'].map((c) => String.fromCodePoint(0xE0000 + c.charCodeAt(0))).join('');
+    const res = await h.spawn({ specialist: 'spec', task: `tidy my notes${hidden} \u2764\uFE0F`, context: `ctx\u200B${hidden}` });
+    expect(res.status).toBe(202);
+    const args = JSON.parse(h.cards[0]!.tool_arguments) as { task: string; context: string };
+    expect(args.task).toBe('tidy my notes \u2764');
+    expect(args.context).toBe('ctx');
+  });
+
+  it('never refuses a stop card for a flood of start cards', async () => {
+    const h = harness();
+    expect((await h.spawn({ specialist: 'spec' })).status).toBe(201);
+    const agentId = h.subAgents()[0]!.id;
+    for (let i = 0; i < maxWaitingSpawnCards() + 2; i++) {
+      h.approvals.createRequest({ agentId: h.primary.id, agentName: h.primary.agent.role.name, toolName: 'manage_agents',
+        toolArguments: { action: 'spawn', specialist: 'spec', task: `flood ${i}` }, actionCategory: 'spawn_agent',
+        urgency: 'normal', reason: 'r', context: 'c', executionMode: 'deferred' });
+    }
+    // terminate_agent needs level 9; this primary is 5, so the stop asks.
+    const res = await h.stop(agentId);
+    expect(res.status).toBe(202);
+    expect(h.cards.map((c) => c.action_category)).toEqual(['terminate_agent']);
+  });
+
+  it(`rejects a task over ${AGENT_TASK_MAX_CHARS} characters before anything is spawned or carded`, async () => {
+    const h = harness(needsApproval);
+    const res = await h.spawn({ specialist: 'spec', task: 'x'.repeat(AGENT_TASK_MAX_CHARS + 1) });
+    expect(res.status).toBe(400);
+    expect(h.cards).toHaveLength(0);
+    expect(h.subAgents()).toHaveLength(0);
+    expect(h.loops()).toBe(0);
+  });
+
+  it('bounds a task given to an existing agent through manage_agents assign too', async () => {
+    const h = harness();
+    expect((await h.spawn({ specialist: 'spec' })).status).toBe(201);
+    const agentId = h.subAgents()[0]!.id;
+    const out = await h.registry.get('manage_agents')!.execute({ action: 'assign', agent_id: agentId, task: 'z'.repeat(AGENT_TASK_MAX_CHARS + 1) });
+    expect(String(out)).toContain(`the limit is ${AGENT_TASK_MAX_CHARS}`);
+    expect(h.loops()).toBe(0);
+    expect(String(await h.registry.get('manage_agents')!.execute({ action: 'assign', agent_id: agentId, task: 'fine\u{E0065}\u{E0076}' }))).toContain('task_id');
+    expect(h.loops()).toBe(1);
+    // The task that runs carries no character a card cannot show.
+    expect(h.taskManager.listTasks()[0]!.task).toBe('fine');
+  });
+
+  it(`rejects a context over ${AGENT_CONTEXT_MAX_CHARS} characters the same way`, async () => {
+    const h = harness(needsApproval);
+    const res = await h.spawn({ specialist: 'spec', task: 'short', context: 'y'.repeat(AGENT_CONTEXT_MAX_CHARS + 1) });
+    expect(res.status).toBe(400);
+    expect(h.cards).toHaveLength(0);
+  });
+
+  it('shows a task and context at the limit whole on the card: what is read is what runs', async () => {
+    const h = harness(needsApproval);
+    const task = `${'t'.repeat(AGENT_TASK_MAX_CHARS - 4)} END`;
+    const context = `${'c'.repeat(AGENT_CONTEXT_MAX_CHARS - 4)} FIN`;
+    expect((await h.spawn({ specialist: 'spec', task, context })).status).toBe(202);
+    const [card] = h.cards;
+    expect(JSON.parse(card!.tool_arguments)).toMatchObject({ task, context });
+    const intent = (JSON.parse(card!.context) as { intent: string }).intent;
+    expect(intent).toContain(`"${task}"`);
+    expect(intent).toContain(`"${context}"`);
+    expect(intent).not.toContain('...');
   });
 });

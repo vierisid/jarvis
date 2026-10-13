@@ -743,6 +743,8 @@ function SpawnDialog({
               className="v2-agents__textarea"
               value={task}
               onChange={(e) => setTask(e.target.value)}
+              // The server's AGENT_TASK_MAX_CHARS (#989): what the approval card shows whole.
+              maxLength={600}
               rows={2}
               placeholder="Optional. Leave blank to spawn the agent in idle mode."
             />
@@ -754,6 +756,8 @@ function SpawnDialog({
               className="v2-agents__textarea"
               value={context}
               onChange={(e) => setContext(e.target.value)}
+              // The server's AGENT_CONTEXT_MAX_CHARS (#989).
+              maxLength={300}
               rows={2}
               placeholder="Optional background context for the task."
             />

@@ -12,7 +12,7 @@ import type { AgentOrchestrator } from '../../agents/orchestrator.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import type { RoleDefinition } from '../../roles/types.ts';
 import type { ToolDefinition, ToolGate } from './registry.ts';
-import { forCard } from '../../util/card-text.ts';
+import { forCard, withoutCardInvisibles } from '../../util/card-text.ts';
 import type { AgentTaskManager, AsyncTask } from '../../agents/task-manager.ts';
 import { createScopedToolRegistry, type ProgressCallback } from '../../agents/sub-agent-runner.ts';
 
@@ -51,6 +51,30 @@ export type PersistentAgentSummary = {
  * `spawn` ask for: a specialist, and optionally its first task.
  */
 export type PersistentAgentRequest = { specialist: string; task?: string; context?: string };
+
+/**
+ * The longest task and context an agent may be given (#989). Not chosen: they
+ * are the budgets the approval card shows each in (`manageAgentsGate`, via
+ * `forCard`'s default of 600 and the context's 300), which use these same
+ * constants. Before, a longer value was cut on the card with "..." while the
+ * approved call ran all of it, so a person approved text they never saw; and
+ * one card could carry an unbounded blob. Refused rather than cut wherever
+ * the act happens (dashboard, voice, the tool, an approved card), so a
+ * request is not valid or invalid by whether it happened to need approval.
+ * The orchestrator's tool-layer gate builds its card before `execute`, so an
+ * over-long model call can still be shown there; approving it runs nothing.
+ */
+export const AGENT_TASK_MAX_CHARS = 600;
+export const AGENT_CONTEXT_MAX_CHARS = 300;
+
+function checkTaskBounds(task: string | undefined, context: string | undefined): void {
+  if (task && task.length > AGENT_TASK_MAX_CHARS) {
+    throw new HttpError(400, `The task is ${task.length} characters; the limit is ${AGENT_TASK_MAX_CHARS}, so the approval card can show all of it. Shorten it.`);
+  }
+  if (context && context.length > AGENT_CONTEXT_MAX_CHARS) {
+    throw new HttpError(400, `The context is ${context.length} characters; the limit is ${AGENT_CONTEXT_MAX_CHARS}, so the approval card can show all of it. Shorten it.`);
+  }
+}
 
 /**
  * The registered call that redoes `request` once approved: what a card raised
@@ -118,8 +142,11 @@ export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string, 
  * waiting on a card.
  */
 export async function startPersistentAgent(deps: AgentToolDeps, request: PersistentAgentRequest) {
-  const task = request.task?.trim() || undefined;
-  const context = request.context?.trim() || undefined;
+  // What runs is what a card shows: no characters a card cannot display.
+  const task = (request.task === undefined ? '' : withoutCardInvisibles(request.task)).trim() || undefined;
+  const context = (request.context === undefined ? '' : withoutCardInvisibles(request.context)).trim() || undefined;
+  // Before anything is spawned or any card is raised.
+  checkTaskBounds(task, context);
   // Refuse BEFORE spawning: a cap hit after it would leave an idle agent
   // behind for a task that never started.
   if (task && !deps.taskManager.canLaunch()) {
@@ -145,9 +172,12 @@ export async function assignPersistentAgentTask(
   deps: AgentToolDeps,
   params: { agentId: string; task: string; context?: string }
 ) {
-  const { agentId, task, context = '' } = params;
+  const { agentId } = params;
+  const task = typeof params.task === 'string' ? withoutCardInvisibles(params.task) : params.task;
+  const context = typeof params.context === 'string' ? withoutCardInvisibles(params.context) : '';
   if (!agentId) throw new HttpError(400, '"agentId" is required');
   if (!task) throw new HttpError(400, '"task" is required');
+  checkTaskBounds(task, context);
 
   const agent = deps.orchestrator.getAgent(agentId);
   if (!agent) throw new HttpError(404, `Agent "${agentId}" not found. Use list to see active agents.`);
@@ -323,10 +353,10 @@ export function manageAgentsGate(params: Record<string, unknown>, lookup?: Agent
   const quoted = (v: unknown, max?: number) => JSON.stringify(forCard(v, max));
   const task = typeof params.task === 'string' && params.task.trim() ? params.task : null;
   const context = typeof params.context === 'string' && params.context.trim() ? params.context : null;
-  const withContext = context ? ` with context ${quoted(context, 300)}` : '';
+  const withContext = context ? ` with context ${quoted(context, AGENT_CONTEXT_MAX_CHARS)}` : '';
   if (params.action === 'spawn') {
     const who = `Start a ${forCard(params.specialist, 60) || 'specialist'} background agent`;
-    return { actionCategory: 'spawn_agent', intent: task ? `${who}${withContext} on the task ${quoted(task)}` : who };
+    return { actionCategory: 'spawn_agent', intent: task ? `${who}${withContext} on the task ${quoted(task, AGENT_TASK_MAX_CHARS)}` : who };
   }
   if (params.action === 'terminate') {
     // Stopping work is `terminate_agent` (#963), not the spawn_agent the tool
@@ -343,7 +373,7 @@ export function manageAgentsGate(params: Record<string, unknown>, lookup?: Agent
   }
   if (params.action === 'assign' && task) {
     return { actionCategory: 'spawn_agent',
-      intent: `Give background agent ${forCard(params.agent_id, 60)}${withContext} the task ${quoted(task)}` };
+      intent: `Give background agent ${forCard(params.agent_id, 60)}${withContext} the task ${quoted(task, AGENT_TASK_MAX_CHARS)}` };
   }
   return null;
 }
@@ -399,12 +429,12 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
       },
       task: {
         type: 'string',
-        description: 'Task description (required for assign; optional for spawn, which then starts it)',
+        description: `Task description, at most ${AGENT_TASK_MAX_CHARS} characters (required for assign; optional for spawn, which then starts it)`,
         required: false,
       },
       context: {
         type: 'string',
-        description: 'Background context for the task (optional for assign and spawn)',
+        description: `Background context for the task, at most ${AGENT_CONTEXT_MAX_CHARS} characters (optional for assign and spawn)`,
         required: false,
       },
     },

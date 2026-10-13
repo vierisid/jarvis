@@ -35,6 +35,7 @@ import { gateContext, resolveToolGate, substituteAboveLevel } from '../authority
 import { spendApproval, type ApprovalSource } from '../authority/approved-action-scope.ts';
 import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
 import type { AgentInstance } from './agent.ts';
+import { MAX_RUNNING_TASKS } from './task-manager.ts';
 
 export type LifecycleAction = Extract<ActionCategory, 'spawn_agent' | 'terminate_agent'>;
 
@@ -47,7 +48,22 @@ export type LifecycleAction = Extract<ActionCategory, 'spawn_agent' | 'terminate
  */
 export type LifecycleVia = { toolName: string; toolArguments?: Record<string, unknown> };
 
-export type LifecycleRefusalKind = 'halted' | 'denied' | 'approval_required';
+export type LifecycleRefusalKind = 'halted' | 'denied' | 'approval_required' | 'too_many_waiting';
+
+/**
+ * How many requests to START an agent may wait on cards at once from one
+ * source (#989). Identical requests already share one card; this bounds
+ * distinct ones, a varied `POST /api/agents` or repeated ambient speech.
+ *
+ * The number is the running-task cap, not a new one: at most that many tasks
+ * can run, so cards past it could never all be carried out together, and the
+ * cap's own reasoning ("well past what a person follows at once") is the
+ * approval-fatigue argument this bound exists for. A function, not a copy, so
+ * the two cannot drift.
+ */
+export function maxWaitingSpawnCards(): number {
+  return MAX_RUNNING_TASKS;
+}
 
 /** The act was not carried out. `approvalId` is set when a card is now waiting for it. */
 export class AgentLifecycleRefusal extends Error {
@@ -170,9 +186,28 @@ export function raiseLifecycleCard(
   // that card, not a second one. Repeated speech or a retried dashboard
   // request must not bury the queue (#932).
   const args = JSON.stringify(via.toolArguments);
-  const waiting = deps.approvalManager.getPending().find((r) => r.tool_name === via.toolName
+  const pending = deps.approvalManager.getPending();
+  const waiting = pending.find((r) => r.tool_name === via.toolName
     && r.tool_arguments === args && r.action_category === req.action && r.execution_mode === 'deferred');
   if (waiting) return waiting;
+  // The source is the acting agent as the card names it (`agent_name`), not
+  // its id: pending cards outlive a restart and the primary's id does not, so
+  // an id would hand every restart a fresh budget. Only starts are capped. A
+  // stop is the safety lever and must never be refused for a flood of
+  // starts; stop cards are already one per agent and task.
+  if (req.action === 'spawn_agent') {
+    const source = deps.auditName(req.actor.agent.role.name);
+    const cap = maxWaitingSpawnCards();
+    // Only cards for this same registered call: a `request_approval` card the
+    // model raised under spawn_agent is not a start, and must not use up the
+    // owner's budget.
+    const queued = pending.filter((r) => r.action_category === 'spawn_agent' && r.tool_name === via.toolName
+      && r.execution_mode === 'deferred' && r.agent_name === source).length;
+    if (queued >= cap) {
+      throw new AgentLifecycleRefusal(req.action, 'too_many_waiting',
+        `${queued} requests to start an agent are already waiting for your decision (the limit is ${cap}). Approve or deny those in the Authority room first.`);
+    }
+  }
   const tool = deps.toolRegistry.get(via.toolName);
   const gate = resolveToolGate(tool, via.toolName, via.toolArguments);
   const request = deps.approvalManager.createRequest({
@@ -193,6 +228,20 @@ export function raiseLifecycleCard(
     console.warn('[Lifecycle] approval delivery failed:', err instanceof Error ? err.message : err);
   }
   return request;
+}
+
+/**
+ * `raiseLifecycleCard`, writing the row when it refuses to raise one. A cap
+ * refusal is recorded as `denied`, so a flood is visible in the audit and not
+ * mistaken for a card that could not be delivered.
+ */
+function raiseOrAudit(deps: LifecycleGateDeps, req: LifecycleRequest, reason: string): ApprovalRequest | null {
+  try {
+    return raiseLifecycleCard(deps, req, reason);
+  } catch (err) {
+    audit(deps, req, err instanceof AgentLifecycleRefusal && err.kind === 'too_many_waiting' ? 'denied' : 'approval_required', false);
+    throw err;
+  }
 }
 
 /**
@@ -245,7 +294,7 @@ export function gateLifecycle(
     if (acceptable) {
       return () => audit(deps, req, 'approval_required', true, grant!.approvalId, grant!.source);
     }
-    const card = raiseLifecycleCard(deps, req, decision.reason);
+    const card = raiseOrAudit(deps, req, decision.reason);
     audit(deps, req, 'approval_required', false, card?.id ?? null);
     throw new AgentLifecycleRefusal(action, 'approval_required', card
       ? `${VERB[action][0]!.toUpperCase()}${VERB[action].slice(1)} the agent needs your approval (${decision.reason}). Request #${card.id.slice(0, 8)} is waiting on the dashboard.`
@@ -268,7 +317,7 @@ export function askLifecycleApproval(deps: LifecycleGateDeps, req: LifecycleRequ
     throw new AgentLifecycleRefusal(req.action, 'denied', `Authority denied ${VERB[req.action]} an agent: ${decision.reason}`);
   }
   const reason = decision?.requiresApproval ? decision.reason : `${req.action} asked for by voice requires user approval`;
-  const card = raiseLifecycleCard(deps, req, reason);
+  const card = raiseOrAudit(deps, req, reason);
   audit(deps, req, 'approval_required', false, card?.id ?? null);
   if (!card) {
     throw new AgentLifecycleRefusal(req.action, 'approval_required',
