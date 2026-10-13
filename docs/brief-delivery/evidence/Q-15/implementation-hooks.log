@@ -1,0 +1,75 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 3 required path(s) present in the npm tarball (2370 files).
+[pre-commit] Running 2 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+src/vault/recall-ranking.test.ts:
+(pass) development benchmark meets recall, qualification, precision and order gates [285.95ms]
+(pass) partial names match whole Unicode tokens without matching substrings [11.54ms]
+(pass) full person names scope individual facts while retaining direct references and requested task subjects [11.61ms]
+(pass) full person scoping does not combine name tokens from multiple named people [10.81ms]
+(pass) explicit aliases retain qualification alongside a fully named person [11.33ms]
+(pass) unrelated self requests abstain but explicit self overview still works [12.35ms]
+(pass) an embedded "me" inside an ordinary word is not a self overview request [11.44ms]
+(pass) a remembered value cannot forge the qualification separator or a new record [11.26ms]
+(pass) aliases shared by different subjects preserve ambiguity and evidence qualification [10.27ms]
+(pass) crowded alias recall keeps selection evidence (reverse=%s) [12.16ms]
+(pass) crowded alias recall keeps selection evidence (reverse=%s) [12.75ms]
+(pass) a subject cannot appear when its required alias qualification does not fit [10.85ms]
+(pass) all matched aliases count toward the fact limits [12.65ms]
+(pass) unavailable alias dependencies omit the subject (missing) [10.58ms]
+(pass) unavailable alias dependencies omit the subject (expired) [10.88ms]
+(pass) alias dependencies remain whole at the shared fact limit [14.67ms]
+(pass) empty and stopword-only messages avoid database reads while self overview still reads [12.08ms]
+(pass) large evidence quotes cannot evict a short qualified fact or be silently truncated [10.69ms]
+(pass) many evidence records keep explicit omission counts and a stable ledger reference [10.59ms]
+(pass) whole qualified facts fit the exact budget; oversize facts cannot hide small siblings [10.99ms]
+(pass) entity and fact budgets distribute useful context across subjects [31.67ms]
+(pass) a subject whose records are all out of period reads as having none [11.04ms]
+(pass) a long message cannot make scoring quadratic on the recall path [489.28ms]
+(pass) a subject whose facts all miss the budget contributes no heading or relationship [12.38ms]
+(pass) a value stored on another subject survives a name-only top match [11.63ms]
+(pass) a subject named with a common word recovers no cross-references [13.11ms]
+(pass) a possessive name still anchors on its subject [10.99ms]
+(pass) facts dropped by ranking are reported as an incomplete record [12.84ms]
+(pass) the self overview and the profile boost agree on the same request [12.62ms]
+(pass) relationship context is bounded, stable and unverified [13.17ms]
+(pass) ranking respects C8 states and periods while retaining contested facts [11.55ms]
+(pass) value query retains the current confirmed counterpart: Does Alex still use Vim? [11.71ms]
+(pass) value query retains the current confirmed counterpart: Vim [10.67ms]
+(pass) active multi-valued facts do not acquire correction dependencies [9.85ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: missing [10.43ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: expired [12.34ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: oversize [10.03ms]
+(pass) mutually contested confirmations preserve their dependency group at context limits [10.27ms]
+(pass) packing keeps C8 source references, scope, validity and contested status intact [11.09ms]
+(pass) default recall recovers qualified facts after a database restart [151.35ms]
+(pass) value queries retain the correction through aliases, crowding and restart [151.07ms]
+(pass) repeated evidence preserves corrected recall and the full ledger after restart [141.97ms]
+(pass) corrections, periods and source ledger survive default recall [10.34ms]
+
+src/vault/evaluation/founder-recall.test.ts:
+(pass) founder development cases pass through canonical writers, retrieval and packing in every order [541.70ms]
+(pass) the evaluator rejects missing qualifications, wrong-person context, omitted answers and exceeded budgets [80.61ms]
+(pass) failed fixture evaluation restores its global clock and UUID sources [11.94ms]
+
+ 46 pass
+ 0 fail
+ 377 expect() calls
+Ran 46 tests across 2 files. [2.54s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/q-15 2ef7e001] fix(memory): scope named-person recall and validate founder development cases
+ 7 files changed, 9747 insertions(+), 3 deletions(-)
+ create mode 100644 docs/brief-delivery/evidence/Q-15/candidate-freeze.json
+ create mode 100644 docs/brief-delivery/evidence/Q-15/development-baseline.json
+ create mode 100644 docs/brief-delivery/evidence/Q-15/development-candidate.json
+ create mode 100644 docs/brief-delivery/evidence/Q-15/development-comparison.json
+ create mode 100644 src/vault/evaluation/founder-recall.test.ts
