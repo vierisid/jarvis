@@ -4,6 +4,8 @@ import { BriefCapabilities } from '../../../../src/brief/capabilities';
 import { BriefConversationClient } from './client';
 import type { ConversationApi } from './api';
 import type { BriefConversation } from '../../../../src/brief/contracts';
+import { BriefReconciliationClient } from '../reconciliation/client';
+import { useBriefProjection } from '../reconciliation/react';
 
 let React: typeof import('react');
 let createRoot: typeof import('react-dom/client').createRoot;
@@ -63,6 +65,61 @@ function Room({ name, theme }: { name: string; theme: string }) {
   observed = useChat();
   return <div data-room={name} data-theme={theme}>{observed.messages.map(message => message.content).join('|')}</div>;
 }
+test('reconciliation observes scoped approvals on the shared socket without remounting draft, selection or scroll', async () => {
+  const { client } = clientFixture();
+  const caps = new BriefCapabilities([{ id: 'reconciliation', provider: { readiness: () => 'ready' } }], ['reconciliation']).snapshot();
+  const reconciliation = new BriefReconciliationClient({ capabilities: async () => caps });
+  let data = ['original'], reads = 0, mounts = 0;
+  const projection = reconciliation.projection({ domains: ['decisions'], read: async () => {
+    reads++; return { data, empty: false, asOf: Date.now() };
+  } });
+  function StableRoom() {
+    const value = useBriefProjection(projection);
+    const [selected] = React.useState('selected-run');
+    React.useEffect(() => { mounts++; }, []);
+    return <div data-testid="scroll" style={{ height: 100, overflow: 'auto' }}><input aria-label="Draft" defaultValue="Keep this draft" />
+      <p>{selected}</p><p>{value.state}: {value.data?.join(',')}</p></div>;
+  }
+  await React.act(async () => root.render(<Provider client={client} reconciliation={reconciliation} enabled><StableRoom /></Provider>));
+  await open(sockets[0]!);
+  const input = host.querySelector('input')!, scroll = host.querySelector('div')!;
+  input.focus(); input.setSelectionRange(2, 7); scroll.scrollTop = 91;
+  data = ['original', 'pending-approval'];
+  const frame = { conversationId: 'chat-a', turnId: 't', requestId: 'r', eventId: 'approval-event', sequence: 1,
+    payload: { kind: 'approval', approvalId: 'pending-approval', status: 'pending' } };
+  const before = reads;
+  await React.act(async () => { sockets[0]!.receive('brief_chat_event', frame); sockets[0]!.receive('brief_chat_event', frame); });
+  expect(reads).toBe(before + 1); expect(host.textContent).toContain('pending-approval');
+  expect(host.querySelector('input')).toBe(input); expect(document.activeElement).toBe(input);
+  expect(input.value).toBe('Keep this draft'); expect(input.selectionStart).toBe(2); expect(scroll.scrollTop).toBe(91);
+  expect(host.textContent).toContain('selected-run'); expect(mounts).toBe(1); expect(sockets).toHaveLength(1);
+  data = ['after-reconnect'];
+  await React.act(async () => { sockets[0]!.close(); window.dispatchEvent(new Event('jarvis:ws-reconnect')); });
+  await open(sockets[1]!); expect(host.textContent).toContain('after-reconnect');
+  expect(mounts).toBe(1); expect(input.value).toBe('Keep this draft'); expect(scroll.scrollTop).toBe(91);
+  data = ['after-focus']; await React.act(async () => { window.dispatchEvent(new Event('focus')); });
+  expect(host.textContent).toContain('after-focus'); expect(sockets).toHaveLength(2);
+});
+
+test('replacing the optional observer keeps the legacy socket and an observer exception cannot consume chat', async () => {
+  const { client, api } = clientFixture(); api.capabilities = async () => ({});
+  const first = new BriefReconciliationClient({ capabilities: async () => ({}) });
+  const second = new BriefReconciliationClient({ capabilities: async () => ({}) });
+  const show = async (reconciliation: BriefReconciliationClient) => React.act(async () => root.render(
+    <Provider client={client} reconciliation={reconciliation} enabled><Room name="today" theme="light" /></Provider>));
+  await show(first); await open(sockets[0]!); await show(second);
+  second.observer.onMessage = () => { throw Error('Optional observer failed'); };
+  await React.act(async () => { observed.send('Still works'); });
+  expect(sockets).toHaveLength(1); expect(host.textContent).toContain('Legacy history');
+  expect(sockets[0]?.sent.at(-1)).toMatchObject({ type: 'chat', payload: { text: 'Still works' } });
+  await React.act(async () => sockets[0]!.receive('notification', { source: 'approval_request', request: {
+    id: 'approval', agent_name: 'Fixture', tool_name: 'fixture', action_category: 'write_data', urgency: 'normal', reason: 'Approval needed',
+  } }));
+  await React.act(async () => sockets[0]!.receive('notification', { source: 'assistant_message', text: 'Delivered despite observer failure' }));
+  expect(host.textContent).toContain('Delivered despite observer failure');
+  // The observer's failure leaves normal routing live (no reconnection or chat ownership change).
+  expect(observed.status.mode).toBe('legacy'); expect(sockets[0]?.readyState).toBe(1);
+});
 async function render(client: BriefConversationClient, room = 'today', theme = 'light', enabled = true, chatVisible = false) {
   await React.act(async () => root.render(<React.StrictMode><Provider client={client} enabled={enabled} chatVisible={chatVisible}><Room key={room} name={room} theme={theme} /></Provider></React.StrictMode>));
 }
