@@ -1,0 +1,504 @@
+{
+  "schemaVersion": 1,
+  "policy": "baseline-job-v1",
+  "data": "synthetic only",
+  "limitation": "Small hand-authored, unblinded synthetic split. Wilson intervals describe fixture sampling only; this is not field precision, observed completion, time saved, or model quality. The split was frozen before implementation but visible to its author; it is not an independent blinded holdout.",
+  "results": [
+    {
+      "split": "development",
+      "corpusSha256": "105f9546e0d5ea59a8d7c8d253f25f06b3fa2aa405e3f3a08ae013978259b7d0",
+      "totalCases": 22,
+      "usefulCases": 10,
+      "negativeCases": 12,
+      "proposalPrecision": {
+        "numerator": 3,
+        "denominator": 7,
+        "rate": 0.42857142857142855,
+        "wilson95": [
+          0.15821692226262685,
+          0.7495457695909742
+        ]
+      },
+      "missedUsefulRoutines": {
+        "numerator": 7,
+        "denominator": 10,
+        "rate": 0.7,
+        "wilson95": [
+          0.39677321997956516,
+          0.892210712513788
+        ]
+      },
+      "falseProposals": 4,
+      "cases": [
+        {
+          "id": "dev-invoices",
+          "expected": "invoice_review",
+          "proposed": [
+            "invoice_review"
+          ],
+          "trueProposals": 1,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "dev-leads",
+          "expected": "lead_followup",
+          "proposed": [
+            "lead_followup"
+          ],
+          "trueProposals": 1,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "dev-report",
+          "expected": "recurring_report",
+          "proposed": [
+            "recurring_report"
+          ],
+          "trueProposals": 1,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "dev-meeting",
+          "expected": "meeting_followup",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-expenses",
+          "expected": "expense_reconciliation",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-support",
+          "expected": "support_triage",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-invoices-it",
+          "expected": "invoice_review",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-meeting-it",
+          "expected": "meeting_followup",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-hiring",
+          "expected": "candidate_screening",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-inventory",
+          "expected": "inventory_ordering",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-reading",
+          "expected": null,
+          "proposed": [
+            "invoice_review"
+          ],
+          "trueProposals": 0,
+          "falseProposals": 1,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "dev-app-switching",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-static",
+          "expected": null,
+          "proposed": [
+            "invoice_review"
+          ],
+          "trueProposals": 0,
+          "falseProposals": 1,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "dev-source-only",
+          "expected": null,
+          "proposed": [
+            "invoice_review"
+          ],
+          "trueProposals": 0,
+          "falseProposals": 1,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "dev-reverse",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-private",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-unrelated-languages",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-app-name-only",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-single-day",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-two-episodes",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-device-mixing",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "dev-missing-output",
+          "expected": null,
+          "proposed": [
+            "recurring_report"
+          ],
+          "trueProposals": 0,
+          "falseProposals": 1,
+          "missed": false,
+          "abstention": null
+        }
+      ]
+    },
+    {
+      "split": "holdout",
+      "corpusSha256": "9f18d64b988e465942265b7adaea4aac9a33b9bf605edffcb90f35e9f5ea5016",
+      "totalCases": 24,
+      "usefulCases": 11,
+      "negativeCases": 13,
+      "proposalPrecision": {
+        "numerator": 3,
+        "denominator": 6,
+        "rate": 0.5,
+        "wilson95": [
+          0.18761280689940868,
+          0.8123871931005913
+        ]
+      },
+      "missedUsefulRoutines": {
+        "numerator": 8,
+        "denominator": 11,
+        "rate": 0.7272727272727273,
+        "wilson95": [
+          0.4343497069897537,
+          0.9025411942607853
+        ]
+      },
+      "falseProposals": 3,
+      "cases": [
+        {
+          "id": "hold-receivables",
+          "expected": "invoice_review",
+          "proposed": [
+            "invoice_review"
+          ],
+          "trueProposals": 1,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "hold-prospects",
+          "expected": "lead_followup",
+          "proposed": [
+            "lead_followup"
+          ],
+          "trueProposals": 1,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "hold-monthly",
+          "expected": "recurring_report",
+          "proposed": [
+            "recurring_report"
+          ],
+          "trueProposals": 1,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "hold-call",
+          "expected": "meeting_followup",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-spend",
+          "expected": "expense_reconciliation",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-helpdesk",
+          "expected": "support_triage",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-invoices-it",
+          "expected": "invoice_review",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-meeting-it",
+          "expected": "meeting_followup",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-onboarding",
+          "expected": "employee_onboarding",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-renewals",
+          "expected": "renewal_review",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-paraphrase",
+          "expected": "meeting_followup",
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": true,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-research",
+          "expected": null,
+          "proposed": [
+            "invoice_review"
+          ],
+          "trueProposals": 0,
+          "falseProposals": 1,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "hold-tutorial",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-article-it",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-static-days",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-two-apps",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-unrelated-languages",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-private-vault",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-future",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-stale",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-no-operation",
+          "expected": null,
+          "proposed": [
+            "lead_followup"
+          ],
+          "trueProposals": 0,
+          "falseProposals": 1,
+          "missed": false,
+          "abstention": null
+        },
+        {
+          "id": "hold-delayed-steps",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-continuous",
+          "expected": null,
+          "proposed": [],
+          "trueProposals": 0,
+          "falseProposals": 0,
+          "missed": false,
+          "abstention": "no_job_evidence"
+        },
+        {
+          "id": "hold-excluded",
+          "expected": null,
+          "proposed": [
+            "recurring_report"
+          ],
+          "trueProposals": 0,
+          "falseProposals": 1,
+          "missed": false,
+          "abstention": null
+        }
+      ]
+    }
+  ]
+}

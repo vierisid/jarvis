@@ -1,0 +1,449 @@
+{
+  "schemaVersion": 1,
+  "split": "holdout",
+  "provenance": "Hand-authored synthetic screen text; no customer data, paid model, or observed user behavior.",
+  "labelPolicy": "A useful routine requires repeated operational source/operation/output activity. Reading, privacy-excluded, incomplete, stale, future, and one-day activity are negative. Unsupported useful routines remain positive in the missed-routine denominator.",
+  "cases": [
+    {
+      "id": "hold-receivables",
+      "usefulRoutine": "invoice_review",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Outstanding invoices\nLedger 2026"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Outstanding invoices\nReconciling balances"
+        },
+        {
+          "app": "Editor",
+          "text": "Draft invoice reminders"
+        }
+      ]
+    },
+    {
+      "id": "hold-prospects",
+      "usefulRoutine": "lead_followup",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Prospect outreach\nSales workspace"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Prospect outreach\nChecking contact history"
+        },
+        {
+          "app": "Editor",
+          "text": "Prospect outreach draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-monthly",
+      "usefulRoutine": "recurring_report",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Monthly revenue report\nAnalytics workspace"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Monthly revenue report\nValidating totals"
+        },
+        {
+          "app": "Editor",
+          "text": "Monthly revenue report preview"
+        }
+      ]
+    },
+    {
+      "id": "hold-call",
+      "usefulRoutine": "meeting_followup",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Call transcript\nProject discussion"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Call transcript\nAssigning owners"
+        },
+        {
+          "app": "Editor",
+          "text": "Meeting follow-up draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-spend",
+      "usefulRoutine": "expense_reconciliation",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Bank transactions\nExpense workspace"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Bank transactions\nReconciling receipts"
+        },
+        {
+          "app": "Editor",
+          "text": "Expense summary draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-helpdesk",
+      "usefulRoutine": "support_triage",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Customer requests\nHelp desk"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Customer requests\nPrioritizing tickets"
+        },
+        {
+          "app": "Editor",
+          "text": "Ticket response draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-invoices-it",
+      "usefulRoutine": "invoice_review",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Fatture non pagate\nContabilità"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Fatture non pagate\nControllo saldi"
+        },
+        {
+          "app": "Editor",
+          "text": "Bozza promemoria fatture"
+        }
+      ]
+    },
+    {
+      "id": "hold-meeting-it",
+      "usefulRoutine": "meeting_followup",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Trascrizione riunione\nProgetto"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Trascrizione riunione\nAssegnazione responsabili"
+        },
+        {
+          "app": "Editor",
+          "text": "Bozza riepilogo riunione"
+        }
+      ]
+    },
+    {
+      "id": "hold-onboarding",
+      "usefulRoutine": "employee_onboarding",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "New starter list"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Assign induction tasks"
+        },
+        {
+          "app": "Editor",
+          "text": "Welcome checklist draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-renewals",
+      "usefulRoutine": "renewal_review",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Contracts expiring soon"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Compare renewal terms"
+        },
+        {
+          "app": "Editor",
+          "text": "Renewal decision brief"
+        }
+      ]
+    },
+    {
+      "id": "hold-paraphrase",
+      "usefulRoutine": "meeting_followup",
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Yesterday we talked about the launch"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Picking who does what next"
+        },
+        {
+          "app": "Editor",
+          "text": "A to-do note ready to check"
+        }
+      ]
+    },
+    {
+      "id": "hold-research",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Research: Outstanding invoices"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Research: Reconciling balances for outstanding invoices"
+        },
+        {
+          "app": "Editor",
+          "text": "Research: Draft invoice reminders"
+        }
+      ]
+    },
+    {
+      "id": "hold-tutorial",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Tutorial: Call transcript"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Tutorial: Assigning owners from call transcript"
+        },
+        {
+          "app": "Editor",
+          "text": "Tutorial: Meeting follow-up draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-article-it",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Articolo: Fatture scadute"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Articolo: Fatture scadute verifica pagamenti"
+        },
+        {
+          "app": "Editor",
+          "text": "Articolo: Bozza sollecito fatture"
+        }
+      ]
+    },
+    {
+      "id": "hold-static-days",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Meeting action list draft"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Meeting action list draft"
+        },
+        {
+          "app": "Editor",
+          "text": "Meeting action list draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-two-apps",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Home page"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Search"
+        },
+        {
+          "app": "Editor",
+          "text": "New tab"
+        }
+      ]
+    },
+    {
+      "id": "hold-unrelated-languages",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "La factura histórica está en el museo"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Il report mensile è un romanzo"
+        },
+        {
+          "app": "Editor",
+          "text": "会議についての映画を見ました"
+        }
+      ]
+    },
+    {
+      "id": "hold-private-vault",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "1Password — Expense receipts"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "1Password — Expense receipts matching transactions"
+        },
+        {
+          "app": "Editor",
+          "text": "1Password — Expense reconciliation draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-future",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Support tickets"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Support tickets categorizing requests"
+        },
+        {
+          "app": "Editor",
+          "text": "Support reply drafts"
+        }
+      ],
+      "dayOffsets": [
+        1,
+        2,
+        3
+      ]
+    },
+    {
+      "id": "hold-stale",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Meeting notes"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Meeting notes extracting action items"
+        },
+        {
+          "app": "Editor",
+          "text": "Meeting action list draft"
+        }
+      ],
+      "dayOffsets": [
+        -20,
+        -19,
+        -18
+      ]
+    },
+    {
+      "id": "hold-no-operation",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Lead follow-up"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Lead follow-up email draft"
+        }
+      ]
+    },
+    {
+      "id": "hold-delayed-steps",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Expense receipts"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Expense receipts matching transactions"
+        },
+        {
+          "app": "Editor",
+          "text": "Expense reconciliation draft"
+        }
+      ],
+      "stepGapMinutes": 45
+    },
+    {
+      "id": "hold-continuous",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Support tickets"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Support tickets categorizing requests"
+        },
+        {
+          "app": "Editor",
+          "text": "Support reply drafts"
+        }
+      ],
+      "continuous": true
+    },
+    {
+      "id": "hold-excluded",
+      "usefulRoutine": null,
+      "steps": [
+        {
+          "app": "Browser",
+          "text": "Weekly sales report"
+        },
+        {
+          "app": "Spreadsheet",
+          "text": "Weekly sales report comparing figures"
+        },
+        {
+          "app": "Editor",
+          "text": "Weekly sales report draft"
+        }
+      ],
+      "excluded": true
+    }
+  ]
+}

@@ -1,0 +1,141 @@
+bun test v1.4.2 (744846f84)
+
+src/awareness/job-hypotheses.test.ts:
+81 |       captureId: `${s.captureId}-bridge-${minute}`, observedAt: s.observedAt + minute * 60_000,
+82 |       routine: { ...s.routine!, sidecarId: 'other-device' },
+83 |     }))];
+84 |     return [{ ...s, observedAt: s.observedAt + 88 * 60_000 }];
+85 |   });
+86 |   expect(groupRoutineEpisodes(input, EVALUATION_NOW)).toEqual([]);
+                                                           ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "operation": {
++       "app": "Notes",
++       "captureId": "meeting-0-1",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791552600000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "operation",
++       },
++     },
++     "output": {
++       "app": "Editor",
++       "captureId": "meeting-0-2",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791552720000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "output",
++       },
++     },
++     "source": {
++       "app": "Notes",
++       "captureId": "meeting-0-0",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791547200000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "source",
++       },
++     },
++   },
++   {
++     "operation": {
++       "app": "Notes",
++       "captureId": "meeting-1-1",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791639000000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "operation",
++       },
++     },
++     "output": {
++       "app": "Editor",
++       "captureId": "meeting-1-2",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791639120000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "output",
++       },
++     },
++     "source": {
++       "app": "Notes",
++       "captureId": "meeting-1-0",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791633600000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "source",
++       },
++     },
++   },
++   {
++     "operation": {
++       "app": "Notes",
++       "captureId": "meeting-2-1",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791725400000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "operation",
++       },
++     },
++     "output": {
++       "app": "Editor",
++       "captureId": "meeting-2-2",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791725520000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "output",
++       },
++     },
++     "source": {
++       "app": "Notes",
++       "captureId": "meeting-2-0",
++       "cue": "meeting notes and follow-up actions",
++       "kind": "meeting_followup",
++       "observedAt": 1791720000000,
++       "routine": {
++         "policy": "routine-cues-v2",
++         "sidecarId": "fixture-device",
++         "stage": "source",
++       },
++     },
++   },
++ ]
+
+- Expected  - 1
++ Received  + 116
+
+      at <anonymous> ($WORKTREE/src/awareness/job-hypotheses.test.ts:86:55)
+(fail) another device cannot bridge a stale partial episode [14.80ms]
+
+ 0 pass
+ 9 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [47.00ms]
