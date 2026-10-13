@@ -1,0 +1,11 @@
+.release-test-header { padding: 12px 20px; background: #edf3ef; color: #162c20; font: 14px system-ui; }
+.release-test-header nav { display: flex; flex-wrap: wrap; gap: 16px; margin: 8px 0; }
+.release-test-header a { color: #1c5033; text-decoration: underline; }
+.release-test-header button, .release-test-room button { border: 1px solid #4b6653; border-radius: 4px; padding: 5px 10px; background: white; color: #162c20; }
+.release-test-dashboard { height: calc(100dvh - 160px); min-height: 450px; }
+.release-test-dashboard > .jarvis-v2-root, .release-test-dashboard .brief-root { height: 100%; }
+.release-test-room { padding: 24px; font-family: system-ui; }
+.release-test-room h1 { font-size: 24px; margin-bottom: 16px; }
+.release-test-room pre { margin: 12px 0; }
+.release-test-draft { margin: 20px 0; }
+.release-test-draft textarea { display: block; padding: 8px; border: 1px solid #4b6653; margin: 8px 0; width: min(100%, 400px); }
