@@ -1,0 +1,138 @@
+{
+  "task": "F-28",
+  "date": "2026-10-13",
+  "repository": "vierisid/jarvis",
+  "base_branch": "brief/f-27",
+  "baseline": "f861eebbfd0b3e60cebe0f47a024be0b881979c1",
+  "main_rechecked": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+  "head": {
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/F-28.json",
+    "reason": "Avoids a self-referential commit hash."
+  },
+  "scope": "Activation matrix, release record/audit, opt-in gated registry and isolated migration compatibility tests only",
+  "merge_after": [
+    "F-01"
+  ],
+  "enable_after": [
+    "F-02",
+    "F-03",
+    "F-04",
+    "F-05",
+    "F-06",
+    "F-07",
+    "F-08",
+    "F-09",
+    "F-10",
+    "F-11",
+    "F-12",
+    "F-13",
+    "F-14",
+    "F-15",
+    "F-16",
+    "F-17",
+    "F-18",
+    "F-19",
+    "F-20",
+    "F-21",
+    "F-22",
+    "F-23",
+    "F-24",
+    "F-25",
+    "F-26",
+    "F-27"
+  ],
+  "activation": {
+    "record": "docs/brief-delivery/F-28-release.json",
+    "status": "blocked",
+    "approved_capabilities": [],
+    "active_capabilities": [],
+    "release_enabled": false,
+    "deployment_authorized": false,
+    "code_merged": false,
+    "production_readiness": "not_run",
+    "host_bindings": "blocked",
+    "daemon_bootstrap_changed": false,
+    "assembly_owner": "D-33/release integration",
+    "prerequisites_merged": 0,
+    "prerequisites_total": 27
+  },
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "node": "81:3",
+    "native_inspection": "not_run_this_card",
+    "visual_changes": false
+  },
+  "runtime": {
+    "bun": "1.3.14",
+    "dependencies": "separate frozen installation; lockfile unchanged",
+    "databases": "isolated temporary SQLite only",
+    "external_effects": false,
+    "account_mutations": false
+  },
+  "checks": {
+    "focused": {
+      "command": "bun test src/brief/release src/brief/capabilities.test.ts src/daemon/api-brief.test.ts scripts/check-brief-release.test.ts",
+      "passed": 76,
+      "failed": 0,
+      "assertions": 2402,
+      "files": 5
+    },
+    "affected": {
+      "command": "bun test src/brief src/daemon/api-brief*.test.ts src/vault/conversation-schema.test.ts src/vault/chat-turns.test.ts src/vault/memory-usage.test.ts ui/src/brief/chat ui/src/brief/reconciliation ui/src/brief/entry scripts/check-brief-release.test.ts",
+      "passed": 739,
+      "skipped": 6,
+      "failed": 0,
+      "assertions": 7823,
+      "files": 63,
+      "skip_reason": "Existing optional actual Q-05/Q-13/Q-18 integration modules absent from this F stack"
+    },
+    "typecheck": "passed: bunx tsc --noEmit",
+    "build_ui": "passed: bun run build:ui; pre-existing Tailwind directive warnings",
+    "fixture_reproduction": "passed: all five files byte-for-byte",
+    "audit_cli": "passed: exit 1, blocked, zero enabled capabilities, no deployment authorization",
+    "review": {
+      "status": "passed",
+      "findings_fixed": 1,
+      "final_review": "No findings",
+      "independent_delegated_review": false
+    },
+    "full_ci": {
+      "source": "GitHub checks for the pushed PR head",
+      "status": "reported after push in PR/private handoff"
+    }
+  },
+  "migration_coverage": {
+    "new_tables": 34,
+    "fresh": true,
+    "upgrades": [
+      "69211511c95355776c6c319c01e1df5acd3b8f1e",
+      "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+      "partial F-07/F-20 with saved rows"
+    ],
+    "historical_conversation_code": "reads/writes upgraded DB; every prior Brief row survives re-upgrade",
+    "retained": "histories, titles, IDs, tab/stack order, drafts, measurements, suppression, attachment metadata, document revisions and idempotency/removal receipts",
+    "full_binary_downgrade": "unsupported without separate evidence",
+    "fresh_data": "no synthetic measurement backfill"
+  },
+  "evidence": [
+    "docs/brief-delivery/evidence/F-28/activation-audit.json",
+    "docs/brief-delivery/evidence/F-28/affected.log",
+    "docs/brief-delivery/evidence/F-28/build.log",
+    "docs/brief-delivery/evidence/F-28/fixture-reproduction.json",
+    "docs/brief-delivery/evidence/F-28/focused.log",
+    "docs/brief-delivery/evidence/F-28/review-host-pair-red.log",
+    "docs/brief-delivery/evidence/F-28/review.json",
+    "docs/brief-delivery/evidence/F-28/typecheck.log",
+    "docs/brief-delivery/evidence/F-28/unobserved-capabilities.json"
+  ],
+  "limitations": [
+    "All F prerequisites remain unmerged; the source-stack inventory is not an assembled candidate or active deployment",
+    "Existing feature constructors and bootstrap flags remain independently operable; the release owner must wire the gated registry to all consumers",
+    "Old conversation reader/storage compatibility does not certify a full historical daemon downgrade",
+    "No real hosted pair, sidecar, production account or D/Q stack integration exercised",
+    "D-33 still requires live candidate-bound D-32/F-28/Q-22 evidence, exact runtime combinations and separate team approval"
+  ],
+  "rollback": "Disable feature approvals/requests on guard-aware code, refresh capabilities, and retain all additive data and canonical guards; no destructive down migration. Roll back visual shell independently.",
+  "next_card": "None in the F track; no additional card started"
+}
