@@ -697,10 +697,101 @@ if (rule === "narrow") {
       for (const st of steps)
         if (String(st.uses ?? "").startsWith("google-github-actions/auth@") && st.with?.create_credentials_file !== false)
           out.push(name + ": google-github-actions/auth leaves a credentials file in the workspace (create_credentials_file is not false)");
-    if (release)
+    // No checkout leaves its token in .git/config on the release path, nor
+    // (#982) in any job holding a write scope or reading a secret other than
+    // GITHUB_TOKEN, whatever the workflow. release.yml is not on the release
+    // path as defined above (no `release` environment, no id-token), so its
+    // cut job left its PAT there for every later step. Every step after the
+    // checkout can read the file, so a credential goes to the one step that
+    // needs it, from that step env.
+    const writesAny = perm === "write-all" || (perm && typeof perm === "object" && Object.values(perm).some((v) => v === "write"));
+    const readsSecret = [...JSON.stringify({ env: doc.env, job }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)]
+      .some((m) => /\bsecrets\b(?!\s*\.\s*GITHUB_TOKEN\b)/i.test(m[1]));
+    const isCheckout = (st) => String(st.uses ?? "").toLowerCase().startsWith("actions/checkout@");
+    if (release || writesAny || readsSecret)
       for (const st of steps)
-        if (String(st.uses ?? "").startsWith("actions/checkout@") && st.with?.["persist-credentials"] !== false)
+        if (isCheckout(st) && st.with?.["persist-credentials"] !== false)
           out.push(name + ": checkout leaves the token in .git/config (persist-credentials is not false)");
+    // ...so a git command that talks to a remote, in a job whose checkouts
+    // persist nothing, has no credential unless its step supplies one
+    // (#982). Without one it fails, and the `|| true` a branch delete
+    // usually carries turns that into a silent no-op. A helper given in the
+    // step env counts: a GIT_CONFIG_KEY_n below GIT_CONFIG_COUNT naming a
+    // credential helper, with a value. The token in the remote URL does not
+    // count (see below).
+    const checkouts = steps.filter(isCheckout);
+    const gitRemote = cmd("git\\s+(?:(?:-[cC]|--(?:git-dir|work-tree|namespace|exec-path|config-env))\\s+\\S+\\s+|--?[\\w-]+(?:=\\S+)?\\s+)*(?:push|fetch|pull|ls-remote)\\b");
+    const stepLines = (st) => (typeof st.run === "string" ? st.run : "").replace(/\\\n/g, " ").split("\n").map((l) => stripComment(l).trim());
+    // The env a step runs with, as GitHub builds it: workflow, then job,
+    // then step, a later level overriding an earlier one.
+    const envOf = (st) => ({ ...(doc.env ?? {}), ...(job.env ?? {}), ...(st.env ?? {}) });
+    // GIT_CONFIG_KEY_<n> as git reads it: n in plain decimal (no leading
+    // zero) and below GIT_CONFIG_COUNT.
+    const envConfig = (e) => {
+      const n = Number(e.GIT_CONFIG_COUNT ?? 0);
+      return Object.entries(e).flatMap(([k, v]) => {
+        const m = /^GIT_CONFIG_KEY_(\d+)$/.exec(k);
+        return m && m[1] === String(Number(m[1])) && Number(m[1]) < n ? [[String(v), String(e["GIT_CONFIG_VALUE_" + m[1]] ?? "")]] : [];
+      });
+    };
+    const helpers = (st) => envConfig(envOf(st)).filter(([k]) => /^credential\.(?:.+\.)?helper$/i.test(k)).map(([, v]) => v);
+    if (checkouts.length && checkouts.every((st) => st.with?.["persist-credentials"] === false))
+      for (const [i, st] of steps.entries()) {
+        if (!stepLines(st).some((l) => gitRemote.test(l))) continue;
+        if (!helpers(st).some((v) => v !== ""))
+          out.push(name + ": step " + (st.name ?? st.id ?? String(i)) + " runs git against a remote with no credential: the checkout persists none and the step env gives no credential helper");
+      }
+    // A helper given that way answers from the step env and stores nothing:
+    // an inline `!f() { ... }; f` that names no storing helper and writes
+    // no file. Anything else (store, cache, a credential manager, or an
+    // inline one that calls them) keeps what git hands it after a push, on
+    // disk or in a daemon every later step can ask.
+    for (const [i, st] of steps.entries())
+      for (const v of helpers(st))
+        if (v !== "" && (!/^!f\(\)\s*\{[\s\S]*\};\s*f$/.test(v) || /credential-(?:store|cache)|\bgh\s+auth\b|>/.test(v)))
+          out.push(name + ": step " + (st.name ?? st.id ?? String(i)) + " configures the credential helper " + JSON.stringify(v) + ", which keeps the credential after the step");
+    // Git config given in the environment reaches every step that env
+    // reaches, so at the job or workflow level it is the persisted
+    // credential again; and an extraheader, insteadOf or helper value given
+    // as GIT_CONFIG_PARAMETERS, or a GIT_CONFIG_GLOBAL file, is git config
+    // this rule cannot read.
+    for (const [lvl, e] of [["workflow env", doc.env ?? {}], ["job env", job.env ?? {}]])
+      for (const k of Object.keys(e))
+        if (/^GIT_CONFIG_(?:COUNT|KEY_\d+|VALUE_\d+|PARAMETERS|GLOBAL|SYSTEM)$/.test(k))
+          out.push(name + ": " + lvl + " sets " + k + ", git config every step of the job reads");
+    for (const [i, st] of steps.entries()) {
+      for (const k of Object.keys(st.env ?? {}))
+        if (/^GIT_CONFIG_(?:PARAMETERS|GLOBAL|SYSTEM)$/.test(k))
+          out.push(name + ": step " + (st.name ?? st.id ?? String(i)) + " sets " + k + ", git config this rule cannot read");
+      for (const [k] of envConfig(st.env ?? {}))
+        if (/extraheader|\.insteadof$/i.test(k))
+          out.push(name + ": step " + (st.name ?? st.id ?? String(i)) + " sets " + k + " through the environment; give a credential helper instead");
+    }
+    // Nor may a job that holds a credential put it back where the checkout
+    // no longer does: an extraheader or helper in git config (on disk, or on
+    // a command line every process can read), a .git-credentials, .netrc or
+    // .gitconfig file, a storing helper run directly, or gh auth, which
+    // writes its token under ~/.config. Continuation lines joined.
+    const joined = runs.replace(/\\\n/g, " ").split("\n").map((l) => stripComment(l).trim());
+    if (release || writesAny || readsSecret)
+      for (const line of joined)
+        if (/\bgit\b.*\bconfig\b.*(?:extraheader|\bcredential\.|\.insteadof\b)/i.test(line) || /\bgit\b.*\s-c\s+["\x27]?[^\s=]*(?:extraheader|credential\.)/i.test(line) ||
+            /\.git-credentials\b|(?:^|[^\w.-])\.(?:netrc|gitconfig)\b|\bcredential-(?:store|cache)\b|\bgh\s+auth\s+(?:login|setup-git)\b/.test(line))
+          out.push(name + ": writes a git credential where every later step can read it: " + line);
+    // Nor a credential in a URL (#982): git and curl print the URL they
+    // failed on, where only the secret itself is masked and nothing derived
+    // from it, and a URL argument is visible to every process on the runner.
+    // A credential is an expression, a variable, a command substitution or
+    // a printf slot in the userinfo. Run text, and every env (workflow,
+    // job, container, services, step) and with value.
+    const credUrl = /\bhttps?:\/\/[^\s\/@]*(?:\$\{\{[\s\S]*?\}\}|\$\{?[A-Za-z_]\w*\}?|\$\([^)]*\)|`[^`]*`|%s)[^\s\/@]*@/i;
+    const vals = (o) => Object.values(o ?? {}).map(String);
+    const urlTexts = [...joined, ...vals(doc.env), ...vals(job.env), ...vals(job.container?.env),
+      ...Object.values(job.services ?? {}).flatMap((sv) => vals(sv?.env)),
+      ...steps.flatMap((st) => [...vals(st.env), ...vals(st.with)])];
+    for (const t of urlTexts)
+      if (credUrl.test(t))
+        out.push(name + ": puts a credential in a URL, which git and curl print in their errors: " + t);
     for (const st of steps)
       if (String(st.uses ?? "").startsWith("docker/login-action@") && "dry_run" in ((doc.on ?? doc[true] ?? {}).workflow_dispatch?.inputs ?? {}) &&
           !/env\.DRY_RUN\s*!=\s*.true./.test(String(st.if ?? "")))
@@ -1542,6 +1633,239 @@ expect_caught 'a refusal that tests GITHUB_TOKEN instead' catalog-pr "$WORKFLOWS
 expect_caught 'a PR opened before the refusal runs' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'      - name: Refuse without the catalog PR token' $'      - name: Open early\n        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1\n        with:\n          token: ${{ secrets.RELEASE_PR_TOKEN }}\n      - name: Refuse without the catalog PR token' \
 	'publish: step Open early: no earlier step refuses when RELEASE_PR_TOKEN is empty'
+
+echo
+echo "no checkout leaves a write token or a secret on disk, and a push brings its own credential (#982)"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'the release cut job leaving its PAT in .git/config (#982)' narrow "$WORKFLOWS/release.yml" \
+		$'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n          persist-credentials: false\n' $'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n' \
+		'cut: checkout leaves the token in .git/config'
+	expect_caught 'the release cut job persisting its PAT on purpose (#982)' narrow "$WORKFLOWS/release.yml" \
+		$'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n          persist-credentials: false\n' $'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n          persist-credentials: true\n' \
+		'cut: checkout leaves the token in .git/config'
+	expect_caught 'a write-scoped job off the release path persisting its token (#982)' narrow "$WORKFLOWS/update-webview.yml" \
+		$'        with:\n          persist-credentials: false\n      - uses: actions/setup-go@' '      - uses: actions/setup-go@' \
+		'update: checkout leaves the token in .git/config'
+	expect_caught 'a read-only job persisting a secret it checked out with (#982)' narrow "$WORKFLOWS/docker-build.yml" \
+		$'      - uses: actions/checkout@v7\n' $'      - uses: actions/checkout@v7\n        with:\n          token: ${{ secrets.SOME_PAT }}\n' \
+		'docker-build: checkout leaves the token in .git/config'
+	expect_caught 'the same checkout spelled in another case (#982)' narrow "$WORKFLOWS/docker-build.yml" \
+		$'      - uses: actions/checkout@v7\n' $'      - uses: Actions/Checkout@v7\n        with:\n          token: ${{ secrets.SOME_PAT }}\n' \
+		'docker-build: checkout leaves the token in .git/config'
+	expect_caught 'the release branch pushed with no credential helper (#982)' narrow "$WORKFLOWS/release.yml" \
+		$'          GIT_CONFIG_KEY_1: credential.https://github.com.helper\n' '' \
+		'cut: step Create release PR runs git against a remote with no credential'
+	expect_caught 'the release branch pushed with an empty credential helper (#982)' narrow "$WORKFLOWS/release.yml" \
+		"          GIT_CONFIG_VALUE_1: '!f()" $'          GIT_CONFIG_VALUE_1: ""\n          x-was: \'!f()' \
+		'cut: step Create release PR runs git against a remote with no credential'
+	expect_caught 'the release branch delete back on git, with no credential (#982)' narrow "$WORKFLOWS/release.yml" \
+		'          if ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then' '          if ! git push origin --delete "release/v${NEW}"; then' \
+		'cut: step Delete release branch runs git against a remote with no credential'
+	expect_caught 'the cleanup delete back on git -C, with no credential (#982)' narrow "$WORKFLOWS/release.yml" \
+		'          if [ -n "$NEW" ] && ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then' '          if [ -n "$NEW" ] && ! git -C . push origin --delete "release/v${NEW}"; then' \
+		'cut: step Clean up on failure runs git against a remote with no credential'
+	expect_caught 'the release branch pushed with the token in its URL (#982)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' '          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"' \
+		'cut: puts a credential in a URL'
+	expect_caught 'the token in a URL as a spaced expression (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' '          git push "https://x-access-token:${{ secrets.RELEASE_PR_TOKEN }}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"' \
+		'cut: puts a credential in a URL'
+	expect_caught 'the token in a URL split by quotes (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' '          git push "https://x-access-token:"$GH_TOKEN"@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"' \
+		'cut: puts a credential in a URL'
+	expect_caught 'the token in a URL held in step env (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          GIT_TERMINAL_PROMPT: "0"' $'          PUSH_URL: https://x-access-token:${{ secrets.RELEASE_PR_TOKEN }}@github.com/vierisid/jarvis.git\n          GIT_TERMINAL_PROMPT: "0"' \
+		'cut: puts a credential in a URL'
+	expect_caught 'a storing helper as the reset entry (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          GIT_CONFIG_VALUE_0: ""' '          GIT_CONFIG_VALUE_0: store' \
+		'cut: step Create release PR configures the credential helper "store"'
+	expect_caught 'the helper beyond GIT_CONFIG_COUNT, so git never reads it (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          GIT_CONFIG_COUNT: "2"' '          GIT_CONFIG_COUNT: "1"' \
+		'cut: step Create release PR runs git against a remote with no credential'
+	expect_caught 'the PAT written back into .git/config as an extraheader (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          git config http.https://github.com/.extraheader "AUTHORIZATION: basic x"\n          git push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'an extraheader on the git command line (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' '          git -c http.extraheader="AUTHORIZATION: basic x" push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'a .git-credentials file written (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          printf \x27https://x:%s@github.com\\n\x27 "$GH_TOKEN" >~/.git-credentials\n          git push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'a remote git command continued onto the next line (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          if ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then' $'          if ! git \\\n            push origin --delete "release/v${NEW}"; then' \
+		'cut: step Delete release branch runs git against a remote with no credential'
+	expect_caught 'a remote git command behind --git-dir (#982 review)' narrow "$WORKFLOWS/release.yml" \
+		'          if ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then' '          if ! git --git-dir .git push origin --delete "release/v${NEW}"; then' \
+		'cut: step Delete release branch runs git against a remote with no credential'
+	expect_caught 'git config in the job env, reaching every step (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		$'    env:\n      GH_TOKEN: ${{ github.token }}\n' $'    env:\n      GH_TOKEN: ${{ github.token }}\n      GIT_CONFIG_COUNT: "1"\n      GIT_CONFIG_KEY_0: http.https://github.com/.extraheader\n      GIT_CONFIG_VALUE_0: "AUTHORIZATION: basic ${{ secrets.RELEASE_PR_TOKEN }}"\n' \
+		'cut: job env sets GIT_CONFIG_COUNT'
+	expect_caught 'an extraheader given in the step env (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          GIT_CONFIG_KEY_0: credential.helper' '          GIT_CONFIG_KEY_0: http.https://github.com/.extraheader' \
+		'cut: step Create release PR sets http.https://github.com/.extraheader through the environment'
+	expect_caught 'GIT_CONFIG_PARAMETERS in the step env (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          GIT_TERMINAL_PROMPT: "0"' $'          GIT_CONFIG_PARAMETERS: "\x27credential.helper\x27=\x27store\x27"\n          GIT_TERMINAL_PROMPT: "0"' \
+		'cut: step Create release PR sets GIT_CONFIG_PARAMETERS'
+	expect_caught 'an inline helper that calls the storing one (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          GIT_CONFIG_VALUE_0: ""' '          GIT_CONFIG_VALUE_0: "!git credential-store"' \
+		'configures the credential helper "!git credential-store"'
+	expect_caught 'the helper key spelled with a leading zero, which git never reads (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		$'          GIT_CONFIG_KEY_1: credential.https://github.com.helper\n          GIT_CONFIG_VALUE_1: ' $'          GIT_CONFIG_KEY_01: credential.https://github.com.helper\n          GIT_CONFIG_VALUE_01: ' \
+		'cut: step Create release PR runs git against a remote with no credential'
+	expect_caught 'an extraheader written across a continuation line (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          git config --global \\\n            http.https://github.com/.extraheader "AUTHORIZATION: basic x"\n          git push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'a storing helper on a continued command line (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          git -c \\\n            credential.helper=store push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'an insteadOf carrying the token (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          git config url.https://x@github.com/.insteadOf https://github.com/\n          git push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'the storing helper run directly (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          printf \x27protocol=https\\nhost=github.com\\nusername=x\\npassword=%s\\n\x27 "$GH_TOKEN" | git credential-store store\n          git push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'gh auth login, which writes the token under ~/.config (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          gh auth login --with-token <<<"$GH_TOKEN"\n          git push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'a .netrc written with no space before it (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          echo "machine github.com password $GH_TOKEN" >.netrc\n          git push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'a .gitconfig written by hand (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          printf \x27[credential]\\n\\thelper = store\\n\x27 >>~/.gitconfig\n          git push origin "$BRANCH"' \
+		'cut: writes a git credential where every later step can read it'
+	expect_caught 'the token in a URL held in workflow env (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		$'jobs:\n  cut:\n' $'env:\n  PUSH_URL: https://x-access-token:${{ secrets.RELEASE_PR_TOKEN }}@github.com/vierisid/jarvis.git\njobs:\n  cut:\n' \
+		'cut: puts a credential in a URL'
+	expect_caught 'the token in a URL through format() (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          GIT_TERMINAL_PROMPT: "0"' $'          PUSH_URL: https://x-access-token:${{ format(\x27{0}\x27, secrets.RELEASE_PR_TOKEN) }}@github.com/vierisid/jarvis.git\n          GIT_TERMINAL_PROMPT: "0"' \
+		'cut: puts a credential in a URL'
+	expect_caught 'the token in a URL through a command substitution (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' '          git push "https://x-access-token:$(printenv GH_TOKEN)@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"' \
+		'cut: puts a credential in a URL'
+	expect_caught 'the token in a URL built by printf (#982 review 2)' narrow "$WORKFLOWS/release.yml" \
+		'          git push origin "$BRANCH"' $'          url="$(printf \x27https://x-access-token:%s@github.com/%s.git\x27 "$GH_TOKEN" "$GITHUB_REPOSITORY")"\n          git push "$url" "$BRANCH"' \
+		'cut: puts a credential in a URL'
+}
+# The helper itself, executed (#982): git asks it exactly as `git credential
+# fill` does, with the step env as the workflow writes it and each expression
+# replaced by a marker, and nothing else (no user or system git config, no
+# inherited GIT_* variables). For github.com it must answer with the value of
+# secrets.RELEASE_PR_TOKEN, for any other host with nothing, and with that
+# secret empty with nothing, and git may never fall back to a prompt.
+# push_cred_check <workflow>: one violation per line, nothing when clean.
+push_cred_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" SCRATCH="${WORK}/pushcred" bun -e '
+const fs = require("node:fs");
+const doc = Bun.YAML.parse(fs.readFileSync(process.env.FILE, "utf8"));
+const out = [];
+fs.rmSync(process.env.SCRATCH, { recursive: true, force: true });
+fs.mkdirSync(process.env.SCRATCH + "/home", { recursive: true });
+let found = 0;
+for (const [name, job] of Object.entries(doc.jobs ?? {}))
+  for (const [i, st] of (job.steps ?? []).entries()) {
+    // Any git push in the step, wherever it sits in a line.
+    if (typeof st.run !== "string" || !/(?:^|[;&|(!{`]\s*|\b(?:then|do|else|if|elif|while|until)\s+)git\s+(?:-\S+\s+(?:[^\s-]\S*\s+)?)*push\b/m.test(st.run.replace(/\\\n/g, " "))) continue;
+    found++;
+    const label = name + ": step " + (st.name ?? st.id ?? String(i));
+    const env = {};
+    let pat = null;
+    // The env the step runs with: workflow, job, then step.
+    for (const [k, v] of Object.entries({ ...(doc.env ?? {}), ...(job.env ?? {}), ...(st.env ?? {}) })) {
+      const s = String(v);
+      if (/^\$\{\{\s*secrets\.RELEASE_PR_TOKEN\s*\}\}$/.test(s)) { env[k] = "pat-marker-" + k; pat = k; }
+      else env[k] = s.includes("${{") ? "expr-marker-" + k : s;
+    }
+    if (env.GIT_TERMINAL_PROMPT !== "0") { out.push(label + ": GIT_TERMINAL_PROMPT is not 0, so a missing credential can wait on a prompt"); continue; }
+    const fill = (host, extra = {}) => {
+      const r = Bun.spawnSync(["git", "credential", "fill"], {
+        cwd: process.env.SCRATCH, timeout: 20000,
+        env: { PATH: process.env.PATH, HOME: process.env.SCRATCH + "/home", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", ...env, ...extra },
+        stdin: Buffer.from("protocol=https\nhost=" + host + "\npath=vierisid/jarvis\n\n"),
+      });
+      return { code: r.exitCode, text: r.stdout.toString() };
+    };
+    const gh = fill("github.com");
+    const pw = /^password=(.*)$/m.exec(gh.text)?.[1];
+    if (!pat) out.push(label + ": no step env carries secrets.RELEASE_PR_TOKEN alone, so the push is not made by the PAT");
+    else if (gh.code !== 0 || pw !== "pat-marker-" + pat) out.push(label + ": git gets " + JSON.stringify(pw ?? null) + " for github.com, not secrets.RELEASE_PR_TOKEN (exit " + gh.code + ")");
+    // After a push git hands the credential back (approve), which is when a
+    // storing helper writes it down; nothing may then hold the marker.
+    if (gh.code === 0) {
+      Bun.spawnSync(["git", "credential", "approve"], {
+        cwd: process.env.SCRATCH, timeout: 20000,
+        env: { PATH: process.env.PATH, HOME: process.env.SCRATCH + "/home", GIT_CONFIG_NOSYSTEM: "1", GIT_CONFIG_GLOBAL: "/dev/null", ...env },
+        stdin: Buffer.from(gh.text + "\n"),
+      });
+      const kept = (dir) => fs.readdirSync(dir, { recursive: true, withFileTypes: true }).filter((e) => e.isFile())
+        .filter((e) => fs.readFileSync(require("node:path").join(e.parentPath ?? e.path, e.name), "utf8").includes("pat-marker-"));
+      if (kept(process.env.SCRATCH).length) out.push(label + ": the push credential is written to disk after the push (a storing helper)");
+    }
+    const other = fill("example.com");
+    if (other.code === 0 || /marker/.test(other.text)) out.push(label + ": the push credential is offered to a host other than github.com");
+    if (pat) {
+      const empty = fill("github.com", { [pat]: "" });
+      if (empty.code === 0) out.push(label + ": with secrets.RELEASE_PR_TOKEN empty git still gets a credential");
+    }
+  }
+if (!found) out.push("no step runs git push, so the push credential check checked nothing");
+// The PAT is read exactly three times: the refusal, the checkout token
+// (persisted nowhere) and the push step env. Anywhere else it reaches code
+// this check has not looked at.
+const patReads = [...JSON.stringify({ env: doc.env, jobs: doc.jobs }).matchAll(/\$\{\{([\s\S]*?)\}\}/g)]
+  .filter((m) => /\bsecrets\s*(?:\.\s*RELEASE_PR_TOKEN\b|\[)|\btoJSON\s*\(\s*secrets\b/i.test(m[1])).length;
+if (patReads !== 3) out.push("secrets.RELEASE_PR_TOKEN is read " + patReads + " times; expected 3 (the refusal env, the checkout token, the push step env)");
+if (out.length) console.log(out.join("\n"));
+'
+}
+found="$(push_cred_check "$WORKFLOWS/release.yml")"
+if [ -z "$found" ]; then
+	ok "release.yml: the branch push gets secrets.RELEASE_PR_TOKEN from its step env, for github.com alone (#982)"
+else
+	no "release.yml: the branch push gets secrets.RELEASE_PR_TOKEN from its step env, for github.com alone (#982)" "$found"
+fi
+# push_cred_caught <label> <exact text> <replacement> <reason>
+push_cred_caught() {
+	local copy="${WORK}/release-push.yml"
+	if ! FROM="$WORKFLOWS/release.yml" TO="$copy" OLD="$2" NEW="$3" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
+await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+'; then
+		no "push credential mutant '$1' could be applied (release.yml no longer has the text it mutates)"
+		return
+	fi
+	found="$(push_cred_check "$copy")"
+	if grep -qF -- "$4" <<<"$found"; then ok "reports: $1"; else no "reports: $1, for the reason it exists" "wanted '${4}', got: ${found}"; fi
+}
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	push_cred_caught 'the helper answering for every host (#982)' \
+		'          GIT_CONFIG_KEY_1: credential.https://github.com.helper' '          GIT_CONFIG_KEY_1: credential.helper' \
+		'offered to a host other than github.com'
+	push_cred_caught 'the helper reading a variable the step does not set (#982)' \
+		'password=%s\n" "$GH_TOKEN"' 'password=%s\n" "$PUSH_TOKEN"' \
+		'not secrets.RELEASE_PR_TOKEN'
+	push_cred_caught 'the push made with the job token instead of the PAT (#982)' \
+		$'          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n          # The branch push' $'          GH_TOKEN: ${{ github.token }}\n          # The branch push' \
+		'no step env carries secrets.RELEASE_PR_TOKEN alone'
+	push_cred_caught 'the helper answering with the token empty (#982)' \
+		'] && [ -n "$GH_TOKEN" ]; then' ']; then' \
+		'with secrets.RELEASE_PR_TOKEN empty git still gets a credential'
+	push_cred_caught 'a storing helper as the reset entry, writing the PAT after the push (#982 review)' \
+		'          GIT_CONFIG_VALUE_0: ""' '          GIT_CONFIG_VALUE_0: store' \
+		'written to disk after the push'
+	push_cred_caught 'a second push mid-line, with no helper of its own (#982 review 2)' \
+		'          if ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then' '          if ! git push origin --delete "release/v${NEW}"; then' \
+		'cut: step Delete release branch: GIT_TERMINAL_PROMPT is not 0'
+	push_cred_caught 'the PAT read by another step (#982 review 2)' \
+		'          PR_URL: ${{ steps.pr.outputs.PR_URL }}' $'          PR_URL: ${{ steps.pr.outputs.PR_URL }}\n          EXTRA: ${{ secrets.RELEASE_PR_TOKEN }}' \
+		'secrets.RELEASE_PR_TOKEN is read 4 times'
+	push_cred_caught 'git allowed to prompt for a credential (#982)' \
+		'          GIT_TERMINAL_PROMPT: "0"' '          GIT_TERMINAL_PROMPT: "1"' \
+		'GIT_TERMINAL_PROMPT is not 0'
+}
 
 echo
 echo "${pass} passed, ${fail} failed"
