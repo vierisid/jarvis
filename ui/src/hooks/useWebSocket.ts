@@ -534,7 +534,20 @@ export interface WebSocketChatAdapter {
   onMessage(message: WSMessage): boolean;
 }
 
-export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat?: WebSocketChatAdapter } = {}) {
+/** Read-only hints share the socket without consuming chat/voice frames or opening another one. */
+export interface WebSocketObserver {
+  onOpen(): void;
+  onClose(): void;
+  onMessage(message: WSMessage): void;
+}
+function notifyObserver(observer: WebSocketObserver | undefined, event: 'onOpen' | 'onClose'): void;
+function notifyObserver(observer: WebSocketObserver | undefined, event: 'onMessage', message: WSMessage): void;
+function notifyObserver(observer: WebSocketObserver | undefined, event: keyof WebSocketObserver, message?: WSMessage) {
+  try { if (event === 'onMessage') observer?.onMessage(message!); else observer?.[event](); }
+  catch { /* An optional projection cannot interrupt chat or voice delivery. */ }
+}
+
+export function useWebSocket({ enabled = true, chat, observer }: { enabled?: boolean; chat?: WebSocketChatAdapter; observer?: WebSocketObserver } = {}) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [taskEvents, setTaskEvents] = useState<TaskEvent[]>([]);
@@ -558,6 +571,12 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
   } | null>(null);
   const [roomActionRequest, setRoomActionRequest] = useState<DashboardRoomActionRequest | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const observerRef = useRef<WebSocketObserver | undefined>(undefined);
+  useEffect(() => {
+    observerRef.current = observer;
+    if (wsRef.current?.readyState === WebSocket.OPEN) notifyObserver(observer, 'onOpen');
+    return () => { observerRef.current = undefined; notifyObserver(observer, 'onClose'); };
+  }, [observer]);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Bumped when a socket closes; tells a queued room action its asker is gone (#1010). */
   const socketGenerationRef = useRef(0);
@@ -588,6 +607,7 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
     ws.onopen = async () => {
       if (wsRef.current !== ws || !mountedRef.current) return;
       setIsConnected(true);
+      notifyObserver(observerRef.current, 'onOpen');
       chat?.onOpen(ws);
       console.log("[WS] Connected");
       // Load chat history from backend on the first connect that gets an answer.
@@ -677,6 +697,7 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
       socketGenerationRef.current += 1;
       ws.onopen = ws.onclose = ws.onerror = ws.onmessage = null;
       wsRef.current = null;
+      notifyObserver(observerRef.current, 'onClose');
       chat?.onClose();
       setIsConnected(false);
       setIsResponding(false);
@@ -690,6 +711,7 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
 
     ws.onerror = () => {
       if (wsRef.current !== ws || !mountedRef.current) return;
+      notifyObserver(observerRef.current, 'onClose');
       setIsConnected(false);
     };
 
@@ -704,6 +726,7 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
 
       try {
         const msg: WSMessage = JSON.parse(event.data);
+        notifyObserver(observerRef.current, 'onMessage', msg);
         if (chat?.onMessage(msg)) return;
 
         // Voice signal messages → route to voice hook
@@ -1215,6 +1238,7 @@ export function useWebSocket({ enabled = true, chat }: { enabled?: boolean; chat
         socket.close();
       }
       chat?.onClose();
+      notifyObserver(observerRef.current, 'onClose');
       setIsConnected(false);
     };
   }, [connect, chat]);

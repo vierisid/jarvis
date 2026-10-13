@@ -1,0 +1,25 @@
+{
+  "task": "F-27", "method": "Direct read-only Review Agent skill; no delegation",
+  "base": "70833765929908112de6ccf3b5c4739b00e892ef",
+  "scope": "Complete F-27 diff, shared socket/provider callers, canonical read routes and regression tests",
+  "corrected_findings": [
+    {
+      "priority": 2,
+      "title": "Preserve unavailable status for degraded supported providers",
+      "file": "ui/src/brief/reconciliation/client.ts",
+      "pre_fix_line": 39,
+      "scenario": "Capability readiness falls from ready to unavailable. Treating every disabled capability as unsupported loses the distinction between a temporary outage and an absent feature.",
+      "resolution": "Classify present degraded providers as unavailable; missing/disabled providers remain unsupported. Regression covers degradation and recovery."
+    },
+    {
+      "priority": 2,
+      "title": "Clear cached snapshots when the provider becomes unsupported",
+      "file": "ui/src/brief/reconciliation/resource.ts",
+      "pre_fix_line": 89,
+      "scenario": "A provider returns HTTP 501 after a successful read. Unsupported status previously retained cached records because the HTTP failure did not set clear.",
+      "resolution": "Unsupported failures always clear cached data. Regression covers success followed by 501."
+    }
+  ],
+  "final_findings": [], "final_result": "No findings",
+  "residual_risks": ["Optional default-off host only", "No certification of future full-stack merge or production activation", "Eventual snapshot convergence, not exactly-once event delivery"]
+}

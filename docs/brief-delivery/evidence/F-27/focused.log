@@ -1,0 +1,500 @@
+bun test v1.3.14 (0d9b296a)
+
+src/brief/decisions.test.ts:
+Database initialized at: /tmp/jarvis-f12-pdT77b/fixture.db
+Database initialized at: /tmp/jarvis-f12-pdT77b/fixture.db
+(pass) prior-day work survives reload; intent acceptance is not permission or verified success [64.20ms]
+Database initialized at: /tmp/jarvis-f12-vD4sud/fixture.db
+(pass) approval, effect detail and run detail share one identity; no duplicate blocked work card [47.69ms]
+Database initialized at: /tmp/jarvis-f12-z15wVF/fixture.db
+(pass) unknown receipt cannot be hidden by a verified work result [34.96ms]
+Database initialized at: /tmp/jarvis-f12-9gSGjd/fixture.db
+(pass) blocked receipt cannot be hidden by a verified work result [45.56ms]
+Database initialized at: /tmp/jarvis-f12-5jn9F3/fixture.db
+(pass) failed receipt cannot be hidden by a verified work result [37.40ms]
+Database initialized at: /tmp/jarvis-f12-giyJt5/fixture.db
+Database initialized at: /tmp/jarvis-f12-giyJt5/fixture.db
+(pass) concurrent permission submissions call the existing executor only once; lost response reconciles by ID [48.62ms]
+Database initialized at: /tmp/jarvis-f12-UlZnGn/fixture.db
+(pass) restart uncertainty can only close; not-started can run once through the existing claim [36.36ms]
+Database initialized at: /tmp/jarvis-f12-0mdAeh/fixture.db
+(pass) failed/blocked receipts and legacy executed-without-receipt remain attention items [38.95ms]
+Database initialized at: /tmp/jarvis-f12-8m3mFx/fixture.db
+(pass) bounded references still detect unknown beyond the first fifty effects [42.28ms]
+Database initialized at: /tmp/jarvis-f12-LXMzQ3/fixture.db
+Database initialized at: /tmp/jarvis-f12-LXMzQ3/fixture.db
+(pass) placement persists, equal-time pagination is bounded and stable across restart [128.47ms]
+Database initialized at: /tmp/jarvis-f12-tE6QAa/fixture.db
+(pass) cursor explicitly conflicts after insert instead of skipping or repeating a decision [32.27ms]
+Database initialized at: /tmp/jarvis-f12-Fs1kHF/fixture.db
+(pass) cursor explicitly conflicts after reorder instead of skipping or repeating a decision [42.50ms]
+Database initialized at: /tmp/jarvis-f12-xpq0FI/fixture.db
+(pass) cursor explicitly conflicts after legacy-write instead of skipping or repeating a decision [38.89ms]
+Database initialized at: /tmp/jarvis-f12-7hZDRq/fixture.db
+(pass) cursor explicitly conflicts after delete instead of skipping or repeating a decision [30.59ms]
+Database initialized at: /tmp/jarvis-f12-zjBu8M/fixture.db
+Database initialized at: :memory:
+(pass) query validation, cursor scope, source revisions and replaced database fail closed [58.37ms]
+Database initialized at: /tmp/jarvis-f12-fgHSeW/fixture.db
+(pass) approval and execution claim are durable before the tool is dispatched [32.22ms]
+Database initialized at: /tmp/jarvis-f12-Y6zVRC/fixture.db
+(pass) permission revision is checked again at the actual writer, before any dispatch [30.18ms]
+Database initialized at: /tmp/jarvis-f12-J1yptT/fixture.db
+Database initialized at: /tmp/jarvis-f12-J1yptT/fixture.db
+(pass) approval projection excludes hostile workflow payloads from reads and mutation receipts [68.68ms]
+Database initialized at: /tmp/jarvis-f12-Ig4tEd/fixture.db
+Database initialized at: /tmp/jarvis-f12-Ig4tEd/fixture.db
+(pass) work projection excludes hostile workflow payloads from reads and mutation receipts [62.92ms]
+Database initialized at: /tmp/jarvis-f12-rDpV3b/fixture.db
+Database initialized at: /tmp/jarvis-f12-rDpV3b/fixture.db
+(pass) effect projection excludes hostile workflow payloads from reads and mutation receipts [56.40ms]
+Database initialized at: /tmp/jarvis-f12-RXpZk4/fixture.db
+Database initialized at: /tmp/jarvis-f12-RXpZk4/fixture.db
+(pass) workflow rejection stays denied, then becomes an inspect-only blocked receipt across restart [65.21ms]
+
+src/brief/memory-stream.test.ts:
+(pass) empty returns exact counts, while missing instrumentation is unknown rather than unused [24.24ms]
+(pass) tied timestamps paginate every fact once with frozen counts despite concurrent same-time/backdated inserts [27.50ms]
+(pass) long sentences remain intact; literal case-insensitive search does not interpret SQL wildcards [27.80ms]
+(pass) search, multi-evidence Source, actual Used in and half-open Updated range combine with exact counts [25.28ms]
+(pass) selected is not supplied; outcomes preserve explicit evidence stage without claiming model reliance [23.70ms]
+(pass) delete invalidates an existing snapshot without returning cached content [24.13ms]
+(pass) correct invalidates an existing snapshot without returning cached content [23.80ms]
+(pass) verify invalidates an existing snapshot without returning cached content [22.75ms]
+(pass) rename invalidates an existing snapshot without returning cached content [28.43ms]
+(pass) evidence invalidates an existing snapshot without returning cached content [22.57ms]
+(pass) usage invalidates an existing snapshot without returning cached content [22.60ms]
+(pass) canonical correction history has safe internal links, excludes superseded facts from stream and never links raw sources [23.90ms]
+(pass) unconfirmed source/evidence labels cannot claim confirmed status; quotes and extra usage payload never leak [22.72ms]
+(pass) expired, evicted and restarted cursors report stale and refresh works [33.94ms]
+(pass) cursors are bound to query and page size and signed against offset tampering [26.84ms]
+(pass) strict bounds reject unsupported fields and malformed query inputs [21.24ms]
+(pass) closed or replaced database and failing usage provider return unavailable, not zero matches [39.73ms]
+(pass) malformed and duplicate usage records fail closed [31.92ms]
+(pass) hard collection cap is unavailable, never a silently truncated count [98.47ms]
+(pass) usage and provenance caps fail closed before returning misleading partial evidence [297.16ms]
+(pass) history cycles terminate and oversized lineage is unavailable without truncation [26.07ms]
+
+src/brief/workflow-context.test.ts:
+Database initialized at: /tmp/jarvis-f21-ce3AmY/fixture.db
+(pass) selection stays on the run version after edits and later publication [39.38ms]
+Database initialized at: /tmp/jarvis-f21-jcgvrY/fixture.db
+(pass) an editable run never inherits the later locked graph, even with equal timestamps [31.88ms]
+Database initialized at: /tmp/jarvis-f21-OnMdg2/fixture.db
+(pass) legacy absent version evidence fails closed after mutation; reading never backfills it [31.96ms]
+Database initialized at: /tmp/jarvis-f21-fT37Ha/fixture.db
+(pass) missing immutable version preserves recorded steps and identity without substituting the current version [30.97ms]
+Database initialized at: /tmp/jarvis-f21-GgQSuj/fixture.db
+(pass) redacts nested credentials, arbitrary text/keys, code, HTML and resume capabilities [33.67ms]
+Database initialized at: /tmp/jarvis-f21-IpAjlu/fixture.db
+(pass) missing fields and recorded context are explicit, not populated from current configuration [30.40ms]
+Database initialized at: /tmp/jarvis-f21-VrogdX/fixture.db
+(pass) configured connection, rule, target and fact references remain distinct from recorded usage [41.02ms]
+Database initialized at: /tmp/jarvis-f21-ncsang/fixture.db
+(pass) actual memory handoffs, machine binding and approval reference come only from the selected run [32.55ms]
+Database initialized at: /tmp/jarvis-f21-7AEv9Z/fixture.db
+(pass) scope checks precede loading flow/version/run/receipt content [31.38ms]
+Database initialized at: /tmp/jarvis-f21-tgtshE/fixture.db
+(pass) stable keyset pagination handles equal timestamps and new head inserts without gaps [48.45ms]
+Database initialized at: /tmp/jarvis-f21-UuMmL0/fixture.db
+(pass) history queries seek within the selected flow index without scanning or sorting project history [144.51ms]
+Database initialized at: /tmp/jarvis-f21-ISHmMx/fixture.db
+(pass) legacy giant source, aggregate receipts and row counts are refused before projection [103.75ms]
+Database initialized at: /tmp/jarvis-f21-hHbDbD/fixture.db
+(pass) deep/wide values are bounded and explicitly partial [28.55ms]
+Database initialized at: /tmp/jarvis-f21-sBip06/fixture.db
+Database initialized at: /tmp/jarvis-f21-sBip06/fixture.db
+(pass) manual start atomically queues one run and returns a durable run ID across retries and restart [38.08ms]
+Database initialized at: /tmp/jarvis-f21-riFgyA/fixture.db
+Database initialized at: /tmp/jarvis-f21-riFgyA/fixture.db
+(pass) accepted request recovery survives hard deletion and restart while retaining scope and readiness gates [43.88ms]
+Database initialized at: /tmp/jarvis-f21-WoEL3f/fixture.db
+(pass) request key reuse with changed version, flow or input refuses without another run [27.77ms]
+Database initialized at: /tmp/jarvis-f21-UhwuNX/fixture.db
+(pass) manual input must be explicit, bounded and immutable; refusal never enqueues [43.40ms]
+Database initialized at: /tmp/jarvis-f21-VW29Rl/fixture.db
+(pass) queue insertion failure rolls back the run and request receipt [26.70ms]
+Database initialized at: /tmp/jarvis-f21-t6bFVd/fixture.db
+(pass) removal still fences new requests; accepted requests survive removal and do not replay [30.01ms]
+Database initialized at: /tmp/jarvis-f21-UYpTkq/fixture.db
+(pass) additive schema upgrades twice without inventing run evidence or deleting request outcomes [30.63ms]
+Database initialized at: /tmp/jarvis-f21-nUXsyx/fixture.db
+Database initialized at: :memory:
+(pass) disabled and replaced database providers fail closed [42.85ms]
+Database initialized at: /tmp/jarvis-f21-hlRjYs/fixture.db
+(pass) existing worker executes the explicitly submitted input once and inspection shows recorded output [33.64ms]
+Database initialized at: /tmp/jarvis-f21-srsHNi/fixture.db
+(pass) real worker envelopes preserve nested loop evidence and redact payloads without unwrapping payload lookalikes [31.66ms]
+Database initialized at: /tmp/jarvis-f21-jxsyJP/fixture.db
+(pass) configured bindings share one cap across connection references and restricted auth entries [100.11ms]
+Database initialized at: /tmp/jarvis-f21-PmypYL/fixture.db
+(pass) loop iterations retain individual actual inputs, outputs and statuses [28.28ms]
+Database initialized at: /tmp/jarvis-f21-n04Rjt/fixture.db
+(pass) goal references match configured and accepted work without reading arbitrary metadata or granting progress [29.06ms]
+Database initialized at: /tmp/jarvis-f21-nG9mJg/fixture.db
+(pass) bounded command capacity never evicts an accepted identity or permits replay after history deletion [45.25ms]
+Database initialized at: /tmp/jarvis-f21-q7gzeH/fixture.db
+(pass) configured preparation references are scoped to their exact version and never claimed as actual run usage [28.48ms]
+Database initialized at: /tmp/jarvis-f21-G0y5d4/fixture.db
+(pass) connection inspection never decrypts secrets or reads labels, even if the credential cannot be decrypted [34.75ms]
+Database initialized at: /tmp/jarvis-f21-KMwWAU/fixture.db
+(pass) manual run retains CODE permission and readiness gates and bounds nesting before any writes [32.10ms]
+Database initialized at: /tmp/jarvis-f21-fvh1xH/fixture.db
+(pass) nested execution paths cannot collide with literal step names in the inspector [28.53ms]
+Database initialized at: /tmp/jarvis-f21-0gwIrX/fixture.db
+(pass) malformed legacy step containers are unavailable rather than a fabricated empty inspection [25.74ms]
+Database initialized at: /tmp/jarvis-f21-QGXLhd/fixture.db
+(pass) untrusted prototype status names remain uncertain and non-finite input is refused [26.71ms]
+
+src/brief/capabilities.test.ts:
+(pass) production registration enables nothing, even when activation is requested without providers [0.64ms]
+(pass) installed and ready does not activate a feature without an explicit selection [0.18ms]
+(pass) readiness changes are reflected without restarting or retaining a stale true flag [0.13ms]
+(pass) transitive activation dependencies must themselves be enabled [0.16ms]
+(pass) dependency failure disables consumers on the next snapshot [0.17ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.20ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.06ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.06ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.06ms]
+(pass) duplicate and unknown registrations fail early, and registries do not share state [0.32ms]
+(pass) old or unsupported server response cannot enable new controls: null [0.04ms]
+(pass) old or unsupported server response cannot enable new controls: {} [0.02ms]
+(pass) old or unsupported server response cannot enable new controls: {"error":"Not found"}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":2,"capabilities":{}}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":1,"capabilities":null}
+(pass) v1 clients accept additive fields but reject inconsistent booleans or unknown capability IDs [0.12ms]
+(pass) the fixed activation graph has only known dependencies and no cycles [0.14ms]
+(pass) contracts and capability consumer bundle for a browser without importing backend implementations [2.61ms]
+
+src/brief/workflow-removal.test.ts:
+Database initialized at: /tmp/jarvis-f20-4mKAh0/vault.db
+Database initialized at: /tmp/jarvis-f20-4mKAh0/vault.db
+(pass) remove, reload and reverse-order Undo retain exact identities, history and original slots paused [52.33ms]
+Database initialized at: /tmp/jarvis-f20-VzBOwd/vault.db
+(pass) only later explicit enable changes restored activation, using canonical readiness [31.07ms]
+Database initialized at: /tmp/jarvis-f20-xyuOX6/vault.db
+(pass) complete stable collection includes more than the legacy first page and refuses overflow [104.18ms]
+Database initialized at: /tmp/jarvis-f20-NAYWfG/vault.db
+(pass) new workflows keep their new slot while Undo returns removed workflows to the same neighbors [40.56ms]
+Database initialized at: /tmp/jarvis-f20-avHJ9X/vault.db
+Database initialized at: /tmp/jarvis-f20-avHJ9X/vault.db
+(pass) expired receipt cannot restore, including after restart; no hard purge is performed [48.79ms]
+Database initialized at: /tmp/jarvis-f20-pgWoE8/vault.db
+(pass) request retries are durable and an old receipt cannot undo a later removal [29.68ms]
+Database initialized at: /tmp/jarvis-f20-lzEkCS/vault.db
+(pass) scope, version and revision checks prevent cross-owner or stale mutations [32.92ms]
+Database initialized at: /tmp/jarvis-f20-hnyKml/vault.db
+(pass) a storage failure rolls back status, receipt, generation and command atomically [26.90ms]
+Database initialized at: /tmp/jarvis-f20-YpdJ8d/vault.db
+(pass) legacy writers and another SQLite connection cannot re-enable, edit, purge or start a removed flow [31.70ms]
+Database initialized at: /tmp/jarvis-f20-NoxDNk/vault.db
+(pass) in-flight work stays visible and finishes once; Undo neither cancels nor replays it [43.39ms]
+Database initialized at: /tmp/jarvis-f20-LjdKrx/vault.db
+(pass) already queued work may finish after removal, without admitting new runs [30.64ms]
+Database initialized at: /tmp/jarvis-f20-UxGJ92/vault.db
+Database initialized at: /tmp/jarvis-f20-UxGJ92/vault.db
+(pass) reconciliation survives restart and flag rollback without changing a recovered command [43.41ms]
+Database initialized at: /tmp/jarvis-f20-jXFhZY/vault.db
+(pass) old schema initializes stable slots once and reinitialization preserves a removal [31.31ms]
+Database initialized at: /tmp/jarvis-f20-h7T6C2/vault.db
+(pass) capacity failure preserves the chosen workflow and never evicts previous receipts [111.12ms]
+Database initialized at: /tmp/jarvis-f20-0BjUoN/vault.db
+(pass) replacing a stalled trigger runtime retries durable reconciliation with the new runtime [29.44ms]
+Database initialized at: /tmp/jarvis-f20-fc9AxZ/vault.db
+(pass) management readiness reports missing CODE permission before explicit Enable [36.64ms]
+Database initialized at: /tmp/jarvis-f20-Ej2hPD/vault.db
+Database initialized at: /tmp/jarvis-f20-Ej2hPD/vault.db
+(pass) R2: the last ordinary command can remove and still Undo once at capacity after restart [104.57ms]
+Database initialized at: /tmp/jarvis-f20-v2oCdG/vault.db
+(pass) R2: invalid Undo cannot use receipt-reserved capacity or mutate the removal [101.16ms]
+Database initialized at: /tmp/jarvis-f20-DoQPEi/vault.db
+Database initialized at: /tmp/jarvis-f20-DoQPEi/vault.db
+(pass) R4: a real older draft run finishing while removed cannot change the receipt version [51.67ms]
+Database initialized at: /tmp/jarvis-f20-mniao0/vault.db
+(pass) R4: late bookkeeping after Undo keeps the selected draft; explicit authoring selects a new draft [33.86ms]
+Database initialized at: /tmp/jarvis-f20-BjudMv/vault.db
+(pass) R1: management projections never expose trigger inputs, sample data or run outputs [28.73ms]
+Database initialized at: /tmp/jarvis-f20-qhGPqd/vault.db
+(pass) R4: an existing F20 database upgrades its active receipt to a durable draft pin [48.28ms]
+Database initialized at: /tmp/jarvis-f20-AymIyq/vault.db
+(pass) R4: explicit Enable checks CODE permission against the pinned draft [30.83ms]
+Database initialized at: /tmp/jarvis-f20-FSDHcx/vault.db
+(pass) R4: an invalid pinned draft cannot borrow readiness from an older runnable version [34.34ms]
+
+ui/src/hooks/useWebSocket.test.ts:
+(pass) finalizeStreamMessage > recovers text from the done frame when every stream chunk was missed [0.19ms]
+(pass) finalizeStreamMessage > repairs partial streamed text with authoritative completed text [0.12ms]
+(pass) finalizeStreamMessage > does not duplicate a response when completion is handled twice [0.05ms]
+(pass) mergeRestoredHistory > returns history untouched when nothing raced in [0.10ms]
+(pass) mergeRestoredHistory > keeps a message that landed while the history fetch was in flight [0.11ms]
+(pass) mergeRestoredHistory > drops the live copy of a message the vault already has [0.07ms]
+(pass) mergeRestoredHistory > does not collapse a genuinely repeated answer [0.09ms]
+(pass) mergeRestoredHistory > does not match across roles [0.03ms]
+(pass) nextStreamBuffer > adopts the relay's running total so a late client is not left truncated [0.04ms]
+(pass) nextStreamBuffer > stays in step with local accumulation on a healthy stream [0.02ms]
+(pass) nextStreamBuffer > falls back to appending when the chunk carries no accumulated total [0.02ms]
+(pass) nextStreamBuffer > ignores a non-string accumulated value [0.01ms]
+(pass) nextStreamBuffer > keeps the buffer intact when a chunk has no text at all [0.02ms]
+(pass) extractNestedMessage > returns null for non-objects and empty values [0.06ms]
+(pass) extractNestedMessage > pulls .message from a flat object [0.02ms]
+(pass) extractNestedMessage > pulls string .error [0.02ms]
+(pass) extractNestedMessage > recurses into nested .error.message (Anthropic shape) [0.02ms]
+(pass) extractNestedMessage > trims whitespace [0.02ms]
+(pass) formatProviderErrorMessage — buckets > auth: 401 status code [0.48ms]
+(pass) formatProviderErrorMessage — buckets > forbidden: 403 gets model-access copy, not the API-key copy [0.06ms]
+(pass) formatProviderErrorMessage — buckets > auth wins when a 401 body also carries permission wording [0.03ms]
+(pass) formatProviderErrorMessage — buckets > forbidden: model-access wording with no status code [0.05ms]
+(pass) formatProviderErrorMessage — buckets > auth: invalid x-api-key [0.03ms]
+(pass) formatProviderErrorMessage — buckets > rate limit: 429 status code — split from network bucket [0.05ms]
+(pass) formatProviderErrorMessage — buckets > rate limit: insufficient_quota [0.04ms]
+(pass) formatProviderErrorMessage — buckets > network: 503 [0.03ms]
+(pass) formatProviderErrorMessage — buckets > network: econnrefused [0.04ms]
+(pass) formatProviderErrorMessage — buckets > fallback: unknown errors still preserve detail [0.04ms]
+(pass) formatProviderErrorMessage — detail extraction > parses full-JSON payload and extracts nested message as detail [0.05ms]
+(pass) formatProviderErrorMessage — detail extraction > parses embedded-JSON payload [0.03ms]
+(pass) formatProviderErrorMessage — detail extraction > returns empty detail when raw is missing [0.02ms]
+(pass) formatProviderErrorMessage — detail extraction > gracefully handles malformed embedded JSON [0.04ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > auth code routes to auth summary regardless of raw text [0.03ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > rate_limit code overrides keyword heuristic (e.g. raw mentions 'timeout') [0.03ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > forbidden code has its own copy, distinct from auth [0.03ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > structured code still outranks digits in the raw message [0.03ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > not_found has its own copy [0.02ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > bad_request has its own copy [0.03ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > server has its own copy [0.02ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > unknown code falls back to keyword heuristic [0.02ms]
+(pass) formatProviderErrorMessage — structured code branching (Phase B) > code present but no raw still returns a summary [0.03ms]
+(pass) formatProviderErrorMessage — status-code brittleness fix > does NOT match '401' embedded in unrelated digits [0.03ms]
+(pass) formatProviderErrorMessage — status-code brittleness fix > does NOT match '403' embedded in unrelated digits [0.02ms]
+(pass) formatProviderErrorMessage — status-code brittleness fix > does NOT match '429' embedded in unrelated digits [0.02ms]
+(pass) formatProviderErrorMessage — status-code brittleness fix > DOES match '\b401\b' when it is a real status code [0.02ms]
+
+ui/src/hooks/useWebSocket.realtime-status.test.ts:
+(pass) dispatchRealtimeStatus > a realtime error goes to the realtime handler, not the generic one [0.16ms]
+(pass) dispatchRealtimeStatus > without a realtime handler the error still reaches onError [0.05ms]
+(pass) dispatchRealtimeStatus > closed passes the reason through [0.04ms]
+(pass) dispatchRealtimeStatus > live and unknown states, or no hook attached, do nothing [0.04ms]
+
+ui/src/brief/reconciliation/client.test.ts:
+(pass) goal cursor detects holes, deduplicates IDs, and does not discard unfamiliar reordered updates [0.30ms]
+(pass) chat cursors are per conversation, track non-approval frames and refresh everything on a gap [0.13ms]
+(pass) dropped, duplicate and reordered messages converge without local count arithmetic [5.76ms]
+(pass) an event during a slow read retires its stale result and coalesces into one follow-up [4.32ms]
+(pass) reconnect retires an outstanding read even if the transport ignores cancellation [3.47ms]
+(pass) last lost event converges by periodic snapshots even without a socket [36.42ms]
+(pass) valid empty, first-read failure and stale cached data remain distinct [3.54ms]
+(pass) memory is cleared as soon as invalidated and failure cannot masquerade as empty [3.31ms]
+(pass) capability loss, unauthorized reads and stop clear every cache and reject late replies [4.85ms]
+(pass) stopped identity cannot publish its delayed capabilities into a restarted lifetime [3.51ms]
+(pass) unsubscribed selections are retired, and a read ignoring abort times out without tight retries [28.51ms]
+(pass) absent reconciliation or absent optional provider never issues a domain read [1.49ms]
+(pass) a present degraded provider is unavailable, while a disabled or missing provider is unsupported [3.61ms]
+(pass) an unsupported read after a successful snapshot clears cached records immediately [2.34ms]
+
+ui/src/brief/reconciliation/integration.test.ts:
+Database initialized at: /tmp/jarvis-f27-14v3vX/fixture.db
+(pass) real canonical approvals and work survive missed events and converge once each after reconnect [43.71ms]
+Database initialized at: /tmp/jarvis-f27-dfQ1Pm/fixture.db
+(pass) canonical memory deletion during pagination restarts before publishing and unavailable never becomes empty [47.88ms]
+Database initialized at: /tmp/jarvis-f27-T2TEfP/fixture.db
+(pass) selected run status refreshes from canonical inspection while a later run never replaces its identity [40.41ms]
+
+ui/src/brief/reconciliation/sources.test.ts:
+(pass) reconciliation follows opaque cursors, preserves revisions and removes exact duplicates [0.40ms]
+(pass) cursor invalidation restarts the entire window once without retaining obsolete items [0.26ms]
+(pass) continually changing cursors fail after a bounded restart instead of displaying a partial queue [0.21ms]
+(pass) a bounded page window exposes incomplete coverage and unknown total [0.13ms]
+(pass) conflicting revisions, looping cursors and malformed arrays cannot become ready snapshots [0.48ms]
+(pass) empty memory requires exact server counts; unavailable or absent data does not mean zero [0.29ms]
+(pass) inspection is pinned to the selected flow/version/run even when a newer run exists [0.21ms]
+(pass) an empty outcome summary preserves unknown measurements instead of manufacturing zeros [0.20ms]
+(pass) HTTP reads bypass cache, stay same-origin and preserve access/error status without server internals [0.28ms]
+
+ui/src/brief/navigation/Navigation.test.tsx:
+(pass) approvals, failures and updates stay reachable with conversation absent, and marking read does not hide pending work [28.16ms]
+(pass) stale notifications are explicit, and a cancelled draft guard leaves notifications unread [12.58ms]
+(pass) colliding update and notification-center IDs mark only their source owner read [8.30ms]
+(pass) an unavailable workflow history keeps the notification visible until retry succeeds [7.97ms]
+(pass) support entry provides explicit retained links without restoring tabs or global create [9.16ms]
+(pass) browser handoff keeps one root and the in-memory room-action owner, and selects the real Settings tab [9.36ms]
+(pass) device handoff selects only the requested device and never calls update/revoke/enroll [7.67ms]
+(pass) F-25 explicit preview mounts no legacy/voice owner and chat closure leaves attention visible [34.58ms]
+(pass) an inline Settings observer preserves the sidecar pill request for the expanded destination mount [71.10ms]
+(pass) an accepted history entry restores the real Settings tab without remounting the room [99.27ms]
+
+ui/src/brief/navigation/navigation.test.ts:
+(pass) registration is optional and every integration check is fail-closed; explicit activation required [0.71ms]
+(pass) every retained destination has an owner and an exact released room/settings fallback [1.17ms]
+(pass) all room, native panel, standalone and opaque object links retain exact legacy owners [0.31ms]
+(pass) room-only commands use a ready Brief room; action-bearing commands retain canonical handlers [0.26ms]
+(pass) deep-linked Settings tabs accept canonical names only and do not affect unrelated rooms [0.21ms]
+(pass) closed/old/malformed gates never ask a guard or navigate [0.51ms]
+(pass) guard cancel, rejected guard, caller abort, access loss and retirement do not navigate [0.75ms]
+(pass) latest navigation wins and destinations are resolved after the guard [0.50ms]
+(pass) D-27/D-28 callbacks respect abort and D-30 callbacks reject cancelled handoffs [0.36ms]
+(pass) approval, failure and update notifications preserve source IDs and open no effect [0.33ms]
+(pass) unknown freshness is not an empty count; read critical rows remain discoverable and duplicate IDs are source-scoped [0.16ms]
+(pass) a stale/resolved notification after a dirty-draft dialog cannot route or be marked read [0.34ms]
+(pass) mark read only follows a successful navigation and ambiguous source IDs cannot select the wrong row [0.31ms]
+(pass) workflow failures stay unread until their exact run history is available [0.78ms]
+(pass) workflow history readiness is rechecked after the shared draft guard [0.36ms]
+
+ui/src/brief/chat/store.test.ts:
+(pass) activity rows retain their first position and final phase across delayed starts and reconnect [2.26ms]
+(pass) canonical event consumes attachments in a stale window and prevents resurrection [0.88ms]
+(pass) canonical snapshot-message consumes attachments in a stale window and prevents resurrection [0.44ms]
+(pass) canonical snapshot-turn consumes attachments in a stale window and prevents resurrection [0.34ms]
+(pass) canonical history consumes attachments in a stale window and prevents resurrection [0.54ms]
+(pass) out-of-order and duplicate events reconstruct ordered text and never regress a terminal turn [0.33ms]
+(pass) canonical snapshots do not double replay text, regress newer text or reset consumed history [0.34ms]
+(pass) late history fills missing IDs without overwriting live output or selected conversation [0.19ms]
+(pass) activity and approval transitions are scoped, deduplicated and monotonic [0.19ms]
+(pass) draft, attachment references, scroll and unread survive reload, with workspace isolation [0.68ms]
+(pass) unread is per answer, remains while the panel is hidden, and clears only for the viewed chat [0.21ms]
+(pass) corrupt or quota-limited storage leaves chat usable and reports failed persistence [0.43ms]
+(pass) compacting a stream retains older locally received messages outside the snapshot tail [0.24ms]
+(pass) other windows cannot overwrite a saved draft or attachment by scrolling or receiving events [0.50ms]
+(pass) legacy drafts remain readable while new field writes preserve concurrent edits [0.41ms]
+(pass) replayed failure stays scoped and does not replace a later successful turn [0.32ms]
+
+ui/src/brief/chat/attachments.test.ts:
+(pass) failed upload retries with the same identity and switching chats cannot move its result [2.34ms]
+(pass) remove and tab close abort pending uploads and ignore their late responses [1.17ms]
+(pass) reload verifies references, clears accepted files, and exposes expired or missing uploads [0.80ms]
+(pass) a late reference refresh cannot overwrite removal failure or a newer operation [0.52ms]
+(pass) acceptance preserves a file added by another window after the original send [0.35ms]
+(pass) disabled attachment capability and unconfirmed capture dispatch nothing [0.26ms]
+(pass) reload recovers canonical screenshot metadata after the capture response is lost [0.42ms]
+
+ui/src/brief/chat/client.test.ts:
+(pass) ten add/close cycles preserve all surviving drafts/history, select neighbors, and reopen closed history [138.13ms]
+(pass) rapid mutations are serialized, active-last close selects left, and inactive close retains selection [17.95ms]
+(pass) delayed history and old lifecycle responses cannot overwrite a selected chat or a restarted workspace [16.22ms]
+(pass) reconnect pages all replay events without duplicating snapshot output, preserving drafts and unread [103.34ms]
+(pass) uncertain sends retry the same identity, accepted sends clear only their unchanged draft, and cancel is scoped [22.76ms]
+(pass) rejected sends retain draft and attachments never silently become a text-only submission [20.18ms]
+(pass) old/malformed/disabled capabilities fall back to single chat, while authentication/network failures stay unavailable [15.74ms]
+(pass) a failed close reconciles metadata and preserves the draft and history with a visible error [15.39ms]
+(pass) a stale tab fetch on reconnect completes before a newer selection is applied [22.73ms]
+(pass) tab reconciliation subscribes newly discovered chats and unsubscribes remotely closed ones [23.94ms]
+(pass) malformed and delayed sync pages cannot overwrite state or continue an invalid cursor [19.91ms]
+(pass) reconnect fills missed history beyond the snapshot tail across replay pages [145.43ms]
+(pass) replay completes an old cached running turn outside the latest fifty turns [73.45ms]
+(pass) failed turn details survive live delivery, reconnect and a daemon restart [34.97ms]
+(pass) history loaded before subscription is not appended again by older replay pages [30.59ms]
+(pass) acceptance in a stale window preserves a newer draft saved by another window [21.56ms]
+
+ui/src/brief/chat/integration.test.ts:
+(pass) real HTTP/WebSocket chat preserves history and attachment ownership (attachments=false) [56.02ms]
+(pass) real HTTP/WebSocket chat preserves history and attachment ownership (attachments=true) [109.96ms]
+
+ui/src/brief/chat/provider.test.tsx:
+[WS] Connected
+[WS] Disconnected, reconnecting in 2s...
+[WS] Connected
+(pass) reconciliation observes scoped approvals on the shared socket without remounting draft, selection or scroll [29.53ms]
+[WS] Connected
+(pass) replacing the optional observer keeps the legacy socket and an observer exception cannot consume chat [13.55ms]
+[WS] Connected
+(pass) one connection survives ten room/theme remounts and retains the provider-owned draft [13.31ms]
+[WS] Connected
+(pass) old backend uses the existing single-chat history and writer without a scoped frame [6.84ms]
+[WS] Connected
+[WS] Disconnected, reconnecting in 2s...
+[WS] Connected
+[WS] Connected
+(pass) disconnect/retry and capability loss close scoped ownership before opening a fresh legacy socket [4.67ms]
+[WS] Connected
+(pass) disabled provider opens no connection, and unmount cannot schedule a reconnect [3.80ms]
+(pass) browser visibility and panel visibility jointly determine whether the active chat is read [7.67ms]
+[WS] Connected
+(pass) an accepted failed response exposes its explanation and never projects partial output as done [4.49ms]
+
+ui/src/brief/connections/legacy-setup.test.tsx:
+(pass) Google, channels and enrollment navigate to the existing settings setup tabs with no OAuth or enrollment writes [0.90ms]
+(pass) piece handoff opens the canonical manual form with exact piece/version/type and no saved secrets [22.02ms]
+(pass) existing account handoff edits only that identity and repeated handoff reopens after cancellation [24.86ms]
+(pass) workflows room handoff opens Connections even when an old workflow query would open the editor [34.09ms]
+(pass) piece handoff works on a plain HTTP LAN browser without randomUUID [1.80ms]
+
+ui/src/brief/connections/setup.test.ts:
+(pass) persists position before handing off only a currently supported setup path [1.03ms]
+(pass) cancel and reload preserve selection/search/scroll without reopening or claiming an account [0.50ms]
+(pass) reload retains pending position but reads canonical state again before verification [0.29ms]
+(pass) foreign, expired and replayed-after-cancel callbacks do not change source state [0.20ms]
+(pass) callback is only a return signal; manual credentials are configured, never falsely authenticated [0.28ms]
+(pass) new account must be selected by canonical identity and belong to the requested service/kind [0.28ms]
+(pass) live connection observation can be verified but is not cached across return or reload [0.27ms]
+(pass) storage failure and foreign scope prevent launching; corrupted storage cannot supply a redirect [0.28ms]
+(pass) cancel during a pending source read prevents later launch or verification results [0.32ms]
+(pass) plain HTTP browser without randomUUID still persists a random setup identity and opens [0.31ms]
+
+ui/src/brief/profile-settings/actions.test.tsx:
+(pass) voice setup opens the current channels form with no credential or provider writes [0.48ms]
+(pass) confirmed replay delegates exactly once to the existing API and never requests provider setup [2.05ms]
+(pass) the real legacy form retains its edit revision across polling and a failed save keeps the draft open [25.43ms]
+(pass) real hook keeps canonical save/clear results despite reordered responses and failed reads [112.27ms]
+
+ui/src/brief/profile-settings/editor.test.ts:
+(pass) polls and reordered reads never overwrite a draft or advance its comparison revision [0.85ms]
+(pass) edits typed during save survive and an old poll cannot restore the pre-save revision [0.21ms]
+
+ui/src/brief/onboarding/draft.integration.test.ts:
+Database initialized at: /tmp/jarvis-f26-hmNabk/fixture.db
+(pass) the onboarding handoff uses real F-07 routes/SQLite, recovers a lost response and creates one disabled populated draft with zero runs [37.47ms]
+
+ui/src/brief/onboarding/Onboarding.test.tsx:
+(pass) Brief tutorial saves stable targets, retains focus and uses only canonical progress/complete writes [31.88ms]
+(pass) failed progress stays on the current step and replay resumes the saved target [13.56ms]
+(pass) fresh hosted, Brief flag false: setup selection and written interview remain canonical [43.55ms]
+(pass) fresh local, Brief flag false: setup selection and written interview remain canonical [92.05ms]
+(pass) fresh hosted, Brief flag true: setup selection and written interview remain canonical [42.01ms]
+(pass) fresh local, Brief flag true: setup selection and written interview remain canonical [77.17ms]
+(pass) Brief gate retains a failed final refresh and draft-room handoff without composing another draft [2152.68ms]
+(pass) completed replay restores a saved unsent prompt; Explore requires no composition and clears only the handoff [26.72ms]
+(pass) Explore ignores a late background poll and tutorial replay can prepare a new task [1067.17ms]
+(pass) tutorial replay with Brief flag false preserves canonical dismissal and completion [26.48ms]
+(pass) tutorial replay with Brief flag true preserves canonical dismissal and completion [34.34ms]
+(pass) peer completion cannot discard the final prompt; peer replay resets the tour but keeps that prompt [89.26ms]
+
+ui/src/brief/onboarding/draft.test.ts:
+(pass) registration is optional, default off and depends on enabled F-07 plus every host seam [1.56ms]
+(pass) editing/reading the prompt performs no effects; explicit preparation keeps the exact prompt and pinned draft IDs [0.56ms]
+(pass) lost response, duplicate clicks and reload recover the same persisted F-07 key [0.42ms]
+(pass) blocked/failed attempts retain editable prompts and require another explicit prepare for a fresh request [0.26ms]
+(pass) pending jobs read by job identity without creating another workflow [0.35ms]
+(pass) a late polling receipt cannot alter a new handoff after clear [0.40ms]
+(pass) a late polling error cannot alter a new handoff after clear [0.13ms]
+(pass) a failed clear keeps the pending read owned by the retained handoff [0.37ms]
+(pass) missing/stale access, invalid receipts and unready destinations cannot create or open a misleading result [0.39ms]
+(pass) failed storage writes fence POST and retain the key for recovery [0.27ms]
+(pass) unreadable storage is never replaced with defaults or a fresh request [0.25ms]
+(pass) retired account ignores late receipts and aborts deferred navigation [0.42ms]
+(pass) account-scoped storage never restores another account prompt and old tutorial steps safely restart [0.18ms]
+(pass) a failed final clear preserves both in-memory and persisted prompt/receipt for retry [0.22ms]
+(pass) draft handoff rechecks capability after the shared leave guard [0.23ms]
+(pass) draft handoff rechecks room after the shared leave guard [0.07ms]
+(pass) draft handoff rechecks cancel after the shared leave guard [0.05ms]
+
+ui/src/brief/entry/route.test.ts:
+(pass) the default and non-exact flag values keep the released dashboard [0.12ms]
+(pass) all existing sidecar and dashboard destinations retain their route owner [0.17ms]
+(pass) onboarding reset owns the page even when a Brief URL was bookmarked [0.04ms]
+(pass) fixture mode requires both its explicit flag and isolated destination [0.09ms]
+(pass) every registered destination resolves without requiring another room's module [0.22ms]
+(pass) unknown or malformed Brief destinations explain the retained controls instead of silently opening home [0.07ms]
+(pass) source identities roundtrip without inventing a record or retaining unknown query keys [0.11ms]
+(pass) rollback removes only the Brief opt-in and preserves connection parameters [0.06ms]
+
+ui/src/brief/entry/DashboardEntry.test.tsx:
+(pass) flag off and legacy hash navigation retain one legacy mount and its connection owner [6.03ms]
+(pass) every current room and sidecar panel still resolves through the released router [6.36ms]
+(pass) isolated preview owns no live connection, fetch or onboarding side effects [11.57ms]
+(pass) real Brief entry remains behind the existing onboarding gate [6.60ms]
+(pass) missing modules give a truthful fallback instead of fabricated empty business data [6.80ms]
+(pass) room modules preserve shell state and selected source IDs through navigation [3.45ms]
+(pass) a fixture view cannot accidentally supply live room business data [1.71ms]
+
+ 332 pass
+ 0 fail
+ 2624 expect() calls
+Ran 332 tests across 26 files. [10.59s]
