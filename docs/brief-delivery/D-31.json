@@ -4,7 +4,7 @@
   "date": "2026-10-13",
   "status": "implemented_verified_opt_in",
   "implementation_head": "926f77ae3a354dbd64c9539237f60798beca596c",
-  "head": "The following evidence-only commit is the PR head.",
+  "head": "Evidence-only commits follow implementation_head; the final evidence commit is the PR head.",
   "branch": "brief/d-31",
   "target": "brief/d-30",
   "base_sha": "93a04bcfe59b1030fdb7607f2de37c7d2e78ebde",
