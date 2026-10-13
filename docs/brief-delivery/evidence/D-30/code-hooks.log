@@ -1,0 +1,84 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 2 required path(s) present in the npm tarball (2332 files).
+[pre-commit] Running 4 related test file(s) (180s timeout)...
+bun test v1.3.14 (0d9b296a)
+
+ui/src/v2/shell/useTheme.test.tsx:
+(pass) independent controls and menus update together without replacing focused content [51.93ms]
+(pass) rapid independent toggles read the current root rather than a stale render [7.52ms]
+(pass) cross-tab storage updates all subscribers without echoing a storage write [18.78ms]
+(pass) storage clear/removal uses the bootstrap OS fallback [17.49ms]
+(pass) existing direct root writers remain observable [26.20ms]
+(pass) storage denial still changes in-memory appearance [6.36ms]
+
+ui/src/brief/account/settings/f23-integration.test.ts:
+(pass) D30 settings roundtrips through the pinned actual F23 routes and SQLite owner [327.49ms]
+
+ui/src/brief/account/settings/settings.test.ts:
+(pass) missing host is unsupported and never fabricates preferences [0.96ms]
+(pass) strict F23 settings parsing rejects malformed or invented choices [1.57ms]
+(pass) local saves only the selected canonical voice [5.83ms]
+(pass) hosted saves only the selected canonical voice [5.13ms]
+(pass) arbitrary or unchanged voices do not write [7.95ms]
+(pass) read-only cannot mutate voice [2.93ms]
+(pass) voice-unavailable cannot mutate voice [1.23ms]
+(pass) unavailable cannot mutate voice [1.21ms]
+(pass) unsupported cannot mutate voice [1.17ms]
+(pass) error cannot mutate voice [1.23ms]
+(pass) restart-required distinguishes saved value from live application [6.29ms]
+(pass) apply-failure distinguishes saved value from live application [3.77ms]
+(pass) save-failure keeps the selection and only an explicit retry reconciles [10.10ms]
+(pass) lost-response keeps the selection and only an explicit retry reconciles [7.91ms]
+(pass) changed selection after a lost reply still reconciles the original attempt [7.68ms]
+(pass) unknown retry never overwrites an external correction [5.18ms]
+(pass) changed provider during reconciliation conflicts even if voice names match [2.92ms]
+(pass) save supersedes a poll, blocks duplicate saves, and ignores a late old reply [4.03ms]
+(pass) discard supersedes a pending poll and failed reload preserves the selection [4.86ms]
+(pass) read failure blocks mutations and permission loss purges old values [2.74ms]
+(pass) retiring a scope prevents late save and replay status from restoring values [1.54ms]
+(pass) tutorial replay requires confirmation, preserves scope and cannot automatically repeat unknown results [3.25ms]
+(pass) unavailable/read-only tutorial and missing destinations do not execute [4.45ms]
+(pass) all explicit destinations use the host compatibility owner [2.73ms]
+(pass) bad save receipts/readbacks never claim success [0.41ms]
+(pass) restart notice survives failed and recovered polling without resubmission [7.13ms]
+(pass) late tutorial acknowledgment is discarded after scope revocation [1.46ms]
+(pass) tutorial wrapper delegates only tutorial scope to the existing reset owner [5.68ms]
+
+ui/src/brief/account/settings/SettingsWorkspace.test.tsx:
+(pass) approved groups expose only canonical voice choices and honest unavailable preferences [98.14ms]
+(pass) voice autosave keeps the select mounted and pending recovery is explicit [155.45ms]
+(pass) saved application failure stays visible across canonical polls [68.24ms]
+(pass) hosted controls never expose provider selection; tutorial requires confirmation and restores focus [151.67ms]
+(pass) read-only and stale settings cannot mutate or replay [110.51ms]
+(pass) scope mismatch and fixture/live mixing purge settings [62.93ms]
+(pass) live settings require both F23 and F25 and all destination callbacks [98.11ms]
+
+ 42 pass
+ 0 fail
+ 184 expect() calls
+Ran 42 tests across 4 files. [1.81s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-30 d7d9d586] Build D30 Settings and synchronized Appearance
+ 16 files changed, 2607 insertions(+), 29 deletions(-)
+ create mode 100644 scripts/check-d30-f23.ts
+ create mode 100644 ui/src/brief/account/settings/AppearanceSelector.tsx
+ create mode 100644 ui/src/brief/account/settings/SettingsSpecimen.tsx
+ create mode 100644 ui/src/brief/account/settings/SettingsWorkspace.test.tsx
+ create mode 100644 ui/src/brief/account/settings/SettingsWorkspace.tsx
+ create mode 100644 ui/src/brief/account/settings/actions.ts
+ create mode 100644 ui/src/brief/account/settings/adapter.ts
+ create mode 100644 ui/src/brief/account/settings/controller.ts
+ create mode 100644 ui/src/brief/account/settings/f23-integration.test.ts
+ create mode 100644 ui/src/brief/account/settings/fixtures.ts
+ create mode 100644 ui/src/brief/account/settings/model.ts
+ create mode 100644 ui/src/brief/account/settings/settings.css
+ create mode 100644 ui/src/brief/account/settings/settings.test.ts
+ create mode 100644 ui/src/v2/shell/useTheme.test.tsx
