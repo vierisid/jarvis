@@ -21,6 +21,8 @@ export const BILLING_EXAMPLES = [
   "degraded",
   "old-response",
   "mixed-currency",
+  "multiple-prices",
+  "undated-charge",
   "long-history",
 ] as const;
 export type BillingExample = (typeof BILLING_EXAMPLES)[number];
@@ -196,6 +198,21 @@ export function makeBillingFixture(
         id: `history-${i}`,
         invoiceNumber: `PREVIEW-LONG-INVOICE-IDENTIFIER-${i}`,
       }));
+      break;
+    case "multiple-prices":
+      summary.plans[0]!.prices.push({
+        unitAmount: 85000,
+        currency: "EUR",
+        interval: "year",
+      });
+      break;
+    case "undated-charge":
+      summary.subscription!.currentPeriodEnd = null;
+      summary.upcomingInvoice = {
+        amountDueCents: 10370,
+        currency: "EUR",
+        date: null,
+      };
       break;
   }
   return fixture;

@@ -16,6 +16,7 @@ import {
   planTitle,
   recurringTotal,
   formatPrice,
+  formatMoney,
   planMeta,
   boldSegments,
   brandLabel,
@@ -216,6 +217,20 @@ function BillingContent({
               <p>
                 <StrongCopy text={planMeta(summary, now)} />
               </p>
+              {state === "active" &&
+                summary.upcomingInvoice &&
+                !summary.upcomingInvoice.date && (
+                  <p>
+                    Next charge{" "}
+                    <strong>
+                      {formatMoney(
+                        summary.upcomingInvoice.amountDueCents,
+                        summary.upcomingInvoice.currency,
+                      )}
+                    </strong>{" "}
+                    · Charge date unavailable
+                  </p>
+                )}
             </div>
             <div className="brief-billing-actions">
               {state === "active"
@@ -226,10 +241,11 @@ function BillingContent({
                       state === "incomplete"
                         ? "Complete payment"
                         : "Open billing",
-                      "manage",
+                      state === "none" ? "page" : "manage",
                     )}
             </div>
             {(summary.plans.length > 1 ||
+              summary.plans.some((plan) => plan.prices.length > 1) ||
               (!totalText && summary.plans.length > 0)) && (
               <ul className="brief-billing-plan-lines">
                 {summary.plans.map((plan, i) => (
