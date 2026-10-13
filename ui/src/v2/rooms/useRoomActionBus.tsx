@@ -8,6 +8,7 @@ import React, {
 } from "react";
 import type { RoomKey } from "../router";
 import { ROOM_ACTION_QUEUE_TTL_MS } from "../../../../src/daemon/room-action-results";
+import { isRoomAction } from "../../../../src/daemon/room-actions";
 
 /**
  * Phase 6.3.5 — Room control via voice.
@@ -54,6 +55,20 @@ export type RoomActionResultCallback = (accepted: boolean) => void;
 const accepted = (result: boolean | string | void): boolean =>
   result === true || typeof result === "string";
 
+/**
+ * Hand `room`'s handler only actions it is listed for in ROOM_ACTIONS
+ * (#969). The daemon refuses anything else before it broadcasts; this is the
+ * dashboard's own check, so no room_action, from whatever path, reaches a
+ * handler with an action the table does not name.
+ */
+function runHandler(handler: RoomActionHandler, req: RoomActionRequest): boolean | string | void {
+  if (!isRoomAction(req.room, req.action)) {
+    console.warn(`[RoomActionBus] Refused "${req.action}" for room "${req.room}": not one of its actions`);
+    return false;
+  }
+  return handler(req.action, req.args);
+}
+
 interface BusInternal {
   /** Most-recent handler per RoomKey wins. */
   register: (room: RoomKey, handler: RoomActionHandler) => () => void;
@@ -93,7 +108,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
       console.log(
         `[RoomActionBus] Draining queued action "${req.action}" for room "${req.room}"`,
       );
-      const result = handler(req.action, req.args);
+      const result = runHandler(handler, req);
       onResult?.(accepted(result));
       if (result === false) {
         console.warn(
@@ -120,6 +135,13 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
   );
 
   const dispatch = useCallback((req: RoomActionRequest, onResult?: RoomActionResultCallback) => {
+    // Refuse before queueing, so an action no room carries out is answered
+    // now rather than waiting on a room that may never mount (#969).
+    if (!isRoomAction(req.room, req.action)) {
+      console.warn(`[RoomActionBus] Refused "${req.action}" for room "${req.room}": not one of its actions`);
+      onResult?.(false);
+      return;
+    }
     const stack = handlersRef.current[req.room as RoomKey];
     if (!stack || stack.length === 0) {
       // No handler yet — queue and wait for one to register. Common
@@ -135,7 +157,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
       return;
     }
     const top = stack[stack.length - 1]!;
-    const result = top(req.action, req.args);
+    const result = runHandler(top, req);
     onResult?.(accepted(result));
     if (result === false) {
       console.warn(

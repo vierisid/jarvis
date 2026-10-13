@@ -217,18 +217,6 @@ tools room ("room": "tools"):
    matches "select web_search", "show the git_commit tool"
 
 workflows room ("room": "workflows"):
-- "search" — args: { "query": string }
-   matches "search for morning brief", "filter workflows by triage"
-- "set_filter" — args: { "filter": "all" | "active" | "paused" }
-   matches "show paused workflows", "show all workflows", "show only active"
-- "select" — args: { "name": string }
-   matches "open the morning brief workflow", "select daily-summary"
-- "run" — args: { "name"?: string }
-   matches "run morning brief", "run this workflow", "run the selected one"
-- "pause" — args: { "name"?: string }
-   matches "pause the daily-summary workflow", "pause this one"
-- "enable" — args: { "name"?: string }
-   matches "enable morning brief", "turn on this workflow"
 - "create_from_nl" — args: { "prompt": string }
    matches "create a workflow that runs every morning at 8 and sends me my calendar",
    "make a new workflow that checks AI news every morning",
@@ -278,11 +266,6 @@ ${switchTabSpec('settings')}
    matches "open the LLM tab", "switch to channels", "go to general settings", "open the voice tab"
 - "read_status" — args: {}
    matches "read the current status", "what's the LLM config", "what's connected"
-- "set_primary_llm" — args: { "provider": "anthropic"|"openai"|"groq"|"gemini"|"ollama"|"openrouter"|"nvidia"|"litellm"|"omniroute" }
-   matches "set primary to anthropic", "make openai the default", "switch to ollama"
-- "set_fallback_llm" — args: { "fallback": string[] | string }
-   matches "set the fallback chain to openai and ollama", "use openai as fallback"
-   The "fallback" can be an array of provider names or a comma-separated string.
 - "set_model" — args: { "provider": LLMProvider, "model": string }
    matches "set the anthropic model to claude-opus-4-7",
    "use gpt-5.4 for openai", "switch ollama to llama3.1"
@@ -414,16 +397,10 @@ ${switchTabSpec('authority')}
    matches "show approvals", "open the audit", "switch to grants", "go to learning"
 - "set_filter" — args: { "decision": "all" | "allowed" | "denied" | "approval_required" }
    matches "show only denied", "filter audit by approval required", "show all decisions"
-- "grant_access" — args: { "action": ActionCategory }
-   matches "grant Jarvis email access", "allow send_email globally",
-   "grant access to send messages", "let agents access the browser"
-   The "action" must be one of: read_data, write_data, delete_data,
-   send_message, send_email, execute_command, install_software,
-   make_payment, modify_settings, spawn_agent, terminate_agent,
-   access_browser, control_app.
-- "revoke_access" — args: { "action": ActionCategory }
-   matches "revoke email access", "remove send_email permission",
-   "deny browser access for everyone"
+- IMPORTANT: do NOT extract granting or revoking a permission ("grant
+   Jarvis email access", "revoke browser access") as a room_action. The
+   Authority room takes no grants or revokes by voice: they are clicks in
+   its Grants tab only. Leave "room_action" null and route through chat.
 - IMPORTANT: do NOT extract emergency commands (pause, kill, resume,
    reset) as room_actions — they are deliberately UI-button-only for
    safety. If the user says "pause everything" or "kill all agents",
@@ -502,9 +479,6 @@ Transcript: "back to projects"
 Transcript: "open the LLM tab"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"settings","action":"switch_tab","args":{"tab":"llm"}}}
 
-Transcript: "set the primary LLM to anthropic"
-{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.94,"room_action":{"room":"settings","action":"set_primary_llm","args":{"provider":"anthropic"}}}
-
 Transcript: "use gpt-5.4 for openai"
 {"verb":"update","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"settings","action":"set_model","args":{"provider":"openai","model":"gpt-5.4"}}}
 
@@ -528,9 +502,6 @@ Transcript: "redo the tutorial"
 
 Transcript: "go to settings and disable TTS"
 {"verb":"update","object":null,"args":{},"impact":"write","confidence":0.95,"room_action":{"room":"settings","action":"disable_tts","args":{}}}
-
-Transcript: "open the LLM tab and switch to anthropic"
-{"verb":"update","object":null,"args":{},"impact":"write","confidence":0.94,"room_action":{"room":"settings","action":"set_primary_llm","args":{"provider":"anthropic"}}}
 
 Transcript: "in the tasks room, complete the oauth task"
 {"verb":"update","object":null,"args":{},"impact":"write","confidence":0.93,"room_action":{"room":"tasks","action":"complete_task","args":{"name":"oauth"}}}
@@ -629,10 +600,10 @@ Transcript: "turn on live tail"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.95,"room_action":{"room":"logs","action":"toggle_live_tail","args":{}}}
 
 Transcript: "run morning brief"
-{"verb":"run","object":{"type":"workflow","query":"morning brief"},"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"workflows","action":"run","args":{"name":"morning brief"}}}
+{"verb":"run","object":{"type":"workflow","query":"morning brief"},"args":{},"impact":"write","confidence":0.92,"room_action":null}
 
 Transcript: "show paused workflows"
-{"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"workflows","action":"set_filter","args":{"filter":"paused"}}}
+{"verb":"show","object":{"type":"workflow"},"args":{},"impact":"read","confidence":0.94,"room_action":null}
 
 Transcript: "make a new workflow that checks AI news every morning"
 {"verb":"create","object":{"type":"workflow"},"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"workflows","action":"create_from_nl","args":{"prompt":"checks AI news every morning"}}}
@@ -662,13 +633,13 @@ Transcript: "switch to constellation"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.96,"room_action":{"room":"memory","action":"switch_tab","args":{"tab":"constellation"}}}
 
 Transcript: "grant Jarvis email access"
-{"verb":"grant","object":{"type":"authority","query":"send_email"},"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"authority","action":"grant_access","args":{"action":"send_email"}}}
+{"verb":"grant","object":{"type":"authority","query":"send_email"},"args":{},"impact":"write","confidence":0.92,"room_action":null}
 
 Transcript: "show only denied audit entries"
 {"verb":"show","object":null,"args":{},"impact":"read","confidence":0.94,"room_action":{"room":"authority","action":"set_filter","args":{"decision":"denied"}}}
 
 Transcript: "revoke browser access"
-{"verb":"revoke","object":{"type":"authority","query":"access_browser"},"args":{},"impact":"write","confidence":0.9,"room_action":{"room":"authority","action":"revoke_access","args":{"action":"access_browser"}}}
+{"verb":"revoke","object":{"type":"authority","query":"access_browser"},"args":{},"impact":"write","confidence":0.9,"room_action":null}
 
 Transcript: "schedule a meeting tuesday at 3 with alice for an hour"
 {"verb":"create","object":null,"args":{},"impact":"write","confidence":0.92,"room_action":{"room":"calendar","action":"schedule_event","args":{"title":"meeting with alice","when":"tuesday at 3pm","duration":"1 hour","with":"alice"}}}

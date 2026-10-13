@@ -6,8 +6,10 @@
  * latency). Executed in ws-service against the existing broadcast* methods, so
  * the dashboard reacts exactly as it did for the old voice path.
  *
- * Keep the in-room action vocabulary here in sync with the classifier prompt in
- * src/agents/voice-intent-classifier.ts (the standard voice path's source).
+ * The in-room action vocabulary here, like the classifier prompt in
+ * src/agents/voice-intent-classifier.ts, may only name actions in
+ * ROOM_ACTIONS (room-actions.ts); room-actions-vocabulary.test.ts holds both
+ * to it, and ws-service refuses anything else before sending it (#969).
  */
 
 import type { LLMTool } from '../llm/provider.ts';
@@ -27,6 +29,9 @@ export const REALTIME_ROOM_KEYS = [
   'calendar', 'goals', 'tasks', 'content', 'workspaces', 'usage', 'settings',
 ] as const;
 
+/** The window actions control_dashboard_window offers, and the only ones it sends. */
+export const REALTIME_WINDOW_ACTIONS = ['close', 'minimize', 'expand', 'restore'] as const;
+
 export const REALTIME_NAV_TOOL_NAMES = new Set([
   'open_dashboard_room',
   'go_back_to_thread',
@@ -38,17 +43,19 @@ export const REALTIME_NAV_TOOL_NAMES = new Set([
 // "matches ..." examples from the classifier are omitted to keep token cost
 // low; the GPT-5-class model infers usage from names + args).
 const ROOM_ACTION_REFERENCE = `Available actions by room (pass via dashboard_room_action):
-- settings: ${switchTab('settings')}, set_primary_llm{provider}, set_fallback_llm{fallback}, set_model{provider,model}, test_provider{provider}, enable_telegram, disable_telegram, enable_discord, disable_discord, set_stt_provider{provider}, enable_tts, disable_tts, set_tts_provider{provider}, set_tts_voice{voice}, set_heartbeat_interval{minutes}, set_heartbeat_aggressiveness{level: passive|moderate|aggressive}, restart_daemon, replay_onboarding{scope?: all|setup|profile|tutorial}. (Do NOT set API keys by voice.)
+- settings: ${switchTab('settings')}, set_model{provider,model}, test_provider{provider}, enable_telegram, disable_telegram, enable_discord, disable_discord, set_stt_provider{provider}, enable_tts, disable_tts, set_tts_provider{provider}, set_tts_voice{voice}, set_heartbeat_interval{minutes}, set_heartbeat_aggressiveness{level: passive|moderate|aggressive}, restart_daemon, replay_onboarding{scope?: all|setup|profile|tutorial}. (Do NOT set API keys by voice.)
 - tools: set_filter{filter: all|read|write|external|destructive}, search{query}, select{name}
-- workflows: search{query}, set_filter{filter: all|active|paused}, select{name}, run{name?}, pause{name?}, enable{name?}, create_from_nl{prompt}
+- workflows: create_from_nl{prompt}
 - agents: ${switchTab('agents')}, open_spawn_dialog, close_dialog, set_search{query}, spawn_agent{specialist,task?,context?}
 - content: switch_view{view: kanban|list}, search{query}, set_filter{field: stage|type, value}, select{name}, create_content{title,type?}, advance{name?}, regress{name?}, schedule{name?,when}
-- tasks: set_filter{status}, search{query}
-- goals: ${switchTab('goals')}, set_filter{health}
+- tasks: set_filter{field: status|priority|assigned_to, value}, search{query}
+- goals: ${switchTab('goals')}, set_filter{field: status|health, value}
 - memory: ${switchTab('memory')}`;
-// Authority is deliberately not listed, not even its tabs: its room also takes
-// grant_access/revoke_access, and advertising the room to the model would make
-// those easier to find on a path with no authority gating (#965 review).
+// Every action named here must be one its room carries out (ROOM_ACTIONS);
+// anything else is refused before it is sent (#969), and
+// room-actions-vocabulary.test.ts holds this list to the table.
+// Authority is deliberately not listed, not even its tabs: nothing there
+// needs voice, and its grants and revokes are clicks only (#965 review, #969).
 
 /**
  * Navigation + in-room-action tools. Appended to the realtime toolset so the
@@ -85,7 +92,7 @@ export const REALTIME_NAV_TOOLS: LLMTool[] = [
     parameters: {
       type: 'object',
       properties: {
-        action: { type: 'string', enum: ['close', 'minimize', 'expand', 'restore'] },
+        action: { type: 'string', enum: [...REALTIME_WINDOW_ACTIONS] },
         target: {
           type: 'string',
           description: 'Room key to target, or "most_recent" for the most recently opened window (default).',

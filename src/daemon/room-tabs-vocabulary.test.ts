@@ -77,9 +77,9 @@ describe('the realtime nav tool offers only real tabs', () => {
       if (tabs) offered[entry[1]!] = tabs[1]!.split('|');
       else expect(entry[2]).not.toContain('switch_tab');
     }
-    // Authority is left out on purpose: listing it would point the model at a
-    // room whose handler also grants and revokes permissions. Every other
-    // tabbed room is offered, with exactly its tabs.
+    // Authority is left out on purpose: nothing there needs voice, and its
+    // grants and revokes are clicks only (#969). Every other tabbed room is
+    // offered, with exactly its tabs.
     const { authority: _authority, ...rest } = expected;
     expect(offered).toEqual(rest);
     expect(tool!.description).not.toMatch(/^- authority:/m);
