@@ -55,6 +55,8 @@ import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { runAsApproved } from '../authority/approved-action-scope.ts';
+import { gateLifecycle, type LifecycleGateDeps, type LifecycleVia } from './lifecycle-gate.ts';
 
 /**
  * Convert a system prompt (legacy string or static/dynamic parts) into the
@@ -433,50 +435,53 @@ export class AgentOrchestrator {
     return agent;
   }
 
+  /** What the lifecycle gate needs from this orchestrator; see lifecycle-gate.ts. */
+  private lifecycleDeps(): LifecycleGateDeps {
+    return {
+      engine: this.authorityEngine,
+      approvalManager: this.approvalManager,
+      auditTrail: this.auditTrail,
+      emergency: this.emergencyController,
+      toolRegistry: this.toolRegistry,
+      temporaryGrants: this.temporaryGrants,
+      profile: this.getEffectiveProfile(),
+      onApprovalNeeded: this.onApprovalNeeded,
+      auditName: (roleName) => this.auditAgentName(roleName),
+    };
+  }
+
   /**
-   * Spawn a sub-agent under a parent
+   * Spawn a sub-agent under a parent.
+   *
+   * This is the SINK for starting an agent, so it is where the gate lives
+   * (#932), not at each path that reaches it: the tool layer, the dashboard
+   * spawn dialog, the pebble's voice fast path, a workflow step. See
+   * lifecycle-gate.ts for what is decided. The authority engine is the PRIME
+   * decider: the user's explicit configuration wins over the role-derived
+   * capability flag in BOTH directions, and the flag is only the fallback when
+   * no engine is wired (tests, embedded use).
+   *
+   * A decision that needs approval is satisfied only by an approval already
+   * given for this act (the tool layer's card, run inside its scope). Otherwise
+   * it throws `AgentLifecycleRefusal`, after raising a card for `via` when the
+   * caller supplied the call that redoes the spawn once approved.
    */
   spawnSubAgent(
     parentId: string,
     role: RoleDefinition,
-    opts?: { memory_scope?: string[] }
+    opts?: { memory_scope?: string[]; via?: LifecycleVia }
   ): AgentInstance {
     const parent = this.hierarchy.getAgent(parentId);
     if (!parent) {
       throw new Error(`Parent agent not found: ${parentId}`);
     }
 
-    // The authority engine is the PRIME decider for spawning. The user's
-    // explicit configuration (per-action overrides, context rules, the
-    // authority slider) wins over the role-derived capability flag in
-    // BOTH directions: a `spawn_agent` deny blocks a delegation-capable
-    // role, and an allow unblocks a role that never declared delegation.
-    // This also covers spawn paths that bypass the tool-level gate
-    // (dashboard spawn dialog, workflow delegator). The role flag is
-    // only the fallback when no engine is wired (tests, embedded use).
-    if (this.authorityEngine) {
-      const decision = this.authorityEngine.checkAuthority({
-        agentId: parent.id,
-        agentAuthorityLevel: parent.agent.authority.max_authority_level,
-        agentRoleId: parent.agent.role.id,
-        toolName: 'spawn_sub_agent',
-        toolCategory: 'delegation',
-        actionCategory: 'spawn_agent',
-        temporaryGrants: this.temporaryGrants,
-        profile: this.getEffectiveProfile(),
-      });
-      if (!decision.allowed) {
-        throw new Error(`Authority denied spawning a sub-agent: ${decision.reason}`);
-      }
-      // `requiresApproval` is intentionally treated as allowed here: the
-      // soft gate runs at the TOOL layer (executeTool intercepts
-      // delegate_task/manage_agents before they execute), so by the time
-      // we get here the approval either wasn't needed or was granted.
-    } else if (!parent.agent.authority.can_spawn_children) {
-      throw new Error(
-        `Agent role "${parent.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
-      );
-    }
+    const recordSpawn = gateLifecycle(this.lifecycleDeps(), {
+      action: 'spawn_agent', actor: parent, subject: role.id, via: opts?.via,
+    }, {
+      allowed: parent.agent.authority.can_spawn_children,
+      message: `Agent role "${parent.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
+    });
 
     // Create child agent with reduced authority
     const childAuthority = {
@@ -499,6 +504,7 @@ export class AgentOrchestrator {
     });
 
     this.hierarchy.addAgent(agent);
+    recordSpawn();
 
     // Add system message with role context for sub-agents. Communication
     // style is optional - only inject the line when the role declares one.
@@ -1984,8 +1990,12 @@ export class AgentOrchestrator {
     }
 
     // 3. Authority check — hard denies enforced; approval auto-granted.
+    // The categories auto-granted here, for the lifecycle sinks the call may
+    // reach (#932): without the scope, a voice `manage_agents spawn` the
+    // realtime policy auto-approved would be refused again at the spawn sink.
+    let autoApproved: ActionCategory[] | null = null;
     if (this.authorityEngine && primary) {
-      const decision = combineDecisions(gate.categories.map((category) => this.authorityEngine!.checkAuthority({
+      const perCategory = gate.categories.map((category) => this.authorityEngine!.checkAuthority({
         agentId: primary.id,
         agentAuthorityLevel: primary.agent.authority.max_authority_level,
         agentRoleId: primary.agent.role.id,
@@ -1994,7 +2004,8 @@ export class AgentOrchestrator {
         actionCategory: category,
         temporaryGrants: this.temporaryGrants,
         profile: this.getEffectiveProfile(),
-      })));
+      }));
+      const decision = combineDecisions(perCategory);
 
       if (!decision.allowed) {
         logAudit('denied', false);
@@ -2012,11 +2023,17 @@ export class AgentOrchestrator {
 
       // Other requiresApproval -> auto-approved in realtime; audited as such.
       logAudit(decision.requiresApproval ? 'approval_required' : 'allowed', true);
+      // Only the categories that asked for approval were auto-approved.
+      if (decision.requiresApproval) autoApproved = perCategory.filter((d) => d.requiresApproval).map((d) => d.actionCategory);
     }
 
     // 4. Execute.
     try {
-      const raw = await this.toolRegistry.execute(name, args);
+      const registry = this.toolRegistry;
+      const raw = await (autoApproved
+        ? runAsApproved({ categories: autoApproved, approvalId: null, source: 'realtime_auto' },
+          () => registry.execute(name, args))
+        : registry.execute(name, args));
       const category = tool?.category;
       this.noteTaint(name, category);
       if (isToolResult(raw)) {

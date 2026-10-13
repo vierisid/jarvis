@@ -64,13 +64,13 @@ import {
   CONTENT_STAGES, CONTENT_TYPES,
 } from '../vault/content-pipeline.ts';
 import {
-  assignPersistentAgentTask,
   HttpError,
   listPersistentAgents,
-  spawnPersistentAgent,
+  startPersistentAgent,
   terminatePersistentAgent,
 } from '../actions/tools/agents.ts';
-import type { AsyncTask } from '../agents/task-manager.ts';
+import { TaskHaltedError, type AsyncTask } from '../agents/task-manager.ts';
+import { AgentLifecycleRefusal } from '../agents/lifecycle-gate.ts';
 
 import { mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -237,6 +237,18 @@ function json(data: unknown, status = 200): Response {
 
 function error(message: string, status = 400): Response {
   return json({ error: message }, status);
+}
+
+/**
+ * A spawn or stop the lifecycle gate did not carry out (#932). Waiting on a
+ * card is 202 with the request id, so the dashboard can say so instead of
+ * reporting a spawned agent; a halted system is 409; a refusal is 403.
+ */
+function lifecycleRefusalResponse(err: AgentLifecycleRefusal): Response {
+  if (err.kind === 'approval_required' && err.approvalId) {
+    return json({ approval_required: true, approval_id: err.approvalId, message: err.message }, 202);
+  }
+  return error(err.message, err.kind === 'halted' ? 409 : 403);
 }
 
 function errorFromException(err: unknown): Response {
@@ -889,21 +901,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             },
           };
 
-          // Refuse BEFORE spawning: a cap hit after it would leave an idle
-          // agent behind for a task that never started.
-          if (body.task?.trim() && !taskManager.canLaunch()) {
-            return error('Too many agent tasks are already running. Wait for one to finish.', 429);
-          }
-          const spawned = spawnPersistentAgent(deps, body.specialist ?? '');
-          let assignment: Awaited<ReturnType<typeof assignPersistentAgentTask>> | null = null;
-
-          if (body.task?.trim()) {
-            assignment = await assignPersistentAgentTask(deps, {
-              agentId: spawned.agent.id,
-              task: body.task.trim(),
-              context: body.context?.trim(),
-            });
-          }
+          // Gated at the spawn sink like every other path (#932): a spawn
+          // that needs approval raises a card for this whole request (agent
+          // AND task) and answers 202 with the request, not a spawned agent.
+          const { spawned, assignment } = await startPersistentAgent(deps, {
+            specialist: body.specialist ?? '',
+            task: body.task,
+            context: body.context,
+          });
 
           const latestTask = taskManager.getAgentTask(spawned.agent.id);
           return json({
@@ -914,6 +919,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             assignment,
           }, 201);
         } catch (err) {
+          if (err instanceof AgentLifecycleRefusal) return lifecycleRefusalResponse(err);
+          if (err instanceof TaskHaltedError) return error(err.message, 409);
           return errorFromException(err);
         }
       },

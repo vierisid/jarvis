@@ -33,6 +33,8 @@
 
 import { ROOM_TABS, roomTabs, type RoomTab, type TabbedRoom } from './room-tabs.ts';
 import type { RoomActionOutcome } from './room-action-results.ts';
+import { AgentLifecycleRefusal } from '../agents/lifecycle-gate.ts';
+import { TaskHaltedError } from '../agents/task-manager.ts';
 
 /**
  * Words that may come before a command without making it part of a sentence:
@@ -539,4 +541,23 @@ export function parseBackgroundTask(text: string): string | null {
   if (!m) return null;
   const task = (m[1] ?? '').trim();
   return task.length < 3 ? null : task;
+}
+
+/**
+ * What the pebble says when a voice "in the background, X" was not started
+ * (#932). It never says the agent is running. A spawn that needs approval
+ * has raised a card for the whole request, and says so.
+ */
+export function backgroundRefusalReply(err: unknown): string {
+  if (err instanceof AgentLifecycleRefusal) {
+    if (err.kind === 'approval_required') {
+      return err.approvalId
+        ? "Starting that background agent needs your approval. I've put up a card for it."
+        : "Starting that background agent needs your approval, and I can't ask for it from here.";
+    }
+    if (err.kind === 'halted') return "Jarvis is paused, so I can't start a background agent.";
+    return "I'm not allowed to start background agents.";
+  }
+  if (err instanceof TaskHaltedError) return "Jarvis is paused, so I can't start a background agent.";
+  return "I couldn't start that background task.";
 }

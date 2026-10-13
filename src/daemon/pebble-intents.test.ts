@@ -13,11 +13,13 @@ import { describe, expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { wakeCommandFrom } from '../voice/wake-phrase.ts';
 import {
-  exactRoomKey, findRoomKey, parseBackgroundTask, parseSettingsIntent, PEBBLE_ROOMS,
+  backgroundRefusalReply, exactRoomKey, findRoomKey, parseBackgroundTask, parseSettingsIntent, PEBBLE_ROOMS,
   CANNOT_STOP_AGENT, planInPanelAction, planSubPebbleClose, planWindowAction, SPOKEN_TABS, spokenTab, tabSwitchReply,
   type PanelLookups, type PanelRef, type SubPebbleCand,
 } from './pebble-intents.ts';
 import { isRoomTab, ROOM_TABS, roomTabs, type TabbedRoom } from './room-tabs.ts';
+import { AgentLifecycleRefusal } from '../agents/lifecycle-gate.ts';
+import { TaskHaltedError } from '../agents/task-manager.ts';
 
 // The daemon's open-panel inventory, over the real room table: the same
 // shape as panelLookups() in index.ts.
@@ -492,9 +494,38 @@ describe('the daemon uses these plans', () => {
     expect(src).not.toContain('orderedAliases');
   });
 
+  // #932: "in the background, X" has no model and no gesture in front of it,
+  // so it must reach the spawn through the shared, gated entry and nothing
+  // that skips it.
+  test('the background fast path spawns only through startPersistentAgent', () => {
+    expect(src).toContain('await startPersistentAgent(deps, { specialist: specialistId, task });');
+    expect(src).toContain('await speakConfirmation(sidecarId, backgroundRefusalReply(err), ctrl);');
+    expect(src).not.toContain('spawnPersistentAgent(');
+    expect(src).not.toContain('spawnSubAgent(');
+    expect(src).not.toContain('taskManagerLocal.launch(');
+  });
+
   test('no copy of the old patterns is left behind', () => {
     expect(src).not.toContain('in the background[,:]?');
     expect(src).not.toContain('voice (?:output|response)?');
     expect(src).not.toContain('tryParseWindowAction');
+  });
+});
+
+describe('what the pebble says when a background agent was not started (#932)', () => {
+  test('a spawn waiting on a card says so, and never that it is running', () => {
+    const reply = backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'approval_required', 'x', 'req-1'));
+    expect(reply).toContain('needs your approval');
+    expect(reply).toContain('card');
+    expect(reply).not.toMatch(/running|started|got it/i);
+  });
+
+  test('approval with nobody to ask, a halted system and a deny each get their own answer', () => {
+    expect(backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'approval_required', 'x')))
+      .toContain("can't ask");
+    expect(backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'halted', 'x'))).toContain('paused');
+    expect(backgroundRefusalReply(new TaskHaltedError('paused'))).toContain('paused');
+    expect(backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'denied', 'x'))).toContain('not allowed');
+    expect(backgroundRefusalReply(new Error('boom'))).toBe("I couldn't start that background task.");
   });
 });

@@ -57,6 +57,7 @@ import { getMachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability } from '../../sidecar/types';
 import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
+import { runAsApproved } from '../../authority/approved-action-scope.ts';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -606,7 +607,15 @@ export function buildSandboxServiceBackends(
         }
       },
     };
-    return m7.delegate(req, continuation);
+    // When the boundary above parked this delegation on a card and the person
+    // approved it, the spawn sink inside must not ask again (#932). Only then:
+    // the boundary judged the workflow's principal, not the primary the sink
+    // judges, so an authorisation that was never an approval cannot answer an
+    // approval the sink asks for. Spent by that one spawn.
+    const delegation = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, 'agent'));
+    if (!delegation?.approvalId) return m7.delegate(req, continuation);
+    return runAsApproved({ categories: ['spawn_agent'], approvalId: delegation.approvalId, source: 'workflow_effect' },
+      () => m7.delegate(req, continuation));
   };
 
   const eventsPoll: EventsPollFn = async (req) => {

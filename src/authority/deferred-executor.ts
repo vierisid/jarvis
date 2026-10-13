@@ -15,6 +15,7 @@ import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
 import { boundedReceiptText, splitToolReturn } from '../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scope.ts';
 import { runAsReviewed } from '../actions/tools/reviewed-call-scope.ts';
+import { runAsApproved } from './approved-action-scope.ts';
 
 // Defined next to substituteAboveLevel, which writes it; re-exported here,
 // where the approval learner reads it.
@@ -257,8 +258,12 @@ export class DeferredExecutor {
       // navigate would be refused above anyway, its binding gone with the old
       // process; `browser_snapshot` is not one, and is why the demotion exists.
       const dispatch = () => registry.execute(request.tool_name, args);
-      const raw = await runAsReviewed(uiExecution?.reviewed,
-        () => request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch));
+      // Inside the approval it bought (#932, #963): a lifecycle sink this
+      // call reaches (spawn, terminate) reads the scope instead of raising a
+      // second card for the act the person just approved.
+      const grant = { categories: [request.action_category as ActionCategory], approvalId: requestId, source: 'approval' as const };
+      const raw = await runAsApproved(grant, () => runAsReviewed(uiExecution?.reviewed,
+        () => request.execution_mode === 'inline' ? dispatch() : withoutTemplateDelivery(dispatch)));
       // Collapsed to one string for the consumers that show it -- the
       // notification and the execute route -- with any trusted trailer back
       // in band, where it is framed as data along with the rest if anything

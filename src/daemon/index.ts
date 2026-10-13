@@ -43,7 +43,7 @@ import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
-import { spawnPersistentAgent, assignPersistentAgentTask } from "../actions/tools/agents.ts";
+import { startPersistentAgent } from "../actions/tools/agents.ts";
 import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
@@ -108,7 +108,7 @@ import {
   logSafeLabel, MAX_POINT_COORD, PEBBLE_SCREEN_SPACE, pointingGuidance, pointTagRegex,
 } from "./pebble-point-prompt.ts";
 import {
-  parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
+  backgroundRefusalReply, parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
@@ -2966,14 +2966,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         console.log(`[background-intent] routed task "${task.slice(0, 60)}…" → ${specialistId}`);
 
+        // The spawn sink gates this like every other path (#932): Pause/Kill,
+        // the engine, and a card when the spawn needs approval. No model and
+        // no gesture stands between the wake word and this call, so it must
+        // never be the way round a `requires_approval` setting.
         try {
-          const spawned = spawnPersistentAgent(deps, specialistId);
-          await assignPersistentAgentTask(deps, { agentId: spawned.agent.id, task, context: '' });
+          await startPersistentAgent(deps, { specialist: specialistId, task });
           await speakConfirmation(sidecarId, `Got it. Running in the background.`, ctrl);
           console.log(`[ambient-ui] background-intent: spawned ${specialistId} for "${task.slice(0, 60)}"`);
         } catch (err) {
           console.warn('[ambient-ui] background-intent dispatch failed:', err);
-          await speakConfirmation(sidecarId, "I couldn't start that background task.", ctrl);
+          await speakConfirmation(sidecarId, backgroundRefusalReply(err), ctrl);
         }
         return true;
       };

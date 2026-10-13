@@ -11,7 +11,8 @@
 import type { AgentOrchestrator } from '../../agents/orchestrator.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import type { RoleDefinition } from '../../roles/types.ts';
-import type { ToolDefinition } from './registry.ts';
+import type { ToolDefinition, ToolGate } from './registry.ts';
+import { forCard } from '../../util/card-text.ts';
 import type { AgentTaskManager, AsyncTask } from '../../agents/task-manager.ts';
 import { createScopedToolRegistry, type ProgressCallback } from '../../agents/sub-agent-runner.ts';
 
@@ -45,7 +46,30 @@ export type PersistentAgentSummary = {
   busy: boolean;
 };
 
-export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string) {
+/**
+ * What the dashboard dialog, the pebble's voice fast path and the tool's own
+ * `spawn` ask for: a specialist, and optionally its first task.
+ */
+export type PersistentAgentRequest = { specialist: string; task?: string; context?: string };
+
+/**
+ * The registered call that redoes `request` once approved: what a card raised
+ * at the spawn sink runs (#932). One `manage_agents spawn` carrying the task, so
+ * approving it starts the agent AND its task, not an idle agent.
+ */
+function spawnCall(request: PersistentAgentRequest) {
+  return {
+    toolName: 'manage_agents',
+    toolArguments: {
+      action: 'spawn',
+      specialist: request.specialist,
+      ...(request.task ? { task: request.task } : {}),
+      ...(request.context ? { context: request.context } : {}),
+    },
+  };
+}
+
+export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string, request?: PersistentAgentRequest) {
   if (!specialistId) {
     throw new HttpError(400, 'A specialist role is required to spawn an agent.');
   }
@@ -60,7 +84,12 @@ export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string) 
     throw new HttpError(503, 'No primary agent exists');
   }
 
-  const agent = deps.orchestrator.spawnSubAgent(primary.id, role);
+  // Gated at the sink (orchestrator.spawnSubAgent): Pause/Kill, the engine,
+  // approval and the audit row. On a decision that needs approval it raises a
+  // card for the whole request and throws AgentLifecycleRefusal.
+  const agent = deps.orchestrator.spawnSubAgent(primary.id, role, {
+    via: spawnCall(request ?? { specialist: specialistId }),
+  });
   const scopedRegistry = createScopedToolRegistry(agent.agent.authority.allowed_tools);
   agentRegistries.set(agent.id, scopedRegistry);
 
@@ -80,6 +109,36 @@ export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string) 
       tool_categories: agent.agent.authority.allowed_tools,
     },
   };
+}
+
+/**
+ * Spawn a specialist and, when asked, start its first task: the one entry the
+ * dashboard spawn dialog, the pebble's voice fast path and `manage_agents
+ * spawn` share. Throws AgentLifecycleRefusal when the spawn is refused or is
+ * waiting on a card.
+ */
+export async function startPersistentAgent(deps: AgentToolDeps, request: PersistentAgentRequest) {
+  const task = request.task?.trim() || undefined;
+  const context = request.context?.trim() || undefined;
+  // Refuse BEFORE spawning: a cap hit after it would leave an idle agent
+  // behind for a task that never started.
+  if (task && !deps.taskManager.canLaunch()) {
+    throw new HttpError(429, 'Too many agent tasks are already running. Wait for one to finish.');
+  }
+  const spawned = spawnPersistentAgent(deps, request.specialist, { specialist: request.specialist, task, context });
+  if (!task) return { spawned, assignment: null };
+  try {
+    return { spawned, assignment: await assignPersistentAgentTask(deps, { agentId: spawned.agent.id, task, context }) };
+  } catch (err) {
+    // What was asked for (and possibly approved) is the agent AND its task.
+    // Half of it -- an idle agent nobody asked for -- is removed rather than
+    // left behind (a cap race, or Pause landing between spawn and launch).
+    agentRegistries.delete(spawned.agent.id);
+    try {
+      deps.orchestrator.terminateAgent(spawned.agent.id);
+    } catch { /* the original error is the one to report */ }
+    throw err;
+  }
 }
 
 export async function assignPersistentAgentTask(
@@ -218,6 +277,29 @@ export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string) {
   };
 }
 
+/**
+ * The card sentence for the calls that start work (#932 review). A spawn card
+ * used to read "Manage agents" while the approved call also started a task the
+ * person never saw; a sentence here is what the card shows, and the approval
+ * executor refuses a run whose recomputed sentence differs from the approved
+ * one. Values quoted with their quotes escaped, the free-text task last.
+ */
+export function manageAgentsGate(params: Record<string, unknown>): ToolGate | null {
+  const quoted = (v: unknown, max?: number) => JSON.stringify(forCard(v, max));
+  const task = typeof params.task === 'string' && params.task.trim() ? params.task : null;
+  const context = typeof params.context === 'string' && params.context.trim() ? params.context : null;
+  const withContext = context ? ` with context ${quoted(context, 300)}` : '';
+  if (params.action === 'spawn') {
+    const who = `Start a ${forCard(params.specialist, 60) || 'specialist'} background agent`;
+    return { actionCategory: 'spawn_agent', intent: task ? `${who}${withContext} on the task ${quoted(task)}` : who };
+  }
+  if (params.action === 'assign' && task) {
+    return { actionCategory: 'spawn_agent',
+      intent: `Give background agent ${forCard(params.agent_id, 60)}${withContext} the task ${quoted(task)}` };
+  }
+  return null;
+}
+
 export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
   return {
     name: 'manage_agents',
@@ -227,7 +309,7 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
       'For quick one-shot tasks, use delegate_task instead.',
       '',
       'Actions:',
-      '  spawn     — Create a persistent specialist agent (returns agent_id)',
+      '  spawn     — Create a persistent specialist agent (returns agent_id); with "task", also start it on that task',
       '  assign    — Send a task to an existing agent (async, returns task_id)',
       '  status    — Check agent or task status',
       '  collect   — Get full result of a completed task',
@@ -239,6 +321,7 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
       'Workflow: spawn → assign → status/collect → terminate',
     ].join('\n'),
     category: 'delegation',
+    authorityGate: manageAgentsGate,
     parameters: {
       action: {
         type: 'string',
@@ -262,12 +345,12 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
       },
       task: {
         type: 'string',
-        description: 'Task description (required for assign)',
+        description: 'Task description (required for assign; optional for spawn, which then starts it)',
         required: false,
       },
       context: {
         type: 'string',
-        description: 'Background context for the task (optional for assign)',
+        description: 'Background context for the task (optional for assign and spawn)',
         required: false,
       },
     },
@@ -276,7 +359,7 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
 
       switch (action) {
         case 'spawn':
-          return handleSpawn(deps, params);
+          return await handleSpawn(deps, params);
         case 'assign':
           return handleAssign(deps, params);
         case 'status':
@@ -294,10 +377,14 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
   };
 }
 
-function handleSpawn(deps: AgentToolDeps, params: Record<string, unknown>): string {
+async function handleSpawn(deps: AgentToolDeps, params: Record<string, unknown>): Promise<string> {
   try {
-    const specialistId = params.specialist as string;
-    return JSON.stringify(spawnPersistentAgent(deps, specialistId).summary);
+    const { spawned, assignment } = await startPersistentAgent(deps, {
+      specialist: params.specialist as string,
+      task: typeof params.task === 'string' ? params.task : undefined,
+      context: typeof params.context === 'string' ? params.context : undefined,
+    });
+    return JSON.stringify(assignment ? { ...spawned.summary, assignment } : spawned.summary);
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }

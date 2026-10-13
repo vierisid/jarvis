@@ -10,6 +10,7 @@ import { runSubAgent, type SubAgentResult, type ProgressCallback, type RunSubAge
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
+import { outsideApprovalScope } from '../authority/approved-action-scope.ts';
 
 export type AsyncTaskStatus = 'running' | 'completed' | 'failed';
 
@@ -66,6 +67,14 @@ export class TaskCapacityError extends Error {
   }
 }
 
+/** launch() refused because the emergency controller has paused or killed the system. */
+export class TaskHaltedError extends Error {
+  constructor(readonly state: string) {
+    super(`[SYSTEM ${state.toUpperCase()}] No agent task can start while the system is ${state}.`);
+    this.name = 'TaskHaltedError';
+  }
+}
+
 export class AgentTaskManager {
   private tasks = new Map<string, AsyncTask>();
   private listeners = new Set<TaskLifecycleListener>();
@@ -118,6 +127,10 @@ export class AgentTaskManager {
     // The authoritative check, before anything is recorded: callers ask
     // canLaunch() first for a friendly answer, but this is what holds.
     if (!this.canLaunch()) throw new TaskCapacityError();
+    // A task is a model loop that spends tokens; under Pause or Kill only its
+    // tools would be refused, so it must not start at all (#932).
+    const emergency = authority?.emergencyController;
+    if (emergency && !emergency.canExecute()) throw new TaskHaltedError(emergency.getState());
 
     const taskId = crypto.randomUUID();
     const asyncTask: AsyncTask = {
@@ -136,8 +149,11 @@ export class AgentTaskManager {
     this.tasks.set(taskId, asyncTask);
     this.emit('launch', asyncTask);
 
-    // Fire runSubAgent without awaiting — runs in background
-    this.runSubAgentFn({
+    // Fire runSubAgent without awaiting — runs in background. Outside any
+    // approval scope, completion handlers included: an approved `manage_agents
+    // spawn` starts its task from inside the approval, and nothing the task
+    // runs must inherit it (#932).
+    outsideApprovalScope(() => this.runSubAgentFn({
       agent,
       task,
       context,
@@ -167,7 +183,7 @@ export class AgentTaskManager {
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
       this.emit('fail', asyncTask);
       onComplete?.(asyncTask);
-    });
+    }));
 
     return taskId;
   }
