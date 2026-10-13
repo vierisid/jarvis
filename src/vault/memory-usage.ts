@@ -38,6 +38,20 @@ export function memoryFactRef(fact: Fact, subjectName: string): MemoryFactRef {
   return { factId: fact.id, sourceRevision: memoryDigest([subjectName, row,
     [...evidence].sort((a, b) => a.id.localeCompare(b.id)), basis, binding_eligible]) };
 }
+/** Safety at consumption is independent of whether usage telemetry is enabled.
+ * Owner decision (F18 I-3): only a fact deleted (or its subject removed) or
+ * expired since packing refuses consumption. A correction, confirmation, new
+ * evidence or rename passes; the next recall excludes a superseded fact. */
+export function assertCurrentMemoryFacts(db: Database, refs: readonly MemoryFactRef[]): void {
+  if (db !== getDb()) throw new MemoryUsageError('Memory context belongs to a replaced vault');
+  const now = Date.now();
+  for (const ref of refs) {
+    const fact = getFact(ref.factId), entity = fact && db.query<{ name: string }, [string]>('SELECT name FROM entities WHERE id = ?').get(fact.subject_id);
+    if (!fact || !entity || (fact.valid_to != null && now >= fact.valid_to)) {
+      throw new MemoryUsageError('Memory changed before consumption: a supplied fact was deleted or expired; refresh the context');
+    }
+  }
+}
 const project = (r: Stored): MemoryUseRecord => ({ useId: r.use_id, factId: r.fact_id,
   sourceRevision: r.source_revision, stage: r.stage, purpose: r.purpose, workflowId: r.workflow_id,
   callId: r.call_id, runId: r.run_id, at: r.recorded_at,

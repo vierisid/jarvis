@@ -5,6 +5,7 @@ import { ActionOutcomeError } from '../action-outcome.ts';
 import { activeEmergencyState } from '../../authority/emergency.ts';
 import { WorkflowCancellationError } from '../../workflows/runtime/cancellation-error.ts';
 import { observeToolExecution } from '../progress-context.ts';
+import { assertCurrentMemoryContext } from '../../vault/memory-use-context.ts';
 
 export type ToolParameter = {
   type: string;
@@ -241,7 +242,10 @@ export class ToolRegistry {
       // reaches while running (a sidecar call, a channel send, a TTS chunk)
       // refuses once Jarvis is stopped. Pause does not: work in flight
       // finishes, and nothing new starts.
-      return await observeToolExecution(name, () => withExecutionScope(killFence, () => tool.execute(params)));
+      return await observeToolExecution(name, () => withExecutionScope(killFence, () => {
+        assertCurrentMemoryContext();
+        return tool.execute(params);
+      }));
     } catch (error) {
       if (error instanceof ActionOutcomeError) throw error;
       // #630. The fence above is NOT the only place cancellation is raised, and
