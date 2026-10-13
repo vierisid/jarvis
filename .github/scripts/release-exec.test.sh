@@ -2924,8 +2924,10 @@ else
 		no "sidecar resolve: a real publish_only call is refused without asking npm" "exit ${RC}; output: $(cat "${WORK}/sc/out"); npm: $(cat "${WORK}/npmspy/log" 2>/dev/null); log: $(cat "${WORK}/sc/log")"
 	fi
 	# Nothing to release (the version is already on npm): neither half runs,
-	# whatever the call asked for. A real run asks npm; a stub answers yes.
-	mkdir -p "${WORK}/npmstub" && printf '#!/bin/sh\necho 1.2.3\n' >"${WORK}/npmstub/npm" && chmod +x "${WORK}/npmstub/npm"
+	# whatever the call asked for. A real run asks npm; a stub answers yes,
+	# as npm view --json does (#979: a bare 1.2.3 is not JSON, and no npm
+	# prints it for --json).
+	mkdir -p "${WORK}/npmstub" && printf '#!/bin/sh\necho \x27"1.2.3"\x27\n' >"${WORK}/npmstub/npm" && chmod +x "${WORK}/npmstub/npm"
 	for m in "PUBLISH=false PUBLISH_ONLY=false" ""; do
 		rm -rf "${WORK}/sc" && mkdir -p "${WORK}/sc/sidecar" && printf '1.2.3' >"${WORK}/sc/sidecar/VERSION" && : >"${WORK}/sc/out"
 		# shellcheck disable=SC2086 # m is a list of VAR=value words on purpose.
@@ -2938,6 +2940,106 @@ else
 			no "sidecar resolve: a version already on npm runs neither half (${m:-no inputs})" "exit ${RC}; output: ${OUT}; log: $(cat "${WORK}/sc/log")"
 		fi
 	done
+	# #979: the lookup decides to release only on a clean "not found". The
+	# stub prints, byte for byte, what npm printed on stdout for each case
+	# (measured with npm 10.8.2, 11.6.2 and 12.1.0, --json, against the
+	# registry and against a local server answering each status), exits as
+	# npm did, and records how it was called.
+	# npm_case <label> <release|skip|fail> <npm exit> <npm stdout>
+	cat >"${WORK}/npmstub/npm" <<-STUB
+		#!/bin/sh
+		printf '%s\n' "\$*" >>"${WORK}/npmstub/calls"
+		cat "${WORK}/npmstub/stdout"
+		exit "\$(cat "${WORK}/npmstub/rc")"
+	STUB
+	chmod +x "${WORK}/npmstub/npm"
+	npm_case() {
+		local label="$1" want="$2"
+		printf '%s' "$4" >"${WORK}/npmstub/stdout"
+		printf '%s' "$3" >"${WORK}/npmstub/rc"
+		rm -rf "${WORK}/sc" "${WORK}/npmstub/calls" && mkdir -p "${WORK}/sc/sidecar" && printf '1.2.3' >"${WORK}/sc/sidecar/VERSION" && : >"${WORK}/sc/out"
+		(cd "${WORK}/sc" && env -i PATH="${WORK}/npmstub:$PATH" GITHUB_OUTPUT="${WORK}/sc/out" DRY_RUN="${NPM_CASE_DRY:-false}" bash -c "$RESOLVE") >"${WORK}/sc/log" 2>&1
+		RC=$?
+		OUT="$(cat "${WORK}/sc/out")"
+		local calls
+		calls="$(cat "${WORK}/npmstub/calls" 2>/dev/null)"
+		local asked='view @usejarvis/sidecar@1.2.3 version --json'
+		[ "${NPM_CASE_DRY:-false}" = true ] && asked=''
+		local ok_=0
+		case "$want" in
+		release) [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=1.2.3\nshould_release=true\nbuild=true\npublish=true')" ] && ok_=1 ;;
+		skip) [ "$RC" -eq 0 ] && [ "$OUT" = "$(printf 'version=1.2.3\nshould_release=false\nbuild=false\npublish=false')" ] && ok_=1 ;;
+		fail) [ "$RC" -ne 0 ] && ! grep -q '^should_release=' <<<"$OUT" && grep -qF '::error::Could not establish whether @usejarvis/sidecar@1.2.3 is on npm' "${WORK}/sc/log" && ok_=1 ;;
+		esac
+		if [ "$ok_" = 1 ] && [ "$calls" = "$asked" ]; then
+			ok "sidecar resolve: ${label}"
+		else
+			no "sidecar resolve: ${label}" "exit ${RC}; output: ${OUT}; npm calls: ${calls}; log: $(cat "${WORK}/sc/log")"
+		fi
+	}
+	e404_version=$'{\n  "error": {\n    "code": "E404",\n    "summary": "No match found for version 1.2.3",\n    "detail": "The requested resource \'@usejarvis/sidecar@1.2.3\' could not be found or you do not have permission to access it.\\n\\nNote that you can also install from a\\ntarball, folder, http url, or git url."\n  }\n}'
+	e404_package=$'{\n  "error": {\n    "code": "E404",\n    "summary": "Not Found - GET https://registry.npmjs.org/@usejarvis%2fsidecar - Not found",\n    "detail": "\'@usejarvis/sidecar@1.2.3\' is not in this registry.\\n\\nNote that you can also install from a\\ntarball, folder, http url, or git url."\n  }\n}'
+	# err_json <code> <summary>: the shape npm prints for every other error.
+	err_json() { printf '{\n  "error": {\n    "code": "%s",\n    "summary": "%s",\n    "detail": ""\n  }\n}' "$1" "$2"; }
+	npm_case 'published, as npm 12 answers (an array), skips' skip 0 $'[\n  "1.2.3"\n]'
+	npm_case 'published, as npm 10 and 11 answer (a string), skips' skip 0 '"1.2.3"'
+	npm_case 'a clean not found (no such version) releases' release 1 "$e404_version"
+	npm_case 'a 404 for the package (a first release) releases' release 1 "$e404_package"
+	npm_case 'a 500 from the registry fails' fail 1 "$(err_json E500 '500 Internal Server Error - GET https://registry.npmjs.org/@usejarvis%2fsidecar - x')"
+	npm_case 'a 503 from the registry fails' fail 1 "$(err_json E503 '503 Service Unavailable - GET https://registry.npmjs.org/@usejarvis%2fsidecar - x')"
+	npm_case 'a rate limit (429) fails' fail 1 "$(err_json E429 '429 Too Many Requests - GET https://registry.npmjs.org/@usejarvis%2fsidecar - x')"
+	npm_case 'an auth error (401) fails' fail 1 "$(err_json E401 '401 Unauthorized - GET https://registry.npmjs.org/@usejarvis%2fsidecar - x')"
+	npm_case 'a forbidden answer (403) fails' fail 1 "$(err_json E403 '403 Forbidden - GET https://registry.npmjs.org/@usejarvis%2fsidecar - x')"
+	npm_case 'a network timeout fails' fail 1 "$(err_json ETIMEDOUT 'request to https://registry.npmjs.org/@usejarvis%2fsidecar failed, reason: connect ETIMEDOUT')"
+	npm_case 'a DNS failure fails' fail 1 "$(err_json ENOTFOUND 'request to https://registry.npmjs.org/@usejarvis%2fsidecar failed, reason: getaddrinfo ENOTFOUND registry.npmjs.org')"
+	npm_case 'a registry answer that is not JSON fails' fail 1 "$(err_json FETCH_ERROR 'invalid json response body at https://registry.npmjs.org/@usejarvis%2fsidecar')"
+	npm_case 'npm failing with nothing on stdout fails' fail 1 ''
+	npm_case 'npm not found at all fails' fail 127 ''
+	npm_case 'success with nothing on stdout fails' fail 0 ''
+	npm_case 'success naming another version fails' fail 0 '"1.2.4"'
+	npm_case 'success naming two versions fails' fail 0 $'[\n  "1.2.3",\n  "1.2.4"\n]'
+	npm_case 'success with an E404 body fails' fail 0 "$e404_version"
+	npm_case 'an E404 followed by another answer fails' fail 1 "${e404_version}"$'\n"1.2.3"'
+	npm_case 'an E404 behind text that is not JSON fails' fail 1 "npm warn something"$'\n'"${e404_version}"
+	npm_case 'an E404 code that is not a string fails' fail 1 '{"error":{"code":404,"summary":"Not Found"}}'
+	npm_case 'an E404 code outside the error object fails' fail 1 '{"code":"E404"}'
+	npm_case 'an error summary carrying a workflow command fails on one line' fail 1 '{"error":{"code":"E500","summary":"x\n::add-mask::y\r::stop-commands::z"}}'
+	if [ "$(grep -c '^::' "${WORK}/sc/log")" = 1 ]; then
+		ok "sidecar resolve: npm error text cannot start a workflow command"
+	else
+		no "sidecar resolve: npm error text cannot start a workflow command" "$(cat "${WORK}/sc/log")"
+	fi
+	# The cases above hold the decision only while the step is the one they
+	# ran. Each mutant below reopens one hole in a copy of the step, and the
+	# case it exists for must then fail.
+	# npm_mutant <label> <exact text> <replacement> <npm_case arguments...>
+	npm_mutant() {
+		local label="$1" old="$2" new="$3"
+		shift 3
+		local mutated
+		mutated="$(OLD="$old" NEW="$new" SRC="$RESOLVE" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, process.env.NEW));')" || {
+			no "resolve mutant '${label}' could be applied (the step no longer has the text it mutates)"
+			return
+		}
+		local res; res="$(RESOLVE="$mutated" npm_case "$@")"; if grep -q "^  FAIL" <<<"$res"; then ok "reports: ${label}"; else no "reports: ${label}" "the case passed a step with this hole"; fi
+	}
+	# shellcheck disable=SC2016 # literal workflow text, not shell.
+	{
+		npm_mutant 'any npm failure read as not published, as before #979' \
+			'elif [ "$view_rc" -ne 0 ] && [ "$(errfield code)" = "E404" ]; then' 'elif [ "$view_rc" -ne 0 ]; then' \
+			'a 503 from the registry fails' fail 1 "$(err_json E503 '503 Service Unavailable - GET https://registry.npmjs.org/@usejarvis%2fsidecar - x')"
+		npm_mutant 'the first of several answers taken as the answer (#979)' \
+			"'if length == 1 then .[0] else null end'" "'.[0]'" \
+			'an E404 followed by another answer fails' fail 1 "${e404_version}"$'\n"1.2.3"'
+		npm_mutant 'a lookup that never asks for JSON, seen in the call it makes (#979)' \
+			'version --json 2>/dev/null' 'version 2>/dev/null' \
+			'published, as npm 10 and 11 answer (a string), skips' skip 0 '"1.2.3"'
+		npm_mutant 'any successful lookup read as published (#979)' \
+			'if [ "$view_rc" -eq 0 ] && jq -e --arg v "$VERSION"' 'if [ "$view_rc" -eq 0 ] || jq -e --arg v "$VERSION"' \
+			'success naming another version fails' fail 0 '"1.2.4"'
+	}
+	# #978 unchanged: a dry run releases whatever npm holds, and asks it nothing.
+	NPM_CASE_DRY=true npm_case 'a dry run releases a version npm already has, without asking npm' release 0 '"1.2.3"'
 	# Under a UTF-8 locale glibc's [A-Za-z] and [0-9] match more than ASCII;
 	# the step pins LC_ALL=C, as the tag gate does.
 	if [ -z "$UTF8_LOCALE" ]; then
