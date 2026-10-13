@@ -1,0 +1,263 @@
+bun test v1.3.14 (0d9b296a)
+
+src/brief/composition.test.ts:
+Database initialized at: /tmp/jarvis-f07-hOwP8D/test.db
+Database initialized at: /tmp/jarvis-f07-hOwP8D/test.db
+(pass) durable receipt precedes the model; retries across every phase attach one disabled populated draft [65.20ms]
+Database initialized at: /tmp/jarvis-f07-tDA1Xi/test.db
+(pass) an uncertain response can be recovered by requestId and changed specifications conflict [31.63ms]
+Database initialized at: /tmp/jarvis-f07-xcGLMF/test.db
+(pass) job receipts and later composition prompts never forward captured workflow output [33.76ms]
+Database initialized at: /tmp/jarvis-f07-pHwCaW/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 27 chars, ends "..{PRIVATE MALFORMED RESPONSE"))
+[compose] attempt 2 success-after-retry
+(pass) repair retains the exact specification and exposes candidate count without candidate contents [30.22ms]
+Database initialized at: /tmp/jarvis-f07-mmTVMk/test.db
+(pass) a trigger-only result is a useful blocker and cannot create an empty success [30.93ms]
+Database initialized at: /tmp/jarvis-f07-T6rFx5/test.db
+[compose] attempt 1 validation-error (step "report" references unknown piece "missing-piece")
+[compose] attempt 2 exhausted (step "report" references unknown piece "missing-piece")
+(pass) a populated graph with an unknown piece cannot bypass composer validation [29.96ms]
+Database initialized at: /tmp/jarvis-f07-ywrCQ0/test.db
+(pass) a LOOP_ON_ITEMS scaffold without any piece action is a blocker [32.01ms]
+Database initialized at: /tmp/jarvis-f07-IUms0x/test.db
+(pass) a ROUTER scaffold without any piece action is a blocker [30.68ms]
+Database initialized at: /tmp/jarvis-f07-xVxTSd/test.db
+(pass) a LOOP_ON_ITEMS containing a nested piece action remains a populated draft [33.61ms]
+Database initialized at: /tmp/jarvis-f07-KrMKEi/test.db
+(pass) a ROUTER containing a nested piece action remains a populated draft [30.00ms]
+Database initialized at: /tmp/jarvis-f07-yW82i2/test.db
+[compose] attempt 1 tool-loop-blocked (Specify which destination should receive the report.)
+(pass) report_blocked preserves actionable reasons without attaching or running a draft [31.12ms]
+Database initialized at: /tmp/jarvis-f07-ukjYFZ/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+[compose] attempt 2 exhausted (response was not valid JSON: JSON Parse error: Expected '}' (rawResponse: 23 chars, ends "..{PRIVATE MODEL RESPONSE"))
+(pass) provider errors and malformed responses stay out of the public failure receipt [32.10ms]
+Database initialized at: /tmp/jarvis-f07-xASBdA/test.db
+(pass) queued cancellation makes no model call; running cancellation aborts and rejects late results [39.06ms]
+Database initialized at: /tmp/jarvis-f07-1LjFE9/test.db
+(pass) cancellation frees the queue even if the model ignores abort [36.38ms]
+Database initialized at: /tmp/jarvis-f07-3yZTsN/test.db
+(pass) timeout releases an uncooperative model and retains a durable retryable failure [50.69ms]
+Database initialized at: /tmp/jarvis-f07-XdTsUh/test.db
+Database initialized at: /tmp/jarvis-f07-XdTsUh/test.db
+(pass) restart records queued and running work as interrupted and never resumes it implicitly [56.17ms]
+Database initialized at: /tmp/jarvis-f07-8go418/test.db
+(pass) graceful shutdown persists interrupted outcomes before aborting provider work [35.37ms]
+Database initialized at: /tmp/jarvis-f07-EcmZyY/test.db
+(pass) an interruption write failure cannot block shutdown or attach a late draft [36.05ms]
+Database initialized at: /tmp/jarvis-f07-WF8p2A/test.db
+(pass) failure to save result IDs rolls back both canonical draft rows [28.28ms]
+Database initialized at: /tmp/jarvis-f07-p3PKr8/test.db
+(pass) runtime storage recovery settles abandoned work after timeout without replaying it [3079.20ms]
+Database initialized at: /tmp/jarvis-f07-BeKGb6/test.db
+(pass) runtime storage recovery settles abandoned work after provider failure without replaying it [3057.52ms]
+Database initialized at: /tmp/jarvis-f07-SfRq0c/test.db
+(pass) runtime storage recovery relinquishes ownership on stop [1190.67ms]
+Database initialized at: /tmp/jarvis-f07-ICUbOJ/test.db
+Database initialized at: /tmp/jarvis-f07-ICUbOJ/test.db
+(pass) runtime storage recovery relinquishes ownership on replace database [1193.87ms]
+Database initialized at: /tmp/jarvis-f07-KOT7B7/test.db
+(pass) failure to bind journal identity rolls back before any model call [41.51ms]
+Database initialized at: /tmp/jarvis-f07-AMwMEk/test.db
+(pass) a prepared disabled draft still faces canonical readiness checks before activation [52.28ms]
+Database initialized at: /tmp/jarvis-f07-rUnKgC/test.db
+(pass) request validation bounds bytes and identifiers, rejects unknown fields, and preserves admitted wording [59.10ms]
+Database initialized at: /tmp/jarvis-f07-dRs5pL/test.db
+(pass) queue is bounded while idempotent repeats remain readable when it is full [63.41ms]
+Database initialized at: /tmp/jarvis-f07-QGXuBN/test.db
+(pass) project scope separates lookup, recovery, cancellation and idempotency keys [44.94ms]
+Database initialized at: /tmp/jarvis-f07-NGJw6s/test.db
+(pass) schema is additive and idempotent over saved receipts and journals [37.85ms]
+
+src/brief/capabilities.test.ts:
+(pass) production registration enables nothing, even when activation is requested without providers [1.00ms]
+(pass) installed and ready does not activate a feature without an explicit selection [0.29ms]
+(pass) readiness changes are reflected without restarting or retaining a stale true flag [0.21ms]
+(pass) transitive activation dependencies must themselves be enabled [0.22ms]
+(pass) dependency failure disables consumers on the next snapshot [0.18ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.20ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.06ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.07ms]
+(pass) failed or malformed provider readiness fails closed without serializing internals [0.06ms]
+(pass) duplicate and unknown registrations fail early, and registries do not share state [0.54ms]
+(pass) old or unsupported server response cannot enable new controls: null [0.04ms]
+(pass) old or unsupported server response cannot enable new controls: {} [0.01ms]
+(pass) old or unsupported server response cannot enable new controls: {"error":"Not found"} [0.03ms]
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":2,"capabilities":{}}
+(pass) old or unsupported server response cannot enable new controls: {"contractVersion":1,"capabilities":null}
+(pass) v1 clients accept additive fields but reject inconsistent booleans or unknown capability IDs [0.25ms]
+(pass) the fixed activation graph has only known dependencies and no cycles [0.40ms]
+(pass) contracts and capability consumer bundle for a browser without importing backend implementations [6.49ms]
+
+ui/src/brief/profile-settings/actions.test.tsx:
+(pass) voice setup opens the current channels form with no credential or provider writes [2.60ms]
+(pass) confirmed replay delegates exactly once to the existing API and never requests provider setup [5.00ms]
+(pass) the real legacy form retains its edit revision across polling and a failed save keeps the draft open [156.81ms]
+(pass) real hook keeps canonical save/clear results despite reordered responses and failed reads [369.15ms]
+
+ui/src/brief/onboarding/draft.integration.test.ts:
+Database initialized at: /tmp/jarvis-f26-kVAspV/fixture.db
+(pass) the onboarding handoff uses real F-07 routes/SQLite, recovers a lost response and creates one disabled populated draft with zero runs [65.26ms]
+
+ui/src/brief/onboarding/Onboarding.test.tsx:
+(pass) Brief tutorial saves stable targets, retains focus and uses only canonical progress/complete writes [119.47ms]
+(pass) failed progress stays on the current step and replay resumes the saved target [25.06ms]
+(pass) fresh hosted, Brief flag false: setup selection and written interview remain canonical [164.03ms]
+(pass) fresh local, Brief flag false: setup selection and written interview remain canonical [349.79ms]
+(pass) fresh hosted, Brief flag true: setup selection and written interview remain canonical [86.20ms]
+(pass) fresh local, Brief flag true: setup selection and written interview remain canonical [209.16ms]
+(pass) Brief gate retains a failed final refresh and draft-room handoff without composing another draft [2217.87ms]
+(pass) completed replay restores a saved unsent prompt; Explore requires no composition and clears only the handoff [50.85ms]
+(pass) Explore ignores a late background poll and tutorial replay can prepare a new task [1175.32ms]
+(pass) tutorial replay with Brief flag false preserves canonical dismissal and completion [135.70ms]
+(pass) tutorial replay with Brief flag true preserves canonical dismissal and completion [102.92ms]
+(pass) peer completion cannot discard the final prompt; peer replay resets the tour but keeps that prompt [122.54ms]
+
+ui/src/brief/onboarding/draft.test.ts:
+(pass) registration is optional, default off and depends on enabled F-07 plus every host seam [6.17ms]
+(pass) editing/reading the prompt performs no effects; explicit preparation keeps the exact prompt and pinned draft IDs [1.37ms]
+(pass) lost response, duplicate clicks and reload recover the same persisted F-07 key [0.72ms]
+(pass) blocked/failed attempts retain editable prompts and require another explicit prepare for a fresh request [0.36ms]
+(pass) pending jobs read by job identity without creating another workflow [0.43ms]
+(pass) a late polling receipt cannot alter a new handoff after clear [0.55ms]
+(pass) a late polling error cannot alter a new handoff after clear [0.14ms]
+(pass) a failed clear keeps the pending read owned by the retained handoff [0.40ms]
+(pass) missing/stale access, invalid receipts and unready destinations cannot create or open a misleading result [0.47ms]
+(pass) failed storage writes fence POST and retain the key for recovery [0.24ms]
+(pass) unreadable storage is never replaced with defaults or a fresh request [0.23ms]
+(pass) retired account ignores late receipts and aborts deferred navigation [0.67ms]
+(pass) account-scoped storage never restores another account prompt and old tutorial steps safely restart [0.47ms]
+(pass) a failed final clear preserves both in-memory and persisted prompt/receipt for retry [0.30ms]
+(pass) draft handoff rechecks capability after the shared leave guard [0.37ms]
+(pass) draft handoff rechecks room after the shared leave guard [0.10ms]
+(pass) draft handoff rechecks cancel after the shared leave guard [0.07ms]
+
+ui/src/brief/entry/route.test.ts:
+(pass) the default and non-exact flag values keep the released dashboard [1.80ms]
+(pass) all existing sidecar and dashboard destinations retain their route owner [1.21ms]
+(pass) onboarding reset owns the page even when a Brief URL was bookmarked [0.09ms]
+(pass) fixture mode requires both its explicit flag and isolated destination [0.14ms]
+(pass) every registered destination resolves without requiring another room's module [0.44ms]
+(pass) unknown or malformed Brief destinations explain the retained controls instead of silently opening home [0.13ms]
+(pass) source identities roundtrip without inventing a record or retaining unknown query keys [0.18ms]
+(pass) rollback removes only the Brief opt-in and preserves connection parameters [0.14ms]
+
+ui/src/brief/entry/DashboardEntry.test.tsx:
+(pass) flag off and legacy hash navigation retain one legacy mount and its connection owner [21.28ms]
+(pass) every current room and sidecar panel still resolves through the released router [16.38ms]
+(pass) isolated preview owns no live connection, fetch or onboarding side effects [21.30ms]
+(pass) real Brief entry remains behind the existing onboarding gate [1.75ms]
+(pass) missing modules give a truthful fallback instead of fabricated empty business data [18.38ms]
+(pass) room modules preserve shell state and selected source IDs through navigation [13.25ms]
+(pass) a fixture view cannot accidentally supply live room business data [3.47ms]
+
+ui/src/v2/onboarding/useInterviewSession.test.tsx:
+(pass) written interview session > requests written replies and never listens to or plays legacy voice messages [4.10ms]
+(pass) written interview session > prevents rapid duplicate replies and preserves rejected answers for retry [3.22ms]
+(pass) written interview session > completion stays complete when audio, stale replies or socket close arrive [11.50ms]
+(pass) written interview session > reports disconnected sessions and detaches all socket handlers on unmount [3.97ms]
+(pass) written interview UI > offers written answers and keeps Skip available without requesting a microphone [16.83ms]
+(pass) written interview UI > retains a typed answer if sending fails and displays it once sent [37.28ms]
+(pass) written interview UI > a failed turn returns the answer to the composer instead of showing it twice [88.43ms]
+(pass) written interview UI > Enter never submits during composition, with Shift, or while a reply is pending [64.64ms]
+
+ui/src/v2/onboarding/WorkflowActivation.test.tsx:
+(pass) first workflow activation > starts empty, offers editable examples and hands off only on a deliberate click [70.85ms]
+(pass) first workflow activation > Explore Jarvis first skips without fabricating a workflow request [33.45ms]
+(pass) first workflow activation > blocks duplicate handoffs and keeps the task when opening fails [47.40ms]
+(pass) the request survives the gate refresh, waits for connection, preserves edits on reopen and never sends itself [269.15ms]
+(pass) a failed completion refresh retains the activation task and can be retried [180.96ms]
+(pass) a skip that saves but cannot load the dashboard says so, and retrying works [116.98ms]
+
+ui/src/v2/onboarding/OnboardingWizard.steps.test.ts:
+(pass) stepsFor > self-hosted keeps every screen (configuring an LLM is mandatory there) [0.18ms]
+(pass) stepsFor > hosted drops exactly brain, hearing and speaking — nothing else [0.22ms]
+(pass) stepsFor > the steps that survive keep their original relative order [0.20ms]
+(pass) stepsFor > every resume target exists on both installs [0.25ms]
+(pass) stepGatedOnProbe > unknown probe gates exactly the provisioned screens [0.14ms]
+(pass) stepGatedOnProbe > a resolved probe gates nothing (either verdict) [0.09ms]
+(pass) resolveStepKey > a key present in the list renders as itself [0.06ms]
+(pass) resolveStepKey > a hidden key resolves to Permissions, never the terminal screen [0.05ms]
+
+ui/src/v2/onboarding/stt-setup.test.ts:
+(pass) localSTTSetup > sends the loaded endpoint and dialect [0.32ms]
+(pass) localSTTSetup > sends nothing when the stored config was not read and nothing was edited [0.17ms]
+(pass) localSTTSetup > sends only the edited dialect when the stored config was not read [0.11ms]
+(pass) localSTTSetup > sends only the edited endpoint when the stored config was not read [0.06ms]
+(pass) localSTTSetup > never sends a blank endpoint [0.08ms]
+
+ui/src/v2/onboarding/llm-setup.test.ts:
+(pass) Anthropic onboarding model selection > omits the curated model when testing a custom endpoint [0.13ms]
+(pass) Anthropic onboarding model selection > keeps the selected model for official Anthropic and other providers [0.07ms]
+(pass) Anthropic onboarding model selection > keeps a model picked from the discovered gateway catalog [0.08ms]
+(pass) Anthropic onboarding model selection > re-discovers when the selection is not in the known catalog [0.04ms]
+(pass) Anthropic onboarding model selection > saves the validated gateway model ahead of the curated selection [0.05ms]
+(pass) NVIDIA live catalog selection > keeps a selection that remains in the live catalog [0.09ms]
+(pass) NVIDIA live catalog selection > replaces a retired selection with the preferred live model [0.28ms]
+(pass) NVIDIA live catalog selection > tries the next preferred chat model before the alphabetical first [0.11ms]
+(pass) NVIDIA live catalog selection > falls back predictably when no preferred model is available [0.07ms]
+
+ui/src/v2/onboarding/OnboardingWizard.tour.test.tsx:
+(pass) tour slides > labels the static dashboard as a preview [29.27ms]
+(pass) tour slides > copy, counter and position always describe the SAME slide [86.38ms]
+(pass) tour slides > the counter's total matches the slides that actually exist [129.91ms]
+(pass) tour slides > each slide is a NEW element, never a mutated one [122.65ms]
+(pass) tour slides > the last slide finishes instead of advancing [147.93ms]
+(pass) tour slides > Skip tour dismisses rather than completing [45.49ms]
+(pass) tour keyboard focus > advancing keeps focus on the button that was activated [139.98ms]
+(pass) tour keyboard focus > the first slide does not grab focus on its own [41.57ms]
+
+ui/src/v2/onboarding/permission-rows.test.ts:
+(pass) displayRows > macOS shows all four, ordered by what fails silently first [0.50ms]
+(pass) displayRows > Linux shows nothing at all [0.29ms]
+(pass) displayRows > Windows shows only the microphone link, with no state and its own copy [0.43ms]
+(pass) displayRows > a row with no readable state is never marked required [0.24ms]
+(pass) displayRows > a permission name this build has never heard of is skipped [0.30ms]
+(pass) displayRows > each row carries how it is obtained, so the button can say so [0.38ms]
+(pass) displayRows > an unavailable report yields no rows [0.17ms]
+(pass) displayRows > the screen offers exactly four permissions, and required is exactly two [0.46ms]
+(pass) outstandingRequired > names only the rows that fail silently and are not granted [0.47ms]
+(pass) outstandingRequired > the microphone is never outstanding -- macOS asks for it in the moment [0.38ms]
+(pass) outstandingRequired > nothing is outstanding once the two are granted [0.26ms]
+(pass) allSettled > false while any readable row is ungranted [0.33ms]
+(pass) allSettled > true when every readable row is granted [0.25ms]
+(pass) allSettled > a stateless row does not hold it open forever [0.17ms]
+(pass) needsRestartNote > silent until the user has actually been sent to that pane [0.18ms]
+(pass) needsRestartNote > shown when they have been and the row is still not granted [0.24ms]
+(pass) needsRestartNote > gone once the row is granted [0.10ms]
+(pass) unavailableCopy > every reason has its own sentence [2.20ms]
+(pass) unavailableCopy > offline and no_sidecar do not say the same thing [1.33ms]
+(pass) requestFeedback > a granted-by-dialog request says nothing [0.39ms]
+(pass) requestFeedback > a pane that opened says nothing [0.13ms]
+(pass) requestFeedback > an available:false answer is never silent [0.37ms]
+(pass) requestFeedback > a refusal carries the reason the desktop app gave [1.93ms]
+(pass) requestFeedback > a pane that did not open names where to go by hand [0.21ms]
+(pass) requestFeedback > a launcher error is passed through, not swallowed [0.21ms]
+(pass) requestFeedback > an unreadable body is reported rather than treated as success [0.08ms]
+
+ui/src/v2/onboarding/external-open.test.ts:
+(pass) openedOrHandedOff > a real window is a success, host routing or not [0.55ms]
+(pass) openedOrHandedOff > null with the host routing is a hand-off, not a failure [0.23ms]
+(pass) openedOrHandedOff > null with no host routing is the one real failure [0.10ms]
+(pass) openedOrHandedOff > only the exact flag counts [0.12ms]
+(pass) openedOrHandedOff > no window at all (server render) is not a hand-off [0.10ms]
+(pass) openExternal > severs the opener instead of passing noopener [0.68ms]
+(pass) openExternal > a blocked popup comes back as null [0.15ms]
+(pass) openExternal > survives a browser that refuses the opener write [0.47ms]
+(pass) host-injection contract > the sidecar injects the flag this module reads [1.39ms]
+(pass) host-injection contract > every platform reports whether it installed routing [1.29ms]
+(pass) host-injection contract > the platforms that need a popup setting both set AND verify it [0.36ms]
+
+ui/src/v2/onboarding/useOnboardingStatus.test.tsx:
+(pass) a local phase flip costs exactly one status read, not two [101.79ms]
+(pass) a local phase flip still reaches other subscribers, each re-reading once [51.34ms]
+(pass) a peer tab's broadcast triggers exactly one re-read [105.74ms]
+(pass) a local flip overlapping a peer-driven read is still broadcast [72.98ms]
+(pass) a reset fired through resetClient reaches a mounted tab [55.86ms]
+(pass) unmounting closes the channel, so a later broadcast reads nothing [43.58ms]
+
+ 183 pass
+ 0 fail
+ 1313 expect() calls
+Ran 183 tests across 17 files. [17.91s]

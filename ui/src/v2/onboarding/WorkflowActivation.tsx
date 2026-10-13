@@ -2,7 +2,7 @@ import React, { useId, useRef, useState } from "react";
 import { ArrowRight } from "lucide-react";
 import "./WorkflowActivation.css";
 
-const EXAMPLES = [
+export const WORKFLOW_EXAMPLES = [
   { label: "Weekly update", task: "Every Friday, turn the notes I provide into a weekly company update with progress, blockers and next steps." },
   { label: "Meeting follow-up", task: "After a meeting, use the notes I provide to draft a follow-up and a list of actions for me to review." },
   { label: "Competitor brief", task: "Each week, check the competitor sources I provide and prepare a brief of what changed and what matters to my company." },
@@ -59,7 +59,7 @@ export function WorkflowActivation({ onContinue }: {
       />
       <div className="obw-activation__examples" role="group" aria-label="Example recurring tasks">
         <span>Try an example</span>
-        {EXAMPLES.map((example) => (
+        {WORKFLOW_EXAMPLES.map((example) => (
           <button type="button" key={example.label} disabled={pending} onClick={() => {
             setRoutine(example.task);
             input.current?.focus();

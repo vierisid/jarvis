@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openExternal, openedOrHandedOff } from "./external-open";
 import { useInterviewSession } from "./useInterviewSession";
+import { BriefWorkflowActivation } from "../../brief/onboarding/WorkflowActivation";
+import type { OnboardingDraft } from "../../brief/onboarding/draft";
+import { BRIEF_TOUR, ONBOARDING_TARGETS, TUTORIAL_STEPS, tutorialIndex, tutorialStepId } from "../../brief/onboarding/targets";
 import { WorkflowActivation } from "./WorkflowActivation";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
@@ -161,8 +164,10 @@ type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string; vali
 export function OnboardingWizard({
   status,
   onComplete,
+  brief,
 }: {
   status: OnboardingStatus | null;
+  brief?: OnboardingDraft;
   onComplete: (prompt?: string) => void | Promise<void>;
 }) {
   const startKey = useMemo<StepKey>(() => {
@@ -301,7 +306,9 @@ export function OnboardingWizard({
   const [tgToken, setTgToken] = useState("");
   const [tgBusy, setTgBusy] = useState(false);
   // tour
-  const [tourI, setTourI] = useState(0);
+  const [tourI, setTourI] = useState(() => brief ? tutorialIndex(status?.tutorial_progress_step) : 0);
+  const tourWrite = useRef(false);
+  const [tourSaving, setTourSaving] = useState(false);
 
   // A rerun must show and preserve the local server's existing dialect. The
   // endpoint alone cannot distinguish whisper.cpp's /inference API from an
@@ -815,13 +822,15 @@ export function OnboardingWizard({
   // Both check the response: silently swallowing a failed POST would replay
   // the whole tour on next launch.
   const endTour = useCallback(async (endpoint: string) => {
+    if (tourWrite.current) return;
+    tourWrite.current = true; setTourSaving(true);
     try {
       const r = await fetch(endpoint, { method: "POST" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       goKey("allset");
     } catch {
       setError("Couldn't reach the daemon to save your progress — try again.");
-    }
+    } finally { tourWrite.current = false; setTourSaving(false); }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const finishTour = useCallback(() => endTour("/api/onboarding/tutorial/complete"), [endTour]);
@@ -1354,7 +1363,8 @@ export function OnboardingWizard({
               <div><span className="ok">✓</span> setup complete</div>
             )}
           </div>
-          <WorkflowActivation onContinue={onComplete} />
+          {brief ? <BriefWorkflowActivation draft={brief} onContinue={() => onComplete()} />
+            : <WorkflowActivation onContinue={onComplete} />}
         </div></div>
       );
 
@@ -1457,12 +1467,46 @@ export function OnboardingWizard({
   }
 
   function renderTour() {
-    const T = TOUR[tourI]!;
+    const tour = brief ? BRIEF_TOUR : TOUR;
+    const T = tour[tourI]!;
+    const advance = async () => {
+      if (tourWrite.current) return;
+      if (tourI === tour.length - 1) { await finishTour(); return; }
+      if (brief) {
+        tourWrite.current = true; setTourSaving(true); setError(null);
+        try {
+          const response = await fetch("/api/onboarding/tutorial/progress", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ stepId: tutorialStepId(TUTORIAL_STEPS[tourI + 1]!) }),
+          });
+          if (!response.ok) throw Error("Progress unavailable");
+        } catch {
+          setError("Couldn't save your place in the tour. Try again."); return;
+        } finally { tourWrite.current = false; setTourSaving(false); }
+      }
+      tourAdvanced.current = true; setTourI(tourI + 1);
+    };
     const pos = T.pos as React.CSSProperties;
     return (
       <div className="obw-tourstage">
         <div className="obw-tourframe">
           <div className="obw-preview-label">Dashboard preview</div>
+          {brief ? <div className="obw-miniapp" aria-hidden="true">
+            <div className="mrail">
+              <div className="mr">Today</div>
+              <div className={`mr${T.focus === "workflows" ? " on" : ""}`}>Workflows</div>
+              <div className="mr">Opportunities</div><div className="mr">Needs you</div>
+              <div className="mh">The bigger picture</div><div className="mr">Goals</div>
+              <div data-onboarding-target={ONBOARDING_TARGETS.context.id} className={`mr${T.focus === "context" ? " on" : ""}`}>Memory</div>
+              <div data-onboarding-target={ONBOARDING_TARGETS.apps.id} className={`mr${T.focus === "apps" ? " on" : ""}`}>Connected workspace</div>
+              <div data-onboarding-target={ONBOARDING_TARGETS.authority.id} className={`mr${T.focus === "authority" ? " on" : ""}`}>Authority &amp; settings</div>
+            </div>
+            <div className="mmain">
+              <div className="mtop">Workflows</div>
+              <div className="mcard" data-onboarding-target={ONBOARDING_TARGETS.workflows.id}>Create your workflow<br />Describe the work you want to automate…</div>
+              <span data-onboarding-target={ONBOARDING_TARGETS.talk.id} className="mpeb obw-drop" style={{ width: 26, height: 26 }}><span className="in" /></span>
+            </div>
+          </div> : (
           <div className="obw-miniapp" aria-hidden="true">
             <div className="mrail">
               <div className="mh">Run</div><div className={`mr${T.focus === "workflows" || T.focus === "apps" ? " on" : ""}`}>Workflows</div><div className="mr">Agents</div><div className="mr">Tasks</div>
@@ -1475,6 +1519,7 @@ export function OnboardingWizard({
               <span className="mpeb obw-drop" style={{ width: 26, height: 26 }}><span className="in" /></span>
             </div>
           </div>
+          )}
           <div className="obw-tourdim" />
           {/* Keyed by slide so each step mounts a NEW node instead of mutating
               one in place. React's output was always right - the DOM carried
@@ -1487,23 +1532,20 @@ export function OnboardingWizard({
               4's position. Slides 1->2->3 swap right/bottom for left/top, a
               big enough change to force a repaint, which is why only the tail
               of the tour showed it. A fresh node cannot be a stale one. */}
-          <div key={tourI} className="obw-spot" style={pos}>
-            <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of {TOUR.length}</span></div>
+          <div key={tourI} className="obw-spot" style={pos} data-tour-target={brief ? ONBOARDING_TARGETS[TUTORIAL_STEPS[tourI]!].id : undefined}>
+            <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of {tour.length}</span></div>
             <h3>{T.title}</h3>
             <div className="sm">{T.sm}</div>
             {T.t && <div className="stry">{T.t}</div>}
             {error && <div className="stry" style={{ color: "var(--listen)" }}>{error}</div>}
             <div className="sb">
-              <button className="obw-skip" onClick={skipTour}>Skip tour</button><span className="grow" />
+              <button className="obw-skip" disabled={tourSaving} onClick={skipTour}>Skip tour</button><span className="grow" />
               <button
                 ref={tourNextRef}
                 className="obw-btn obw-btn-pri sm"
-                onClick={() => {
-                  if (tourI === TOUR.length - 1) { finishTour(); return; }
-                  tourAdvanced.current = true;
-                  setTourI(tourI + 1);
-                }}
-              >{tourI === TOUR.length - 1 ? "Finish" : "Next"}</button>
+                disabled={tourSaving}
+                onClick={() => void advance()}
+              >{tourI === tour.length - 1 ? "Finish" : "Next"}</button>
             </div>
           </div>
         </div>
