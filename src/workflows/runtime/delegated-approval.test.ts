@@ -138,7 +138,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   const services = buildSandboxServiceBackends({ credentialResolver: new CredentialResolver(), eventBuffer: new WorkflowEventBuffer(),
     toolRegistry: registry, authorityEngine: authority, emergencyController: emergency, auditTrail,
     approvalManager: approvals,
-    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, terminateAgent: () => {} } as any,
+    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, reapAgent: () => {} } as any,
     agentSpecialists: new Map([[ROLE.id, ROLE]]) as any,
     agentScopedRegistry: () => registry,
     llmManager: { chatTier: async (_tier: string, _origin: string, messages: Array<{ role: string }>) => {

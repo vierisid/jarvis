@@ -1,8 +1,8 @@
 /**
- * The authority gate for starting agents (#932).
+ * The authority gate for starting and stopping agents (#932, #963).
  *
- * Called from the SINK, `orchestrator.spawnSubAgent`, rather than from each
- * path that reaches it.
+ * Called from the two SINKS, `orchestrator.spawnSubAgent` and
+ * `orchestrator.terminateAgent`, rather than from each path that reaches them.
  * Four paths were found reaching a governed action without passing the gate
  * (#908, #932, #969, #973); gating where the act happens covers the ones we
  * know -- the tool layer, the dashboard, the pebble's voice fast path, a
@@ -11,14 +11,15 @@
  * What it decides, in order:
  *   1. Emergency state. A spawn under Pause or Kill is refused: the agent's
  *      model loop would otherwise start and spend tokens with only its tools
- *      refused.
+ *      refused. A STOP is never refused for emergency state.
  *   2. The engine's decision for the category, for the acting agent. Any
  *      deny (override, context rule, profile cap, the level check) throws, as
- *      it does at the tool layer: an approval in hand never lifts one.
+ *      it does at the tool layer: an approval in hand never lifts one. The one
+ *      exception mirrors the tool layer: a stop's level shortfall asks.
  *   3. Approval. Satisfied by an unspent approval for the category in the
  *      ambient scope (`approved-action-scope.ts`): the tool layer's card, the
- *      realtime gate's documented auto-approval, a workflow boundary's
- *      authorisation. Otherwise a card is raised when the caller
+ *      realtime gate's documented auto-approval (never for a stop), a
+ *      workflow boundary's approved delegation. Otherwise a card is raised when the caller
  *      said what call would redo the act once approved (`via.toolArguments`),
  *      and the act is refused either way with `AgentLifecycleRefusal`.
  *   4. An audit row, for every outcome. Nothing recorded a spawn before.
@@ -30,7 +31,7 @@ import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts'
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
-import { gateContext, resolveToolGate } from '../authority/tool-action-map.ts';
+import { gateContext, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { spendApproval, type ApprovalSource } from '../authority/approved-action-scope.ts';
 import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
 import type { AgentInstance } from './agent.ts';
@@ -106,7 +107,22 @@ export function lifecycleDecision(deps: LifecycleGateDeps, req: LifecycleRequest
     temporaryGrants: deps.temporaryGrants,
     profile: deps.profile,
   });
-  return decision;
+  if (action !== 'terminate_agent') return decision;
+  // A stop needs level 9, which no shipped role has, and the person can always
+  // approve stopping their own agent: a pure level shortfall asks instead of
+  // refusing, exactly as `manage_agents terminate` does at the tool layer
+  // (its gate declares `confirm: 'above_level'` over the spawn_agent floor).
+  return substituteAboveLevel(decision, { confirm: 'above_level', floorCategory: 'spawn_agent' }, (category) =>
+    deps.engine!.checkAuthority({
+      agentId: actor.id,
+      agentAuthorityLevel: actor.agent.authority.max_authority_level,
+      agentRoleId: actor.agent.role.id,
+      toolName: req.via?.toolName ?? DEFAULT_TOOL[action],
+      toolCategory: 'delegation',
+      actionCategory: category,
+      temporaryGrants: deps.temporaryGrants,
+      profile: deps.profile,
+    }));
 }
 
 function audit(
@@ -183,9 +199,9 @@ export function raiseLifecycleCard(
  * Decide `req`. Returns the function that writes the row for the act once it
  * has happened; throws `AgentLifecycleRefusal` (row written) when it may not.
  *
- * `fallbackAllowed` is the answer when no engine is wired (tests, embedded
- * use): the role-derived capability for a spawn. Its refusal message is the
- * caller's, since it names the role's configuration.
+ * `fallback` is the answer when no engine is wired (tests, embedded use): the
+ * role-derived capability for a spawn, and allowed for a stop. Its refusal
+ * message is the caller's, since it names the role's configuration.
  */
 export function gateLifecycle(
   deps: LifecycleGateDeps,
@@ -223,8 +239,11 @@ export function gateLifecycle(
     // session's auto-approval and a workflow's authorisation never judged the
     // outside content this turn read (the realtime gate refuses it itself).
     const tainted = decision.profileLabel?.includes(TAINT_PROFILE_LABEL) ?? false;
-    if (grant && (!tainted || grant.source === 'approval')) {
-      return () => audit(deps, req, 'approval_required', true, grant.approvalId, grant.source);
+    // A stop is never auto-approved by a voice session (#963): only a real
+    // card counts for it.
+    const acceptable = grant && (grant.source === 'approval' || (!tainted && action !== 'terminate_agent'));
+    if (acceptable) {
+      return () => audit(deps, req, 'approval_required', true, grant!.approvalId, grant!.source);
     }
     const card = raiseLifecycleCard(deps, req, decision.reason);
     audit(deps, req, 'approval_required', false, card?.id ?? null);
@@ -235,4 +254,25 @@ export function gateLifecycle(
   }
 
   return () => audit(deps, req, 'allowed', true);
+}
+
+/**
+ * Raise a card for `req` WITHOUT acting, whatever the engine would allow: for
+ * the voice cancel, which may stop an agent only through a card (#963). A hard
+ * deny still refuses, since the card could never be carried out.
+ */
+export function askLifecycleApproval(deps: LifecycleGateDeps, req: LifecycleRequest): ApprovalRequest {
+  const decision = lifecycleDecision(deps, req);
+  if (decision && !decision.allowed) {
+    audit(deps, req, 'denied', false);
+    throw new AgentLifecycleRefusal(req.action, 'denied', `Authority denied ${VERB[req.action]} an agent: ${decision.reason}`);
+  }
+  const reason = decision?.requiresApproval ? decision.reason : `${req.action} asked for by voice requires user approval`;
+  const card = raiseLifecycleCard(deps, req, reason);
+  audit(deps, req, 'approval_required', false, card?.id ?? null);
+  if (!card) {
+    throw new AgentLifecycleRefusal(req.action, 'approval_required',
+      `${VERB[req.action][0]!.toUpperCase()}${VERB[req.action].slice(1)} the agent needs your approval, and there is no way to ask for it from here.`);
+  }
+  return card;
 }

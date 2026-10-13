@@ -123,7 +123,7 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
         });
 
         // Terminate sub-agent after completion
-        deps.orchestrator.terminateAgent(subAgent.id);
+        deps.orchestrator.reapAgent(subAgent.id);
 
         // Format result for the PA
         const toolsList = result.toolsUsed.length > 0
@@ -151,7 +151,7 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
       } catch (err) {
         // Clean up on error
         try {
-          deps.orchestrator.terminateAgent(subAgent.id);
+          deps.orchestrator.reapAgent(subAgent.id);
         } catch { /* ignore cleanup errors */ }
 
         const errorMsg = err instanceof Error ? err.message : String(err);

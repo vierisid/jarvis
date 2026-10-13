@@ -56,7 +56,7 @@ import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts
 import { progressAcknowledgement } from './progress.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { runAsApproved } from '../authority/approved-action-scope.ts';
-import { gateLifecycle, type LifecycleGateDeps, type LifecycleVia } from './lifecycle-gate.ts';
+import { askLifecycleApproval, gateLifecycle, type LifecycleGateDeps, type LifecycleVia } from './lifecycle-gate.ts';
 
 /**
  * Convert a system prompt (legacy string or static/dynamic parts) into the
@@ -520,9 +520,61 @@ export class AgentOrchestrator {
   }
 
   /**
-   * Terminate an agent and its children
+   * Stops the background task loops an agent is running; set by the agent
+   * service, which owns the task manager. Without it a terminated agent's loop
+   * kept calling the model until it finished (#963).
    */
-  terminateAgent(agentId: string): void {
+  private taskCanceller: ((agentId: string) => void) | null = null;
+
+  setTaskCanceller(cancel: ((agentId: string) => void) | null): void {
+    this.taskCanceller = cancel;
+  }
+
+  /**
+   * Stop an agent at someone's request: the SINK for stopping one (#963),
+   * gated as `terminate_agent` for the agent asking (the primary). A hard deny
+   * throws; a decision that needs approval is satisfied only by a card already
+   * approved for this act, otherwise a card is raised for `via` and this throws
+   * `AgentLifecycleRefusal`. When it goes ahead, the agent's running task loops
+   * are aborted, not just its record removed.
+   *
+   * Cleanup of an agent the caller itself spawned and whose run is over is
+   * `reapAgent`, which is not a decision anyone needs to approve.
+   */
+  terminateAgent(agentId: string, opts?: { via?: LifecycleVia }): void {
+    const agent = this.hierarchy.getAgent(agentId);
+    if (!agent) {
+      throw new Error(`Agent not found: ${agentId}`);
+    }
+    const actor = this.getPrimary() ?? agent;
+    const recordStop = gateLifecycle(this.lifecycleDeps(), {
+      action: 'terminate_agent', actor, subject: agent.agent.role.id, via: opts?.via,
+    }, { allowed: true, message: '' });
+    this.reapAgent(agentId);
+    recordStop();
+  }
+
+  /**
+   * Raise a card to stop `agentId` without stopping it, whatever the engine
+   * would allow: voice may stop an agent only through a card (#963). Returns
+   * the request; throws `AgentLifecycleRefusal` on a hard deny or when there
+   * is nobody to ask.
+   */
+  requestTerminationApproval(agentId: string, via: Required<LifecycleVia>): ApprovalRequest {
+    const agent = this.hierarchy.getAgent(agentId);
+    if (!agent) throw new Error(`Agent not found: ${agentId}`);
+    return askLifecycleApproval(this.lifecycleDeps(), {
+      action: 'terminate_agent', actor: this.getPrimary() ?? agent, subject: agent.agent.role.id, via,
+    });
+  }
+
+  /**
+   * Remove an agent and its children, aborting any task loop they run. Not
+   * gated: for an agent the caller spawned itself and has finished with
+   * (delegate_task, a workflow delegation, shutdown). Anything stopping an
+   * agent on someone's behalf goes through `terminateAgent`.
+   */
+  reapAgent(agentId: string): void {
     const agent = this.hierarchy.getAgent(agentId);
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`);
@@ -531,7 +583,13 @@ export class AgentOrchestrator {
     // Recursively terminate children first
     const children = this.hierarchy.getChildren(agentId);
     for (const child of children) {
-      this.terminateAgent(child.id);
+      this.reapAgent(child.id);
+    }
+
+    try {
+      this.taskCanceller?.(agentId);
+    } catch (err) {
+      console.warn(`[Orchestrator] could not cancel the tasks of ${agentId}:`, err instanceof Error ? err.message : err);
     }
 
     // Terminate this agent
@@ -1987,6 +2045,33 @@ export class AgentOrchestrator {
     if (gate.confirm === 'always') {
       logAudit('denied', false);
       return `[BLOCKED] ${name} needs the user's confirmation in the dashboard and cannot be started from a voice session. Tell the user what you wanted to do and ask them to confirm it there.`;
+    }
+
+    // 2c. Stopping an agent is never auto-approved by a voice session
+    // (#963): voice may stop one only through a card, which the person clicks
+    // (terminate_agent is destructive, so the card cannot be approved by voice
+    // either). Raised here, deferred, so the audio loop does not block.
+    if (gate.categories.includes('terminate_agent') && primary) {
+      // Only a real sub-agent, and only the canonical stop call: a card for an
+      // invented id, or carrying extra keys, would be noise on every approval
+      // surface (and defeat the dedupe of a card already waiting).
+      const target = typeof args.agent_id === 'string' ? this.getAgent(args.agent_id) : undefined;
+      if (name !== 'manage_agents' || !target || target.id === primary.id) {
+        logAudit('denied', false);
+        return `Error: there is no background agent "${String(args.agent_id ?? '')}" to stop.`;
+      }
+      const toolArguments = { action: 'terminate', agent_id: target.id,
+        ...(typeof args.task_id === 'string' ? { task_id: args.task_id } : {}) };
+      try {
+        // askLifecycleApproval writes the audit row, whichever way it goes.
+        const card = askLifecycleApproval(this.lifecycleDeps(), {
+          action: 'terminate_agent', actor: primary, subject: target.agent.role.id,
+          via: { toolName: name, toolArguments },
+        });
+        return `[AWAITING_APPROVAL] Request #${card.id.slice(0, 8)} submitted. Stopping an agent needs the user to click the approval card in the dashboard; it keeps running until they do. Tell them that.`;
+      } catch (err) {
+        return `[AUTHORITY DENIED] Cannot execute ${name}: ${err instanceof Error ? err.message : String(err)}`;
+      }
     }
 
     // 3. Authority check — hard denies enforced; approval auto-granted.

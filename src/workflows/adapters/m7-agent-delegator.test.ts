@@ -71,7 +71,7 @@ function makeOrchestratorStub(opts: {
         getMessages: () => [],
       };
     },
-    terminateAgent: (id: string) => {
+    reapAgent: (id: string) => {
       calls.terminate.push(id);
     },
   };

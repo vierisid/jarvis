@@ -135,7 +135,7 @@ export async function startPersistentAgent(deps: AgentToolDeps, request: Persist
     // left behind (a cap race, or Pause landing between spawn and launch).
     agentRegistries.delete(spawned.agent.id);
     try {
-      deps.orchestrator.terminateAgent(spawned.agent.id);
+      deps.orchestrator.reapAgent(spawned.agent.id);
     } catch { /* the original error is the one to report */ }
     throw err;
   }
@@ -251,7 +251,7 @@ export function listPersistentAgents(deps: AgentToolDeps) {
   };
 }
 
-export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string) {
+export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string, opts: { taskId?: string } = {}) {
   if (!agentId) throw new HttpError(400, '"agentId" is required');
 
   if (deps.orchestrator.getPrimary()?.id === agentId) {
@@ -265,17 +265,52 @@ export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string) {
   }
 
   const name = agent.agent.role.name;
+  const runningTasks = deps.taskManager.listTasks({ status: 'running' }).filter((t) => t.agentId === agentId);
+  // A stop asked about a task (the voice "cancel the amber one", or a card
+  // raised while one was running) is a stop of THAT task. If it has ended
+  // since, the agent may be on a task the person never saw: nothing is stopped.
+  if (opts.taskId !== undefined) {
+    const pinned = deps.taskManager.getTask(opts.taskId);
+    if (!pinned || pinned.agentId !== agentId) {
+      throw new HttpError(404, `Task "${opts.taskId}" is not ${name}'s.`);
+    }
+    if (pinned.status !== 'running') {
+      throw new HttpError(409, `${name}'s task "${forCard(pinned.task, 80)}" is no longer running; nothing was stopped.`);
+    }
+  }
+  const taskId = opts.taskId ?? runningTasks[0]?.id;
+  // Gated at the sink (orchestrator.terminateAgent, #963): a stop that needs
+  // approval raises a card for this call and throws AgentLifecycleRefusal, and
+  // the agent and its registry stay as they are until the card is approved.
+  // When it goes ahead the agent's running task loop is aborted, not left
+  // calling the model behind a removed record.
+  deps.orchestrator.terminateAgent(agentId, { via: stopCall(agentId, taskId) });
   agentRegistries.delete(agentId);
-  deps.orchestrator.terminateAgent(agentId);
 
   console.log(`[ManageAgents] Terminated ${name} (${agentId})`);
 
   return {
     terminated: agentId,
     name,
-    message: `${name} terminated.`,
+    stopped_tasks: runningTasks.length,
+    // "Asked to stop", not "cancelled": a tool call already running finishes
+    // first, and the task shows as cancelled once its loop has returned.
+    message: runningTasks.length > 0 ? `${name} removed; its running task was asked to stop.` : `${name} terminated.`,
   };
 }
+
+/**
+ * The registered call that redoes a stop once approved: what its card runs.
+ * `taskId` pins the task the stop is about, so a card approved after that task
+ * ended cannot stop the agent's next one.
+ */
+export function stopCall(agentId: string, taskId?: string) {
+  return { toolName: 'manage_agents',
+    toolArguments: { action: 'terminate', agent_id: agentId, ...(taskId ? { task_id: taskId } : {}) } };
+}
+
+/** What a stop card names: the agent's role and the task it would cancel. */
+export type AgentLookup = (agentId: string, taskId?: string) => { name: string; task: string | null } | null;
 
 /**
  * The card sentence for the calls that start work (#932 review). A spawn card
@@ -284,7 +319,7 @@ export function terminatePersistentAgent(deps: AgentToolDeps, agentId: string) {
  * executor refuses a run whose recomputed sentence differs from the approved
  * one. Values quoted with their quotes escaped, the free-text task last.
  */
-export function manageAgentsGate(params: Record<string, unknown>): ToolGate | null {
+export function manageAgentsGate(params: Record<string, unknown>, lookup?: AgentLookup): ToolGate | null {
   const quoted = (v: unknown, max?: number) => JSON.stringify(forCard(v, max));
   const task = typeof params.task === 'string' && params.task.trim() ? params.task : null;
   const context = typeof params.context === 'string' && params.context.trim() ? params.context : null;
@@ -292,6 +327,19 @@ export function manageAgentsGate(params: Record<string, unknown>): ToolGate | nu
   if (params.action === 'spawn') {
     const who = `Start a ${forCard(params.specialist, 60) || 'specialist'} background agent`;
     return { actionCategory: 'spawn_agent', intent: task ? `${who}${withContext} on the task ${quoted(task)}` : who };
+  }
+  if (params.action === 'terminate') {
+    // Stopping work is `terminate_agent` (#963), not the spawn_agent the tool
+    // maps to statically. It needs level 9; `above_level` turns a shortfall
+    // into a card, the same answer the stop sink gives on every other path.
+    // Named by role and task, read live: the sentence then changes when the
+    // agent or its task does, and the approval executor refuses a card whose
+    // sentence changed after it was approved.
+    const id = typeof params.agent_id === 'string' ? params.agent_id : '';
+    const seen = lookup?.(id, typeof params.task_id === 'string' ? params.task_id : undefined) ?? null;
+    const who = seen ? `the ${forCard(seen.name, 60)} background agent` : `background agent ${forCard(id, 60)}`;
+    return { actionCategory: 'terminate_agent', confirm: 'above_level',
+      intent: seen?.task ? `Stop ${who} and cancel its task ${quoted(seen.task, 300)}` : `Stop ${who}` };
   }
   if (params.action === 'assign' && task) {
     return { actionCategory: 'spawn_agent',
@@ -314,14 +362,20 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
       '  status    — Check agent or task status',
       '  collect   — Get full result of a completed task',
       '  list      — Show all active agents and tasks',
-      '  terminate — Shut down an agent',
+      '  terminate — Stop an agent: cancels its running task and removes it (may need the user\'s approval)',
       '',
       'Available specialists: ' + Array.from(deps.specialists.keys()).join(', '),
       '',
       'Workflow: spawn → assign → status/collect → terminate',
     ].join('\n'),
     category: 'delegation',
-    authorityGate: manageAgentsGate,
+    authorityGate: (params) => manageAgentsGate(params, (agentId, taskId) => {
+      const agent = deps.orchestrator.getAgent(agentId);
+      if (!agent) return null;
+      const task = taskId ? deps.taskManager.getTask(taskId) : deps.taskManager.listTasks({ status: 'running' })
+        .find((t) => t.agentId === agentId);
+      return { name: agent.agent.role.name, task: task && task.agentId === agentId ? task.task : null };
+    }),
     parameters: {
       action: {
         type: 'string',
@@ -340,7 +394,7 @@ export function createManageAgentsTool(deps: AgentToolDeps): ToolDefinition {
       },
       task_id: {
         type: 'string',
-        description: 'Task ID (for status, collect)',
+        description: 'Task ID (for status, collect; for terminate, stop only if this task is still running)',
         required: false,
       },
       task: {
@@ -489,7 +543,8 @@ function handleList(deps: AgentToolDeps): string {
 
 function handleTerminate(deps: AgentToolDeps, params: Record<string, unknown>): string {
   try {
-    return JSON.stringify(terminatePersistentAgent(deps, params.agent_id as string));
+    return JSON.stringify(terminatePersistentAgent(deps, params.agent_id as string,
+      typeof params.task_id === 'string' ? { taskId: params.task_id } : {}));
   } catch (err) {
     return `Error: ${err instanceof Error ? err.message : String(err)}`;
   }

@@ -240,9 +240,9 @@ function error(message: string, status = 400): Response {
 }
 
 /**
- * A spawn or stop the lifecycle gate did not carry out (#932). Waiting on a
- * card is 202 with the request id, so the dashboard can say so instead of
- * reporting a spawned agent; a halted system is 409; a refusal is 403.
+ * A spawn or stop the lifecycle gate did not carry out (#932, #963). Waiting
+ * on a card is 202 with the request id, so the dashboard can say so instead of
+ * reporting a spawned or stopped agent; a halted system is 409; a refusal is 403.
  */
 function lifecycleRefusalResponse(err: AgentLifecycleRefusal): Response {
   if (err.kind === 'approval_required' && err.approvalId) {
@@ -892,6 +892,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             // all -- and it carries no success flag to word the message by.
             onTaskComplete: (task: AsyncTask) => {
               const ok = task.result?.success ?? false;
+              if (task.status === 'cancelled') {
+                ctx.wsService?.broadcastNotification(`**${task.agentName}'s task was stopped.**`, 'normal');
+                return;
+              }
               ctx.wsService?.broadcastNotification(
                 ok
                   ? `**${task.agentName} finished its task.** Open the Agents room to read the result.`
@@ -951,8 +955,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             specialists: ctx.agentService.getSpecialists(),
             taskManager,
           };
+          // Gated at the stop sink (#963): 202 with the card when stopping
+          // needs approval, and the agent keeps running until it is approved.
           return json(terminatePersistentAgent(deps, req.params.id));
         } catch (err) {
+          if (err instanceof AgentLifecycleRefusal) return lifecycleRefusalResponse(err);
           return errorFromException(err);
         }
       },

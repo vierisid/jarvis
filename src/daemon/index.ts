@@ -43,7 +43,7 @@ import { GoogleAuth } from "../integrations/google-auth.ts";
 import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
-import { startPersistentAgent } from "../actions/tools/agents.ts";
+import { startPersistentAgent, stopCall } from "../actions/tools/agents.ts";
 import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
@@ -108,7 +108,7 @@ import {
   logSafeLabel, MAX_POINT_COORD, PEBBLE_SCREEN_SPACE, pointingGuidance, pointTagRegex,
 } from "./pebble-point-prompt.ts";
 import {
-  backgroundRefusalReply, parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
+  backgroundRefusalReply, cancelCardReply, cancelRefusalReply, parseBackgroundTask, parseSettingsIntent, planInPanelAction, planSubPebbleClose, planWindowAction, tabSwitchReply,
   SUB_PEBBLE_COLORS, PEBBLE_ROOMS, exactRoomKey, findRoomKey, type PanelLookups, type SubPebbleCand,
 } from "./pebble-intents.ts";
 import { makeSpeakConfirmation } from "./pebble-confirmation.ts";
@@ -1911,10 +1911,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   state: 'working',
                 });
                 console.log(`[sub-pebble] spawn task=${task.id} agent=${task.agentName} slot=${slot}`);
-              } else if (event === 'complete' || event === 'fail') {
+              } else if (event === 'complete' || event === 'fail' || event === 'cancel') {
                 // Success turns the drop green (the brand "done" state) so the
                 // rail shows finished work at a glance; failures stop the pulse
-                // (idle) and recolor to vermilion so the user sees red.
+                // (idle) and recolor to vermilion so the user sees red. A
+                // cancelled task (#963) stops the pulse and keeps its colour:
+                // it was stopped on purpose, not failed.
                 await sidecarManager.dispatchRPC(sidecarId, 'sub_pebble.set_state', {
                   id: task.id, state: event === 'complete' ? 'done' : 'idle',
                 });
@@ -2790,8 +2792,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       //   "close the (research|legal|...) one|agent"   -> close by agent-name
       //                                                   substring match
       //   "dismiss / get rid of" -- same verbs
-      //   "cancel / kill" (or stop, abort, ...) -- never hides: closing only
-      //     removes the overlay, not the task, so these get told that (#934)
+      //   "cancel / kill" (or stop, abort, ...) -- never hides (#934): it
+      //     raises an approval card to stop the agent, and stops nothing
+      //     itself (#963)
       // A bare "this"/"that" or "agents" no longer counts (#926); see
       // planSubPebbleClose.
       // Returns true when handled (skips LLM).
@@ -2819,6 +2822,34 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!plan) return false;
         if (plan.kind === 'say') {
           await speakConfirmation(sidecarId, plan.text, ctrl);
+          return true;
+        }
+        if (plan.kind === 'cancel') {
+          // Voice may stop a background agent only through a card (#963):
+          // one per running agent, raised at the stop sink, and nothing is
+          // stopped or hidden here. The card runs the same governed stop the
+          // dashboard and the model use once the person clicks it.
+          const tm = agentService.getTaskManager();
+          const orchestrator = agentService.getOrchestrator();
+          // Distinct cards: asking twice answers with the card already waiting.
+          const raised = new Set<string>();
+          let refusal: unknown = null;
+          for (const cand of plan.cands) {
+            const agentId = tm?.getTask(cand.id)?.agentId;
+            if (!agentId || !orchestrator.getAgent(agentId)) continue;
+            try {
+              // Pinned to the task the person named, so a late click cannot
+              // stop whatever the agent is doing by then.
+              raised.add(orchestrator.requestTerminationApproval(agentId, stopCall(agentId, cand.id)).id);
+            } catch (err) {
+              console.warn(`[sub-pebble] could not ask to stop ${cand.id}:`, err);
+              refusal = err;
+            }
+          }
+          const reply = raised.size > 0
+            ? cancelCardReply(plan.label, raised.size) + (refusal ? ` ${cancelRefusalReply(refusal)}` : '')
+            : refusal ? cancelRefusalReply(refusal) : 'That background agent is no longer running.';
+          await speakConfirmation(sidecarId, reply, ctrl);
           return true;
         }
         if (!used) return false;
