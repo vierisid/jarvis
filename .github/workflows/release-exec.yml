@@ -705,12 +705,14 @@ jobs:
   # moment, so the two publishers have to come due together: publish-sidecar
   # and publish-brain wait for exactly the same jobs (sidecar-build and
   # pack-brain, and through them everything before), and release-exec.test.sh
-  # holds them to that. Not to the second, though: inside the publish call
-  # its resolve job runs first (8s on v0.16.0's run, plus a runner), so the
-  # sidecar request appears a few seconds after the brain one. Approve once
-  # both are listed as waiting, or the sidecar asks again. When the sidecar was one call, pack-brain and
-  # publish-brain waited for the whole of it, its publish included, so the
-  # second approval could not even be requested until the first was given.
+  # holds them to that. Inside the publish call nothing runs ahead of the
+  # gated job: its resolve is skipped and every other job needs resolve, so
+  # they all skip without a runner (release-exec.test.sh holds that too).
+  # Before that, resolve ran first, 8s on v0.16.0's run plus a runner, and
+  # the sidecar request came that much after the brain one. When the sidecar
+  # was one call, pack-brain and publish-brain waited for the whole of it,
+  # its publish included, so the second approval could not even be requested
+  # until the first was given.
   #
   # sidecar-build builds, signs and verifies, and publishes nothing; its
   # `digests` output carries the build jobs' sha256 outputs to the second
@@ -761,9 +763,10 @@ jobs:
   # that read them, the build legs, are skipped. The single call before #952
   # passed the same five to the same workflow, so nothing new can read them.
   #
-  # Its outputs (released, version, sums) are the ones github-release reads:
-  # this call's resolve decides whether it publishes, and its publish-sidecar
-  # records the digests of what it published.
+  # Its outputs (released, version, sums) are the ones github-release reads,
+  # all three set by its publish-sidecar job, which runs exactly when
+  # sidecar-build built (non-empty digests). The version comes from
+  # sidecar-build too, since this call runs no resolve of its own.
   publish-sidecar:
     needs: [validate-tag, sidecar-build, pack-brain]
     permissions:
@@ -780,6 +783,7 @@ jobs:
       dry_run: ${{ inputs.dry_run == true }}
       publish_only: true
       digests: ${{ needs.sidecar-build.outputs.digests }}
+      version: ${{ needs.sidecar-build.outputs.version }}
 
   # --- Build the brain tarball (no OIDC) ---
   # Split from publish-brain (#682). Everything that runs repository and
@@ -800,8 +804,13 @@ jobs:
   # publish-sidecar taking all five. A swap there is caught, not prevented:
   # each checks the bytes against the producing job's sha256 output (#781),
   # and github-release against publish-sidecar's sums (#682), job outputs no
-  # other job can set. A planted extra sidecar-* artifact fails publish-sidecar
-  # closed, and stays in the run, so recovery is a new run, not a re-run. publish-sidecar also waits for this
+  # other job can set. A planted extra sidecar-* artifact is never fetched by
+  # publish-sidecar, which downloads the five by exact name; github-release
+  # still takes sidecar-* by glob, where an extra one is harmless: its check
+  # covers the listed files and it packages fixed paths. One of the five
+  # replaced or deleted is still only caught: publish-sidecar then fails
+  # after the shared approval has released brain, and since the bad artifact
+  # stays in the run, recovery is a new run, not a re-run. publish-sidecar also waits for this
   # job, so nothing here is still running while it downloads. The timeout
   # bounds how long anything it starts can linger.
   pack-brain:
