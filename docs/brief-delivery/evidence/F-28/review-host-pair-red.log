@@ -1,0 +1,23 @@
+bun test v1.3.14 (0d9b296a)
+
+src/brief/release/activation.test.ts:
+105 |   expect(assessRelease(r, snapshot(), runtime).blockers).toContain('check_not_passed:hosted_pair');
+106 | });
+107 | test('changing the hosting revision cannot reuse evidence from the previous deployment pair', () => {
+108 |   const r = record(); r.hostingRevision = 'c'.repeat(40);
+109 |   expect(assessRelease(r, snapshot(), { ...runtime, hostingRevision: r.hostingRevision }).blockers)
+110 |     .toContain('check_not_passed:hosted_pair');
+           ^
+error: expect(received).toContain(expected)
+
+Expected to contain: "check_not_passed:hosted_pair"
+Received: []
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-f-28/src/brief/release/activation.test.ts:110:6)
+(fail) changing the hosting revision cannot reuse evidence from the previous deployment pair [1.94ms]
+
+ 0 pass
+ 46 filtered out
+ 1 fail
+ 1 expect() calls
+Ran 1 test across 1 file. [163.00ms]
