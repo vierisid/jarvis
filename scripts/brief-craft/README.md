@@ -1,5 +1,7 @@
 # Brief runtime craft verification (D32)
 
+With D33, isolated fixture URLs also require the existing `jarvis-devtools=1` localStorage setting before loading the page. The release switch is off by default; a preview URL alone does not enter fixtures in an ordinary production document. See `scripts/brief-release/README.md` for entry and rollback checks.
+
 This suite inventories **988 required cases**, independent of feature availability:
 
 - 19 room families × light/dark × expanded/rail × conversation closed/open × ready/long/empty/error: 608 cases.

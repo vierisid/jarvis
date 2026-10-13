@@ -1,0 +1,80 @@
+{
+  "checked_at": "2026-10-13T21:25:45Z",
+  "main": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+  "prs": [
+    {
+      "baseRefName": "brief/f-26",
+      "headRefName": "brief/f-27",
+      "headRefOid": "3797c4a1a843856e43fd7731a3baf6fbff5c9aae",
+      "mergedAt": null,
+      "number": 1002,
+      "state": "OPEN",
+      "title": "F-27: Reconcile Brief dashboard snapshots after missed events",
+      "url": "https://github.com/vierisid/jarvis/pull/1002"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-15",
+      "headRefOid": "42ecdc0e8ca34fbdb57c5535fa7f9b9e8249e6b4",
+      "mergedAt": null,
+      "number": 996,
+      "state": "OPEN",
+      "title": "[Q-15] Measure founder recall and scope named-person context",
+      "url": "https://github.com/vierisid/jarvis/pull/996"
+    },
+    {
+      "baseRefName": "brief/d-31",
+      "headRefName": "brief/d-32",
+      "headRefOid": "4c3b124401e2ae2007343a28ccde150b13d719f1",
+      "mergedAt": null,
+      "number": 995,
+      "state": "OPEN",
+      "title": "D32: Add runtime craft and accessibility verification harness",
+      "url": "https://github.com/vierisid/jarvis/pull/995"
+    },
+    {
+      "baseRefName": "brief/q-12",
+      "headRefName": "brief/q-14",
+      "headRefOid": "757fda03241fe23d7d1e6cee772cf30d9f71500c",
+      "mergedAt": null,
+      "number": 993,
+      "state": "OPEN",
+      "title": "[Q-14] Learn from proposal usefulness without repeat noise",
+      "url": "https://github.com/vierisid/jarvis/pull/993"
+    },
+    {
+      "baseRefName": "brief/q-11",
+      "headRefName": "brief/q-12",
+      "headRefOid": "a1c99ebca6994b7a3e2ae06adf3a1aea09bf2541",
+      "mergedAt": null,
+      "number": 977,
+      "state": "OPEN",
+      "title": "[Q-12] Ground opportunity candidates in current goal outcomes",
+      "url": "https://github.com/vierisid/jarvis/pull/977"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/q-11",
+      "headRefOid": "8ea4bc6d53d5884ca9ca51ff2cf8800ebb191874",
+      "mergedAt": null,
+      "number": 967,
+      "state": "OPEN",
+      "title": "[Q-11] Recognize routines from structured episode evidence",
+      "url": "https://github.com/vierisid/jarvis/pull/967"
+    },
+    {
+      "baseRefName": "main",
+      "headRefName": "brief/d-01",
+      "headRefOid": "2e9d829e415df803703cdd0ff39c46a40c7847c1",
+      "mergedAt": null,
+      "number": 701,
+      "state": "OPEN",
+      "title": "D-01: Add the opt-in Brief dashboard foundation",
+      "url": "https://github.com/vierisid/jarvis/pull/701"
+    }
+  ],
+  "F-28": "no PR found",
+  "Q-22": "no PR found",
+  "D-33": "no pre-existing PR found",
+  "D-32_exact_head_ci": "all active checks passed; conditional checks skipped"
+}

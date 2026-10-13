@@ -1,0 +1,89 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 2 required path(s) present in the npm tarball (2332 files).
+[pre-commit] Running 4 related test file(s) (180s timeout)...
+bun test v1.3.14 (0d9b296a)
+
+ui/src/brief/entry/release.test.ts:
+(pass) the shipped release has no activation or fabricated evidence [0.36ms]
+(pass) unknown and malformed manifest versions fail closed without throwing [0.17ms]
+(pass) D-32 must be passed live evidence for this integrated candidate [0.49ms]
+(pass) F-28 must be passed live evidence for this integrated candidate [0.29ms]
+(pass) Q-22 must be passed live evidence for this integrated candidate [0.08ms]
+(pass) missing and stale approval is not inferred from passed tests [0.29ms]
+(pass) invalid candidate, unknown runtime, fixture runtime and stale build cannot activate [0.23ms]
+(pass) brain, hosting, sidecar, schema and enabled flags match an exact tested combination [0.21ms]
+(pass) migration and rollback evidence are mandatory for every supported combination [0.31ms]
+(pass) supported hosted/local and browser/sidecar tuples require their own proof [0.16ms]
+
+ui/src/brief/entry/release-route.test.ts:
+(pass) cohort requires exact opt-in; released aliases still respect explicit opt-out [10.27ms]
+(pass) every direct room retains selected source IDs when approved and restores a usable parent when disabled [4.60ms]
+(pass) native panel, advanced, result and onboarding routes keep the legacy owner [0.99ms]
+(pass) developer previews are explicit and cannot alias foreground routes [0.13ms]
+(pass) pre-cutover F25 maintenance bookmarks and settings tab/device links preserve their owner [0.47ms]
+(pass) malformed URLs never become foreground aliases or rollback targets [0.36ms]
+
+ui/src/brief/entry/route.test.ts:
+(pass) the default and non-exact flag values keep the released dashboard [0.40ms]
+(pass) all existing sidecar and dashboard destinations retain their route owner [0.18ms]
+(pass) onboarding reset owns the page even when a Brief URL was bookmarked [0.07ms]
+(pass) fixture mode requires both its explicit flag and isolated destination [0.09ms]
+(pass) every registered destination resolves without requiring another room's module [0.37ms]
+(pass) unknown or malformed Brief destinations use the existing safe fallback [0.10ms]
+(pass) source identities roundtrip without inventing a record or retaining unknown query keys [0.10ms]
+(pass) rollback explicitly opts out and preserves connection parameters [0.09ms]
+
+ui/src/brief/entry/DashboardEntry.test.tsx:
+(pass) flag off and legacy hash navigation retain one legacy mount and its connection owner [42.19ms]
+(pass) every current room and sidecar panel still resolves through the released router [30.53ms]
+(pass) isolated preview owns no live connection, fetch or onboarding side effects [258.34ms]
+(pass) Today review and illustrative decision actions never call live providers [1950.36ms]
+(pass) real Brief entry remains behind the existing onboarding gate [4.07ms]
+(pass) shared-control specimen is isolated from live account and connection effects [113.01ms]
+(pass) motion specimen stays isolated and unmounts without live side effects [105.24ms]
+(pass) navigation review uses the production shell without live reads, sockets or account actions [116.83ms]
+(pass) missing modules give a truthful fallback instead of fabricated empty business data [59.18ms]
+(pass) Pebble review mounts one isolated conversation without live reads or writers [148.51ms]
+(pass) room modules preserve shell state and selected source IDs through navigation [59.05ms]
+(pass) navigation readiness loss and recovery preserve the mounted room and edited draft [170.43ms]
+(pass) a fixture view cannot accidentally supply live room business data [22.45ms]
+(pass) production default rejects opt-in bypass and restores the legacy parent before mounting [21.59ms]
+(pass) fixture preview URL cannot mount in the ordinary production document [12.65ms]
+(pass) a passed release record cannot bypass missing or unsafe composition: body [6.73ms]
+(pass) a passed release record cannot bypass missing or unsafe composition: navigation [7.17ms]
+(pass) a passed release record cannot bypass missing or unsafe composition: conversation [3.06ms]
+(pass) a passed release record cannot bypass missing or unsafe composition: fixture-navigation [1.71ms]
+(pass) a passed release record cannot bypass missing or unsafe composition: fixture-conversation [1.66ms]
+(pass) a passed release record cannot bypass missing or unsafe composition: loading-navigation [1.37ms]
+(pass) approved cohort aliases foreground routes and retains exact selection through navigation [78.82ms]
+(pass) native sidecar panels still mount only their legacy owner under an approved release [18.79ms]
+(pass) old F25 maintenance links keep device settings reachable with a released default [8.28ms]
+(pass) approved entry still runs the existing onboarding gate, and explicit reset retains its owner [4.65ms]
+(pass) readiness and configuration updates do not discard an open draft; reload applies rollback [329.11ms]
+(pass) enabling a flag during a legacy session waits for reload instead of destroying legacy work [3.49ms]
+
+ 51 pass
+ 0 fail
+ 846 expect() calls
+Ran 51 tests across 4 files. [4.07s]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/d-33 6655313e] feat(brief): add reversible D33 release gate and route aliases
+ 15 files changed, 637 insertions(+), 10 deletions(-)
+ create mode 100644 scripts/brief-release/README.md
+ create mode 100644 scripts/brief-release/index.html
+ create mode 100644 scripts/brief-release/preview.css
+ create mode 100644 scripts/brief-release/preview.tsx
+ create mode 100644 scripts/brief-release/serve.ts
+ create mode 100644 ui/src/brief/entry/release-route.test.ts
+ create mode 100644 ui/src/brief/entry/release-route.ts
+ create mode 100644 ui/src/brief/entry/release.test-support.ts
+ create mode 100644 ui/src/brief/entry/release.test.ts
+ create mode 100644 ui/src/brief/entry/release.ts
