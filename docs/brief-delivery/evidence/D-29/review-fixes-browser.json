@@ -1,0 +1,99 @@
+{
+  "geometry": [
+    {
+      "height": 44,
+      "label": "Full name",
+      "tag": "INPUT"
+    },
+    {
+      "height": 44,
+      "label": "What should Jarvis call you?",
+      "tag": "TEXTAREA"
+    },
+    {
+      "height": 44,
+      "label": "Company",
+      "tag": "TEXTAREA"
+    },
+    {
+      "height": 44,
+      "label": "Role",
+      "tag": "TEXTAREA"
+    },
+    {
+      "height": 96,
+      "label": "What are you building?",
+      "tag": "TEXTAREA"
+    },
+    {
+      "height": 96,
+      "label": "How you like to work",
+      "tag": "TEXTAREA"
+    }
+  ],
+  "newline": {
+    "focused": true,
+    "height": 44,
+    "selectionStart": 10,
+    "tag": "TEXTAREA",
+    "value": "First lineSecond line"
+  },
+  "uncertain": {
+    "field": {
+      "invalid": "true",
+      "length": 4001,
+      "readOnly": false
+    },
+    "retryEnabled": false
+  },
+  "recovered": {
+    "company": "Recovery studio",
+    "projects": "Corrected project draft",
+    "status": ["Current profile loaded."]
+  },
+  "narrow": {
+    "documentWidth": 390,
+    "fields": [
+      {
+        "height": 44,
+        "label": "What should Jarvis call you?",
+        "width": 276
+      },
+      {
+        "height": 44,
+        "label": "Company",
+        "width": 276
+      },
+      {
+        "height": 44,
+        "label": "Role",
+        "width": 276
+      },
+      {
+        "height": 96,
+        "label": "What are you building?",
+        "width": 276
+      },
+      {
+        "height": 96,
+        "label": "How you like to work",
+        "width": 276
+      },
+      {
+        "height": 44,
+        "width": 133
+      }
+    ],
+    "height": 1000,
+    "width": 390
+  },
+  "console": [],
+  "postSaveStatus": [
+    "Save not confirmed. Retry checks current values before saving again."
+  ],
+  "timing_note": "Pending-save typing is verified deterministically in the controller/DOM regressions. Browser evidence verifies editable invalid drafts after uncertainty, correction, explicit retry, canonical refresh, focus and geometry.",
+  "desktop_screenshot_size": {
+    "width": 1440,
+    "height": 1100
+  }
+}

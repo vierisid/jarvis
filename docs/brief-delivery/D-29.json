@@ -1,0 +1,212 @@
+{
+  "step": "D-29",
+  "title": "Build the Profile form",
+  "date": "2026-10-13",
+  "status": "implemented_verified_not_activated",
+  "implementation_head": "76c543bc722c4957ef1c79a54a5acff58f3080eb",
+  "head": "The final evidence commit is the PR head; implementation_head identifies the tested code.",
+  "branch": "brief/d-29",
+  "target": "brief/d-28",
+  "base_sha": "f1c06c8ae572f32231281702d44e623bada1c93e",
+  "main_inspected": "75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0",
+  "github_recheck": {
+    "parent": "https://github.com/vierisid/jarvis/pull/947",
+    "state": "OPEN",
+    "parent_ci": "All active current-head checks passed; conditional jobs skipped.",
+    "duplicate_d29_prs": 0,
+    "evidence": "evidence/D-29/parent-recheck.json",
+    "base_decision": "Continue corrected, unmerged D28 in a dedicated worktree; owner main preserved. No standalone-main compatibility claim."
+  },
+  "source_pins": {
+    "F-23": {
+      "pr": "https://github.com/vierisid/jarvis/pull/945",
+      "head": "13beb76554514227e0fb2fa476e7cd78f5432053",
+      "state": "OPEN",
+      "ci": "All active current-head checks passed.",
+      "evidence": "evidence/D-29/f23-recheck.json"
+    },
+    "A20": "Existing settings user-profile owner, compared with F23 canonical contract; no second store.",
+    "roadmap_audit": "69211511c95355776c6c319c01e1df5acd3b8f1e"
+  },
+  "ownership": [
+    "ui/src/brief/account/profile/**",
+    "ui/src/brief/preview/FoundationPreview.tsx: isolated import and dispatch",
+    "scripts/check-d29-f23.ts: optional pinned cross-stack proof",
+    "src/util/model-exec-env.ts: classify the F23 non-secret feature setting used by the proof",
+    "docs/brief-delivery/D-29.* and evidence/D-29/**"
+  ],
+  "design_reference": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "81:2",
+    "profile": "392:3946",
+    "ui33_stable_forms": "864:2940",
+    "ui33_profile_verification": "864:12068",
+    "inspection": "Native Profile and UI33 Profile verification visually inspected in Chrome.",
+    "limits": "Not a pixel diff or full UI35 export. Sign-in sample identity intentionally not copied into canonical context."
+  },
+  "activation": {
+    "code_delivered": true,
+    "code_merged": false,
+    "release_enabled": false,
+    "production_registry_changed": false,
+    "capability_defaults_changed": false,
+    "real_account_writes": false,
+    "merge_prerequisite": "D-01",
+    "enable_after": ["F-23"],
+    "required_capabilities": ["profileSettings"],
+    "host_requirements": [
+      "Authenticated scope-bound transport and write permission; retire controller on logout, account/transport or permission replacement.",
+      "Same guardProfileNavigation port at shell and Profile; other routing calls controller.navigateAway and honors cancellation.",
+      "Live capability, scope and source must match. Verify combined production navigation and authenticated persistence before enabling."
+    ]
+  },
+  "implementation": [
+    "Six native fields mapped via F23 explicit contract; full name unavailable and account-owned, five assistant-context fields editable.",
+    "44px fields, 96px context areas, multiline legacy Role retained, reserved validation/status and Save/Saved/Retry width; stable secondary width and wrapped narrow actions.",
+    "Changed-field-only revision-bound PATCH, then acknowledgment plus fresh matching readback.",
+    "Dirty polls pin draft baseline; new edits during save survive. Stale reads retain drafts but block writes.",
+    "Explicit unknown-save retry reconciles only unchanged baseline or exact attempted values; corrections conflict, no automatic replay.",
+    "Cancel/discard/navigation modal with native Escape/focus, unload warning, scope cancellation and canonical account-menu return.",
+    "No backend, identity, Settings/Appearance, voice/check-in, registry, default gate or migration change."
+  ],
+  "field_mapping": {
+    "full_name": "account/unavailable",
+    "preferred_name": "preferred_name",
+    "company": "company",
+    "role": "work_role",
+    "projects": "current_projects",
+    "working_style": "communication_preferences"
+  },
+  "verification": [
+    {
+      "command": "D29_F23_ROOT=/path/to/pinned/f23 bun test ui/src/brief/account/profile",
+      "result": "pass",
+      "tests": 46,
+      "assertions": 216,
+      "evidence": "evidence/D-29/focused-tests.log"
+    },
+    {
+      "command": "D27_F22_SETUP_MODULE=/tmp/d27-f22-pin/ui/src/brief/connections/setup.ts D29_F23_ROOT=/path/to/pinned/f23 bun test ui/src/brief",
+      "result": "pass",
+      "tests": 868,
+      "skipped": 2,
+      "assertions": 6609,
+      "evidence": "evidence/D-29/brief-tests.log",
+      "note": "Before final CSS-only action wrapping and one added live-capability test. Final focused tests/hooks cover final code. Existing optional F07/F08 skips; actual pinned F22 export enabled."
+    },
+    {
+      "command": "D29_F23_ROOT=/path/to/pinned/f23 bun run scripts/check-d29-f23.ts",
+      "result": "pass",
+      "evidence": "evidence/D-29/f23-integration.log",
+      "proof": "Actual route handlers, temporary SQLite/secrets, five edits, multiline/clear, hidden answers/interview, restart, CAS conflict, idempotent lost-ack retry, atomic failure/retry, disabled provider. Script excludes inherited hook Git metadata during its pin checks."
+    },
+    {
+      "command": "bunx tsc --noEmit",
+      "result": "pass",
+      "evidence": "evidence/D-29/typecheck.log"
+    },
+    {
+      "command": "bun run build:ui",
+      "result": "pass",
+      "evidence": "evidence/D-29/build.log",
+      "warnings": "Existing @theme/@tailwind warnings."
+    },
+    {
+      "command": "bunx prettier --check ui/src/brief/account/profile scripts/check-d29-f23.ts docs/brief-delivery/D-29.md docs/brief-delivery/D-29.json",
+      "result": "pass",
+      "evidence": "evidence/D-29/format-check.log"
+    },
+    {
+      "command": "git diff --cached --check",
+      "result": "pass"
+    }
+  ],
+  "commit_hooks": {
+    "result": "pass",
+    "evidence": "evidence/D-29/code-hooks.log",
+    "note": "Normal license, migrations, templates, package, related tests and TypeScript. Initial integration pin check saw inherited Git hook metadata; corrected within proof script and normal hooks rerun. No bypass or coauthor trailers."
+  },
+  "browser": {
+    "result": "pass_with_recorded_limits",
+    "method": "CUA Chromium locators, native modal and read-only DOM geometry",
+    "evidence": "evidence/D-29/browser-checks.json",
+    "layouts": 8,
+    "layout_size": "1440x1100",
+    "additional_widths": [800, 390, 320],
+    "console": "No warning/error entries observed in final preview.",
+    "final_css": "Narrow action wrap and reserved Cancel/Reload width verified after rebuild at 320/390; earlier desktop matrix retained.",
+    "screenshots": [
+      "evidence/D-29/confirmed-save.png",
+      "evidence/D-29/conflict-800.png",
+      "evidence/D-29/dark-expanded-chat-closed.png",
+      "evidence/D-29/dark-expanded-chat-open.png",
+      "evidence/D-29/dark-rail-chat-closed.png",
+      "evidence/D-29/dark-rail-chat-open.png",
+      "evidence/D-29/failed-save.png",
+      "evidence/D-29/final-profile.png",
+      "evidence/D-29/light-expanded-chat-closed.png",
+      "evidence/D-29/light-expanded-chat-open.png",
+      "evidence/D-29/light-rail-chat-closed.png",
+      "evidence/D-29/light-rail-chat-open.png",
+      "evidence/D-29/read-only-stale-390.png",
+      "evidence/D-29/saved-320.png",
+      "evidence/D-29/unsaved-navigation.png",
+      "evidence/D-29/validation.png"
+    ]
+  },
+  "not_run": [
+    "Combined production authenticated host/session and all navigation entry points",
+    "Production activation or real user data mutation",
+    "Physical touch, screen reader, native OS reduced-motion setting or other browser",
+    "Pixel diff and complete UI35 export",
+    "Whole repository suite locally; PR CI reported separately"
+  ],
+  "preview": {
+    "command": "D25_PREVIEW_PORT=4419 bun run scripts/preview-brief-memory.ts",
+    "url": "http://127.0.0.1:4419/?brief=preview&specimen=profile#/_brief_preview",
+    "isolation": "Loopback static server rejecting APIs, in-memory synthetic values reset on browser reload."
+  },
+  "rollback": "Remove optional Profile registration or restore existing profile settings surface. Revert card commits; no migration or data rollback.",
+  "next_card": "D-30 not started",
+  "private_progress": "Kept outside product repository; shared Drive roadmap unchanged.",
+  "review_corrections": {
+    "date": "2026-10-13",
+    "pr": "https://github.com/vierisid/jarvis/pull/948",
+    "findings_fixed": 4,
+    "new_regression_cases": 8,
+    "fixes": [
+      "Classify F23 setting without feature activation.",
+      "Confirmed Cancel supersedes pending polling; failed discard reads retain drafts.",
+      "Uncertain drafts remain editable and keep required reconciliation, including validation and return-to-base edits.",
+      "Stable textarea elements retain focus and selection when removing legacy newlines; 44px/96px geometry unchanged."
+    ],
+    "focused_tests": {
+      "passed": 74,
+      "assertions": 482,
+      "includes": "D29 actual pinned F23 integration and environment policy"
+    },
+    "brief_tests": {
+      "passed": 877,
+      "skipped": 2,
+      "assertions": 6679,
+      "note": "Before final validation-message simplification, covered by final focused tests/hooks."
+    },
+    "normal_hooks": {
+      "passed": true,
+      "tests": 73,
+      "typecheck": "pass"
+    },
+    "build": "pass, existing at-rule warnings",
+    "browser": "Focus/selection, editable invalid drafts after uncertainty, correction/retry, canonical refresh, desktop and 390px geometry; no console warnings/errors observed.",
+    "evidence": [
+      "review-fixes-tests.log",
+      "review-fixes-brief-tests.log",
+      "review-fixes-hooks.log",
+      "review-fixes-build.log",
+      "review-fixes-browser.json",
+      "review-fixes-desktop.png",
+      "review-fixes-390.png"
+    ],
+    "ci": "See current PR checks; no whole repository suite run locally."
+  }
+}
