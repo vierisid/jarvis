@@ -1,0 +1,10 @@
+{
+  "phase": "Candidate frozen after 93 targeted tests and TypeScript passed, before first heldout execution. No runtime ranking changes will be tuned on heldout results.",
+  "corpus_freeze_commit": "ba05abdd",
+  "baseline": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+  "files": {
+    "src/vault/recall-ranking.ts": "e15b0631f6fcc4ddc95bd55d99117c2cabf117b804dc39d8efe0160244035def",
+    "src/vault/recall-ranking.test.ts": "f0b9bc97a065cadf3f330a0d80d9aa78685c84562120d9105c995961cb4117d5",
+    "src/vault/evaluation/founder-recall.test.ts": "fda0d518d5980566c687dbf316db8214bcd4693a435e4e76a8ac8012b6a1d68e"
+  }
+}

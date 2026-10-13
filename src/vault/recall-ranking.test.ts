@@ -36,6 +36,44 @@ test('partial names match whole Unicode tokens without matching substrings', () 
   expect(recallTerms('отчёт')).toContain('отчет');
 });
 
+test('full person names scope individual facts while retaining direct references and requested task subjects', () => {
+  const mira = createEntity('person', 'Mira Solis');
+  const nina = createEntity('person', 'Nina Solis');
+  const project = createEntity('project', 'Cobalt Studio');
+  repository.createFact(mira.id, 'email', 'mira@example.test');
+  repository.createFact(nina.id, 'email', 'nina@example.test');
+  repository.createFact(nina.id, 'meeting', 'Mira Solis attends the launch review');
+  repository.createFact(project.id, 'meeting', 'Review the launch checklist');
+  const context = getKnowledgeForMessage('Mira Solis email meeting Cobalt Studio');
+  expect(context).toContain('mira@example.test');
+  expect(context).toContain('Mira Solis attends');
+  expect(context).toContain('Review the launch checklist');
+  expect(context).not.toContain('nina@example.test');
+  expect(context).toContain('Additional memory omitted');
+});
+
+test('full person scoping does not combine name tokens from multiple named people', () => {
+  for (const name of ['Mira Lake', 'Evan Solis', 'Mira Solis']) {
+    repository.createFact(createEntity('person', name).id, 'email', `${name.replace(' ', '-')}@example.test`);
+  }
+  const context = getKnowledgeForMessage('Mira Lake and Evan Solis email');
+  expect(context).toContain('Mira-Lake@example.test');
+  expect(context).toContain('Evan-Solis@example.test');
+  expect(context).not.toContain('Mira-Solis@example.test');
+});
+
+test('explicit aliases retain qualification alongside a fully named person', () => {
+  repository.createFact(createEntity('person', 'Mira Solis').id, 'meeting', 'Prepare the agenda');
+  const nina = createEntity('person', 'Nina Solis');
+  repository.createFact(nina.id, 'alias', 'delivery lead', { source: 'llm_extraction' });
+  repository.createFact(nina.id, 'meeting', 'Review milestones');
+  const context = getKnowledgeForMessage('Mira Solis and delivery lead meeting');
+  expect(context).toContain('Prepare the agenda');
+  expect(context).toContain('Review milestones');
+  expect(context).toContain('alias: delivery lead');
+  expect(context).toContain('"basis":"inferred"');
+});
+
 test('unrelated self requests abstain but explicit self overview still works', () => {
   saveUserProfile({ preferred_name: 'Sofia', interests: 'Cooking' });
   expect(getKnowledgeForMessage('Help me solve quantum physics')).toBe('');

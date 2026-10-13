@@ -1,0 +1,163 @@
+{
+  "matchedObservations": 36,
+  "baseline": {
+    "cases": 12,
+    "observations": 36,
+    "passingObservations": 24,
+    "casePass": {
+      "numerator": 8,
+      "denominator": 12,
+      "rate": 0.6666666666666666,
+      "wilson95": [
+        0.3906175873976139,
+        0.8618821601026385
+      ]
+    },
+    "relevantFactInclusion": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "precision": {
+      "numerator": 12,
+      "denominator": 16,
+      "rate": 0.75,
+      "wilson95": [
+        0.5050123107060135,
+        0.8981809801576265
+      ]
+    },
+    "qualificationRetention": {
+      "numerator": 16,
+      "denominator": 16,
+      "rate": 1,
+      "wilson95": [
+        0.8063865817272802,
+        1
+      ]
+    },
+    "bindingAccuracy": {
+      "numerator": 6,
+      "denominator": 6,
+      "rate": 1,
+      "wilson95": [
+        0.6096569663469354,
+        0.9999999999999999
+      ]
+    },
+    "stableCases": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "wrongPersonFacts": 4,
+    "tokenBudget": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "tokens": {
+      "p50": 303,
+      "p95": 626,
+      "max": 626
+    },
+    "latencyMs": {
+      "p50": 1.2499240000001919,
+      "p95": 13.146389
+    }
+  },
+  "candidate": {
+    "cases": 12,
+    "observations": 36,
+    "passingObservations": 36,
+    "casePass": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "relevantFactInclusion": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "precision": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "qualificationRetention": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "bindingAccuracy": {
+      "numerator": 6,
+      "denominator": 6,
+      "rate": 1,
+      "wilson95": [
+        0.6096569663469354,
+        0.9999999999999999
+      ]
+    },
+    "stableCases": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "wrongPersonFacts": 0,
+    "tokenBudget": {
+      "numerator": 12,
+      "denominator": 12,
+      "rate": 1,
+      "wilson95": [
+        0.7574992425007574,
+        1
+      ]
+    },
+    "tokens": {
+      "p50": 282,
+      "p95": 440,
+      "max": 440
+    },
+    "latencyMs": {
+      "p50": 0.5402880000000323,
+      "p95": 3.8601230000000157
+    }
+  },
+  "improvedObservations": 12,
+  "regressions": [],
+  "safetyFailures": [],
+  "pass": true
+}

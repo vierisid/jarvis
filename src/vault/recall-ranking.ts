@@ -58,6 +58,12 @@ function mentioned(label: string, query: Set<string>, normalized: string): boole
     || tokens.every(token => query.has(token));
 }
 
+// Person scoping needs the whole name in order, including initials/stopwords.
+// A bag of tokens would mistake "Mira Lake and Evan Solis" for "Mira Solis".
+function phrase(text: string): string {
+  return ` ${normalizeRecallText(text).match(/[\p{L}\p{N}]+/gu)?.join(' ') ?? ''} `;
+}
+
 export type RecallFactDependency = { factId: string; requiredFactIds: string[] };
 export type RankedEntity = { entity: Entity; facts: RecallFact[]; matchedAliasIds: string[];
   factDependencies: RecallFactDependency[]; score: number;
@@ -102,6 +108,9 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
   const selfOverview = isRecallSelfOverview(message);
   if (!query.size && !selfOverview) return [];
   const normalized = normalizeRecallText(message);
+  const queryPhrase = phrase(message);
+  const namedPeople = entities.filter(entity => entity.type === 'person'
+    && phrase(entity.name).trim().split(' ').length > 1 && queryPhrase.includes(phrase(entity.name)));
   const current = facts.filter(fact => isCurrentRecallFact(fact, at));
   // Superseded and out-of-period rows never reach the prompt, but they are still
   // records this subject has: the block has to admit it is not the whole ledger.
@@ -135,6 +144,7 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
     }
   }
   const results: RankedEntity[] = [];
+  let scopedOut = false;
   for (const entity of entities) {
     const entityDocs = grouped.get(entity.id) ?? [];
     const aliasMatches = entityDocs.filter(doc => ['alias', 'username', 'preferred_name', 'name'].includes(doc.fact.predicate_key ?? doc.fact.predicate)
@@ -149,8 +159,19 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
     ]);
     const taskTerms = new Set([...query].filter(term => !anchorTerms.has(term)));
     const ownProfile = selfQuery && entity.id === user?.id;
+    // A shared first/last name or generic task word is not a reference to a
+    // different person. Keep explicitly requested aliases and direct references
+    // to the named person; filter per fact so one reference cannot admit the
+    // other person's unrelated contact details. Non-person task subjects retain
+    // their existing relevance ranking.
+    const scopePerson = namedPeople.length > 0 && entity.type === 'person'
+      && !queryPhrase.includes(phrase(entity.name)) && !ownProfile
+      && !aliasMatches.some(doc => queryPhrase.includes(phrase(doc.fact.object)));
+    const eligibleDocs = scopePerson ? entityDocs.filter(doc => namedPeople.some(person =>
+      [doc.fact.predicate, doc.fact.object, doc.fact.scope ?? ''].some(text => phrase(text).includes(phrase(person.name))))) : entityDocs;
+    if (scopePerson && (eligibleDocs.length < entityDocs.length || nameMatch)) scopedOut = true;
     const matchedTerms = new Set<string>();
-    const scored = entityDocs.map(doc => {
+    const scored = eligibleDocs.map(doc => {
       let match = 0, taskMatch = 0;
       // Walk the record's own terms rather than the query. Scoring stays linear
       // in stored text, so a pasted document cannot stall the synchronous
@@ -177,7 +198,8 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
       || (a.fact.scope ?? '').localeCompare(b.fact.scope ?? '') || a.fact.id.localeCompare(b.fact.id);
     scored.sort(compare);
     const primary = hasTaskMatch ? scored.filter(doc => doc.taskMatch > 0 || doc.alias) : scored;
-    const score = primary[0]?.score ?? (fullNameMatch || aliasMatches.length || (ownProfile && selfOverview) ? 12 : 8 * nameCoverage);
+    const score = primary[0]?.score ?? (scopePerson ? 0
+      : fullNameMatch || aliasMatches.length || (ownProfile && selfOverview) ? 12 : 8 * nameCoverage);
     if (score > 0) {
       // C8 supplies the conflict state and canonical predicate. A lexical hit on
       // an old inferred value must retain the confirmed answer, even if that
@@ -221,6 +243,6 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
   const anchors = new Set(top != null && !top.taskMatch ? top.anchorTerms.filter(identifies) : []);
   const kept = results.filter(result => result.score >= floor
     || (result !== top && result.matchedTerms.some(term => anchors.has(term))));
-  if (kept.length < results.length && kept[0]) kept[0].omitted = true;
+  if ((scopedOut || kept.length < results.length) && kept[0]) kept[0].omitted = true;
   return kept;
 }
