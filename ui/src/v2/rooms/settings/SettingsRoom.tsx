@@ -30,7 +30,7 @@ import { SidecarTab } from "./tabs/SidecarTab";
 import { BillingTab } from "./tabs/BillingTab";
 import { useBilling } from "../../billing/useBilling";
 import { billingTabVisible } from "../../billing/billing-view";
-import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab } from "../../shell/settings-tab-request";
+import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab, settingsTabFromHref } from "../../shell/settings-tab-request";
 import "./SettingsRoom.css";
 
 export type SettingsTab =
@@ -66,13 +66,20 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useEffect(() => {
     const onRequest = (e: Event) => {
       const t = (e as CustomEvent<SettingsTab>).detail;
-      if (VALID_TABS.has(t)) {
-        takeRequestedSettingsTab(); // An already-mounted room consumed this request too.
-        setTab(t);
-      }
+      if (VALID_TABS.has(t)) setTab(t);
+    };
+    const onLocation = () => {
+      const t = settingsTabFromHref(window.location.href);
+      if (t) setTab(t);
     };
     window.addEventListener(SETTINGS_TAB_EVENT, onRequest);
-    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onRequest);
+    window.addEventListener("popstate", onLocation);
+    window.addEventListener("hashchange", onLocation);
+    return () => {
+      window.removeEventListener(SETTINGS_TAB_EVENT, onRequest);
+      window.removeEventListener("popstate", onLocation);
+      window.removeEventListener("hashchange", onLocation);
+    };
   }, []);
   // A self-hosted install has no bill, so it gets no Billing tab. Same shared
   // store as the shell banner, and refreshOnMount: false so opening Settings

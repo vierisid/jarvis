@@ -1,7 +1,7 @@
 import { briefHash } from "../entry/route";
 import type { NavigationHost } from "./controller";
 import { targetHref } from "./destinations";
-import { requestSettingsTab } from "../../v2/shell/settings-tab-request";
+import { clearRequestedSettingsTab, requestSettingsTab } from "../../v2/shell/settings-tab-request";
 
 export interface BrowserNavigationOptions extends Omit<NavigationHost, "commit"> {
   /** Must reveal the canonical item or throw. Merely opening chat is not successful routing. */
@@ -24,6 +24,7 @@ export function browserNavigationHost(options: BrowserNavigationOptions): Naviga
       // Stay in this module lifetime: queued canonical room actions must survive
       // a Brief -> legacy handoff. Both routers subscribe, but only one root mounts.
       const oldURL = window.location.href;
+      clearRequestedSettingsTab();
       window.history.pushState(null, "", next);
       if (target.kind === "legacy" && target.settingsTab) requestSettingsTab(target.settingsTab);
       window.dispatchEvent(new PopStateEvent("popstate"));

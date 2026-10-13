@@ -11,6 +11,9 @@ export const SETTINGS_TAB_EVENT = "jarvis:settings-tab";
 
 let pending: SettingsTab | null = null;
 
+/** An explicit compatibility navigation replaces any older ephemeral request. */
+export function clearRequestedSettingsTab(): void { pending = null; }
+
 export function requestSettingsTab(tab: SettingsTab): void {
   pending = tab;
   if (typeof window !== "undefined") {
