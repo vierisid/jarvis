@@ -28,8 +28,9 @@ import {
   type GoalStatus,
 } from "./useGoalsData";
 import "./GoalsRoom.css";
+import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
 
-type TabId = "constellation" | "timeline" | "metrics";
+type TabId = RoomTab<"goals">;
 
 const TAB_LABEL: Record<TabId, string> = {
   constellation: "Constellation",
@@ -108,8 +109,8 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useRoomActions("goals", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const t = String(args.tab);
-        if (t === "constellation" || t === "timeline" || t === "metrics") {
+        const t = args.tab;
+        if (isRoomTab("goals", t)) {
           setActiveTab(t);
           return true;
         }

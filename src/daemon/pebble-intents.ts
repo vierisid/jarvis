@@ -24,11 +24,15 @@
  * spoken refusal is allowed only once the intent is certain, because then it
  * is the honest answer to what the user asked.
  *
- * NO IMPORTS. The room table lives here so the planners and the daemon
+ * NO IMPORTS beyond room-tabs.ts and room-action-results.ts, both
+ * import-free. The room table lives here so the planners and the daemon
  * resolve the same names; the daemon passes in what is live (open panels,
  * running agents), so every decision can be tested without standing the
  * daemon up. The closures in `src/daemon/index.ts` only carry the plan out.
  */
+
+import { ROOM_TABS, roomTabs, type RoomTab, type TabbedRoom } from './room-tabs.ts';
+import type { RoomActionOutcome } from './room-action-results.ts';
 
 /**
  * Words that may come before a command without making it part of a sentence:
@@ -133,6 +137,8 @@ export type PanelRef = { id: string; key: string; title: string };
 export type PanelLookups = {
   /** The open panel a hint names, or the most recent one when there is no hint. */
   findPanel: (hint?: string) => PanelRef | null;
+  /** Every open panel, most recent first. */
+  openPanels: () => PanelRef[];
   /**
    * The display title of the room this phrase IS ("workflows", "agent strip"),
    * open or not; null when it is anything else. Exact, not a search: "chrome
@@ -166,31 +172,42 @@ function missingRoom(room: string | undefined, lookups: PanelLookups): SayPlan |
 // ---------------------------------------------------------------------------
 
 /**
- * Recognized tab synonyms across the dashboard rooms. Match is STRICT -- a
- * captured tab name that is not here falls through to the model. Without it,
- * "open Gmail on a new Chrome tab window" parsed as `switch_tab` with
- * tab="gmail_on_a_new_chrome", because the pattern captures anything that
- * ends with "... tab".
+ * What each room's tabs are called aloud, built from ROOM_TABS so a spoken
+ * tab can only ever name one the room's `switch_tab` handler accepts (#933).
+ * Every tab answers to its own name; the extras are the tab labels people
+ * read off the screen ("Command Center", "Agent Builder"). The table used to
+ * be one flat list of `editor`, `list`, `logs`, `tts` and others that no room
+ * had, so a switch to them was announced and nothing moved.
+ *
+ * Match is STRICT -- a phrase that is not here falls through to the model.
+ * Without that, "open Gmail on a new Chrome tab window" parsed as a tab
+ * switch to "gmail_on_a_new_chrome".
  */
-const TAB_SYNONYMS: Record<string, string> = {
-  editor: 'editor',
-  edit: 'editor',
-  'edit view': 'editor',
-  builder: 'builder',
-  'agent builder': 'agent_builder',
-  list: 'list',
-  all: 'list',
-  logs: 'logs',
-  history: 'logs',
-  settings: 'settings',
-  general: 'general',
-  tts: 'tts',
-  stt: 'stt',
-  voice: 'voice',
-  llm: 'llm',
-  tools: 'tools',
-  channels: 'channels',
+const TAB_LABELS: { [R in TabbedRoom]?: Record<string, RoomTab<R>> } = {
+  agents: { 'command center': 'command', 'agent builder': 'builder' },
 };
+
+export const SPOKEN_TABS: { [R in TabbedRoom]: Readonly<Record<string, RoomTab<R>>> } = Object.fromEntries(
+  (Object.keys(ROOM_TABS) as TabbedRoom[]).map((room) => [
+    room,
+    {
+      ...Object.fromEntries(ROOM_TABS[room].map((tab) => [tab, tab])),
+      ...TAB_LABELS[room],
+    },
+  ]),
+) as { [R in TabbedRoom]: Record<string, RoomTab<R>> };
+
+/** The tab of `room` this phrase names, or null when the room has no such tab. */
+export function spokenTab(room: string, phrase: string): string | null {
+  if (!Object.prototype.hasOwnProperty.call(SPOKEN_TABS, room)) return null;
+  const table = SPOKEN_TABS[room as TabbedRoom] as Readonly<Record<string, string>>;
+  return Object.prototype.hasOwnProperty.call(table, phrase) ? table[phrase]! : null;
+}
+
+/** Whether some room has a tab this phrase names. */
+function isSpokenTabAnywhere(phrase: string): boolean {
+  return Object.keys(SPOKEN_TABS).some((room) => spokenTab(room, phrase) !== null);
+}
 
 export type InPanelPlan =
   | { kind: 'switch_tab'; target: PanelRef; tab: string; tabRaw: string; roomHint?: string }
@@ -221,18 +238,51 @@ export function planInPanelAction(text: string, lookups: PanelLookups): InPanelP
   // of that test, having just been checked to be a room.
   const outsideHint = m[2] ? t.slice(0, m.index + m[0].length - m[2].length) + t.slice(m.index + m[0].length) : t;
   if (/\b(chrome|firefox|edge|safari|browser|gmail|google|mail|youtube|github|window)\b/i.test(outsideHint)) return null;
-  // A "tab" that is a room's own name is the room: "open the settings page"
-  // means Settings. No room takes "settings", "tools" or "logs" as a tab, so
-  // treating them as one switched nothing and said it had.
-  if (lookups.roomTitle(tabRaw)) return null;
-  const tab = TAB_SYNONYMS[tabRaw];
-  if (!tab) return null;
 
-  const target = lookups.findPanel(roomHint);
-  if (target) return { kind: 'switch_tab', target, tab, tabRaw, roomHint };
-  // Nothing to navigate. Only a room named outright earns an answer; without
-  // one the turn goes on to the model.
-  return missingRoom(roomHint, lookups);
+  if (roomHint) {
+    // A room named outright: that panel, and its tabs only.
+    const target = lookups.findPanel(roomHint);
+    if (!target) return isSpokenTabAnywhere(tabRaw) ? missingRoom(roomHint, lookups) : null;
+    const tab = spokenTab(target.key, tabRaw);
+    if (tab) return { kind: 'switch_tab', target, tab, tabRaw, roomHint };
+    // Only a phrase that is some room's tab is certainly a tab. "the telegram
+    // section of settings" or "the failed runs section of workflows" is a
+    // place inside a room, and the model can say where it is.
+    if (!isSpokenTabAnywhere(tabRaw)) return null;
+    // The room and the tab are both certain and the room lacks it: that is
+    // the answer. Workflows, Logs and the rest have no tabs at all.
+    return {
+      kind: 'say',
+      text: roomTabs(target.key)
+        ? `${target.title} doesn't have a ${tabRaw} tab.`
+        : `${target.title} doesn't have tabs I can switch.`,
+    };
+  }
+
+  // No room named: the most recent open panel that has this tab. Only open
+  // panels are candidates, so nothing here opens a room or names one that is
+  // not open.
+  const target = lookups.openPanels().find((p) => spokenTab(p.key, tabRaw) !== null);
+  if (target) return { kind: 'switch_tab', target, tab: spokenTab(target.key, tabRaw)!, tabRaw };
+  // Nothing open has it. "open the settings page" is the room, and the room
+  // opener (or the model) takes it; anything else goes to the model too.
+  return null;
+}
+
+/**
+ * What to say once the room has answered (#933). Only an accepted switch is
+ * announced as done; the daemon used to say "Switched X to Y." before any
+ * room had looked at it.
+ */
+export function tabSwitchReply(title: string, tabRaw: string, outcome: RoomActionOutcome): string {
+  switch (outcome) {
+    case 'accepted':
+      return `Switched ${title} to ${tabRaw}.`;
+    case 'rejected':
+      return `${title} didn't switch to ${tabRaw}.`;
+    case 'no_answer':
+      return `I asked ${title} to switch to ${tabRaw}, but it didn't answer.`;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -335,7 +385,8 @@ export function planWindowAction(text: string, lookups: PanelLookups): WindowPla
 // Closing background agents (sub-pebbles)
 // ---------------------------------------------------------------------------
 
-export type SubPebbleCand = { id: string; slot: number; color: string; agentName: string };
+/** A background agent's overlay. `running` is its task's state: hiding the overlay does not change it. */
+export type SubPebbleCand = { id: string; slot: number; color: string; agentName: string; running: boolean };
 
 export const SUB_PEBBLE_COLORS = ['amber', 'sage', 'violet', 'mustard', 'teal', 'vermilion'] as const;
 
@@ -349,16 +400,69 @@ const RESERVED_HINTS = new Set([
   'newest', 'latest', 'last', 'recent', 'current', 'running', 'other', 'first', 'oldest', 'old',
 ]);
 
+/**
+ * Words that ask for the work to stop, not for the overlay to go away (#934).
+ * Closing a sub-pebble only hides it; the task behind it keeps running, and
+ * nothing here can stop it. So none of these may reach a hide: "cancel the
+ * background agent" used to hide it and answer "Closed the ... background
+ * agent." while it carried on.
+ */
+const CANCEL_WORD =
+  /\b(?:cancel\w*|kill\w*|stop(?:s|ped|ping)?|abort\w*|terminat\w*|halt\w*|quit|nuke|scrap|put an end to|for good|permanently|shut(?:ting)?\s+(?:(?:it|them)\s+)?down|end(?:s|ed|ing)?\s+(?:it|them|the\s+(?:task|agent|job|work)))\b/;
+
+/**
+ * A cancel word the user negated asks for nothing to stop: "close it, don't
+ * stop it" and "close it without killing it" mean hide. Removed before the
+ * test above, so they hide as asked.
+ */
+const NEGATED_CANCEL = new RegExp(
+  `\\b(?:don'?t|do not|without|but not|never|no need to)\\s+(?:\\w+\\s+)?${CANCEL_WORD.source.replace(/^\\b/, '')}`,
+  'g',
+);
+
+function asksToStop(text: string): boolean {
+  return CANCEL_WORD.test(text.toLowerCase().replace(NEGATED_CANCEL, ' '));
+}
+
+/** What JARVIS says when asked to stop a background agent it can only hide. */
+export const CANNOT_STOP_AGENT =
+  "I can't stop a background agent by voice. Closing it only hides it, and it keeps running.";
+
+/**
+ * `reply` is what to say once the overlay is gone. It says "Hid", and whether
+ * the task is still running, because that is all closing does. `label` and
+ * `count` are not spoken; they stay for the log and the tests.
+ */
 export type SubPebbleClosePlan =
-  | { kind: 'close_all'; count: number }
-  | { kind: 'close_one'; cand: SubPebbleCand; label: string }
+  | { kind: 'close_all'; count: number; reply: string }
+  | { kind: 'close_one'; cand: SubPebbleCand; label: string; reply: string }
   | SayPlan;
+
+function stillRunning(running: number, total: number): string {
+  if (running === 0) return '';
+  if (running === total) return total === 1 ? " It's still running." : " They're still running.";
+  return ` ${running} of them ${running === 1 ? 'is' : 'are'} still running.`;
+}
+
+function hideOne(cand: SubPebbleCand, label: string): SubPebbleClosePlan {
+  return { kind: 'close_one', cand, label, reply: `Hid the ${label} background agent.${stillRunning(cand.running ? 1 : 0, 1)}` };
+}
 
 /**
  * `cands` is null when the slot table is empty for this pebble, and the live
  * candidates otherwise (possibly none, when every slot's task is gone).
  */
 export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[] | null): SubPebbleClosePlan | null {
+  const plan = planSubPebbleTarget(text, cands);
+  // Asked to stop it: hiding it would be doing something else and calling it
+  // done. A plan that is already an answer ("there's no amber one") stands.
+  if (plan && plan.kind !== 'say' && asksToStop(text)) {
+    return { kind: 'say', text: CANNOT_STOP_AGENT };
+  }
+  return plan;
+}
+
+function planSubPebbleTarget(text: string, cands: readonly SubPebbleCand[] | null): SubPebbleClosePlan | null {
   const t = text.toLowerCase().trim();
   if (!/\b(close|dismiss|kill|get rid of|cancel)\b/.test(t)) return null;
 
@@ -371,7 +475,13 @@ export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[]
   const live = cands ?? [];
 
   if (named && /\b(all|every|everything)\b/.test(t) && live.length > 0) {
-    return { kind: 'close_all', count: live.length };
+    const n = live.length;
+    const running = live.filter((c) => c.running).length;
+    return {
+      kind: 'close_all',
+      count: n,
+      reply: `Hid ${n === 1 ? 'the background agent' : `all ${n} background agents`}.${stillRunning(running, n)}`,
+    };
   }
 
   // "close the amber one". A colour that is running is certain; a colour
@@ -380,7 +490,7 @@ export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[]
   const colour = new RegExp(`\\b(${SUB_PEBBLE_COLORS.join('|')})\\s+${AGENT_NOUN}\\b`).exec(t);
   if (colour) {
     const match = live.find((c) => c.color === colour[1]);
-    if (match) return { kind: 'close_one', cand: match, label: colour[1]! };
+    if (match) return hideOne(match, colour[1]!);
     return named ? { kind: 'say', text: `There's no ${colour[1]} background agent running.` } : null;
   }
 
@@ -389,7 +499,7 @@ export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[]
   if (m && m[1] && !RESERVED_HINTS.has(m[1])) {
     const hint = m[1];
     const match = live.find((c) => c.agentName.toLowerCase().includes(hint));
-    if (match) return { kind: 'close_one', cand: match, label: match.agentName.toLowerCase() };
+    if (match) return hideOne(match, match.agentName.toLowerCase());
     if (named) return { kind: 'say', text: `There's no ${hint} background agent running.` };
     return null;
   }
@@ -399,7 +509,7 @@ export function planSubPebbleClose(text: string, cands: readonly SubPebbleCand[]
   if (cands === null) return { kind: 'say', text: 'There are no background agents running.' };
   if (cands.length === 0) return { kind: 'say', text: 'There are no background agents to close.' };
   const newest = cands.slice().sort((a, b) => b.slot - a.slot)[0]!;
-  return { kind: 'close_one', cand: newest, label: 'most recent' };
+  return hideOne(newest, 'most recent');
 }
 
 // ---------------------------------------------------------------------------

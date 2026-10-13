@@ -54,6 +54,7 @@ import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../
 import { runWithOrigin } from '../llm/origin.ts';
 import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
 import type { FileEntry } from '../sites/types.ts';
+import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
 
 type VoiceSession = {
   requestId: string;
@@ -379,6 +380,8 @@ export class WebSocketService implements Service {
    * cap survives restarts. See realtime-budget.ts.
    */
   private realtimeBudget: RealtimeBudgetTracker | null = null;
+  /** Room actions waiting on a panel to say whether it ran them (#933). */
+  private roomActionResults = new RoomActionResults();
   /**
    * Phase B — per-WS onboarding interview sessions. Created on
    * `interview_start`, torn down on disconnect or after the agent
@@ -1186,6 +1189,14 @@ export class WebSocketService implements Service {
       case 'interview_listen_stop': {
         // No interview capture exists to stop. In particular, do not disarm
         // a normal Pebble conversation because a stale client sent this.
+        return undefined;
+      }
+
+      case 'room_action_result': {
+        // A panel's answer to requestRoomAction. Malformed or unknown ids are
+        // dropped inside answer(); nothing is sent back either way.
+        const p = msg.payload as { resultId?: unknown; accepted?: unknown } | undefined;
+        this.roomActionResults.answer(p?.resultId, p?.accepted);
         return undefined;
       }
 
@@ -2806,6 +2817,33 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       },
       timestamp: Date.now(),
     });
+  }
+
+  /**
+   * Broadcast a room action and wait for a panel to say whether its room ran
+   * it (#933). Resolves `accepted` or `rejected` on the first answer, and
+   * `no_answer` when none comes: no panel of that room connected, or one that
+   * never mounted the room. Only native panels answer.
+   */
+  requestRoomAction(
+    action: { room: string; action: string; args?: Record<string, unknown> },
+    timeoutMs: number = ROOM_ACTION_QUEUE_TTL_MS,
+  ): Promise<RoomActionOutcome> {
+    const { id, outcome } = this.roomActionResults.open(timeoutMs);
+    const reached = this.wsServer.broadcastWithReceipt({
+      type: 'notification',
+      payload: {
+        source: 'room_action',
+        room: action.room,
+        action: action.action,
+        args: action.args ?? {},
+        resultId: id,
+      },
+      timestamp: Date.now(),
+    });
+    // Nobody connected to answer: say so now rather than after the timeout.
+    if (reached === 0) this.roomActionResults.abandon(id);
+    return outcome;
   }
 
   /**

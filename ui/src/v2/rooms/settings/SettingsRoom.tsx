@@ -31,28 +31,26 @@ import { BillingTab } from "./tabs/BillingTab";
 import { useBilling } from "../../billing/useBilling";
 import { billingTabVisible } from "../../billing/billing-view";
 import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab } from "../../shell/settings-tab-request";
+import { isRoomTab, ROOM_TABS, type RoomTab } from "../../../../../src/daemon/room-tabs";
 import "./SettingsRoom.css";
 
-export type SettingsTab =
-  | "general"
-  | "profile"
-  | "llm"
-  | "channels"
-  | "voice"
-  | "integrations"
-  | "billing"
-  | "sidecar";
+export type SettingsTab = RoomTab<"settings">;
 
-const TABS: ReadonlyArray<{ key: SettingsTab; label: string; icon: LucideIcon }> = [
-  { key: "general", label: "General", icon: Cog },
-  { key: "profile", label: "Profile", icon: UserCircle2 },
-  { key: "llm", label: "LLM", icon: Bot },
-  { key: "channels", label: "Channels", icon: MessagesSquare },
-  { key: "voice", label: "Voice", icon: Mic },
-  { key: "integrations", label: "Integrations", icon: Cable },
-  { key: "billing", label: "Billing", icon: CreditCard },
-  { key: "sidecar", label: "Sidecar", icon: Server },
-];
+// Keyed by every tab in ROOM_TABS.settings, so a tab added there without a
+// label and icon here does not type-check (#933).
+const TAB_META: Record<SettingsTab, { label: string; icon: LucideIcon }> = {
+  general: { label: "General", icon: Cog },
+  profile: { label: "Profile", icon: UserCircle2 },
+  llm: { label: "LLM", icon: Bot },
+  channels: { label: "Channels", icon: MessagesSquare },
+  voice: { label: "Voice", icon: Mic },
+  integrations: { label: "Integrations", icon: Cable },
+  billing: { label: "Billing", icon: CreditCard },
+  sidecar: { label: "Sidecar", icon: Server },
+};
+
+const TABS: ReadonlyArray<{ key: SettingsTab; label: string; icon: LucideIcon }> =
+  ROOM_TABS.settings.map((key) => ({ key, ...TAB_META[key] }));
 
 const VALID_TABS = new Set<SettingsTab>(TABS.map((t) => t.key));
 
@@ -127,9 +125,9 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useRoomActions("settings", (action, args) => {
     switch (action) {
       case "switch_tab": {
-        const t = String(args.tab);
-        if (VALID_TABS.has(t as SettingsTab) && (showBilling || t !== "billing")) {
-          setTab(t as SettingsTab);
+        const t = args.tab;
+        if (isRoomTab("settings", t) && (showBilling || t !== "billing")) {
+          setTab(t);
           return true;
         }
         return false;
