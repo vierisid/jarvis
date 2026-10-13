@@ -10,13 +10,22 @@ export async function inspect(tab, room) {
     const root = document.querySelector(".brief-root");
     const roomElement = main?.querySelector(selector);
     const visible = element => {
-      if (element.closest('[inert], [aria-hidden="true"]')) return false;
+      if (!element || element.closest('[inert], [aria-hidden="true"]')) return false;
       for (let node = element; node; node = node.parentElement) {
         const style = getComputedStyle(node);
-        if (style.display === "none" || style.visibility === "hidden") return false;
+        if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
       }
-      return element.getClientRects().length > 0;
+      const rect = element.getBoundingClientRect();
+      return rect.width > 0 && rect.height > 0;
     };
+    const bounds = element => {
+      const rect = element?.getBoundingClientRect();
+      return rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null;
+    };
+    const measure = element => ({ visible: visible(element), bounds: bounds(element) });
+    const pebble = navigation?.querySelector("[data-pebble-layout]");
+    const surface = pebble?.querySelector(".brief-pebble-surface");
+    const composers = surface?.querySelectorAll(".brief-pebble-content textarea") ?? [];
     const name = element => {
       const ids = element.getAttribute("aria-labelledby");
       if (ids) return ids.split(/\s+/).map(id => document.getElementById(id)?.textContent ?? "").join(" ").trim();
@@ -25,7 +34,8 @@ export async function inspect(tab, room) {
     const controls = [...(navigation?.querySelectorAll('button, a[href], input:not([type="hidden"]), select, textarea, [role="button"], [role="tab"]') ?? [])].filter(visible);
     const unnamed = controls.filter(element => !name(element)).map(element => ({ tag: element.tagName, class: element.className }));
     const selected = [...(main?.querySelectorAll('[aria-selected="true"], [aria-pressed="true"], [aria-current], [data-fact-id], [data-run-id]') ?? [])].map(element => ({ tag: element.tagName, name: name(element), factId: element.getAttribute("data-fact-id"), runId: element.getAttribute("data-run-id") }));
-    const rect = roomElement?.getBoundingClientRect();
+    const workflowNodeIds = [...(roomElement?.querySelectorAll(".react-flow__node[data-id] .wf-node--selected") ?? [])]
+      .map(element => element.closest(".react-flow__node").getAttribute("data-id")).sort();
     const active = document.activeElement;
     return {
       room: main?.getAttribute("data-brief-room"), bodyPresent: !!roomElement,
@@ -33,18 +43,34 @@ export async function inspect(tab, room) {
       viewport: { width: innerWidth, height: innerHeight, devicePixelRatio },
       pageOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       mainOverflow: main ? main.scrollWidth - main.clientWidth : null,
-      roomBounds: rect ? { x: rect.x, y: rect.y, width: rect.width, height: rect.height } : null,
+      roomBounds: bounds(roomElement),
       roomVisible: !!roomElement && visible(roomElement),
-      pebbleLayout: document.querySelector("[data-pebble-layout]")?.getAttribute("data-pebble-layout"),
+      pebbleLayout: pebble?.getAttribute("data-pebble-layout"),
+      conversation: {
+        open: pebble?.getAttribute("data-pebble-open") === "true",
+        available: pebble?.getAttribute("data-pebble-available") === "true",
+        hostBounds: bounds(pebble), surface: measure(surface),
+        reading: measure(surface?.querySelector(".brief-pebble-reading")),
+        content: measure(surface?.querySelector(".brief-pebble-content")),
+        close: measure(surface?.querySelector('[aria-label="Close conversation"]')),
+        composer: measure(composers.length === 1 ? composers[0] : null),
+      },
       busy: [...(main?.querySelectorAll('[aria-busy="true"]') ?? [])].some(visible)
         || [...(main?.querySelectorAll('h1,h2,[role="status"]') ?? [])].some(element => visible(element) && /^Loading\b/.test(element.textContent?.trim() ?? "")),
       activeAnimations: Number(document.querySelector("[data-brief-craft]")?.getAttribute("data-active-animations") ?? -1),
-      controls: controls.length, unnamed, selected,
+      controls: controls.length, unnamed, selected, workflowNodeIds,
       focus: active ? { tag: active.tagName, name: name(active), visible: visible(active), inRoom: !!main?.contains(active) } : null,
       headings: [...(main?.querySelectorAll("h1,h2") ?? [])].filter(visible).map(element => element.textContent?.trim()),
       statuses: [...(main?.querySelectorAll('[role="status"], [role="alert"]') ?? [])].filter(visible).map(element => element.textContent?.trim()),
     };
   }, { selector: room.selector });
+}
+
+function containsBounds(outer, inner) {
+  const valid = rect => rect && [rect.x, rect.y, rect.width, rect.height].every(Number.isFinite) && rect.width > 0 && rect.height > 0;
+  // Allow border/subpixel rounding, never an offscreen or collapsed surface.
+  return valid(outer) && valid(inner) && inner.x >= outer.x - 2 && inner.y >= outer.y - 2
+    && inner.x + inner.width <= outer.x + outer.width + 2 && inner.y + inner.height <= outer.y + outer.height + 2;
 }
 
 export function layoutProblems(test, metrics) {
@@ -54,12 +80,41 @@ export function layoutProblems(test, metrics) {
   if (metrics.sidebar !== test.sidebar) errors.push("Wrong requested sidebar.");
   if (metrics.rail !== String(test.width < 700 || test.sidebar === "rail")) errors.push("Wrong effective sidebar.");
   if (metrics.chat !== String(test.chat)) errors.push("Wrong conversation state.");
+  const conversation = metrics.conversation;
+  if (!conversation || conversation.open !== test.chat) errors.push("Wrong rendered conversation state.");
+  if (test.chat) {
+    const viewport = { x: 0, y: 0, width: metrics.viewport.width, height: metrics.viewport.height };
+    if (!conversation?.available || !conversation.surface?.visible
+      || !containsBounds(viewport, conversation.surface?.bounds)
+      || !containsBounds(conversation.hostBounds, conversation.surface?.bounds)) errors.push("Conversation surface is missing, hidden, collapsed or outside the viewport/workspace.");
+    for (const part of ["reading", "content", "close", "composer"]) {
+      if (!conversation?.[part]?.visible || !containsBounds(conversation.surface?.bounds, conversation[part].bounds)) errors.push(`Conversation ${part} is missing, hidden, collapsed or clipped.`);
+    }
+  }
   if (metrics.viewport.width !== test.width) errors.push("Viewport was not applied.");
   if (metrics.busy || metrics.activeAnimations) errors.push("Room did not settle.");
   if (metrics.pageOverflow > 2 || metrics.mainOverflow > 2) errors.push("Horizontal clipping/overflow.");
   if (metrics.unnamed.length) errors.push("Interactive controls missing an accessible name.");
   if (!metrics.roomVisible && !(test.chat && metrics.pebbleLayout === "single")) errors.push("Room unexpectedly hidden.");
   return errors;
+}
+
+export function workflowSelectionProblems(expectedId, metrics) {
+  return expectedId && metrics.workflowNodeIds?.length === 1 && metrics.workflowNodeIds[0] === expectedId
+    ? [] : ["Selected workflow node was lost or changed."];
+}
+
+async function selectWorkflowNode(tab, room) {
+  // Select a non-trigger step through the same keyboard path as a user. Closing
+  // its settings retains the selection, so chat is exercised with a real ID.
+  const nodes = tab.playwright.locator(`${room.selector} .react-flow__node[data-id]`);
+  if (await nodes.count() < 2) throw Error("Expected a selectable workflow step beyond the trigger.");
+  const node = nodes.nth(1);
+  const id = await node.getAttribute("data-id");
+  if (!id) throw Error("Workflow step has no stable ID.");
+  await node.press("Enter");
+  await tab.playwright.getByRole("button", { name: "Close settings", exact: true }).click();
+  return id;
 }
 
 async function settle(tab, room) {
@@ -170,6 +225,9 @@ export async function runCases({ tab, viewport, baseUrl, cases, save, onResult =
         evidence.push(`${file}.focus.json`);
       }
       if (test.kind === "repeat-20") {
+        const workflowNodeId = room.id === "workflow" ? await selectWorkflowNode(tab, room) : null;
+        observation = await settle(tab, room);
+        if (room.id === "workflow" && workflowSelectionProblems(workflowNodeId, observation.metrics).length) throw Error("Workflow selection setup did not select the expected node.");
         const before = observation.metrics.selected;
         const cycles = [];
         const draft = "Keep this thought across twenty conversation cycles.";
@@ -183,17 +241,18 @@ export async function runCases({ tab, viewport, baseUrl, cases, save, onResult =
           await tab.playwright.getByRole("button", { name: "Close conversation", exact: true }).click();
           const closed = await settle(tab, room);
           const cycleProblems = [...layoutProblems({ ...test, chat: true }, open.metrics), ...layoutProblems(test, closed.metrics)];
+          if (room.id === "workflow") cycleProblems.push(...workflowSelectionProblems(workflowNodeId, open.metrics), ...workflowSelectionProblems(workflowNodeId, closed.metrics));
           if (JSON.stringify(before) !== JSON.stringify(closed.metrics.selected)) cycleProblems.push("Selection changed during conversation toggle.");
           if (retained !== draft) cycleProblems.push("Conversation draft was lost.");
           if (closed.metrics.focus?.name !== "Open conversation") cycleProblems.push("Conversation close lost return focus.");
-          cycles.push({ cycle: cycle + 1, problems: cycleProblems });
+          cycles.push({ cycle: cycle + 1, ...(workflowNodeId ? { workflowNodeId, openNodeIds: open.metrics.workflowNodeIds, closedNodeIds: closed.metrics.workflowNodeIds } : {}), problems: cycleProblems });
           problems.push(...cycleProblems.map(problem => `Cycle ${cycle + 1}: ${problem}`));
         }
         observation = await settle(tab, room);
         await tab.playwright.getByRole("button", { name: "Capture craft trace", exact: true }).click();
         const trace = JSON.parse(await tab.playwright.locator("[data-brief-craft-trace]").textContent());
         if (trace.backgrounded || trace.truncated || trace.activeAnimations || !trace.frames.length || trace.inputs.length < 40) problems.push("Performance trace is incomplete or not at rest.");
-        await save(`${file}.trace.json`, JSON.stringify({ ...trace, selectionBefore: before, selectionAfter: observation.metrics.selected, cycles }, null, 2));
+        await save(`${file}.trace.json`, JSON.stringify({ ...trace, selectionBefore: before, selectionAfter: observation.metrics.selected, workflowNodeId, cycles }, null, 2));
         evidence.push(`${file}.trace.json`);
       }
       await save(`${file}.json`, JSON.stringify({ test, ...observation.metrics, problems }, null, 2));
