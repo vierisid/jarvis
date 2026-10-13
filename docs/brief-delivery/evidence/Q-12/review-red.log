@@ -1,0 +1,38 @@
+bun test v1.4.2 (744846f84)
+
+src/awareness/goal-relevance.test.ts:
+13 | function current(goal: Goal, now: number): boolean {
+14 |   return goal.status === 'active' && goal.completed_at === null
+15 |     && Number.isSafeInteger(goal.updated_at) && goal.updated_at <= now
+16 |     && goal.updated_at >= now - GOAL_FRESHNESS_MS
+17 |     && (goal.deadline === null || Number.isSafeInteger(goal.deadline) && goal.deadline >= now)
+18 |     && goal.title.length <= 300 && goal.description.length <= 6000 && goal.success_criteria.length <= 300
+                                             ^
+TypeError: null is not an object (evaluating 'goal.description.length')
+      at current (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.ts:18:41)
+      at objectivePath (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.ts:28:52)
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.ts:73:18)
+      at rankOpportunityGoals (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.ts:72:25)
+      at fromRow (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/opportunities.ts:30:56)
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.test.ts:122:10)
+(fail) nullable legacy goal description cannot break assessment or reads [38.16ms]
+13 | function current(goal: Goal, now: number): boolean {
+14 |   return goal.status === 'active' && goal.completed_at === null
+15 |     && Number.isSafeInteger(goal.updated_at) && goal.updated_at <= now
+16 |     && goal.updated_at >= now - GOAL_FRESHNESS_MS
+17 |     && (goal.deadline === null || Number.isSafeInteger(goal.deadline) && goal.deadline >= now)
+18 |     && goal.title.length <= 300 && goal.description.length <= 6000 && goal.success_criteria.length <= 300
+                                                                                ^
+TypeError: null is not an object (evaluating 'goal.success_criteria.length')
+      at current (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.ts:18:76)
+      at objectivePath (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.ts:28:52)
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.ts:73:18)
+      at rankOpportunityGoals (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.ts:72:25)
+      at fromRow (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/opportunities.ts:30:56)
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.test.ts:122:10)
+(fail) nullable legacy goal success_criteria cannot break assessment or reads [16.40ms]
+
+ 0 pass
+ 12 filtered out
+ 2 fail
+Ran 2 tests across 1 file. [145.00ms]

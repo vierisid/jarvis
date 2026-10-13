@@ -1,0 +1,120 @@
+{
+  "task": "Q-12",
+  "title": "Ground opportunities in the right goal",
+  "date": "2026-10-13",
+  "branch": "brief/q-12",
+  "baseline": "8ea4bc6d53d5884ca9ca51ff2cf8800ebb191874",
+  "baseline_ref": "origin/brief/q-11",
+  "main_audit": "4aee7e6be06666ac434570d3fada6ba86da05a41",
+  "head": {
+    "implementation_sha": "0f390d96cdae86559631e142b835d83eaf7428b7",
+    "delivery_ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-12.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "release_enabled": false,
+    "publication": "one PR from brief/q-12 to brief/q-11; resolve with gh pr view brief/q-12 --json url",
+    "ci": "pending publication; inspect current PR head checks"
+  },
+  "worktree": "Dedicated .worktrees/jarvis-q-12, own frozen-lockfile dependencies and temporary/in-memory SQLite fixtures. Managed worktree creation was unavailable because the parent Projects folder is not a Git repository. Owner checkout preserved.",
+  "figma": {
+    "node": "81:3",
+    "applicability": "Service ranking card; no visible UI change or visual certification."
+  },
+  "merge_after": [
+    "Q-11 #967: chosen structured-evidence integration prerequisite"
+  ],
+  "enable_after": [],
+  "capability_gate": "Existing awareness enablement; no new activation flag, automatic goal link, score/progress write, workflow enablement or execution.",
+  "integration": [
+    "Source Q-12 card has no mandatory prerequisites. Current main and live all-state PRs were rechecked; no Q-12 PR existed. Q-11 #967 remains open at 8ea4bc6d with all applicable CI passed. Its structured evidence seam is deliberately reused, so this implementation is stacked on Q-11.",
+    "Fresh main 4aee7e6b adds catalog-license guards/tests and has no file overlap. A temporary uncommitted integration was tested; it is removed before delivery so this PR contains only Q-12 changes.",
+    "Pinned A06 job hypotheses and A09 goal application service were read. Canonical goal writers, manual confirmation, feedback, composition and delivery contracts are preserved.",
+    "F-09 #766 and Q-13 #737 were inspected for goal-candidate consumers; neither consumes candidate basis as execution authority. Q-11 still requires their documented three-kind constraint-map integration. No prepared lifecycle, qualification, UI or Q-14 learning changes are included."
+  ],
+  "acceptance": [
+    {
+      "check": "Current objective/path/outcome/evidence ranking",
+      "status": "passed_synthetic",
+      "evidence": "All six job families; nine candidate cases with causal contribution, declared objective path, required outcome and every role reference. Explicit criteria outrank title-only outcomes; supported descendants outrank ancestors."
+    },
+    {
+      "check": "Unrelated same words and stale/completed goals abstain",
+      "status": "passed",
+      "evidence": "Labeled research/negation/irrelevant-outcome cases; inactive status, expired deadline, 90-day updated_at heuristic, inactive/stale/missing/cyclic ancestor, legacy NULL text and bounded-input checks."
+    },
+    {
+      "check": "No-goal and competing-goal cases are truthful",
+      "status": "passed",
+      "evidence": "Fifteen expected abstentions, including competing business goals and one documented unsupported useful paraphrase. Ties never use app names, score or ID order to invent relevance."
+    },
+    {
+      "check": "No goal progress or automatic link mutation",
+      "status": "passed",
+      "evidence": "Real SQLite goal score/progress/event snapshots unchanged; explicit user-confirmed/no-goal feedback remains separate and idempotent."
+    },
+    {
+      "check": "Current reads and restart preserve history",
+      "status": "passed",
+      "evidence": "Renamed, paused, completed, deleted and newly competing goals reproject; persisted snapshots unchanged; old cue-only rows remain readable with no inferred link; restart and first-100-goal boundary exercised."
+    }
+  ],
+  "validation": [
+    {
+      "command": "bun install --frozen-lockfile",
+      "result": "passed, Bun 1.4.2"
+    },
+    {
+      "command": "bun test src/awareness src/vault/awareness.test.ts src/goals/application-service.test.ts",
+      "result": "173 passed, 0 failed, 705 assertions across 12 files"
+    },
+    {
+      "command": "bun run scripts/evaluate-goal-relevance.ts",
+      "result": "24/24 labeled policy checks; 9 candidate links, 15 abstentions, 1 explicit known useful paraphrase miss. Author-visible synthetic development data, not field accuracy."
+    },
+    {
+      "command": "bunx tsc --noEmit; git diff --check",
+      "result": "passed on Q-12 branch"
+    },
+    {
+      "command": "normal implementation commit hooks",
+      "result": "44 passed, 0 failed, 246 assertions across 3 files; all four repository guards and TypeScript passed; overlaps affected tests"
+    },
+    {
+      "command": "temporary integration with origin/main 4aee7e6b: affected suite plus catalog.test.ts, TypeScript and diff check",
+      "result": "208 passed, 0 failed, 8660 assertions across 13 files; TypeScript and diff check passed. Temporary integration removed before delivery."
+    }
+  ],
+  "review": {
+    "skill": "review-agent",
+    "mode": "read-only complete diff/callers, no delegation or independent human review claimed",
+    "finding": "P2: nullable legacy goal description/success_criteria could throw",
+    "resolution": "String guards make incomplete legacy text abstain; both pre-fix SQLite regressions fail in review-red.log and pass after correction. Corrected diff/callers: No findings."
+  },
+  "evidence": [
+    "evidence/Q-12/evaluation.json",
+    "evidence/Q-12/validation.log",
+    "evidence/Q-12/review-red.log",
+    "evidence/Q-12/review.txt",
+    "evidence/Q-12/commit-hooks.log",
+    "evidence/Q-12/main-integration.log"
+  ],
+  "manual_checks": [
+    {
+      "check": "Deployed runtime, native UI, independent human/blinded field or paid model evaluation",
+      "status": "not_run",
+      "reason": "Bounded service card tested with isolated synthetic fixtures; no real provider effects or paid evaluation required."
+    }
+  ],
+  "limitations": [
+    "Bounded English outcome vocabulary and lexical exclusions can miss useful paraphrases or fail to identify unmarked non-operational text. Development labels are author-visible; there is no independent human/field accuracy result.",
+    "90-day updated_at freshness is a conservative heuristic, not proof of user review. Long-lived useful goals, oversized criteria and nullable legacy data can abstain.",
+    "At the 1000-goal reader cap inferred relevance abstains, even for exactly 1000 goals.",
+    "Declared objective paths and routine evidence cannot verify account/customer ownership, causal business impact, completed work or workflow feasibility. Candidates always require confirmation.",
+    "Stored suggestion context remains a timestamped discovery snapshot; current inferred-relation consumers must use getOpportunity/listOpportunities. Existing composition ignores inferred candidates."
+  ],
+  "rollback": "Disable awareness for containment. Restore the prior versioned relevance seam while retaining Q-11 privacy/recurrence and current stale-goal filtering, or return no inferred goal candidates. Keep additive data, historical hypotheses, explicit confirmations and user work; never replay effects or alter scores.",
+  "quick_verification": "You can see this change in bun run scripts/evaluate-goal-relevance.ts, then inspect invoice-outcome-not-title-overlap, current-objective-path and competing-businesses. See docs/opportunity-goal-relevance.md."
+}

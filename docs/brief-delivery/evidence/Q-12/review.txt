@@ -1,0 +1,11 @@
+Q-12 review-agent review (read-only, no delegation)
+Base and merge base: Q-11 8ea4bc6d53d5884ca9ca51ff2cf8800ebb191874.
+Reviewed: complete changed runtime/types, fixture corpus/evaluator/tests, persisted opportunity reads, goal vault schema/application service, suggestion feedback/composition and delivery callers, and F-09/Q-13 candidate consumers.
+
+[P2] Tolerate nullable goal text from older vaults — src/awareness/goal-relevance.ts:18
+The schema permits NULL description/success_criteria. Accessing .length threw during assessment and opportunity reads. Reproduced against real in-memory SQLite; both nullable-field regressions failed before correction (review-red.log).
+
+Resolution: require string fields before evaluating a candidate. Incomplete legacy goal data abstains; no schema or goal writes were added. Both SQLite regressions pass, including pure ranking and persisted/list reads.
+Corrected diff and call paths reviewed: No findings.
+
+Residual limits: author-visible synthetic development fixtures, bounded English vocabulary and 90-day updated_at heuristic; no independent human/blinded field assessment. Declared objective paths and screen activity cannot establish real business contribution, verified progress or readiness. Current main's catalog-license change is unrelated; Q-11 is the deliberate stack prerequisite. No merged/deployed runtime certification.
