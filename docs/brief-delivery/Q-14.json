@@ -1,0 +1,102 @@
+{
+  "task": "Q-14",
+  "title": "Learn from proposal usefulness without becoming noisy",
+  "date": "2026-10-13",
+  "branch": "brief/q-14",
+  "baseline": "a1c99ebca6994b7a3e2ae06adf3a1aea09bf2541",
+  "baseline_ref": "origin/brief/q-12",
+  "main_audit": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+  "head": {
+    "implementation_sha": "3664bb92b774a4822c35c0c6a4b278829e5eb166",
+    "delivery_ref": "commit containing this receipt",
+    "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-14.json"
+  },
+  "status": {
+    "implementation": "verified locally",
+    "merge": "not_merged",
+    "release_enabled": false,
+    "publication": "one PR against brief/q-12; URL and exact-head CI recorded in the PR description after publication",
+    "ci": "pending publication; inspect checks on the current PR head"
+  },
+  "worktree": "Dedicated .worktrees/jarvis-q-14, own Bun 1.4.2 frozen-lockfile dependencies and isolated SQLite fixtures. Managed creation was unavailable because the parent Projects directory is not a Git repository; a dedicated Git worktree was used. Owner checkout preserved.",
+  "figma": {
+    "node": "81:3",
+    "url": "https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81:3",
+    "applicability": "Service suppression/ranking card, demonstrated by reproducible fixtures; no UI change or visual certification."
+  },
+  "merge_after": ["Q-12 #977: chosen current goal-relevance and Q-11 structured-evidence integration prerequisite"],
+  "enable_after": [],
+  "capability_gate": "Existing awareness enablement. No new flag, workflow activation/execution, goal link or score/progress mutation. F-11 continues to own quiet delivery enablement.",
+  "integration": [
+    "Live roadmap Q-14 and delivery contract rechecked, with pinned A06/A07/A05 sources. All-state PR inventory and explicit Q-14 title search found no existing Q-14 PR.",
+    "The source card declares no mandatory merge prerequisites. This implementation deliberately stacks on open Q-12 #977 at a1c99ebc, whose current head passed all applicable CI, to reuse current Q-11/Q-12 classification and goal ranking. Q-13 #737 remains a separate open card and is not required.",
+    "Current main 8a0da716 was temporarily merged without committing. All 190 affected tests, TypeScript and diff check passed, then the merge was aborted so delivery contains only Q-14.",
+    "F-09 #766 at 8614e886 and F-10 #770 at ad6cb75f expose optional prepared dismissal/acceptance timestamps. The actual F-10 schema was probed with an isolated database. Q-14 only reads its compatible four-column contract when present; full runtime integration is not claimed.",
+    "F-11 #772 at 5af1fce5 owns default-off quiet awareness delivery. Its scheduling, transport, UI and activation gates are unchanged. No next card is included."
+  ],
+  "acceptance": [
+    {
+      "check": "Explicit-source decisions and repeated-use evidence",
+      "status": "passed_synthetic",
+      "evidence": "Canonical suggestion/opportunity feedback, delivery and optional prepared decisions retain source references. Two distinct useful reports can boost related priority only after current goal evidence. Duplicate work references count once; conflicting or malformed outcomes remain unknown."
+    },
+    {
+      "check": "Dismiss, restart and re-detect preserve suppression",
+      "status": "passed",
+      "evidence": "Real disk restart preserves dismissal and absolute cooldown expiry. Renamed titles/apps and forged pattern keys cannot republish the same routine; publication rechecks durable feedback transactionally after assessment."
+    },
+    {
+      "check": "Materially changed job and bounded cooldown",
+      "status": "passed_bounded_scope",
+      "evidence": "Weekly-to-monthly report change becomes eligible exactly at the seven-day dismissal boundary. Same routine remains durably deduplicated. Mixed/ambiguous cadence abstains; historical unknown cadence conservatively overlaps all report cadences. Other material changes are unsupported."
+    },
+    {
+      "check": "Quality, rejection and reappearance reporting",
+      "status": "passed",
+      "evidence": "Metrics expose useful-result numerator/denominator/null rate, source-qualified rejection reasons, same-identity reappearance errors, missing outcome counts and invalid/conflicting/undated records. Existing metrics remain compatible."
+    },
+    {
+      "check": "Clicks cannot become usefulness, savings or goal progress",
+      "status": "passed",
+      "evidence": "Interest and acceptance alone retain zero reported uses, null usefulness rate and measured time saved, zero verified results, unchanged goal data and empty progress history. Acceptance affects frequency only."
+    },
+    {
+      "check": "Older writer compatibility",
+      "status": "passed_after_review_correction",
+      "evidence": "The first scoped report retains the old family storage key, while immutable cadence supports semantic distinction. A failing regression before this correction is retained in compatibility-red.log. No migration or historical rewrite."
+    }
+  ],
+  "validation": [
+    { "command": "bun install --frozen-lockfile", "result": "passed with Bun 1.4.2" },
+    { "command": "bun test src/awareness src/vault/awareness.test.ts src/goals/application-service.test.ts", "result": "190 passed, 0 failed, 763 assertions across 13 files, including 16 Q-14 tests" },
+    { "command": "bun run scripts/evaluate-proposal-feedback.ts", "result": "18/18 labeled synthetic policy cases; corpus hash and expected/actual values in evaluation.json" },
+    { "command": "bunx tsc --noEmit; git diff --check", "result": "passed on Q-14 branch" },
+    { "command": "normal implementation commit hooks", "result": "46 passed, 0 failed, 226 assertions across 3 files; all four repository guards and TypeScript passed; overlaps affected tests" },
+    { "command": "temporary merge of origin/main 8a0da716, then affected suite, TypeScript and diff check", "result": "190 passed, 0 failed, 763 assertions; TypeScript and diff check passed; temporary integration removed" },
+    { "command": "isolated Bun/SQLite probe using ensurePreparedSchema from origin/brief/f-10", "result": "Actual prepared schema accepts the four-column dismissal/acceptance read. Acceptance supplies no useful-result evidence. Projection-only check, not full runtime integration." }
+  ],
+  "review": {
+    "skill": "review-agent",
+    "mode": "read-only complete merge-base diff, callers, canonical writers and tests; no delegated or independent human review claimed",
+    "resolved": "P2 older-writer report identity compatibility regression; failing test preserved, correction passes",
+    "final_result": "No findings."
+  },
+  "evidence": [
+    "evidence/Q-14/affected.log",
+    "evidence/Q-14/evaluation.json",
+    "evidence/Q-14/compatibility-red.log",
+    "evidence/Q-14/commit-hooks.log",
+    "evidence/Q-14/main-integration.log",
+    "evidence/Q-14/prepared-storage.log",
+    "evidence/Q-14/review.txt"
+  ],
+  "limitations": [
+    "Author-visible synthetic fixtures are policy checks, not blinded/field accuracy or proof of business impact. No production deployment, native UI capture or paid provider evaluation ran.",
+    "Material identity changes are limited to allowlisted English daily/weekly/monthly report cadence. Other useful changes can remain suppressed; legacy unknown cadence intentionally suppresses all report variants.",
+    "Priority uses related-family user reports, not verified results or proof a new proposal is useful. Decisions and delivery are not outcomes; missing feedback remains explicit.",
+    "Feedback metrics read the full retained census; large-database performance has not been benchmarked. Undated legacy flags cannot establish cooldown timing or dated reappearance errors.",
+    "Optional F-09/F-10 prepared decision storage is read-compatible, but the complete prepared runtime stack was not combined or enabled. F-11 delivery remains separately gated."
+  ],
+  "rollback": "Disable existing awareness for containment, or restore the previous versioned suppression/ranking policy while retaining Q-11/Q-12 safety/privacy guards, durable identities, feedback and user work. The first report's family storage key protects older-writer deduplication. Never drop tables, erase history or replay effects.",
+  "quick_verification": "You can see this change in bun run scripts/evaluate-proposal-feedback.ts, then inspect changed-cadence-at-cooldown-boundary and clicks-are-not-usefulness. In an enabled development runtime inspect /api/opportunities/metrics quality. See docs/opportunity-feedback-policy.md."
+}

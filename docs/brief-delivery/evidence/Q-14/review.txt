@@ -1,0 +1,26 @@
+Q-14 review-agent review, 2026-10-13
+Target: merge-base(origin/brief/q-12, HEAD)..HEAD; base a1c99ebca6994b7a3e2ae06adf3a1aea09bf2541.
+Implementation: 3664bb92b774a4822c35c0c6a4b278829e5eb166.
+Read-only review of the complete implementation diff, classifier/episode callers,
+publication transaction, canonical feedback writers, metrics route, persisted
+identity readers, tests and evaluation cases. No delegated or independent human
+review is claimed. F-09/F-10 prepared decision columns and F-11 delivery ownership
+were also inspected at their open PR heads.
+
+Resolved P2: Preserve the family storage identity understood by older writers.
+A cadence-only report storage key would let an older Q-11 writer rediscover a
+generic report after rollback. The regression failed before the correction
+(compatibility-red.log). The first scoped report now retains the family storage
+key while its immutable hypothesis retains cadence; a later materially changed
+cadence remains eligible after cooldown. The regression passes.
+
+Final result: No findings.
+The implementation preserves source-qualified evidence, durable deduplication,
+bounded related-family cooldown, conservative missing outcome states and the
+goal-first ranking boundary. Delivery documents and recorded evidence were checked
+against actual commands and results.
+
+Residual limits: author-visible synthetic policy cases, not field accuracy;
+material-change identity supports report cadence only; optional prepared schema
+probe is not full F-09/F-10 runtime integration; no deployment/UI/provider effects
+or large retained-database performance benchmark. See Q-14.json and policy doc.

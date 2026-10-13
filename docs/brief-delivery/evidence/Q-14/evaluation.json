@@ -1,0 +1,976 @@
+{
+  "policy": "proposal-feedback-v1",
+  "provenance": "Author-visible synthetic development cases. Policy checks, not blinded usefulness or field accuracy.",
+  "corpusSha256": "4efa000e7ccabdfec79a57781f5680b2672a8a5d87036aa13b14fb4a632ffebb",
+  "total": 18,
+  "passed": 18,
+  "cases": [
+    {
+      "id": "no-feedback-is-unknown",
+      "expected": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "sourceRefs": []
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 0,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "same-dismissed-routine-stays-suppressed",
+      "expected": {
+        "eligible": false
+      },
+      "actual": {
+        "eligible": false,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": null,
+      "suppression": [
+        {
+          "routineKey": "job-v1:recurring_report:weekly",
+          "reason": "dismissed_routine",
+          "until": null,
+          "sourceRefs": [
+            "opportunity_feedback:same-dismissed-routine-stays-suppressed:0"
+          ]
+        }
+      ],
+      "abstention": "already_proposed",
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [
+          {
+            "source": "opportunity_feedback",
+            "sourceRef": "opportunity_feedback:same-dismissed-routine-stays-suppressed:0",
+            "opportunityId": "prior:job-v1:recurring_report:weekly",
+            "routineKey": "job-v1:recurring_report:weekly",
+            "reason": "Already covered",
+            "at": 1783188000000
+          }
+        ],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "legacy-unknown-cadence-keeps-suppression",
+      "expected": {
+        "eligible": false
+      },
+      "actual": {
+        "eligible": false,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": null,
+      "suppression": [
+        {
+          "routineKey": "job-v1:recurring_report:monthly",
+          "reason": "dismissed_routine",
+          "until": null,
+          "sourceRefs": [
+            "opportunity_feedback:legacy-unknown-cadence-keeps-suppression:0"
+          ]
+        }
+      ],
+      "abstention": "already_proposed",
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [
+          {
+            "source": "opportunity_feedback",
+            "sourceRef": "opportunity_feedback:legacy-unknown-cadence-keeps-suppression:0",
+            "opportunityId": "prior:job-v1:recurring_report",
+            "routineKey": "job-v1:recurring_report",
+            "reason": null,
+            "at": 1790100000000
+          }
+        ],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "changed-cadence-inside-dismiss-cooldown",
+      "expected": {
+        "eligible": false
+      },
+      "actual": {
+        "eligible": false,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": null,
+      "suppression": [
+        {
+          "routineKey": "job-v1:recurring_report:monthly",
+          "reason": "feedback_cooldown",
+          "until": 1791914400000,
+          "sourceRefs": [
+            "opportunity_feedback:changed-cadence-inside-dismiss-cooldown:0"
+          ]
+        }
+      ],
+      "abstention": "feedback_cooldown",
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [
+          {
+            "source": "opportunity_feedback",
+            "sourceRef": "opportunity_feedback:changed-cadence-inside-dismiss-cooldown:0",
+            "opportunityId": "prior:job-v1:recurring_report:weekly",
+            "routineKey": "job-v1:recurring_report:weekly",
+            "reason": null,
+            "at": 1791309600000
+          }
+        ],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "changed-cadence-at-cooldown-boundary",
+      "expected": {
+        "eligible": true,
+        "priority": 0
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "sourceRefs": []
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [
+          {
+            "source": "opportunity_feedback",
+            "sourceRef": "opportunity_feedback:changed-cadence-at-cooldown-boundary:0",
+            "opportunityId": "prior:job-v1:recurring_report:weekly",
+            "routineKey": "job-v1:recurring_report:weekly",
+            "reason": null,
+            "at": 1791223200000
+          }
+        ],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "clicks-are-not-usefulness",
+      "expected": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "sourceRefs": []
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 1,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "acceptance-without-outcome",
+      "expected": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 1,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "sourceRefs": [
+          "suggestion_feedback:acceptance-without-outcome:0"
+        ]
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 1,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 1,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "recent-acceptance-cools-related-proposals",
+      "expected": {
+        "eligible": false,
+        "rate": null
+      },
+      "actual": {
+        "eligible": false,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": null,
+      "suppression": [
+        {
+          "routineKey": "job-v1:recurring_report:monthly",
+          "reason": "feedback_cooldown",
+          "until": 1791914400000,
+          "sourceRefs": [
+            "suggestion_feedback:recent-acceptance-cools-related-proposals:0"
+          ]
+        }
+      ],
+      "abstention": "feedback_cooldown",
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 1,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 1,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "recent-delivery-cools-related-proposals",
+      "expected": {
+        "eligible": false,
+        "rate": null
+      },
+      "actual": {
+        "eligible": false,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": null,
+      "suppression": [
+        {
+          "routineKey": "job-v1:recurring_report:monthly",
+          "reason": "feedback_cooldown",
+          "until": 1791914400000,
+          "sourceRefs": [
+            "opportunity_delivery:recent-delivery-cools-related-proposals:0"
+          ]
+        }
+      ],
+      "abstention": "feedback_cooldown",
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "repeated-distinct-useful-reports",
+      "expected": {
+        "eligible": true,
+        "priority": 1,
+        "rate": 1,
+        "reportedUses": 2
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 1,
+        "rate": 1,
+        "reportedUses": 2
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 1,
+        "accepted": 0,
+        "reportedUses": 2,
+        "usefulReports": 2,
+        "sourceRefs": [
+          "opportunity_feedback:repeated-distinct-useful-reports:0",
+          "opportunity_feedback:repeated-distinct-useful-reports:1"
+        ]
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 2,
+        "usefulReports": 2,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 2,
+          "denominator": 2,
+          "rate": 1
+        },
+        "proposalsWithoutOutcomeFeedback": 0,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 1,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "one-use-is-not-repeated-use",
+      "expected": {
+        "eligible": true,
+        "priority": 0,
+        "rate": 1,
+        "reportedUses": 1
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": 1,
+        "reportedUses": 1
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 1,
+        "usefulReports": 1,
+        "sourceRefs": [
+          "opportunity_feedback:one-use-is-not-repeated-use:0"
+        ]
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 1,
+        "usefulReports": 1,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 1,
+          "denominator": 1,
+          "rate": 1
+        },
+        "proposalsWithoutOutcomeFeedback": 0,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "unhelpful-result-cooldown",
+      "expected": {
+        "eligible": false,
+        "rate": 0
+      },
+      "actual": {
+        "eligible": false,
+        "rate": 0,
+        "reportedUses": 1
+      },
+      "passed": true,
+      "learning": null,
+      "suppression": [
+        {
+          "routineKey": "job-v1:recurring_report:monthly",
+          "reason": "feedback_cooldown",
+          "until": 1792778400000,
+          "sourceRefs": [
+            "opportunity_feedback:unhelpful-result-cooldown:0"
+          ]
+        }
+      ],
+      "abstention": "feedback_cooldown",
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 1,
+        "usefulReports": 0,
+        "notUsefulReports": 1,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 1,
+          "rate": 0
+        },
+        "proposalsWithoutOutcomeFeedback": 0,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "unhelpful-cooldown-is-bounded",
+      "expected": {
+        "eligible": true,
+        "priority": 0,
+        "rate": 0
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": 0,
+        "reportedUses": 1
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 1,
+        "usefulReports": 0,
+        "sourceRefs": [
+          "opportunity_feedback:unhelpful-cooldown-is-bounded:0"
+        ]
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 1,
+        "usefulReports": 0,
+        "notUsefulReports": 1,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 1,
+          "rate": 0
+        },
+        "proposalsWithoutOutcomeFeedback": 0,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "duplicate-work-reference-is-one-use",
+      "expected": {
+        "eligible": true,
+        "priority": 0,
+        "rate": 1,
+        "reportedUses": 1
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": 1,
+        "reportedUses": 1
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 1,
+        "usefulReports": 1,
+        "sourceRefs": [
+          "opportunity_feedback:duplicate-work-reference-is-one-use:0"
+        ]
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 1,
+        "usefulReports": 1,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 1,
+          "denominator": 1,
+          "rate": 1
+        },
+        "proposalsWithoutOutcomeFeedback": 0,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "conflicting-work-reference-is-unknown",
+      "expected": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "sourceRefs": []
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 1,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "other-routine-rejection-is-isolated",
+      "expected": {
+        "eligible": true,
+        "priority": 0
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "sourceRefs": []
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [
+          {
+            "source": "opportunity_feedback",
+            "sourceRef": "opportunity_feedback:other-routine-rejection-is-isolated:0",
+            "opportunityId": "prior:job-v1:invoice_review",
+            "routineKey": "job-v1:invoice_review",
+            "reason": null,
+            "at": 1791828000000
+          }
+        ],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "future-feedback-cannot-steer-ranking",
+      "expected": {
+        "eligible": true,
+        "priority": 0
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": null,
+        "reportedUses": 0
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "sourceRefs": []
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 0,
+          "denominator": 0,
+          "rate": null
+        },
+        "proposalsWithoutOutcomeFeedback": 1,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 0,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    },
+    {
+      "id": "old-reports-stay-in-census-not-priority",
+      "expected": {
+        "eligible": true,
+        "priority": 0,
+        "rate": 1,
+        "reportedUses": 2
+      },
+      "actual": {
+        "eligible": true,
+        "priority": 0,
+        "rate": 1,
+        "reportedUses": 2
+      },
+      "passed": true,
+      "learning": {
+        "policy": "proposal-feedback-v1",
+        "basis": "related_routine_user_reports",
+        "priority": 0,
+        "accepted": 0,
+        "reportedUses": 0,
+        "usefulReports": 0,
+        "sourceRefs": []
+      },
+      "suppression": [],
+      "abstention": null,
+      "metrics": {
+        "policy": "proposal-feedback-v1",
+        "evidenceBasis": "user_report",
+        "accepted": 0,
+        "interested": 0,
+        "reportedUses": 2,
+        "usefulReports": 2,
+        "notUsefulReports": 0,
+        "usefulResultRate": {
+          "numerator": 2,
+          "denominator": 2,
+          "rate": 1
+        },
+        "proposalsWithoutOutcomeFeedback": 0,
+        "acceptedWithoutOutcomeFeedback": 0,
+        "validatedWithoutOutcomeFeedback": 0,
+        "repeatedUsefulRoutines": 1,
+        "dismissalsWithoutTimestamp": 0,
+        "rejectionReasons": [],
+        "reappearanceErrors": [],
+        "invalidOutcomeRecords": 0,
+        "conflictingWorkRefs": 0,
+        "verifiedResults": 0,
+        "measuredTimeSaved": null
+      }
+    }
+  ]
+}

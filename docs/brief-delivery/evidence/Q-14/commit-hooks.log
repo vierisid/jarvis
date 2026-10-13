@@ -1,0 +1,83 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 3 required path(s) present in the npm tarball (2373 files).
+[pre-commit] Running 3 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+src/awareness/opportunities.test.ts:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) evidence-backed hypotheses > sidecar ingestion emits an explainable suggestion using actual persisted capture IDs [29.06ms]
+(pass) evidence-backed hypotheses > real capture writer supplies provenance without transition or session events [17.32ms]
+(pass) evidence-backed hypotheses > empty input, sparse activity, and unsupported tasks abstain [14.12ms]
+(pass) evidence-backed hypotheses > a long continuous session and replayed captures are not separate repetitions [13.98ms]
+(pass) evidence-backed hypotheses > same-day bursts, future and old data cannot pass recurrence [12.62ms]
+(pass) evidence-backed hypotheses > app names and arbitrary instructions never supply job or goal evidence [14.64ms]
+(pass) evidence-backed hypotheses > relevant active goals rank candidates without creating links [15.47ms]
+(pass) evidence-backed hypotheses > higher priority suggestions do not silently consume an opportunity [15.50ms]
+(pass) evidence-backed hypotheses > legacy act records interest only; dismiss prevents resurfacing in new engines [20.37ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) evidence-backed hypotheses > the ledger window is enforced on disk by retention, not only by suggestion evaluation [13.35ms]
+(pass) evidence-backed hypotheses > a suggestion already holding the opportunity identity is never reused as a proposal [11.65ms]
+(pass) evidence-backed hypotheses > capture retention keeps only minimal cues, and duplicate ingestion is idempotent [12.15ms]
+(pass) evidence-backed hypotheses > publication and capture ingestion roll back atomically on failure [15.98ms]
+(pass) validation and real-work feedback boundary > an existing vault upgrades additively without rewriting captures or inventing old evidence [35.24ms]
+(pass) validation and real-work feedback boundary > user confirmation supports an explicit goal link without score writes [14.24ms]
+(pass) validation and real-work feedback boundary > invalid, inactive, and unexplained goal links make no partial writes [16.05ms]
+(pass) validation and real-work feedback boundary > feedback rollback, conflicting retries, and duplicate work references cannot inflate metrics [16.09ms]
+(pass) validation and real-work feedback boundary > outcomes require confirmed work, real timestamps and a work reference [16.63ms]
+(pass) validation and real-work feedback boundary > registered daemon routes expose inspectable evidence and reject malformed requests [16.40ms]
+(pass) validation and real-work feedback boundary > a new process recovers evidence, confirmation and suppression after restart [64.61ms]
+
+src/awareness/opportunity-feedback-policy.test.ts:
+(pass) labeled feedback cases keep abstention, missing outcomes and source-qualified value distinct [19.19ms]
+(pass) wording, app and forged pattern keys cannot republish a dismissed routine [17.22ms]
+(pass) dismissal survives disk restart while a supported changed cadence waits for the bounded cooldown [53.01ms]
+(pass) an old report without cadence keeps family-wide suppression and is not backfilled [14.68ms]
+(pass) the first scoped report retains the family storage key understood by older writers [17.44ms]
+(pass) old automation aliases without owned hypotheses also preserve suppression [15.58ms]
+(pass) publication rechecks a dismissal arriving after assessment, with no partial rows [14.83ms]
+(pass) proposal and transport receipt each bound related proposal frequency across restart [14.24ms]
+(pass) click and acceptance alone leave usefulness, measured savings and goal progress unknown [17.78ms]
+(pass) two distinct useful user reports adjust related priority but cannot override goal evidence [28.64ms]
+(pass) feedback retries do not inflate useful-result rates; negative results cool related work [14.51ms]
+(pass) legacy flags and malformed outcome rows expose missing provenance instead of fabricated usefulness [12.02ms]
+(pass) rejection reasons retain their source and imported reappearance errors are counted by semantic identity [13.29ms]
+(pass) optional prepared decisions inform suppression and missing outcomes without activating preparation [16.02ms]
+(pass) ambiguous or mixed cadence evidence cannot mint a new routine identity [11.46ms]
+(pass) ranking does not mutate source hypotheses or feedback records [14.26ms]
+
+src/awareness/job-hypotheses.test.ts:
+(pass) six families and both fixture splits report precision and misses with real denominators [17.82ms]
+(pass) structured hypotheses reference every role and never certify execution, readiness or goal progress [12.20ms]
+(pass) static repeated screenshots, including all phases on one page, never make an episode [12.06ms]
+(pass) phases cannot be joined across devices, out of order, equal timestamps or long gaps [11.86ms]
+(pass) another device cannot bridge a stale partial episode [10.23ms]
+(pass) continuous activity across midnight is one episode even when all phases repeat [12.69ms]
+(pass) legacy, malformed, stale and future observations never acquire structured evidence [11.76ms]
+(pass) privacy, reading, app-only and input overflow abstain before producing retainable cues [10.45ms]
+(pass) durable evidence survives capture cleanup/restart without retaining new raw text; metadata-only is excluded [37.84ms]
+(pass) pre-Q11 schemas upgrade without backfill, and old writers/readers remain usable [35.38ms]
+
+ 46 pass
+ 0 fail
+ 226 expect() calls
+Ran 46 tests across 3 files. [985.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[brief/q-14 3664bb92] feat(awareness): learn from qualified proposal feedback
+ 11 files changed, 586 insertions(+), 11 deletions(-)
+ create mode 100644 scripts/evaluate-proposal-feedback.ts
+ create mode 100644 src/awareness/evaluation/fixtures/proposal-feedback.json
+ create mode 100644 src/awareness/evaluation/proposal-feedback-evaluation.ts
+ create mode 100644 src/awareness/opportunity-feedback-evidence.ts
+ create mode 100644 src/awareness/opportunity-feedback-policy.test.ts
+ create mode 100644 src/awareness/opportunity-feedback-policy.ts
+ create mode 100644 src/awareness/routine-identity.ts

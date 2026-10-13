@@ -1,0 +1,405 @@
+bun test v1.4.2 (744846f84)
+
+src/awareness/opportunity-abstention.test.ts:
+Database initialized at: :memory:
+(pass) ordinary app switching cannot substantiate a recurring business job [16.85ms]
+
+src/awareness/goal-relevance.test.ts:
+(pass) labeled cases cover all six families, competing/no-goal cases and stale/unrelated paths [21.66ms]
+(pass) a contribution traces every evidence role and the declared objective path without claiming progress [13.08ms]
+(pass) order, app labels and goal scores cannot break an evidence tie [11.04ms]
+(pass) all inactive statuses, expired evidence and future or unreviewed goals fail closed [12.20ms]
+(pass) bounded and incomplete goal context cannot select a misleading winner [12.05ms]
+(pass) legacy cues, repeated role references and incomplete structured evidence cannot ground a link [10.93ms]
+(pass) published and listed hypotheses re-evaluate renamed, paused, deleted and competing goals without rewriting history [18.34ms]
+(pass) payable context added after publication removes inferred collections without rewriting history [12.29ms]
+(pass) nullable legacy goal description cannot break assessment or reads [13.59ms]
+(pass) nullable legacy goal success_criteria cannot break assessment or reads [12.94ms]
+(pass) current path is loaded beyond the old 100-goal page and invalidated when an ancestor becomes inactive [27.20ms]
+(pass) proposal and read projection never write goal scores, progress or goal events [14.65ms]
+(pass) explicit user confirmation remains separate (choose goal: %s) [12.11ms]
+(pass) explicit user confirmation remains separate (choose goal: %s) [14.15ms]
+(pass) restart recomputes current relevance and legacy hypotheses remain readable without inferred links [34.36ms]
+
+src/awareness/opportunity-restart.test.ts:
+(pass) a fresh service recovers a pending proposal without captures or workflow events [152.67ms]
+(pass) a fresh service recovers a legacy proposal without captures or workflow events [153.09ms]
+
+src/awareness/opportunities.test.ts:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) evidence-backed hypotheses > sidecar ingestion emits an explainable suggestion using actual persisted capture IDs [14.50ms]
+(pass) evidence-backed hypotheses > real capture writer supplies provenance without transition or session events [13.71ms]
+(pass) evidence-backed hypotheses > empty input, sparse activity, and unsupported tasks abstain [10.11ms]
+(pass) evidence-backed hypotheses > a long continuous session and replayed captures are not separate repetitions [10.44ms]
+(pass) evidence-backed hypotheses > same-day bursts, future and old data cannot pass recurrence [10.62ms]
+(pass) evidence-backed hypotheses > app names and arbitrary instructions never supply job or goal evidence [12.54ms]
+(pass) evidence-backed hypotheses > relevant active goals rank candidates without creating links [12.76ms]
+(pass) evidence-backed hypotheses > higher priority suggestions do not silently consume an opportunity [12.35ms]
+(pass) evidence-backed hypotheses > legacy act records interest only; dismiss prevents resurfacing in new engines [12.78ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) evidence-backed hypotheses > the ledger window is enforced on disk by retention, not only by suggestion evaluation [10.98ms]
+(pass) evidence-backed hypotheses > a suggestion already holding the opportunity identity is never reused as a proposal [11.90ms]
+(pass) evidence-backed hypotheses > capture retention keeps only minimal cues, and duplicate ingestion is idempotent [11.96ms]
+(pass) evidence-backed hypotheses > publication and capture ingestion roll back atomically on failure [13.19ms]
+(pass) validation and real-work feedback boundary > an existing vault upgrades additively without rewriting captures or inventing old evidence [35.48ms]
+(pass) validation and real-work feedback boundary > user confirmation supports an explicit goal link without score writes [14.06ms]
+(pass) validation and real-work feedback boundary > invalid, inactive, and unexplained goal links make no partial writes [12.97ms]
+(pass) validation and real-work feedback boundary > feedback rollback, conflicting retries, and duplicate work references cannot inflate metrics [14.20ms]
+(pass) validation and real-work feedback boundary > outcomes require confirmed work, real timestamps and a work reference [15.71ms]
+(pass) validation and real-work feedback boundary > registered daemon routes expose inspectable evidence and reject malformed requests [13.86ms]
+(pass) validation and real-work feedback boundary > a new process recovers evidence, confirmation and suppression after restart [64.35ms]
+
+src/awareness/capture-transitions.test.ts:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) serialized captures preserve a real transition and the ended session identity [13.99ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) native app identity takes precedence over an opaque window title [17.49ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) explicit context notifications before the capture do not erase or duplicate it [12.71ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) explicit context notifications after the capture do not erase or duplicate it [13.94ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a title-only transition keeps native app identity and repeated captures stay silent [10.98ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a genuine return to the same app is not removed by deduplication [13.66ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) explicit hints supply missing capture metadata without mutating the previous capture [11.78ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a stale explicit hint cannot revert a newer capture [13.97ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) complete capture metadata wins over conflicting hints and consumes them [13.30ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a future hint waits for a capture at its timestamp [11.36ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) explicit window hints do not leak into another sidecar capture [11.35ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) tracker hints leave previous snapshots intact and retain title-based legacy parsing [10.77ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) capture transitions reach the real knowledge suggestion path [12.53ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) the first metadata-free capture consumes an explicit native window hint [13.61ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a delayed hint does not replace a newer pending hint [12.42ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial capture metadata never borrows a title from a different app [15.57ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial title-only hints and captures retain compatible confirmed metadata [12.91ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial app-only hints and captures retain compatible confirmed metadata [12.38ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial title-only hints complement captures without losing native identity [13.15ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) partial app-only hints complement captures without losing native identity [13.30ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a conflicting title-only hint cannot borrow confirmed fields from another window [12.28ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a conflicting app-only hint cannot borrow confirmed fields from another window [13.19ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) native app identity keeps a title change out of the app-switch escalation path [11.21ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) delayed cloud analysis retains the predecessor of its own capture [14.96ms]
+
+src/awareness/suggestion-feedback.test.ts:
+Database initialized at: /tmp/jarvis-feedback-F1rGrs/test.db
+Database initialized at: /tmp/jarvis-feedback-F1rGrs/test.db
+(pass) durable suggestion feedback > dismissal, reasons and C6 identity survive database reopen [27.74ms]
+Database initialized at: /tmp/jarvis-feedback-MJsscy/test.db
+Database initialized at: /tmp/jarvis-feedback-MJsscy/test.db
+(pass) durable suggestion feedback > legacy duplicate aliases share feedback and one composition identity after upgrade [27.34ms]
+Database initialized at: /tmp/jarvis-feedback-FvjmYS/test.db
+Database initialized at: /tmp/jarvis-feedback-FvjmYS/test.db
+(pass) durable suggestion feedback > legacy dismissal flag on a later alias still suppresses acceptance [26.81ms]
+Database initialized at: /tmp/jarvis-feedback-qoYXqX/test.db
+(pass) durable suggestion feedback > acceptance preserves evidence and only explicit active goal links [20.95ms]
+Database initialized at: /tmp/jarvis-feedback-Kqgrbn/test.db
+(pass) durable suggestion feedback > acceptance is immutable and request IDs cannot change feedback [19.97ms]
+Database initialized at: /tmp/jarvis-feedback-vX3Whz/test.db
+(pass) durable suggestion feedback > interest stays separate from acceptance and non-automation rhythms still work [20.24ms]
+Database initialized at: /tmp/jarvis-feedback-feigMe/test.db
+[compose] attempt 1 parse-error (JSON Parse error: Expected '}' (rawResponse: 11 chars, ends "..{unfinished"))
+[compose] attempt 2 success-after-retry
+Database initialized at: /tmp/jarvis-feedback-feigMe/test.db
+(pass) composition job and draft recovery > the production composer retains the accepted outcome during repair and links its durable record [45.07ms]
+Database initialized at: /tmp/jarvis-feedback-tfRp0J/test.db
+Database initialized at: /tmp/jarvis-feedback-tfRp0J/test.db
+(pass) composition job and draft recovery > concurrent accepts and workers create exactly one disabled draft, outside the LLM transaction [28.89ms]
+Database initialized at: /tmp/jarvis-feedback-GLbCWT/test.db
+(pass) composition job and draft recovery > draft insert failure rolls back the flow and attachment; retry completes the same job [21.45ms]
+Database initialized at: /tmp/jarvis-feedback-ra93zR/test.db
+Database initialized at: /tmp/jarvis-feedback-ra93zR/test.db
+Database initialized at: /tmp/jarvis-feedback-ra93zR/test.db
+(pass) composition job and draft recovery > queued acceptance survives restart, failed composition remains discoverable and retry is idempotent [37.28ms]
+Database initialized at: /tmp/jarvis-feedback-rY5JP2/test.db
+Database initialized at: /tmp/jarvis-feedback-rY5JP2/test.db
+(pass) composition job and draft recovery > expired claims fail explicitly and late completion cannot attach a duplicate draft [28.18ms]
+Database initialized at: /tmp/jarvis-feedback-VPf2rr/test.db
+Database initialized at: /tmp/jarvis-feedback-VPf2rr/test.db
+(pass) composition job and draft recovery > shutdown fences late LLM completion across a database reopen [27.12ms]
+Database initialized at: /tmp/jarvis-feedback-rIhoQ3/test.db
+(pass) composition job and draft recovery > timeout releases the queue and retains an actionable failure [40.56ms]
+Database initialized at: /tmp/jarvis-feedback-rPjylN/test.db
+(pass) composition job and draft recovery > deleting a composed flow preserves its historical IDs and never silently creates a second draft [21.78ms]
+Database initialized at: /tmp/jarvis-feedback-CLNu4N/test.db
+(pass) routes validate JSON, IDs, reason, conflicts and operate without an awareness service [20.61ms]
+Database initialized at: /tmp/jarvis-feedback-M3yu92/test.db
+Database initialized at: /tmp/jarvis-feedback-M3yu92/test.db
+(pass) routine discovery pages canonical proposals and decisions without a notification-age cutoff [36.24ms]
+
+src/awareness/opportunity-feedback-policy.test.ts:
+(pass) labeled feedback cases keep abstention, missing outcomes and source-qualified value distinct [15.78ms]
+(pass) wording, app and forged pattern keys cannot republish a dismissed routine [13.58ms]
+(pass) dismissal survives disk restart while a supported changed cadence waits for the bounded cooldown [41.87ms]
+(pass) an old report without cadence keeps family-wide suppression and is not backfilled [11.44ms]
+(pass) the first scoped report retains the family storage key understood by older writers [14.56ms]
+(pass) old automation aliases without owned hypotheses also preserve suppression [12.62ms]
+(pass) publication rechecks a dismissal arriving after assessment, with no partial rows [13.90ms]
+(pass) proposal and transport receipt each bound related proposal frequency across restart [12.86ms]
+(pass) click and acceptance alone leave usefulness, measured savings and goal progress unknown [14.35ms]
+(pass) two distinct useful user reports adjust related priority but cannot override goal evidence [15.96ms]
+(pass) feedback retries do not inflate useful-result rates; negative results cool related work [13.53ms]
+(pass) legacy flags and malformed outcome rows expose missing provenance instead of fabricated usefulness [10.68ms]
+(pass) rejection reasons retain their source and imported reappearance errors are counted by semantic identity [12.62ms]
+(pass) optional prepared decisions inform suppression and missing outcomes without activating preparation [13.66ms]
+(pass) ambiguous or mixed cadence evidence cannot mint a new routine identity [10.73ms]
+(pass) ranking does not mutate source hypotheses or feedback records [13.12ms]
+
+src/awareness/opportunity-delivery.test.ts:
+(pass) proposal and pending delivery commit atomically [12.40ms]
+(pass) failed notification retries the same ID and records delivery only after acceptance [11.72ms]
+[Awareness] Opportunity notification pending: offline
+(pass) a thrown transport error leaves the proposal pending for another worker [11.18ms]
+(pass) dismiss suppresses pending notification recovery [12.17ms]
+(pass) interest suppresses pending notification recovery [11.22ms]
+(pass) validate suppresses pending notification recovery [12.58ms]
+(pass) legacy pre-callback flags cannot suppress recovery or inflate delivery metrics [11.76ms]
+(pass) concurrent workers and flush calls share a claim until its lease expires [14.18ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: enable [26.22ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: disable [11.68ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: shutdown [11.89ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) rapid toggles before queued work settles honor the final setting [10.90ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a stop request blocks new capture events before queued shutdown begins [11.33ms]
+
+src/awareness/suggestion-identity.test.ts:
+(pass) an upgrade gives pre-existing app-pair rows one stable identity across restart [26.31ms]
+
+src/awareness/awareness.test.ts:
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > createCapture + getCapture [10.62ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > createCapture persists sidecarId for fetch_capture routing [10.01ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > createCapture without sidecarId stores null (legacy rows) [10.66ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > getRecentCaptures with app filter [10.40ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > getCapturesInRange [10.06ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > getAppUsageStats attributes elapsed time, not capture count [12.34ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > getAppUsageStats is unmoved by a denser sampling rate [12.11ms]
+Database initialized at: :memory:
+(pass) Vault — Screen Captures > activeMsFrom caps away-from-keyboard gaps [10.06ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Sessions > create + get + update + end session [10.18ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Sessions > incrementSessionCaptureCount [10.54ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Sessions > getRecentSessions [10.04ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Suggestions > create + dismiss + act on suggestions [10.64ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Suggestions > getSuggestionStats [10.85ms]
+Database initialized at: :memory:
+(pass) Vault — Awareness Suggestions > getSuggestionCountSince [10.27ms]
+Database initialized at: :memory:
+(pass) ContextTracker > detects context changes [10.19ms]
+Database initialized at: :memory:
+(pass) ContextTracker > detects errors in OCR text [10.72ms]
+Database initialized at: :memory:
+(pass) ContextTracker > detects stuck state [11.44ms]
+Database initialized at: :memory:
+(pass) ContextTracker > extracts app name from window title [10.04ms]
+Database initialized at: :memory:
+(pass) ContextTracker > uses sidecar capturedAt timestamp when provided [10.70ms]
+Database initialized at: :memory:
+(pass) ContextTracker > falls back to Date.now() when capturedAt omitted [10.12ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine > generates error suggestion [11.26ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine > deduplicates suggestions [11.54ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine > knowledge suggestion body is readable prose, not the recall prompt format [11.30ms]
+Database initialized at: :memory:
+(pass) ContextGraph > creates app entity for new apps [10.29ms]
+(pass) AwarenessIntelligence — escalation gate > a quiet capture never escalates [0.09ms]
+(pass) AwarenessIntelligence — escalation gate > a window title change alone never escalates [0.04ms]
+(pass) AwarenessIntelligence — escalation gate > short OCR alone never escalates [0.04ms]
+(pass) AwarenessIntelligence — escalation gate > local signals escalate and pick the matching analysis [0.11ms]
+(pass) AwarenessIntelligence — escalation gate > an app switch escalates ambiently, then is silenced by its own cooldown [0.03ms]
+(pass) AwarenessIntelligence — escalation gate > a claim stamps the cooldown immediately, before any analysis runs [0.03ms]
+(pass) AwarenessIntelligence — escalation gate > an ambient claim also holds off signal escalations [0.03ms]
+(pass) AwarenessIntelligence — escalation gate > cloud vision disabled (Infinity cooldown) never escalates [0.02ms]
+(pass) AwarenessIntelligence — escalation gate > releasing an unused claim frees the cooldown again [0.03ms]
+(pass) AwarenessIntelligence — escalation gate > releasing restores the ambient cooldown too, and only once [0.04ms]
+(pass) AwarenessIntelligence — escalation gate > a stale release cannot reopen a newer claim [0.04ms]
+[Intelligence] the low tier cannot accept images (400 model does not support image input) — using the medium tier for awareness vision from here on.
+(pass) AwarenessIntelligence — escalation gate > a low tier that cannot see falls back to medium, then stays there [0.78ms]
+[Intelligence] awareness_general failed: upstream down
+(pass) AwarenessIntelligence — escalation gate > a vision failure on both tiers degrades to an empty analysis [0.13ms]
+Database initialized at: :memory:
+(pass) ContextTracker — redundant captures > flags a repeat capture with identical OCR text as redundant [10.72ms]
+Database initialized at: :memory:
+(pass) ContextTracker — redundant captures > a window change is never redundant [10.03ms]
+Database initialized at: :memory:
+(pass) ContextTracker — redundant captures > isAppSwitch ignores title-only churn [10.15ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine — break nudge > fires after 90 minutes of activity regardless of capture rate [17.19ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine — break nudge > does not fire for a short stretch of work [12.12ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine — break nudge > still fires for a reader whose screen goes static in stretches [15.90ms]
+Database initialized at: :memory:
+(pass) SuggestionEngine — break nudge > does not count an idle stretch as work [11.10ms]
+[Intelligence] awareness_general failed: 429 rate limit exceeded
+(pass) Vision tier downgrade is only for a real refusal > a transient failure does not abandon the low tier [0.43ms]
+[Intelligence] awareness_general failed: 500 internal error
+[Intelligence] awareness_general failed: 500 internal error
+(pass) Vision tier downgrade is only for a real refusal > a 500 does not abandon the low tier either [0.21ms]
+Database initialized at: :memory:
+(pass) ContextTracker — stuck fires once per episode > a motionless window does not re-fire stuck on every capture [10.26ms]
+Database initialized at: :memory:
+(pass) ContextTracker — stuck fires once per episode > a new stall after activity is a new episode [10.38ms]
+Database initialized at: :memory:
+(pass) ContextTracker — redundancy uses the full OCR text > content changing under a long static header is not redundant [11.02ms]
+
+src/awareness/job-hypotheses.test.ts:
+(pass) six families and both fixture splits report precision and misses with real denominators [14.63ms]
+(pass) structured hypotheses reference every role and never certify execution, readiness or goal progress [10.46ms]
+(pass) static repeated screenshots, including all phases on one page, never make an episode [11.04ms]
+(pass) phases cannot be joined across devices, out of order, equal timestamps or long gaps [11.03ms]
+(pass) another device cannot bridge a stale partial episode [10.31ms]
+(pass) continuous activity across midnight is one episode even when all phases repeat [13.78ms]
+(pass) legacy, malformed, stale and future observations never acquire structured evidence [10.82ms]
+(pass) privacy, reading, app-only and input overflow abstain before producing retainable cues [9.06ms]
+(pass) durable evidence survives capture cleanup/restart without retaining new raw text; metadata-only is excluded [35.58ms]
+(pass) pre-Q11 schemas upgrade without backfill, and old writers/readers remain usable [33.64ms]
+
+src/awareness/session-end.test.ts:
+(pass) app-switch end snapshots are deeply immutable and independent of the new session [10.84ms]
+(pass) a delayed app switch cannot end a session before it started [9.56ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Service stopped
+(pass) delayed captures do not shorten observed work or suppress its summary [21.60ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) shutdown cannot end a clock-skewed session before its last observation [10.60ms]
+(pass) an idle return to the same app closes the old session exactly once [9.21ms]
+(pass) an overnight capture gap does not stretch the ended session [9.05ms]
+(pass) explicit close returns one stable snapshot and a repeated close returns nothing [9.13ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Service stopped
+(pass) a listener cannot change the identity or apps subsequently used by summary inference [11.04ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (5min, Editor)
+[Awareness] Service stopped
+(pass) repeated serialized idle signals and a repeated returning capture produce one summary [13.27ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Pipeline error: synthetic suggestion failure
+[Awareness] Service stopped
+(pass) session-end delivery and summary do not depend on later suggestion success [12.88ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) shutdown emits one end snapshot without launching new summary work [14.58ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+[Awareness] Service stopped
+(pass) concurrent and later replays of a real ended session do not recompute its summary [13.78ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Session-end listener failed: synthetic listener failure
+[Awareness] Session topic: "Draft review" (3min, Editor)
+[Awareness] Session-end listener failed: synthetic listener failure
+[Awareness] Service stopped
+(pass) a throwing session-end listener does not discard the summary or the next session [14.77ms]
+
+src/goals/application-service.test.ts:
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) dashboard and tool scores return the same health and emit equivalent events [18.39ms]
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) dashboard and tool terminal status create completion memory once per transition [16.87ms]
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) invalid status and score input are 400 without mutation or events [14.12ms]
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) dashboard create, edit and delete emit the service events [16.79ms]
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) an outer transaction rollback emits nothing and restores the goal and progress [18.74ms]
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) goal event replay exposes ordered cursors and rejects invalid paging [15.48ms]
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) dashboard refuses an automatic review source and leaves its score unchanged [12.08ms]
+[Goals] Event delivery deferred: 07c457ae-4d3b-4b9d-b4fa-72fb9899a246
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) dashboard success remains successful when the event sink is unavailable [18.01ms]
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) creating an already completed goal records its completion time and memory [16.26ms]
+[CronScheduler] All jobs cancelled
+[GoalService] Stopped
+(pass) a failed reorder rolls back earlier items and their events [16.78ms]
+
+ 190 pass
+ 0 fail
+ 763 expect() calls
+Ran 190 tests across 13 files. [3.15s]
