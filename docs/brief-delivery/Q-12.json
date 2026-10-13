@@ -10,14 +10,14 @@
     "delivery_ref": "commit containing this receipt",
     "resolve": "git log -1 --format=%H -- docs/brief-delivery/Q-12.json",
     "initial_implementation_sha": "0f390d96cdae86559631e142b835d83eaf7428b7",
-    "implementation_ref": "commit containing this receipt includes the final invoice-rule correction"
+    "implementation_ref": "commit containing this receipt includes the payable-context review correction"
   },
   "status": {
     "implementation": "verified locally",
     "merge": "not_merged",
     "release_enabled": false,
     "publication": "PR #977 against brief/q-11; remains unmerged",
-    "ci": "pending publication; inspect current PR head checks"
+    "ci": "pending review-fix publication; inspect checks on the current PR head"
   },
   "worktree": "Dedicated .worktrees/jarvis-q-12, own frozen-lockfile dependencies and temporary/in-memory SQLite fixtures. Managed worktree creation was unavailable because the parent Projects folder is not a Git repository. Owner checkout preserved.",
   "figma": {
@@ -39,7 +39,7 @@
     {
       "check": "Current objective/path/outcome/evidence ranking",
       "status": "passed_synthetic",
-      "evidence": "All six job families; nine candidate cases with causal contribution, declared objective path, required outcome and every role reference. Explicit criteria outrank title-only outcomes; supported descendants outrank ancestors."
+      "evidence": "All six job families; 12 candidate cases with causal contribution, declared objective path, required outcome and every role reference. Explicit criteria outrank title-only outcomes; supported descendants outrank ancestors."
     },
     {
       "check": "Unrelated same words and stale/completed goals abstain",
@@ -49,7 +49,7 @@
     {
       "check": "No-goal and competing-goal cases are truthful",
       "status": "passed",
-      "evidence": "Seventeen expected abstentions, including competing business goals, billing-volume reduction, supplier settlement and one documented unsupported useful paraphrase. Ties never use app names, score or ID order to invent relevance."
+      "evidence": "22 expected abstentions, including competing business goals, billing-volume reduction, explicit payable context throughout goal paths, supplier settlement and one documented unsupported useful paraphrase. Payable success criteria cannot outrank customer receivables. Ties never use app names, score or ID order to invent relevance."
     },
     {
       "check": "No goal progress or automatic link mutation",
@@ -69,11 +69,11 @@
     },
     {
       "command": "bun test src/awareness src/vault/awareness.test.ts src/goals/application-service.test.ts",
-      "result": "173 passed, 0 failed, 705 assertions across 12 files"
+      "result": "174 passed, 0 failed, 709 assertions across 12 files"
     },
     {
       "command": "bun run scripts/evaluate-goal-relevance.ts",
-      "result": "26/26 labeled policy checks; 9 candidate links, 17 abstentions, 1 explicit known useful paraphrase miss. Author-visible synthetic development data, not field accuracy."
+      "result": "34/34 labeled policy checks; 12 candidate links, 22 abstentions, 1 explicit known useful paraphrase miss. Author-visible synthetic development data, not field accuracy."
     },
     {
       "command": "bunx tsc --noEmit; git diff --check",
@@ -85,14 +85,14 @@
     },
     {
       "command": "temporary integration with origin/main 4aee7e6b: affected suite plus catalog.test.ts, TypeScript and diff check",
-      "result": "On initial implementation 0f390d96 (before final invoice-rule correction): 208 passed, 0 failed, 8660 assertions across 13 files; TypeScript and diff check passed. Temporary integration removed. Final policy correction rechecked with the 173-test affected suite and TypeScript."
+      "result": "On initial implementation 0f390d96 (before final invoice-rule correction): 208 passed, 0 failed, 8660 assertions across 13 files; TypeScript and diff check passed. Temporary integration removed. Latest payable-context correction rechecked with the 174-test affected suite and TypeScript; this newer correction was not integrated with main."
     }
   ],
   "review": {
     "skill": "review-agent",
     "mode": "read-only complete diff/callers, no delegation or independent human review claimed",
-    "finding": "Two P2 findings: nullable legacy goal text could throw; generic invoice reduction/payment outcomes could borrow a collections contribution",
-    "resolution": "String guards make nullable historical text abstain. Invoice outcomes require a collections-oriented qualifier/action; billing consolidation and supplier settlement abstain. Both corrections have preserved red results and passing regressions; corrected diff/callers: No findings."
+    "finding": "Three P2 findings across implementation and follow-up reviews: nullable legacy goal text could throw; generic invoice reduction/payment outcomes could borrow a collections contribution; clear/reduce variants still admitted explicit supplier payables after the initial invoice correction.",
+    "resolution": "String guards make nullable historical text abstain. Qualified collection outcomes exclude generic billing/settlement. An invoice-specific payable-context veto now checks title, description and success criteria across the full current path before ranking. Eight new labeled cases and a persisted-read regression cover the remaining finding, including a payable criterion competing with customer receivables; red results are preserved."
   },
   "evidence": [
     "evidence/Q-12/evaluation.json",
@@ -101,7 +101,9 @@
     "evidence/Q-12/review.txt",
     "evidence/Q-12/commit-hooks.log",
     "evidence/Q-12/main-integration.log",
-    "evidence/Q-12/invoice-review-red.log"
+    "evidence/Q-12/invoice-review-red.log",
+    "evidence/Q-12/payable-review-red.log",
+    "evidence/Q-12/payable-validation.log"
   ],
   "manual_checks": [
     {
@@ -111,7 +113,7 @@
     }
   ],
   "limitations": [
-    "Bounded English outcome vocabulary and lexical exclusions can miss useful paraphrases or fail to identify unmarked non-operational text. Development labels are author-visible; there is no independent human/field accuracy result.",
+    "Bounded English outcome vocabulary and lexical exclusions can miss useful paraphrases or fail to identify unmarked non-operational text. Development labels are author-visible; there is no independent human/field accuracy result. Mixed payable/receivable context conservatively abstains for collection proposals; explicit user confirmation remains available.",
     "90-day updated_at freshness is a conservative heuristic, not proof of user review. Long-lived useful goals, oversized criteria and nullable legacy data can abstain.",
     "At the 1000-goal reader cap inferred relevance abstains, even for exactly 1000 goals.",
     "Declared objective paths and routine evidence cannot verify account/customer ownership, causal business impact, completed work or workflow feasibility. Candidates always require confirmation.",

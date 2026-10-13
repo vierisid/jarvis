@@ -1,0 +1,304 @@
+bun test v1.4.2 (744846f84)
+
+src/awareness/goal-relevance.test.ts:
+23 | afterEach(closeDb);
+24 | 
+25 | test('labeled cases cover all six families, competing/no-goal cases and stale/unrelated paths', () => {
+26 |   const report = goalRelevanceReport();
+27 |   expect(report.total).toBe(34);
+28 |   expect(report.cases.filter(c => !c.passed)).toEqual([]);
+                                                   ^
+error: expect(received).toEqual(expected)
+
+- []
++ [
++   {
++     "actual": "payables",
++     "candidate": {
++       "basis": "causal_contribution_requires_confirmation",
++       "evidenceCaptureIds": [
++         "dev-invoices-0-0",
++         "dev-invoices-0-1",
++         "dev-invoices-0-2",
++         "dev-invoices-1-0",
++         "dev-invoices-1-1",
++         "dev-invoices-1-2",
++         "dev-invoices-2-0",
++         "dev-invoices-2-1",
++         "dev-invoices-2-2",
++       ],
++       "goalId": "payables",
++       "grounding": {
++         "contribution": "Reviewed invoice reminders could help collect outstanding balances; it may support “Clear overdue invoices owed to suppliers”.",
++         "objectiveId": "payables",
++         "path": [
++           {
++             "goalId": "payables",
++             "title": "Clear overdue invoices owed to suppliers",
++             "updatedAt": 1791828000000,
++           },
++         ],
++         "policy": "goal-contribution-v1",
++         "requiredOutcome": {
++           "field": "title",
++           "goalId": "payables",
++           "text": "Clear overdue invoices owed to suppliers",
++         },
++         "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       },
++       "reason": "invoice balances → checking balances or payments → invoice reminder draft. Reviewed invoice reminders could help collect outstanding balances; it may support “Clear overdue invoices owed to suppliers”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       "title": "Clear overdue invoices owed to suppliers",
++     },
++     "expected": null,
++     "id": "clearing-supplier-debt-is-not-collections",
++     "limitation": null,
++     "passed": false,
++     "status": "candidate",
++   },
++   {
++     "actual": "payables",
++     "candidate": {
++       "basis": "causal_contribution_requires_confirmation",
++       "evidenceCaptureIds": [
++         "dev-invoices-0-0",
++         "dev-invoices-0-1",
++         "dev-invoices-0-2",
++         "dev-invoices-1-0",
++         "dev-invoices-1-1",
++         "dev-invoices-1-2",
++         "dev-invoices-2-0",
++         "dev-invoices-2-1",
++         "dev-invoices-2-2",
++       ],
++       "goalId": "payables",
++       "grounding": {
++         "contribution": "Reviewed invoice reminders could help collect outstanding balances; it may support “Reduce overdue invoices by paying vendors on time”.",
++         "objectiveId": "payables",
++         "path": [
++           {
++             "goalId": "payables",
++             "title": "Reduce overdue invoices by paying vendors on time",
++             "updatedAt": 1791828000000,
++           },
++         ],
++         "policy": "goal-contribution-v1",
++         "requiredOutcome": {
++           "field": "title",
++           "goalId": "payables",
++           "text": "Reduce overdue invoices by paying vendors on time",
++         },
++         "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       },
++       "reason": "invoice balances → checking balances or payments → invoice reminder draft. Reviewed invoice reminders could help collect outstanding balances; it may support “Reduce overdue invoices by paying vendors on time”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       "title": "Reduce overdue invoices by paying vendors on time",
++     },
++     "expected": null,
++     "id": "paying-vendors-is-not-collections",
++     "limitation": null,
++     "passed": false,
++     "status": "candidate",
++   },
++   {
++     "actual": "payables",
++     "candidate": {
++       "basis": "causal_contribution_requires_confirmation",
++       "evidenceCaptureIds": [
++         "dev-invoices-0-0",
++         "dev-invoices-0-1",
++         "dev-invoices-0-2",
++         "dev-invoices-1-0",
++         "dev-invoices-1-1",
++         "dev-invoices-1-2",
++         "dev-invoices-2-0",
++         "dev-invoices-2-1",
++         "dev-invoices-2-2",
++       ],
++       "goalId": "payables",
++       "grounding": {
++         "contribution": "Reviewed invoice reminders could help collect outstanding balances; it may support “Clear outstanding invoices from our suppliers”.",
++         "objectiveId": "payables",
++         "path": [
++           {
++             "goalId": "payables",
++             "title": "Improve cash collection",
++             "updatedAt": 1791828000000,
++           },
++         ],
++         "policy": "goal-contribution-v1",
++         "requiredOutcome": {
++           "field": "success_criteria",
++           "goalId": "payables",
++           "text": "Clear outstanding invoices from our suppliers",
++         },
++         "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       },
++       "reason": "invoice balances → checking balances or payments → invoice reminder draft. Reviewed invoice reminders could help collect outstanding balances; it may support “Clear outstanding invoices from our suppliers”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       "title": "Improve cash collection",
++     },
++     "expected": null,
++     "id": "payable-success-criterion-is-not-collections",
++     "limitation": null,
++     "passed": false,
++     "status": "candidate",
++   },
++   {
++     "actual": "payables",
++     "candidate": {
++       "basis": "causal_contribution_requires_confirmation",
++       "evidenceCaptureIds": [
++         "dev-invoices-0-0",
++         "dev-invoices-0-1",
++         "dev-invoices-0-2",
++         "dev-invoices-1-0",
++         "dev-invoices-1-1",
++         "dev-invoices-1-2",
++         "dev-invoices-2-0",
++         "dev-invoices-2-1",
++         "dev-invoices-2-2",
++       ],
++       "goalId": "payables",
++       "grounding": {
++         "contribution": "Reviewed invoice reminders could help collect outstanding balances; it may support “Review unpaid invoices”.",
++         "objectiveId": "payables",
++         "path": [
++           {
++             "goalId": "payables",
++             "title": "Review unpaid invoices",
++             "updatedAt": 1791828000000,
++           },
++         ],
++         "policy": "goal-contribution-v1",
++         "requiredOutcome": {
++           "field": "title",
++           "goalId": "payables",
++           "text": "Review unpaid invoices",
++         },
++         "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       },
++       "reason": "invoice balances → checking balances or payments → invoice reminder draft. Reviewed invoice reminders could help collect outstanding balances; it may support “Review unpaid invoices”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       "title": "Review unpaid invoices",
++     },
++     "expected": null,
++     "id": "payable-description-is-not-collections",
++     "limitation": null,
++     "passed": false,
++     "status": "candidate",
++   },
++   {
++     "actual": "step",
++     "candidate": {
++       "basis": "causal_contribution_requires_confirmation",
++       "evidenceCaptureIds": [
++         "dev-invoices-0-0",
++         "dev-invoices-0-1",
++         "dev-invoices-0-2",
++         "dev-invoices-1-0",
++         "dev-invoices-1-1",
++         "dev-invoices-1-2",
++         "dev-invoices-2-0",
++         "dev-invoices-2-1",
++         "dev-invoices-2-2",
++       ],
++       "goalId": "step",
++       "grounding": {
++         "contribution": "Reviewed invoice reminders could help collect outstanding balances; it may support “Reduce overdue invoices”.",
++         "objectiveId": "root",
++         "path": [
++           {
++             "goalId": "root",
++             "title": "Keep accounts payable current",
++             "updatedAt": 1791828000000,
++           },
++           {
++             "goalId": "step",
++             "title": "Reduce overdue invoices",
++             "updatedAt": 1791828000000,
++           },
++         ],
++         "policy": "goal-contribution-v1",
++         "requiredOutcome": {
++           "field": "title",
++           "goalId": "step",
++           "text": "Reduce overdue invoices",
++         },
++         "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       },
++       "reason": "invoice balances → checking balances or payments → invoice reminder draft. Reviewed invoice reminders could help collect outstanding balances; it may support “Reduce overdue invoices”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       "title": "Reduce overdue invoices",
++     },
++     "expected": null,
++     "id": "payable-ancestor-is-not-collections",
++     "limitation": null,
++     "passed": false,
++     "status": "candidate",
++   },
++   {
++     "actual": "payables",
++     "candidate": {
++       "basis": "causal_contribution_requires_confirmation",
++       "evidenceCaptureIds": [
++         "dev-invoices-0-0",
++         "dev-invoices-0-1",
++         "dev-invoices-0-2",
++         "dev-invoices-1-0",
++         "dev-invoices-1-1",
++         "dev-invoices-1-2",
++         "dev-invoices-2-0",
++         "dev-invoices-2-1",
++         "dev-invoices-2-2",
++       ],
++       "goalId": "payables",
++       "grounding": {
++         "contribution": "Reviewed invoice reminders could help collect outstanding balances; it may support “Clear overdue invoices”.",
++         "objectiveId": "payables",
++         "path": [
++           {
++             "goalId": "payables",
++             "title": "Supplier payments",
++             "updatedAt": 1791828000000,
++           },
++         ],
++         "policy": "goal-contribution-v1",
++         "requiredOutcome": {
++           "field": "success_criteria",
++           "goalId": "payables",
++           "text": "Clear overdue invoices",
++         },
++         "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       },
++       "reason": "invoice balances → checking balances or payments → invoice reminder draft. Reviewed invoice reminders could help collect outstanding balances; it may support “Clear overdue invoices”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
++       "title": "Supplier payments",
++     },
++     "expected": "cash",
++     "id": "payable-criterion-cannot-outrank-receivables",
++     "limitation": null,
++     "passed": false,
++     "status": "candidate",
++   },
++ ]
+
+- Expected  - 1
++ Received  + 265
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.test.ts:28:47)
+(fail) labeled cases cover all six families, competing/no-goal cases and stale/unrelated paths [57.48ms]
+119 |   const g = createGoal('Clear overdue invoices', 'objective', { status: 'active' });
+120 |   const id = refreshOpportunity()!.id;
+121 |   const stored = getDb().query('SELECT hypothesis FROM opportunity_hypotheses WHERE suggestion_id = ?').get(id);
+122 |   expect(getOpportunity(id)!.hypothesis.goalCandidates[0]!.goalId).toBe(g.id);
+123 |   updateGoal(g.id, { description: 'Pay our suppliers promptly to protect supply continuity.' });
+124 |   expect(getOpportunity(id)!.hypothesis.goalRelevance!.status).toBe('no_supported_goal');
+                                                                     ^
+error: expect(received).toBe(expected)
+
+Expected: "no_supported_goal"
+Received: "candidate"
+
+      at <anonymous> (/home/vieri-balboni/Projects/.worktrees/jarvis-q-12/src/awareness/goal-relevance.test.ts:124:64)
+(fail) payable context added after publication removes inferred collections without rewriting history [39.86ms]
+
+ 0 pass
+ 13 filtered out
+ 2 fail
+ 4 expect() calls
+Ran 2 tests across 1 file. [174.00ms]

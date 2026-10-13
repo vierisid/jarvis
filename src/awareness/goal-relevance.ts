@@ -74,6 +74,10 @@ export function rankOpportunityGoals(hypothesis: Evidence, goals: Goal[], now: n
   const matches = goals.flatMap(goal => {
     const path = objectivePath(goal, byId, now);
     if (!path) return [];
+    // A matching outcome must not override an incompatible purpose anywhere on its path.
+    if (rule.excludedContext && path.some(node => rule.excludedContext!.test(
+      `${node.title}\n${node.description}\n${node.success_criteria}`.replace(/\s+/g, ' '),
+    ))) return [];
     // Explicit success criteria take precedence: title matches cannot contradict the required outcome.
     const field = goal.success_criteria.trim() ? 'success_criteria' as const : 'title' as const;
     const outcome = goal[field].trim();

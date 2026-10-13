@@ -24,10 +24,10 @@ afterEach(closeDb);
 
 test('labeled cases cover all six families, competing/no-goal cases and stale/unrelated paths', () => {
   const report = goalRelevanceReport();
-  expect(report.total).toBe(26);
+  expect(report.total).toBe(34);
   expect(report.cases.filter(c => !c.passed)).toEqual([]);
-  expect(report.proposedLinks).toBe(9);
-  expect(report.expectedAbstentions).toBe(17);
+  expect(report.proposedLinks).toBe(12);
+  expect(report.expectedAbstentions).toBe(22);
   expect(report.knownUnsupportedUsefulRelations).toBe(1);
 });
 
@@ -111,6 +111,18 @@ test('published and listed hypotheses re-evaluate renamed, paused, deleted and c
   expect(getOpportunity(id)!.hypothesis.goalCandidates[0]!.goalId).toBe(g.id);
   deleteGoal(g.id);
   expect(getOpportunity(id)!.hypothesis.goalCandidates).toEqual([]);
+  expect(getDb().query('SELECT hypothesis FROM opportunity_hypotheses WHERE suggestion_id = ?').get(id)).toEqual(stored);
+});
+
+test('payable context added after publication removes inferred collections without rewriting history', () => {
+  seed();
+  const g = createGoal('Clear overdue invoices', 'objective', { status: 'active' });
+  const id = refreshOpportunity()!.id;
+  const stored = getDb().query('SELECT hypothesis FROM opportunity_hypotheses WHERE suggestion_id = ?').get(id);
+  expect(getOpportunity(id)!.hypothesis.goalCandidates[0]!.goalId).toBe(g.id);
+  updateGoal(g.id, { description: 'Pay our suppliers promptly to protect supply continuity.' });
+  expect(getOpportunity(id)!.hypothesis.goalRelevance!.status).toBe('no_supported_goal');
+  expect(listOpportunities()[0]!.hypothesis.goalCandidates).toEqual([]);
   expect(getDb().query('SELECT hypothesis FROM opportunity_hypotheses WHERE suggestion_id = ?').get(id)).toEqual(stored);
 });
 

@@ -1,11 +1,11 @@
 {
   "policy": "goal-contribution-v1",
-  "corpusSha256": "0c8889ddfe1fb009029217ab198475bf14a287dec67001deb774a6b3a8e0b1cc",
+  "corpusSha256": "08728bb363a0e58f24fc518b9f4012816f377ec22ea02aad10a8cd13ac799eba",
   "provenance": "Hand-labeled synthetic development fixtures, author-visible. No customer data, independent human review or production accuracy claim.",
-  "total": 26,
-  "passed": 26,
-  "proposedLinks": 9,
-  "expectedAbstentions": 17,
+  "total": 34,
+  "passed": 34,
+  "proposedLinks": 12,
+  "expectedAbstentions": 22,
   "knownUnsupportedUsefulRelations": 1,
   "cases": [
     {
@@ -548,6 +548,180 @@
       "passed": true,
       "limitation": null,
       "candidate": null
+    },
+    {
+      "id": "clearing-supplier-debt-is-not-collections",
+      "expected": null,
+      "actual": null,
+      "status": "no_supported_goal",
+      "passed": true,
+      "limitation": null,
+      "candidate": null
+    },
+    {
+      "id": "paying-vendors-is-not-collections",
+      "expected": null,
+      "actual": null,
+      "status": "no_supported_goal",
+      "passed": true,
+      "limitation": null,
+      "candidate": null
+    },
+    {
+      "id": "payable-success-criterion-is-not-collections",
+      "expected": null,
+      "actual": null,
+      "status": "no_supported_goal",
+      "passed": true,
+      "limitation": null,
+      "candidate": null
+    },
+    {
+      "id": "payable-description-is-not-collections",
+      "expected": null,
+      "actual": null,
+      "status": "no_supported_goal",
+      "passed": true,
+      "limitation": null,
+      "candidate": null
+    },
+    {
+      "id": "payable-ancestor-is-not-collections",
+      "expected": null,
+      "actual": null,
+      "status": "no_supported_goal",
+      "passed": true,
+      "limitation": null,
+      "candidate": null
+    },
+    {
+      "id": "payable-criterion-cannot-outrank-receivables",
+      "expected": "cash",
+      "actual": "cash",
+      "status": "candidate",
+      "passed": true,
+      "limitation": null,
+      "candidate": {
+        "goalId": "cash",
+        "title": "Collect unpaid invoices from customers",
+        "basis": "causal_contribution_requires_confirmation",
+        "evidenceCaptureIds": [
+          "dev-invoices-0-0",
+          "dev-invoices-0-1",
+          "dev-invoices-0-2",
+          "dev-invoices-1-0",
+          "dev-invoices-1-1",
+          "dev-invoices-1-2",
+          "dev-invoices-2-0",
+          "dev-invoices-2-1",
+          "dev-invoices-2-2"
+        ],
+        "reason": "invoice balances → checking balances or payments → invoice reminder draft. Reviewed invoice reminders could help collect outstanding balances; it may support “Collect unpaid invoices from customers”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
+        "grounding": {
+          "policy": "goal-contribution-v1",
+          "objectiveId": "cash",
+          "path": [
+            {
+              "goalId": "cash",
+              "title": "Collect unpaid invoices from customers",
+              "updatedAt": 1791828000000
+            }
+          ],
+          "requiredOutcome": {
+            "goalId": "cash",
+            "field": "title",
+            "text": "Collect unpaid invoices from customers"
+          },
+          "contribution": "Reviewed invoice reminders could help collect outstanding balances; it may support “Collect unpaid invoices from customers”.",
+          "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness."
+        }
+      }
+    },
+    {
+      "id": "customer-collections-remain-supported",
+      "expected": "cash",
+      "actual": "cash",
+      "status": "candidate",
+      "passed": true,
+      "limitation": null,
+      "candidate": {
+        "goalId": "cash",
+        "title": "Receivables",
+        "basis": "causal_contribution_requires_confirmation",
+        "evidenceCaptureIds": [
+          "dev-invoices-0-0",
+          "dev-invoices-0-1",
+          "dev-invoices-0-2",
+          "dev-invoices-1-0",
+          "dev-invoices-1-1",
+          "dev-invoices-1-2",
+          "dev-invoices-2-0",
+          "dev-invoices-2-1",
+          "dev-invoices-2-2"
+        ],
+        "reason": "invoice balances → checking balances or payments → invoice reminder draft. Reviewed invoice reminders could help collect outstanding balances; it may support “Collect overdue invoices owed by customers”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
+        "grounding": {
+          "policy": "goal-contribution-v1",
+          "objectiveId": "cash",
+          "path": [
+            {
+              "goalId": "cash",
+              "title": "Receivables",
+              "updatedAt": 1791828000000
+            }
+          ],
+          "requiredOutcome": {
+            "goalId": "cash",
+            "field": "success_criteria",
+            "text": "Collect overdue invoices owed by customers"
+          },
+          "contribution": "Reviewed invoice reminders could help collect outstanding balances; it may support “Collect overdue invoices owed by customers”.",
+          "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness."
+        }
+      }
+    },
+    {
+      "id": "vendor-expenses-still-support-reconciliation",
+      "expected": "expenses",
+      "actual": "expenses",
+      "status": "candidate",
+      "passed": true,
+      "limitation": null,
+      "candidate": {
+        "goalId": "expenses",
+        "title": "Reconcile business expenses",
+        "basis": "causal_contribution_requires_confirmation",
+        "evidenceCaptureIds": [
+          "dev-expenses-0-0",
+          "dev-expenses-0-1",
+          "dev-expenses-0-2",
+          "dev-expenses-1-0",
+          "dev-expenses-1-1",
+          "dev-expenses-1-2",
+          "dev-expenses-2-0",
+          "dev-expenses-2-1",
+          "dev-expenses-2-2"
+        ],
+        "reason": "receipts or transactions → matching receipts and transactions → expense reconciliation draft. A reviewed reconciliation could identify receipts and unmatched expenses; it may support “Reconcile business expenses”. This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness.",
+        "grounding": {
+          "policy": "goal-contribution-v1",
+          "objectiveId": "expenses",
+          "path": [
+            {
+              "goalId": "expenses",
+              "title": "Reconcile business expenses",
+              "updatedAt": 1791828000000
+            }
+          ],
+          "requiredOutcome": {
+            "goalId": "expenses",
+            "field": "title",
+            "text": "Reconcile business expenses"
+          },
+          "contribution": "A reviewed reconciliation could identify receipts and unmatched expenses; it may support “Reconcile business expenses”.",
+          "uncertainty": "This is a possible contribution; confirm that the observed work serves this goal. Activity does not prove progress or readiness."
+        }
+      }
     },
     {
       "id": "unsupported-paraphrase",

@@ -1,9 +1,11 @@
 import type { JobKind } from './opportunity-types.ts';
 
 /** Bounded outcome vocabulary, not a semantic model or a promise of business impact. */
-export const GOAL_CONTRIBUTIONS: Record<JobKind, { outcome: RegExp; contribution: string }> = {
+export const GOAL_CONTRIBUTIONS: Record<JobKind, { outcome: RegExp; excludedContext?: RegExp; contribution: string }> = {
   invoice_review: {
     outcome: /\b(?:(?:reduce|clear|collect|recover|review) (?:the |all |our )?(?:unpaid |overdue |outstanding )invoices?|improve cash collection)\b/i,
+    // Clearing payables sends money out; a collections reminder cannot establish that contribution.
+    excludedContext: /\b(?:payables?|(?:pay(?:ing)?|payments? to|owed to) (?:our |the )?(?:suppliers?|vendors?)|(?:suppliers?|vendors?)(?:['’]s?)? (?:payments?|invoices?|bills?|balances?)|(?:invoices?|bills?|balances?) (?:from|to) (?:our |the )?(?:suppliers?|vendors?))\b/i,
     contribution: 'Reviewed invoice reminders could help collect outstanding balances',
   },
   lead_followup: {

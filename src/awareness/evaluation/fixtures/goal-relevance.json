@@ -84,6 +84,32 @@
     { "id": "supplier-payments-are-not-collections", "kind": "invoice_review", "goals": [
       { "id": "payables", "title": "Settle overdue invoices from suppliers" }
     ], "expected": null, "status": "no_supported_goal" },
+    { "id": "clearing-supplier-debt-is-not-collections", "kind": "invoice_review", "goals": [
+      { "id": "payables", "title": "Clear overdue invoices owed to suppliers" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "paying-vendors-is-not-collections", "kind": "invoice_review", "goals": [
+      { "id": "payables", "title": "Reduce overdue invoices by paying vendors on time" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "payable-success-criterion-is-not-collections", "kind": "invoice_review", "goals": [
+      { "id": "payables", "title": "Improve cash collection", "success_criteria": "Clear outstanding invoices from our suppliers" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "payable-description-is-not-collections", "kind": "invoice_review", "goals": [
+      { "id": "payables", "title": "Review unpaid invoices", "description": "Pay\nour vendors promptly to protect supply continuity." }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "payable-ancestor-is-not-collections", "kind": "invoice_review", "goals": [
+      { "id": "root", "title": "Keep accounts payable current" },
+      { "id": "step", "title": "Reduce overdue invoices", "level": "key_result", "parent_id": "root" }
+    ], "expected": null, "status": "no_supported_goal" },
+    { "id": "payable-criterion-cannot-outrank-receivables", "kind": "invoice_review", "goals": [
+      { "id": "payables", "title": "Supplier payments", "success_criteria": "Clear overdue invoices" },
+      { "id": "cash", "title": "Collect unpaid invoices from customers" }
+    ], "expected": "cash", "status": "candidate" },
+    { "id": "customer-collections-remain-supported", "kind": "invoice_review", "goals": [
+      { "id": "cash", "title": "Receivables", "success_criteria": "Collect overdue invoices owed by customers" }
+    ], "expected": "cash", "status": "candidate" },
+    { "id": "vendor-expenses-still-support-reconciliation", "kind": "expense_reconciliation", "goals": [
+      { "id": "expenses", "title": "Reconcile business expenses", "description": "Match vendor invoices to receipts and transactions." }
+    ], "expected": "expenses", "status": "candidate" },
     { "id": "unsupported-paraphrase", "kind": "invoice_review", "goals": [
       { "id": "cash", "title": "Get customers to pay what they owe" }
     ], "expected": null, "status": "no_supported_goal", "limitation": "Useful relation not recognized by this bounded vocabulary" }
