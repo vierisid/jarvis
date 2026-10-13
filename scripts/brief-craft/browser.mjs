@@ -15,8 +15,9 @@ export async function inspect(tab, room) {
         const style = getComputedStyle(node);
         if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
       }
-      const rect = element.getBoundingClientRect();
-      return rect.width > 0 && rect.height > 0;
+      // SVG edges can be visible/focusable with a zero-width bounding box.
+      // Positive two-dimensional geometry is required for panels below.
+      return element.getClientRects().length > 0;
     };
     const bounds = element => {
       const rect = element?.getBoundingClientRect();
