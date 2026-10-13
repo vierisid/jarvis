@@ -3102,6 +3102,527 @@ else
 	fi
 fi
 
+
+echo
+echo "the sidecar publish steps when the version is already on npm (#966)"
+# Both publish steps of publish-sidecar, executed verbatim with an npm stub
+# that answers as the registry would: a version it holds refuses a publish,
+# dry or real, with the message npm 12.1.0 prints (run 38395996923, and the
+# same text reproduced locally with npm 12.1.0 against
+# @usejarvis/sidecar-linux-x64@0.11.0). The steps run from a workspace laid
+# out as Prepare platform packages leaves it. A dry run is the only
+# rehearsal of this workflow, so it must not fail just because the version
+# it rehearses is already out (#966).
+#
+# sp_suite <workflow>: run every fixture against that file, one line per
+# fixture in ${WORK}/sp/results: PASS<TAB>label or FAIL<TAB>label<TAB>why.
+# The workflow itself must pass all of them; each behaviour mutant below
+# must make the fixture it names fail.
+mkdir -p "${WORK}/sp/bin"
+# npm stub: logs its argv. A package is published when its name is a line
+# of $STUB_PUBLISHED. publish refuses a published one as npm does, and
+# fails with another error when STUB_FAIL=other; either way it first writes
+# a line to stderr, as npm does its tarball listing. view answers version,
+# dist.tarball (on $STUB_REGISTRY when set) and dist.integrity (of the
+# tarball in $STUB_REG, or $STUB_INTEGRITY), for VERSION only.
+cat >"${WORK}/sp/bin/npm" <<'EOF'
+#!/usr/bin/env bash
+printf 'npm %s\n' "$*" >>"$NPM_LOG"
+case "$1" in
+publish)
+	base="$(basename "$PWD")"
+	if [ "$base" = jarvis-sidecar ]; then name=@usejarvis/sidecar; else name="@usejarvis/sidecar-${base}"; fi
+	echo "npm notice stub-tarball-listing ${name}" >&2
+	if [ "${STUB_FAIL:-}" = other ]; then echo "npm error code E403" >&2; exit 1; fi
+	if grep -qxF "$name" "$STUB_PUBLISHED"; then
+		echo "npm error You cannot publish over the previously published versions: ${VERSION}." >&2
+		exit 1
+	fi
+	exit 0
+	;;
+view)
+	spec="$2"
+	pkg="${spec%@*}"
+	# Only the exact version this run publishes is on npm.
+	[ "$spec" = "${pkg}@${VERSION}" ] || { echo "npm error code E404" >&2; exit 1; }
+	grep -qxF "$pkg" "$STUB_PUBLISHED" || { echo "npm error code E404" >&2; exit 1; }
+	base="${pkg#@usejarvis/}"
+	case "$3" in
+	version) printf '%s\n' "${spec##*@}" ;;
+	dist.tarball) printf '%s\n' "${STUB_REGISTRY:-https://registry.npmjs.org}/${pkg}/-/${base}-${spec##*@}.tgz" ;;
+	dist.integrity)
+		if [ -n "${STUB_INTEGRITY:-}" ]; then printf '%s\n' "$STUB_INTEGRITY"; exit 0; fi
+		printf 'sha512-%s\n' "$(openssl dgst -sha512 -binary "${STUB_REG}/${base}-${spec##*@}.tgz" | base64 -w0)"
+		;;
+	*) exit 1 ;;
+	esac
+	;;
+*) exit 1 ;;
+esac
+EOF
+# curl stub (#958): serves registry tarballs from $STUB_REG by the base
+# name of the URL, into the -o path; fails when STUB_CURL_FAIL is set.
+cat >"${WORK}/sp/bin/curl" <<'EOF'
+#!/usr/bin/env bash
+printf 'curl %s\n' "$*" >>"$NPM_LOG"
+[ -z "${STUB_CURL_FAIL:-}" ] || exit 22
+out=""
+url=""
+while [ "$#" -gt 0 ]; do
+	case "$1" in
+	-o) out="$2"; shift ;;
+	-*) ;;
+	*) url="$1" ;;
+	esac
+	shift
+done
+cp "${STUB_REG}/${url##*/}" "$out"
+EOF
+# openssl stub: the real one, unless STUB_OPENSSL_FAIL is set.
+SP_OPENSSL="$(command -v openssl)"
+printf '#!/usr/bin/env bash\n[ -z "${STUB_OPENSSL_FAIL:-}" ] || exit 1\nexec %q "$@"\n' "$SP_OPENSSL" >"${WORK}/sp/bin/openssl"
+chmod +x "${WORK}/sp/bin/npm" "${WORK}/sp/bin/curl" "${WORK}/sp/bin/openssl"
+SP_PLATFORMS="darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64"
+# sp_fixture: the workspace as Prepare platform packages leaves it.
+sp_fixture() {
+	rm -rf "${WORK}/sp/ws" && mkdir -p "${WORK}/sp/ws/sidecar/npm/jarvis-sidecar" "${WORK}/sp/tmp"
+	local p
+	for p in $SP_PLATFORMS; do
+		mkdir -p "${WORK}/sp/ws/sidecar/npm/${p}/bin"
+		printf '{"name":"@usejarvis/sidecar-%s","version":"0.11.0"}\n' "$p" >"${WORK}/sp/ws/sidecar/npm/${p}/package.json"
+		case "$p" in
+		darwin-*)
+			mkdir -p "${WORK}/sp/ws/sidecar/npm/${p}/bin/Jarvis.app/Contents/MacOS"
+			printf 'bundle %s\n' "$p" >"${WORK}/sp/ws/sidecar/npm/${p}/bin/Jarvis.app/Contents/MacOS/jarvis"
+			printf 'plist %s\n' "$p" >"${WORK}/sp/ws/sidecar/npm/${p}/bin/Jarvis.app/Contents/Info.plist"
+			;;
+		win32-*) printf 'exe %s\n' "$p" >"${WORK}/sp/ws/sidecar/npm/${p}/bin/jarvis.exe" ;;
+		*) printf 'elf %s\n' "$p" >"${WORK}/sp/ws/sidecar/npm/${p}/bin/jarvis" ;;
+		esac
+	done
+	printf 'launcher\n' >"${WORK}/sp/ws/sidecar/npm/jarvis-sidecar/index.js"
+	: >"${WORK}/sp/published"
+	rm -rf "${WORK}/sp/reg" && mkdir -p "${WORK}/sp/reg"
+	for p in $SP_PLATFORMS; do sp_pack "$p" 0.11.0; done
+}
+# sp_pack <platform> <version> [stage edit]: the tarball npm serves for that
+# platform package, as npm lays it out (package/ prefix), from the
+# workspace copy, i.e. exactly these bytes. With a third argument, that
+# shell text is run inside the staged package/ first, to make npm serve
+# something else.
+sp_pack() {
+	local st="${WORK}/sp/stage"
+	rm -rf "$st" && mkdir -p "$st"
+	cp -R "${WORK}/sp/ws/sidecar/npm/${1}" "${st}/package"
+	if [ -n "${3:-}" ]; then (cd "${st}/package" && eval "$3"); fi
+	(cd "$st" && tar -czf "${WORK}/sp/reg/sidecar-${1}-${2}.tgz" -- *)
+}
+# sp_published <package names...>: what npm already holds at VERSION.
+sp_published() { printf '%s\n' "$@" >"${WORK}/sp/published"; }
+SP_ALL_PLATFORMS=(@usejarvis/sidecar-darwin-arm64 @usejarvis/sidecar-darwin-x64 @usejarvis/sidecar-linux-x64 @usejarvis/sidecar-linux-arm64 @usejarvis/sidecar-win32-x64)
+# sp_run <script> <dry true|false> <version>: run the step as the runner
+# would (bash -e, the default shell), with the env it is given there.
+sp_run() {
+	: >"${WORK}/sp/npm.log"
+	(cd "${WORK}/sp/ws" && env -i PATH="${WORK}/sp/bin:$PATH" TMPDIR="${WORK}/sp/tmp" HOME="${WORK}/sp/tmp" \
+		GITHUB_WORKSPACE="${WORK}/sp/ws" DRY_RUN="$2" VERSION="$3" NPM_LOG="${WORK}/sp/npm.log" \
+		STUB_PUBLISHED="${WORK}/sp/published" STUB_REG="${WORK}/sp/reg" ${STUB_FAIL+STUB_FAIL="$STUB_FAIL"} \
+		${STUB_CURL_FAIL+STUB_CURL_FAIL=1} ${STUB_INTEGRITY+STUB_INTEGRITY="$STUB_INTEGRITY"} \
+		${STUB_REGISTRY+STUB_REGISTRY="$STUB_REGISTRY"} ${STUB_OPENSSL_FAIL+STUB_OPENSSL_FAIL=1} \
+		bash -e -c "$1") >"${WORK}/sp/out" 2>&1
+	SP_RC=$?
+}
+# sp_case <want 0|1> <label> [text the output must contain]
+sp_case() {
+	local want="$1" label="$2" text="${3:-}" why=""
+	if [ "$want" = 0 ] && [ "$SP_RC" -ne 0 ]; then why="exited ${SP_RC}"; fi
+	if [ "$want" != 0 ] && [ "$SP_RC" -eq 0 ]; then why="exited 0"; fi
+	if [ -z "$why" ] && [ -n "$text" ] && ! grep -qF -- "$text" "${WORK}/sp/out"; then why="no '${text}' in the output"; fi
+	if [ -z "$why" ]; then
+		printf 'PASS\t%s\n' "$label" >>"${WORK}/sp/results"
+	else
+		printf 'FAIL\t%s\t%s\n' "$label" "${why}: $(tr '\n' '|' <"${WORK}/sp/out") calls: $(tr '\n' '|' <"${WORK}/sp/npm.log")" >>"${WORK}/sp/results"
+	fi
+}
+# sp_log_case <label> <expected npm publish lines, one per package>
+sp_log_case() {
+	local want="$2" got
+	got="$(grep '^npm publish' "${WORK}/sp/npm.log")"
+	if [ "$SP_RC" -eq 0 ] && [ "$got" = "$want" ]; then
+		printf 'PASS\t%s\n' "$1" >>"${WORK}/sp/results"
+	else
+		printf 'FAIL\t%s\t%s\n' "$1" "exit ${SP_RC}; publish calls: $(printf '%s' "$got" | tr '\n' '|')" >>"${WORK}/sp/results"
+	fi
+}
+# sp_want5 <flags>: the five platform publish calls with those flags.
+sp_want5() {
+	local i
+	for i in 1 2 3 4 5; do printf 'npm publish --access public%s\n' "${1:+ $1}"; done
+}
+sp_suite() {
+	: >"${WORK}/sp/results"
+	local plat wrap
+	plat="$(YQ_FILE="$1" yq step publish-sidecar 'Publish platform packages')" || plat=""
+	wrap="$(YQ_FILE="$1" yq step publish-sidecar 'Publish wrapper package')" || wrap=""
+	if [ -z "$plat" ] || [ -z "$wrap" ]; then
+		printf 'FAIL\t%s\t%s\n' "found both publish steps" "missing" >>"${WORK}/sp/results"
+		return
+	fi
+	# Nothing on npm yet: every package published, flags as before.
+	sp_fixture
+	sp_run "$plat" false 0.11.0
+	sp_log_case "real run, nothing on npm yet: publishes all five" "$(sp_want5 "")"
+	sp_fixture
+	sp_run "$plat" true 0.11.0
+	sp_log_case "dry run, nothing on npm yet: rehearses all five with --dry-run" "$(sp_want5 "--dry-run")"
+	sp_fixture
+	sp_run "$plat" true 0.12.0-rc.1
+	sp_log_case "dry run of a prerelease: --dry-run --tag next on all five" "$(sp_want5 "--dry-run --tag next")"
+	sp_fixture
+	sp_run "$plat" false 0.12.0-rc.1
+	sp_log_case "real run of a prerelease: --tag next on all five" "$(sp_want5 "--tag next")"
+	sp_fixture
+	sp_run "$wrap" false 0.12.0-rc.1
+	sp_log_case "wrapper, real run of a prerelease: --tag next" "npm publish --access public --tag next"
+	sp_fixture
+	sp_run "$wrap" true 0.11.0
+	sp_log_case "wrapper, dry run, nothing on npm yet: rehearses with --dry-run" "npm publish --access public --dry-run"
+	# #966: already on npm, on a dry run.
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_run "$plat" true 0.11.0
+	sp_case 0 "dry run, all five already on npm: a notice, not a failure (#966)" "::notice::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_run "$plat" true 0.12.0-rc.1
+	sp_case 0 "dry run of a prerelease already on npm: a notice, not a failure (#966)" "::notice::"
+	sp_fixture
+	sp_published @usejarvis/sidecar-linux-x64
+	sp_run "$plat" true 0.11.0
+	sp_log_case "dry run, one of five already on npm: all five still rehearsed (#966)" "$(sp_want5 "--dry-run")"
+	sp_fixture
+	sp_published @usejarvis/sidecar
+	sp_run "$wrap" true 0.11.0
+	sp_case 0 "wrapper, dry run, already on npm: a notice, not a failure (#966)" "::notice::"
+	# Only that refusal is forgiven on a dry run: any other failure of a
+	# rehearsed publish still fails it, even for a version npm has.
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	STUB_FAIL=other sp_run "$plat" true 0.11.0
+	sp_case 1 "dry run, a failure other than the version existing, on a version npm has: fails (#966)"
+	sp_fixture
+	sp_published @usejarvis/sidecar
+	STUB_FAIL=other sp_run "$wrap" true 0.11.0
+	sp_case 1 "wrapper, dry run, a failure other than the version existing, on a version npm has: fails (#966)"
+	# Not on npm and the publish failed: a failure, dry or real.
+	sp_fixture
+	STUB_FAIL=other sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, a publish that fails for a version npm does not have: fails"
+	sp_fixture
+	STUB_FAIL=other sp_run "$plat" true 0.11.0
+	sp_case 1 "dry run, a publish that fails for a version npm does not have: fails"
+	sp_fixture
+	STUB_FAIL=other sp_run "$wrap" false 0.11.0
+	sp_case 1 "wrapper, real run, a publish that fails for a version npm does not have: fails"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_run "$plat" false 0.11.0
+	sp_case 0 "real run, all five already on npm: success" "treating as success"
+	# What npm prints reaches the log, on success and on failure.
+	sp_fixture
+	sp_run "$plat" false 0.11.0
+	sp_case 0 "npm output shown when a platform publish succeeds" "npm notice stub-tarball-listing @usejarvis/sidecar-win32-x64"
+	sp_fixture
+	STUB_FAIL=other sp_run "$plat" false 0.11.0
+	sp_case 1 "npm output shown when a platform publish fails" "npm error code E403"
+	sp_fixture
+	sp_run "$wrap" false 0.11.0
+	sp_case 0 "npm output shown when the wrapper publish succeeds" "npm notice stub-tarball-listing @usejarvis/sidecar"
+	sp_fixture
+	STUB_FAIL=other sp_run "$wrap" false 0.11.0
+	sp_case 1 "npm output shown when the wrapper publish fails" "npm error code E403"
+	# A real run that finds the wrapper already out takes it as success,
+	# as before: it carries no artifact bytes.
+	sp_fixture
+	sp_published @usejarvis/sidecar
+	sp_run "$wrap" false 0.11.0
+	sp_case 0 "wrapper, real run, already on npm: success" "is already on npm"
+	# #958: a real run that finds a platform package already on npm takes
+	# it as published only if npm serves exactly the files this run built
+	# and verified; otherwise github-release would attach, with digests,
+	# binaries npm does not serve. Same bytes is what a re-run of the run
+	# that published them sees.
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_run "$plat" false 0.11.0
+	sp_case 0 "real run, all five already on npm with exactly these files: success (#958)" "with exactly the files this run verified"
+	sp_fixture
+	sp_published @usejarvis/sidecar-darwin-x64 @usejarvis/sidecar-win32-x64
+	sp_run "$plat" false 0.11.0
+	sp_log_case "real run, two of five already on npm with these files: the other three published (#958)" "$(sp_want5 "")"
+	if [ "$(grep -c '^curl ' "${WORK}/sp/npm.log")" = 2 ]; then
+		printf 'PASS\t%s\n' "real run, two of five already on npm: both compared (#958)" >>"${WORK}/sp/results"
+	else
+		printf 'FAIL\t%s\t%s\n' "real run, two of five already on npm: both compared (#958)" "$(tr '\n' '|' <"${WORK}/sp/npm.log")" >>"${WORK}/sp/results"
+	fi
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack linux-arm64 0.11.0 'printf "another build\n" >bin/jarvis'
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, npm serving another build of one package: refused (#958)" "::error::@usejarvis/sidecar-linux-arm64@0.11.0 is already on npm with files other than"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack darwin-arm64 0.11.0 'printf "x\n" >bin/Jarvis.app/Contents/MacOS/extra'
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, npm serving an extra file in a bundle: refused (#958)" "::error::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack darwin-x64 0.11.0 'rm bin/Jarvis.app/Contents/Info.plist'
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, npm serving a bundle with a file missing: refused (#958)" "::error::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack linux-x64 0.11.0 'ln -s jarvis bin/jarvis-link'
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, npm serving an extra link beside the same files: refused (#958)" "::error::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack win32-x64 0.11.0 'rm -r bin'
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, npm serving a package with no bin: refused (#958)" "::error::"
+	# npm installs the first path component stripped, links dropped: what
+	# GNU tar shows must be what npm installs (#958 security review).
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack linux-x64 0.11.0 "cd .. && rm -r package && ln -s \"${WORK}/sp/ws/sidecar/npm/linux-x64\" package"
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, a tarball whose package is a link to this very package: refused (#958)" "::error::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack linux-x64 0.11.0 'mkdir -p ../zzz/bin && printf "other\n" >../zzz/bin/jarvis'
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, a tarball with a second top-level directory: refused (#958)" "::error::"
+	# Members spelled ./package/...: GNU tar shows package/, npm strips the
+	# dot and installs package/package.json, no bin at the root.
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	rm -rf "${WORK}/sp/stage" && mkdir -p "${WORK}/sp/stage"
+	cp -R "${WORK}/sp/ws/sidecar/npm/linux-x64" "${WORK}/sp/stage/package"
+	tar -czf "${WORK}/sp/reg/sidecar-linux-x64-0.11.0.tgz" -C "${WORK}/sp/stage" ./package
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, members spelled ./package/: refused (#958)" "::error::"
+	# A hard link to a member sent again later: GNU tar keeps the first
+	# bytes in the link, npm drops the link and installs no binary.
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	rm -rf "${WORK}/sp/stage" "${WORK}/sp/stage2" && mkdir -p "${WORK}/sp/stage/package/bin" "${WORK}/sp/stage2/package"
+	cp "${WORK}/sp/ws/sidecar/npm/linux-x64/bin/jarvis" "${WORK}/sp/stage/package/package.json"
+	ln "${WORK}/sp/stage/package/package.json" "${WORK}/sp/stage/package/bin/jarvis"
+	cp "${WORK}/sp/ws/sidecar/npm/linux-x64/package.json" "${WORK}/sp/stage2/package/package.json"
+	tar -cf "${WORK}/sp/hl.tar" -C "${WORK}/sp/stage" package/package.json package/bin/jarvis
+	tar -rf "${WORK}/sp/hl.tar" -C "${WORK}/sp/stage2" package/package.json
+	gzip -c "${WORK}/sp/hl.tar" >"${WORK}/sp/reg/sidecar-linux-x64-0.11.0.tgz"
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, a hard link to a member sent again later: refused (#958)" "::error::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack linux-x64 0.11.0 'printf "{\"scripts\":{\"postinstall\":\"x\"}}\n" >package.json'
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, npm serving another package.json with the same bin: refused (#958)" "::error::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack linux-x64 0.11.0 "printf x >\"bin/a\$(printf \"\\r\")::notice title=spoof::npm matches\""
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, a file name with a carriage return: refused (#958)" "::error::"
+	if grep -q $'\r' "${WORK}/sp/out"; then
+		printf 'FAIL\t%s\t%s\n' "a carriage return in a tarball name never reaches the log (#958)" "found one" >>"${WORK}/sp/results"
+	else
+		printf 'PASS\t%s\n' "a carriage return in a tarball name never reaches the log (#958)" >>"${WORK}/sp/results"
+	fi
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack win32-x64 0.11.0 'rm -r bin'
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, npm serving a package with no bin: refused (#958)" "::error::"
+	# Nothing to compare is not a match.
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	rm -rf "${WORK}/sp/ws/sidecar/npm/linux-x64/bin" && mkdir "${WORK}/sp/ws/sidecar/npm/linux-x64/bin"
+	sp_pack linux-x64 0.11.0
+	sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, an empty bin here and on npm: refused, nothing was compared (#958)" "::error::"
+	# What is fetched must be what npm says it serves, from npm.
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	STUB_INTEGRITY="sha512-$(printf 'other' | openssl dgst -sha512 -binary | base64 -w0)" sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, a download that does not match dist.integrity: refused (#958)" "::error::"
+	# An empty digest from a failed openssl must not match an empty one
+	# from npm.
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	STUB_INTEGRITY="sha512-" STUB_OPENSSL_FAIL=1 sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, an empty dist.integrity while the local digest fails: refused (#958)" "::error::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	STUB_REGISTRY="https://registry.npmjs.org.evil.example" sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, a tarball URL off the registry: refused (#958)" "::error::"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	STUB_CURL_FAIL=1 sp_run "$plat" false 0.11.0
+	sp_case 1 "real run, a tarball that cannot be fetched: refused (#958)" "::error::"
+	# #966 wins on a dry run: the comparison is reported, never fatal. A
+	# fresh build never matches what another run published (#958 has the
+	# measurement: every leg differs between two builds of the same source).
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_pack linux-arm64 0.11.0 'printf "another build\n" >bin/jarvis'
+	sp_run "$plat" true 0.11.0
+	sp_case 0 "dry run, npm serving another build: a notice that a real run would stop, not a failure (#966, #958)" "::notice::@usejarvis/sidecar-linux-arm64@0.11.0 on npm is not byte for byte this build"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	sp_run "$plat" true 0.11.0
+	sp_case 0 "dry run, npm serving exactly these files: a notice that says so (#958)" "::notice::@usejarvis/sidecar-linux-x64@0.11.0 on npm is byte for byte this build"
+	sp_fixture
+	sp_published "${SP_ALL_PLATFORMS[@]}"
+	STUB_CURL_FAIL=1 sp_run "$plat" true 0.11.0
+	sp_case 0 "dry run, a comparison that cannot complete: a warning, not a failure (#966, #958)" "::warning::"
+}
+sp_suite "$SIDECAR_WORKFLOW"
+while IFS=$'\t' read -r st label why; do
+	if [ "$st" = PASS ]; then ok "publish steps: ${label}"; else no "publish steps: ${label}" "$why"; fi
+done <"${WORK}/sp/results"
+# behaviour_mutant <label> <exact text> <replacement> <fixture that must fail>
+#   [<second exact text> <its replacement>]
+# Each text must occur exactly once in sidecar-release.yml. The copy keeps
+# its basename, as mutant() does. The optional second edit is for a
+# backstop: it removes the earlier check that would otherwise catch the
+# fixture first, so the mutant shows the backstop alone still does.
+behaviour_mutant() {
+	local copy="${WORK}/bm/sidecar-release.yml"
+	mkdir -p "${WORK}/bm"
+	if ! FROM="$SIDECAR_WORKFLOW" TO="$copy" OLD="$2" NEW="$3" OLD2="${5:-}" NEW2="${6:-}" bun -e '
+let s = await Bun.file(process.env.FROM).text();
+const edits = [[process.env.OLD, process.env.NEW]];
+if (process.env.OLD2) edits.push([process.env.OLD2, process.env.NEW2]);
+for (const [o, r] of edits) {
+  const n = s.split(o).length - 1;
+  if (n !== 1) { console.error("anchor occurs " + n + " times"); process.exit(2); }
+  s = s.replace(o, r);
+}
+await Bun.write(process.env.TO, s);
+'; then
+		no "mutant '${1}' could be applied (the workflow no longer has the text it mutates)"
+		return
+	fi
+	sp_suite "$copy"
+	if grep -qF -- "$(printf 'FAIL\t%s\t' "$4")" "${WORK}/sp/results"; then
+		ok "reports: ${1}"
+	else
+		no "reports: ${1}, for the reason it exists" "wanted '${4}' to fail; results:
+$(cut -f1,2 "${WORK}/sp/results")"
+	fi
+}
+# shellcheck disable=SC2016 # every mutant is literal workflow text.
+{
+	behaviour_mutant 'a dry run failing on a version npm already has, as before #966' \
+		'              elif grep -qF "You cannot publish over the previously published versions" "$err"; then' \
+		'              elif false; then' \
+		'dry run, all five already on npm: a notice, not a failure (#966)'
+	behaviour_mutant 'the wrapper dry run failing on a version npm already has, as before #966' \
+		$'\n            elif grep -qF "You cannot publish over the previously published versions" "$err"; then' \
+		$'\n            elif false; then' \
+		'wrapper, dry run, already on npm: a notice, not a failure (#966)'
+	behaviour_mutant 'a dry run forgiving any failure of a version npm has (#966)' \
+		'              elif grep -qF "You cannot publish over the previously published versions" "$err"; then' \
+		'              elif true; then' \
+		'dry run, a failure other than the version existing, on a version npm has: fails (#966)'
+	behaviour_mutant 'the wrapper dry run forgiving any failure of a version npm has (#966)' \
+		$'\n            elif grep -qF "You cannot publish over the previously published versions" "$err"; then' \
+		$'\n            elif true; then' \
+		'wrapper, dry run, a failure other than the version existing, on a version npm has: fails (#966)'
+	behaviour_mutant 'a dry run that stops rehearsing at the first package npm already has (#966)' \
+		$'                echo "::notice::${pkg}@${VERSION} is already on npm, so this dry run cannot rehearse publishing it; packing it was rehearsed."\n' \
+		$'                echo "::notice::${pkg}@${VERSION} is already on npm, so this dry run cannot rehearse publishing it; packing it was rehearsed."\n                exit 0\n' \
+		'dry run, one of five already on npm: all five still rehearsed (#966)'
+	behaviour_mutant 'a prerelease of the platform packages published without --tag next' \
+		$'flags+=(--tag next); fi\n          err="$(mktemp)"\n\n          # manifest <dir>' \
+		$'flags+=(--tag latest); fi\n          err="$(mktemp)"\n\n          # manifest <dir>' \
+		'dry run of a prerelease: --dry-run --tag next on all five'
+	behaviour_mutant 'a prerelease of the wrapper published without --tag next' \
+		$'flags+=(--tag next); fi\n          pkg="@usejarvis/sidecar"' \
+		$'fi\n          pkg="@usejarvis/sidecar"' \
+		'wrapper, real run of a prerelease: --tag next'
+	behaviour_mutant 'a real run failing on a platform package npm already has' \
+		'              elif [ "$DRY_RUN" != "true" ]; then' \
+		'              elif false; then' \
+		'real run, all five already on npm: success'
+	behaviour_mutant 'npm output of the platform publishes swallowed' \
+		$'            npm publish --access public "${flags[@]}" 2>&1 | tee "$err"\n' \
+		$'            npm publish --access public "${flags[@]}" >"$err" 2>&1 | true\n' \
+		'npm output shown when a platform publish fails'
+	behaviour_mutant 'npm output of the wrapper publish swallowed' \
+		$'\n          npm publish --access public "${flags[@]}" 2>&1 | tee "$err"\n' \
+		$'\n          npm publish --access public "${flags[@]}" >"$err" 2>&1 | true\n' \
+		'npm output shown when the wrapper publish succeeds'
+	behaviour_mutant 'the status of tee taken for the status of the publish' \
+		$'            if [ "${PIPESTATUS[0]}" -ne 0 ]; then\n' \
+		$'            if [ "${PIPESTATUS[1]}" -ne 0 ]; then\n' \
+		'dry run, all five already on npm: a notice, not a failure (#966)'
+	# #958: the real-run fallback accepts only the bytes this run verified.
+	behaviour_mutant 'a real run taking a version npm has as published without comparing, as before #958' \
+		$'                same_as_npm "$pkg" || same=$?\n                if [ "$same" -eq 0 ]; then\n                  echo "${pkg}@${VERSION} is already on npm with exactly' \
+		$'                true || same=$?\n                if [ "$same" -eq 0 ]; then\n                  echo "${pkg}@${VERSION} is already on npm with exactly' \
+		'real run, npm serving another build of one package: refused (#958)'
+	behaviour_mutant 'the comparison by type and path only, not by content (#958)' \
+		$'            find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum || exit 1\n' '' \
+		'real run, npm serving another build of one package: refused (#958)'
+	behaviour_mutant 'the comparison by content only, blind to an extra link, behind no listing check (#958)' \
+		$'            find . -mindepth 1 -not -type d -printf \'%y %P\\n\' | LC_ALL=C sort || exit 1\n' '' \
+		'real run, npm serving an extra link beside the same files: refused (#958)' \
+		$'            if grep -qv \'^package/\' <<<"$names"; then return 1; fi\n            if grep -qv \'^[-d]$\' <<<"$types"; then return 1; fi\n' ''
+	behaviour_mutant 'nothing compared taken as a match (#958)' \
+		$'            [ -n "$(find bin -type f -print -quit 2>/dev/null)" ] || exit 1\n' '' \
+		'real run, an empty bin here and on npm: refused, nothing was compared (#958)'
+	behaviour_mutant 'a tarball judged by what GNU tar shows, behind no listing check (#958 security review)' \
+		$'            [ "$(find "${tmp}/x" -mindepth 1 -maxdepth 1 -printf \'%P %y\\n\')" = "package d" ] || return 1\n' '' \
+		'real run, a tarball whose package is a link to this very package: refused (#958)' \
+		$'            if grep -qv \'^package/\' <<<"$names"; then return 1; fi\n            if grep -qv \'^[-d]$\' <<<"$types"; then return 1; fi\n' ''
+	behaviour_mutant 'a second top-level directory let through, behind no listing check (#958 security review)' \
+		$'            [ "$(find "${tmp}/x" -mindepth 1 -maxdepth 1 -printf \'%P %y\\n\')" = "package d" ] || return 1\n' '' \
+		'real run, a tarball with a second top-level directory: refused (#958)' \
+		$'            if grep -qv \'^package/\' <<<"$names"; then return 1; fi\n            if grep -qv \'^[-d]$\' <<<"$types"; then return 1; fi\n' ''
+	behaviour_mutant 'members outside package/ let through the listing (#958 security re-review)' \
+		$'            if grep -qv \'^package/\' <<<"$names"; then return 1; fi\n' '' \
+		'real run, members spelled ./package/: refused (#958)'
+	behaviour_mutant 'links let through the listing (#958 security re-review)' \
+		$'            if grep -qv \'^[-d]$\' <<<"$types"; then return 1; fi\n' '' \
+		'real run, a hard link to a member sent again later: refused (#958)'
+	behaviour_mutant 'only bin compared, package.json left out (#958 security review)' \
+		$'            find . -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum || exit 1\n' \
+		$'            find bin -type f -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum || exit 1\n' \
+		'real run, npm serving another package.json with the same bin: refused (#958)'
+	behaviour_mutant 'unprintable names let through to the log (#958 security review)' \
+		$'            [ -z "$(LC_ALL=C find . -name \'*[![:print:]]*\' -print -quit)" ] || exit 1\n' '' \
+		'a carriage return in a tarball name never reaches the log (#958)'
+	behaviour_mutant 'the download not checked against dist.integrity (#958)' \
+		$'            [ "sha512-${got}" = "$integrity" ] || return 2\n' '' \
+		'real run, a download that does not match dist.integrity: refused (#958)'
+	behaviour_mutant 'any dist.integrity accepted, an empty one included (#958)' \
+		$'            [[ "$integrity" =~ ^sha512-[A-Za-z0-9+/]{86}==$ ]] || return 2\n' '' \
+		'real run, an empty dist.integrity while the local digest fails: refused (#958)'
+	behaviour_mutant 'a tarball fetched from wherever npm view points (#958)' \
+		$'            [[ "$url" =~ ^https://registry\\.npmjs\\.org/[^[:space:]]+\\.tgz$ ]] || return 2\n' '' \
+		'real run, a tarball URL off the registry: refused (#958)'
+	behaviour_mutant 'a real run that cannot compare taking the version as published (#958)' \
+		$'re-run this job."\n                  exit 1\n' $'re-run this job."\n' \
+		'real run, a tarball that cannot be fetched: refused (#958)'
+	behaviour_mutant 'a dry run failing because npm serves another build, against #966' \
+		$'the sidecar is not reproducible across runs."\n' $'the sidecar is not reproducible across runs."\n                  exit 1\n' \
+		'dry run, npm serving another build: a notice that a real run would stop, not a failure (#966, #958)'
+	behaviour_mutant 'a dry run failing when it cannot compare, against #966' \
+		$'a real run would stop here (#958)."\n' $'a real run would stop here (#958)."\n                  exit 1\n' \
+		'dry run, a comparison that cannot complete: a warning, not a failure (#966, #958)'
+}
 echo
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]
