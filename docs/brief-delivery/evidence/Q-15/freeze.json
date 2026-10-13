@@ -1,0 +1,11 @@
+{
+  "protocol": "founder-recall-v1",
+  "baseline": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+  "phase": "Frozen before candidate ranking changes and before the first heldout execution. Initial development-only harness preflight corrected an expected contested binding to abstention, preserving the truth layer.",
+  "provenance": "Author-visible synthetic repository cases; not an independent/blinded holdout.",
+  "files": {
+    "src/vault/evaluation/founder-recall.ts": "d96cf84660a4ee8506c827a0241880be03b4d4037c58146255b5309141c7dbb7",
+    "src/vault/evaluation/fixtures/founder-recall-development.json": "804dca2e6be0fd2d431ab7c2d98d82624035eca92eb7ba5c8c4106523d0ace86",
+    "src/vault/evaluation/fixtures/founder-recall-heldout.json": "15e7dcf5b9565f96adbbfa15714014a3c387fccd96d0756a42cb1b5d6f1d8e87"
+  }
+}
