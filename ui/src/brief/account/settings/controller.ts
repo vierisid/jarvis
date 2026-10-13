@@ -286,25 +286,36 @@ export class SettingsController {
         });
     }
   }
+  private replayAllowed() {
+    return (
+      this.alive &&
+      this.access &&
+      this.canWrite &&
+      this.canReplayTutorial &&
+      this.state.availability === "ready" &&
+      this.state.base?.replay.includes("tutorial") &&
+      this.state.draft === null &&
+      this.state.phase !== "saving" &&
+      !["pending", "unknown", "replayed"].includes(this.state.replay)
+    );
+  }
   requestReplay() {
-    if (
-      !this.alive ||
-      !this.access ||
-      !this.canWrite ||
-      !this.canReplayTutorial ||
-      this.state.availability !== "ready" ||
-      !this.state.base?.replay.includes("tutorial") ||
-      this.state.draft !== null ||
-      this.state.phase === "saving" ||
-      ["pending", "unknown", "replayed"].includes(this.state.replay)
-    )
-      return;
+    if (!this.replayAllowed()) return;
     this.publish({ replay: "confirm", actionMessage: "" });
   }
   async confirmReplay(confirmed: boolean) {
     if (!this.alive || !this.access || this.state.replay !== "confirm") return;
     if (!confirmed) {
       this.publish({ replay: "idle" });
+      return;
+    }
+    // Polling can invalidate eligibility while the confirmation is open.
+    if (!this.replayAllowed()) {
+      this.publish({
+        replay: "idle",
+        actionMessage:
+          "Tutorial replay is unavailable. Refresh settings and try again.",
+      });
       return;
     }
     const scope = this.scope;

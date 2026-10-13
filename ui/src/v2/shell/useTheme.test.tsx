@@ -85,18 +85,30 @@ test("rapid independent toggles read the current root rather than a stale render
   expectTheme("light");
 });
 test("cross-tab storage updates all subscribers without echoing a storage write", async () => {
-  localStorage.setItem("jarvis-theme", "light");
-  await React.act(async () =>
-    window.dispatchEvent(
-      new StorageEvent("storage", {
-        key: "jarvis-theme",
-        newValue: "dark",
-        storageArea: localStorage,
-      }),
-    ),
-  );
+  localStorage.setItem("jarvis-theme", "dark");
+  const original = localStorage.setItem;
+  let writes = 0;
+  localStorage.setItem = () => {
+    writes++;
+  };
+  try {
+    await React.act(async () =>
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "jarvis-theme",
+          newValue: "dark",
+          storageArea: localStorage,
+        }),
+      ),
+    );
+    expect(writes).toBe(0);
+  } finally {
+    localStorage.setItem = original;
+  }
   expectTheme("dark");
-  expect(localStorage.getItem("jarvis-theme")).toBe("light");
+  expect(localStorage.getItem("jarvis-theme")).toBe("dark");
+  // Unrelated/session events must not read even a changed local preference.
+  localStorage.setItem("jarvis-theme", "light");
   await React.act(async () =>
     window.dispatchEvent(
       new StorageEvent("storage", { key: "unrelated", newValue: "light" }),
@@ -114,6 +126,33 @@ test("cross-tab storage updates all subscribers without echoing a storage write"
   );
   expectTheme("dark");
 });
+test("queued storage events cannot replace a newer local appearance choice", async () => {
+  localStorage.setItem("jarvis-theme", "dark");
+  const queued = new StorageEvent("storage", {
+    key: "jarvis-theme",
+    newValue: "dark",
+    storageArea: localStorage,
+  });
+  await React.act(async () => setters[0]!("light"));
+  await React.act(async () => window.dispatchEvent(queued));
+  expectTheme("light");
+  expect(localStorage.getItem("jarvis-theme")).toBe("light");
+});
+test("queued clear and removal events respect a later stored choice", async () => {
+  for (const key of [null, "jarvis-theme"]) {
+    localStorage.clear();
+    const queued = new StorageEvent("storage", {
+      key,
+      newValue: null,
+      storageArea: localStorage,
+    });
+    // A later peer-tab write is already canonical when the old event arrives.
+    localStorage.setItem("jarvis-theme", "dark");
+    await React.act(async () => window.dispatchEvent(queued));
+    expectTheme("dark");
+    expect(localStorage.getItem("jarvis-theme")).toBe("dark");
+  }
+});
 test("storage clear/removal uses the bootstrap OS fallback", async () => {
   const original = window.matchMedia;
   window.matchMedia = ((query) => ({
@@ -122,6 +161,8 @@ test("storage clear/removal uses the bootstrap OS fallback", async () => {
   })) as typeof window.matchMedia;
   try {
     for (const key of ["jarvis-theme", null]) {
+      if (key === null) localStorage.clear();
+      else localStorage.removeItem(key);
       await React.act(async () =>
         window.dispatchEvent(
           new StorageEvent("storage", { key, newValue: null }),
@@ -132,6 +173,27 @@ test("storage clear/removal uses the bootstrap OS fallback", async () => {
     }
   } finally {
     window.matchMedia = original;
+  }
+});
+test("an unreadable storage event preserves the in-memory appearance", async () => {
+  await React.act(async () => setters[0]!("dark"));
+  const original = localStorage.getItem;
+  localStorage.getItem = () => {
+    throw Error("Denied");
+  };
+  try {
+    await React.act(async () =>
+      window.dispatchEvent(
+        new StorageEvent("storage", {
+          key: "jarvis-theme",
+          newValue: "light",
+          storageArea: localStorage,
+        }),
+      ),
+    );
+    expectTheme("dark");
+  } finally {
+    localStorage.getItem = original;
   }
 });
 test("existing direct root writers remain observable", async () => {
