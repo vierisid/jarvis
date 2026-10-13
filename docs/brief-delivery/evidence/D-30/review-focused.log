@@ -1,0 +1,62 @@
+bun test v1.3.14 (0d9b296a)
+
+ui/src/v2/shell/useTheme.test.tsx:
+(pass) independent controls and menus update together without replacing focused content [84.11ms]
+(pass) rapid independent toggles read the current root rather than a stale render [16.71ms]
+(pass) cross-tab storage updates all subscribers without echoing a storage write [16.84ms]
+(pass) queued storage events cannot replace a newer local appearance choice [10.42ms]
+(pass) queued clear and removal events respect a later stored choice [15.95ms]
+(pass) storage clear/removal uses the bootstrap OS fallback [20.26ms]
+(pass) an unreadable storage event preserves the in-memory appearance [13.74ms]
+(pass) existing direct root writers remain observable [25.06ms]
+(pass) storage denial still changes in-memory appearance [7.24ms]
+
+ui/src/brief/account/settings/f23-integration.test.ts:
+(pass) D30 settings roundtrips through the pinned actual F23 routes and SQLite owner [445.44ms]
+
+ui/src/brief/account/settings/settings.test.ts:
+(pass) missing host is unsupported and never fabricates preferences [1.73ms]
+(pass) strict F23 settings parsing rejects malformed or invented choices [2.76ms]
+(pass) local saves only the selected canonical voice [9.62ms]
+(pass) hosted saves only the selected canonical voice [4.26ms]
+(pass) arbitrary or unchanged voices do not write [2.02ms]
+(pass) read-only cannot mutate voice [1.77ms]
+(pass) voice-unavailable cannot mutate voice [3.56ms]
+(pass) unavailable cannot mutate voice [1.43ms]
+(pass) unsupported cannot mutate voice [1.43ms]
+(pass) error cannot mutate voice [1.49ms]
+(pass) restart-required distinguishes saved value from live application [4.56ms]
+(pass) apply-failure distinguishes saved value from live application [4.25ms]
+(pass) save-failure keeps the selection and only an explicit retry reconciles [11.10ms]
+(pass) lost-response keeps the selection and only an explicit retry reconciles [7.22ms]
+(pass) changed selection after a lost reply still reconciles the original attempt [6.94ms]
+(pass) unknown retry never overwrites an external correction [5.82ms]
+(pass) changed provider during reconciliation conflicts even if voice names match [5.71ms]
+(pass) save supersedes a poll, blocks duplicate saves, and ignores a late old reply [4.81ms]
+(pass) discard supersedes a pending poll and failed reload preserves the selection [3.31ms]
+(pass) read failure blocks mutations and permission loss purges old values [3.35ms]
+(pass) retiring a scope prevents late save and replay status from restoring values [3.85ms]
+(pass) tutorial replay requires confirmation, preserves scope and cannot automatically repeat unknown results [3.90ms]
+(pass) tutorial confirmation rechecks freshness and requires a new request after recovery [4.44ms]
+(pass) tutorial confirmation rechecks the latest supported replay scopes [2.06ms]
+(pass) unavailable/read-only tutorial and missing destinations do not execute [2.07ms]
+(pass) all explicit destinations use the host compatibility owner [4.85ms]
+(pass) bad save receipts/readbacks never claim success [1.10ms]
+(pass) restart notice survives failed and recovered polling without resubmission [7.98ms]
+(pass) late tutorial acknowledgment is discarded after scope revocation [1.74ms]
+(pass) tutorial wrapper delegates only tutorial scope to the existing reset owner [15.51ms]
+
+ui/src/brief/account/settings/SettingsWorkspace.test.tsx:
+(pass) approved groups expose only canonical voice choices and honest unavailable preferences [113.63ms]
+(pass) voice autosave keeps the select mounted and pending recovery is explicit [171.57ms]
+(pass) saved application failure stays visible across canonical polls [104.77ms]
+(pass) hosted controls never expose provider selection; tutorial requires confirmation and restores focus [150.57ms]
+(pass) a polling failure while the tutorial dialog is open prevents replay [168.75ms]
+(pass) read-only and stale settings cannot mutate or replay [137.08ms]
+(pass) scope mismatch and fixture/live mixing purge settings [77.27ms]
+(pass) live settings require both F23 and F25 and all destination callbacks [135.35ms]
+
+ 48 pass
+ 0 fail
+ 214 expect() calls
+Ran 48 tests across 4 files. [2.60s]

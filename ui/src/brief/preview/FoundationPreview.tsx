@@ -18,6 +18,7 @@ import { WorkflowCreationSpecimen } from "../workflows/create/preview/WorkflowCr
 import { DecisionsSpecimen } from "../decisions/DecisionsSpecimen";
 import { MemoryDetailSpecimen } from "../memory/detail/MemoryDetailSpecimen";
 import { AuthoritySpecimen } from "../authority/AuthoritySpecimen";
+import { SettingsSpecimen } from "../account/settings/SettingsSpecimen";
 import { ProfileSpecimen } from "../account/profile/ProfileSpecimen";
 import { ConnectionsSpecimen } from "../connections/ConnectionsSpecimen";
 import { MemorySpecimen } from "../memory/stream/MemorySpecimen";
@@ -52,6 +53,7 @@ const PreviewBody = bindBriefView<PreviewModel>(() => ({ ...unavailableView<Prev
 /** Explicit fixture-only URL. Never used as the fallback for real business data. */
 export function FoundationPreview() {
   const specimen = new URLSearchParams(window.location.search).get("specimen");
+  if (specimen === "settings") return <SettingsSpecimen />;
   if (specimen === "profile") return <ProfileSpecimen />;
   if (specimen === "authority") return <AuthoritySpecimen />;
   if (specimen === "connections") return <ConnectionsSpecimen />;
