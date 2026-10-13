@@ -1,0 +1,39 @@
+{
+  "head": "bae0364c454f41358fead7411e7c944186a3aa06",
+  "required": 988,
+  "passed": 670,
+  "blocked": 316,
+  "failed": [
+    "today/viewport/ready/390",
+    "today/viewport/long/390"
+  ],
+  "missing": [],
+  "errors": [],
+  "releaseReady": false,
+  "groups": {
+    "layout": {
+      "required": 608,
+      "passed": 464,
+      "failed": 0,
+      "blocked": 144
+    },
+    "viewport": {
+      "required": 228,
+      "passed": 172,
+      "failed": 2,
+      "blocked": 54
+    },
+    "repeat-20": {
+      "required": 19,
+      "passed": 17,
+      "failed": 0,
+      "blocked": 2
+    },
+    "keyboard": {
+      "required": 19,
+      "passed": 17,
+      "failed": 0,
+      "blocked": 2
+    }
+  }
+}
