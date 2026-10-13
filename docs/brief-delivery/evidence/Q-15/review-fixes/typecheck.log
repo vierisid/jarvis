@@ -1,0 +1,2 @@
+bunx tsc --noEmit
+Exit status: 0 (no diagnostics)

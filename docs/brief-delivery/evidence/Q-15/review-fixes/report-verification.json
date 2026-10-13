@@ -1,0 +1,34 @@
+[
+  {
+    "report": "development-baseline.json",
+    "sha256": "ed57ecd418fc7a4ca6058ddca9480755093551cdfdc37c96187e1f0e99fd42d4",
+    "observations": 36,
+    "sourceHashesMatch": true,
+    "originalContextsAndFactEvidenceIdsPreserved": true,
+    "includedAndOmittedIdsDisjoint": true
+  },
+  {
+    "report": "development-candidate.json",
+    "sha256": "1f9f1421a027248f60f206c12bfd7a52d7e24e7be598e383ce85491df45b9181",
+    "observations": 36,
+    "sourceHashesMatch": true,
+    "originalContextsAndFactEvidenceIdsPreserved": true,
+    "includedAndOmittedIdsDisjoint": true
+  },
+  {
+    "report": "heldout-baseline.json",
+    "sha256": "cea7103a73a29f47111a31680cacb570ab8dff1a22b072d621c045a9fcdab94a",
+    "observations": 60,
+    "sourceHashesMatch": true,
+    "originalContextsAndFactEvidenceIdsPreserved": true,
+    "includedAndOmittedIdsDisjoint": true
+  },
+  {
+    "report": "heldout-candidate.json",
+    "sha256": "73786d9e2e9f8acaa067f3e5854a8b4919bfa9b76cfee271ba7f5ae7dfea18bd",
+    "observations": 60,
+    "sourceHashesMatch": true,
+    "originalContextsAndFactEvidenceIdsPreserved": true,
+    "includedAndOmittedIdsDisjoint": true
+  }
+]

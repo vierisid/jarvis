@@ -1,0 +1,64 @@
+{
+  "result": "No findings.",
+  "method": "Read-only Review Agent skill pass by the implementing agent; not independent human approval. No delegation or posted GitHub review.",
+  "comparison_base": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
+  "reviewed_pre_fix_head": "eb627e66f1f9e905d8f800c70b6ab517e8dbb82c",
+  "corrected_implementation_head": "39bc84c334eb67f8e6ef897b1cf28a96a9672970",
+  "scoring": "founder-recall-scoring-v2",
+  "evaluation_phase": "Post-review regression re-evaluation; heldout already observed. Original corpus/freezes/reports retained.",
+  "resolved_findings": [
+    {
+      "priority": "P2",
+      "issue": "Repeated fact/name normalization stalls synchronous multi-person recall",
+      "fix": "Normalize each entity name once and each scoped fact field once; preserve ranked output.",
+      "evidence": [
+        "regressions-before-fixes.log",
+        "ranking-cost.json",
+        "ranking-cost.mjs"
+      ]
+    },
+    {
+      "priority": "P2",
+      "issue": "Evaluator ignores rendered subject ownership",
+      "fix": "Associate every fact occurrence with its rendered section heading; compare canonical owner, type and formatted line. Correct copies cannot conceal corrupted duplicates.",
+      "evidence": [
+        "regressions-before-fixes.log",
+        "vault-tests.log"
+      ]
+    },
+    {
+      "priority": "P2",
+      "issue": "Empty-record substring hides facts from scoring",
+      "fix": "Exclude only the exact structural marker; regression tests include the phrase in both a forbidden value and evidence quote.",
+      "evidence": [
+        "regressions-before-fixes.log",
+        "vault-tests.log"
+      ]
+    }
+  ],
+  "scope": [
+    "Complete merge-base implementation diff, callers, canonical truth/formatter/packer boundaries, fixtures and tests",
+    "Correction diff, stress reproduction, matched report rows, source/corpus hashes, original context and fact/evidence identity equivalence",
+    "Delivery documents and superseding evidence"
+  ],
+  "checks": [
+    "203 vault tests passed, 0 failed, 1124 assertions across 18 files",
+    "51 related tests passed in normal implementation commit hooks, 409 assertions; TypeScript and repository guards passed",
+    "TypeScript and 1263-module daemon bundle passed",
+    "Corrected baseline/candidate development and heldout comparisons pass with no regressions or safety failures",
+    "Every original context hash and fact/evidence identity preserved; canonical source hashes match the baseline or corrected implementation"
+  ],
+  "source_hashes": {
+    "src/vault/recall-ranking.ts": "39b30a8515b5daac71693f43f64c5023d850919a51486a6850477973fc9d1fb9",
+    "src/vault/evaluation/founder-recall.ts": "923a8455165ec3ff7c1727afff4658ba927f30f3ce5c96c9119c945be0e5caba",
+    "src/vault/recall-ranking.test.ts": "43a5e1479f32a4b780e7c4a6eab504e9d7837fa43da9258b8a09fb086c78832c",
+    "src/vault/evaluation/founder-recall.test.ts": "8b7c5b505cea03f7b3b95a89dc0c6fcc52656c01bb7495dbd46ed65ebc50e027",
+    "src/vault/evaluation/fixtures/founder-recall-development.json": "804dca2e6be0fd2d431ab7c2d98d82624035eca92eb7ba5c8c4106523d0ace86",
+    "src/vault/evaluation/fixtures/founder-recall-heldout.json": "15e7dcf5b9565f96adbbfa15714014a3c387fccd96d0756a42cb1b5d6f1d8e87"
+  },
+  "limitations": [
+    "Synthetic, author-visible corpus; corrected heldout runs are regression checks, not unseen evaluation",
+    "Timing is a local synthetic stress measurement; deterministic operation counts are the CI regression guard",
+    "No hosted model, deployment or combined F-18/Q-16 runtime test; lexical identity limitations unchanged"
+  ]
+}

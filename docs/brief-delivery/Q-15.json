@@ -4,8 +4,8 @@
   "status": "implemented_unmerged",
   "branch": "brief/q-15",
   "baseline": "8a0da716ed476f51327a7f22e1d30327edbca0a2",
-  "head": "2ef7e001d3de5044209825364c70332ed9d45a49",
-  "head_semantics": "Evaluated implementation commit; final delivery/CI head is recorded in the PR and task-local receipt. Runtime/corpus/harness hashes are immutable in attached evidence.",
+  "head": "39bc84c334eb67f8e6ef897b1cf28a96a9672970",
+  "head_semantics": "Corrected implementation commit after all three review findings; final delivery/CI head is recorded in PR #996 and task-local receipt. Original freeze/results remain historical; current scoring-v2 evidence is under review-fixes/.",
   "figma_node": "81:3",
   "capability_gate": "Existing recall path; no new capability gate, activation prerequisite or deployment. PR remains unmerged.",
   "merge_prerequisites": [],
@@ -14,52 +14,62 @@
   "tests": [
     {
       "command": "bun test src/vault",
-      "result": "198 passed, 0 failed, 1092 assertions, 18 files; isolated disk-backed TMPDIR",
-      "evidence": "evidence/Q-15/vault-tests.log"
+      "result": "203 passed, 0 failed, 1124 assertions, 18 files; isolated disk-backed TMPDIR",
+      "evidence": "evidence/Q-15/review-fixes/vault-tests.log"
     },
     {
       "command": "bunx tsc --noEmit",
       "result": "passed; also enforced by normal commit hooks",
-      "evidence": "evidence/Q-15/implementation-hooks.log"
+      "evidence": "evidence/Q-15/review-fixes/implementation-hooks.log"
     },
     {
       "command": "bun build src/daemon/index.ts --target=bun --outdir <isolated-build>",
       "result": "passed, 1263 modules",
-      "evidence": "evidence/Q-15/daemon-build.log"
+      "evidence": "evidence/Q-15/review-fixes/daemon-build.log"
     },
     {
       "command": "bun run scripts/benchmark-founder-memory.ts development --check",
       "result": "12/12 cases, 36/36 observations; zero wrong-person facts",
-      "evidence": "evidence/Q-15/development-candidate.json"
+      "evidence": "evidence/Q-15/review-fixes/development-candidate.json"
     },
     {
       "command": "bun run scripts/benchmark-founder-memory.ts heldout --check",
       "result": "20/20 cases, 60/60 observations; zero wrong-person facts",
-      "evidence": "evidence/Q-15/heldout-candidate.json"
+      "evidence": "evidence/Q-15/review-fixes/heldout-candidate.json"
     },
     {
       "command": "bun run scripts/benchmark-founder-memory.ts compare <matched-baseline.json> <matched-candidate.json>",
       "result": "60 heldout observations, 15 improved, zero regressions or safety failures",
-      "evidence": "evidence/Q-15/heldout-comparison.json"
+      "evidence": "evidence/Q-15/review-fixes/heldout-comparison.json"
+    },
+    {
+      "command": "bun docs/brief-delivery/evidence/Q-15/review-fixes/ranking-cost.mjs <pre-fix-ranker.ts> <baseline-ranker.ts>",
+      "result": "Median 1926 ms to 252 ms; 423303 to 18453 normalizations for 25 named people. Exact pre-fix/corrected output preserved; deterministic operation-count regression passes.",
+      "evidence": "evidence/Q-15/review-fixes/ranking-cost.json"
     }
   ],
   "review": {
     "result": "No findings.",
-    "evidence": "evidence/Q-15/review.json"
+    "evidence": "evidence/Q-15/review-fixes/review.json",
+    "resolved_findings": 3
   },
   "manual_checks": [
     "Current main and relevant open PRs rechecked; existing recall #458/provenance #456 reused; no pre-existing Q-15 PR",
     "No truth-layer, packer, database/schema, UI, consumer/cache or activation changes",
     "Fixture fact/evidence IDs and exact context hashes remain stable across all shuffles",
-    "Each omitted fixture fact has an ID and reason; context omission disclosure checked where relevant"
+    "Each omitted fixture fact has an ID and reason; context omission disclosure checked where relevant",
+    "Corrected report contexts and fact/evidence identities equal original frozen reports; every rendered fact occurrence is checked under its canonical heading",
+    "Original corpus, freeze files and first matched reports remain unmodified"
   ],
   "evidence": [
     "evidence/Q-15/freeze.json",
     "evidence/Q-15/candidate-freeze.json",
-    "Q-15.md"
+    "Q-15.md",
+    "evidence/Q-15/review-fixes/report-verification.json"
   ],
   "limitations": [
     "Author-visible synthetic evaluation, not independent/blinded/field accuracy; 12 heldout cases share development templates",
+    "Scoring-v2 matched reruns are post-review regression checks; original heldout already observed. Do not compare old/new harness reports.",
     "cl100k_base reference tokens for memory block only; no deployed-profile or full-prompt certification",
     "No combined F-18 runtime/usage-capture or Q-16 cache/forgetting conformance test",
     "No live activation or release claim; final-head CI recorded in PR/task receipt"

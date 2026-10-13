@@ -1,0 +1,395 @@
+bun test v1.4.2 (744846f84)
+
+src/vault/recall-ranking.test.ts:
+(pass) development benchmark meets recall, qualification, precision and order gates [315.80ms]
+(pass) partial names match whole Unicode tokens without matching substrings [10.56ms]
+(pass) full person names scope individual facts while retaining direct references and requested task subjects [11.29ms]
+(pass) full person scoping does not combine name tokens from multiple named people [11.32ms]
+(pass) explicit aliases retain qualification alongside a fully named person [15.11ms]
+(pass) long-history normalization work does not multiply by the number of named people [417.64ms]
+(pass) unrelated self requests abstain but explicit self overview still works [12.50ms]
+(pass) an embedded "me" inside an ordinary word is not a self overview request [9.99ms]
+(pass) a remembered value cannot forge the qualification separator or a new record [9.73ms]
+(pass) aliases shared by different subjects preserve ambiguity and evidence qualification [10.70ms]
+(pass) crowded alias recall keeps selection evidence (reverse=%s) [12.25ms]
+(pass) crowded alias recall keeps selection evidence (reverse=%s) [11.68ms]
+(pass) a subject cannot appear when its required alias qualification does not fit [16.02ms]
+(pass) all matched aliases count toward the fact limits [11.67ms]
+(pass) unavailable alias dependencies omit the subject (missing) [13.21ms]
+(pass) unavailable alias dependencies omit the subject (expired) [16.92ms]
+(pass) alias dependencies remain whole at the shared fact limit [12.47ms]
+(pass) empty and stopword-only messages avoid database reads while self overview still reads [10.96ms]
+(pass) large evidence quotes cannot evict a short qualified fact or be silently truncated [10.33ms]
+(pass) many evidence records keep explicit omission counts and a stable ledger reference [15.93ms]
+(pass) whole qualified facts fit the exact budget; oversize facts cannot hide small siblings [10.09ms]
+(pass) entity and fact budgets distribute useful context across subjects [34.38ms]
+(pass) a subject whose records are all out of period reads as having none [9.08ms]
+(pass) a long message cannot make scoring quadratic on the recall path [447.93ms]
+(pass) a subject whose facts all miss the budget contributes no heading or relationship [14.78ms]
+(pass) a value stored on another subject survives a name-only top match [9.37ms]
+(pass) a subject named with a common word recovers no cross-references [10.25ms]
+(pass) a possessive name still anchors on its subject [10.51ms]
+(pass) facts dropped by ranking are reported as an incomplete record [11.21ms]
+(pass) the self overview and the profile boost agree on the same request [11.08ms]
+(pass) relationship context is bounded, stable and unverified [10.41ms]
+(pass) ranking respects C8 states and periods while retaining contested facts [16.65ms]
+(pass) value query retains the current confirmed counterpart: Does Alex still use Vim? [15.98ms]
+(pass) value query retains the current confirmed counterpart: Vim [9.71ms]
+(pass) active multi-valued facts do not acquire correction dependencies [10.67ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: missing [9.96ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: expired [10.29ms]
+(pass) unavailable correction hides its inference but keeps unrelated facts: oversize [10.73ms]
+(pass) mutually contested confirmations preserve their dependency group at context limits [16.45ms]
+(pass) packing keeps C8 source references, scope, validity and contested status intact [10.48ms]
+(pass) default recall recovers qualified facts after a database restart [130.32ms]
+(pass) value queries retain the correction through aliases, crowding and restart [161.37ms]
+(pass) repeated evidence preserves corrected recall and the full ledger after restart [157.58ms]
+(pass) corrections, periods and source ledger survive default recall [10.28ms]
+
+src/vault/user-profile.test.ts:
+Database initialized at: :memory:
+(pass) Vault — User Profile > save + load persists normalized answers [11.04ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > clear removes saved profile [9.76ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > save syncs profile answers into the vault knowledge base [15.07ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > save derives alias facts from free-form profile answers [9.88ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > prompt formatter includes answered fields only [15.66ms]
+Database initialized at: :memory:
+(pass) Vault — User Profile > prompt formatter indents multiline answers to keep them contained [9.04ms]
+
+src/vault/approval-migration.test.ts:
+[Vault] Closed 2 approval(s) that were approved before execution receipts existed. Whether they ran is unknown, so none were run again; they read as closed in Authority.
+(pass) the upgrade closes approved rows written before receipts existed, once, and leaves everything else alone [138.10ms]
+[Vault] Closed 2 approval(s) that were approved before execution receipts existed. Whether they ran is unknown, so none were run again; they read as closed in Authority.
+(pass) the columns and the closure land together: a failed closure rolls the columns back [132.61ms]
+
+src/vault/agent-activity.test.ts:
+Database initialized at: :memory:
+(pass) agent-activity > records and lists events for one agent [9.43ms]
+Database initialized at: :memory:
+(pass) agent-activity > isolates events by agent_id [10.83ms]
+Database initialized at: :memory:
+(pass) agent-activity > respects limit and offset [15.87ms]
+Database initialized at: :memory:
+(pass) agent-activity > clamps limit between 1 and 200 [10.35ms]
+Database initialized at: :memory:
+(pass) agent-activity > round-trips JSON data and handles missing data [9.85ms]
+Database initialized at: :memory:
+(pass) agent-activity > returns empty for unknown agent [9.84ms]
+
+src/vault/facts.test.ts:
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-cWy7rV/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-cWy7rV/vault.db
+(pass) confirmed correction is used on the next recall and after restart; late inference stays qualified [125.70ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-v1JlGI/vault.db
+(pass) repeated inferences preserve sources without duplication or promotion [113.68ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-SinZwN/vault.db
+(pass) known single-value contradictions are contested until explicit confirmation [123.25ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-2DjstY/vault.db
+(pass) locations, aliases, jobs and unknown predicates preserve multiple valid values [125.67ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-XctzOb/vault.db
+(pass) targeted location correction replaces only that location and retry retains one record [124.21ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-mNn0lf/vault.db
+(pass) scope and disjoint validity periods remain separate; expired values cannot bind [115.72ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-jDEaZl/vault.db
+(pass) an out of period value is still marked as outside its validity when shown [117.08ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-bbbcZh/vault.db
+(pass) overlapping but different confirmed periods are contested, not silently superseded [123.47ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-kiroji/vault.db
+(pass) paths, URLs and email local parts retain case during deduplication [122.61ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-HlOC8q/vault.db
+(pass) confirmation cannot be inferred from a source label or confidence [121.50ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-fP9ehh/vault.db
+(pass) atomic correction rolls back replacement, supersession and evidence on failure [116.50ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-Ulzu04/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-Ulzu04/legacy.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-Ulzu04/legacy.db
+(pass) upgrade preserves legacy IDs/sources, consolidates duplicates and qualifies old contradictions [260.79ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-UNAMVp/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-UNAMVp/vault.db
+(pass) inherited property predicate constructor supports creation, lookup and restart [135.30ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-1Alnv8/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-1Alnv8/vault.db
+(pass) inherited property predicate __proto__ supports creation, lookup and restart [135.85ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-YSWvRv/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-YSWvRv/legacy-property.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-YSWvRv/legacy-property.db
+(pass) inherited property predicate constructor migrates legacy facts without blocking startup [241.39ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-Gfp2T1/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-Gfp2T1/legacy-property.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-Gfp2T1/legacy-property.db
+(pass) inherited property predicate __proto__ migrates legacy facts without blocking startup [251.83ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-6L8Ds2/vault.db
+(pass) profile changes retain superseded history and confirmed current answers [128.64ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-XLPjj3/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-XLPjj3/vault.db
+(pass) profile corrections update prompt settings and derived name across restart and later saves [134.62ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-5wb4W6/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-5wb4W6/vault.db
+(pass) capitalization correction updates API, profile and recall without duplicate facts or inference overwrite [135.74ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-nKMl8N/vault.db
+(pass) a changed capitalization on a superseded correction requires reviewing the current fact [115.91ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-C3OGIn/vault.db
+(pass) profile correction rolls back settings, entity, projections and evidence together [141.37ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-5X557f/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-5X557f/vault.db
+(pass) profile heuristics remain inferred and cannot turn a product name into a confirmed user alias [135.49ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-s2ZEpJ/vault.db
+(pass) confirming a competing profile answer updates the profile without affecting scoped or other-person facts [132.33ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-PJ4UtH/vault.db
+(pass) later profile edits retain explicitly confirmed aliases but retire removed direct answers [141.32ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-kK2P6M/vault.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-kK2P6M/legacy-profile.db
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-kK2P6M/legacy-profile.db
+(pass) legacy migration confirms only profile answers supported by the canonical record [260.88ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-C3zTJN/vault.db
+(pass) deleting a conflicting inference clears contested state without confirming anything [118.85ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-fa5cbQ/vault.db
+(pass) recall caps the evidence ledger so a repeated assertion cannot grow the prompt without bound [576.11ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-rvA8rx/vault.db
+(pass) recall shows the strongest evidence first and clips an overlong quote [130.74ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-yOHZ3O/vault.db
+(pass) a person-facing fact summary stays readable and still carries the qualification [120.52ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-dabBbI/vault.db
+(pass) decision routes answer through the caller's response helper so they keep the API CORS scope [130.31ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-omnbth/vault.db
+(pass) decision routes require explicit confirmation, validate input and expose history [112.85ms]
+Database initialized at: /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-facts-2CvHWS/vault.db
+(pass) extraction cannot forge confirmation, assistant quotes or overwrite a confirmed correction [135.40ms]
+
+src/vault/extractor.test.ts:
+Database initialized at: :memory:
+(pass) Vault Extractor > buildExtractionPrompt > should build prompt with user and assistant messages [12.13ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > parseExtractionResponse > should parse valid JSON response [10.40ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > parseExtractionResponse > should handle markdown code blocks [8.86ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > parseExtractionResponse > should return empty result on invalid JSON [8.88ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > parseExtractionResponse > should handle missing fields [11.35ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should return empty result when no provider given [18.09ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should extract and store entities [13.52ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should extract and store facts [12.57ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should extract and store relationships [10.62ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should extract and store commitments [10.66ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore > should reuse existing entities [17.37ms]
+Database initialized at: :memory:
+Invalid entity type: invalid_type, skipping entity Invalid
+(pass) Vault Extractor > extractAndStore > should handle invalid entity types [14.24ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > maps extracted entity sharing the profile name to the profile entity [11.56ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > maps entities flagged is_current_user/is_user (boolean or string) to the profile entity [16.30ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > prefers the profile entity even when a newer same-name duplicate exists [14.21ms]
+Database initialized at: :memory:
+Skipping user-representing entity "User": no user profile exists
+Subject entity not found: User, skipping fact
+(pass) Vault Extractor > extractAndStore user profile dedup > drops user-representing entities when no profile exists instead of creating ghosts [10.03ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > still creates unrelated entities normally alongside a profile [13.81ms]
+Database initialized at: :memory:
+(pass) Vault Extractor > extractAndStore user profile dedup > never resolves a conversation entity to a goal completion record [11.70ms]
+
+src/vault/retrieval.test.ts:
+Database initialized at: :memory:
+(pass) extractSearchTerms filters stopwords [9.19ms]
+Database initialized at: :memory:
+(pass) extractSearchTerms deduplicates [9.41ms]
+Database initialized at: :memory:
+(pass) extractSearchTerms handles empty input [9.58ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage finds entities by name [12.73ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage finds entities via fact objects [10.70ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage includes facts for matched entities [10.57ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage includes relationships [10.14ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage returns empty for irrelevant query [15.49ms]
+Database initialized at: :memory:
+(pass) retrieveForMessage includes current user profile for self queries [10.70ms]
+Database initialized at: :memory:
+(pass) formatKnowledgeContext formats entity with facts [10.87ms]
+Database initialized at: :memory:
+(pass) formatKnowledgeContext returns empty for no profiles [9.80ms]
+Database initialized at: :memory:
+(pass) getKnowledgeForMessage end-to-end [10.95ms]
+Database initialized at: :memory:
+(pass) getKnowledgeForMessage handles no matches gracefully [10.21ms]
+
+src/vault/observations-prompt.test.ts:
+(pass) describeObservationForPrompt > screen captures carry app and window, never OCR text [0.29ms]
+(pass) describeObservationForPrompt > clipboard carries only a length [0.03ms]
+(pass) describeObservationForPrompt > email carries sender and subject, not the snippet [0.03ms]
+(pass) describeObservationForPrompt > notifications carry app and title, not the body [0.02ms]
+(pass) describeObservationForPrompt > long fields are clipped [0.05ms]
+(pass) describeObservationForPrompt > unknown data shapes never throw [0.29ms]
+
+src/vault/skills.test.ts:
+Database initialized at: :memory:
+(pass) Vault - Skills > upsert inserts then updates by name, bumping version, and signs the row [11.37ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > getByName is case-insensitive; list respects enabled [10.05ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > recordSkillRun accumulates the successRate signal without breaking the MAC [12.10ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > a row whose steps were rewritten without the key reads as tampered and is not runnable [10.68ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > provenance and description are covered: relabelling a row invalidates it [10.81ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > one row's signed content cannot be moved into another row [12.08ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > a row with no MAC is unsigned, listed, never runnable [15.43ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > a different signing key rejects every row [9.03ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > matchSkills is URL/process-aware, not just message text, and skips tampered rows [11.18ms]
+Database initialized at: :memory:
+(pass) Vault - Skills > delete removes the skill [10.43ms]
+
+src/vault/commitment-scope.test.ts:
+Database initialized at: :memory:
+(pass) commitment scope provenance > an explicit scope_id is stored and read back [10.41ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > the ambient turn scope is picked up with no explicit argument [10.23ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > an explicit argument wins over the ambient scope [10.10ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > outside any scoped turn the column stays null [10.01ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > a NULL in the column reads as unscoped [15.53ms]
+Database initialized at: :memory:
+(pass) commitment scope provenance > a table that never got the column still accepts writes [10.44ms]
+
+src/vault/keychain.test.ts:
+(pass) keychain > JARVIS_HOME is where a fresh install stores its keychain [0.35ms]
+(pass) keychain > a fresh install writes and reads its keychain under the configured dir [3.61ms]
+(pass) keychain > an un-migrated install keeps using the legacy pair, both halves together [3.70ms]
+(pass) keychain > a fresh install with neither pair resolves to the configured dir [0.14ms]
+(pass) keychain > JARVIS_SECRETS_DIR overrides JARVIS_HOME and skips the fallback [1.72ms]
+[Keychain] Moved the keychain from /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-keychain-599l2N/legacy to /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-keychain-599l2N/data; backups of the data dir now include it
+(pass) keychain > migrate moves the pair and the secrets survive [8.64ms]
+(pass) keychain > migrate is a no-op when the destination already has a keychain [3.42ms]
+(pass) keychain > migrate is a no-op when there is nothing to move [0.14ms]
+(pass) keychain > a broken source pair aborts the move instead of destroying it [2.01ms]
+(pass) keychain > a save leaves no temp file behind [2.60ms]
+[Keychain] Keychain at /home/vieri-balboni/.cache/jarvis/q15-test-tmp/jarvis-keychain-ipdU9V/data/.secrets.enc could not be read (Invalid authentication tag length: 8). Restore the matching .secrets.key, or move both files aside to start a new store.
+(pass) keychain > an unreadable store is never overwritten: reads degrade, writes refuse [2.04ms]
+
+src/vault/memory-room.test.ts:
+Database initialized at: :memory:
+(pass) memory room — create chain > creates an entity, attaches a fact, and links a relationship [10.77ms]
+Database initialized at: :memory:
+(pass) memory room — create chain > findEntities filters by type and name substring [15.68ms]
+Database initialized at: :memory:
+(pass) memory room — create chain > voice "remember that" path: lookup-or-create entity then attach fact [10.91ms]
+Database initialized at: :memory:
+(pass) memory room — create chain > createFact rejects an unknown subject_id via FK constraint [9.97ms]
+
+src/vault/recall-heldout.test.ts:
+(pass) frozen recall heldout preserves useful qualified context and abstention [252.94ms]
+(pass) frozen recall heldout-v2 preserves useful qualified context and abstention [289.24ms]
+
+src/vault/vectors.test.ts:
+Database initialized at: :memory:
+(pass) vectors > storeVector > stores and returns the record [10.28ms]
+Database initialized at: :memory:
+(pass) vectors > storeVector > roundtrips embedding values through the BLOB column [15.29ms]
+Database initialized at: :memory:
+(pass) vectors > storeVector > roundtrips an embedding stored as an offset subarray view [10.10ms]
+Database initialized at: :memory:
+(pass) vectors > storeVector > replaces an existing (ref_type, ref_id, model) embedding [10.42ms]
+Database initialized at: :memory:
+(pass) vectors > storeVector > keeps embeddings from different models for the same ref [14.92ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > returns empty array when store is empty [9.02ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > ranks results by cosine similarity descending [9.22ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > respects the limit [10.09ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > filters by minScore [10.56ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > handles a zero-norm query without NaN [9.19ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > skips candidates whose dimensionality differs from the query [10.28ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > filters candidates by model when asked [10.25ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > labels each match with its model when scanning across models [9.61ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilar > excludes a given ref when asked [8.99ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > returns empty array when the source ref has no embedding [9.03ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > finds related refs without returning the source itself [9.46ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > filters the source lookup by model [10.60ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > only scores candidates from the same model as the source embedding [10.88ms]
+Database initialized at: :memory:
+(pass) vectors > findSimilarByRef > applies minScore to results [14.90ms]
+Database initialized at: :memory:
+(pass) vectors > deleteVectors > removes all embeddings for a ref [10.03ms]
+
+src/vault/webapp-templates.test.ts:
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > resolves path-qualified domains to the right app [10.39ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > plain hostname domains still work, including subdomains [9.37ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > most specific domain entry wins when both match [10.17ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > unmatched host returns null [9.42ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > a path entry matches on a segment boundary, not a prefix [9.32ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > a URL that does not parse resolves to nothing, not to a hostname [8.86ms]
+Database initialized at: :memory:
+(pass) getWebappTemplateByDomain > disabled templates never resolve [9.24ms]
+Database initialized at: :memory:
+(pass) getWebappInstructionsForUrl > resolves a browsed URL to formatted instructions [9.24ms]
+Database initialized at: :memory:
+(pass) getWebappInstructionsForUrl > returns null for URLs no template claims [10.14ms]
+Database initialized at: :memory:
+(pass) getWebappInstructionsForUrl > never throws on garbage input [9.65ms]
+(pass) formatWebappInstructions > formats a single template into a prompt-ready block [0.06ms]
+
+src/vault/memory-regression.test.ts:
+Database initialized at: :memory:
+(pass) recall preserves the source and confidence of an extracted assertion [10.78ms]
+Database initialized at: :memory:
+(pass) repeated extraction does not add duplicate facts [10.09ms]
+Database initialized at: :memory:
+(pass) confirming the corrected current preference removes the old value from next recall [10.40ms]
+Database initialized at: :memory:
+(pass) single-fact lookup cannot silently promote a high-confidence inference [15.39ms]
+
+src/vault/evaluation/founder-heldout.test.ts:
+(pass) frozen founder heldout retains qualified answers, abstention and identity across insertion orders [969.54ms]
+
+src/vault/evaluation/founder-recall.test.ts:
+(pass) founder development cases pass through canonical writers, retrieval and packing in every order [665.90ms]
+(pass) the evaluator rejects missing qualifications, wrong-person context, omitted answers and exceeded budgets [104.86ms]
+(pass) failed fixture evaluation restores its global clock and UUID sources [18.54ms]
+(pass) each rendered fact must remain under its canonical subject heading [103.21ms]
+(pass) empty-record text inside a forbidden fact remains visible to scoring (value) [24.14ms]
+(pass) empty-record text inside a forbidden fact remains visible to scoring (evidence) [25.05ms]
+(pass) the exact empty-record marker still passes sparse-memory scoring [10.72ms]
+
+ 203 pass
+ 0 fail
+ 1124 expect() calls
+Ran 203 tests across 18 files. [11.27s]

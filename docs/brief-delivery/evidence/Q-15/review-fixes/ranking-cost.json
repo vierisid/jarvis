@@ -1,0 +1,50 @@
+{
+  "command": "bun docs/brief-delivery/evidence/Q-15/review-fixes/ranking-cost.mjs <pre-fix-ranker.ts> <baseline-ranker.ts>",
+  "runtime": "1.4.2",
+  "sources": {
+    "baseline": "f638b32d9bb99bd51029efb1d1ba3cc6324935b7456bf2e4402b257a557026ca",
+    "before": "e15b0631f6fcc4ddc95bd55d99117c2cabf117b804dc39d8efe0160244035def",
+    "after": "39b30a8515b5daac71693f43f64c5023d850919a51486a6850477973fc9d1fb9"
+  },
+  "workload": {
+    "people": 300,
+    "facts": 3000,
+    "objectChars": 1919,
+    "namedPeople": 25,
+    "queryChars": 396
+  },
+  "method": "Sequential same-process runs; one warm-up then three timed samples per implementation. Normalization counts are measured separately.",
+  "timingsMs": {
+    "baseline": [
+      149.137657,
+      184.477377,
+      158.23539399999993
+    ],
+    "before": [
+      1870.256144,
+      1926.4260890000005,
+      1959.5827719999988
+    ],
+    "after": [
+      251.90350799999942,
+      248.0870959999993,
+      253.96931500000028
+    ]
+  },
+  "normalizationCalls": {
+    "baseline": {
+      "1": 9902,
+      "25": 9902
+    },
+    "before": {
+      "1": 28743,
+      "25": 423303
+    },
+    "after": {
+      "1": 19173,
+      "25": 18453
+    }
+  },
+  "selectionUnchanged": true,
+  "limitation": "Local synthetic stress case, not daemon latency or a wall-time CI gate. Baseline retains its older relevance policy."
+}
