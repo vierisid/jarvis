@@ -104,6 +104,17 @@ test("visible SVG edges with a zero-width box remain valid named controls", asyn
   expect(layoutProblems(compact, metrics)).toEqual([]);
 });
 
+test("a transparent native input inside a custom radio remains a named keyboard control", async () => {
+  fixture();
+  document.querySelector(".brief-navigation")!.insertAdjacentHTML("beforeend", '<label><input type="radio" name="mode" style="opacity:0">Configured</label>');
+  bounds('input[type="radio"]', 100, 200, 120, 44);
+  document.querySelector<HTMLInputElement>('input[type="radio"]')!.focus();
+  const metrics = await inspect(tab, room);
+  expect(metrics.controls).toBe(3);
+  expect(metrics.unnamed).toEqual([]);
+  expect(metrics.focus).toMatchObject({ tag: "INPUT", name: "Configured", visible: true });
+});
+
 test("workflow observation detects a changed or lost node even while the Canvas tab stays selected", async () => {
   fixture();
   const before = await inspect(tab, room);
