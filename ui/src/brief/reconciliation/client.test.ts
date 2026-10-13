@@ -39,6 +39,42 @@ test('chat cursors are per conversation, track non-approval frames and refresh e
   expect(hints.accept(chat('a', 3, 'approval'))).toContain('decisions');
   expect(hints.accept({ type: 'tts_start' })).toEqual([]);
 });
+test('delivered chat audio advances its conversation cursor without invalidating selected inspection', async () => {
+  let reads = 0;
+  const { client, projection } = setup({ domains: ['runs'], retainStale: false, read: async () => {
+    reads++; return result({ runId: 'selected-run', status: 'paused' });
+  } });
+  await tick(); const snapshot = projection.getSnapshot();
+  const chat = (sequence: number, kind: string) => ({ type: 'brief_chat_event', payload: {
+    conversationId: 'a', eventId: `a-${sequence}`, sequence, payload: { kind },
+  } });
+  client.observer.onMessage(chat(1, 'delta'));
+  for (const [sequence, phase] of [[2, 'start'], [3, 'chunk'], [4, 'end']] as const) {
+    client.observer.onMessage({ type: 'brief_chat_audio', payload: { conversationId: 'a', sequence, phase } });
+    expect(projection.getSnapshot()).toBe(snapshot);
+  }
+  client.observer.onMessage(chat(5, 'message'));
+  expect(projection.getSnapshot()).toBe(snapshot);
+  await tick(); expect(reads).toBe(1);
+  // Missing event 6 must still invalidate the snapshot when the next audio frame arrives.
+  client.observer.onMessage({ type: 'brief_chat_audio', payload: { conversationId: 'a', sequence: 7, phase: 'start' } });
+  expect(projection.getSnapshot()).toMatchObject({ state: 'stale', data: null });
+  await tick(); expect(reads).toBe(2); expect(projection.getSnapshot().data).toEqual(snapshot.data);
+});
+test('audio cursors stay per conversation and duplicate or older frames never regress them', () => {
+  const hints = new EventHints();
+  const audio = (conversationId: string, sequence: number) => ({ type: 'brief_chat_audio', payload: { conversationId, sequence, phase: 'chunk' } });
+  expect(hints.accept(audio('a', 1))).toEqual([]);
+  expect(hints.accept(audio('b', 20))).toEqual([]);
+  expect(hints.accept(audio('a', 2))).toEqual([]);
+  expect(hints.accept(audio('a', 2))).toEqual([]);
+  expect(hints.accept(audio('a', 1))).toEqual([]);
+  expect(hints.accept(audio('a', 3))).toEqual([]);
+  expect(hints.accept(audio('b', 21))).toEqual([]);
+  expect(hints.accept({ type: 'brief_chat_event', payload: { conversationId: 'a', eventId: 'a-4', sequence: 4,
+    payload: { kind: 'approval' } } })).toEqual(['decisions', 'today', 'runs']);
+  expect(hints.accept(audio('b', 23))).toContain('memory');
+});
 test('dropped, duplicate and reordered messages converge without local count arithmetic', async () => {
   let state = { items: ['a'], count: 8 }, reads = 0;
   const { client, projection } = setup({ domains: ['decisions'], read: async () => { reads++; return result(state); } });
