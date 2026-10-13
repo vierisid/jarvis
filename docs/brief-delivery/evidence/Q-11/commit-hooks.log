@@ -1,0 +1,88 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] OK -- all 3 required path(s) present in the npm tarball (2362 files).
+[pre-commit] Running 4 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+src/awareness/opportunity-restart.test.ts:
+(pass) a fresh service recovers a pending proposal without captures or workflow events [166.05ms]
+(pass) a fresh service recovers a legacy proposal without captures or workflow events [168.14ms]
+
+src/awareness/opportunities.test.ts:
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) evidence-backed hypotheses > sidecar ingestion emits an explainable suggestion using actual persisted capture IDs [30.63ms]
+(pass) evidence-backed hypotheses > real capture writer supplies provenance without transition or session events [24.73ms]
+(pass) evidence-backed hypotheses > empty input, sparse activity, and unsupported tasks abstain [12.84ms]
+(pass) evidence-backed hypotheses > a long continuous session and replayed captures are not separate repetitions [16.68ms]
+(pass) evidence-backed hypotheses > same-day bursts, future and old data cannot pass recurrence [13.43ms]
+(pass) evidence-backed hypotheses > app names and arbitrary instructions never supply job or goal evidence [17.66ms]
+(pass) evidence-backed hypotheses > relevant active goals rank candidates without creating links [13.47ms]
+(pass) evidence-backed hypotheses > higher priority suggestions do not silently consume an opportunity [16.96ms]
+(pass) evidence-backed hypotheses > legacy act records interest only; dismiss prevents resurfacing in new engines [14.51ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) evidence-backed hypotheses > the ledger window is enforced on disk by retention, not only by suggestion evaluation [23.74ms]
+(pass) evidence-backed hypotheses > a suggestion already holding the opportunity identity is never reused as a proposal [11.15ms]
+(pass) evidence-backed hypotheses > capture retention keeps only minimal cues, and duplicate ingestion is idempotent [12.30ms]
+(pass) evidence-backed hypotheses > publication and capture ingestion roll back atomically on failure [12.99ms]
+(pass) validation and real-work feedback boundary > an existing vault upgrades additively without rewriting captures or inventing old evidence [38.05ms]
+(pass) validation and real-work feedback boundary > user confirmation supports an explicit goal link without score writes [23.24ms]
+(pass) validation and real-work feedback boundary > invalid, inactive, and unexplained goal links make no partial writes [12.81ms]
+(pass) validation and real-work feedback boundary > feedback rollback, conflicting retries, and duplicate work references cannot inflate metrics [13.68ms]
+(pass) validation and real-work feedback boundary > outcomes require confirmed work, real timestamps and a work reference [12.25ms]
+(pass) validation and real-work feedback boundary > registered daemon routes expose inspectable evidence and reject malformed requests [15.21ms]
+(pass) validation and real-work feedback boundary > a new process recovers evidence, confirmation and suppression after restart [84.63ms]
+
+src/awareness/opportunity-delivery.test.ts:
+(pass) proposal and pending delivery commit atomically [14.34ms]
+(pass) failed notification retries the same ID and records delivery only after acceptance [14.89ms]
+[Awareness] Opportunity notification pending: offline
+(pass) a thrown transport error leaves the proposal pending for another worker [18.95ms]
+(pass) dismiss suppresses pending notification recovery [12.41ms]
+(pass) interest suppresses pending notification recovery [18.73ms]
+(pass) validate suppresses pending notification recovery [11.79ms]
+(pass) legacy pre-callback flags cannot suppress recovery or inflate delivery metrics [21.97ms]
+(pass) concurrent workers and flush calls share a claim until its lease expires [14.96ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: enable [19.48ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: disable [19.49ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) pending delivery honors the last lifecycle request: shutdown [16.99ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) rapid toggles before queued work settles honor the final setting [11.45ms]
+[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)
+[Awareness] Service stopped
+(pass) a stop request blocks new capture events before queued shutdown begins [10.92ms]
+
+src/awareness/job-hypotheses.test.ts:
+(pass) six families and both fixture splits report precision and misses with real denominators [16.40ms]
+(pass) structured hypotheses reference every role and never certify execution, readiness or goal progress [11.96ms]
+(pass) static repeated screenshots, including all phases on one page, never make an episode [18.98ms]
+(pass) phases cannot be joined across devices, out of order, equal timestamps or long gaps [26.95ms]
+(pass) another device cannot bridge a stale partial episode [20.17ms]
+(pass) continuous activity across midnight is one episode even when all phases repeat [14.06ms]
+(pass) legacy, malformed, stale and future observations never acquire structured evidence [10.33ms]
+(pass) privacy, reading, app-only and input overflow abstain before producing retainable cues [9.73ms]
+(pass) durable evidence survives capture cleanup/restart without retaining new raw text; metadata-only is excluded [43.34ms]
+(pass) pre-Q11 schemas upgrade without backfill, and old writers/readers remain usable [43.11ms]
+
+ 45 pass
+ 0 fail
+ 233 expect() calls
+Ran 45 tests across 4 files. [1301.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.

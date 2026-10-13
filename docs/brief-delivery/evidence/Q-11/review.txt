@@ -1,0 +1,13 @@
+Q-11 read-only review-agent review
+Base/merge-base: c78fbe1849a4c940304e54049e96f3c770aba48f
+Scope: complete diff, all fixtures/reports, capture writer/retention, opportunity publication/delivery/feedback/composition, Q-13 and F-09 integration callers.
+
+[P2] Expire each device partial episode independently — src/awareness/routine-episodes.ts
+Another device could keep the global session active and join a source to an operation 90 minutes later on the first device. Reproduced as three proposed meeting episodes.
+
+Correction: keep per-device lastObserved and expire pending roles after a 30-minute gap.
+Red regression: review-red.log (1 failed before correction).
+Green regression: validation.log (149 passed, including that regression, after correction).
+Corrected diff/callers re-read: No findings.
+
+Residual limits: small author-visible synthetic corpus, fixed vocabulary, unmarked research/replayed changing sequences can resemble work, absent device IDs have unknown provenance. No independent human/field or paid-model validation. Q-13 needs three constraint entries when integrated; no activation here.
