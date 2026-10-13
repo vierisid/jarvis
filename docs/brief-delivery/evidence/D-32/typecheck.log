@@ -1,0 +1,2 @@
+Bun 1.3.14: bunx tsc --noEmit
+Exit code: 0
