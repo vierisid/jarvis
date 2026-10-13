@@ -19,8 +19,10 @@ const tab = { playwright: { evaluate: async (fn: Function, args: unknown) => fn(
 const room = { selector: ".brief-workflow-canvas" };
 const compact = { room: "workflow", theme: "light", sidebar: "expanded", chat: true, width: 390 };
 function bounds(selector: string, x: number, y: number, width: number, height: number) {
-  for (const element of document.querySelectorAll(selector)) Object.defineProperty(element, "getBoundingClientRect", {
-    configurable: true, value: () => ({ x, y, width, height, top: y, left: x, right: x + width, bottom: y + height }),
+  const rect = { x, y, width, height, top: y, left: x, right: x + width, bottom: y + height };
+  for (const element of document.querySelectorAll(selector)) Object.defineProperties(element, {
+    getBoundingClientRect: { configurable: true, value: () => rect },
+    getClientRects: { configurable: true, value: () => [rect] },
   });
 }
 function fixture() {
@@ -90,6 +92,16 @@ test("a collapsed clipping surface and a clipped or missing composer cannot pass
   fixture();
   document.querySelector("textarea")!.remove();
   expect(layoutProblems(compact, await inspect(tab, room))).toContain("Conversation composer is missing, hidden, collapsed or clipped.");
+});
+
+test("visible SVG edges with a zero-width box remain valid named controls", async () => {
+  fixture();
+  document.querySelector(".brief-pebble-content")!.insertAdjacentHTML("beforeend", '<svg><g role="button" aria-label="Edge from notes to draft"><path d="M0 0 V60" stroke="black" /></g></svg>');
+  bounds("svg, g, path", 100, 200, 0, 60);
+  const metrics = await inspect(tab, room);
+  expect(metrics.controls).toBe(3);
+  expect(metrics.unnamed).toEqual([]);
+  expect(layoutProblems(compact, metrics)).toEqual([]);
 });
 
 test("workflow observation detects a changed or lost node even while the Canvas tab stays selected", async () => {
