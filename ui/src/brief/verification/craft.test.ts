@@ -88,7 +88,7 @@ test("completion retains failures and explicitly blocks every unexecuted case", 
 });
 
 const layout = { room: "memory", theme: "light", sidebar: "expanded", chat: false, width: 1440 };
-const metrics = { room: "memory", bodyPresent: true, theme: "light", sidebar: "expanded", rail: "false", chat: "false", viewport: { width: 1440 }, busy: false, activeAnimations: 0, pageOverflow: 0, mainOverflow: 0, unnamed: [], roomVisible: true, pebbleLayout: "split" };
+const metrics = { room: "memory", bodyPresent: true, theme: "light", sidebar: "expanded", rail: "false", chat: "false", conversation: { open: false }, viewport: { width: 1440, height: 1100 }, busy: false, activeAnimations: 0, pageOverflow: 0, mainOverflow: 0, unnamed: [], roomVisible: true, pebbleLayout: "split" };
 test("layout assertions reject placeholders, lost state, loading, overflow, unnamed controls and hidden actions", () => {
   expect(layoutProblems(layout, metrics)).toEqual([]);
   for (const invalid of [{ bodyPresent: false }, { room: "today" }, { theme: "dark" }, { sidebar: "rail" }, { chat: "true" }, { rail: "true" }, { viewport: { width: 1280 } }, { busy: true }, { activeAnimations: -1 }, { activeAnimations: 1 }, { pageOverflow: 10 }, { mainOverflow: 10 }, { unnamed: [{}] }, { roomVisible: false }]) expect(layoutProblems(layout, { ...metrics, ...invalid }).length).toBeGreaterThan(0);
@@ -96,7 +96,8 @@ test("layout assertions reject placeholders, lost state, loading, overflow, unna
 
 test("compact adaptation requires a real single-panel conversation and restores the work on close", () => {
   const compact = { ...layout, width: 390, chat: true };
-  const single = { ...metrics, viewport: { width: 390 }, rail: "true", chat: "true", roomVisible: false, pebbleLayout: "single" };
+  const part = { visible: true, bounds: { x: 80, y: 120, width: 280, height: 600 } };
+  const single = { ...metrics, viewport: { width: 390, height: 1100 }, rail: "true", chat: "true", roomVisible: false, pebbleLayout: "single", conversation: { open: true, available: true, hostBounds: { x: 70, y: 100, width: 320, height: 900 }, surface: part, reading: part, content: part, close: part, composer: part } };
   expect(layoutProblems(compact, single)).toEqual([]);
   expect(layoutProblems({ ...compact, chat: false }, { ...single, chat: "false" })).toContain("Room unexpectedly hidden.");
 });
