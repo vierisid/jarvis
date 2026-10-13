@@ -6,7 +6,8 @@ import { NavigationCompatibility } from "./controller";
 import { browserNavigationHost } from "./browser-host";
 import { deviceNavigation } from "./devices";
 import { DESTINATIONS, targetHref, type DestinationId } from "./destinations";
-import type { AttentionSnapshot } from "./notifications";
+import { attentionKey, fromNotificationCenter, type AttentionSnapshot } from "./notifications";
+import { useNotificationCenter } from "../../hooks/useNotificationCenter";
 import type { BriefConnection } from "../../../../src/brief/contracts";
 import type { SettingsHook, SidecarInfo } from "../../v2/rooms/settings/useSettingsData";
 
@@ -54,19 +55,68 @@ function controller(allow = true) {
 
 test("approvals, failures and updates stay reachable with conversation absent, and marking read does not hide pending work", async () => {
   const f = controller(), read: string[] = [];
-  await mount(<Attention snapshot={fixture} navigation={f.nav} roomAvailable={() => false} markRead={id => read.push(id)} />);
+  await mount(<Attention snapshot={fixture} navigation={f.nav} roomAvailable={() => false} markRead={identity => read.push(attentionKey(identity))} />);
   await click("Approval"); await click("Failure"); await click("Update");
   expect(f.opened).toEqual([DESTINATIONS["advanced-authority"].legacy, { kind: "legacy", hash: "#/_task_task-f" }, DESTINATIONS.devices.legacy]);
-  expect(read).toEqual(["a", "f", "u"]); expect(element.querySelectorAll("button").length).toBe(3);
+  expect(read).toEqual(["approval:a", "failure:f", "update:u"]); expect(element.querySelectorAll("button").length).toBe(3);
   expect(element.textContent).not.toMatch(/Arrange|Create workflow/);
 });
 
 test("stale notifications are explicit, and a cancelled draft guard leaves notifications unread", async () => {
   const f = controller(false), read: string[] = [];
-  await mount(<Attention snapshot={fixture} navigation={f.nav} roomAvailable={() => false} markRead={id => read.push(id)} />);
+  await mount(<Attention snapshot={fixture} navigation={f.nav} roomAvailable={() => false} markRead={identity => read.push(attentionKey(identity))} />);
   await click("Approval"); expect(read).toEqual([]); expect(f.opened).toEqual([]); expect(element.textContent).toContain("Navigation cancelled");
   await mount(<Attention snapshot={{ status: "stale" }} navigation={f.nav} roomAvailable={() => false} markRead={() => {}} />);
   expect(element.querySelectorAll("button").length).toBe(0); expect(element.textContent).toContain("Notifications are stale"); expect(element.textContent).not.toContain("No pending");
+});
+
+test("colliding update and notification-center IDs mark only their source owner read", async () => {
+  const f = controller();
+  let centerUnread = true, updateUnread = true;
+  localStorage.removeItem("jarvis:notif-read");
+  function Host() {
+    const center = useNotificationCenter({ approvals: [], clarifiers: [], repeatBacks: [], notices: [
+      { id: "shared-id", title: "System warning", text: "Still needs inspection", level: "warning" },
+    ] });
+    const [updatesRead, setUpdatesRead] = React.useState<string[]>([]);
+    centerUnread = center.items[0]!.unread;
+    updateUnread = !updatesRead.includes("shared-id");
+    return <Attention snapshot={{ status: "ready", items: [
+      ...fromNotificationCenter(center.items),
+      { id: "shared-id", kind: "system", source: "update", title: "Device update", text: "", timestamp: 1, tone: "neutral", unread: updateUnread },
+    ] }} navigation={f.nav} roomAvailable={() => false} markRead={identity => {
+      if (identity.source === "update") setUpdatesRead(ids => [...ids, identity.id]);
+      else center.markRead(identity.id);
+    }} />;
+  }
+  await mount(<Host />);
+  expect(centerUnread).toBe(true); expect(updateUnread).toBe(true);
+  await click("Device update");
+  expect(centerUnread).toBe(true); expect(updateUnread).toBe(false);
+  expect(JSON.parse(localStorage.getItem("jarvis:notif-read")!)).toEqual([]);
+  await click("System warning");
+  expect(centerUnread).toBe(false); expect(updateUnread).toBe(false);
+  expect(f.opened).toEqual([DESTINATIONS.devices.legacy, DESTINATIONS.logs.legacy]);
+  localStorage.removeItem("jarvis:notif-read");
+});
+
+test("an unavailable workflow history keeps the notification visible until retry succeeds", async () => {
+  const f = controller(), read: string[] = [];
+  const snapshot: AttentionSnapshot = { status: "ready", items: [{
+    id: "run", source: "failure", kind: "system", title: "Failed workflow", text: "Inspect this run", timestamp: 1, tone: "warn", unread: true,
+    refs: { flowId: "flow", versionId: "version", runId: "run" },
+  }] };
+  const render = (ready: boolean) => <Attention snapshot={snapshot} navigation={f.nav} roomAvailable={() => ready} markRead={identity => read.push(attentionKey(identity))} />;
+  await mount(render(false));
+  await click("Failed workflow");
+  expect(f.opened).toEqual([]); expect(read).toEqual([]);
+  expect(element.textContent).toContain("This notification could not be opened");
+  expect(element.textContent).toContain("Failed workflow");
+  await mount(render(true));
+  await click("Failed workflow");
+  expect(f.opened).toEqual([{ kind: "brief", route: { room: "workflow-runs", selection: { flowId: "flow", versionId: "version", runId: "run" } } }]);
+  expect(read).toEqual(["failure:run"]);
+  expect(element.textContent).not.toContain("This notification could not be opened");
 });
 
 test("support entry provides explicit retained links without restoring tabs or global create", async () => {
