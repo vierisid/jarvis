@@ -1,0 +1,195 @@
+.brief-root .brief-settings {
+  container: settings / inline-size;
+  min-width: 0;
+  padding: 4px 0 32px;
+}
+.brief-root .brief-settings > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  margin-bottom: 36px;
+}
+.brief-root .brief-settings h1 {
+  margin: 0;
+}
+.brief-root .brief-settings-appearance {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  font-size: 12px;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-settings-appearance .brief-segment span {
+  min-width: 80px;
+}
+.brief-root .brief-settings > section + section {
+  border-top: 1px solid var(--brief-card-edge);
+  margin-top: 24px;
+  padding-top: 28px;
+}
+.brief-root .brief-settings h2 {
+  font-size: 16px;
+  line-height: 24px;
+  font-weight: 500;
+  margin: 0 0 18px;
+}
+.brief-root .brief-settings h3,
+.brief-root .brief-settings-destination strong {
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 20px;
+  margin: 0;
+}
+.brief-root .brief-settings p {
+  font-size: 12px;
+  line-height: 18px;
+  color: var(--brief-secondary);
+  margin: 6px 0 0;
+}
+.brief-root .brief-settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  min-height: 72px;
+}
+.brief-root .brief-settings-row > :first-child {
+  min-width: 0;
+}
+.brief-root .brief-settings-row > button {
+  flex-shrink: 0;
+}
+.brief-root .brief-settings-voice > .brief-field {
+  width: min(100%, 264px);
+  flex-shrink: 0;
+}
+.brief-root .brief-settings-voice .brief-field__label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+}
+.brief-root .brief-settings-voice .brief-field__feedback {
+  display: none;
+}
+.brief-root .brief-settings-feedback {
+  min-height: 52px;
+  display: flex;
+  gap: 16px;
+  align-items: center;
+  justify-content: space-between;
+}
+.brief-root .brief-settings-feedback p {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.brief-root .brief-settings-feedback > div {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.brief-root .brief-settings-feedback button {
+  min-width: 112px;
+}
+.brief-root .brief-settings-feedback button:first-child {
+  min-width: 182px;
+}
+.brief-root .brief-settings-retry-hidden {
+  visibility: hidden;
+}
+.brief-root .brief-settings > section > .brief-segments {
+  margin-top: 18px;
+  max-width: 390px;
+}
+.brief-root .brief-settings-unavailable {
+  color: var(--brief-secondary);
+  font-size: 12px;
+}
+.brief-root .brief-settings-destination {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  border-radius: 8px 0 8px 8px;
+  color: var(--brief-ink);
+  font-family: var(--brief-sans);
+  cursor: pointer;
+  padding: 12px 0;
+  min-height: 70px;
+}
+.brief-root .brief-settings-destination small {
+  display: block;
+  color: var(--brief-secondary);
+  font-size: 12px;
+  line-height: 18px;
+  margin-top: 4px;
+}
+.brief-root .brief-settings-destination:focus-visible {
+  outline: 2px solid var(--brief-focus);
+  outline-offset: 4px;
+}
+.brief-root .brief-settings-destination:disabled {
+  cursor: not-allowed;
+  color: var(--brief-secondary);
+}
+.brief-root .brief-settings-action-status {
+  min-height: 36px;
+}
+.brief-root .brief-settings-dialog {
+  margin: auto;
+  max-width: min(480px, calc(100vw - 40px));
+  padding: 24px;
+  border: 1px solid var(--brief-card-edge);
+  border-radius: 16px 0 16px 16px;
+  background: var(--brief-card);
+  color: var(--brief-ink);
+  font-family: var(--brief-sans);
+}
+.brief-root .brief-settings-dialog::backdrop {
+  background: rgb(0 0 0 / 0.4);
+}
+.brief-root .brief-settings-dialog > div {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-top: 24px;
+}
+@container settings (max-width: 620px) {
+  .brief-root .brief-settings > header,
+  .brief-root .brief-settings-voice,
+  .brief-root .brief-settings-feedback {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .brief-root .brief-settings-appearance {
+    justify-content: space-between;
+    flex-wrap: wrap;
+  }
+  .brief-root .brief-settings-voice > .brief-field {
+    width: 100%;
+  }
+  .brief-root .brief-settings-row {
+    flex-wrap: wrap;
+    gap: 12px;
+    padding-block: 12px;
+  }
+  .brief-root .brief-settings-feedback > div {
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .brief-root .brief-settings-feedback p {
+    min-height: 54px;
+  }
+}
