@@ -66,7 +66,10 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   useEffect(() => {
     const onRequest = (e: Event) => {
       const t = (e as CustomEvent<SettingsTab>).detail;
-      if (VALID_TABS.has(t)) setTab(t);
+      if (VALID_TABS.has(t)) {
+        takeRequestedSettingsTab(); // An already-mounted room consumed this request too.
+        setTab(t);
+      }
     };
     window.addEventListener(SETTINGS_TAB_EVENT, onRequest);
     return () => window.removeEventListener(SETTINGS_TAB_EVENT, onRequest);

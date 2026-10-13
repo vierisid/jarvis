@@ -8,6 +8,8 @@ import { BRIEF_ROOMS } from "../rooms/registry";
 import { FoundationPreview } from "../preview/FoundationPreview";
 import { briefHash, legacyHref, resolveBriefEntry } from "./route";
 import "./foundation.css";
+import { NavigationPreview } from "../navigation/NavigationPreview";
+import { DESTINATIONS, targetHref } from "../navigation/destinations";
 
 function subscribeLocation(changed: () => void) {
   window.addEventListener("hashchange", changed);
@@ -33,6 +35,15 @@ export function DashboardEntry({ legacy, rooms = BRIEF_ROOMS, Gate = OnboardingG
   const entry = resolveBriefEntry(href);
   if (entry.kind === "legacy") return <>{legacy}</>;
   if (entry.kind === "preview") return <FoundationPreview />;
+  if (entry.kind === "navigation-preview") return <NavigationPreview />;
+  if (entry.kind === "moved") return <div className="jarvis-v2-root"><Gate>
+    <main className="brief-foundation"><section className="brief-foundation__notice">
+      <h1>This view is not part of Brief</h1>
+      <p>Advanced settings and support has links to the retained controls. Your data has not changed.</p>
+      <a href={targetHref(href, DESTINATIONS["advanced-settings"].legacy)}>Open advanced settings and support</a>
+      <p><a href={legacyHref(href)}>Open current dashboard</a></p>
+    </section></main>
+  </Gate></div>;
   return (
     <div className="jarvis-v2-root">
       <Gate><BriefHost route={entry.route} rooms={rooms} /></Gate>

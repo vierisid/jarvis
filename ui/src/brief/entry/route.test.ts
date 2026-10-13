@@ -37,9 +37,9 @@ test("every registered destination resolves without requiring another room's mod
   }
 });
 
-test("unknown or malformed Brief destinations use the existing safe fallback", () => {
+test("unknown or malformed Brief destinations explain the retained controls instead of silently opening home", () => {
   for (const path of ["missing", "__proto__", "today/extra", "today%3F", ""]) {
-    expect(resolveBriefEntry(`http://localhost/?brief=1#/brief/${path}`)).toEqual({ kind: "legacy" });
+    expect(resolveBriefEntry(`http://localhost/?brief=1#/brief/${path}`)).toEqual({ kind: "moved" });
   }
 });
 
