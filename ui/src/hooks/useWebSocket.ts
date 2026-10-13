@@ -563,12 +563,7 @@ export function useWebSocket() {
     target: string; // RoomKey or "most_recent"
     ts: number;
   } | null>(null);
-  const [roomActionRequest, setRoomActionRequest] = useState<{
-    room: string;
-    action: string;
-    args: Record<string, unknown>;
-    ts: number;
-  } | null>(null);
+  const [roomActionRequest, setRoomActionRequest] = useState<DashboardRoomActionRequest | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // History is authoritative only for the first successful load. After that the
@@ -1119,18 +1114,8 @@ export function useWebSocket() {
         // structured action; the UI's action bus dispatches to whichever
         // Room is currently registered. `ts` bumps so the same action
         // repeated produces a new effect.
-        const p = payload as { room?: string; action?: string; args?: unknown };
-        if (typeof p.room === "string" && typeof p.action === "string") {
-          setRoomActionRequest({
-            room: p.room,
-            action: p.action,
-            args:
-              p.args && typeof p.args === "object"
-                ? (p.args as Record<string, unknown>)
-                : {},
-            ts: msg.timestamp,
-          });
-        }
+        const req = roomActionRequestFrom(payload, msg.timestamp);
+        if (req) setRoomActionRequest(req);
       } else if (payload.source === "window_control") {
         // Phase 6.1.5 follow-up: voice window-control ("close", "expand",
         // "minimize" etc.) — daemon regex-matches and broadcasts here so
@@ -1344,4 +1329,32 @@ function buildIntentLabel(
   // No object — echo the user's words as the most informative thing we can say.
   const trimmed = transcript.trim();
   return trimmed.length > 0 ? `${head}: "${trimmed}"` : head;
+}
+
+/**
+ * A daemon-driven room action, as the dashboard dispatches it. `resultId` is
+ * set only when the daemon asked THIS dashboard to say whether the room ran it
+ * (`resultFrom: "dashboard"`, #965); the pebble's requests carry a resultId
+ * for the native panels to answer, and the dashboard must not answer those.
+ */
+export type DashboardRoomActionRequest = {
+  room: string;
+  action: string;
+  args: Record<string, unknown>;
+  ts: number;
+  resultId?: string;
+};
+
+export function roomActionRequestFrom(payload: unknown, ts: number): DashboardRoomActionRequest | null {
+  if (!payload || typeof payload !== "object") return null;
+  const p = payload as { room?: unknown; action?: unknown; args?: unknown; resultId?: unknown; resultFrom?: unknown };
+  if (typeof p.room !== "string" || typeof p.action !== "string") return null;
+  const req: DashboardRoomActionRequest = {
+    room: p.room,
+    action: p.action,
+    args: p.args && typeof p.args === "object" ? (p.args as Record<string, unknown>) : {},
+    ts,
+  };
+  if (p.resultFrom === "dashboard" && typeof p.resultId === "string" && p.resultId) req.resultId = p.resultId;
+  return req;
 }

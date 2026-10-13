@@ -127,3 +127,20 @@ test("an action queued before the room mounted is reported when it runs", async 
   await act(async () => { await Promise.resolve(); });
   expect(results).toEqual([true, false]);
 });
+
+test("#965: a dashboard asked about a room action answers with the real room's verdict", async () => {
+  const { dispatchDashboardRoomAction } = await import("./panel-room-action");
+  const dispatch = await mountWithBus(React.createElement(bodies.agents!, { mode: "expanded" }));
+  const answers: unknown[] = [];
+  for (const [tab, resultId] of [["builder", "a"], ["editor", "b"]] as const) {
+    await act(async () => {
+      dispatchDashboardRoomAction(
+        { room: "agents", action: "switch_tab", args: { tab }, ts: Date.now(), resultId },
+        dispatch,
+        (text) => answers.push(JSON.parse(text).payload),
+      );
+    });
+  }
+  expect(answers).toEqual([{ resultId: "a", accepted: true }, { resultId: "b", accepted: false }]);
+  expect(selected()).toBe("builder");
+});

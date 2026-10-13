@@ -46,4 +46,31 @@ describe('RoomActionResults', () => {
     for (const id of [undefined, 42, '', 'unknown']) results.answer(id, true);
     expect(await w.outcome).toBe('no_answer');
   });
+
+  test('with an answerer, only that client settles the wait (#965)', async () => {
+    const results = new RoomActionResults(ids);
+    const asked = {};
+    const w = results.open(1000, asked);
+    results.answer(w.id, false, {});
+    results.answer(w.id, false, undefined);
+    expect(results.size).toBe(1);
+    results.answer(w.id, true, asked);
+    expect(await w.outcome).toBe('accepted');
+  });
+
+  test('abandonAnswerer ends only that client\'s waits (#965)', async () => {
+    const results = new RoomActionResults(ids);
+    const gone = {};
+    const mine = results.open(1000, gone);
+    const theirs = results.open(1000, {});
+    const panels = results.open(1000);
+    results.abandonAnswerer(gone);
+    expect(await mine.outcome).toBe('no_answer');
+    expect(results.size).toBe(2);
+    results.answer(theirs.id, true, undefined);
+    results.abandonAnswerer(undefined);
+    expect(results.size).toBe(2);
+    results.answer(panels.id, true);
+    expect(await panels.outcome).toBe('accepted');
+  });
 });

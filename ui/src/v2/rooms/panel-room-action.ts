@@ -9,8 +9,9 @@ import type { RoomActionRequest, RoomActionResultCallback } from "./useRoomActio
  * happened instead of announcing success it cannot see. The answer goes back
  * as a `room_action_result` message on the same socket.
  *
- * Only panels answer: the full dashboard dispatches room actions too, but the
- * voice path that asks is the pebble's, and the pebble acts on its panels.
+ * Panels answer the pebble's requests. The full dashboard answers only a
+ * request the daemon addressed to it (`resultFrom: "dashboard"`, sent to the
+ * dashboard the user spoke to); see dispatchDashboardRoomAction below.
  */
 export function handlePanelRoomActionMessage(
   raw: unknown,
@@ -35,12 +36,29 @@ export function handlePanelRoomActionMessage(
       args: m.payload.args ?? {},
       ts: Date.now(),
     },
-    resultId
-      ? (accepted) => send(JSON.stringify({
-          type: "room_action_result",
-          payload: { resultId, accepted },
-          timestamp: Date.now(),
-        }))
-      : undefined,
+    resultId ? (accepted) => send(roomActionResultText(resultId, accepted)) : undefined,
   );
+}
+
+/** The answer to a room_action that carried a resultId (#933, #965). */
+export function roomActionResultText(resultId: string, accepted: boolean): string {
+  return JSON.stringify({
+    type: "room_action_result",
+    payload: { resultId, accepted },
+    timestamp: Date.now(),
+  });
+}
+
+/**
+ * The dashboard's half (#965): dispatch a daemon room action and, when the
+ * daemon asked this dashboard (`request.resultId`), answer whether the room
+ * ran it. Without that the daemon acknowledged room actions blindly.
+ */
+export function dispatchDashboardRoomAction(
+  request: { room: string; action: string; args: Record<string, unknown>; ts: number; resultId?: string },
+  dispatch: (req: RoomActionRequest, onResult?: RoomActionResultCallback) => void,
+  send: (text: string) => void,
+): void {
+  const { resultId, ...req } = request;
+  dispatch(req, resultId ? (accepted) => send(roomActionResultText(resultId, accepted)) : undefined);
 }

@@ -21,6 +21,18 @@ import {
   type RoomKey,
   type Verb,
 } from '../voice/intent.ts';
+import { ROOM_TABS, type TabbedRoom } from '../daemon/room-tabs.ts';
+
+/**
+ * The `switch_tab` line for a room, built from ROOM_TABS: the tabs its room
+ * handler accepts, and nothing else (#965). A room not in ROOM_TABS has no
+ * tab handler and must not be offered one. The list here used to be typed
+ * by hand and offered Workflows tabs that do not exist while leaving out real
+ * Settings and Agents tabs.
+ */
+function switchTabSpec(room: TabbedRoom): string {
+  return `- "switch_tab" \u2014 args: { "tab": ${ROOM_TABS[room].map((t) => `"${t}"`).join(' | ')} }`;
+}
 
 const VALID_ROOMS: ReadonlySet<RoomKey> = new Set([
   'workflows',
@@ -180,8 +192,8 @@ Plain navigation utterances WITHOUT qualifiers still use object:
 Available Room actions:
 
 agents room ("room": "agents"):
-- "switch_tab" — args: { "tab": "command" | "orbital" }
-   matches "switch to orbital view", "show command center", "go to orbital"
+${switchTabSpec('agents')}
+   matches "switch to orbital view", "show command center", "go to orbital", "open the agent builder"
 - "open_spawn_dialog" — args: {}
    matches "open spawn dialog", "spawn an agent" (without specifics)
 - "close_dialog" — args: {}
@@ -205,8 +217,6 @@ tools room ("room": "tools"):
    matches "select web_search", "show the git_commit tool"
 
 workflows room ("room": "workflows"):
-- "switch_tab" — args: { "tab": "list" | "editor" | "builder" }
-   matches "show the list", "open the editor", "switch to agent builder"
 - "search" — args: { "query": string }
    matches "search for morning brief", "filter workflows by triage"
 - "set_filter" — args: { "filter": "all" | "active" | "paused" }
@@ -264,8 +274,8 @@ content room ("room": "content"):
    The "when" field uses the same parseRelativeDate format as Calendar.
 
 settings room ("room": "settings"):
-- "switch_tab" — args: { "tab": "general" | "profile" | "llm" | "channels" | "integrations" | "sidecar" }
-   matches "open the LLM tab", "switch to channels", "go to general settings"
+${switchTabSpec('settings')}
+   matches "open the LLM tab", "switch to channels", "go to general settings", "open the voice tab"
 - "read_status" — args: {}
    matches "read the current status", "what's the LLM config", "what's connected"
 - "set_primary_llm" — args: { "provider": "anthropic"|"openai"|"groq"|"gemini"|"ollama"|"openrouter"|"nvidia"|"litellm"|"omniroute" }
@@ -365,7 +375,7 @@ tasks room ("room": "tasks"):
    matches "reassign the OAuth task to alice", "give this to jarvis"
 
 goals room ("room": "goals"):
-- "switch_tab" — args: { "tab": "constellation" | "timeline" | "metrics" }
+${switchTabSpec('goals')}
    matches "show me the constellation", "switch to timeline", "open the metrics"
 - "search" — args: { "query": string }
    matches "search goals for q3", "find the launch goal"
@@ -400,7 +410,7 @@ calendar room ("room": "calendar"):
      "priority" — only if the user said "urgent"/"high priority" etc.
 
 authority room ("room": "authority"):
-- "switch_tab" — args: { "tab": "approvals" | "audit" | "grants" | "learning" }
+${switchTabSpec('authority')}
    matches "show approvals", "open the audit", "switch to grants", "go to learning"
 - "set_filter" — args: { "decision": "all" | "allowed" | "denied" | "approval_required" }
    matches "show only denied", "filter audit by approval required", "show all decisions"
@@ -420,7 +430,7 @@ authority room ("room": "authority"):
    route through normal chat; never emit a room_action for them.
 
 memory room ("room": "memory"):
-- "switch_tab" — args: { "tab": "constellation" | "explorer" | "browser" }
+${switchTabSpec('memory')}
    matches "show the constellation", "switch to explorer", "open the browser"
 - "search" — args: { "query": string }
    matches "search memory for alice", "find facts about q3"

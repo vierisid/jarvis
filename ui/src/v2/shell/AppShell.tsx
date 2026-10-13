@@ -28,6 +28,8 @@ import { NotificationDrawer } from "../notifications/NotificationDrawer";
 import { LiveDataProvider } from "./LiveDataContext";
 import { PausedTasksBanner } from "./PausedTasksBanner";
 import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
+import { dispatchDashboardRoomAction } from "../rooms/panel-room-action";
+import type { DashboardRoomActionRequest } from "../../hooks/useWebSocket";
 import { IndexSidebar, useIndexCollapsed } from "./IndexSidebar";
 import { TopBar } from "./TopBar";
 import { NowRoom } from "./NowRoom";
@@ -566,7 +568,7 @@ function AppShellLive() {
         latestAssistantReply,
       }}
     >
-      <RoomActionBridge request={live.roomActionRequest} forceIdle={voice.forceIdle} />
+      <RoomActionBridge request={live.roomActionRequest} forceIdle={voice.forceIdle} wsRef={live.wsRef} />
       <ShellLayout
         connection={live.isConnected ? "live" : "offline"}
         items={live.items}
@@ -646,16 +648,25 @@ function AppShellLive() {
 function RoomActionBridge({
   request,
   forceIdle,
+  wsRef,
 }: {
-  request: { room: string; action: string; args: Record<string, unknown>; ts: number } | null;
+  request: DashboardRoomActionRequest | null;
   forceIdle: () => void;
+  wsRef: React.MutableRefObject<WebSocket | null>;
 }) {
   const { dispatch } = useRoomActionDispatcher();
   const ts = request?.ts;
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!request) return;
-    dispatch(request);
+    // When the daemon asked, tell it whether the room ran the action, so its
+    // acknowledgement says what happened (#965). A queued action answers when
+    // its room mounts; after a reconnect the daemon ignores that answer (it
+    // asked the old socket) and has already said it got none.
+    dispatchDashboardRoomAction(request, dispatch, (text) => {
+      const ws = wsRef.current;
+      if (ws?.readyState === WebSocket.OPEN) ws.send(text);
+    });
     forceIdle();
   }, [ts]);
   return null;
