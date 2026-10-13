@@ -129,10 +129,9 @@ function ProfileBody({ controller }: { controller: ProfileController }) {
       reserveMessage: item.questionId ? FIELD_ERROR : undefined,
       autoComplete: "off",
     };
-    // Legacy Work / Role is free-form multiline context: retain line breaks in a compact 44px control.
-    return item.multiline ||
-      item.questionId === "work_role" ||
-      value.includes("\n") ? (
+    // All canonical answers may contain legacy line breaks. Keep the element
+    // type stable while editing or polling, with compact fields still at 44px.
+    return item.questionId ? (
       <BriefTextarea
         key={item.id}
         {...shared}

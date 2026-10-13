@@ -86,7 +86,7 @@ export class ProfileController {
     this.state.availability === "ready" &&
     !this.state.discarding &&
     !this.state.prompt &&
-    !["unknown", "conflict"].includes(this.state.phase);
+    this.state.phase !== "conflict";
   value = (field: ProfileField) =>
     this.state.draft[field] ?? this.state.base?.answers[field] ?? "";
   setAccess(access: boolean) {
@@ -106,16 +106,17 @@ export class ProfileController {
   edit(field: ProfileField, value: string) {
     if (!isField(field) || !this.editable() || !this.state.base) return;
     const draft = { ...this.state.draft, [field]: value };
-    // During a save, even a return to the old base is a new edit to preserve.
+    // Until a save is confirmed, even returning to the old base is a new edit:
+    // the previous attempt may already have changed the canonical value.
     if (
-      this.state.phase !== "saving" &&
+      !["saving", "unknown"].includes(this.state.phase) &&
       value === (this.state.base.answers[field] ?? "")
     )
       delete draft[field];
     const dirty = Object.keys(draft).length > 0;
     this.publish({
       draft,
-      ...(this.state.phase === "saving"
+      ...(["saving", "unknown"].includes(this.state.phase)
         ? {}
         : {
             phase: dirty ? "dirty" : "clean",
@@ -128,9 +129,10 @@ export class ProfileController {
       !this.alive ||
       !this.access ||
       this.state.phase === "saving" ||
-      this.state.reading
+      (this.state.reading && !discard)
     )
       return;
+    // A confirmed discard supersedes an ordinary poll, including its late reply.
     const op = this.operation();
     this.publish({ reading: true, discarding: discard });
     try {
@@ -203,8 +205,10 @@ export class ProfileController {
       !validPatch(patch)
     ) {
       this.publish({
-        phase: "error",
-        message: "Review the highlighted fields before saving.",
+        phase: uncertain ? "unknown" : "error",
+        message: uncertain
+          ? UNKNOWN
+          : "Review the highlighted fields before saving.",
       });
       return;
     }
