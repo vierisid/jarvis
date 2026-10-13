@@ -1,0 +1,88 @@
+{
+  "card": "D-30",
+  "method": "CUA Chromium UI actions and read-only DOM observations",
+  "layouts": [
+    "light-expanded-chat-closed",
+    "light-expanded-chat-open",
+    "light-rail-chat-closed",
+    "light-rail-chat-open",
+    "dark-expanded-chat-closed",
+    "dark-expanded-chat-open",
+    "dark-rail-chat-closed",
+    "dark-rail-chat-open"
+  ],
+  "desktop": {
+    "width": 1440,
+    "height": 1100
+  },
+  "additionalWidths": [800, 390, 320],
+  "checks": [
+    {
+      "check": "cross-tab storage with focused composer",
+      "brief": "light",
+      "draft": "Keep this D30 chat draft",
+      "focused": "Message Jarvis",
+      "root": "light",
+      "selected": ["light", "light"],
+      "sidebar": "true"
+    },
+    {
+      "check": "cross-tab theme while Account menu remains open",
+      "draft": "Keep this D30 chat draft",
+      "focus": "Profile",
+      "menus": [
+        {
+          "background": "rgba(0, 0, 0, 0)",
+          "theme": "dark"
+        }
+      ],
+      "theme": "dark"
+    },
+    {
+      "check": "320px recovered voice",
+      "feedback": "Selected voice is saved. Live application is unconfirmed.Refresh settingsRefresh settingsRetry saveRetry save",
+      "scrollWidth": 320,
+      "selected": ["dark", "dark"],
+      "voice": "en-US-GuyNeural",
+      "width": 320
+    },
+    {
+      "check": "hosted tutorial dialog",
+      "centerX": 400,
+      "centerY": 500,
+      "height": 1000,
+      "managed": true,
+      "open": true,
+      "selects": 1,
+      "width": 800
+    },
+    {
+      "check": "read-only stale at 390px",
+      "feedback": "Could not load current settings. Your selection is still here.",
+      "replayDisabled": true,
+      "scrollWidth": 390,
+      "voiceDisabled": true,
+      "width": 390
+    },
+    {
+      "check": "reload preserves selected Appearance",
+      "selectors": ["light", "light"],
+      "theme": "light"
+    }
+  ],
+  "behavior": [
+    "Canonical listed voice saves and remounts",
+    "Lost-response keeps selection; explicit Retry confirms saved value without claiming application",
+    "Both selectors update with local and peer-tab changes",
+    "Focused composer and chat draft persist through peer-tab update",
+    "Open Account menu changes theme and retains focus",
+    "Hosted tutorial cancel and Escape return focus; confirmation reopens fixture tutorial",
+    "Read-only stale settings block voice and replay"
+  ],
+  "consoleWarningsErrors": [],
+  "limits": [
+    "Synthetic browser host only; actual pinned F23 routes tested in separate temporary-vault proof",
+    "Desktop matrix predates only dialog centering CSS fix; final dialog verified at 800px",
+    "No F25 live destination provider or production activation"
+  ]
+}
