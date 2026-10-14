@@ -1,3 +1,4 @@
+.on-tour-frame { container: onboarding-tour / inline-size; height: 100%; min-width: 0; }
 .on-tour {
   /* Approved Brief values, local so an opposite-theme ancestor cannot bleed in. */
   --on-tour-canvas: #fafbfc;
@@ -21,7 +22,7 @@
 .on-tour, .on-tour__dock, .on-tour__sandbox-label, .on-tour__card, .on-tour__card * { box-sizing: border-box; }
 .on-tour__sandbox-label { padding: 7px 16px; color: var(--on-tour-muted); font-size: 12px; text-align: center; border-bottom: 1px solid color-mix(in srgb, var(--on-tour-muted) 20%, transparent); }
 .on-tour__room { min-height: 0; overflow: auto; pointer-events: none; user-select: none; }
-.on-tour__dock { position: absolute; z-index: 1; inset-inline-start: calc(var(--on-tour-sidebar) + 40px); inset-block-end: 36px; width: min(648px, calc(100% - var(--on-tour-sidebar) - 80px)); }
+.on-tour__dock { position: absolute; z-index: 1; left: calc(var(--on-tour-sidebar) + 40px); bottom: 36px; width: min(648px, calc(100% - var(--on-tour-sidebar) - 80px)); }
 .on-tour__card { background: var(--on-tour-surface); border-radius: 18px 0 18px 18px; box-shadow: inset 0 0 0 2px var(--on-tour-blue), var(--on-tour-shadow); padding: 24px; }
 .on-tour__eyebrow { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; margin: 0 0 16px; color: var(--on-tour-muted); font: 400 12px/1.5 "Spline Sans Mono", ui-monospace, monospace; text-transform: uppercase; }
 .on-tour__count { white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -39,12 +40,17 @@
 .on-tour__primary:hover:not([aria-disabled="true"]) { opacity: .87; }
 .on-tour__card button:active:not([aria-disabled="true"]) { opacity: .7; }
 .on-tour__card button[aria-disabled="true"] { opacity: .45; cursor: default; }
-@media (max-width: 1024px), (max-height: 800px) {
+@container onboarding-tour (max-width: 1024px) {
   .on-tour { grid-template-rows: auto minmax(180px, 1fr) auto; min-height: 0; }
-  .on-tour__dock { position: relative; inset-inline-start: auto; inset-block-end: auto; width: auto; margin: 16px 24px 24px; }
+  .on-tour__dock { position: relative; left: auto; bottom: auto; width: auto; margin: 16px 24px 24px; }
   .on-tour__card { max-width: 648px; margin-inline: auto; }
 }
-@media (max-width: 540px) {
+@media (max-height: 800px) {
+  .on-tour { grid-template-rows: auto minmax(180px, 1fr) auto; min-height: 0; }
+  .on-tour__dock { position: relative; left: auto; bottom: auto; width: auto; margin: 16px 24px 24px; }
+  .on-tour__card { max-width: 648px; margin-inline: auto; }
+}
+@container onboarding-tour (max-width: 540px) {
   .on-tour { height: auto; min-height: 100%; grid-template-rows: auto minmax(160px, 28vh) auto; }
   .on-tour__dock { margin: 12px 12px 20px; }
   .on-tour__card { padding: 20px; }
