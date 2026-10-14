@@ -91,14 +91,17 @@ describe("Pause holds queued work", () => {
 });
 
 describe("Pause holds queued work, through the worker", () => {
-  test("a job the handler hands back as the pause begins is not completed by the worker", async () => {
+  test("a job the handler hands back as the pause begins is neither completed nor reported failed by the worker", async () => {
     const { runId, jobId } = queued();
     const { calls, drain, handler } = counting();
+    const logs: string[] = [];
     // Pause lands after the worker claimed the job, before the handler looked.
-    const pausing = new Worker({ log: silent, handlers: { [RUN_FLOW]: async (job) => { controller.pause(); await handler(job); } } });
+    const pausing = new Worker({ log: (line) => logs.push(line), handlers: { [RUN_FLOW]: async (job) => { controller.pause(); await handler(job); } } });
     await pausing.drain();
     expect(getJob(jobId)).toMatchObject({ status: "QUEUED", attempt: 0 });
     expect(getFlowRun(runId)?.status).toBe("QUEUED");
+    // Handed back is not failed: the worker says nothing about it.
+    expect(logs.filter((line) => line.includes(jobId))).toEqual([]);
     controller.resume();
     await drain();
     expect(calls).toEqual(["BEGIN"]);
