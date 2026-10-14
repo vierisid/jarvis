@@ -14,7 +14,7 @@ function run(raw: unknown, handlerResult: boolean | null) {
     raw,
     (req, onResult) => {
       dispatched.push({ room: req.room, action: req.action, args: req.args });
-      if (handlerResult !== null) onResult?.(handlerResult);
+      if (handlerResult !== null) onResult?.(handlerResult, handlerResult ? "accepted" : "rejected");
     },
     (text) => sent.push(JSON.parse(text)),
   );
@@ -30,7 +30,7 @@ test("answers with the room's verdict when the daemon asked", () => {
   for (const verdict of [true, false]) {
     const { dispatched, sent } = run(note({ resultId: "r1" }), verdict);
     expect(dispatched).toEqual([{ room: "settings", action: "switch_tab", args: { tab: "voice" } }]);
-    expect(sent).toEqual([expect.objectContaining({ type: "room_action_result", payload: { resultId: "r1", accepted: verdict } })]);
+    expect(sent).toEqual([expect.objectContaining({ type: "room_action_result", payload: { resultId: "r1", accepted: verdict, outcome: verdict ? "accepted" : "rejected" } })]);
   }
 });
 
@@ -56,22 +56,32 @@ test("the dashboard answers only an action it was asked about (#965)", () => {
     const dispatched: unknown[] = [];
     dispatchDashboardRoomAction(
       { room: "agents", action: "switch_tab", args: { tab: "builder" }, ts: 1, resultId: "r9" },
-      (req, onResult) => { dispatched.push(req); onResult?.(verdict); },
+      (req, onResult) => { dispatched.push(req); onResult?.(verdict, verdict ? "accepted" : "rejected"); },
       (text) => sent.push(JSON.parse(text)),
     );
     // The room sees the action, not the resultId.
     expect(dispatched).toEqual([{ room: "agents", action: "switch_tab", args: { tab: "builder" }, ts: 1 }]);
-    expect(sent).toEqual([expect.objectContaining({ type: "room_action_result", payload: { resultId: "r9", accepted: verdict } })]);
+    expect(sent).toEqual([expect.objectContaining({ type: "room_action_result", payload: { resultId: "r9", accepted: verdict, outcome: verdict ? "accepted" : "rejected" } })]);
   }
   const sent: unknown[] = [];
   let callback: unknown = "unset";
   dispatchDashboardRoomAction(
     { room: "agents", action: "switch_tab", args: { tab: "builder" }, ts: 1 },
-    (_req, onResult) => { callback = onResult; onResult?.(true); },
+    (_req, onResult) => { callback = onResult; onResult?.(true, "accepted"); },
     (text) => sent.push(text),
   );
   expect(callback).toBeUndefined();
   expect(sent).toEqual([]);
+});
+
+test("a room's pending answer reaches the daemon as pending, not as a refusal (#1016)", () => {
+  const sent: Array<{ payload: unknown }> = [];
+  dispatchDashboardRoomAction(
+    { room: "agents", action: "spawn_agent", args: { specialist: "research" }, ts: 1, resultId: "r7" },
+    (_req, onResult) => { onResult?.(false, "pending"); },
+    (text) => sent.push(JSON.parse(text)),
+  );
+  expect(sent.map((m) => m.payload)).toEqual([{ resultId: "r7", accepted: false, outcome: "pending" }]);
 });
 
 test("the dashboard shell wires daemon room actions through the answering dispatch (#965)", async () => {

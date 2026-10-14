@@ -1293,8 +1293,8 @@ export class WebSocketService implements Service {
         // A panel's or dashboard's answer to requestRoomAction. Malformed or
         // unknown ids, and answers from a client that was not asked, are
         // dropped inside answer(); nothing is sent back either way.
-        const p = msg.payload as { resultId?: unknown; accepted?: unknown } | undefined;
-        this.roomActionResults.answer(p?.resultId, p?.accepted, ws);
+        const p = msg.payload as { resultId?: unknown; accepted?: unknown; outcome?: unknown } | undefined;
+        this.roomActionResults.answer(p?.resultId, p?.accepted, ws, p?.outcome);
         return undefined;
       }
 
@@ -2122,6 +2122,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
         this.auditRoomAction(ra, 'realtime', 'allowed', outcome === 'accepted', { reason: outcome });
         const reply = roomActionReply(ra, outcome);
+        // The model, told only "didn't accept", may call again and raise a
+        // second card (#1016).
+        if (outcome === 'pending') return `${reply} (Nothing has run. The user approves or refuses it on the card; do not call this again for this request.)`;
         return outcome === 'accepted' && !isPresentationRoomAction(room, action)
           ? `${reply} (${roomTitle(room)} accepted it and started it; it shows the result on screen.)`
           : reply;
@@ -3501,8 +3504,9 @@ const ROOM_ACTION_EFFECT: Record<RoomActionCategory, string> = {
 /**
  * What to say about a room action once the room has answered, or not (#965).
  * Only an accepted action gets the action's own acknowledgement; a rejected
- * one says so, and with no answer it says it cannot tell. A tab switch reads
- * the same as the pebble's (tabSwitchReply).
+ * one says so, a pending one says a card is waiting for the person (#1016),
+ * and with no answer it says it cannot tell. A tab switch reads the same as
+ * the pebble's (tabSwitchReply).
  */
 export function roomActionReply(
   ra: { room: string; action: string; args?: Record<string, unknown> },
@@ -3515,6 +3519,9 @@ export function roomActionReply(
       return ackForRoomAction(ra, title);
     case 'rejected':
       return `${title} didn't accept that.`;
+    // Not refused: it waits on the person (#1016).
+    case 'pending':
+      return `That needs your approval before it runs. A card is waiting for you.`;
     case 'no_answer':
       return `I sent that to ${title}, but it didn't answer, so I can't tell whether it happened.`;
     case 'unreached':

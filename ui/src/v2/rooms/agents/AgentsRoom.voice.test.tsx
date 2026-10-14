@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 afterAll(() => GlobalRegistrator.unregister());
 
-type Dispatch = (req: { room: string; action: string; args: Record<string, unknown>; ts: number }, onResult?: (ok: boolean) => void) => void;
+type Dispatch = (req: { room: string; action: string; args: Record<string, unknown>; ts: number }, onResult?: import("../useRoomActionBus").RoomActionResultCallback) => void;
 
 /** Mount the Agents room; `spawnReply` answers each POST /api/agents. */
 async function mount(spawnReply: () => Promise<Response>): Promise<{ dispatch: Dispatch; posts: string[] }> {
@@ -63,12 +63,16 @@ async function mount(spawnReply: () => Promise<Response>): Promise<{ dispatch: D
   return { dispatch, posts };
 }
 
-/** Dispatch a spawn and return a reader for the answer; undefined until the room answers. */
-async function spawn(dispatch: Dispatch): Promise<() => boolean | undefined> {
-  let answer: boolean | undefined;
+/**
+ * Dispatch a spawn and return a reader for the answer, as "<carried out> <answer>"
+ * (#1016: a card waiting is `false pending`, a refusal `false rejected`);
+ * undefined until the room answers.
+ */
+async function spawn(dispatch: Dispatch): Promise<() => string | undefined> {
+  let answer: string | undefined;
   await act(async () => {
     dispatch({ room: "agents", action: "spawn_agent", args: { specialist: "research-analyst", task: "look into it" }, ts: Date.now() },
-      (ok) => { answer = ok; });
+      (ok, outcome) => { answer = `${ok} ${outcome}`; });
   });
   return () => answer;
 }
@@ -89,7 +93,7 @@ test("the room does not answer a voice spawn before the route has", async () => 
   expect(answer()).toBeUndefined();
   await act(async () => { reply(NativeResponse.json({ approval_required: true, approval_id: "a1", message: "A card is waiting." }, { status: 202 })); });
   await settle();
-  expect(answer()).toBe(false);
+  expect(answer()).toBe("false pending");
 });
 
 test("a voice spawn is carried out only when the route started the agent", async () => {
@@ -111,18 +115,19 @@ test("a voice spawn is carried out only when the route started the agent", async
     root = undefined;
     host.remove();
   }
+  // A card is waiting, not a refusal (#1016); nothing else waits.
   expect(answers).toEqual([
-    "202 card raised: false",
-    "409 halted: false",
-    "403 denied: false",
-    "429 too many waiting: false",
-    "network failure: false",
-    "201 spawned: true",
+    "202 card raised: false pending",
+    "409 halted: false rejected",
+    "403 denied: false rejected",
+    "429 too many waiting: false rejected",
+    "network failure: false rejected",
+    "201 spawned: true accepted",
   ]);
 });
 
 test("the bus reports a promised answer when it settles, and a rejected one as not carried out", async () => {
-  let answer: () => PromiseLike<boolean | string | void> = async () => true;
+  let answer: () => PromiseLike<import("../useRoomActionBus").RoomActionAnswer> = async () => true;
   let dispatch!: Dispatch;
   function Probe() { dispatch = bus.useRoomActionDispatcher().dispatch; return null; }
   function Room() { bus.useRoomActions("authority", () => answer()); return null; }
@@ -132,15 +137,18 @@ test("the bus reports a promised answer when it settles, and a rejected one as n
     root!.render(React.createElement(bus.RoomActionBusProvider, null, React.createElement(Probe), React.createElement(Room)));
   });
   await act(async () => { await Promise.resolve(); });
-  const results: Array<boolean | undefined> = [];
+  const results: Array<string | undefined> = [];
   // A thenable that is not a native Promise is an answer too.
   const thenable = (): PromiseLike<boolean> => ({ then: (ok, _err) => Promise.resolve(ok?.(true)) as never });
-  for (const next of [async () => true, async () => "Done.", async () => false, async () => { throw new Error("broke"); }, thenable]) {
+  const held = async (): Promise<import("../useRoomActionBus").RoomActionAnswer> => bus.AWAITING_APPROVAL;
+  // Only the bus's own marker is pending: an object that looks like it is not.
+  const lookalike = async () => ({ awaitingApproval: true }) as never;
+  for (const next of [async () => true, async () => "Done.", async () => false, async () => { throw new Error("broke"); }, thenable, held, lookalike]) {
     answer = next;
-    let got: boolean | undefined;
-    await act(async () => { dispatch({ room: "authority", action: "set_filter", args: {}, ts: Date.now() }, (ok) => { got = ok; }); });
+    let got: string | undefined;
+    await act(async () => { dispatch({ room: "authority", action: "set_filter", args: {}, ts: Date.now() }, (ok, outcome) => { got = `${ok} ${outcome}`; }); });
     await settle();
     results.push(got);
   }
-  expect(results).toEqual([true, true, false, false, true]);
+  expect(results).toEqual(["true accepted", "true accepted", "false rejected", "false rejected", "true accepted", "false pending", "false rejected"]);
 });

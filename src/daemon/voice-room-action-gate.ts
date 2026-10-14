@@ -149,8 +149,9 @@ export type RoomActionAuditReason =
  * action, the origin, every category and the reason, e.g.
  * `room_action(settings/replay_onboarding; via classifier; delete_data,
  * modify_settings; held)`. `executed` is true only when the room said it ran
- * the action; the reason says whether a false one was declined, unreached,
- * or unanswered, which may still have run. `approval_id` is the hold's id,
+ * the action; the reason says whether a false one was declined, held for a
+ * card (`pending`, #1016), unreached, or unanswered, which may still have
+ * run. `approval_id` is the hold's id,
  * linking a hold to what became of it.
  *
  * An authority grant or revoke is not a room action and has no categories,

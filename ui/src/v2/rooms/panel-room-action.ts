@@ -1,6 +1,6 @@
 import type { RoomActionRequest, RoomActionResultCallback } from "./useRoomActionBus";
 import { isPresentationRoomAction } from "../../../../src/daemon/room-actions";
-import { roomActionExpiry } from "../../../../src/daemon/room-action-results";
+import { roomActionExpiry, type RoomAnswer } from "../../../../src/daemon/room-action-results";
 
 /**
  * A native panel's half of a daemon `room_action` (T20c, #933).
@@ -46,15 +46,19 @@ export function handlePanelRoomActionMessage(
       ts: Date.now(),
       ...(expiresAt !== undefined ? { expiresAt } : {}),
     },
-    resultId ? (accepted) => send(roomActionResultText(resultId, accepted)) : undefined,
+    resultId ? (_accepted, answer) => send(roomActionResultText(resultId, answer)) : undefined,
   );
 }
 
-/** The answer to a room_action that carried a resultId (#933, #965). */
-export function roomActionResultText(resultId: string, accepted: boolean): string {
+/**
+ * The answer to a room_action that carried a resultId (#933, #965): whether
+ * the room carried it out, and which answer it was, so a card waiting on the
+ * person is not heard as a refusal (#1016).
+ */
+export function roomActionResultText(resultId: string, answer: RoomAnswer): string {
   return JSON.stringify({
     type: "room_action_result",
-    payload: { resultId, accepted },
+    payload: { resultId, accepted: answer === "accepted", outcome: answer },
     timestamp: Date.now(),
   });
 }
@@ -70,5 +74,5 @@ export function dispatchDashboardRoomAction(
   send: (text: string) => void,
 ): void {
   const { resultId, ...req } = request;
-  dispatch(req, resultId ? (accepted) => send(roomActionResultText(resultId, accepted)) : undefined);
+  dispatch(req, resultId ? (_accepted, answer) => send(roomActionResultText(resultId, answer)) : undefined);
 }
