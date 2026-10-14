@@ -1,0 +1,177 @@
+Revert checks for Q-17 at 456dcbd3: each guarantee removed in turn, its test run, the source restored.
+Each entry gives the file, the exact text removed and what replaced it, so any check can be repeated by hand.
+Result: 22 of 22 detected.
+
+[DETECTED] a goal's count is not derived from its entries
+    test: src/goals/observations.test.ts  exit: 1  2 pass 11 fail
+    file: src/goals/application-service.ts
+    remove: "value: counted.length, measuredAt: entry.recordedAt,"
+    replace with: "value: definition.value, measuredAt: entry.recordedAt,"
+    fails: six signed partners trace to six distinct cited entries; activity, accepted work and checked results never count [367.78ms]
+    fails: a duplicate business event cannot count twice: the same partner, the same source version or the same request [216.10ms]
+    fails: an entry receipt survives a restart, and its replay afterwards changes nothing [298.43ms]
+    fails: a partner who backs out is taken back out by an entry linked to the one it corrects, and can be counted again [243.38ms]
+    fails: correcting a detail of a counted entry replaces its reference without moving the count or the progress history [242.73ms]
+    fails: one partner can support several goals, counted once in each [250.31ms]
+    fails: a parent and its child count independently: a child entry, correction or deletion never changes the parent [242.79ms]
+    fails: a goal completed, corrected and reopened keeps one coherent count [279.03ms]
+    fails: a counted goal takes no typed total, no score and no work-result score: its number comes from entries only [318.16ms]
+    fails: an automatic review stays inside the no-verified-mapping boundary on a counted goal [300.87ms]
+    fails: a counted measure holds at most 1,000 things; corrections and retractions still work at the cap [4157.16ms]
+
+[DETECTED] the same thing counts twice on one goal
+    test: src/goals/observations.test.ts  exit: 1  10 pass 3 fail
+    file: src/goals/application-service.ts
+    remove: "if (input.corrects === null && latest) throw new GoalMeasurementConflict("
+    replace with: "if (input.corrects === null && latest && false) throw new GoalMeasurementConflict("
+    fails: a duplicate business event cannot count twice: the same partner, the same source version or the same request [229.26ms]
+    fails: a partner who backs out is taken back out by an entry linked to the one it corrects, and can be counted again [265.85ms]
+    fails: one partner can support several goals, counted once in each [273.16ms]
+
+[DETECTED] case and spacing make a new thing
+    test: src/goals/observations.test.ts  exit: 1  11 pass 2 fail
+    file: src/goals/observations.ts
+    remove: "return subject.normalize('NFKC').replace(/\\s+/gu, ' ').trim().toLocaleLowerCase('en-US');"
+    replace with: "return subject;"
+    fails: a duplicate business event cannot count twice: the same partner, the same source version or the same request [232.76ms]
+    fails: a partner who backs out is taken back out by an entry linked to the one it corrects, and can be counted again [278.82ms]
+
+[DETECTED] a source version is cited twice on one goal
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "if (this.db.query('SELECT 1 FROM goal_observation WHERE goal_id = ? AND source_key = ?').get(id, sourceKey))"
+    replace with: "if (false)"
+    fails: a duplicate business event cannot count twice: the same partner, the same source version or the same request [252.84ms]
+
+[DETECTED] a replayed entry is written again
+    test: src/goals/observations.test.ts  exit: 1  11 pass 2 fail
+    file: src/goals/application-service.ts
+    remove: "      if (prior) {\n        if (prior.command !== serialized) throw new GoalMeasurementConflict('Request ID already has a different entry');"
+    replace with: "      if (false) {\n        if (prior!.command !== serialized) throw new GoalMeasurementConflict('Request ID already has a different entry');"
+    fails: a duplicate business event cannot count twice: the same partner, the same source version or the same request [237.56ms]
+    fails: an entry receipt survives a restart, and its replay afterwards changes nothing [247.90ms]
+
+[DETECTED] a correction may name an older entry
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "if (input.corrects !== null && latest?.id !== input.corrects)"
+    replace with: "if (false)"
+    fails: a partner who backs out is taken back out by an entry linked to the one it corrects, and can be counted again [248.84ms]
+
+[DETECTED] a thing not counted can be taken out
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "if (input.kind === 'retracted' && latest?.kind !== 'counted') throw"
+    replace with: "if (false) throw"
+    fails: a partner who backs out is taken back out by an entry linked to the one it corrects, and can be counted again [250.59ms]
+
+[DETECTED] a retraction does not lower the count
+    test: src/goals/observations.test.ts  exit: 1  9 pass 4 fail
+    file: src/goals/observations.ts
+    remove: "WHERE goal_id = ? AND kind = 'counted' AND ${LATEST} ORDER BY seq"
+    replace with: "WHERE goal_id = ? AND ${LATEST} ORDER BY seq"
+    fails: a partner who backs out is taken back out by an entry linked to the one it corrects, and can be counted again [233.67ms]
+    fails: a parent and its child count independently: a child entry, correction or deletion never changes the parent [243.32ms]
+    fails: a goal completed, corrected and reopened keeps one coherent count [281.32ms]
+    fails: a counted measure holds at most 1,000 things; corrections and retractions still work at the cap [3982.50ms]
+
+[DETECTED] a detail correction writes progress
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "counted.length !== definition.value);"
+    replace with: "true);"
+    fails: correcting a detail of a counted entry replaces its reference without moving the count or the progress history [240.02ms]
+
+[DETECTED] a typed total overwrites a counted goal
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "if (before.measurement?.basis === 'observations')\n        throw new GoalMeasurementConflict('This goal is counted"
+    replace with: "if (false)\n        throw new GoalMeasurementConflict('This goal is counted"
+    fails: a counted goal takes no typed total, no score and no work-result score: its number comes from entries only [280.53ms]
+
+[DETECTED] a redefinition changes the unit under its entries
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "if (counted.length && before.measurement?.unit !== unit)"
+    replace with: "if (false)"
+    fails: defining a counted measure replaces a typed total, keeps its entries when redefined, and keeps its unit once counted [245.22ms]
+
+[DETECTED] a counted definition keeps the typed number
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "const measurement: GoalMeasurement = { unit, baseline, target, value: counted.length, measuredAt: Date.now(),"
+    replace with: "const measurement: GoalMeasurement = { unit, baseline, target, value: before.measurement?.value ?? counted.length, measuredAt: Date.now(),"
+    fails: defining a counted measure replaces a typed total, keeps its entries when redefined, and keeps its unit once counted [225.82ms]
+
+[DETECTED] a definition's replay is written again
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "      if (prior) return prior;\n      if ((before.measurement?.revision ?? 0) !== command.revision) throw new GoalMeasurementConflict('Measurement changed; refresh before saving');\n      const counted"
+    replace with: "      if ((before.measurement?.revision ?? 0) !== command.revision) throw new GoalMeasurementConflict('Measurement changed; refresh before saving');\n      const counted"
+    fails: defining a counted measure replaces a typed total, keeps its entries when redefined, and keeps its unit once counted [231.94ms]
+
+[DETECTED] the read names one source instead of each counted thing
+    test: src/goals/observations.test.ts  exit: 1  10 pass 3 fail
+    file: src/brief/goal-measurements.ts
+    remove: "provenance: measurement.basis === 'observations'"
+    replace with: "provenance: false"
+    fails: six signed partners trace to six distinct cited entries; activity, accepted work and checked results never count [330.39ms]
+    fails: correcting a detail of a counted entry replaces its reference without moving the count or the progress history [239.71ms]
+    fails: defining a counted measure replaces a typed total, keeps its entries when redefined, and keeps its unit once counted [230.35ms]
+
+[DETECTED] a counted measure reads as a typed total
+    test: src/goals/observations.test.ts  exit: 1  11 pass 2 fail
+    file: src/brief/goal-measurements.ts
+    remove: "      basis: measurement.basis ?? 'reported' } : null,"
+    replace with: "      } : null,"
+    fails: six signed partners trace to six distinct cited entries; activity, accepted work and checked results never count [333.43ms]
+    fails: defining a counted measure replaces a typed total, keeps its entries when redefined, and keeps its unit once counted [229.01ms]
+
+[DETECTED] an entry counts without a counted measure
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "if (definition?.basis !== 'observations') throw"
+    replace with: "if (false) throw"
+    fails: defining a counted measure replaces a typed total, keeps its entries when redefined, and keeps its unit once counted [382.05ms]
+
+[DETECTED] a build without Q-17 cannot read a counted snapshot
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "evidence: ledgerEvidence(id, definition.revision + 1), revision: definition.revision + 1, counted };"
+    replace with: "evidence: null, revision: definition.revision + 1, counted };"
+    fails: six signed partners trace to six distinct cited entries; activity, accepted work and checked results never count [330.83ms]
+
+[DETECTED] a retraction names nothing it takes back
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/observations.ts
+    remove: "if (kind === 'retracted' && corrects === null) invalid("
+    replace with: "if (false) invalid("
+    fails: an entry names one thing, when it happened and a cited source version; anything more or less is refused [216.62ms]
+
+[DETECTED] an entry may be dated in the future
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/observations.ts
+    remove: "number(e.observedAt, 'entry.observedAt', 0, Date.now(), true)"
+    replace with: "number(e.observedAt, 'entry.observedAt', 0, 8640000000000000, true)"
+    fails: an entry names one thing, when it happened and a cited source version; anything more or less is refused [229.12ms]
+
+[DETECTED] a counted measure grows past its cap
+    test: src/goals/observations.test.ts  exit: 1  12 pass 1 fail
+    file: src/goals/application-service.ts
+    remove: "if (counting && (definition.counted?.length ?? 0) >= MAX_COUNTED)"
+    replace with: "if (false)"
+    fails: a counted measure holds at most 1,000 things; corrections and retractions still work at the cap [4027.89ms]
+
+[DETECTED] the entry routes are missing
+    test: src/daemon/api-brief-goal-measurements.test.ts  exit: 1  5 pass 1 fail
+    file: src/brief/goal-measurement-routes.ts
+    remove: "[`${base}/observations`]: {"
+    replace with: "[`${base}/observations-gone`]: {"
+    fails: Q-17: counted measures and their entries go through the same gated routes, with receipts and conflicts [8.73ms]
+
+[DETECTED] the counted definition route is missing
+    test: src/daemon/api-brief-goal-measurements.test.ts  exit: 1  5 pass 1 fail
+    file: src/brief/goal-measurement-routes.ts
+    remove: "[`${base}/measurement/counted`]: {"
+    replace with: "[`${base}/measurement/counted-gone`]: {"
+    fails: Q-17: counted measures and their entries go through the same gated routes, with receipts and conflicts [8.85ms]

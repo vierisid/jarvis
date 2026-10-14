@@ -1,0 +1,7 @@
+Targeted tests on brief/q-17 at 456dcbd3 (local WSL2, a fresh checkout of the commit).
+$ bun test --preload ./src/test-preload.ts src/goals src/brief src/daemon/api-brief-goal-measurements.test.ts src/daemon/api-routes.test.ts
+ 577 pass
+ 6 skip
+ 0 fail
+ 3819 expect() calls
+Ran 583 tests across 38 files. [81.90s]
