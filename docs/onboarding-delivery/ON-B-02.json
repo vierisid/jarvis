@@ -1,0 +1,159 @@
+{
+  "schemaVersion": 1,
+  "card": "ON-B-02",
+  "title": "Move setup off the Permissions screen",
+  "date": "2026-10-14",
+  "repository": "vierisid/jarvis",
+  "branch": "onboarding/on-b-02",
+  "pr": "https://github.com/vierisid/jarvis/pull/1055",
+  "target": "main",
+  "baseline": "5024ea7455a5613be0514475be32c0dee6de0edd",
+  "source_head": "a6a6e6d23c00449f39aee9e85a4cc2480d911b7e",
+  "delivery_head": {
+    "resolve": "git log -1 --format=%H -- docs/onboarding-delivery/ON-B-02.json",
+    "reason": "Avoid a self-referential commit hash; exact final CI is reported on the PR."
+  },
+  "status": "implemented_unmerged_default_off",
+  "merge_after": [],
+  "enable_after": [
+    "ON-B-11",
+    "ON-U-02",
+    "ON-U-10",
+    "verified combined D/F/Q candidate",
+    "actual hosted, macOS and Windows evidence"
+  ],
+  "capability": {
+    "provides": [
+      "setup.v1"
+    ],
+    "requires": [],
+    "registered": false,
+    "default_enabled": false,
+    "live_ready": false
+  },
+  "scope": [
+    "src/onboarding-next/setup/",
+    "docs/onboarding-delivery/ON-B-02.json",
+    "docs/onboarding-delivery/evidence/ON-B-02/"
+  ],
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "1097:16424",
+    "checkpoint": "Onboarding / Tutorial focus contour / 2026-10-14",
+    "version": "2410205462365531104",
+    "visual_changes": false,
+    "live_figma_inspection": "not required for backend adapter; approved roadmap and U02 source contract read"
+  },
+  "concurrent_work_inspected": {
+    "ON-B-01": "#1050",
+    "ON-U-01": "#1051",
+    "ON-U-02": "#1053",
+    "ON-U-03": "#1054",
+    "F-26": "#994 receipt remains default-off/unregistered",
+    "D-33": "#1003 cutover remains blocked",
+    "open_D_F_Q_PRs": "fetched and listed; no sibling stack imported"
+  },
+  "checks": {
+    "runtime": "Bun 1.4.2",
+    "dependencies": "own frozen install; lockfile unchanged",
+    "module": {
+      "passed": 43,
+      "failed": 0,
+      "assertions": 151
+    },
+    "focused": {
+      "passed": 157,
+      "failed": 0,
+      "assertions": 551,
+      "files": 14
+    },
+    "typecheck": "passed",
+    "build_ui": "passed; existing Tailwind directive warnings",
+    "build_workflows": "forced pieces and engine build passed; task-owned staging/output",
+    "repository_guards": "all four passed, including package guard Bun fallback",
+    "pre_commit": "normal hooks passed",
+    "full_ci": {
+      "status_at_receipt": "pending",
+      "source_head": "a6a6e6d23c00449f39aee9e85a4cc2480d911b7e",
+      "final_evidence": "PR checks and final handoff; not claimed passed here"
+    },
+    "review": {
+      "skill": "pr-reviewer",
+      "method": "direct full diff and surrounding-service review by implementer",
+      "independent_reviewer": false,
+      "remaining_code_blockers": 0,
+      "fixed": "permission request could follow a changed fallback desktop; now target-pinned",
+      "regression": "device-affinity-red.log fails without guard; module.log passes with guard"
+    }
+  },
+  "independence": {
+    "alone_on_base": "passed in separate detached checkout with frozen dependencies",
+    "synthetic_assembly_phases": {
+      "absent": {
+        "tests_passed": 2,
+        "tests_failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "standalone": {
+        "tests_passed": 46,
+        "tests_failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "combined": {
+        "tests_passed": 96,
+        "tests_failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "setup-removed": {
+        "tests_passed": 52,
+        "tests_failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      }
+    },
+    "actual_assembly": "blocked until ON-B-11/ON-U-10 exist",
+    "no_sibling_imports": true,
+    "no_shared_registration_edits": true,
+    "evidence": "evidence/ON-B-02/independence.json"
+  },
+  "evidence": {
+    "real": [
+      "SQLite in-memory vault",
+      "canonical settings persistence and hosted binding resolution",
+      "SQLite-triggered write failure",
+      "existing native permission resolver/parser code",
+      "typecheck, builds and Git checks"
+    ],
+    "mocked": [
+      "service startup and readiness",
+      "sidecar RPC reports including macOS and Windows",
+      "authentication context",
+      "synthetic assembly host"
+    ],
+    "not_run": [
+      "live hosted deployment",
+      "real AI/voice provider",
+      "real native permission prompt",
+      "screen observation",
+      "actual D/F/Q activation"
+    ]
+  },
+  "limitations": [
+    "ON-B-11 must inject authenticated owner/vault selection, binding hot reload and verified idempotent service startup; current legacy starter resolution alone is insufficient.",
+    "ON-U-10 must wire the controlled explainer Continue action and preserve the existing self-hosted setup path.",
+    "Native permission readiness is not Awareness consent, capture readiness or Authority approval.",
+    "First new hosted setup persists Awareness off. Later explicit opt-in remains through existing controls; retries preserve it.",
+    "No production endpoint or UI entry is registered, so no live preview URL exists."
+  ],
+  "rollback": "Disable or omit setup.v1 and use the unchanged legacy path. Retain additive settings and any workflows. Do not re-enable Awareness as a rollback side effect.",
+  "quick_verify": {
+    "cwd": "/home/vierisid/.cache/codex/jarvis-on-b-02",
+    "command": "bun test src/onboarding-next/setup",
+    "url": null,
+    "expected": "43 passing isolated tests; no live effects"
+  },
+  "next_card": "ON-B-03 not started"
+}

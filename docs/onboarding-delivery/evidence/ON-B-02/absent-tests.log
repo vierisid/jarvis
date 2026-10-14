@@ -1,0 +1,10 @@
+bun test v1.4.2 (744846f84)
+
+assembly.fixture.test.ts:
+(pass) synthetic host remains default-off [0.02ms]
+(pass) synthetic closure matches physically present modules [0.01ms]
+
+ 2 pass
+ 0 fail
+ 2 expect() calls
+Ran 2 tests across 1 file. [14.00ms]

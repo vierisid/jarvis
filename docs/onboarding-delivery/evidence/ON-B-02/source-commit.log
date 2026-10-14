@@ -1,0 +1,94 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 3 required path(s) present in the bun tarball (2420 files).
+[pre-commit] Running 3 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/setup/daemon-adapter.test.ts:
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > hosted setup persists, preserves system providers and starts only after disabling implicit Awareness [13.10ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > a durable retry preserves completion and a later explicit Awareness choice [9.51ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > explicit voice decline, existing provider settings and onboarding fields survive [9.44ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > delayed server configuration stays unknown; proxy-less hosted remains hosted [8.16ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > self-hosted settings are never rewritten or marked complete [7.97ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > wrong actor/project cannot read or commit the bound vault [7.76ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > corrupt onboarding row not-json is retained and not overwritten [7.78ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > corrupt onboarding row [] is retained and not overwritten [7.59ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > corrupt onboarding row "string" is retained and not overwritten [7.68ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > corrupt onboarding row {"setup_completed_at":"yesterday"} is retained and not overwritten [7.78ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > corrupt cfg.awareness blocks setup before writes [7.73ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > corrupt cfg.tts blocks setup before writes [7.95ms]
+Database initialized at: :memory:
+(pass) existing vault/settings setup adapter > real SQLite completion-write failure retains off state and retries safely [8.17ms]
+
+src/onboarding-next/setup/provider.test.ts:
+(pass) setup.v1 transition > factory and explainer reads cannot save, prompt or start services [0.12ms]
+(pass) setup.v1 transition > hosted setup completes without permission services or a Permissions step [0.13ms]
+(pass) setup.v1 transition > overlapping clicks, lost response and a recreated provider preserve one commit [0.27ms]
+(pass) setup.v1 transition > unknown/delayed hosted probe never falls through to self setup [0.07ms]
+(pass) setup.v1 transition > an unavailable hosted AI service does not expose a provider/key path [0.06ms]
+(pass) setup.v1 transition > self hosting retains legacy configuration even after a skip marker [0.08ms]
+(pass) setup.v1 transition > save failure cannot acknowledge completion or start services, and retry works [0.14ms]
+(pass) setup.v1 transition > read failure never fabricates an incomplete self-hosted installation [0.10ms]
+(pass) setup.v1 transition > a service failure retains saved setup and can be retried without saving again [0.11ms]
+(pass) setup.v1 transition > a resolved startup promise alone is not evidence of service readiness [0.09ms]
+(pass) setup.v1 transition > missing optional modules fail closed and no sibling imports are needed [0.28ms]
+(pass) setup.v1 transition > authorization runs for every retry and rejects client identity/configuration [0.18ms]
+
+src/onboarding-next/setup/permissions.test.ts:
+(pass) native access remains explicit and separate from setup > read-only screen check cannot open settings or start capture [0.49ms]
+(pass) native access remains explicit and separate from setup > macOS opened screen pane is not a grant; restart is conditional advice [0.46ms]
+(pass) native access remains explicit and separate from setup > failed settings-pane launch does not show restart advice [0.08ms]
+(pass) native access remains explicit and separate from setup > Windows reports no OS grant required without claiming granted or observing [0.07ms]
+(pass) native access remains explicit and separate from setup > a missing or duplicate permission row is not a grant [0.09ms]
+(pass) native access remains explicit and separate from setup > unbundled macOS cannot prompt for a different application identity [0.08ms]
+(pass) native access remains explicit and separate from setup > offline panel refuses instead of choosing a different desktop [0.07ms]
+(pass) native access remains explicit and separate from setup > no_sidecar has truthful recovery [0.09ms]
+(pass) native access remains explicit and separate from setup > offline has truthful recovery
+(pass) native access remains explicit and separate from setup > ambiguous has truthful recovery
+(pass) native access remains explicit and separate from setup > unsupported has truthful recovery
+(pass) native access remains explicit and separate from setup > refused has truthful recovery
+(pass) native access remains explicit and separate from setup > unreachable has truthful recovery
+[API] system.permissions from sidecar desktop-a was unreadable: {"platform":"darwin","permissions":[{"name":"screen","status":"unknown"}]}
+(pass) native access remains explicit and separate from setup > old, detached and malformed sidecar replies reuse existing fail-closed checks [0.22ms]
+(pass) native access remains explicit and separate from setup > only known action-specific permissions can be requested [0.17ms]
+(pass) native access remains explicit and separate from setup > microphone and accessibility actions do not request screen access [0.20ms]
+(pass) native access remains explicit and separate from setup > switching the only connected desktop between read and request cannot prompt the new device [0.14ms]
+(pass) native access remains explicit and separate from setup > a device switch on the final read cannot turn another desktop grant into readiness [0.21ms]
+
+ 43 pass
+ 0 fail
+ 151 expect() calls
+Ran 43 tests across 3 files. [155.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[onboarding/on-b-02 a6a6e6d2] ON-B-02: add optional setup transition with native access safeguards
+ 10 files changed, 810 insertions(+)
+ create mode 100644 src/onboarding-next/setup/README.md
+ create mode 100644 src/onboarding-next/setup/daemon-adapter.test.ts
+ create mode 100644 src/onboarding-next/setup/daemon-adapter.ts
+ create mode 100644 src/onboarding-next/setup/index.ts
+ create mode 100644 src/onboarding-next/setup/manifest.json
+ create mode 100644 src/onboarding-next/setup/permissions.test.ts
+ create mode 100644 src/onboarding-next/setup/permissions.ts
+ create mode 100644 src/onboarding-next/setup/provider.test.ts
+ create mode 100644 src/onboarding-next/setup/provider.ts
+ create mode 100644 src/onboarding-next/setup/types.ts
