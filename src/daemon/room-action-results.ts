@@ -55,7 +55,13 @@ export function roomActionExpiry(expiresInMs: unknown, receivedAt: number): numb
   return receivedAt + expiresInMs;
 }
 
-export type RoomActionOutcome = 'accepted' | 'rejected' | 'no_answer';
+/**
+ * What became of a room action: a room ran it, a room declined it, it was
+ * sent and nobody answered in time, or it never reached anyone who could run
+ * it (#1011: a socket closing as it was sent takes no frame, and "I sent that"
+ * was untrue).
+ */
+export type RoomActionOutcome = 'accepted' | 'rejected' | 'no_answer' | 'unreached';
 
 export class RoomActionResults {
   private pending = new Map<string, { settle: (o: RoomActionOutcome) => void; answerer?: unknown }>();
@@ -96,9 +102,9 @@ export class RoomActionResults {
     this.finish(id, accepted ? 'accepted' : 'rejected');
   }
 
-  /** Stop waiting now: the action reached no one who could answer. */
+  /** Stop waiting now: the action reached no one who could answer (#1011). */
   abandon(id: string): void {
-    this.finish(id, 'no_answer');
+    this.finish(id, 'unreached');
   }
 
   /** Stop waiting on everything only `answerer` could answer: it has gone. */

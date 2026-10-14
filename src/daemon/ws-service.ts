@@ -250,8 +250,9 @@ const VOICE_CONFIRMATION_SWEEP_INTERVAL_MS = 60_000;
  * be unit-tested without spinning up a real WebSocket server.
  *
  * Returns the number of pendingVoiceConfirmations entries removed (the
- * other two are at most 1 each — one entry per ws). Mostly useful so the
- * test can assert "we swept N abandoned cards" without re-querying.
+ * other two are at most 1 each — one entry per ws), and their ids, so the
+ * caller can take those cards down on every dashboard that shows them
+ * (#1011).
  */
 export function cleanupPerSocketMaps<W>(
   ws: W,
@@ -260,7 +261,7 @@ export function cleanupPerSocketMaps<W>(
   pendingVoiceConfirmations: Map<string, { ws: W }>,
   realtimeSessions?: Map<W, unknown>,
   pendingVoiceFrames?: Map<W, unknown>,
-): { voiceRemoved: boolean; interviewRemoved: boolean; pendingRemoved: number } {
+): { voiceRemoved: boolean; interviewRemoved: boolean; pendingRemoved: number; pendingRemovedIds: string[] } {
   const voiceRemoved = voiceSessions.delete(ws);
   const interviewRemoved = interviewSessions.delete(ws);
   // Backstop only: closeRealtimeVoice runs first on disconnect and owns the
@@ -272,20 +273,20 @@ export function cleanupPerSocketMaps<W>(
     realtimeSessions.delete(ws);
   }
   pendingVoiceFrames?.delete(ws);
-  let pendingRemoved = 0;
+  const pendingRemovedIds: string[] = [];
   for (const [id, pending] of pendingVoiceConfirmations) {
     if (pending.ws === ws) {
       pendingVoiceConfirmations.delete(id);
-      pendingRemoved += 1;
+      pendingRemovedIds.push(id);
     }
   }
-  return { voiceRemoved, interviewRemoved, pendingRemoved };
+  return { voiceRemoved, interviewRemoved, pendingRemoved: pendingRemovedIds.length, pendingRemovedIds };
 }
 
 /**
  * Pure TTL-sweep helper: removes pendingVoiceConfirmations entries older
  * than `ttlMs` and returns the ids of removed entries so the caller can
- * notify the originating clients (`voice_confirmation_expired`).
+ * take their cards down (`voice_confirmation_expired`, to every client).
  *
  * Extracted so the TTL contract can be unit-tested deterministically by
  * passing an explicit `now` rather than relying on real time.
@@ -587,28 +588,7 @@ export class WebSocketService implements Service {
         onConnect: (_ws) => {
           console.log('[WSService] Client connected');
         },
-        onDisconnect: (ws) => {
-          this.cancelActiveChat(ws, 'disconnect', false);
-          // A room action this dashboard was asked about can no longer be
-          // answered: say so now rather than after the wait (#965).
-          this.roomActionResults.abandonAnswerer(ws);
-          // Tear down any realtime voice session (closes the OpenAI WS + timer).
-          this.closeRealtimeVoice(ws);
-          // Clean up every per-socket map so a long-running daemon doesn't
-          // accumulate dead-socket entries across reconnects. See
-          // cleanupPerSocketMaps for the contract; tested in
-          // ws-service-cleanup.test.ts.
-          cleanupPerSocketMaps(
-            ws,
-            this.voiceSessions as unknown as Map<typeof ws, unknown>,
-            this.interviewSessions as unknown as Map<typeof ws, unknown>,
-            this.pendingVoiceConfirmations as unknown as Map<string, { ws: typeof ws }>,
-            this.realtimeSessions as unknown as Map<typeof ws, unknown>,
-            this.pendingVoiceFrames as unknown as Map<typeof ws, unknown>,
-          );
-          this.endInterviewSession(ws);
-          console.log('[WSService] Client disconnected');
-        },
+        onDisconnect: (ws) => this.handleClientDisconnect(ws),
       });
 
       // Start the server
@@ -618,29 +598,10 @@ export class WebSocketService implements Service {
       // an active client that receives a clarifier and then ignores it
       // (user walks away, switches context) leaves the entry forever.
       // 60s tick, 10-min TTL — see sweepExpiredVoiceConfirmations.
-      this.voiceConfirmationSweepTimer = setInterval(() => {
-        const expired = sweepExpiredVoiceConfirmations(
-          this.pendingVoiceConfirmations as unknown as Map<string, { ws: ServerWebSocket<unknown>; createdAt: number }>,
-          Date.now(),
-          VOICE_CONFIRMATION_TTL_MS,
-        );
-        for (const { id, ws } of expired) {
-          // Tell the originating client so the card UI can dismiss itself
-          // rather than stay rendered forever.
-          try {
-            ws.send(JSON.stringify({
-              type: 'voice_confirmation_expired',
-              payload: { id },
-              timestamp: Date.now(),
-            }));
-          } catch (err) {
-            // Socket may have died between map-read and send; safe to
-            // ignore. Use debug instead of warn so a burst of expirations
-            // against half-closed sockets doesn't spam the daemon log.
-            console.debug('[WSService] voice_confirmation_expired send failed:', err);
-          }
-        }
-      }, VOICE_CONFIRMATION_SWEEP_INTERVAL_MS);
+      this.voiceConfirmationSweepTimer = setInterval(
+        () => this.sweepVoiceConfirmations(Date.now()),
+        VOICE_CONFIRMATION_SWEEP_INTERVAL_MS,
+      );
 
       this._status = 'running';
       console.log(`[WSService] Started on port ${this.port}`);
@@ -648,6 +609,72 @@ export class WebSocketService implements Service {
       this._status = 'error';
       throw error;
     }
+  }
+
+  /** The clarifiers and repeat-backs still waiting for an answer (#1011). */
+  pendingVoiceConfirmationIds(): string[] {
+    return [...this.pendingVoiceConfirmations.keys()];
+  }
+
+  /** A dashboard or panel socket closed. */
+  private handleClientDisconnect(ws: ServerWebSocket<unknown>): void {
+    this.cancelActiveChat(ws, 'disconnect', false);
+    // A room action this dashboard was asked about can no longer be
+    // answered: say so now rather than after the wait (#965).
+    this.roomActionResults.abandonAnswerer(ws);
+    // Tear down any realtime voice session (closes the OpenAI WS + timer).
+    this.closeRealtimeVoice(ws);
+    // Clean up every per-socket map so a long-running daemon doesn't
+    // accumulate dead-socket entries across reconnects. See
+    // cleanupPerSocketMaps for the contract; tested in
+    // ws-service-cleanup.test.ts.
+    const { pendingRemovedIds } = cleanupPerSocketMaps(
+      ws,
+      this.voiceSessions as unknown as Map<typeof ws, unknown>,
+      this.interviewSessions as unknown as Map<typeof ws, unknown>,
+      this.pendingVoiceConfirmations as unknown as Map<string, { ws: typeof ws }>,
+      this.realtimeSessions as unknown as Map<typeof ws, unknown>,
+      this.pendingVoiceFrames as unknown as Map<typeof ws, unknown>,
+    );
+    // Its clarifier and repeat-back cards went to every dashboard, and a
+    // click on one now finds nothing: take them down everywhere (#1011).
+    for (const id of pendingRemovedIds) this.broadcastVoiceConfirmationGone(id, 'disconnected');
+    this.endInterviewSession(ws);
+    console.log('[WSService] Client disconnected');
+  }
+
+  /**
+   * Drop the voice confirmations older than VOICE_CONFIRMATION_TTL_MS, and
+   * take their cards down on every dashboard that was shown them (#1011).
+   * The sweep timer calls this; it used to tell only the socket that spoke,
+   * in a message no dashboard handled.
+   */
+  private sweepVoiceConfirmations(now: number): void {
+    const expired = sweepExpiredVoiceConfirmations(
+      this.pendingVoiceConfirmations as unknown as Map<string, { ws: ServerWebSocket<unknown>; createdAt: number }>,
+      now,
+      VOICE_CONFIRMATION_TTL_MS,
+    );
+    for (const { id } of expired) this.broadcastVoiceConfirmationGone(id, 'expired');
+  }
+
+  /**
+   * A clarifier or repeat-back card that can no longer be answered, sent to
+   * the audience its request went to: every client (broadcastClarifierRequest,
+   * broadcastRepeatBackRequest). A card that looks live but is dead teaches
+   * people to click without reading, which is what the card is there to stop.
+   *
+   * One source, `voice_confirmation_expired`, for both endings; `reason` says
+   * which, for logs and any client that wants it, and dashboards treat them
+   * alike. It replaces a top-level `voice_confirmation_expired` message that
+   * went to the originating socket only and that no client handled.
+   */
+  private broadcastVoiceConfirmationGone(id: string, reason: 'expired' | 'disconnected'): void {
+    this.wsServer.broadcast({
+      type: 'notification',
+      payload: { source: 'voice_confirmation_expired', id, reason },
+      timestamp: Date.now(),
+    });
   }
 
   async stop(): Promise<void> {
@@ -2972,11 +2999,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     client: ServerWebSocket<unknown>,
     requestId?: string,
   ): void {
-    if (isPresentationRoomAction(ra.room, ra.action)) {
-      this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
-      return;
-    }
-    this.wsServer.sendToClient(client, navigateRoomNotice(ra.room, requestId));
+    const notice = navigateRoomNotice(ra.room, requestId);
+    const reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, notice);
+    // As with the action itself: the others follow only once the dashboard
+    // that asked has it (#1011).
+    if (reached && isPresentationRoomAction(ra.room, ra.action)) this.wsServer.broadcastWithReceipt(notice, client);
   }
 
   /**
@@ -3011,9 +3038,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
   /**
    * Send a room action and wait to hear whether a room ran it (#933).
-   * Resolves `accepted` or `rejected` on the first answer, and `no_answer`
-   * when none comes: nobody connected who could answer, or a room that never
-   * mounted.
+   * Resolves `accepted` or `rejected` on the first answer, `no_answer` when
+   * none comes (a room that never mounted, a dashboard that closed before it
+   * answered), and `unreached` at once when no socket took the frame
+   * (nobody connected who could answer, #1011).
    *
    * Without `client` the native panels answer (the pebble's tab switch). With
    * `client`, only that dashboard gets the resultId, is asked to answer
@@ -3065,12 +3093,15 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     const waited = { resultId: id, expiresInMs: timeoutMs };
     let reached: boolean;
     if (client) {
-      if (presentation) this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
       reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
         type: 'notification',
         payload: { ...payload, ...waited, resultFrom: 'dashboard' },
         timestamp: Date.now(),
       });
+      // The others follow the dashboard that asked, and only once it has the
+      // action: otherwise they would switch while it is reported unreached,
+      // and "nothing was done" would be untrue (#1011).
+      if (presentation && reached) this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
     } else {
       reached = this.wsServer.broadcastWithReceipt({
         type: 'notification',
@@ -3078,7 +3109,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         timestamp: Date.now(),
       }) > 0;
     }
-    // Nobody connected to answer: say so now rather than after the timeout.
+    // Nobody took the frame: say so now rather than after the timeout, and
+    // not as "sent but no answer" (#1011). That includes a dashboard whose
+    // socket is closing but whose close has not been handled yet, where the
+    // send is dropped.
     if (!reached) this.roomActionResults.abandon(id);
     return outcome;
   }
@@ -3339,6 +3373,8 @@ export function roomActionReply(
       return `${title} didn't accept that.`;
     case 'no_answer':
       return `I sent that to ${title}, but it didn't answer, so I can't tell whether it happened.`;
+    case 'unreached':
+      return `I couldn't reach ${title} on the dashboard, so nothing was done.`;
   }
 }
 

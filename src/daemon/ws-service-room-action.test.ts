@@ -9,6 +9,7 @@ import { describe, expect, test } from 'bun:test';
 import { describeRoomAction, isVoiceAffirmative, roomActionReply, WebSocketService } from './ws-service.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS } from './room-action-results.ts';
+import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { buildTaintGating } from '../authority/taint-gating.ts';
@@ -65,8 +66,9 @@ describe('requestRoomAction', () => {
     const { svc, internals } = makeService();
     internals.wsServer.getClients().clear();
     const t0 = Date.now();
+    // Nothing was sent, so not "sent but no answer" (#1011).
     expect(await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 60_000))
-      .toBe('no_answer');
+      .toBe('unreached');
     expect(Date.now() - t0).toBeLessThan(1000);
   });
 
@@ -137,13 +139,40 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     expect(await pending).toBe('accepted');
   });
 
-  test('a dashboard that is gone gets no_answer at once', async () => {
+  test('a dashboard that is gone is reported unreached at once', async () => {
     const { svc } = setup();
     const gone = client();
     const t0 = Date.now();
     expect(await svc.requestRoomAction({ room: 'settings', action: 'enable_tts' }, 60_000, { client: gone.ws as never }))
-      .toBe('no_answer');
+      .toBe('unreached');
     expect(Date.now() - t0).toBeLessThan(1000);
+    expect(gone.sent).toEqual([]);
+  });
+
+  // #1011: a socket that is closing, but whose close the server has not
+  // handled yet, is still a client; its send is dropped (Bun returns 0).
+  test('a dashboard whose socket drops the frame is unreached, and nobody is told it was sent', async () => {
+    const { svc, internals, other } = setup();
+    const closing = { sent: [] as Sent[], ws: { send: () => 0, sendBinary: () => {} } };
+    (svc as unknown as { wsServer: { getClients: () => Set<unknown> } }).wsServer.getClients().add(closing.ws);
+    expect(await svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 60_000, { client: closing.ws as never }))
+      .toBe('unreached');
+    await internals.handleVoiceRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 'req', closing.ws);
+    const acks = other.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text);
+    expect(acks).toEqual(["I couldn't reach Tasks on the dashboard, so nothing was done."]);
+    expect(roomActionReply({ room: 'tasks', action: 'create_task' }, 'unreached')).not.toContain('sent');
+  });
+
+  test('a view action for a dashboard that cannot be reached goes nowhere, so "nothing was done" is true', async () => {
+    const { svc, internals, other } = setup();
+    const closing = { ws: { send: () => 0, sendBinary: () => {} } };
+    (svc as unknown as { wsServer: { getClients: () => Set<unknown> } }).wsServer.getClients().add(closing.ws);
+    for (const ws of [closing.ws, client().ws]) {
+      other.sent.length = 0;
+      const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'done' } }, ws);
+      expect(reply).toBe("I couldn't reach Tasks on the dashboard, so nothing was done.");
+      expect(other.sent.filter((m) => m.payload?.source === 'room_action' || m.payload?.source === 'navigate_room')).toEqual([]);
+    }
   });
 
   test('the realtime tool tells the model what the room answered, never "Done"', async () => {
@@ -249,10 +278,13 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     (svc as unknown as { roomActionResults: { abandonAnswerer: (ws: unknown) => void } }).roomActionResults.abandonAnswerer(speaker.ws);
     expect(await pending).toBe('no_answer');
     expect(Date.now() - t0).toBeLessThan(1000);
-    // Wired to the socket's disconnect.
+    // Wired to the socket's disconnect: the handler does it.
+    const again = svc.requestRoomAction({ room: 'settings', action: 'enable_tts' }, 60_000, { client: speaker.ws as never });
+    (svc as unknown as { handleClientDisconnect: (ws: unknown) => void }).handleClientDisconnect(speaker.ws);
+    expect(await again).toBe('no_answer');
+    expect(Date.now() - t0).toBeLessThan(1000);
     const src = await Bun.file(new URL('./ws-service.ts', import.meta.url)).text();
-    const hook = src.slice(src.indexOf('onDisconnect: (ws) => {'), src.indexOf('onDisconnect: (ws) => {') + 400);
-    expect(hook).toContain('this.roomActionResults.abandonAnswerer(ws);');
+    expect(src).toContain('onDisconnect: (ws) => this.handleClientDisconnect(ws),');
   });
 
   test('the realtime tool refuses a room that does not exist without waiting', async () => {
@@ -771,5 +803,100 @@ describe('isVoiceAffirmative reads a plain yes from the transcript (#973)', () =
     for (const t of ['', 'yes but wait', 'not yet', 'yesterday', 'no', 'sure', 'ok', 'that sounds right', 'yes delete everything', 'jarvis']) {
       expect([t, isVoiceAffirmative(t)]).toEqual([t, false]);
     }
+  });
+});
+
+// #1011: a clarifier or repeat-back request goes to every dashboard, but a
+// hold swept when its dashboard closed, or dropped by the TTL sweep, was only
+// ever reported to the socket that spoke, in a message no dashboard handled.
+// The card stayed live-looking everywhere, and a click on it got a 404.
+describe('a voice confirmation that ends is taken down where it was shown (#1011)', () => {
+  type Sent = { type: string; payload: Record<string, unknown> };
+  const setup = () => {
+    const base = makeService();
+    base.internals.wsServer.getClients().clear();
+    const mk = () => {
+      const sent: Sent[] = [];
+      return { sent, ws: { send: (raw: string) => { sent.push(JSON.parse(raw)); return raw.length; }, sendBinary: () => {} } };
+    };
+    const speaker = mk();
+    const other = mk();
+    const panel = mk();
+    for (const c of [speaker, other, panel]) base.internals.wsServer.getClients().add(c.ws);
+    const internals = base.svc as unknown as {
+      routeClassifiedVoiceIntent: (intent: Intent, trimmed: string, requestId: string, ws: unknown) => Promise<void>;
+      handleClientDisconnect: (ws: unknown) => void;
+      sweepVoiceConfirmations: (now: number) => void;
+      pendingVoiceConfirmations: Map<string, { createdAt: number }>;
+      wsServer: { getClients: () => Set<unknown> };
+    };
+    const held = (id: string, ws: unknown, over: Partial<Intent> = {}) => internals.routeClassifiedVoiceIntent({
+      id, utterance: 'x', verb: 'show', object: null, args: {}, impact: 'read', confidence: 0.99,
+      room_action: { room: 'tasks' as never, action: 'create_task', args: { title: id } }, ...over,
+    }, 'add it', 'req', ws);
+    const gone = (c: { sent: Sent[] }) => c.sent
+      .filter((m) => m.type === 'notification' && m.payload?.source === 'voice_confirmation_expired')
+      .map((m) => `${String(m.payload.id)}:${String(m.payload.reason)}`);
+    const requested = (c: { sent: Sent[] }) => c.sent
+      .filter((m) => m.payload?.source === 'repeat_back_request' || m.payload?.source === 'clarifier_request')
+      .map((m) => String(m.payload.id));
+    return { internals, speaker, other, panel, held, gone, requested };
+  };
+
+  test('closing the dashboard a hold is for takes its card down on every other one', async () => {
+    const { internals, speaker, other, panel, held, gone, requested } = setup();
+    await held('mine', speaker.ws);
+    await held('theirs', other.ws);
+    // Not vacuous: everyone was shown both.
+    for (const c of [speaker, other, panel]) expect(requested(c)).toEqual(['mine', 'theirs']);
+    internals.wsServer.getClients().delete(speaker.ws);
+    internals.handleClientDisconnect(speaker.ws);
+    for (const c of [other, panel]) expect(gone(c)).toEqual(['mine:disconnected']);
+    expect([...internals.pendingVoiceConfirmations.keys()]).toEqual(['theirs']);
+  });
+
+  test('a clarifier is taken down the same way', async () => {
+    const { internals, speaker, other, held, gone, requested } = setup();
+    await held('vague', speaker.ws, { room_action: undefined, verb: 'ask', impact: 'write', confidence: 0.7 });
+    expect(requested(other)).toEqual(['vague']);
+    expect(other.sent.find((m) => m.payload?.source === 'clarifier_request')).toBeDefined();
+    internals.wsServer.getClients().delete(speaker.ws);
+    internals.handleClientDisconnect(speaker.ws);
+    expect(gone(other)).toEqual(['vague:disconnected']);
+  });
+
+  test('a card that times out is taken down on every dashboard, not just the one that spoke', async () => {
+    const { internals, speaker, other, panel, held, gone } = setup();
+    await held('old', speaker.ws);
+    await held('fresh', speaker.ws);
+    internals.pendingVoiceConfirmations.get('old')!.createdAt -= 10 * 60_000 + 1;
+    internals.sweepVoiceConfirmations(Date.now());
+    for (const c of [speaker, other, panel]) expect(gone(c)).toEqual(['old:expired']);
+    expect([...internals.pendingVoiceConfirmations.keys()]).toEqual(['fresh']);
+    // Nothing goes out as the old top-level type no dashboard handled.
+    expect(speaker.sent.some((m) => m.type === 'voice_confirmation_expired')).toBe(false);
+  });
+
+  test('a dashboard back from a dropped socket can ask which cards are still live', async () => {
+    const { internals, speaker, other, held } = setup();
+    await held('mine', speaker.ws);
+    await held('theirs', other.ws);
+    internals.wsServer.getClients().delete(speaker.ws);
+    internals.handleClientDisconnect(speaker.ws);
+    const route = createApiRoutes({ wsService: internals } as unknown as ApiContext)['/api/voice/confirmations'] as { GET: () => Response };
+    const before = Date.now();
+    const body = await route.GET().json() as { ids: string[]; at: number };
+    expect(body.ids).toEqual(['theirs']);
+    expect(body.at).toBeGreaterThanOrEqual(before);
+  });
+
+  test('nothing is said about a dashboard that held nothing', async () => {
+    const { internals, speaker, other, held, gone } = setup();
+    await held('theirs', other.ws);
+    internals.wsServer.getClients().delete(speaker.ws);
+    internals.handleClientDisconnect(speaker.ws);
+    expect(gone(other)).toEqual([]);
+    internals.sweepVoiceConfirmations(Date.now());
+    expect(gone(other)).toEqual([]);
   });
 });

@@ -3673,6 +3673,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      * the request silently (the user-voice ThreadItem stays in the thread,
      * no assistant reply follows).
      */
+    /**
+     * The ids of the voice confirmations still waiting (#1011). A dashboard
+     * whose socket dropped missed the notices that took cards down meanwhile,
+     * and its own holds were dropped when it went; it reads this on reconnect
+     * and takes down every card not listed.
+     */
+    '/api/voice/confirmations': {
+      GET: () => {
+        if (!ctx.wsService) return error('WS service not configured', 500);
+        // `at` is when the list was read, on the clock the cards' own
+        // timestamps use, so a card that arrives after it is not taken down.
+        return json({ ids: ctx.wsService.pendingVoiceConfirmationIds(), at: Date.now() });
+      },
+    },
     '/api/voice/clarifier/:id/confirm': {
       POST: async (req: Request & { params: { id: string } }) => {
         if (!ctx.wsService) return error('WS service not configured', 500);

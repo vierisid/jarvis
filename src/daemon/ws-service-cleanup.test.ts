@@ -48,6 +48,8 @@ describe('cleanupPerSocketMaps', () => {
     expect(result.voiceRemoved).toBe(true);
     expect(result.interviewRemoved).toBe(true);
     expect(result.pendingRemoved).toBe(2);
+    // Which ones, so their cards can be taken down everywhere (#1011).
+    expect(result.pendingRemovedIds).toEqual(['p1', 'p2']);
 
     // ws1 entries are gone, ws2 entries are intact (other clients
     // disconnecting must NOT take down unrelated sessions).

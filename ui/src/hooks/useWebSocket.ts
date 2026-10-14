@@ -661,6 +661,22 @@ export function useWebSocket() {
       } catch (err) {
         console.warn("[WS] Failed to rehydrate approvals:", err);
       }
+
+      // Take down every voice card that ended while this socket was down
+      // (#1011): the notices went out while it could not hear them, and its
+      // own holds were dropped when it went. A click on one would 404.
+      try {
+        const resp = await fetch("/api/voice/confirmations");
+        if (resp.ok) {
+          const keep = stillPendingVoiceConfirmations(await resp.json());
+          if (keep) {
+            setClarifiers((prev) => prev.filter(keep));
+            setRepeatBacks((prev) => prev.filter(keep));
+          }
+        }
+      } catch (err) {
+        console.warn("[WS] Failed to recheck voice confirmations:", err);
+      }
     };
 
     ws.onclose = () => {
@@ -1095,8 +1111,10 @@ export function useWebSocket() {
         setRepeatBacks((prev) =>
           prev.some((r) => r.id === pending.id) ? prev : [...prev, pending],
         );
-      } else if (payload.source === "voice_confirmation_resolved") {
-        const id = (payload as { id?: string }).id;
+      } else if (payload.source === "voice_confirmation_resolved" || payload.source === "voice_confirmation_expired") {
+        // Resolved anywhere, expired, or its dashboard gone (#1011): the
+        // card is dead on every dashboard that was shown it.
+        const id = retiredVoiceConfirmationId(payload);
         if (id) {
           setClarifiers((prev) => prev.filter((c) => c.id !== id));
           setRepeatBacks((prev) => prev.filter((r) => r.id !== id));
@@ -1366,6 +1384,32 @@ export type DashboardRoomActionRequest = {
   /** False once the socket the action came on has closed (#1010). */
   stillAsked?: () => boolean;
 };
+
+/**
+ * The clarifier or repeat-back card a daemon notification takes down, or
+ * null: `voice_confirmation_resolved` (answered, on any dashboard) and
+ * `voice_confirmation_expired` (timed out, or the dashboard it was for has
+ * closed, #1011).
+ */
+export function retiredVoiceConfirmationId(payload: unknown): string | null {
+  const p = (payload ?? {}) as { source?: unknown; id?: unknown };
+  if (p.source !== "voice_confirmation_resolved" && p.source !== "voice_confirmation_expired") return null;
+  return typeof p.id === "string" && p.id ? p.id : null;
+}
+
+/**
+ * Which voice cards to keep, from `/api/voice/confirmations` (#1011): those
+ * still waiting, and any that arrived after the list was read (`at`, on the
+ * daemon clock the cards' timestamps use). Null when the body is not that
+ * shape: a card is never dropped on a reply this cannot read.
+ */
+export function stillPendingVoiceConfirmations(body: unknown): ((card: { id: string; timestamp: number }) => boolean) | null {
+  const b = (body ?? {}) as { ids?: unknown; at?: unknown };
+  if (!Array.isArray(b.ids) || typeof b.at !== "number") return null;
+  const ids = new Set(b.ids.filter((id): id is string => typeof id === "string"));
+  const at = b.at;
+  return (card) => ids.has(card.id) || card.timestamp > at;
+}
 
 /** A daemon `repeat_back_request`, or null when malformed. */
 export function repeatBackFrom(payload: unknown, timestamp: number): PendingRepeatBack | null {

@@ -64,10 +64,6 @@ export type WSMessage = {
       // (needs_input) are NOT emitted as task_event - the conv LLM handles
       // them by asking the user via the regular chat stream.
       | 'task_event'
-      // Emitted when a pending voice confirmation (clarifier / repeat-back)
-      // expires from the server-side TTL sweep. Payload: { id: string }.
-      // Clients should dismiss the corresponding card from their UI.
-      | 'voice_confirmation_expired'
       // Emitted after DB-backed settings are hot-applied to the running
       // daemon (per-section apply or POST /api/config/reload / SIGHUP).
       // Payload: { sections: string[], ok: boolean, errors?: { section, error }[] }
