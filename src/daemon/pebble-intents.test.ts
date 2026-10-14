@@ -267,6 +267,11 @@ describe('in-panel navigation names only tabs the room has (#933)', () => {
       .toBe("I asked Settings to switch to voice, but it didn't answer.");
     // Nothing reached a panel, so it does not claim to have asked (#1011).
     expect(tabSwitchReply('Settings', 'voice', 'unreached')).toBe("I couldn't reach Settings to switch it to voice.");
+    // No room holds a tab switch for a card (#1016) or answers one late
+    // (#1015); an answer that says so is still not a switch.
+    for (const odd of ['pending', 'started'] as const) {
+      expect(tabSwitchReply('Settings', 'voice', odd)).toBe("I asked Settings to switch to voice, but it didn't say it had.");
+    }
   });
 });
 

@@ -44,6 +44,15 @@ export interface RoomActionRequest {
    * socket it came on closed, and the daemon gave up on it then.
    */
   stillAsked?: () => boolean;
+  /**
+   * Told when the room's handler has taken the action and its answer waits
+   * on work still running (it returned a promise, #1015): a request to the
+   * daemon, which can outlast the daemon's wait (a dev server gets 30s to
+   * come up). The daemon then says the action is under way, not that it
+   * could not tell whether anything happened, so the realtime model does
+   * not ask again and run it twice. Called at most once, before the answer.
+   */
+  onStarted?: () => void;
 }
 
 /** Whether `req`'s caller has stopped waiting for it (#1010). */
@@ -121,6 +130,7 @@ function report(
   // Any thenable, not only a native Promise: a handler's answer is reported
   // when it settles, never read as "not carried out" because of its type.
   if (isThenable(result)) {
+    req.onStarted?.();
     result.then(settle, (err: unknown) => {
       console.warn(`[RoomActionBus] ${label} "${req.action}" failed in "${req.room}":`, err);
       settle(false);

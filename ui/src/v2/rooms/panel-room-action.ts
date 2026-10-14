@@ -64,9 +64,22 @@ export function roomActionResultText(resultId: string, answer: RoomAnswer): stri
 }
 
 /**
+ * Word that the room has taken an action whose answer waits on work still
+ * running (#1015). Not an answer: the answer follows when the work settles.
+ */
+export function roomActionStartedText(resultId: string): string {
+  return JSON.stringify({
+    type: "room_action_result",
+    payload: { resultId, started: true },
+    timestamp: Date.now(),
+  });
+}
+
+/**
  * The dashboard's half (#965): dispatch a daemon room action and, when the
  * daemon asked this dashboard (`request.resultId`), answer whether the room
- * ran it. Without that the daemon acknowledged room actions blindly.
+ * ran it, and say when it has started work it will answer for later (#1015).
+ * Without that the daemon acknowledged room actions blindly.
  */
 export function dispatchDashboardRoomAction(
   request: { room: string; action: string; args: Record<string, unknown>; ts: number; resultId?: string; expiresAt?: number; stillAsked?: () => boolean },
@@ -74,5 +87,12 @@ export function dispatchDashboardRoomAction(
   send: (text: string) => void,
 ): void {
   const { resultId, ...req } = request;
-  dispatch(req, resultId ? (_accepted, answer) => send(roomActionResultText(resultId, answer)) : undefined);
+  if (!resultId) {
+    dispatch(req);
+    return;
+  }
+  dispatch(
+    { ...req, onStarted: () => send(roomActionStartedText(resultId)) },
+    (_accepted, answer) => send(roomActionResultText(resultId, answer)),
+  );
 }

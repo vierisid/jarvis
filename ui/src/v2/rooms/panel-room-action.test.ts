@@ -59,8 +59,9 @@ test("the dashboard answers only an action it was asked about (#965)", () => {
       (req, onResult) => { dispatched.push(req); onResult?.(verdict, verdict ? "accepted" : "rejected"); },
       (text) => sent.push(JSON.parse(text)),
     );
-    // The room sees the action, not the resultId.
-    expect(dispatched).toEqual([{ room: "agents", action: "switch_tab", args: { tab: "builder" }, ts: 1 }]);
+    // The room sees the action, not the resultId; and a way to say it has
+    // started (#1015).
+    expect(dispatched).toEqual([{ room: "agents", action: "switch_tab", args: { tab: "builder" }, ts: 1, onStarted: expect.any(Function) }]);
     expect(sent).toEqual([expect.objectContaining({ type: "room_action_result", payload: { resultId: "r9", accepted: verdict, outcome: verdict ? "accepted" : "rejected" } })]);
   }
   const sent: unknown[] = [];
@@ -101,7 +102,25 @@ test("the dashboard hands the bus the deadline and the asker with the action (#1
     (req) => { dispatched.push(req); },
     () => {},
   );
-  expect(dispatched).toEqual([{ room: "tasks", action: "create_task", args: { title: "x" }, ts: 1, expiresAt: 123, stillAsked }]);
+  expect(dispatched).toEqual([{ room: "tasks", action: "create_task", args: { title: "x" }, ts: 1, expiresAt: 123, stillAsked, onStarted: expect.any(Function) }]);
+});
+
+test("a room that has started work it answers for later says so first (#1015)", () => {
+  const sent: Array<{ payload: unknown }> = [];
+  let started: (() => void) | undefined;
+  let answer: ((ok: boolean, a: "accepted" | "rejected" | "pending") => void) | undefined;
+  dispatchDashboardRoomAction(
+    { room: "workspaces", action: "start_server", args: { name: "demo" }, ts: 1, resultId: "r5" },
+    (req, onResult) => { started = req.onStarted; answer = onResult; },
+    (text) => sent.push(JSON.parse(text)),
+  );
+  started!();
+  answer!(true, "accepted");
+  expect(sent.map((m) => m.payload)).toEqual([{ resultId: "r5", started: true }, { resultId: "r5", accepted: true, outcome: "accepted" }]);
+  // Nobody asked, so nobody is told it started.
+  const quiet: unknown[] = [];
+  dispatchDashboardRoomAction({ room: "workspaces", action: "start_server", args: {}, ts: 1 }, (req) => { req.onStarted?.(); }, (t) => quiet.push(t));
+  expect(quiet).toEqual([]);
 });
 
 test("a panel passes on how long the daemon waits, on its own clock (#1010)", () => {

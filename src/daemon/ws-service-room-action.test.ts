@@ -181,8 +181,10 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
   });
 
   test('the realtime tool tells the model what the room answered, never "Done"', async () => {
+    // A side-effecting action is answered once its request has settled
+    // (#1015), so a yes is the room saying it is done, not that it started.
     const cases = [
-      [true, 'Turning off text to speech. (Settings accepted it and started it; it shows the result on screen.)'],
+      [true, 'Turning off text to speech. (Settings says it is done.)'],
       [false, "Settings didn't accept that."],
       [null, "I sent that to Settings, but it didn't answer, so I can't tell whether it happened."],
     ] as const;
@@ -194,6 +196,39 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
         'dashboard_room_action', { room: 'settings', action: 'disable_tts', args: {} }, speaker.ws);
       expect(reply).toBe(said);
     }
+  });
+
+  // #1015: the room answers once its request settles, and a dev server gets
+  // 30s to come up where this path waits 3.5s. A room that said it had
+  // started is still working, which is not "can't tell whether it happened":
+  // told that, the model may ask again and run it twice.
+  test('a room still working when the wait runs out is said to be working, and that is not a retry', async () => {
+    const { svc, internals, speaker, answer, actionTo } = setup();
+    shortWait(svc);
+    const tick = setInterval(() => {
+      const a = actionTo(speaker);
+      if (!a) return;
+      clearInterval(tick);
+      void internals.routeMessage({ type: 'room_action_result', payload: { resultId: a.payload.resultId, started: true }, timestamp: Date.now() }, speaker.ws);
+    }, 1);
+    const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, speaker.ws);
+    clearInterval(tick);
+    expect(reply).toBe('Workspaces started that and is still working on it. It shows the result on screen. (It has not finished; do not call this again for this request.)');
+    // Started is not an answer: one that follows in time settles it.
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 200, { client: speaker.ws as never });
+    const id = speaker.sent.filter((m) => m.payload?.source === 'room_action').at(-1)!.payload.resultId;
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, started: true }, timestamp: Date.now() }, speaker.ws);
+    await answer(speaker, id, false);
+    expect(await p).toBe('rejected');
+  });
+
+  test('only the dashboard asked can say it has started', async () => {
+    const { svc, internals, speaker, other, actionTo } = setup();
+    const p = svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 50, { client: speaker.ws as never });
+    const id = actionTo(speaker)!.payload.resultId;
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: id, started: true }, timestamp: Date.now() }, other.ws);
+    await internals.routeMessage({ type: 'room_action_result', payload: { resultId: 'someone-else', started: true }, timestamp: Date.now() }, speaker.ws);
+    expect(await p).toBe('no_answer');
   });
 
   // #1010: the answerer is told how long it is waited for, so the bus can
@@ -237,12 +272,15 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
     expect(to2(o2)!.payload.expiresInMs).toBeUndefined();
   });
 
-  test('an accepted presentation action is not reported as work started', async () => {
+  test('an accepted presentation action is not reported as work done', async () => {
     const { internals, speaker, answerWhenSent } = setup();
     answerWhenSent(speaker, true);
-    const reply = await internals.executeRealtimeNavTool(
-      'dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'pending' } }, speaker.ws);
-    expect(reply).not.toContain('started it');
+    const args = { field: 'status', value: 'pending' };
+    const reply = await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args }, speaker.ws);
+    // Its own acknowledgement and nothing after it (#1015: the suffix for
+    // work is "says it is done").
+    expect(reply).toBe(roomActionReply({ room: 'tasks', action: 'set_filter', args }, 'accepted'));
+    expect(reply).not.toContain('done');
   });
 
   test('a tab switch by the realtime tool reads like the pebble\'s', async () => {
@@ -1113,6 +1151,23 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     expect(ok.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; rejected)']);
   });
 
+  // #1015: a room still on it when the wait ran out has started it; the row
+  // says so, and that its end is not known.
+  test('a room still working when the wait runs out is recorded as run, and as started', async () => {
+    const t = setup();
+    t.answering({ started: true } as never);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'start_server', args: { name: 'demo' } }, t.speaker.ws);
+    expect(t.brief()).toEqual(['allowed:ran:voice:room_action(workspaces/start_server; via realtime; execute_command; started)']);
+    // And on the classifier path, where it is said aloud: test_provider is
+    // not governed, so a sure reading runs it.
+    const c = setup();
+    c.answering({ started: true } as never);
+    await c.internals.routeClassifiedVoiceIntent(c.intent('settings', 'test_provider', { provider: 'openai' }), 'test openai', 'r', c.speaker.ws);
+    expect(c.brief()).toEqual(['allowed:ran:voice:room_action(settings/test_provider; via classifier; read_data; started)']);
+    const said = c.speaker.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text);
+    expect(said.at(-1)).toBe('Settings started that and is still working on it. It shows the result on screen.');
+  });
+
   test('a room that never answers is not recorded as having run it', async () => {
     const t = setup();
     await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
@@ -1239,6 +1294,6 @@ describe('every voice room action decision writes an audit row (#1009)', () => {
     t.svc.setAuditTrail({ log: () => { throw new Error('disk full'); } } as never);
     t.answering();
     const reply = await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
-    expect(reply).toContain('accepted it and started it');
+    expect(reply).toContain('Tasks says it is done');
   });
 });

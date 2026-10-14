@@ -60,7 +60,7 @@ import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
 import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
 import {
   classifierMustConfirmRoomAction, realtimeRoomActionDecision, resolveHeldRoomAction, roomActionAuditRow,
-  type RoomActionAuditReason, type RoomActionOrigin,
+  roomActionExecuted, type RoomActionAuditReason, type RoomActionOrigin,
   type RealtimeRoomActionContext, type RoomActionTargetLists,
 } from './voice-room-action-gate.ts';
 import { findContent } from '../vault/content-pipeline.ts';
@@ -1293,8 +1293,10 @@ export class WebSocketService implements Service {
         // A panel's or dashboard's answer to requestRoomAction. Malformed or
         // unknown ids, and answers from a client that was not asked, are
         // dropped inside answer(); nothing is sent back either way.
-        const p = msg.payload as { resultId?: unknown; accepted?: unknown; outcome?: unknown } | undefined;
-        this.roomActionResults.answer(p?.resultId, p?.accepted, ws, p?.outcome);
+        const p = msg.payload as { resultId?: unknown; accepted?: unknown; outcome?: unknown; started?: unknown } | undefined;
+        // Word that the room is on it, ahead of its answer (#1015).
+        if (p?.started === true) this.roomActionResults.started(p.resultId, ws);
+        else this.roomActionResults.answer(p?.resultId, p?.accepted, ws, p?.outcome);
         return undefined;
       }
 
@@ -2120,13 +2122,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // so a slow room cannot leave this result to be voiced on its own
         // (and the model, seeing none, calling the tool again).
         const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
-        this.auditRoomAction(ra, 'realtime', 'allowed', outcome === 'accepted', { reason: outcome });
+        this.auditRoomAction(ra, 'realtime', 'allowed', roomActionExecuted(outcome), { reason: outcome });
         const reply = roomActionReply(ra, outcome);
         // The model, told only "didn't accept", may call again and raise a
         // second card (#1016).
         if (outcome === 'pending') return `${reply} (Nothing has run. The user approves or refuses it on the card; do not call this again for this request.)`;
+        // Calling again would run it twice (#1015).
+        if (outcome === 'started') return `${reply} (It has not finished; do not call this again for this request.)`;
+        // A side-effecting action is answered once its request has settled
+        // (#1015), so accepted is done, not started.
         return outcome === 'accepted' && !isPresentationRoomAction(room, action)
-          ? `${reply} (${roomTitle(room)} accepted it and started it; it shows the result on screen.)`
+          ? `${reply} (${roomTitle(room)} says it is done.)`
           : reply;
       }
       default:
@@ -3152,10 +3158,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
   /**
    * Send a room action and wait to hear whether a room ran it (#933).
-   * Resolves `accepted` or `rejected` on the first answer, `no_answer` when
-   * none comes (a room that never mounted, a dashboard that closed before it
-   * answered), and `unreached` at once when no socket took the frame
-   * (nobody connected who could answer, #1011).
+   * Resolves `accepted`, `rejected` or `pending` (a card waits on the person,
+   * #1016) on the first answer; when the wait runs out, `started` if the room
+   * said it was still working on it (#1015), else `no_answer` (a room that
+   * never mounted, a dashboard that closed before it answered); and
+   * `unreached` at once when no socket took the frame (nobody connected who
+   * could answer, #1011).
    *
    * Without `client` the native panels answer (the pebble's tab switch). With
    * `client`, only that dashboard gets the resultId, is asked to answer
@@ -3279,7 +3287,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       throw err;
     }
     console.log(`[WSService] room action ${ra.room}/${ra.action}: ${outcome}`);
-    this.auditRoomAction(ra, audit.origin, 'allowed', outcome === 'accepted', { ...auditOpts, reason: outcome });
+    this.auditRoomAction(ra, audit.origin, 'allowed', roomActionExecuted(outcome), { ...auditOpts, reason: outcome });
     this.broadcastAssistantAck(roomActionReply(ra, outcome), requestId);
   }
 
@@ -3522,6 +3530,9 @@ export function roomActionReply(
     // Not refused: it waits on the person (#1016).
     case 'pending':
       return `That needs your approval before it runs. A card is waiting for you.`;
+    // Taken, and not finished when the wait ran out (#1015).
+    case 'started':
+      return `${title} started that and is still working on it. It shows the result on screen.`;
     case 'no_answer':
       return `I sent that to ${title}, but it didn't answer, so I can't tell whether it happened.`;
     case 'unreached':
@@ -3555,11 +3566,13 @@ function roomTitle(room: string): string {
 }
 
 /**
- * Phase 6.3.5 - short ack for a Room action the room accepted. Accepted
- * means its handler took the action, and many handlers only start async work
- * that reports its own result on screen, so these say what is under way
- * rather than that it is done (#965). Anything not enumerated gets a generic
- * acknowledgement, so future Room action vocabularies need no code here.
+ * Phase 6.3.5 - short ack for a Room action the room accepted. For a view
+ * action accepted means its handler did it; for any other, since #1015, that
+ * its request settled and worked (for a setting, that it was saved: applying
+ * it can still fail later, and Settings says so). They still read as what is
+ * under way (#965), which stays true either way. Anything not enumerated gets
+ * a generic acknowledgement, so future Room action vocabularies need no code
+ * here.
  */
 function ackForRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }, title: string): string {
   const a = ra.args ?? {};

@@ -89,17 +89,24 @@ export async function resetOnboarding(
     /* best-effort; the local reload below still fires */
   }
 
-  if (reload && typeof window !== "undefined") {
-    // Strip any ?onboarding=... params so the next mount doesn't
-    // re-fire the URL trigger after we reload.
-    const url = new URL(window.location.href);
-    url.searchParams.delete("onboarding");
-    url.searchParams.delete("scope");
-    window.history.replaceState(null, "", url.pathname + url.search + url.hash);
-    window.location.reload();
-  }
+  if (reload) reloadAfterOnboardingReset();
 
   return data;
+}
+
+/**
+ * The reload that ends a reset, for a caller that passed `reload: false` to
+ * do something first (a voice action answering before the page goes, #1015).
+ */
+export function reloadAfterOnboardingReset(): void {
+  if (typeof window === "undefined") return;
+  // Strip any ?onboarding=... params so the next mount doesn't
+  // re-fire the URL trigger after we reload.
+  const url = new URL(window.location.href);
+  url.searchParams.delete("onboarding");
+  url.searchParams.delete("scope");
+  window.history.replaceState(null, "", url.pathname + url.search + url.hash);
+  window.location.reload();
 }
 
 /**
