@@ -1072,7 +1072,9 @@ describe('#722: a field named like the omitted-fields marker', () => {
   test('the stored effect, the approval row and the digest carry the escaped field', async () => {
     const f = fixture(GMAIL, 'send_email');
     f.authority.setGovernedCategories(['send_email']);
-    const pending = await f.authorize(sanitizePieceInput({ ...SEND_INPUT, body: { text: 'hi', omittedFields: 3 } }));
+    const projected = sanitizePieceInput({ ...SEND_INPUT, body: { text: 'hi', omittedFields: 3 } });
+    const inputDigest = await pieceInputDigest(projected);
+    const pending = await f.authorize(projected);
     const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
     const shown = JSON.parse(f.approvals.getRequest(approvalId)!.tool_arguments) as { body: Record<string, unknown> };
     expect(shown.body).toEqual({ text: 'hi', '~omittedFields': 3 });
@@ -1081,8 +1083,8 @@ describe('#722: a field named like the omitted-fields marker', () => {
     // The fence is over the escaped projection: an approval recorded against
     // the bare key does not match it.
     const input = effect.arguments as Record<string, unknown>;
-    expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input }));
-    expect(effect.requestDigest).not.toBe(digest({ piece: GMAIL, action: 'send_email',
+    expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input, inputDigest }));
+    expect(effect.requestDigest).not.toBe(digest({ piece: GMAIL, action: 'send_email', inputDigest,
       input: { ...input, body: { text: 'hi', omittedFields: 3 } } }));
   });
 });
@@ -1184,15 +1186,32 @@ describe('Q-08: every piece step obeys Pause and Kill', () => {
     expect(await send(REVIEWED)).toMatchObject({ dispatch: 'authorized' });
   });
 
-  test('an approval parked before the whole-input digest existed runs once, then is bound to it', async () => {
-    const f = fixture(GMAIL, 'send_email');
-    f.authority.setGovernedCategories(['send_email']);
-    // What an engine built before Q-08 sent: the projection alone.
-    const parked = await f.backends.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: sanitizePieceInput(REVIEWED) }, f.context) as { approval: { approvalId: string } };
+  test('an untracked draft approval parked before the whole-input digest existed runs once, then is bound to it', async () => {
+    const action = 'gmail_create_draft';
+    const f = fixture(GMAIL, action);
+    f.authority.setGovernedCategories(['write_data']);
+    // Q-08's compatibility path still applies to actions without a send fence.
+    const parked = await f.backends.pieceAuthorize!({ piece: GMAIL, action, input: sanitizePieceInput(REVIEWED) }, f.context) as { approval: { approvalId: string } };
     f.approvals.approve(parked.approval.approvalId, 'dashboard');
-    const send = sendWhole(f);
+    const send = async (input: Record<string, unknown>) => f.backends.pieceAuthorize!({
+      piece: GMAIL, action, input: sanitizePieceInput(input), inputDigest: await pieceInputDigest(input) }, f.context);
     expect(await send(REVIEWED)).toMatchObject({ dispatch: 'authorized' });
     await expect(send(CHANGED)).rejects.toThrow(/changed since it was recorded/);
+  });
+
+  test('a tracked send without a whole-input digest needs a fresh, fully bound request', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    await expect(f.backends.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: sanitizePieceInput(REVIEWED) }, f.context))
+      .rejects.toThrow('A tracked send requires the complete input digest');
+    expect(listWorkflowEffects(f.run.id)).toEqual([]);
+    expect(f.approvals.getPending()).toEqual([]);
+    const send = sendWhole(f);
+    const parked = await send(REVIEWED) as { approval: { approvalId: string } };
+    expect(parked).toMatchObject({ dispatch: 'approval_required' });
+    f.approvals.approve(parked.approval.approvalId, 'dashboard');
+    await expect(send(CHANGED)).rejects.toThrow(/changed since it was recorded/);
+    expect(await send(REVIEWED)).toMatchObject({ dispatch: 'authorized' });
   });
 
   test('the whole-input digest leaves the connection out and sees past the cut', async () => {

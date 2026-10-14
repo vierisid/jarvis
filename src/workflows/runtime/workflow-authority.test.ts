@@ -437,7 +437,7 @@ describe('workflow effect boundary', () => {
   }
 
   for (const [label, failure, effectStatus, receipt] of [
-    ['a thrown error', () => new Error('remote timeout'), 'failed', 'failed'],
+    ['a thrown error', () => new Error('remote timeout'), 'unknown', 'failed'],
     ['a blocked outcome', () => new ActionOutcomeError({ status: 'blocked', code: 'refused', message: 'remote refused', effect: 'not_started' }), 'blocked', 'blocked'],
     ['an unknown outcome', () => new ActionOutcomeError({ status: 'unknown', code: 'lost', message: 'reply lost', effect: 'may_have_occurred' }), 'unknown', 'failed'],
     // Blocked partway: the effect may have happened, so the receipt must not

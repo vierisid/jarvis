@@ -2156,15 +2156,20 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflow-recovery": {
       GET: req => trapErrors(() => {
         const params = new URL(req.url).searchParams;
-        return ok(listRunRecoveries(Number(params.get('limit') ?? '50'), params.get('cursor')));
+        return ok(listRunRecoveries(Number(params.get('limit') ?? '50'), params.get('cursor'), callerProject(req)));
       }),
     },
     "/api/workflow-runs/:runId/recovery": {
-      GET: req => trapErrors(() => ok({ recovery: getRunRecovery((req as RequestWithParams<{ runId: string }>).params.runId) })),
+      GET: req => trapErrors(() => {
+        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
+        return ok({ recovery: getRunRecovery(runId) });
+      }),
       POST: req => trapErrors(async () => {
+        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+        if (!scopedRun(req, runId)) return err('run not found', 404);
         const read = await readWriteBody(req, 8192);
         if ('error' in read) return read.error;
-        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
         const receipt = await decideRunRecovery(runId, read.body, { authority: opts.recoveryAuthority });
         return ok({ receipt, recovery: getRunRecovery(runId) });
       }),

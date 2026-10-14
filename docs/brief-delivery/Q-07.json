@@ -34,11 +34,11 @@
   ],
   "enable_after": [],
   "integration": [
-    "Rechecked Q-08 at 307353150cef19a92c42cc8c45dd22c260b47ead, open against brief/q-06 with successful required checks; Q-06 is an ancestor. No existing Q-07 PR was found before implementation or publication preparation.",
-    "Q-08 is the integration base because Q-07 extends its effect boundary, emergency holds and Q-06 no-replay ledger. This is not a new product prerequisite. No stack-wide merge or rebase.",
-    "Verified current main at 75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0. Keep main's approve AND deny allowlists, exact short-ID matching, review-only restrictions, ApprovalGuard and argument/version binding when the stack is integrated. This PR changes no channel approval or decision endpoint and does not certify main plus the whole stack.",
+    "Rebased on 2026-10-14 onto Q-08 #891 at 5353482f02f2c9d555cae6553519e4e5cddcfe16, including Q-06 #806 and main 5024ea7455a5613be0514475be32c0dee6de0edd. The stack retains its narrow parent PR target and remains unmerged.",
+    "Owner approved retaining Q-08 parked execution type and resume payload alongside Q-07 completion tracking, with main project isolation extended to recovery lists, reads and decisions. Recovery never automatically replays work.",
+    "Preserved main channel approval safeguards, delegated call restrictions, project guards and capture environment variable, plus Q-08 current Authority revalidation and emergency behavior. Both test-cache isolation and capture environment variables stay internal.",
     "Deploy daemon and rebuilt engine together. New engines refuse selected sends without the completion protocol; legacy authorization records prevent acquisition of a new send identity.",
-    "The app's managed-worktree creation failed because the chat is attached to the Projects parent directory rather than the repository; attaching the manually created checkout was also refused as unmanaged. Used an isolated dedicated Git worktree instead; did not alter the owner's main checkout."
+    "Original implementation and rebase both use isolated dedicated Git worktrees; no owner checkout changes. Original validation history is retained below; the rebase block records current validation."
   ],
   "behavior": [
     "Gmail send_email/gmail_send_email and Slack send_channel_message/slack_post_message acquire a durable piece-dispatch fence before provider execution. Reauthorization cannot dispatch again while the result is unknown. A saved completion is returned without another send even if its acknowledgement was lost.",
@@ -150,5 +150,18 @@
     "Confirmation proves the exact provider message exists, not delivery/read, remaining-step completion or business success. Inspection never turns unknown into success.",
     "Legacy authorization-only effects may already have executed and require inspection. Mixed old/new engine deployment is not certified. Main plus the full Brief stack requires separate integration verification.",
     "Recovery views and audit history are additive APIs; this card does not ship a dashboard recovery UI."
-  ]
+  ],
+  "rebase": {
+    "date": "2026-10-14",
+    "onto": "5353482f02f2c9d555cae6553519e4e5cddcfe16",
+    "main": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "decision": "Owner approved completion tracking plus Q08 resume metadata and main project scoping for recovery.",
+    "validation": {
+      "focused": "783 passed, 0 failed; 14920 assertions across 23 files, including Q07 recovery engine and Q08 Delay/Wait for Approval/CODE real-engine tests.",
+      "approvalRegression": "258 passed, 0 failed across governed pieces, workflow Authority, delegated approvals and delegated call scope.",
+      "projectIsolation": "Foreign recovery reads/decisions and receipt replay rejected; project filtering occurs before pagination and follows flow ownership; decisions enqueue no work. Red tests reproduced the pre-fix leak.",
+      "rangeDiff": "All five original commits retained; approved conflict adaptations plus a final project-scope regression fix.",
+      "limits": "Local fake providers; no live provider, paid model, deployment or full-stack certification."
+    }
+  }
 }

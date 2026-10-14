@@ -32,6 +32,11 @@ closed after upgrade. It may already have sent; it must not acquire a new
 `piece-dispatch` identity. New engines also refuse a daemon without the completion
 protocol. Rebuild the engine with the daemon; mixed/old engines are not certified.
 
+Q-08's emergency holds preserve the original execution type and resume payload.
+A parked step does not enter the completion protocol until execution is admitted.
+Pause/Resume therefore keeps its timing and payload, while the dispatch fence
+prevents a resumed selected send from being sent twice.
+
 ## Shared read contract and decisions
 
 `GET /api/workflow-runs/:runId` and `/effects` include `recovery`.
@@ -56,6 +61,11 @@ Follow `next` even on an empty filtered page. Acknowledged rows are filtered, bu
 pagination advances over the underlying runs. This does not activate Brief or
 implement its UI. F-21 should consume/re-export these shapes and must not add a
 second reconciliation writer.
+
+Recovery lists, reads and decisions are scoped to the selected project through
+the workflow that owns the run. Filtering happens before pagination; another
+project's run cannot consume a page, expose a receipt or accept a decision.
+A foreign or deleted workflow/run returns 404, including repeated request IDs.
 
 `POST /api/workflow-runs/:runId/recovery` accepts exactly one of:
 
@@ -131,10 +141,10 @@ return envelopes and token selection; they are not copied into this repository.
 
 ## Stack integration and rollback
 
-Q-07 is stacked on Q-08 #891 at `307353150cef19a92c42cc8c45dd22c260b47ead`,
-which includes Q-06 #806. This is an integration choice, not a new product
-prerequisite. No stack-wide merge or rebase is included. At verification main was
-`75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0`.
+Q-07 was rebased on 2026-10-14 onto Q-08 #891 at
+`5353482f02f2c9d555cae6553519e4e5cddcfe16`, which includes Q-06 #806 and main
+`5024ea7455a5613be0514475be32c0dee6de0edd`. This retains the existing stack
+order and adds no product prerequisite. The PR remains unmerged.
 
 Keep current main's stricter channel allowlists for approve **and deny**, exact
 short-ID matching, review-only delivery restrictions, ApprovalGuard and argument /

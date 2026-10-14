@@ -75,7 +75,7 @@ beforeAll(async () => {
     if (failure === 'after') throw new Error('fixture lost completion reply');
   };
   api = new SandboxApi({ services }); await api.start({ port: 0 });
-  runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
+  runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest, cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, 'code') });
   provider = Bun.serve({ hostname: '127.0.0.1', port: 0, fetch(req) {
     sends++;
     return req.url.endsWith('/uncertain') ? new Response('', { status: 500 }) : Response.json({ id: 'a123' });

@@ -137,13 +137,17 @@ export function getRunRecovery(runId: string): RecoveryProjection | null {
 }
 
 /** Stable pages include acknowledged rows so a filtered page never pretends to be complete. */
-export function listRunRecoveries(limit = 50, cursor?: string | null): { recoveries: RecoveryProjection[]; next: string | null } {
+export function listRunRecoveries(limit = 50, cursor?: string | null, projectId?: string): { recoveries: RecoveryProjection[]; next: string | null } {
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) throw new RecoveryError('limit must be an integer from 1 to 100');
   let after = 0;
   if (cursor) { if (!/^\d{1,16}$/.test(cursor)) throw new RecoveryError('Invalid recovery cursor'); after = Number(cursor); }
+  // Scope through the flow, as main's run routes do, even if a legacy run's
+  // project column is wrong. Filter before LIMIT so foreign rows never consume
+  // a page or make a project's inbox appear complete too early.
+  const projectFilter = projectId === undefined ? '' : ' AND flow_id IN (SELECT id FROM flow WHERE project_id = ?)';
   const rows = getWorkflowDb().query(`SELECT rowid AS cursor, id FROM flow_run WHERE rowid > ? AND status IN
-    ('FAILED','TIMEOUT','INTERNAL_ERROR','QUOTA_EXCEEDED','STOPPED','MEMORY_LIMIT_EXCEEDED','SCHEDULE_FAILURE') ORDER BY rowid LIMIT ?`)
-    .all(after, limit + 1) as { cursor: number; id: string }[];
+    ('FAILED','TIMEOUT','INTERNAL_ERROR','QUOTA_EXCEEDED','STOPPED','MEMORY_LIMIT_EXCEEDED','SCHEDULE_FAILURE')${projectFilter} ORDER BY rowid LIMIT ?`)
+    .all(after, ...(projectId === undefined ? [] : [projectId]), limit + 1) as { cursor: number; id: string }[];
   const page = rows.slice(0, limit);
   return { recoveries: page.map(r => getRunRecovery(r.id)!).filter(r => r.needsAttention),
     next: rows.length > limit ? String(page.at(-1)!.cursor) : null };

@@ -426,3 +426,58 @@ test('completion approval receipts and inspection notes cannot persist active fr
     expect(text).not.toContain(UNTRUSTED_OPEN); expect(text).not.toContain(UNTRUSTED_CLOSE);
   }
 });
+
+test('project recovery routes refuse foreign reads and decisions, including repeated receipts', async () => {
+  const project = 'recovery-private';
+  const flow = createFlow({ projectId: project });
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Private recovery', trigger: { name: 'trigger', type: 'EMPTY' } });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'FAILED' });
+  const own = createWorkflowRoutes({ callerProjectId: () => project });
+  const foreign = createWorkflowRoutes();
+  const choice = { action: 'inspect', requestId: 'private_inspect', revision: getRunRecovery(run.id)!.revision, note: 'Inspected without retrying.' };
+  const request = (method = 'GET') => Object.assign(new Request(`http://fixture.test/api/workflow-runs/${run.id}/recovery`, {
+    method, ...(method === 'POST' ? { body: JSON.stringify(choice) } : {}),
+  }), { params: { runId: run.id } });
+  const key = '/api/workflow-runs/:runId/recovery';
+  expect((await foreign[key]!.GET!(request())).status).toBe(404);
+  expect((await foreign[key]!.POST!(request('POST'))).status).toBe(404);
+  expect(getRunRecovery(run.id)!.receipts).toHaveLength(0);
+  expect((await own[key]!.GET!(request())).status).toBe(200);
+  expect((await own[key]!.POST!(request('POST'))).status).toBe(200);
+  expect(getRunRecovery(run.id)!.receipts).toHaveLength(1);
+  expect((await foreign[key]!.POST!(request('POST'))).status).toBe(404);
+  expect((await own[key]!.POST!(request('POST'))).status).toBe(200);
+  expect(getRunRecovery(run.id)!.receipts).toHaveLength(1);
+  expect(getFlowRun(run.id)?.status).toBe('FAILED');
+  expect(getWorkflowDb().query('SELECT COUNT(*) AS count FROM workflow_job').get()).toEqual({ count: 0 });
+});
+
+test('project recovery pagination filters by flow ownership before applying the limit', async () => {
+  const project = 'recovery-private';
+  const seed = (projectId: string) => {
+    const flow = createFlow({ projectId });
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Recovery page', trigger: { name: 'trigger', type: 'EMPTY' } });
+    return createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'FAILED' });
+  };
+  const foreignA = seed(DEFAULT_IDS.project), ownA = seed(project), foreignB = seed(DEFAULT_IDS.project), ownB = seed(project);
+  // A legacy or corrupt run column cannot widen the flow's project boundary.
+  getWorkflowDb().run('UPDATE flow_run SET project_id = ?', [DEFAULT_IDS.project]);
+  const routes = createWorkflowRoutes({ callerProjectId: () => project });
+  const list = async (cursor?: string) => {
+    const response = await routes['/api/workflow-recovery']!.GET!(new Request(`http://fixture.test/api/workflow-recovery?limit=1${cursor ? `&cursor=${cursor}` : ''}`));
+    expect(response.status).toBe(200);
+    return await response.json() as { recoveries: Array<{ runId: string }>; next: string | null };
+  };
+  const first = await list();
+  expect(first.recoveries.map(r => r.runId)).toEqual([ownA.id]);
+  expect(first.next).not.toBeNull();
+  const second = await list(first.next!);
+  expect(second.recoveries.map(r => r.runId)).toEqual([ownB.id]);
+  expect(second.next).toBeNull();
+  await decideRunRecovery(ownA.id, { action: 'inspect', requestId: 'page_inspect', revision: getRunRecovery(ownA.id)!.revision, note: 'Reviewed.' });
+  const acknowledged = await list();
+  expect(acknowledged.recoveries).toEqual([]);
+  expect((await list(acknowledged.next!)).recoveries.map(r => r.runId)).toEqual([ownB.id]);
+  const publicPage = await createWorkflowRoutes()['/api/workflow-recovery']!.GET!(new Request('http://fixture.test/api/workflow-recovery'));
+  expect((await publicPage.json() as { recoveries: Array<{ runId: string }> }).recoveries.map(r => r.runId)).toEqual([foreignA.id, foreignB.id]);
+});
