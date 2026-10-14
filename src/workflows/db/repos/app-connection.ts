@@ -273,6 +273,12 @@ export function updateConnectionById(
       // Resolve encryption before the write. A key failure must never save JSON.
       sets.push("value = ?");
       params.push(encryptBoundJson(patch.value, bindingFor(row)));
+      // Use the same identity rule as upsert, within this scoped transaction.
+      // A rename or an identical credential must not invalidate accepted pins.
+      const previous = decryptBoundJson(row.value, bindingFor(row), `app_connection ${row.id}`);
+      if (!sameCredential(previous, patch.value)) {
+        sets.push("credential_generation = credential_generation + 1");
+      }
     }
     sets.push("updated = ?");
     params.push(now());

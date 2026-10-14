@@ -56,7 +56,8 @@ as they did before this build. With several, the flow stays unpinned to a
 computer until a person enables it again.
 
 `credential_generation` counts each time a different credential is stored in a
-saved connection through `upsertConnection` (the create and update routes). A
+saved connection through `upsertConnection` or the project-scoped
+`updateConnectionById` (the create and update routes). A
 rename, a status change or saving the same credential again does not count.
 Jarvis stores no account identity, so a rotated key cannot be told from another
 account pasted under the same name: both pause the flow. Re-encryption (key

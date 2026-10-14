@@ -340,7 +340,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           // name, another computer), a person sees it and approves first: the
           // model never accepts one on its own. Otherwise both stay at the
           // floor, for the reasons below.
-          const changes = bindingChangesForGate(params);
+          const changes = bindingChangesForGate(params, deps.callerProjectId?.() ?? DEFAULT_IDS.project);
           return changes.length ? { actionCategory: "write_data", confirm: "always",
             intent: `${action === "enable" ? "Enable" : "Publish"} workflow ${forCard(params.flow)} and accept: ${changes.join(" ")}` } : null;
         }
@@ -1048,9 +1048,9 @@ function contractRecheck(flow: FlowRow, trigger: FlowTriggerNode): ReturnType<ty
  * (Q-05). Empty when it accepts nothing new, or when the flow does not resolve:
  * the action reports that itself.
  */
-function bindingChangesForGate(params: Record<string, unknown>): string[] {
+function bindingChangesForGate(params: Record<string, unknown>, project: string): string[] {
   let flow: FlowRow;
-  try { flow = requireFlowParam(params); } catch { return []; }
+  try { flow = requireFlowIn(project, params); } catch { return []; }
   const versionId = params.action === "publish"
     ? getLatestDraft(flow.id)?.id ?? flow.published_version_id
     : flow.published_version_id ?? getLatestDraft(flow.id)?.id;

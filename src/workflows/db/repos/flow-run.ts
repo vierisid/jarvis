@@ -287,7 +287,9 @@ export function getFlowRunInProject(projectId: string, id: string): FlowRun | nu
       `SELECT r.* FROM flow_run r JOIN flow f ON f.id = r.flow_id WHERE r.id = ? AND f.project_id = ?`,
     )
     .get(id, projectId);
-  return row ? rowToRun(row) : null;
+  if (!row) return null;
+  const bindings = runConnectionBindingViews(row.id);
+  return bindings.length ? { ...rowToRun(row), connectionBindings: bindings } : rowToRun(row);
 }
 
 export function updateRun(id: string, patch: UpdateRunInput): FlowRun {

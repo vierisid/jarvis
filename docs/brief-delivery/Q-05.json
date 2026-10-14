@@ -144,5 +144,24 @@
     "also_fixed": [
       "P1, pre-existing and fixed at the owner's request in 8fc295f4: the Google source handed its refresh token to the engine although the credential route documents it as empty"
     ]
+  },
+  "rebase_2026_10_14": {
+    "base": "6854e8a5f5ca9af247b09018f685c88aa8f4a5ec",
+    "main": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "owner_decision": "Combine main project-safe credential updates and approval handling with Q05 binding checks; cover the new update path.",
+    "changes": [
+      "Keep main reserved approval-target fields, piece input reprojection, and run project ownership.",
+      "Advance credential generation in updateConnectionById only for changed plaintext credentials, inside the scoped transaction.",
+      "Scope binding acceptance checks and run refusal views to caller project."
+    ],
+    "verification": {
+      "focused": "536 tests passed, 14799 assertions across 13 files",
+      "regressions": "Reproduced missed credential generation, missing approval gate and missing chat refusal after automatic merge; fixed; API rotation tested in default and non-default projects, with rename/equal credential controls and foreign run refusal.",
+      "guards": "Normal commit hook must pass before commit; final result in rebase ledger"
+    },
+    "limitations": [
+      "No live credentials, paid model calls or deployment.",
+      "Existing Q05 limitations remain; refresh-token identity changes can pause flows."
+    ]
   }
 }

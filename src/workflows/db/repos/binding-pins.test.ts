@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from '../index';
+import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from '../index';
 import { encryptJson, setEncryptionKey } from '../encryption';
 import { bindNativeCredentials } from '../credential-migration';
 import { createFlow, getFlow, updateFlowStatus } from './flow';
@@ -12,6 +12,7 @@ import { assertFlowReady, assertVersionReady, configureWorkflowReadiness, versio
 import { deleteConnection, getConnection, upsertConnection } from './app-connection';
 import { createFlowRun, getFlowRun } from './flow-run';
 import { enforceRunConnectionBinding, listRunConnectionBindings, pinUnpinnedEnabledFlows, readBindingPins } from './binding-pins';
+import { createWorkflowRoutes } from '../../api/routes';
 import { PieceCatalog } from '../../runtime/piece-catalog';
 import { CredentialResolver, type JarvisConnectionSource } from '../../credentials/adapter';
 import type { SidecarInfo } from '../../../sidecar/types';
@@ -71,6 +72,57 @@ const blockers = (flowId: string) => {
 };
 
 describe('pins are what a person accepted when publishing or enabling', () => {
+  test.each([DEFAULT_IDS.project, 'proj_pins_other'])('the connection PATCH preserves pins until credentials change in project %s', async (projectId) => {
+    const connection = upsertConnection({ projectId, externalId: 'account', pieceName: 'private-piece',
+      displayName: 'Account', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret: 'first', scope: 'read' } });
+    const flow = createFlow({ projectId });
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Pinned', trigger: graph(send()) });
+    publishFlowVersion(flow.id);
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
+    expect(enforceRunConnectionBinding(run.id, projectId, 'account')).toBeNull();
+    const routes = createWorkflowRoutes({ callerProjectId: () => projectId });
+    const patch = async (body: object) => {
+      const request = Object.assign(new Request('http://x/api/workflows/connections/' + connection.id, {
+        method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+      }), { params: { id: connection.id } });
+      const response = await routes['/api/workflows/connections/:id']!.PATCH!(request);
+      expect(response.status).toBe(200);
+    };
+    await patch({ displayName: 'Renamed' });
+    await patch({ status: 'ERROR' });
+    await patch({ status: 'ACTIVE' });
+    await patch({ value: { scope: 'read', secret: 'first' } });
+    expect(getConnection(connection.id)!.credentialGeneration).toBe(0);
+    expect(blockers(flow.id)).toEqual([]);
+    await patch({ value: { secret: 'different account', scope: 'read' } });
+    expect(getConnection(connection.id)!.credentialGeneration).toBe(1);
+    expect(blockers(flow.id)).toEqual([expect.stringContaining('was replaced since this workflow was enabled')]);
+    const tool = createManageWorkflowTool({ callerProjectId: () => projectId });
+    for (const action of ['enable', 'publish']) {
+      expect(tool.authorityGate!({ action, flow: flow.id })).toMatchObject({
+        actionCategory: 'write_data', confirm: 'always', intent: expect.stringContaining('credential stored in connection account was replaced'),
+      });
+      if (projectId !== DEFAULT_IDS.project) {
+        expect(createManageWorkflowTool({}).authorityGate!({ action, flow: flow.id })).toBeNull();
+      }
+    }
+    expect(enforceRunConnectionBinding(run.id, projectId, 'account')).toContain('was replaced during this run');
+    updateFlowStatus(flow.id, 'ENABLED');
+    expect(blockers(flow.id)).toEqual([]);
+    expect(enforceRunConnectionBinding(run.id, projectId, 'account')).toContain('was replaced during this run');
+    const runRequest = Object.assign(new Request('http://x/api/workflow-runs/' + run.id), { params: { runId: run.id } });
+    const response = await routes['/api/workflow-runs/:runId']!.GET!(runRequest);
+    expect(response.status).toBe(200);
+    const body = await response.json() as { connectionBindings?: unknown[] };
+    expect(body.connectionBindings).toEqual([expect.objectContaining({ externalId: 'account',
+      refusal: { message: expect.stringContaining('was replaced during this run'), at: expect.any(Number) } })]);
+    if (projectId !== DEFAULT_IDS.project) {
+      expect(getWorkflowDb().query('SELECT COUNT(*) AS n FROM app_connection').get()).toEqual({ n: 1 });
+      const outside = createWorkflowRoutes();
+      expect((await outside['/api/workflow-runs/:runId']!.GET!(runRequest)).status).toBe(404);
+    }
+  });
+
   test('publishing pins each connection the steps name and the computer the flow runs on', () => {
     const connection = connect();
     const { flowId, versionId } = published(send('account', readFile()));
@@ -108,7 +160,7 @@ describe('pins are what a person accepted when publishing or enabling', () => {
     const { flowId } = published(send());
     const save = (changes: Partial<Parameters<typeof upsertConnection>[0]>) => upsertConnection({ externalId: 'account',
       pieceName: 'private-piece', displayName: 'Account', pieceVersion: '1', type: 'SECRET_TEXT', value: { secret_text: 'first' }, ...changes });
-    // The dashboard's PATCH sends every edit through the upsert with the stored value.
+    // Other upsert callers may send the stored value with metadata edits.
     save({ displayName: 'Renamed in the dashboard' });
     save({ status: 'ERROR' });
     save({ status: 'ACTIVE' });
