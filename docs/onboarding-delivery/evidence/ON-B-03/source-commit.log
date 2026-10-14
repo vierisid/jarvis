@@ -1,0 +1,80 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 3 required path(s) present in the bun tarball (2423 files).
+[pre-commit] Running 5 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/google/provider.test.ts:
+(pass) google-state.v1 > constructs without effects and requires authentication on every operation [0.80ms]
+(pass) google-state.v1 > rejects owner mismatch and missing bindings without reading credentials [0.12ms]
+(pass) google-state.v1 > checks a live grant before opening; already connected starts no attempt [0.64ms]
+(pass) google-state.v1 > uses one-time existing PKCE flow, then verifies the saved account and granted scopes [0.72ms]
+(pass) google-state.v1 > rejects foreign actor, foreign project, forged state and stale callbacks before exchange [0.58ms]
+(pass) google-state.v1 > consumes denied consent once and redacts upstream error content [0.22ms]
+(pass) google-state.v1 > expires waiting and refuses an expired grant exchange [0.16ms]
+(pass) google-state.v1 > cancels without connecting or revoking; late valid grant is unattributed [0.14ms]
+(pass) google-state.v1 > cancels during exchange immediately and does not attribute completion after it [0.29ms]
+(pass) google-state.v1 > does not let an in-flight read overwrite cancellation [0.20ms]
+(pass) google-state.v1 > serializes concurrent begin and callback requests [0.32ms]
+(pass) google-state.v1 > refreshes external grants/revocation without trusting a client success event [0.20ms]
+(pass) google-state.v1 > fails closed on unknown or insufficient granted access [0.23ms]
+(pass) google-state.v1 > handles blocked windows, stale cancellation, retry and missing hosted configuration [0.24ms]
+(pass) google-state.v1 > rejects callbacks after the canonical binding changes [0.11ms]
+(pass) google-state.v1 > reports exchange failures without leaking response bodies [0.20ms]
+(pass) google-state.v1 > does not relaunch when cancellation arrives during a begin status read [0.19ms]
+(pass) google-state.v1 > refuses an old binding result after canonical ownership selection changes mid-read [0.16ms]
+
+src/onboarding-next/google/integration.test.ts:
+(pass) completes existing OAuth exchange and canonical persistence with isolated provider HTTP fixtures [3.94ms]
+
+src/onboarding-next/google/browser.test.ts:
+(pass) reuses external-open detection and cleans the exact return listeners on exit [0.45ms]
+
+src/onboarding-next/google/controller.test.ts:
+(pass) Google headless browser lifecycle > has no startup effects; entry reads current status and return verifies it again [0.71ms]
+(pass) Google headless browser lifecycle > reports a blocked popup/WebView handoff and stops polling [0.12ms]
+(pass) Google headless browser lifecycle > prevents overlapping connect clicks and cancels a late launch after leaving [0.16ms]
+(pass) Google headless browser lifecycle > cancel stops polling; a later return can discover a genuine grant [0.16ms]
+(pass) Google headless browser lifecycle > skip never starts a connection and removes every listener/timer [0.18ms]
+(pass) Google headless browser lifecycle > leaving discards outstanding reads and reentering does not reopen OAuth [0.19ms]
+(pass) Google headless browser lifecycle > bounds hung requests and ignores their later result [0.20ms]
+(pass) Google headless browser lifecycle > polls without overlap and stops on expiry [0.14ms]
+
+src/onboarding-next/google/verify-grant.test.ts:
+(pass) canonical Google grant reader with provider HTTP doubles > verifies audience, live scope metadata and Gmail identity using real GoogleAuth storage [1.74ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not infer scopes from tokens, requested scopes, or a successful exchange [1.30ms]
+(pass) canonical Google grant reader with provider HTTP doubles > distinguishes revoked, unavailable and absent grants [1.22ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not accept a profile without a bounded usable identity [1.42ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not resurrect a disconnect that happens during verification [1.17ms]
+(pass) canonical Google grant reader with provider HTTP doubles > discards identity when a different grant replaces the token during verification [1.56ms]
+(pass) canonical Google grant reader with provider HTTP doubles > never calls the network without a trusted client ID or when token storage is empty [1.25ms]
+(pass) canonical Google grant reader with provider HTTP doubles > rejects a token that expires while profile verification is in flight [1.36ms]
+
+ 36 pass
+ 0 fail
+ 171 expect() calls
+Ran 36 tests across 5 files. [46.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[onboarding/on-b-03 6214d49c] Add optional authoritative Google onboarding provider
+ 13 files changed, 925 insertions(+)
+ create mode 100644 src/onboarding-next/google/README.md
+ create mode 100644 src/onboarding-next/google/browser.test.ts
+ create mode 100644 src/onboarding-next/google/browser.ts
+ create mode 100644 src/onboarding-next/google/controller.test.ts
+ create mode 100644 src/onboarding-next/google/controller.ts
+ create mode 100644 src/onboarding-next/google/index.ts
+ create mode 100644 src/onboarding-next/google/integration.test.ts
+ create mode 100644 src/onboarding-next/google/manifest.json
+ create mode 100644 src/onboarding-next/google/provider.test.ts
+ create mode 100644 src/onboarding-next/google/provider.ts
+ create mode 100644 src/onboarding-next/google/types.ts
+ create mode 100644 src/onboarding-next/google/verify-grant.test.ts
+ create mode 100644 src/onboarding-next/google/verify-grant.ts

@@ -1,0 +1,168 @@
+{
+  "schemaVersion": 1,
+  "card": "ON-B-03",
+  "title": "Make Google connection state authoritative",
+  "date": "2026-10-14",
+  "repository": "vierisid/jarvis",
+  "branch": "onboarding/on-b-03",
+  "pr": "https://github.com/vierisid/jarvis/pull/1059",
+  "target": "main",
+  "baseline": "5024ea7455a5613be0514475be32c0dee6de0edd",
+  "source_head": "91f97469546cedb5a4f975d3328d0c01f0b714a9",
+  "delivery_head": {
+    "resolve": "git log -1 --format=%H -- docs/onboarding-delivery/ON-B-03.json",
+    "reason": "Avoid a self-referential commit hash; exact delivery-head CI is reported on the PR."
+  },
+  "status": "implemented_unmerged_default_off",
+  "merge_after": [],
+  "enable_after": [
+    "ON-B-11",
+    "ON-U-03",
+    "ON-U-10",
+    "authenticated callback/owner-bound canonical bindings",
+    "hosted trusted public OAuth client ID",
+    "real browser/WebView OAuth verification",
+    "verified combined D/F/Q candidate"
+  ],
+  "capability": {
+    "provides": [
+      "google-state.v1"
+    ],
+    "requires": [],
+    "registered": false,
+    "default_enabled": false,
+    "live_ready": false
+  },
+  "scope": [
+    "src/onboarding-next/google/",
+    "docs/onboarding-delivery/ON-B-03.json",
+    "docs/onboarding-delivery/evidence/ON-B-03/"
+  ],
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "node": "1097:16449",
+    "checkpoint_version": "2410205462365531104",
+    "visual_changes": false,
+    "evidence": "Approved roadmap and exact ON-U-03 contract inspected; no live Figma fidelity claim"
+  },
+  "concurrent_work_inspected": {
+    "ON-B-01": "#1050",
+    "ON-B-02": "#1055",
+    "ON-U-03": "#1054 at 5cc2b4397b6b79fe8d31e7dd1c058cfb8ee52d84",
+    "F-22": "#943 existing setup and Google status semantics reviewed; not imported",
+    "F-26": "#994 default-off",
+    "D-33": "#1003 activation blocked",
+    "other": "Open D/F/Q/onboarding PRs and receipts inspected; dirty primary checkout preserved"
+  },
+  "checks": {
+    "runtime": "Bun 1.4.2",
+    "dependencies": "own frozen install, unchanged lockfile",
+    "module": {
+      "passed": 37,
+      "failed": 0,
+      "assertions": 173,
+      "files": 5
+    },
+    "focused": {
+      "passed": 77,
+      "failed": 0,
+      "assertions": 299,
+      "files": 10
+    },
+    "typecheck": "passed on final source in normal hook and candidate",
+    "build_ui": "passed; existing Tailwind directive warnings",
+    "build_workflows": "forced pieces/engine build passed in task-owned output/staging",
+    "bundle_provider": "passed",
+    "bundle_browser": "passed",
+    "repository_guards": "all four passed in normal hooks; package guard used Bun fallback",
+    "pre_commit": "normal source and revision hooks passed",
+    "full_ci": {
+      "status_at_receipt": "pending",
+      "source_head": "91f97469546cedb5a4f975d3328d0c01f0b714a9",
+      "final_evidence": "PR checks and final handoff for delivery head"
+    },
+    "review": {
+      "skill": "pr-reviewer",
+      "method": "direct implementer full-diff and surrounding-service review",
+      "independent_reviewer": false,
+      "remaining_code_blockers": 0,
+      "fixed": [
+        "cancel during begin verification could relaunch",
+        "binding change during read could return old account evidence"
+      ],
+      "red_green": "races-red.log: 2 failures before guards; module.log: 0 failures after guards"
+    }
+  },
+  "independence": {
+    "alone_on_base": true,
+    "no_sibling_imports": true,
+    "no_shared_registration_edits": true,
+    "phases": {
+      "absent": {
+        "passed": 2,
+        "failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "standalone": {
+        "passed": 40,
+        "failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "combined": {
+        "passed": 56,
+        "failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "google-removed": {
+        "passed": 17,
+        "failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      }
+    },
+    "actual_assembly": "blocked until ON-B-11/ON-U-10; present/absent fixture is synthetic",
+    "evidence": "evidence/ON-B-03/independence.json"
+  },
+  "evidence": {
+    "real": [
+      "existing GoogleAuth exchange and canonical file storage code with isolated paths",
+      "existing GoogleOAuthFlowStore state/PKCE",
+      "existing external-open decision code",
+      "actual ON-U-03 component rendering in combined candidate",
+      "typecheck, builds, Git checks"
+    ],
+    "mocked": [
+      "Google token/tokeninfo/profile HTTP",
+      "authenticated server context and binding selection",
+      "browser/WebView events and return values",
+      "synthetic optional assembly host"
+    ],
+    "not_run": [
+      "real Google accounts/grants",
+      "native external window or popup",
+      "live hosting/control-plane changes",
+      "production deployment/activation",
+      "real email/calendar actions"
+    ]
+  },
+  "limitations": [
+    "Attempts are in-memory, as in the existing OAuth store; restart requires retry but canonical grants remain readable.",
+    "ON-B-11 must provide authenticated callback routing and immutable owner-bound services, serialize legacy/onboarding exchanges to a canonical store, and map missing services to unsupported.",
+    "Hosted current configuration does not expose a trusted public OAuth client ID for this verifier. Activation requires authoritative injection; no secret/API-key form is added.",
+    "Managed handoff cannot prove local attempt provenance; verified hosted grants have attemptId null and never advance a journey automatically.",
+    "ON-U-10 must use bounded mutation transport calls, wire controlled UI callbacks, respect streamId/revision and replace pending UI on controller failure.",
+    "No real-provider or native browser verification; actual combined D/F/Q assembly is not present.",
+    "Local legacy api-google-oauth.test.ts was not run because its default token-path fixture is not reliably isolated; the new integration fixture exercises the same real exchange/store with an explicit temporary path. Full CI runs the legacy suite in its disposable runner."
+  ],
+  "rollback": "Omit/disable google-state.v1 registration and use the unchanged legacy path. Retain canonical grants, journey records and drafts. Do not revoke or delete connection data as a rollback effect.",
+  "quick_verify": {
+    "cwd": "/home/vierisid/.cache/codex/jarvis-on-b-03",
+    "command": "bun test src/onboarding-next/google",
+    "url": null,
+    "expected": "37 passing isolated tests; no live effects"
+  },
+  "next_card": "ON-B-04 not started"
+}

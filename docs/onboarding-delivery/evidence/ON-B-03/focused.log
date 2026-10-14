@@ -1,0 +1,112 @@
+bun test v1.4.2 (744846f84)
+
+src/integrations/google-oauth-flow.test.ts:
+(pass) GoogleOAuthFlowStore > binds a one-time state to the exact callback and PKCE verifier [0.35ms]
+(pass) GoogleOAuthFlowStore > rejects expired attempts [0.03ms]
+
+src/integrations/google-managed-refresh.test.ts:
+(pass) makeManagedRefresh > signs the exact body it sends, and never sends a client secret [0.52ms]
+(pass) makeManagedRefresh > a gone grant is permanent; everything else is transient [0.43ms]
+[GoogleAuth] Token refreshed successfully
+(pass) makeGoogleAuth > a managed config produces an auth with NO credentials that refreshes remotely [2.72ms]
+[GoogleAuth] Token refreshed successfully
+(pass) makeGoogleAuth > MANAGED WINS over credentials that are also present [1.17ms]
+(pass) makeGoogleAuth > managed is chosen over credentials, and self-hosted still works [0.07ms]
+(pass) makeGoogleAuth > the reload identity distinguishes both shapes [0.06ms]
+(pass) a grant that is gone > is remembered ACROSS A RESTART, and clears when a new token arrives [1.31ms]
+[GoogleAuth] Token refreshed successfully
+(pass) a grant that is gone > a successful refresh says the grant is alive again [3.11ms]
+(pass) a grant that is gone > a transient failure does NOT mark the grant dead [1.48ms]
+(pass) a grant that is gone > someone else's text does not become our voice, unbounded [1.17ms]
+(pass) classifyGoogle > a partial managed block is none, not a fallback to the file credentials [0.11ms]
+
+src/integrations/google-auth.test.ts:
+(pass) GoogleAuth token storage > saves OAuth tokens with owner-only permissions [0.93ms]
+(pass) GoogleAuth token storage > does not chmod cwd for bare relative token paths [1.15ms]
+(pass) GoogleAuth token storage > uses the same custom redirect URI and PKCE verifier during exchange [1.42ms]
+[GoogleAuth] Token refreshed successfully
+[GoogleAuth] Token refreshed successfully
+(pass) GoogleAuth managed refresh > concurrent callers share ONE refresh [3.19ms]
+[GoogleAuth] Token refreshed successfully
+(pass) GoogleAuth managed refresh > a failed refresh does not wedge the single-flight slot [1.50ms]
+[GoogleAuth] discarding a refresh whose token was replaced while it was in flight
+(pass) GoogleAuth managed refresh > a disconnect mid-flight does NOT re-create the tokens file [1.20ms]
+[GoogleAuth] discarding a refresh whose token was replaced while it was in flight
+(pass) GoogleAuth managed refresh > a reconnect mid-flight does not clobber the new grant [1.52ms]
+[GoogleAuth] Token refreshed successfully
+(pass) GoogleAuth managed refresh > a rotated refresh token is persisted, not dropped [1.79ms]
+
+src/daemon/api-google-managed.test.ts:
+(pass) managed (hosted) Google mode > status reports managed + where to connect [1.42ms]
+(pass) managed (hosted) Google mode > a self-hosted instance is NOT managed [0.60ms]
+(pass) managed (hosted) Google mode > the daemon OAuth flow is refused when managed, and points at the account page [0.23ms]
+(pass) managed (hosted) Google mode > the daemon OAuth flow still works for a self-hosted instance [0.25ms]
+(pass) managed (hosted) Google mode > a partial managed block disables Google rather than using the file credentials [0.13ms]
+(pass) managed (hosted) Google mode > POST /api/config/google is refused when managed [0.23ms]
+(pass) managed (hosted) Google mode > POST /api/config/google is NOT swallowed by the managed guard when self-hosted [0.09ms]
+(pass) managed (hosted) Google mode > a connected instance reads connected; a REVOKED grant reads reconnect_required [1.15ms]
+
+src/onboarding-next/google/provider.test.ts:
+(pass) google-state.v1 > constructs without effects and requires authentication on every operation [0.65ms]
+(pass) google-state.v1 > rejects owner mismatch and missing bindings without reading credentials [0.11ms]
+(pass) google-state.v1 > checks a live grant before opening; already connected starts no attempt [0.50ms]
+(pass) google-state.v1 > uses one-time existing PKCE flow, then verifies the saved account and granted scopes [0.47ms]
+(pass) google-state.v1 > rejects foreign actor, foreign project, forged state and stale callbacks before exchange [0.40ms]
+(pass) google-state.v1 > consumes denied consent once and redacts upstream error content [0.20ms]
+(pass) google-state.v1 > expires waiting and refuses an expired grant exchange [0.18ms]
+(pass) google-state.v1 > cancels without connecting or revoking; late valid grant is unattributed [0.13ms]
+(pass) google-state.v1 > cancels during exchange immediately and does not attribute completion after it [0.26ms]
+(pass) google-state.v1 > does not let an in-flight read overwrite cancellation [0.21ms]
+(pass) google-state.v1 > serializes concurrent begin and callback requests [0.36ms]
+(pass) google-state.v1 > refreshes external grants/revocation without trusting a client success event [0.32ms]
+(pass) google-state.v1 > fails closed on unknown or insufficient granted access [0.32ms]
+(pass) google-state.v1 > handles blocked windows, stale cancellation, retry and missing hosted configuration [0.28ms]
+(pass) google-state.v1 > rejects callbacks after the canonical binding changes [0.12ms]
+(pass) google-state.v1 > reports exchange failures without leaking response bodies [0.20ms]
+(pass) google-state.v1 > does not relaunch when cancellation arrives during a begin status read [0.18ms]
+(pass) google-state.v1 > refuses an old binding result after canonical ownership selection changes mid-read [0.18ms]
+(pass) google-state.v1 > gives an evicted scope a new revision stream and rejects malformed callback input [0.17ms]
+
+src/onboarding-next/google/integration.test.ts:
+(pass) completes existing OAuth exchange and canonical persistence with isolated provider HTTP fixtures [2.44ms]
+
+src/onboarding-next/google/browser.test.ts:
+(pass) reuses external-open detection and cleans the exact return listeners on exit [0.23ms]
+
+src/onboarding-next/google/controller.test.ts:
+(pass) Google headless browser lifecycle > has no startup effects; entry reads current status and return verifies it again [0.72ms]
+(pass) Google headless browser lifecycle > reports a blocked popup/WebView handoff and stops polling [0.10ms]
+(pass) Google headless browser lifecycle > prevents overlapping connect clicks and cancels a late launch after leaving [0.23ms]
+(pass) Google headless browser lifecycle > cancel stops polling; a later return can discover a genuine grant [0.18ms]
+(pass) Google headless browser lifecycle > skip never starts a connection and removes every listener/timer [0.15ms]
+(pass) Google headless browser lifecycle > leaving discards outstanding reads and reentering does not reopen OAuth [0.15ms]
+(pass) Google headless browser lifecycle > bounds hung requests and ignores their later result [0.17ms]
+(pass) Google headless browser lifecycle > polls without overlap and stops on expiry [0.13ms]
+
+src/onboarding-next/google/verify-grant.test.ts:
+(pass) canonical Google grant reader with provider HTTP doubles > verifies audience, live scope metadata and Gmail identity using real GoogleAuth storage [1.65ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not infer scopes from tokens, requested scopes, or a successful exchange [1.48ms]
+(pass) canonical Google grant reader with provider HTTP doubles > distinguishes revoked, unavailable and absent grants [1.33ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not accept a profile without a bounded usable identity [1.61ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not resurrect a disconnect that happens during verification [1.51ms]
+(pass) canonical Google grant reader with provider HTTP doubles > discards identity when a different grant replaces the token during verification [1.58ms]
+(pass) canonical Google grant reader with provider HTTP doubles > never calls the network without a trusted client ID or when token storage is empty [1.03ms]
+(pass) canonical Google grant reader with provider HTTP doubles > rejects a token that expires while profile verification is in flight [1.27ms]
+
+ui/src/v2/onboarding/external-open.test.ts:
+(pass) openedOrHandedOff > a real window is a success, host routing or not [0.05ms]
+(pass) openedOrHandedOff > null with the host routing is a hand-off, not a failure [0.01ms]
+(pass) openedOrHandedOff > null with no host routing is the one real failure
+(pass) openedOrHandedOff > only the exact flag counts [0.01ms]
+(pass) openedOrHandedOff > no window at all (server render) is not a hand-off [0.01ms]
+(pass) openExternal > severs the opener instead of passing noopener [0.08ms]
+(pass) openExternal > a blocked popup comes back as null [0.03ms]
+(pass) openExternal > survives a browser that refuses the opener write [0.06ms]
+(pass) host-injection contract > the sidecar injects the flag this module reads [0.09ms]
+(pass) host-injection contract > every platform reports whether it installed routing [0.13ms]
+(pass) host-injection contract > the platforms that need a popup setting both set AND verify it [0.09ms]
+
+ 77 pass
+ 0 fail
+ 299 expect() calls
+Ran 77 tests across 10 files. [133.00ms]

@@ -1,0 +1,72 @@
+[
+  {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/agent",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/agent/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/agent/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-agent",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }, {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/ask",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/ask/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/ask/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-ask",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }, {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/context",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/context/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/context/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-context",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }, {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/notify",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/notify/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/notify/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-notify",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }, {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/regex",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/regex/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/regex/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-regex",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }, {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/test",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/test/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/test/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-test",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }, {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/tool",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/tool/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/tool/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-tool",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }, {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/trigger",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/trigger/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/trigger/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-trigger",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }, {
+    pieceDir: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/validate",
+    bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/validate/dist/src/index.js",
+    packageJsonPath: "/home/vierisid/.cache/codex/jarvis-on-b-03/src/workflows/activepieces/packages/pieces/jarvis/validate/dist/package.json",
+    packageName: "@jarvispieces/piece-jarvis-validate",
+    pieceVersion: "0.0.1",
+    cached: false,
+  }
+]
+{
+  bundlePath: "/home/vierisid/.cache/codex/jarvis-on-b-03-output/engine/e64225702de5c06a/main.js",
+  hash: "e64225702de5c06a",
+  bundleDir: "/home/vierisid/.cache/codex/jarvis-on-b-03-output/engine/e64225702de5c06a",
+  digest: "6420620feaea7f9a7b3a9329bc7d20dd81e0c4ac8c4033d6e6af55f72460b852",
+}

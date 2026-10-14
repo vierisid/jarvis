@@ -1,0 +1,54 @@
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/google/provider.test.ts:
+(pass) google-state.v1 > constructs without effects and requires authentication on every operation [1.02ms]
+(pass) google-state.v1 > rejects owner mismatch and missing bindings without reading credentials [0.15ms]
+(pass) google-state.v1 > checks a live grant before opening; already connected starts no attempt [0.58ms]
+(pass) google-state.v1 > uses one-time existing PKCE flow, then verifies the saved account and granted scopes [0.74ms]
+(pass) google-state.v1 > rejects foreign actor, foreign project, forged state and stale callbacks before exchange [0.59ms]
+(pass) google-state.v1 > consumes denied consent once and redacts upstream error content [0.18ms]
+(pass) google-state.v1 > expires waiting and refuses an expired grant exchange [0.14ms]
+(pass) google-state.v1 > cancels without connecting or revoking; late valid grant is unattributed [0.13ms]
+(pass) google-state.v1 > cancels during exchange immediately and does not attribute completion after it [0.28ms]
+(pass) google-state.v1 > does not let an in-flight read overwrite cancellation [0.22ms]
+(pass) google-state.v1 > serializes concurrent begin and callback requests [0.37ms]
+(pass) google-state.v1 > refreshes external grants/revocation without trusting a client success event [0.24ms]
+(pass) google-state.v1 > fails closed on unknown or insufficient granted access [0.24ms]
+(pass) google-state.v1 > handles blocked windows, stale cancellation, retry and missing hosted configuration [0.21ms]
+(pass) google-state.v1 > rejects callbacks after the canonical binding changes [0.09ms]
+(pass) google-state.v1 > reports exchange failures without leaking response bodies [0.21ms]
+157 |     const f = fixture(), a = await start(f), entered = deferred<void>(), release = deferred<GoogleGrant>();
+158 |     f.binding.readGrant = async () => { entered.resolve(); return release.promise; };
+159 |     const begin = f.provider.begin(owner); await entered.promise;
+160 |     await f.provider.cancel(owner, a.id); release.resolve({ state: 'absent' });
+161 |     const result = await begin;
+162 |     expect(result.launch).toBeUndefined(); expect(result.snapshot.connection.state).toBe('cancelled');
+                                ^
+error: expect(received).toBeUndefined()
+
+Received: {
+  attemptId: "edec06b9-9366-49ae-9152-3cdc3672e687",
+  url: "https://accounts.google.com/o/oauth2/v2/auth?state=MSqNBIdLax-Lf_jfTGsa4qYfxUMaYW73WtiFkpir41A&code_challenge=8bvcNlr8dQEz86-c5Aw34sLKuzUrSciFV9NUgeVMCnQ",
+}
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-03/src/onboarding-next/google/provider.test.ts:162:27)
+(fail) google-state.v1 > does not relaunch when cancellation arrives during a begin status read [0.49ms]
+163 |   });
+164 |   it('refuses an old binding result after canonical ownership selection changes mid-read', async () => {
+165 |     const f = fixture(), entered = deferred<void>(), release = deferred<GoogleGrant>();
+166 |     f.binding.readGrant = async () => { entered.resolve(); return release.promise; };
+167 |     const read = f.provider.read(owner); await entered.promise; f.binding.id = 'replacement-vault'; release.resolve(verified);
+168 |     await expect(read).rejects.toMatchObject({ code: 'unavailable' });
+                                     ^
+error: expect(received).rejects.toMatchObject(expected)
+
+Expected promise that rejects
+Received promise that resolved: Promise { <resolved> }
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-03/src/onboarding-next/google/provider.test.ts:168:32)
+(fail) google-state.v1 > refuses an old binding result after canonical ownership selection changes mid-read [0.24ms]
+
+ 16 pass
+ 2 fail
+ 93 expect() calls
+Ran 18 tests across 1 file. [27.00ms]

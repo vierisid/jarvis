@@ -1,0 +1,58 @@
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/candidate.fixture.test.ts:
+(pass) synthetic host stays default-off [0.01ms]
+(pass) synthetic closure matches physically present modules
+(pass) missing authenticated binding stays unsupported [0.47ms]
+
+src/onboarding-next/google/provider.test.ts:
+(pass) google-state.v1 > constructs without effects and requires authentication on every operation [0.45ms]
+(pass) google-state.v1 > rejects owner mismatch and missing bindings without reading credentials [0.16ms]
+(pass) google-state.v1 > checks a live grant before opening; already connected starts no attempt [0.69ms]
+(pass) google-state.v1 > uses one-time existing PKCE flow, then verifies the saved account and granted scopes [0.74ms]
+(pass) google-state.v1 > rejects foreign actor, foreign project, forged state and stale callbacks before exchange [0.70ms]
+(pass) google-state.v1 > consumes denied consent once and redacts upstream error content [0.29ms]
+(pass) google-state.v1 > expires waiting and refuses an expired grant exchange [0.19ms]
+(pass) google-state.v1 > cancels without connecting or revoking; late valid grant is unattributed [0.17ms]
+(pass) google-state.v1 > cancels during exchange immediately and does not attribute completion after it [0.33ms]
+(pass) google-state.v1 > does not let an in-flight read overwrite cancellation [0.24ms]
+(pass) google-state.v1 > serializes concurrent begin and callback requests [0.33ms]
+(pass) google-state.v1 > refreshes external grants/revocation without trusting a client success event [0.22ms]
+(pass) google-state.v1 > fails closed on unknown or insufficient granted access [0.26ms]
+(pass) google-state.v1 > handles blocked windows, stale cancellation, retry and missing hosted configuration [0.44ms]
+(pass) google-state.v1 > rejects callbacks after the canonical binding changes [0.14ms]
+(pass) google-state.v1 > reports exchange failures without leaking response bodies [0.27ms]
+(pass) google-state.v1 > does not relaunch when cancellation arrives during a begin status read [0.30ms]
+(pass) google-state.v1 > refuses an old binding result after canonical ownership selection changes mid-read [0.17ms]
+(pass) google-state.v1 > gives an evicted scope a new revision stream and rejects malformed callback input [0.17ms]
+
+src/onboarding-next/google/integration.test.ts:
+(pass) completes existing OAuth exchange and canonical persistence with isolated provider HTTP fixtures [4.03ms]
+
+src/onboarding-next/google/browser.test.ts:
+(pass) reuses external-open detection and cleans the exact return listeners on exit [0.22ms]
+
+src/onboarding-next/google/controller.test.ts:
+(pass) Google headless browser lifecycle > has no startup effects; entry reads current status and return verifies it again [0.73ms]
+(pass) Google headless browser lifecycle > reports a blocked popup/WebView handoff and stops polling [0.10ms]
+(pass) Google headless browser lifecycle > prevents overlapping connect clicks and cancels a late launch after leaving [0.18ms]
+(pass) Google headless browser lifecycle > cancel stops polling; a later return can discover a genuine grant [0.22ms]
+(pass) Google headless browser lifecycle > skip never starts a connection and removes every listener/timer [0.15ms]
+(pass) Google headless browser lifecycle > leaving discards outstanding reads and reentering does not reopen OAuth [0.21ms]
+(pass) Google headless browser lifecycle > bounds hung requests and ignores their later result [0.19ms]
+(pass) Google headless browser lifecycle > polls without overlap and stops on expiry [0.13ms]
+
+src/onboarding-next/google/verify-grant.test.ts:
+(pass) canonical Google grant reader with provider HTTP doubles > verifies audience, live scope metadata and Gmail identity using real GoogleAuth storage [1.77ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not infer scopes from tokens, requested scopes, or a successful exchange [1.93ms]
+(pass) canonical Google grant reader with provider HTTP doubles > distinguishes revoked, unavailable and absent grants [1.47ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not accept a profile without a bounded usable identity [1.71ms]
+(pass) canonical Google grant reader with provider HTTP doubles > does not resurrect a disconnect that happens during verification [1.15ms]
+(pass) canonical Google grant reader with provider HTTP doubles > discards identity when a different grant replaces the token during verification [1.52ms]
+(pass) canonical Google grant reader with provider HTTP doubles > never calls the network without a trusted client ID or when token storage is empty [0.95ms]
+(pass) canonical Google grant reader with provider HTTP doubles > rejects a token that expires while profile verification is in flight [1.03ms]
+
+ 40 pass
+ 0 fail
+ 176 expect() calls
+Ran 40 tests across 6 files. [44.00ms]
