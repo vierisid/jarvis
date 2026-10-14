@@ -56,7 +56,21 @@ import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts
 import { progressAcknowledgement } from './progress.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 import { runAsApproved } from '../authority/approved-action-scope.ts';
-import { askLifecycleApproval, gateLifecycle, type LifecycleGateDeps, type LifecycleVia } from './lifecycle-gate.ts';
+import { AgentLifecycleRefusal, askLifecycleApproval, gateLifecycle, type LifecycleAction, type LifecycleGateDeps, type LifecycleVia } from './lifecycle-gate.ts';
+import { actingAgent } from './acting-agent.ts';
+
+/**
+ * Tighten-only merge of `profiles` (`mergeProfiles`), with each label part
+ * kept once. An agent's restrictions reach a run along more than one route
+ * (inherited at its spawn, and again as its caller's when that caller asks
+ * for the run), and repeated label parts grew with every generation (#1014
+ * review).
+ */
+function tighten(...profiles: Array<AuthorityProfile | null>): AuthorityProfile | null {
+  const merged = profiles.reduce<AuthorityProfile | null>((acc, p) => mergeProfiles(acc, p), null);
+  if (!merged?.label) return merged;
+  return { ...merged, label: [...new Set(merged.label.split('; '))].join('; ') };
+}
 
 /**
  * Convert a system prompt (legacy string or static/dynamic parts) into the
@@ -435,8 +449,11 @@ export class AgentOrchestrator {
     return agent;
   }
 
-  /** What the lifecycle gate needs from this orchestrator; see lifecycle-gate.ts. */
-  private lifecycleDeps(): LifecycleGateDeps {
+  /**
+   * What the lifecycle gate needs from this orchestrator; see lifecycle-gate.ts.
+   * `restrictions` are the acting sub-agent's, tightening the live profile.
+   */
+  private lifecycleDeps(restrictions: AuthorityProfile | null = null): LifecycleGateDeps {
     return {
       engine: this.authorityEngine,
       approvalManager: this.approvalManager,
@@ -444,10 +461,88 @@ export class AgentOrchestrator {
       emergency: this.emergencyController,
       toolRegistry: this.toolRegistry,
       temporaryGrants: this.temporaryGrants,
-      profile: this.getEffectiveProfile(),
+      profile: tighten(this.getEffectiveProfile(), restrictions),
       onApprovalNeeded: this.onApprovalNeeded,
       auditName: (roleName) => this.auditAgentName(roleName),
     };
+  }
+
+  /**
+   * Restrictions an agent started by a sub-agent carries for life (#1014):
+   * the profile its caller ran under and the taint its caller had read, as
+   * of the spawn. Keyed by agent id, removed when the agent is.
+   */
+  private inheritedRestrictions = new Map<string, AuthorityProfile>();
+
+  /**
+   * The sub-agent whose tool call is running, and the restrictions it is
+   * under: the profile its run was given, and its taint judged by THIS
+   * orchestrator's taint gating, whether or not its own run gates on taint (a
+   * workflow-delegated run does not). Null when nobody but the primary or the
+   * person is acting.
+   *
+   * Not carried: an override the owner scoped to the caller's ROLE
+   * (`overrides[].role_id`). The engine matches those on the role being
+   * judged, so a child of another role is not bound by them -- exactly as a
+   * specialist the primary starts is not bound by an override on the
+   * primary's role. What is carried is everything the caller's run is
+   * restricted by as a profile, plus its level and tools.
+   */
+  private actingCaller(action: LifecycleAction, subject: string): { agent: AgentInstance; restrictions: AuthorityProfile | null } | null {
+    const acting = actingAgent();
+    if (!acting) return null;
+    // Fail closed: an act asked for by a call that has returned, or by an
+    // agent that is gone, is nobody's. Never the primary's. Audited as the
+    // gate audits its own refusals, under the id that asked.
+    const agent = acting.settled ? undefined : this.hierarchy.getAgent(acting.agentId);
+    if (!agent) {
+      try {
+        this.auditTrail?.log({ agent_id: acting.agentId, agent_name: this.auditAgentName('sub-agent'),
+          tool_name: `${action}(${subject})`, action_category: action, authority_decision: 'denied', executed: false });
+      } catch (err) {
+        console.warn(`[Lifecycle] could not audit ${action}(${subject}):`, err instanceof Error ? err.message : err);
+      }
+      throw new AgentLifecycleRefusal(action, 'denied', acting.settled
+        ? 'The tool call that asked for this has already finished, so nothing was done.'
+        : 'The agent that asked for this is no longer running, so nothing was done.');
+    }
+    return { agent, restrictions: tighten(acting.profile, taintProfile(this.taintGating, new Set(acting.taint))) };
+  }
+
+  /**
+   * The profile an agent's run is restricted by: the live effective profile,
+   * what the agent inherited from a sub-agent that started it, and, when a
+   * sub-agent is the one asking for this run (a `delegate_task` it made, a
+   * task it assigns), that sub-agent's restrictions. Tighten-only, so a run
+   * never has fewer restrictions than whoever asked for it (#1014).
+   */
+  getProfileFor(agentId: string): AuthorityProfile | null {
+    // An assign is gated as a start (`manageAgentsGate`), so it is refused as one.
+    const caller = this.actingCaller('spawn_agent', this.hierarchy.getAgent(agentId)?.agent.role.id ?? agentId);
+    return tighten(this.getEffectiveProfile(), this.inheritedRestrictions.get(agentId) ?? null, caller?.restrictions ?? null);
+  }
+
+  /**
+   * Why the acting sub-agent may not direct `agentId` (give it a task), or
+   * null when it may (#1014). It may direct only an agent it could have
+   * started itself: one below its level, with no tool it lacks and every tool
+   * it is denied also denied. Otherwise a task it wrote would run with more
+   * authority than it has. Null when no sub-agent is acting.
+   */
+  delegationShortfall(agentId: string): string | null {
+    const target = this.hierarchy.getAgent(agentId);
+    const caller = this.actingCaller('spawn_agent', target?.agent.role.id ?? agentId);
+    if (!caller || !target) return null;
+    const mine = caller.agent.agent.authority;
+    const theirs = target.agent.authority;
+    const extra = theirs.allowed_tools.filter((t) => !mine.allowed_tools.includes(t));
+    const undenied = mine.denied_tools.filter((t) => !theirs.denied_tools.includes(t));
+    if (theirs.max_authority_level < mine.max_authority_level && extra.length === 0 && undenied.length === 0) return null;
+    const why = theirs.max_authority_level >= mine.max_authority_level
+      ? `level ${theirs.max_authority_level}, not below ${mine.max_authority_level}`
+      : extra.length > 0 ? `the tools ${extra.join(', ')}` : `the tools ${undenied.join(', ')} it is denied`;
+    return `${target.agent.role.name} has more authority than ${caller.agent.agent.role.name}, the agent asking (${why}); `
+      + 'a sub-agent can only give tasks to agents it could have started itself.';
   }
 
   /**
@@ -476,24 +571,35 @@ export class AgentOrchestrator {
       throw new Error(`Parent agent not found: ${parentId}`);
     }
 
-    const recordSpawn = gateLifecycle(this.lifecycleDeps(), {
-      action: 'spawn_agent', actor: parent, subject: role.id, via: opts?.via,
+    // Who is asking (#1014). A sub-agent's tool call names its agent: the
+    // spawn is judged as that agent, under its restrictions and taint, and
+    // the child is capped by it as well as by `parent`, so whatever parent a
+    // tool names, the child never has more than the agent that asked for it.
+    // `parent` stays the hierarchy parent: the child's lifetime and who it
+    // reports to are unchanged, only its authority is bounded.
+    const caller = this.actingCaller('spawn_agent', role.id);
+    const actor = caller?.agent ?? parent;
+    // And no deferred card for it: one runs later with nobody acting, as the
+    // primary, so approving it would start the child with the primary's
+    // authority. A sub-agent's spawn that needs approval takes the approval
+    // its own call was made under (a workflow per-call card), or is refused.
+    const via = caller && opts?.via ? { toolName: opts.via.toolName } : opts?.via;
+    const recordSpawn = gateLifecycle(this.lifecycleDeps(caller?.restrictions ?? null), {
+      action: 'spawn_agent', actor, subject: role.id, via,
     }, {
-      allowed: parent.agent.authority.can_spawn_children,
-      message: `Agent role "${parent.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
+      // Both: a sub-agent cannot spawn where the parent's role could not.
+      allowed: parent.agent.authority.can_spawn_children && actor.agent.authority.can_spawn_children,
+      message: `Agent role "${actor.agent.role.id}" cannot spawn sub-agents: the role declares neither the "delegation" tool nor any sub_roles. Add "delegation" to the role's tools list to enable delegation.`,
     });
 
-    // Create child agent with reduced authority
+    // Create child agent with reduced authority: below both the hierarchy
+    // parent and the agent that asked.
+    const bounds = [parent.agent.authority, actor.agent.authority];
     const childAuthority = {
-      max_authority_level: Math.min(
-        role.authority_level,
-        parent.agent.authority.max_authority_level - 1
-      ),
-      allowed_tools: role.tools.filter((tool) =>
-        parent.agent.authority.allowed_tools.includes(tool)
-      ),
-      denied_tools: parent.agent.authority.denied_tools,
-      max_token_budget: Math.floor(parent.agent.authority.max_token_budget / 2),
+      max_authority_level: Math.min(role.authority_level, ...bounds.map((b) => b.max_authority_level - 1)),
+      allowed_tools: role.tools.filter((tool) => bounds.every((b) => b.allowed_tools.includes(tool))),
+      denied_tools: [...new Set(bounds.flatMap((b) => b.denied_tools))],
+      max_token_budget: Math.floor(Math.min(...bounds.map((b) => b.max_token_budget)) / 2),
       can_spawn_children: canSpawnChildren(role),
     };
 
@@ -504,6 +610,10 @@ export class AgentOrchestrator {
     });
 
     this.hierarchy.addAgent(agent);
+    // Every run the child ever makes is restricted by what its caller was
+    // (`getProfileFor`), including a task the primary assigns it later.
+    const inherited = tighten(caller?.restrictions ?? null, this.inheritedRestrictions.get(actor.id) ?? null);
+    if (inherited) this.inheritedRestrictions.set(agent.id, inherited);
     recordSpawn();
 
     // Add system message with role context for sub-agents. Communication
@@ -546,8 +656,16 @@ export class AgentOrchestrator {
     if (!agent) {
       throw new Error(`Agent not found: ${agentId}`);
     }
-    const actor = this.getPrimary() ?? agent;
-    const recordStop = gateLifecycle(this.lifecycleDeps(), {
+    // Judged as the sub-agent asking, when one is (#1014), under its
+    // restrictions; otherwise as the primary, for the person. Unlike a spawn,
+    // a sub-agent's stop keeps its deferred card and may name any managed
+    // agent: a stop takes authority away rather than exercising it, it is the
+    // safety lever #963 keeps reachable, and the card names the exact agent
+    // and task and runs nothing but that stop, so running it later as the
+    // primary widens nothing. A deny still refuses before any card.
+    const caller = this.actingCaller('terminate_agent', agent.agent.role.id);
+    const actor = caller?.agent ?? this.getPrimary() ?? agent;
+    const recordStop = gateLifecycle(this.lifecycleDeps(caller?.restrictions ?? null), {
       action: 'terminate_agent', actor, subject: agent.agent.role.id, via: opts?.via,
     }, { allowed: true, message: '' });
     this.reapAgent(agentId);
@@ -599,6 +717,7 @@ export class AgentOrchestrator {
     // terminated agent's entry would otherwise sit in the map for the life
     // of the process.
     this.exposureLedgers.delete(agentId);
+    this.inheritedRestrictions.delete(agentId);
   }
 
   getPrimary(): AgentInstance | undefined {

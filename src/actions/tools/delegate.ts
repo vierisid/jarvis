@@ -133,7 +133,9 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
         // The sub-agent runs under the parent's authority engine and the
         // parent's effective profile (static restrictions plus the taint of
         // the turn that delegated), so delegation is not a way around the
-        // gate: governed actions are denied outright in a sub-agent.
+        // gate: governed actions are denied outright in a sub-agent. When a
+        // sub-agent is the one delegating, its restrictions and taint are
+        // added (#1014): the specialist never runs under less than it.
         const result = await runSubAgent({
           agent: subAgent,
           task,
@@ -148,7 +150,7 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
           auditTrail: deps.orchestrator.getAuditTrail() ?? undefined,
           emergencyController: deps.orchestrator.getEmergencyController() ?? undefined,
           temporaryGrants: deps.orchestrator.getTemporaryGrants(),
-          profile: deps.orchestrator.getEffectiveProfile(),
+          profile: deps.orchestrator.getProfileFor(subAgent.id),
           taintGating: deps.orchestrator.getTaintGating(),
         });
 

@@ -184,6 +184,11 @@ export async function assignPersistentAgentTask(
 
   const agent = deps.orchestrator.getAgent(agentId);
   if (!agent) throw new HttpError(404, `Agent "${agentId}" not found. Use list to see active agents.`);
+  // A sub-agent may give a task only to an agent strictly below it, one it
+  // could have started itself (#1014): the task is its words, run with the
+  // target's authority.
+  const shortfall = deps.orchestrator.delegationShortfall(agentId);
+  if (shortfall) throw new HttpError(403, shortfall);
 
   if (deps.taskManager.isAgentBusy(agentId)) {
     throw new HttpError(409, `Agent "${agent.agent.role.name}" is already running a task.`);
@@ -207,7 +212,9 @@ export async function assignPersistentAgentTask(
   });
 
   // Same authority engine and effective profile as the parent (see
-  // delegate.ts): a background sub-agent is not a way around the gate.
+  // delegate.ts): a background sub-agent is not a way around the gate. Plus
+  // what the agent inherited from a sub-agent that started it, and the
+  // restrictions of a sub-agent assigning this task (#1014).
   const taskId = deps.taskManager.launch({
     agent,
     task,
@@ -222,7 +229,7 @@ export async function assignPersistentAgentTask(
       auditTrail: deps.orchestrator.getAuditTrail() ?? undefined,
       emergencyController: deps.orchestrator.getEmergencyController() ?? undefined,
       temporaryGrants: deps.orchestrator.getTemporaryGrants(),
-      profile: deps.orchestrator.getEffectiveProfile(),
+      profile: deps.orchestrator.getProfileFor(agentId),
       taintGating: deps.orchestrator.getTaintGating(),
     },
   });

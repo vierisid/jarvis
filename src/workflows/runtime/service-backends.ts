@@ -613,8 +613,8 @@ export function buildSandboxServiceBackends(
                 // surfaces as a deferred card, now naming the act. So it
                 // answers a taint-driven decision or a stop at the sink, as an
                 // approved deferred card does. Like one, it was judged for its
-                // own principal (the sub-agent), and the sink judges the
-                // primary under its live profile.
+                // own principal (the sub-agent), and the sink judges that same
+                // sub-agent, under its restrictions and taint (#1014).
                 //
                 // Otherwise outside any approval: this runs inside the
                 // delegation's own scope (`m7.delegate` below), whose grant

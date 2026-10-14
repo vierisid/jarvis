@@ -49,6 +49,8 @@ function role(id: string, tools: string[]): RoleDefinition {
   return { id, name: id.toUpperCase(), description: 'A role.', responsibilities: ['Things'], autonomous_actions: [],
     approval_required: [], tools, authority_level: 5 } as unknown as RoleDefinition;
 }
+/** The workflow's delegated role as a real role, for a delegation the real sink spawns. */
+const COORDINATOR = { ...role(ROLE.id, ROLE.tools), name: ROLE.name };
 
 /**
  * A workflow whose delegated agent makes one call, `name(args)`, from
@@ -56,7 +58,7 @@ function role(id: string, tools: string[]): RoleDefinition {
  * call each take a card) and, through `inner`, for the primary at the sink.
  */
 function setup(registry: ToolRegistry, name: string, args: Record<string, unknown>, approvals = new ApprovalManager(),
-  opts: { childSpawnSpends?: boolean } = {}) {
+  opts: { childSpawnSpends?: boolean; orchestrator?: AgentOrchestrator } = {}) {
   const flow = createFlow({});
   const delegate: FlowTriggerNode = { name: 'delegate', type: 'PIECE', displayName: 'delegate', settings: { pieceName: PIECE,
     pieceVersion: '0.0.1', actionName: 'delegate', input: { goal: 'Coordinate', maxIterations: 3, role: ROLE.id } } };
@@ -76,8 +78,11 @@ function setup(registry: ToolRegistry, name: string, args: Record<string, unknow
     authorityEngine: new AuthorityEngine({ default_level: 10, governed_categories: ['spawn_agent', 'terminate_agent'] as never, overrides: [],
       context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
     emergencyController: new EmergencyController(), auditTrail: new AuditTrail(), approvalManager: approvals,
-    agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, reapAgent: () => {} } as never,
-    agentSpecialists: new Map([[ROLE.id, ROLE]]) as never,
+    // One orchestrator, as in the daemon, when the call's own tools spawn from
+    // it: the delegated agent is then a real agent the spawn sink can judge
+    // (#1014). Otherwise a stand-in whose spawn only spends the grant.
+    agentOrchestrator: opts.orchestrator ?? { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, reapAgent: () => {} } as never,
+    agentSpecialists: new Map([[ROLE.id, opts.orchestrator ? COORDINATOR : ROLE]]) as never,
     agentScopedRegistry: () => registry,
     llmManager: { chatTier: async (_tier: string, _origin: string, messages: Array<{ role: string }>) =>
       messages.some((m) => m.role === 'tool')
@@ -108,7 +113,7 @@ function setup(registry: ToolRegistry, name: string, args: Record<string, unknow
 }
 
 /** The primary the call's own tool spawns from, with spawns that need approval at the sink. */
-function sink(approvals: ApprovalManager, opts: { spawnsNeedApproval?: boolean; taskRunsUntilStopped?: boolean } = {}) {
+function sink(approvals: ApprovalManager, opts: { spawnsNeedApproval?: boolean; taskRunsUntilStopped?: boolean; primaryTools?: string[] } = {}) {
   const orch = new AgentOrchestrator();
   orch.setAuthorityEngine(new AuthorityEngine({ default_level: 5, governed_categories: [],
     overrides: opts.spawnsNeedApproval === false ? [] : APPROVE_SPAWNS,
@@ -117,7 +122,7 @@ function sink(approvals: ApprovalManager, opts: { spawnsNeedApproval?: boolean; 
   const audit = new AuditTrail();
   orch.setAuditTrail(audit);
   orch.setEmergencyController(new EmergencyController());
-  const primary = orch.createPrimary(role('pa', ['delegation']));
+  const primary = orch.createPrimary(role('pa', opts.primaryTools ?? ['delegation']));
   const specialists = new Map([['spec', role('spec', ['browser'])]]);
   // Like the real loop: a model call (an await), then its dispatch fence.
   const taskManager = new AgentTaskManager((async (o: { signal?: AbortSignal }) => {
@@ -137,14 +142,14 @@ function sink(approvals: ApprovalManager, opts: { spawnsNeedApproval?: boolean; 
   orch.setToolRegistry(registry);
   const spawned = () => orch.getAllAgents().filter((a) => a.id !== primary.id);
   const spawnRows = () => audit.query({ action: 'spawn_agent' }).filter((r) => r.tool_name === 'spawn_agent(spec)');
-  return { registry, spawned, spawnRows, taskManager, deps, audit };
+  return { registry, spawned, spawnRows, taskManager, deps, audit, orch, primary };
 }
 
 describe('an approved workflow-delegated call is not asked again at the spawn sink (#988)', () => {
   test('an approved manage_agents spawn starts the agent on that card, with no second card', async () => {
     const approvals = new ApprovalManager();
     const s = sink(approvals);
-    const f = setup(s.registry, 'manage_agents', { action: 'spawn', specialist: 'spec', task: 'research the thing' }, approvals);
+    const f = setup(s.registry, 'manage_agents', { action: 'spawn', specialist: 'spec', task: 'research the thing' }, approvals, { orchestrator: s.orch });
     const { card, done } = await f.approveThrough();
     // The card the person approved said what it would start (it read "Manage agents").
     expect(approvalIntentFields(card).intent_action).toBe('Start a spec background agent on the task "research the thing"');
@@ -166,7 +171,7 @@ describe('an approved workflow-delegated call is not asked again at the spawn si
     const approvals = new ApprovalManager();
     const s = sink(approvals, { spawnsNeedApproval: false, taskRunsUntilStopped: true });
     const { spawned } = await startPersistentAgent(s.deps, { specialist: 'spec', task: 'draft the plan' });
-    const f = setup(s.registry, 'manage_agents', { action: 'terminate', agent_id: spawned.agent.id }, approvals);
+    const f = setup(s.registry, 'manage_agents', { action: 'terminate', agent_id: spawned.agent.id }, approvals, { orchestrator: s.orch });
     const { card, done } = await f.approveThrough();
     expect(approvalIntentFields(card).intent_action).toBe('Stop the SPEC background agent and cancel its task "draft the plan"');
     expect(done.toolCalls[0]!.error).toBeUndefined();
@@ -180,12 +185,32 @@ describe('an approved workflow-delegated call is not asked again at the spawn si
   test('an approved delegate_task runs its specialist instead of being refused', async () => {
     const approvals = new ApprovalManager();
     const s = sink(approvals);
-    const f = setup(s.registry, 'delegate_task', { specialist: 'spec', task: 'look', context: '' }, approvals);
+    const f = setup(s.registry, 'delegate_task', { specialist: 'spec', task: 'look', context: '' }, approvals, { orchestrator: s.orch });
     const { card, done } = await f.approveThrough();
     expect(approvalIntentFields(card).intent_action).toBe('Delegate to a spec specialist the task "look"');
     expect(String(done.toolCalls[0]!.result)).toContain('[SPEC completed]');
     expect(s.spawnRows().filter((r) => r.executed === 1).map((r) => r.approval_id)).toEqual([card.id]);
     expect(approvals.getPending()).toEqual([]);
+  });
+});
+
+describe('what a workflow-delegated call starts has the delegated agent\'s authority, not the primary\'s (#1014)', () => {
+  test('an approved manage_agents spawn is judged as the delegated agent and capped by it', async () => {
+    const approvals = new ApprovalManager();
+    // The primary could give the specialist its browser tools; the delegated
+    // agent (tools: delegation) could not.
+    const s = sink(approvals, { primaryTools: ['delegation', 'browser'] });
+    const f = setup(s.registry, 'manage_agents', { action: 'spawn', specialist: 'spec' }, approvals, { orchestrator: s.orch });
+    const { done } = await f.approveThrough();
+    expect(done.toolCalls[0]!.error).toBeUndefined();
+    const [spec] = s.spawned();
+    expect(spec!.agent.role.id).toBe('spec');
+    expect(spec!.agent.authority.allowed_tools).toEqual([]);
+    // Below the delegated agent (level 4, under the level-5 primary).
+    expect(spec!.agent.authority.max_authority_level).toBe(3);
+    const [row] = s.spawnRows();
+    expect(row!.agent_id).not.toBe(s.primary.id);
+    expect(row!.agent_name).toBe(ROLE.name);
   });
 });
 
