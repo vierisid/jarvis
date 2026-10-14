@@ -57,7 +57,7 @@ import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
-import { ApprovalManager, executionState, UNANSWERED_APPROVAL_TTL_MS } from "../authority/approval.ts";
+import { ApprovalManager, approvalNeedsClick, executionState, UNANSWERED_APPROVAL_TTL_MS, type ApprovalRequest } from "../authority/approval.ts";
 import { applyEmergencyState } from "./emergency-state.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
@@ -69,7 +69,7 @@ import { ApprovalDelivery, approvalToast, taskCompleteBody } from "../authority/
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
-import { channelApprovalReply, notificationApprovalDecision } from "./approval-decision.ts";
+import { channelApprovalReply, notificationApprovalDecision, notificationDecisionNote } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
@@ -4383,7 +4383,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const expireUnanswered = () => {
       try {
         const expired = approvalManager.expireUnanswered(UNANSWERED_APPROVAL_TTL_MS);
-        if (expired > 0) console.log(`[Daemon] ${expired} unanswered approval request(s) expired after 24 hours`);
+        // Drop the cards from the dashboard, which would otherwise still offer them.
+        for (const request of expired) wsService.broadcastApprovalUpdate(request);
+        if (expired.length > 0) console.log(`[Daemon] ${expired.length} unanswered approval request(s) expired after 24 hours`);
       } catch (err) {
         console.error('[Daemon] Could not expire unanswered approvals:', err);
       }
@@ -4618,6 +4620,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
     };
 
+    // One approval notification. A card that must be reviewed on screen can be
+    // approved on the dashboard only (Q-08), so its toast offers Deny and Review
+    // in Jarvis, not Approve (macOS keys its buttons off the kind and still shows
+    // Approve; pressing it says why, below). `note` replaces the body when the
+    // card is shown again after an approve it refused.
+    const notifyApproval = (req: ApprovalRequest, note?: string): void => {
+      const impact = impactFromCategory(req.action_category);
+      notifyAll({
+        id: req.id,
+        kind: 'approval',
+        title: `Approve: ${trayHumanizeTool(req.tool_name)}?`,
+        body: note ?? (req.reason?.trim() || `${req.agent_name} wants to run ${trayHumanizeTool(req.tool_name)}.`),
+        meta: `${impact} · ${req.tool_name}`,
+        destructive: impact === 'destructive',
+        actions: approvalNeedsClick(req)
+          ? [{ id: 'deny', label: 'Deny' }, { id: 'review', label: 'Review in Jarvis', primary: true }]
+          : [{ id: 'deny', label: 'Deny' }, { id: 'approve', label: 'Approve', primary: true }],
+      });
+    };
+
     // New pending approvals → one notification each, deduped and recent-only so a
     // sidecar reconnect doesn't blast the whole backlog. The same poll also
     // catches approvals that just finished executing → the "done" notification.
@@ -4630,13 +4652,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (notifiedApprovalIds.has(req.id)) continue;
           notifiedApprovalIds.add(req.id);
           if (Date.now() - req.created_at > 60_000) continue; // skip the backlog
-          // Product call (founder): Approve/Deny on approval notifications,
-          // including irreversible ones; the impact rides along in `meta`
-          // ("destructive · delete_data") so the toast reads the risk. Since
-          // #791 only when the toast can show what is being approved: above
-          // TOAST_APPROVABLE_MAX_COLUMNS it is review-only (approvalToast).
-          const { approvable: _approvable, ...toast } = approvalToast(req);
-          notifyAll(toast);
+          // Approve/Deny only when the toast can show the full request.
+          // Requests requiring on-screen review remain dashboard-only.
+          notifyApproval(req);
         }
         if (notifiedApprovalIds.size > 200) {
           const pending = new Set(approvalManager.getPending().map((r) => r.id));
@@ -4759,6 +4777,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     sidecarManager.onEvent((_sidecarId, event) => {
       if (event.event_type !== 'notify.action') return;
       void notificationApprovalDecision(event.payload, { approvalManager, deferredExecutor, wsService, auditTrail })
+        .then((outcome) => {
+          if (!outcome) return;
+          const note = notificationDecisionNote(outcome);
+          if (note && (outcome.status === 'needs_dashboard' || outcome.status === 'held')) notifyApproval(outcome.request, note);
+        })
         .catch((err) => console.error('[Daemon] notification approval decision failed:', err));
     });
 
@@ -4782,6 +4805,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.error('[Daemon] Approval delivery error:', err)
       );
     });
+    // A card withdrawn with its cancelled task leaves the dashboard too.
+    orchestrator.setApprovalWithdrawnCallback((request) => wsService.broadcastApprovalUpdate(request));
 
     // Wire authority engine into agent-service for prompt context
     agentService.setAuthorityEngine(authorityEngine);

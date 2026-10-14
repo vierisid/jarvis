@@ -45,8 +45,8 @@ export type ApprovedReceipt = {
  * unchanged from the slice it replaces on the success path; the other six
  * writers in this file had no bound at all before (#609).
  *
- * EVERY `markExecuted` below goes through it, including the five `blocked`
- * branches whose strings are repo-authored. For those it is byte-identity, and
+ * EVERY `markExecuted` below goes through it, including every `blocked`
+ * refusal (all through `refuse()`), whose strings are repo-authored. For those it is byte-identity, and
  * that is the point: a bound that only some branches apply is a bound the next
  * branch forgets. Two of them do interpolate outside-derived text -- a
  * per-call gate's `intent`, which for `ui_act` is built from an accessibility
@@ -265,16 +265,10 @@ export class DeferredExecutor {
       const registry = uiCall ? uiExecution?.registry ?? null : this.toolRegistry;
       const gate = resolveToolGate(registry?.get(request.tool_name), request.tool_name, args);
       if (gate.confirm === 'always' && !approvalNeedsClick(request)) {
-        const blocked = `Approved action ${request.tool_name} was NOT executed: this approval predates the required UI review. Request a fresh dashboard review.`;
-        this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
-        this.onResult?.(requestId, request, blocked);
-        return { claimed: true, result: blocked };
+        return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: this approval predates the required UI review. Request a fresh dashboard review.`);
       }
       if (!registry) {
-        const blocked = `Approved action ${request.tool_name} was NOT executed: its original UI session or reviewed subject is no longer available. Take a fresh snapshot and request a fresh review.`;
-        this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
-        this.onResult?.(requestId, request, blocked);
-        return { claimed: true, result: blocked };
+        return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: its original UI session or reviewed subject is no longer available. Take a fresh snapshot and request a fresh review.`);
       }
       // A card that must be reviewed on screen was approved somewhere that
       // could not show it: a chat reply, a toast, a voice "yes" (Q-08). Every
@@ -293,10 +287,7 @@ export class DeferredExecutor {
       // or a hook in between (#522).
       if (gate.intent && !approvalIntentFromContext(request)
         && severityRank(gate.actionCategory) > severityRank(request.action_category)) {
-        const blocked = `Approved action ${request.tool_name} was NOT executed: it was approved as ${request.action_category}, but it now reaches ${gate.actionCategory} (${gate.intent}). Request a fresh approval.`;
-        this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
-        this.onResult?.(requestId, request, blocked);
-        return { claimed: true, result: blocked };
+        return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: it was approved as ${request.action_category}, but it now reaches ${gate.actionCategory} (${gate.intent}). Request a fresh approval.`);
       }
       // A card that carried a sentence was an approval of THAT sentence. When
       // the same arguments now produce a different one -- write_file naming
@@ -306,10 +297,7 @@ export class DeferredExecutor {
       // describes a live screen, and captureApprovalGuard binds that.
       const approvedIntent = approvalIntentFromContext(request);
       if (!uiCall && approvedIntent && gate.intent && gate.intent.trim() !== approvedIntent) {
-        const blocked = `Approved action ${request.tool_name} was NOT executed: what it would do changed after approval (approved: "${approvedIntent}"; now: "${gate.intent}"). Request a fresh approval.`;
-        this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
-        this.onResult?.(requestId, request, blocked);
-        return { claimed: true, result: blocked };
+        return this.refuse(request, `Approved action ${request.tool_name} was NOT executed: what it would do changed after approval (approved: "${approvedIntent}"; now: "${gate.intent}"). Request a fresh approval.`);
       }
       // Site-playbook delivery ON for an INLINE approval and OFF for every
       // other one (#830, reversing #586 for inline only, on the owner's call).

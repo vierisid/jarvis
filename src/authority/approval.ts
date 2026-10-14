@@ -586,18 +586,30 @@ export class ApprovalManager {
    * Expire pending requests nobody answered within `maxAgeMs` (Q-08: a chat
    * or background card stays approvable for 24 hours, not forever). Workflow
    * approvals are left alone: a paused run is waiting on each, on its own
-   * terms. Returns how many expired.
+   * terms. Returns the expired rows, for the dashboard to drop their cards.
    */
-  expireUnanswered(maxAgeMs: number, now = Date.now()): number {
+  expireUnanswered(maxAgeMs: number, now = Date.now()): ApprovalRequest[] {
+    return this.expirePending(maxAgeMs, { keepWorkflow: true, now });
+  }
+
+  /**
+   * Expire pending requests older than `maxAgeMs`, one compare-and-set per
+   * row so a decision landing meanwhile wins.
+   */
+  private expirePending(maxAgeMs: number, opts: { keepWorkflow: boolean; now?: number }): ApprovalRequest[] {
     const db = getDb();
-    const result = db.run(
-      `UPDATE approval_requests SET status = 'expired' WHERE status = 'pending' AND execution_mode != 'workflow' AND created_at < ?`,
-      [now - maxAgeMs],
-    );
-    for (const id of this.uiExecutions.keys()) {
-      if (this.getRequest(id)?.status === 'expired') this.uiExecutions.delete(id);
+    const cutoff = (opts.now ?? Date.now()) - maxAgeMs;
+    const scope = opts.keepWorkflow ? ` AND execution_mode != 'workflow'` : '';
+    const ids = (db.query(`SELECT id FROM approval_requests WHERE status = 'pending' AND created_at < ?${scope}`)
+      .all(cutoff) as Array<{ id: string }>).map((row) => row.id);
+    const expired: ApprovalRequest[] = [];
+    for (const id of ids) {
+      if (db.run(`UPDATE approval_requests SET status = 'expired' WHERE id = ? AND status = 'pending'`, [id]).changes === 0) continue;
+      this.uiExecutions.delete(id);
+      const row = this.getRequest(id);
+      if (row) expired.push(row);
     }
-    return result.changes;
+    return expired;
   }
 
   /**
@@ -619,20 +631,10 @@ export class ApprovalManager {
   }
 
   /**
-   * Expire old pending requests.
+   * Expire old pending requests, workflow ones included. Returns how many.
    */
   expireOld(maxAgeMs: number): number {
-    const db = getDb();
-    const cutoff = Date.now() - maxAgeMs;
-
-    const result = db.run(
-      `UPDATE approval_requests SET status = 'expired' WHERE status = 'pending' AND created_at < ?`,
-      [cutoff]
-    );
-    for (const id of this.uiExecutions.keys()) {
-      if (this.getRequest(id)?.status === 'expired') this.uiExecutions.delete(id);
-    }
-    return result.changes;
+    return this.expirePending(maxAgeMs, { keepWorkflow: false }).length;
   }
 
   /**

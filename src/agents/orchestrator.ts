@@ -212,6 +212,7 @@ export class AgentOrchestrator {
   private emergencyController: EmergencyController | null = null;
   private temporaryGrants: Map<string, ActionCategory[]> = new Map();
   private onApprovalNeeded: ((request: ApprovalRequest) => void) | null = null;
+  private onApprovalWithdrawn: ((request: ApprovalRequest) => void) | null = null;
   /** Per-orchestrator restrictions passed into every authority check. */
   private authorityProfile: AuthorityProfile | null = null;
   /** Taint gating config (main agent); null = off. */
@@ -330,6 +331,11 @@ export class AgentOrchestrator {
     this.onApprovalNeeded = cb;
   }
 
+  /** Told when a card is withdrawn because its task was cancelled, so the dashboard drops it (Q-08). */
+  setApprovalWithdrawnCallback(cb: (request: ApprovalRequest) => void): void {
+    this.onApprovalWithdrawn = cb;
+  }
+
   /**
    * Restrictions layered on the shared engine for THIS orchestrator only.
    * The engine and its config stay the single source of truth (dashboard
@@ -378,7 +384,9 @@ export class AgentOrchestrator {
    * under a prefix, which gives it exactly the turn's lifetime.
    */
   private noteDeclinedIntent(category: unknown): void {
-    if (isActionCategory(category)) this.currentTaint().add(`${DECLINED_INTENT}${category}`);
+    // Trimmed as request_approval trims it, so the card and the rule agree.
+    const trimmed = typeof category === 'string' ? category.trim() : category;
+    if (isActionCategory(trimmed)) this.currentTaint().add(`${DECLINED_INTENT}${trimmed}`);
   }
 
   /** Voice sessions have no turn objects: the WS layer calls this on each final user transcript. */
@@ -2040,7 +2048,9 @@ export class AgentOrchestrator {
             // not handed on, so a later click cannot run the action of a task
             // the person stopped (Q-08). A deny only lands while the request
             // is still pending; an approve that won the race runs below.
-            if (signal?.aborted && this.approvalManager.deny(request.id, 'task-cancelled')) {
+            const withdrawn = signal?.aborted ? this.approvalManager.deny(request.id, 'task-cancelled') : null;
+            if (withdrawn) {
+              this.onApprovalWithdrawn?.(withdrawn);
               return `[APPROVAL WITHDRAWN] The task was cancelled, so the approval request for ${toolCall.name} was withdrawn and nothing was run.`;
             }
             // Timed out waiting. Hand the request to the deferred path so a
@@ -2151,16 +2161,18 @@ export class AgentOrchestrator {
 
   /**
    * Execute a tool call originating from a premium realtime (gpt-realtime-2)
-   * voice session. Mirrors `executeTool`'s authority gate, without blocking
-   * the audio loop on a decision: a call that needs approval is not run, and
-   * leaves an approval card instead -- on the dashboard and in chat, like any
-   * other request -- which the model tells the user about (Q-08, owner
-   * decision, 7 October; until then voice auto-approved such calls, decision
-   * #2 in docs/GPT_REALTIME_2_INTEGRATION.md).
+   * voice session. Mirrors `executeTool`'s authority gate BUT auto-approves:
+   * a spoken command is the authorization, so a `requiresApproval` decision is
+   * treated as granted and the audio loop is never blocked (decision #2, see
+   * docs/GPT_REALTIME_2_INTEGRATION.md §4 Phase 3; confirmed by the owner on
+   * 14 October).
    *
-   * Also enforced: emergency state, explicit hard denies, and the
-   * user-configured `blockedCategories` backstop. Every call is written to the
-   * audit trail tagged `channel:'voice'`.
+   * Still enforced: emergency state, explicit hard denies, the user-configured
+   * `blockedCategories` backstop, cards that must be clicked, and approvals a
+   * tainted session's profile asks for. With no primary agent to judge for,
+   * nothing runs. Every call is written to the audit trail tagged
+   * `channel:'voice'`; an auto-approved call is recorded as
+   * `approval_required` + `executed:true` so the trail shows no human confirmed it.
    *
    * Always returns a string (the tool result or an error/denial marker) — the
    * realtime session feeds this straight back to the model as function output.

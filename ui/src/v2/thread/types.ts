@@ -70,6 +70,8 @@ export type ThreadItem =
       impact: Impact;
       /** Highlight spans inside the intent sentence (accent color). */
       highlights?: string[];
+      /** Why an approve was refused; the card is still pending. */
+      note?: string;
       t: string;
     }
   | {

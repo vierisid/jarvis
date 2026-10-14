@@ -664,6 +664,31 @@ describe("Pause and Kill (Q-08)", () => {
     await d.stop();
   });
 
+  test("items a poll had already taken when Pause came are queued for Resume, not lost; under Kill they are skipped", async () => {
+    const controller = emergency();
+    const item = (n: string) => ({ id: n, eventType: "observer.email_received", payload: { id: `m-${n}`, _eventKey: `email:m-${n}` }, timestamp: 1, _dedupe_key: n });
+    // Pause or Kill lands while the poll runs: the source's cursor has already moved past these items.
+    let during: () => void = () => undefined;
+    let items: unknown[] = [];
+    const { engine } = stubEngine({ enable: { listeners: [], scheduleOptions: { cronExpression: "* * * * *" } }, poll: () => { during(); return items; } });
+    const { flowId } = publish({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "jarvis-trigger", triggerName: "on_event", input: { eventType: "observer.email_received" } } });
+    const d = await daemon(at("2026-10-07T09:00:00Z"), engine);
+    during = () => controller.pause();
+    items = [item("1"), item("2")];
+    await d.poll(flowId, "2026-10-07T09:00:10Z");
+    // Queued: the worker claims nothing until Resume, then runs them.
+    expect(runsOf(flowId).map(run => run.status)).toEqual(["QUEUED", "QUEUED"]);
+    expect(listFlowFires(flowId).filter(fire => fire.runId)).toHaveLength(2);
+    controller.resume();
+    during = () => controller.kill();
+    items = [item("3")];
+    await d.poll(flowId, "2026-10-07T09:01:10Z");
+    expect(runsOf(flowId)).toHaveLength(2);
+    expect(listFlowFires(flowId).filter(fire => fire.label === "skipped"))
+      .toEqual([expect.objectContaining({ source: "poll", detail: { reason: "Jarvis was stopped with Kill, so this did not run." } })]);
+    await d.stop();
+  });
+
   test("after Kill nothing starts either, saying so", async () => {
     setCronTimezone("UTC");
     const { flowId } = schedule("* * * * *");

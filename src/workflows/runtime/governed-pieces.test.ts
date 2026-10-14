@@ -35,6 +35,7 @@ import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineTokenSigner } from '../sandbox-api/engine-token';
 import { SandboxRegistry } from '../sandbox-api/sandbox-registry';
+import { createJarvisPieceAuthorizeRoute, type JarvisPiecesRouteDeps } from '../sandbox-api/routes/jarvis-pieces';
 
 beforeEach(() => { initWorkflowDb(':memory:'); });
 afterEach(() => { closeWorkflowDb(); });
@@ -111,6 +112,13 @@ describe('governed piece adapters: the catalogue stays open', () => {
     await expect(authorizePieceDispatch({ apiUrl: 'http://127.0.0.1:1', engineToken: 't', stepName: 'action',
       executionPath: [], fetchImpl: throwing, piece: GMAIL, action: 'send_email', input: SEND_INPUT }))
       .rejects.toThrow(/was not authorized/);
+    // Any other step is admitted, not authorized, and its refusal says which it is (Q-08).
+    await expect(authorizePieceDispatch({ apiUrl: 'http://127.0.0.1:1', engineToken: 't', stepName: 'action',
+      executionPath: [], fetchImpl, piece: CODE_STEP_PIECE, action: 'run', input: {} }))
+      .rejects.toThrow(/^CODE step was not admitted: daemon responded 503/);
+    await expect(authorizePieceDispatch({ apiUrl: 'http://127.0.0.1:1', engineToken: 't', stepName: 'action',
+      executionPath: [], fetchImpl, piece: COMMUNITY_PIECE, action: 'create_contact', input: {} }))
+      .rejects.toThrow(`Piece step ${COMMUNITY_PIECE}/create_contact was not admitted`);
   });
 });
 
@@ -1130,6 +1138,17 @@ describe('Q-08: every piece step obeys Pause and Kill', () => {
     expect(await f.backends.pieceAuthorize!({ piece: CODE_STEP_PIECE, action: 'run', input: {} }, f.context)).toMatchObject({ dispatch: 'held' });
   });
 
+  test("Jarvis's own pieces and the built-in steps leave no admission row", async () => {
+    const f = fixture(COMMUNITY_PIECE, 'create_contact');
+    for (const piece of ['@jarvispieces/piece-jarvis-tool', '@activepieces/piece-delay', '@activepieces/piece-http']) {
+      expect(await f.backends.pieceAuthorize!({ piece, action: 'run', input: {} }, f.context)).toEqual({ governed: false });
+    }
+    expect(audit(f)).toEqual([]);
+    // A community piece still leaves one.
+    expect(await f.backends.pieceAuthorize!({ piece: COMMUNITY_PIECE, action: 'create_contact', input: {} }, f.context)).toEqual({ governed: false });
+    expect(audit(f)).toEqual([expect.objectContaining({ tool_name: `community piece ${COMMUNITY_PIECE}/create_contact` })]);
+  });
+
   test('a recorded piece authorization is not handed out again while paused', async () => {
     const f = fixture(GMAIL, 'send_email');
     expect(await f.authorize(SEND_INPUT)).toMatchObject({ governed: true, dispatch: 'authorized' });
@@ -1139,22 +1158,37 @@ describe('Q-08: every piece step obeys Pause and Kill', () => {
     expect(await f.authorize(SEND_INPUT)).toMatchObject({ governed: true, dispatch: 'authorized' });
   });
 
+  // Same length and count, different only past the card's cut: the last
+  // character of a 600-character body and the 26th recipient. The projection
+  // the card is built from cannot tell these apart, cut once or twice.
+  const people = (last: string) => [...Array.from({ length: 25 }, (_, i) => `person${i}@example.test`), last];
+  const REVIEWED = { ...SEND_INPUT, body: `${'x'.repeat(599)}y`, receiver: people('person25@example.test') };
+  const CHANGED = { ...SEND_INPUT, body: `${'x'.repeat(599)}z`, receiver: people('someone-else@example.test') };
+  // What the engine sends: its projection of the input, and a digest of all of it.
+  const sendWhole = (f: ReturnType<typeof fixture>) => async (input: Record<string, unknown>) => f.backends.pieceAuthorize!({
+    piece: GMAIL, action: 'send_email', input: sanitizePieceInput(input), inputDigest: await pieceInputDigest(input) }, f.context);
+
   test('a piece approval covers the whole input, not the shortened copy its card shows', async () => {
     const f = fixture(GMAIL, 'send_email');
     f.authority.setGovernedCategories(['send_email']);
-    const reviewed = { ...SEND_INPUT, body: 'x'.repeat(600) };
-    const longer = { ...SEND_INPUT, body: `${'x'.repeat(600)}${'y'.repeat(11)}`,
-      receiver: Array.from({ length: 30 }, (_, i) => `person${i}@example.test`) };
-    const reviewedList = { ...reviewed, receiver: Array.from({ length: 26 }, (_, i) => `person${i}@example.test`) };
-    // The card's projection is cut twice (engine, then daemon), so these read the same.
-    expect(sanitizePieceInput(sanitizePieceInput(reviewedList))).toEqual(sanitizePieceInput(sanitizePieceInput(longer)));
-    // What the engine sends: its projection of the input, and a digest of all of it.
-    const send = async (input: Record<string, unknown>) => f.backends.pieceAuthorize!({ piece: GMAIL, action: 'send_email',
-      input: sanitizePieceInput(input), inputDigest: await pieceInputDigest(input) }, f.context);
-    const parked = await send(reviewedList) as { approval: { approvalId: string } };
+    expect(sanitizePieceInput(CHANGED)).toEqual(sanitizePieceInput(REVIEWED));
+    expect(sanitizePieceInput(sanitizePieceInput(CHANGED))).toEqual(sanitizePieceInput(sanitizePieceInput(REVIEWED)));
+    const send = sendWhole(f);
+    const parked = await send(REVIEWED) as { approval: { approvalId: string } };
     f.approvals.approve(parked.approval.approvalId, 'dashboard');
-    await expect(send(longer)).rejects.toThrow(/changed since it was recorded/);
-    expect(await send(reviewedList)).toMatchObject({ dispatch: 'authorized' });
+    await expect(send(CHANGED)).rejects.toThrow(/changed since it was recorded/);
+    expect(await send(REVIEWED)).toMatchObject({ dispatch: 'authorized' });
+  });
+
+  test('an approval parked before the whole-input digest existed runs once, then is bound to it', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    // What an engine built before Q-08 sent: the projection alone.
+    const parked = await f.backends.pieceAuthorize!({ piece: GMAIL, action: 'send_email', input: sanitizePieceInput(REVIEWED) }, f.context) as { approval: { approvalId: string } };
+    f.approvals.approve(parked.approval.approvalId, 'dashboard');
+    const send = sendWhole(f);
+    expect(await send(REVIEWED)).toMatchObject({ dispatch: 'authorized' });
+    await expect(send(CHANGED)).rejects.toThrow(/changed since it was recorded/);
   });
 
   test('the whole-input digest leaves the connection out and sees past the cut', async () => {
@@ -1170,5 +1204,32 @@ describe('Q-08: every piece step obeys Pause and Kill', () => {
     expect(await authorizePieceDispatch({ ...base, fetchImpl: reply(held), piece: COMMUNITY_PIECE, action: 'create_contact', input: {} })).toEqual(held as never);
     await expect(authorizePieceDispatch({ ...base, fetchImpl: reply({ governed: false, dispatch: 'held' }), piece: COMMUNITY_PIECE, action: 'create_contact', input: {} }))
       .rejects.toThrow(/malformed hold/);
+  });
+});
+
+describe('the admission route (Q-08)', () => {
+  const call = (runId: string, deps: JarvisPiecesRouteDeps, body: Record<string, unknown>) => createJarvisPieceAuthorizeRoute(deps)({
+    req: new Request('http://127.0.0.1/v1/jarvis/pieces/authorize', { method: 'POST',
+      headers: { 'X-Jarvis-Step-Name': 'action', 'X-Jarvis-Execution-Path': '[]' }, body: JSON.stringify(body) }),
+    claims: { runId, projectId: DEFAULT_IDS.project, sandboxId: 'test' } as never, params: {},
+  });
+
+  test('unwired, as in an engine-only harness: a governed piece fails closed, any other step runs', async () => {
+    const { run } = fixture(GMAIL, 'send_email');
+    expect((await call(run.id, {}, { piece: GMAIL, action: 'send_email', input: {} })).status).toBe(503);
+    const other = await call(run.id, {}, { piece: COMMUNITY_PIECE, action: 'create_contact' });
+    expect(other.status).toBe(200);
+    expect(await other.json()).toEqual({ governed: false });
+  });
+
+  test('a whole-input digest must be a SHA-256 hex digest, and reaches the service intact', async () => {
+    const { run } = fixture(GMAIL, 'send_email');
+    const seen: unknown[] = [];
+    const deps: JarvisPiecesRouteDeps = { pieceAuthorize: async (req) => { seen.push(req); return { governed: false }; } };
+    expect((await call(run.id, deps, { piece: GMAIL, action: 'send_email', input: {}, inputDigest: 'not-a-digest' })).status).toBe(400);
+    expect(seen).toEqual([]);
+    const whole = 'a'.repeat(64);
+    expect((await call(run.id, deps, { piece: GMAIL, action: 'send_email', input: {}, inputDigest: whole })).status).toBe(200);
+    expect(seen).toEqual([{ piece: GMAIL, action: 'send_email', input: {}, inputDigest: whole }]);
   });
 });

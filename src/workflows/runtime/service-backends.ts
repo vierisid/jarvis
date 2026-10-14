@@ -125,6 +125,15 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
   buildJarvisSystemPrompt?: (userMessage: string) => SystemPromptParts;
 }
 
+/** Jarvis's own pieces: each of their effects passes the boundary and is audited there. */
+const JARVIS_PIECE_PREFIX = '@jarvispieces/';
+
+/** The built-in steps vendored with the engine (`scripts/sync-activepieces.ts`); never audited as steps. */
+const BUILT_IN_STEP_PIECES: ReadonlySet<string> = new Set([
+  '@activepieces/piece-approval', '@activepieces/piece-delay', '@activepieces/piece-file-helper',
+  '@activepieces/piece-http', '@activepieces/piece-schedule', '@activepieces/piece-store', '@activepieces/piece-webhook',
+]);
+
 export function buildSandboxServiceBackends(
   opts: BuildServiceBackendsOptions,
 ): SandboxApiServices {
@@ -740,28 +749,15 @@ export function buildSandboxServiceBackends(
   };
 
   /**
-   * Admission for a verified piece's action. The piece itself runs in the
-   * engine subprocess, so what passes through the boundary here is the
-   * decision to let it dispatch: the same Authority check, the same emergency
-   * and cancellation fences, the same durable record, audit row and approval
-   * waitpoint every other effect gets. The remote call happens in the
-   * subprocess once this returns, so the record is a dispatch authorization
-   * and not a completion receipt.
-   *
-   * A piece with no adapter is reported ungoverned and runs as it does today.
-   *
-   * One authorization covers one step instance. A step the flow configures to
-   * retry re-reads the recorded authorization for the same arguments instead
-   * of asking again, so the engine's own retry of a step whose remote call
-   * failed can repeat that call under the original decision. Any change to the
-   * arguments, the version or the Authority decision invalidates the record and
-   * stops the dispatch.
-   */
-  /**
    * A step with no Jarvis adapter: a community piece the owner installed from
-   * the Library, or a CODE step in a workflow granted them. It stays outside
-   * Authority by those opt-ins, but it obeys Pause and Kill and leaves an
-   * audit row when it is let run (Q-08). Its input is never sent here.
+   * the Library, a CODE step in a workflow granted them, a built-in step
+   * (delay, store, HTTP, ...) or one of Jarvis's own pieces. It stays outside
+   * Authority by those opt-ins, but it obeys Pause and Kill (Q-08). A
+   * community piece or a CODE step leaves an audit row when it is let run:
+   * like a governed piece's, the row records the dispatch, not its outcome.
+   * Jarvis's own pieces leave none here, since each of their effects passes
+   * the boundary and is audited there; built-in steps leave none either. Its
+   * input is never sent here.
    */
   const admitUngovernedStep = (req: PieceAuthorizeRequest, ctx: WorkflowEffectContext): PieceAuthorizeResponse => {
     const run = getFlowRun(ctx.runId);
@@ -774,14 +770,34 @@ export function buildSandboxServiceBackends(
       const hold = holdStep({ runId: run.id, projectId: run.projectId, stepName: ctx.stepName ?? 'unknown step' });
       return { governed: false, dispatch: 'held', approval: { effectId: '', approvalId: '', waitpointId: hold.id, hold: PAUSED_REASON } };
     }
-    try {
-      opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
-        tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,
-        action_category: 'execute_command', authority_decision: 'allowed', approval_id: null, executed: true });
-    } catch (error) { console.error('[Workflow Authority] step audit failed:', error); }
+    if (!req.piece.startsWith(JARVIS_PIECE_PREFIX) && !BUILT_IN_STEP_PIECES.has(req.piece)) {
+      try {
+        opts.auditTrail?.log({ agent_id: `workflow:${run.id}`, agent_name: `Workflow ${run.id} / ${stepName}`,
+          tool_name: req.piece === CODE_STEP_PIECE ? 'code step' : `community piece ${boundedReceiptText(`${req.piece}/${req.action}`, 160)}`,
+          action_category: 'execute_command', authority_decision: 'allowed', approval_id: null, executed: true });
+      } catch (error) { console.error('[Workflow Authority] step audit failed:', error); }
+    }
     return { governed: false };
   };
 
+  /**
+   * Admission for a verified piece's action. The piece itself runs in the
+   * engine subprocess, so what passes through the boundary here is the
+   * decision to let it dispatch: the same Authority check, the same emergency
+   * and cancellation fences, the same durable record, audit row and approval
+   * waitpoint every other effect gets. The remote call happens in the
+   * subprocess once this returns, so the record is a dispatch authorization
+   * and not a completion receipt.
+   *
+   * A piece with no adapter goes through `admitUngovernedStep` above.
+   *
+   * One authorization covers one step instance. A step the flow configures to
+   * retry re-reads the recorded authorization for the same arguments instead
+   * of asking again, so the engine's own retry of a step whose remote call
+   * failed can repeat that call under the original decision. Any change to the
+   * arguments, the version or the Authority decision invalidates the record and
+   * stops the dispatch.
+   */
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
     const resolved = resolveGovernedPieceAction(req.piece, req.action);
     if (!resolved) return admitUngovernedStep(req, ctx);

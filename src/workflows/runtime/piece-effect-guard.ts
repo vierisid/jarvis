@@ -95,6 +95,11 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
     input: governed ? sanitizePieceInput(params.input) : {},
     ...(governed ? { inputDigest: await pieceInputDigest(params.input) } : {}),
   };
+  // What a refusal names: a governed piece is authorized; any other step, a
+  // community piece or a CODE step, is only admitted (Q-08).
+  const refused = governed
+    ? `Governed piece ${body.piece}/${body.action} was not authorized`
+    : body.piece === CODE_STEP_PIECE ? 'CODE step was not admitted' : `Piece step ${body.piece}/${body.action} was not admitted`;
   let response: Response;
   try {
     response = await (params.fetchImpl ?? fetch)(url, {
@@ -108,20 +113,20 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
       body: JSON.stringify(body),
     });
   } catch (error) {
-    throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`${refused}: ${error instanceof Error ? error.message : String(error)}`);
   }
   if (!response.ok) {
     const text = await response.text().catch(() => '');
-    throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: daemon responded ${response.status}: ${text.slice(0, 500)}`);
+    throw new Error(`${refused}: daemon responded ${response.status}: ${text.slice(0, 500)}`);
   }
   const reply = await response.json().catch(() => null) as PieceAuthorizeResponse | null;
   if (!reply || typeof reply !== 'object') {
-    throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: malformed authorization reply`);
+    throw new Error(`${refused}: malformed authorization reply`);
   }
   if (reply.governed === false) {
     if ('dispatch' in reply && reply.dispatch === 'held') {
       if (reply.approval?.waitpointId) return reply;
-      throw new Error(`Piece step ${body.piece}/${body.action} was not admitted: malformed hold reply`);
+      throw new Error(`${refused}: malformed hold reply`);
     }
     // The daemon owns the adapter table. If it says this action is ungoverned
     // while the engine thought otherwise, the engine's copy is the stale one.
@@ -129,5 +134,5 @@ export async function authorizePieceDispatch(params: AuthorizePieceDispatchParam
   }
   if (reply.dispatch === 'approval_required' && reply.approval?.waitpointId) return reply;
   if (reply.dispatch === 'authorized') return reply;
-  throw new Error(`Governed piece ${body.piece}/${body.action} was not authorized: malformed authorization reply`);
+  throw new Error(`${refused}: malformed authorization reply`);
 }

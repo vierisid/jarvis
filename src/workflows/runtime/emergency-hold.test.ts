@@ -90,6 +90,22 @@ describe("Pause holds queued work", () => {
   });
 });
 
+describe("Pause holds queued work, through the worker", () => {
+  test("a job the handler hands back as the pause begins is not completed by the worker", async () => {
+    const { runId, jobId } = queued();
+    const { calls, drain, handler } = counting();
+    // Pause lands after the worker claimed the job, before the handler looked.
+    const pausing = new Worker({ log: silent, handlers: { [RUN_FLOW]: async (job) => { controller.pause(); await handler(job); } } });
+    await pausing.drain();
+    expect(getJob(jobId)).toMatchObject({ status: "QUEUED", attempt: 0 });
+    expect(getFlowRun(runId)?.status).toBe("QUEUED");
+    controller.resume();
+    await drain();
+    expect(calls).toEqual(["BEGIN"]);
+    expect(getFlowRun(runId)?.status).toBe("SUCCEEDED");
+  });
+});
+
 describe("Kill stops every unfinished run", () => {
   test("queued, executing and waiting runs are stopped, saying why; finished ones are left alone", () => {
     const { flowId, versionId } = workflow();
@@ -140,12 +156,26 @@ describe("Pause holds what would wake a waiting run", () => {
     expect((await resume(wp.id)).status).toBe(202);
   });
 
+  test("after Kill a resume URL is not asked to retry: the run will not continue", async () => {
+    const { runId } = pausedRun();
+    const wp = createWaitpoint({ flowRunId: runId, projectId: "p", stepName: "approve", type: "WEBHOOK" });
+    controller.kill();
+    const response = await resume(wp.id);
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ error: expect.stringContaining("stopped with Kill") });
+    expect(getWaitpoint(wp.id)?.resumedAt).toBeNull();
+  });
+
   test("a step parked on a hold is released by Resume, never by a URL", async () => {
     const { runId } = pausedRun();
     controller.pause();
     const hold = holdStep({ runId, projectId: "p", stepName: "send" });
     expect(releaseEmergencyHolds()).toBe(0);
     expect((await resume(hold.id)).status).toBe(403);
+    // The run's waitpoint list offers no URL for it either.
+    const listed = await createWorkflowRoutes()["/api/workflow-runs/:runId/waitpoints"]!.GET!(
+      Object.assign(new Request(`http://localhost/api/workflow-runs/${runId}/waitpoints`), { params: { runId } }));
+    expect(((await listed.json()) as { waitpoints: unknown[] }).waitpoints).toEqual([expect.objectContaining({ id: hold.id, type: "HOLD", resumeUrl: null })]);
     controller.resume();
     expect(releaseEmergencyHolds()).toBe(1);
     const job = claimNextJob<{ executionType: string; waitpointId: string }>()!;

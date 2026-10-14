@@ -813,8 +813,11 @@ export class TriggerManager {
     // Pause holds and Kill stops (Q-08): nothing starts. A scheduled time is
     // skipped and shown, keyed so it is never run late after Resume; a webhook
     // sender is asked to retry later; anything else is recorded as skipped.
+    // An item a poll had already taken from its source when Pause came has
+    // nowhere else to wait, so it is queued: the worker claims nothing until
+    // Resume. Under Kill it is skipped like everything else.
     const held = emergencyHold();
-    if (held) {
+    if (held && !(opts.takenFromSource && held === PAUSED_REASON)) {
       const reason = held === PAUSED_REASON ? "Jarvis was paused, so this did not run." : "Jarvis was stopped with Kill, so this did not run.";
       const fire = recordFire({ flowId, flowVersionId: versionId, source: opts.source,
         dedupeKey: opts.source === "schedule" ? opts.dedupeKey : null, scheduledFor: opts.scheduledFor,
@@ -1000,7 +1003,8 @@ export class TriggerManager {
     };
     // Paused or stopped: no poll at all (Q-08). An event source keeps its
     // items, picked up by the first poll after Resume; a time of the schedule
-    // piece is skipped and shown.
+    // piece is skipped and shown. A poll already running when Pause comes
+    // queues what it took (`takenFromSource`), to run after Resume.
     const held = emergencyHold();
     if (held) {
       unrun("skipped", held === PAUSED_REASON ? "Jarvis was paused, so this time was skipped." : "Jarvis was stopped with Kill, so this time was skipped.");
@@ -1080,6 +1084,8 @@ export class TriggerManager {
         const result = this.startRun({
           flowId, versionId, kind: "engine", source: fireSource, payload, executeTrigger: false,
           dedupeKey: pureSchedule ? occurrence?.key : eventItemKey(payload),
+          // The poll moved the source's cursor past it (Pause may have come mid-poll).
+          ...(pureSchedule ? {} : { takenFromSource: true }),
           ...(pureSchedule ? { scheduledFor: occurrence?.at, lateMs: occurrence?.lateMs, ...shiftedDetail(occurrence) } : {}),
         });
         if (result.outcome === "started") started++;
@@ -1186,6 +1192,8 @@ interface LiveStart {
   scheduledFor?: number;
   lateMs?: number;
   detail?: Record<string, unknown>;
+  /** An item a poll already took from its source: queued while paused, not skipped (Q-08). */
+  takenFromSource?: boolean;
 }
 
 /** Why a schedule ran at a time it does not name: the spring-forward jump skipped its own. */

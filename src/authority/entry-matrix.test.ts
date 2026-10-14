@@ -15,7 +15,7 @@ import { EmergencyController, setActiveEmergencyController } from './emergency.t
 import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
 import { ActionOutcomeError, type ActionFailure } from '../actions/action-outcome.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
-import { applyApprovalDecision, applyExecutionResolution, channelDecisionReply, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
+import { applyApprovalDecision, applyExecutionResolution, channelDecisionReply, notificationDecisionNote, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
 import { ChannelService, CHANNEL_APPROVE_NOT_ALLOWED, channelSenderMayApprove } from '../daemon/channel-service.ts';
 import { createApiRoutes, type ApiContext } from '../daemon/api-routes.ts';
 import { WebSocketService } from '../daemon/ws-service.ts';
@@ -96,6 +96,10 @@ describe('a card that must be reviewed on screen', () => {
       expect(await applyApprovalDecision('approve', req.id, surface, p.deps)).toMatchObject({ status: 'needs_dashboard' });
     }
     expect(p.approvals.getRequest(req.id)!.status).toBe('pending');
+    // Each surface says why, and where to approve it instead.
+    const refused = await applyApprovalDecision('approve', req.id, 'telegram', p.deps);
+    expect(channelDecisionReply(refused, req)).toContain('Approve it on the Jarvis dashboard');
+    expect(notificationDecisionNote(refused)).toContain('Approve it on the Jarvis dashboard');
     expect(await applyApprovalDecision('approve', req.id, 'dashboard', p.deps)).toMatchObject({ status: 'approved', executed: true });
     expect(p.runs).toHaveLength(1);
   });
@@ -145,11 +149,27 @@ describe('Pause and Kill below every decision surface', () => {
     const held = await applyApprovalDecision('approve', req.id, 'dashboard', p.deps);
     expect(held).toMatchObject({ status: 'held', state: 'paused' });
     expect(channelDecisionReply(held, req)).toContain('Resume Jarvis, then approve it');
+    expect(notificationDecisionNote(held)).toContain('Resume Jarvis, then approve it');
     expect(p.approvals.getRequest(req.id)!.status).toBe('pending');
     const other = p.ask();
     expect(await applyApprovalDecision('deny', other.id, 'dashboard', p.deps)).toMatchObject({ status: 'denied' });
     controller.resume();
     expect(await applyApprovalDecision('approve', req.id, 'dashboard', p.deps)).toMatchObject({ status: 'approved', executed: true });
+    expect(p.runs).toHaveLength(1);
+  });
+
+  test('running an approval a restart left unresolved waits while paused, instead of closing it for good', async () => {
+    const controller = new EmergencyController();
+    setActiveEmergencyController(controller);
+    const p = pipeline();
+    const req = p.ask();
+    p.approvals.approve(req.id, 'dashboard');
+    p.approvals.reconcileAfterRestart();
+    controller.pause();
+    expect(await applyExecutionResolution('execute', req.id, 'dashboard', p.deps)).toMatchObject({ status: 'not_executable', reason: expect.stringContaining('paused') });
+    expect(p.approvals.getRequest(req.id)).toMatchObject({ status: 'approved', execution_outcome: 'not_started' });
+    controller.resume();
+    expect(await applyExecutionResolution('execute', req.id, 'dashboard', p.deps)).toMatchObject({ status: 'executed' });
     expect(p.runs).toHaveLength(1);
   });
 
@@ -257,7 +277,7 @@ describe('a card nobody answers', () => {
     const p = pipeline();
     const chat = p.ask(), workflow = p.ask({ mode: 'workflow' }), fresh = p.ask();
     getDb().run('UPDATE approval_requests SET created_at = ? WHERE id IN (?, ?)', [Date.now() - UNANSWERED_APPROVAL_TTL_MS - 1, chat.id, workflow.id]);
-    expect(p.approvals.expireUnanswered(UNANSWERED_APPROVAL_TTL_MS)).toBe(1);
+    expect(p.approvals.expireUnanswered(UNANSWERED_APPROVAL_TTL_MS).map((r) => r.status)).toEqual(['expired']);
     expect([chat, workflow, fresh].map((r) => p.approvals.getRequest(r.id)!.status)).toEqual(['expired', 'pending', 'pending']);
   });
 });
@@ -328,6 +348,14 @@ describe('chat turns', () => {
     expect(h.calls).toEqual(['run_command']);
   });
 
+  test('a category sent with stray spaces is remembered as the card shows it', async () => {
+    const h = turnHarness();
+    const turn = new Set<string>();
+    expect(await h.exec('request_approval', { action_category: ' execute_command ', intent: 'git push --force' }, turn)).toContain('[DENIED]');
+    expect(await h.exec('run_command', {}, turn)).toContain('[AWAITING_APPROVAL]');
+    expect(h.calls).toEqual([]);
+  });
+
   test('a card raised in chat records whom it was asked for, and runs once approved', async () => {
     const h = turnHarness(['execute_command']);
     expect(await h.exec('run_command', {}, new Set())).toContain('[AWAITING_APPROVAL]');
@@ -346,6 +374,8 @@ describe('chat turns', () => {
     const executor = new DeferredExecutor(h.approvals, new AuditTrail());
     executor.setToolRegistry(h.registry);
     h.orch.setDeferredExecutor(executor);
+    const withdrawn: string[] = [];
+    h.orch.setApprovalWithdrawnCallback((request) => withdrawn.push(request.id));
     const abort = new AbortController();
     const pending = h.exec('run_command', {}, new Set(), abort.signal);
     await new Promise((resolve) => setTimeout(resolve, 10));
@@ -353,6 +383,8 @@ describe('chat turns', () => {
     expect(await pending).toContain('[APPROVAL WITHDRAWN]');
     const [card] = h.approvals.getHistory({ limit: 1 });
     expect(card).toMatchObject({ status: 'denied', decided_by: 'task-cancelled' });
+    // The dashboard is told, so it stops offering the card.
+    expect(withdrawn).toEqual([card!.id]);
     expect(h.calls).toEqual([]);
   });
 });

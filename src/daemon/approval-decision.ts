@@ -186,6 +186,18 @@ export function heldApprovalMessage(state: 'paused' | 'killed'): string {
 }
 
 /**
+ * What a desktop notification says after an approve it refused, the card
+ * still pending; null when there is nothing to say (Q-08).
+ */
+export function notificationDecisionNote(outcome: ApprovalDecisionOutcome): string | null {
+  if (outcome.status === 'needs_dashboard') {
+    return 'This one has to be reviewed on screen, so it cannot be approved from a notification. Approve it on the Jarvis dashboard.';
+  }
+  if (outcome.status === 'held') return heldApprovalMessage(outcome.state);
+  return null;
+}
+
+/**
  * What a Telegram or Discord reply is told: what the receipt says happened,
  * never "executed" for a run that was refused, failed or may not have
  * happened (Q-08).
@@ -241,6 +253,14 @@ export async function applyExecutionResolution(
   }
   if (current.tool_name === 'request_approval') {
     return { status: 'not_executable', reason: 'An intent grant has nothing to run on its own; the conversation that asked for it is gone. Close it.' };
+  }
+  // Paused or stopped: running it waits, as approving does (Q-08). Claimed
+  // now, the executor's emergency gate would close it as refused for good.
+  const emergency = activeEmergencyState();
+  if (emergency !== 'normal') {
+    return { status: 'not_executable', reason: emergency === 'paused'
+      ? 'Jarvis is paused, so nothing can run now. Resume Jarvis, then run it; it is still waiting.'
+      : 'Jarvis was stopped with Kill, so nothing can run now. Reset Jarvis first.' };
   }
   // Runs through the same claim as every execution, so this is exactly one
   // attempt even if two surfaces resolve the same row at once. A claim lost

@@ -186,6 +186,17 @@ export class WorkflowEffectBoundary {
     const resolved = resolveEffectContext(input.context, input.piece, input.action);
     const id = workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, input.route);
     let effect = getWorkflowEffect(id);
+    // A piece effect recorded before Q-08 has a request digest without the
+    // engine's digest of the whole input. It is matched without it once and
+    // bound to it from then on, so an approval parked across the upgrade runs
+    // instead of failing as changed. Records made since always carry it.
+    if (effect && input.route === 'piece' && effect.requestDigest !== digest(input.request)) {
+      const { inputDigest, ...earlier } = input.request;
+      if (typeof inputDigest === 'string' && effect.requestDigest === digest(earlier)) {
+        effect.requestDigest = digest(input.request);
+        saveWorkflowEffect(effect);
+      }
+    }
     if (effect && (effect.requestDigest !== digest(input.request) || effect.versionDigest !== resolved.versionDigest
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
       throw new Error('Workflow effect changed since it was recorded; start a new run for new arguments or version');

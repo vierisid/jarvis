@@ -801,6 +801,22 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(f.effects()).toBe(1);
   });
 
+  test('a finished delegation is not handed out again while paused, and is after Resume (Q-08)', async () => {
+    const ids = createRun();
+    const f = backends(ids);
+    const parked = await f.delegate();
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(done.status).toBe('completed');
+    f.emergency.pause();
+    // Nothing inside it is pending: only the delegation's own recorded authorization can hold it.
+    const held = await f.delegate();
+    expect(held).toMatchObject({ status: 'approval_required', approval: { hold: expect.stringMatching(/paused/i) } });
+    f.emergency.resume();
+    expect(await f.delegate()).toEqual(done);
+    expect(f.effects()).toBe(1);
+  });
+
   test('a refusal that leaves the effect untouched is this run\'s error, and the checkpoint keeps its state', async () => {
     const ids = createRun();
     const f = backends(ids);

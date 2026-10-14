@@ -141,14 +141,17 @@ read.
 | Queued runs | Wait: the worker claims nothing; a job claimed as the pause began goes back untouched |
 | A scheduled time | Skipped and recorded, keyed, so it is not run late after Resume |
 | A webhook | 503 with `Retry-After`, recorded as skipped; the sender retries |
-| An event source's poll | Not polled; its items are picked up after Resume |
+| An event source's poll | Not polled; its items are picked up after Resume. Items a poll already took when Pause came are queued, and run after Resume |
 | Timers, approvals, resume URLs | Wake nothing (a resume URL answers 503); they wait |
-| A run already executing | Parks at its next Jarvis, piece or CODE step on a HOLD waitpoint, which Resume releases |
+| A run already executing | Parks at its next Jarvis, piece or CODE step on a HOLD waitpoint, which Resume releases; the step then runs as it was about to (a Delay still waits its full time) |
 | Starting a run by hand | Refused, saying Jarvis is paused |
 
 Kill does all of that and also stops every unfinished run (queued, executing
 or waiting), saying why, and denies every pending approval; tools stop at
-their next dispatch checkpoint. Reset starts nothing again.
+their next dispatch checkpoint. Reset starts nothing again: a scheduled time
+during Kill stays skipped, and items a poll took during Kill are skipped. A
+webhook is still answered 503 with `Retry-After`, so a sender that retries
+after Reset starts a run then, as any delivery after Reset would.
 
 ## The ledger
 

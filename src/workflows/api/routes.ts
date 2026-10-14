@@ -82,7 +82,7 @@ import {
 import { fireForRun, pageFlowFires } from "../db/repos/trigger-fire";
 import { stopRunsOfDeletedFlow, stopRunsOfTurnedOffFlow, stopTurnedOffRun, turnedOffReason } from "../db/repos/flow-turn-off";
 import { claimContinuation } from "../runtime/continuation";
-import { manualStartRefusal } from "../runtime/emergency-hold";
+import { emergencyHold, KILLED_REASON, manualStartRefusal } from "../runtime/emergency-hold";
 import {
   deleteConnectionInProject,
   getConnectionInProject,
@@ -1454,11 +1454,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             case "busy": return err("another continuation of this run is already queued; retry once it has run", 409);
             case "stale": return err("the step this waitpoint was for has already finished", 410);
             case "not-paused": return err("run is no longer paused", 409);
-            // Paused or stopped: the waitpoint is kept; retry after Resume (Q-08).
-            case "held": return new Response(JSON.stringify({ error: "Jarvis is paused; this run continues once it is resumed. Retry later." }), {
-              status: 503,
-              headers: { "Content-Type": "application/json", "Retry-After": "60" },
-            });
+            // Paused: the waitpoint is kept; retry after Resume (Q-08). Under
+            // Kill the run is being stopped, so there is nothing to retry.
+            case "held": return emergencyHold() === KILLED_REASON
+              ? err("Jarvis was stopped with Kill, so this run will not continue.", 409)
+              : new Response(JSON.stringify({ error: "Jarvis is paused; this run continues once it is resumed. Retry later." }), {
+                status: 503,
+                headers: { "Content-Type": "application/json", "Retry-After": "60" },
+              });
             default: return err("waitpoint already resumed", 410);
           }
         }),
@@ -2229,7 +2232,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             created: wp.created,
             ...(children.some(child => child.waitpointId === wp.id)
               ? { child: children.find(child => child.waitpointId === wp.id) }
-              : { resumeUrl: `/api/webhooks/waitpoints/${wp.id}` }),
+              // A HOLD is released by Jarvis on Resume, never by a URL (Q-08).
+              : { resumeUrl: wp.type === "HOLD" ? null : `/api/webhooks/waitpoints/${wp.id}` }),
           }));
           return ok({ runId, waitpoints });
         }),

@@ -142,6 +142,8 @@ describe('ambiguous UI effects require review at real agent gates', () => {
     executor.setToolRegistry(f.registry);
     expect(await executor.executeApproved(old.id)).toContain('predates the required UI review');
     expect(f.calls).toEqual([]);
+    // Refused after the claim, and the receipt is audited like every other one (Q-08).
+    expect(f.audit.query({ limit: 5 })).toContainEqual(expect.objectContaining({ approval_id: old.id, authority_decision: 'approval_required', executed: 0 }));
   });
 });
 

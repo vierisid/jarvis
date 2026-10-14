@@ -5,17 +5,22 @@ starts it: no route runs a governed action without approval, an approval never
 covers different arguments, two surfaces deciding one request produce one
 dispatch, and Pause and Kill hold below every UI control (Q-08).
 
-Tests: `src/authority/entry-matrix.test.ts` (chat, voice, realtime, channels,
-toasts, the executor), `src/workflows/runtime/emergency-hold.test.ts`
-(workflows under Pause and Kill), and the existing Authority suites they sit
-beside (`workflow-authority.test.ts`, `governed-pieces.test.ts`,
-`approval-receipts.test.ts`, `browser-intent.test.ts`).
+Tests: `src/authority/entry-matrix.test.ts` (chat, voice, channels, toasts,
+the executor), `src/agents/orchestrator-realtime.test.ts` (realtime voice),
+`src/workflows/runtime/emergency-hold.test.ts` (workflows under Pause and
+Kill), `src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts`
+(the real engine parking and resuming steps), and the existing Authority
+suites they sit beside (`workflow-authority.test.ts`,
+`governed-pieces.test.ts`, `approval-receipts.test.ts`,
+`browser-intent.test.ts`).
 
-## Owner decisions (7 October)
+## Owner decisions (7 and 14 October)
 
-- **Voice leaves a card.** In a live voice conversation, an action that needs
-  approval is not run. It leaves an approval card on the dashboard and in chat,
-  and Jarvis says so. Until now realtime voice auto-approved it.
+- **A spoken command is the authorization** (14 October, replacing 7
+  October's "voice leaves a card"). In a live voice conversation, an action
+  that needs approval runs when asked, audited as approved by voice. A tainted
+  session's approvals, cards that must be clicked and the blocked categories
+  are still refused.
 - **Voice may keep pressing dashboard buttons** (grant access, run a workflow,
   start an agent, restart Jarvis) as it does today. Recorded as a known path:
   those buttons act as a click would.
@@ -36,10 +41,10 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
 | Background agent | Same, with its level cap | Same, cap included | Refused | Refused |
 | Chat sub-agent | Same, with the parent's profile | No approvals outside workflows | Refused | Refused |
 | Approval from the dashboard | Compare-and-set decision, then one claim | As above | Approving waits for Resume (refused, saying so); denying works | Pending cards are denied |
-| Approval from Telegram or Discord | Allowed sender, exact card id, card shown whole | As above; click-only cards refused | Approving waits for Resume | Pending cards are denied |
-| Approval from a toast | Card shown whole; click-only cards refused | As above | Approving waits for Resume | Pending cards are denied |
+| Approval from Telegram or Discord | Allowed sender, exact card id | As above; click-only cards refused | Approving waits for Resume | Pending cards are denied |
+| Approval from a toast | Click-only cards offer Review in Jarvis, not Approve, and are refused; a refused approve shows the card again, saying why | As above | Approving waits for Resume | Pending cards are denied |
 | Spoken yes or no | Only with exactly one card waiting; not destructive or click-only | As above | Approving waits for Resume | Pending cards are denied |
-| Realtime voice | Authority per category; approval leaves a card | Card runs like any other | Refused | Refused |
+| Realtime voice | Authority per category; the spoken command is the approval; a tainted session's approval, a click-only card or a blocked category is refused | | Refused | Refused |
 | A denied `request_approval` | The category needs its own approval for the rest of the turn | | | |
 | Manual Run, `manage_workflow` run, work item | Readiness, CODE grant (work items too) | | Refused, saying why | Refused |
 | Schedule, webhook, event, poll | Admission, readiness | | Skipped and shown; webhook 503; poll waits | Same |
@@ -75,7 +80,10 @@ nothing, triggers start nothing (a scheduled time is
 skipped and shown, a webhook is told to retry, a poll waits), timers,
 approvals and resume URLs wake nothing, and manual starts are refused. A
 workflow already executing parks at its next step on a HOLD waitpoint, which
-Resume releases. Work in flight finishes.
+Resume releases; the step then runs as it was about to, from the start or
+resuming its own pause with its payload, so a Delay still waits its full time.
+Items a poll had already taken when Pause came are queued for Resume. Work in
+flight finishes.
 
 Kill stops. On top of the hold, every unfinished workflow run is stopped,
 saying why, every pending approval is denied, and a tool in flight stops at
@@ -92,7 +100,9 @@ An approved request ends as one of: executed (`committed`), failed, blocked
 say whether it took effect; never run again, closed by a person). The chat
 reply, the dashboard notification, the tray's recent actions and the "Task
 complete" toast say which, instead of "executed" for all of them. Every
-decision is audited with its surface, and every receipt with its outcome.
+decision a person makes is audited with its surface, and every receipt with
+its outcome. A card closed without a person (Kill, a cancelled task, the
+24-hour expiry) is recorded on the card: its status, and who closed it.
 
 ## Limits
 
@@ -104,8 +114,15 @@ decision is audited with its surface, and every receipt with its outcome.
   (Q-10).
 - Approval cards show what will happen, not the raw arguments.
 - Kill stops a tool at its next dispatch checkpoint: one command already
-  running on a machine finishes. A sub-agent's model loop is not aborted; its
-  tool calls are refused.
+  running on a machine finishes. A sub-agent started by a tool stops at its
+  next turn, which passes the same checkpoint; its tool calls are refused in
+  any case.
+- A tool stopped by Kill is recorded as "may have happened", even at its first
+  checkpoint: a checkpoint cannot tell whether an earlier dispatch took place,
+  so a card caught there is closed by a person, never run again.
+- Under Kill a webhook sender is still told to retry, so a retry that arrives
+  after Reset starts a run, like any delivery after Reset. Scheduled times
+  during Kill stay skipped.
 - An intent grant (`request_approval`) is recorded as executed.
 - Opportunity activation has no route of its own; accepted work items start
   through the run route.

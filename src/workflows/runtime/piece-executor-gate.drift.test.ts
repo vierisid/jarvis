@@ -57,9 +57,14 @@ describe('engine piece-executor admission gate', () => {
     expect(flat).toContain(
       "const parked = 'dispatch' in governance && (governance.dispatch === 'approval_required' || governance.dispatch === 'held')",
     );
+    // It records how it was about to run, and its re-run is that run (Q-08):
+    // the runtime proof is emergency-hold-engine.test.ts; this keeps a
+    // re-vendor from dropping the patch unnoticed.
     expect(flat).toContain(
-      "const output = parked ? { approval: governance.approval } : await runMethodToExecute(backwardCompatibleContext)",
+      "const output = parked ? { approval: governance.approval, [JARVIS_PARKED]: isPaused ? { executionType: ExecutionType.RESUME, resumePayload } : { executionType: ExecutionType.BEGIN } } : await runMethodToExecute(backwardCompatibleContext)",
     );
+    expect(flat).toContain('const parkedBefore = jarvisParked(executionState.getStepOutput(action.name))');
+    expect(flat).toContain('resumePayload: resumePayload!,');
     // One call site only: a second, ungoverned one would be a bypass.
     expect(flat.split('runMethodToExecute(backwardCompatibleContext)')).toHaveLength(2);
   });
