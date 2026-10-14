@@ -111,14 +111,55 @@ jobs:
             }
           '
 
+      # The tag is free only on a clean answer that says so (#998). This used
+      # to read any failure of `gh api .../git/ref/tags/vX` as "no such tag",
+      # so a rate limit or a 5xx let the bump PR open and merge, and "Tag
+      # merge commit" then failed on a tag that did exist, leaving a merged
+      # bump with no tag. A 404 is no clean answer either: measured, that
+      # endpoint gives the same 404 body for a missing repository as for a
+      # missing tag. matching-refs answers 200 with every tag whose name
+      # starts with vX (measured: not paginated, per_page ignored), [] when
+      # there is none, so "free" is an exact name absent from a list GitHub
+      # did return. gh 2.102.0 exits 1 on every non-2xx and does not retry
+      # (measured against GitHub for 401 and 404, and a local server for 403,
+      # 429, 500, 502 and 503: one request each), yet exits 0 on a 200 whose
+      # body is HTML, empty or an object; so anything but exit 0 and exactly
+      # one JSON array of refs stops here.
+      # release-exec.test.sh runs this script verbatim against every case.
       - name: Guard - tag must not already exist
         env:
           NEW: ${{ steps.version.outputs.NEW }}
         run: |
-          if gh api "repos/${{ github.repository }}/git/ref/tags/v${NEW}" >/dev/null 2>&1; then
-            echo "Tag v${NEW} already exists"
+          set -euo pipefail
+          rc=0
+          err="$(mktemp)"
+          trap 'rm -f "$err"' EXIT
+          refs="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v${NEW}" 2>"$err")" || rc=$?
+          # blocked: a tag under vX/ exists, and git refuses to create vX
+          # beside it, as it would vX itself (review of #998).
+          verdict="$(jq -rs --arg ref "refs/tags/v${NEW}" 'if length == 1 and (.[0] | type == "array" and all(.[]; type == "object" and (.ref | type) == "string")) then (if any(.[0][]; .ref == $ref) then "taken" elif any(.[0][]; .ref | startswith($ref + "/")) then "blocked" else "free" end) else "unknown" end' <<<"$refs" 2>/dev/null)" || verdict=unknown
+          [ "$rc" -eq 0 ] || verdict=unknown
+          case "$verdict" in
+          free)
+            echo "Tag v${NEW} does not exist yet."
+            ;;
+          taken)
+            echo "::error::Tag v${NEW} already exists"
             exit 1
-          fi
+            ;;
+          blocked)
+            echo "::error::A tag under v${NEW}/ exists, so the tag v${NEW} cannot be created"
+            exit 1
+            ;;
+          *)
+            # gh text and the start of its answer, control characters
+            # dropped, so they stay one line and cannot start a workflow
+            # command of their own.
+            printf '::error::Could not establish whether the tag v%s exists (gh api exit %s: %s; answer: %s), so the bump PR is not opened (#998). Re-run if it was transient; otherwise check the token and the repository.\n' \
+              "$NEW" "$rc" "$(head -c 300 "$err" | tr -d '\000-\037\177')" "$(head -c 200 <<<"$refs" | tr -d '\000-\037\177')"
+            exit 1
+            ;;
+          esac
 
       - name: Create release PR
         id: pr
@@ -218,7 +259,7 @@ jobs:
           NEW: ${{ steps.version.outputs.NEW }}
           SHA: ${{ steps.merge.outputs.SHA }}
         run: |
-          gh api "repos/${{ github.repository }}/git/refs" \
+          gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
             -f ref="refs/tags/v${NEW}" \
             -f sha="${SHA}"
 
