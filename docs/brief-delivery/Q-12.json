@@ -120,5 +120,23 @@
     "Stored suggestion context remains a timestamped discovery snapshot; current inferred-relation consumers must use getOpportunity/listOpportunities. Existing composition ignores inferred candidates."
   ],
   "rollback": "Disable awareness for containment. Restore the prior versioned relevance seam while retaining Q-11 privacy/recurrence and current stale-goal filtering, or return no inferred goal candidates. Keep additive data, historical hypotheses, explicit confirmations and user work; never replay effects or alter scores.",
-  "quick_verification": "You can see this change in bun run scripts/evaluate-goal-relevance.ts, then inspect invoice-outcome-not-title-overlap, current-objective-path and competing-businesses. See docs/opportunity-goal-relevance.md."
+  "quick_verification": "You can see this change in bun run scripts/evaluate-goal-relevance.ts, then inspect invoice-outcome-not-title-overlap, current-objective-path and competing-businesses. See docs/opportunity-goal-relevance.md.",
+  "rebase_2026_10_14": {
+    "onto": "62594ab5f6787ed93dd2597048740fe8ff62a90d",
+    "main": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "original_head": "a1c99ebca6994b7a3e2ae06adf3a1aea09bf2541",
+    "conflicts": "None; all four original patches unchanged in range-diff.",
+    "validation": {
+      "tests": "174 passed, zero failed, 709 assertions across twelve files",
+      "evaluation": "34/34 synthetic policy cases; complete report matches the original committed report, including frozen corpus hash, 12 candidate links and 22 abstentions"
+    },
+    "integration": "Remains stacked on Q11. Goal suggestions do not mutate goal progress or authorize execution; original invoice/receivables versus payable-context corrections retained.",
+    "evidence_root": "/home/vierisid/.cache/codex/brief-rebase-20261014",
+    "evidence": [
+      "q-12-focused.log",
+      "q-12-evaluation.json",
+      "q-12-range-diff.log",
+      "q-12-commit.log"
+    ]
+  }
 }
