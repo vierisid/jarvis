@@ -50,7 +50,10 @@ jobs:
       current: ${{ steps.cmp.outputs.current }}
       version: ${{ steps.cmp.outputs.version }}
     steps:
+      # persist-credentials: false, as in update below (#982).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - id: cmp
         # Read the dispatch input through env (never interpolate untrusted
         # ${{ }} straight into the shell -- it would allow command injection).
@@ -86,7 +89,13 @@ jobs:
     if: needs.check.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
+      # persist-credentials: false (#982): this job builds and tests the
+      # vendored upstream code while holding contents and pull-requests
+      # write, and nothing here needs the token on disk. create-pull-request
+      # configures git from its own token input.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           # The Actions cache is writable by any run on main, and Go reuses
