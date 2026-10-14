@@ -62,8 +62,9 @@ that real grant without attributing it to a cancelled or newer attempt.
 Attempts are bounded, in-memory, ten-minute records, matching the existing OAuth
 store. A daemon restart requires retrying an unfinished attempt; existing grants
 are recovered from canonical storage. Snapshots carry a monotonic revision within
-the provider lifetime. The transport must scope cursors to its current instance
-and discard lower revisions; snapshots are observations, not durable journey
+their `streamId`, which changes after restart or idle eviction. The transport must
+compare revisions only within that stream and discard older request results;
+snapshots are observations, not durable journey
 completion receipts. Re-entering never relaunches OAuth automatically.
 
 ON-U-10 imports `createGoogleController` from `controller.ts` and the client-only
@@ -73,9 +74,10 @@ ON-U-03 controlled view. Return/focus always reads server status; there is no
 success-message listener. The browser adapter reuses the existing external-open
 service, including its WebView handoff detection. Cancel stops polling; Skip and
 leave remove timers/listeners and abort transport reads. A late begin result is
-cancelled without opening its URL. Each request has a 15-second UI deadline;
+cancelled without opening its URL. Read/begin requests have a 15-second UI deadline;
 `failure()` must replace pending UI with safe retry/skip feedback. It must never
-show Connected. Dispose the controller when the authenticated identity changes.
+show Connected. Inject bounded transport calls for cancel and skip mutations.
+Dispose the controller when the authenticated identity changes.
 
 ## Verification and rollback
 

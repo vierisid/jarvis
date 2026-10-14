@@ -3,7 +3,7 @@ import { createGoogleController } from './controller.ts';
 import type { GoogleConnection, GoogleSnapshot, GoogleStart } from './types.ts';
 
 function snapshot(connection: GoogleConnection): GoogleSnapshot {
-  return { schemaVersion: 1, provider: 'google', installMode: 'self', supported: true, ready: connection.state === 'connected', revision: 1, reason: 'fixture', connection };
+  return { schemaVersion: 1, provider: 'google', installMode: 'self', supported: true, ready: connection.state === 'connected', streamId: 'fixture', revision: 1, reason: 'fixture', connection };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
 const tick = async () => { for (let i = 0; i < 10; i++) await Promise.resolve(); };

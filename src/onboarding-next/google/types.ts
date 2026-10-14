@@ -15,6 +15,8 @@ export interface GoogleSnapshot {
   installMode: 'unknown' | 'hosted' | 'self';
   supported: boolean;
   ready: boolean;
+  /** Changes after restart or idle eviction; revisions are comparable only within it. */
+  streamId: string;
   revision: number;
   reason: string;
   connection: GoogleConnection;

@@ -167,4 +167,11 @@ describe('google-state.v1', () => {
     const read = f.provider.read(owner); await entered.promise; f.binding.id = 'replacement-vault'; release.resolve(verified);
     await expect(read).rejects.toMatchObject({ code: 'unavailable' });
   });
+  it('gives an evicted scope a new revision stream and rejects malformed callback input', async () => {
+    const f = fixture(), before = await f.provider.read(owner);
+    f.elapse(1_200_001); await f.provider.read({ actorId: 'other', projectId: 'other' });
+    const after = await f.provider.read(owner);
+    expect(after.streamId).not.toBe(before.streamId);
+    await expect(f.provider.callback(owner, null as never)).rejects.toMatchObject({ code: 'invalid_callback' });
+  });
 });

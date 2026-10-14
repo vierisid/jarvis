@@ -8,6 +8,7 @@ const sameOwner = (a: GoogleScope, b: GoogleScope) => a.actorId === b.actorId &&
 const validId = (value: unknown): value is string => typeof value === 'string' && value.length > 0 && value.length <= 512;
 interface Attempt { id: string; state?: string; expiresAt: number; consumed: boolean; cancelled: boolean }
 interface Slot {
+  streamId: string;
   bindingId: string;
   attempt?: Attempt;
   connection: GoogleConnection;
@@ -39,7 +40,7 @@ export function createGoogleProvider<Context>(ports: GooglePorts<Context>) {
     if (!slot) {
       for (const [key, value] of slots) if (!value.queued && now() - value.touched > TTL * 2) slots.delete(key);
       if (slots.size >= MAX_OWNERS) throw new GoogleStateError('unavailable');
-      slot = { bindingId: binding.id, connection: { state: 'idle' }, reason: 'not_connected', revision: 0,
+      slot = { streamId: randomUUID(), bindingId: binding.id, connection: { state: 'idle' }, reason: 'not_connected', revision: 0,
         touched: now(), tail: Promise.resolve(), queued: 0 };
       slots.set(key, slot);
     }
@@ -51,7 +52,7 @@ export function createGoogleProvider<Context>(ports: GooglePorts<Context>) {
   }
   function snapshot(binding: GoogleBinding, slot: Slot): GoogleSnapshot {
     return { schemaVersion: 1, provider: 'google', installMode: binding.installMode, supported: true,
-      ready: slot.connection.state === 'connected', revision: slot.revision, reason: slot.reason,
+      ready: slot.connection.state === 'connected', streamId: slot.streamId, revision: slot.revision, reason: slot.reason,
       connection: structuredClone(slot.connection) };
   }
   function expire(slot: Slot) {
@@ -159,7 +160,7 @@ export function createGoogleProvider<Context>(ports: GooglePorts<Context>) {
     callback(context: Context, input: { state: string; code?: string; error?: string }) {
       return serial(context, async (binding, slot) => {
         const attempt = slot.attempt;
-        if (binding.installMode !== 'self' || !binding.self || !attempt || !validId(input.state)
+        if (!input || typeof input !== 'object' || binding.installMode !== 'self' || !binding.self || !attempt || !validId(input.state)
           || attempt.state !== input.state || attempt.consumed || attempt.expiresAt <= now()
           || (!input.error && (!validId(input.code) || input.code.length > 512))) throw new GoogleStateError('invalid_callback');
         const flow = binding.self.flows.consume(input.state, now());
