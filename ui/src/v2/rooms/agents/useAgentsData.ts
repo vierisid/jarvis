@@ -148,8 +148,15 @@ export interface SpawnInput {
 }
 
 export interface SpawnResult {
+  /** The request went through: the agent started, or a card is waiting for it. */
   ok: boolean;
   message: string;
+  /**
+   * The agent was actually started (#991). False for a card raised (202) as
+   * well as for every refusal, so a caller that confirms a spawn -- voice --
+   * says so only when one happened.
+   */
+  started?: boolean;
 }
 
 export function useAgentsData() {
@@ -251,14 +258,16 @@ export function useAgentsData() {
       // 202: the spawn needs approval and a card is waiting for it. Nothing
       // was spawned, so say that rather than "Agent spawned." (#932).
       if (data.approval_required) {
-        return { ok: true, message: data.message ?? "Spawning this agent needs your approval. A card is waiting." };
+        return { ok: true, started: false, message: data.message ?? "Spawning this agent needs your approval. A card is waiting." };
       }
       // Refresh roster so the new agent shows up immediately.
       refresh();
-      return { ok: true, message: data.assignment?.message ?? "Agent spawned." };
+      // 201 is the route's "spawned"; any other success is not one it makes.
+      return { ok: true, started: resp.status === 201, message: data.assignment?.message ?? "Agent spawned." };
     } catch (err) {
       return {
         ok: false,
+        started: false,
         message: err instanceof Error ? err.message : "Failed to spawn agent.",
       };
     }
