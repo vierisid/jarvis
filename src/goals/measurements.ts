@@ -14,6 +14,15 @@ export interface GoalMeasurementInput {
 export interface GoalMeasurement extends GoalMeasurementInput {
   revision: number;
   qualification: 'user_reported' | null;
+  /**
+   * Absent: a typed snapshot (F-15). `observations`: counted from cited
+   * entries (Q-17), so `value` is the number of entries in `counted`, and
+   * `evidence` names the goal's entry ledger at this revision, which a build
+   * without Q-17 still reads as the snapshot's one source.
+   */
+  basis?: 'observations';
+  /** For `observations`: the entries that count right now, one per thing. */
+  counted?: string[];
 }
 export interface GoalMeasurementCommand {
   requestId: string;
@@ -28,18 +37,19 @@ export interface GoalMeasurementReceipt {
   progressId: string | null;
 }
 export class GoalMeasurementConflict extends Error {}
-const label = (value: unknown, path: string, max: number) => {
+/** Trimmed plain text: no surrounding space and no control characters. */
+export const plainLabel = (value: unknown, path: string, max: number) => {
   const result = text(value, path, true, max);
   if (result !== result.trim() || /[\x00-\x1f\x7f]/.test(result)) invalid(path, 'must be trimmed plain text');
   return result;
 };
 export function validateMeasurementCommand(raw: unknown): GoalMeasurementCommand {
   const input = record(raw, 'request'); keys(input, ['requestId', 'revision', 'measurement'], 'request');
-  const requestId = label(input.requestId, 'requestId', 128);
+  const requestId = plainLabel(input.requestId, 'requestId', 128);
   const revision = number(input.revision, 'revision', 0, Number.MAX_SAFE_INTEGER - 1, true);
   const m = record(input.measurement, 'measurement');
   keys(m, ['unit', 'baseline', 'target', 'value', 'measuredAt', 'evidence'], 'measurement');
-  const unit = label(m.unit, 'measurement.unit', 80);
+  const unit = plainLabel(m.unit, 'measurement.unit', 80);
   const baseline = number(m.baseline, 'measurement.baseline', -1e12, 1e12);
   const target = number(m.target, 'measurement.target', -1e12, 1e12);
   if (baseline === target) invalid('measurement.target', 'must differ from baseline');
@@ -50,7 +60,7 @@ export function validateMeasurementCommand(raw: unknown): GoalMeasurementCommand
     value = number(m.value, 'measurement.value', -1e12, 1e12);
     measuredAt = number(m.measuredAt, 'measurement.measuredAt', 0, Date.now(), true);
     const e = record(m.evidence, 'measurement.evidence'); keys(e, ['id', 'revision'], 'measurement.evidence');
-    evidence = { id: label(e.id, 'measurement.evidence.id', 512), revision: label(e.revision, 'measurement.evidence.revision', 128) };
+    evidence = { id: plainLabel(e.id, 'measurement.evidence.id', 512), revision: plainLabel(e.revision, 'measurement.evidence.revision', 128) };
   }
   return { requestId, revision, measurement: { unit, baseline, target, value, measuredAt, evidence } };
 }
@@ -64,7 +74,7 @@ export function readGoalMeasurement(db: Database, goalId: string): GoalMeasureme
   return row ? JSON.parse(row.snapshot) : null;
 }
 export function readMeasurementReceipt(db: Database, goalId: string, requestId: string): GoalMeasurementReceipt | null {
-  label(requestId, 'requestId', 128);
+  plainLabel(requestId, 'requestId', 128);
   const row = db.query<{ receipt: string }, [string, string]>('SELECT receipt FROM goal_measurement_receipt WHERE goal_id = ? AND request_id = ?').get(goalId, requestId);
   return row ? JSON.parse(row.receipt) : null;
 }

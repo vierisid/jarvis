@@ -3,6 +3,7 @@ import { getDb } from '../vault/schema';
 import { getGoal } from '../vault/goals';
 import { getGoalApplication } from '../goals/application-service';
 import { measurementProgress, readMeasurementReceipt } from '../goals/measurements';
+import { listObservations, readObservationReceipt } from '../goals/observations';
 import type { Goal } from '../goals/types';
 import type { BriefGoal, BriefReadResult } from './contracts';
 import { projectLegacyGoal } from './adapters';
@@ -14,12 +15,16 @@ export function projectMeasuredGoal(goal: Goal): BriefGoal {
   return { ...projectLegacyGoal(goal),
     revision: `${goal.updated_at}:${measurement?.revision ?? 0}`,
     measurementRevision: measurement?.revision ?? 0,
-    measurementDefinition: measurement ? { unit: measurement.unit, baseline: measurement.baseline, target: measurement.target } : null,
+    measurementDefinition: measurement ? { unit: measurement.unit, baseline: measurement.baseline, target: measurement.target,
+      basis: measurement.basis ?? 'reported' } : null,
     progress: { value, basis: measurement ? value === null ? 'unknown' : 'measurement' : 'legacy_score', rollup: 'independent' },
     measurement: measurement?.value != null ? {
       value: measurement.value, unit: measurement.unit, baseline: measurement.baseline, target: measurement.target,
       asOf: measurement.measuredAt!, qualification: 'user_reported',
-      provenance: [{ kind: 'source', id: measurement.evidence!.id, revision: measurement.evidence!.revision }],
+      // A counted measure names each counted thing's entry (Q-17); a typed total names its one source.
+      provenance: measurement.basis === 'observations'
+        ? (measurement.counted ?? []).map(id => ({ kind: 'observation' as const, id, revision: null }))
+        : [{ kind: 'source', id: measurement.evidence!.id, revision: measurement.evidence!.revision }],
     } : null,
   };
 }
@@ -39,4 +44,10 @@ export class GoalMeasurements {
   }
   record(goalId: string, command: unknown) { this.available(); return getGoalApplication().recordMeasurement(goalId, command); }
   receipt(goalId: string, requestId: string) { this.available(); return readMeasurementReceipt(this.db, goalId, requestId); }
+  /** Q-17: count the goal from cited entries. */
+  defineCounted(goalId: string, command: unknown) { this.available(); return getGoalApplication().defineCountedMeasurement(goalId, command); }
+  recordObservation(goalId: string, command: unknown) { this.available(); return getGoalApplication().recordObservation(goalId, command); }
+  /** Every entry, corrections included, oldest first: the lineage behind the count. */
+  observations(goalId: string) { this.available(); return { entries: listObservations(this.db, goalId) }; }
+  observationReceipt(goalId: string, requestId: string) { this.available(); return readObservationReceipt(this.db, goalId, requestId); }
 }

@@ -61,6 +61,47 @@ Use a new request ID, the returned measurement revision, a later observation tim
 
 Canonical `/api/goals`, root, tree, children and detail reads add an optional `measurement` field, so existing clients still receive the original score/status/health fields. Every canonical goal query joins its measurement in the same SQL statement, so another process cannot produce a response mixing an old score/health/revision with a newer measurement. This also applies to overdue, dependency and escalation readers. Each goal is internally consistent; a recursively assembled tree does not promise one snapshot across different goals. Legacy records have measurement null. The Brief projection has `measurement: null` when unobserved, and explicit progress basis `legacy_score`, `unknown` or `measurement`. `progress.rollup` is `independent`.
 
+## Counted measures (Q-17)
+
+A goal can be measured by counting cited entries instead of a typed total: signed partners, customers, deals, hires. Its value is the number of distinct things whose latest entry counts them. Nobody types the number, so six signed partners trace to six entries, never to six workflow runs, six accepted tasks, a passed work result or a typed six.
+
+What an entry is:
+
+- `subject`: who or what was counted, as the person names it (trimmed plain text, up to 200 characters). Things are compared without case, width or spacing differences, so `Acme Corp` and ` ACME  corp` are the same partner. Spelling variants (`Acme Inc.`) are not merged: the person corrects them.
+- `observedAt`: when it happened (UTC epoch milliseconds, not in the future), not when it was recorded.
+- `source`: the cited source version `{ id, revision }`, such as a signed contract or a CRM record. It is a reference, never fetched or verified.
+- `kind`: `counted`, or `retracted` to take a counted thing back out (a partner who backed out).
+- `corrects`: the latest entry for the same thing, or null for a thing not seen before.
+
+The rules, each enforced in the same immediate transaction as the write:
+
+- A thing is counted once per goal. A second `counted` entry for it conflicts unless it corrects the thing's latest entry.
+- A correction names the latest entry for its thing, and an entry is corrected at most once, so each thing keeps one lineage, oldest first. Correcting a detail (the date, the source) keeps the count; a retraction lowers it; a new count after a retraction raises it again.
+- A source version is cited once per goal; the same source may support other goals.
+- Exact replay of a request ID returns its receipt, including after a restart; reuse with different content conflicts.
+- Entries are recorded by a person, or confirmed by one, so the measure's qualification stays `user_reported`. Nothing in this build records an entry automatically.
+
+Defining a counted measure (`unit`, whole-number `baseline`, larger whole-number `target`, at most 1,000) replaces a typed total: the value becomes the count of cited entries, zero until each thing is cited. Defining it again keeps the entries and their count; the unit stays once entries count toward it. On a counted goal, a typed total, a legacy score and a work result's `goalScore` are refused. A counted measure holds at most 1,000 things and a goal at most 20,000 entries.
+
+Every entry updates the snapshot, absolute score, progress history (only when the count changes) and a `goal_measurement_recorded` event (`basis: observations`, `entryId`, `kind`, `corrects`) atomically. The snapshot keeps the IDs of the entries that count, so a read stays consistent with its own snapshot.
+
+Distinguishable by construction:
+
+- Activity (an awareness or workflow note) is a progress note that moves nothing.
+- Accepted and checked work keeps its own record and never creates an entry.
+- A typed total (F15) carries `measurementDefinition.basis: reported` and one `source` reference.
+- A counted measure carries `basis: observations` and one `observation` reference per counted thing.
+
+Parents and children stay independent, as for typed totals: a child's entries, corrections or deletion never change its parent, and a parent counts a thing only on its own entry. Automatic reviews stay inside the no-verified-mapping boundary: they cannot score a counted goal, and a passed work result cited by a review is rejected with `no_verified_score_mapping`. Recording entries automatically from a connected source needs its own tested mapping, explicitly installed; none exists.
+
+Routes, under the same capability, authentication, `no-store` and 8 KiB body rules as above:
+
+- `POST /api/brief/goals/:id/measurement/counted` with `{ requestId, revision, definition: { unit, baseline, target } }` returns the measurement receipt; recover it with `GET .../measurement?requestId=`.
+- `POST /api/brief/goals/:id/observations` with `{ requestId, entry }` returns `{ entry, measurement, score, progressId }`.
+- `GET /api/brief/goals/:id/observations` lists every entry, oldest first, corrections included; `?requestId=` returns `{ receipt }`, null if that request never committed.
+
+Invalid input is 400; a duplicate thing, a reused source version, a stale correction or a typed total on a counted goal is 409.
+
 ## D-track and F16 integration
 
 D09 and goal-room adapters should pass `BriefGoal.measurement` through for qualified counts and data basis. Use `BriefGoal.progress.value` for progress; do not calculate it from a legacy score or from value/target alone, since nonzero baselines and decreasing targets are supported. A six-of-ten zero-baseline count maps directly to D09's existing qualified measurement shape. D09's present raw value/target band helper requires integration work for other baselines or decreasing targets; its preview is not live F15 integration. Do not activate it on unsupported cases by relabelling values. Keep user-reported qualification, source revision and as-of visible through the data-basis affordance. This PR does not bind or activate D09/D10/D25 presentation.
@@ -75,4 +116,4 @@ bun test src/goals/measurements.test.ts src/daemon/api-brief-goal-measurements.t
 
 Tests use isolated fixture databases and a local authenticated socket. They exercise the canonical writer, API, receipt recovery, restart, competing processes, negative corrections, independent hierarchy, old-schema migration, malformed requests and transaction failure. No live service, model or external effect is used. The review regressions commit a correction through the real writer in another process between fetching a goal and projecting it, covering nine canonical/Brief read paths. The environment inventory also verifies that the feature flag is classified as a setting and preserved in model-launched environments.
 
-Disable the feature flag and restart the new runtime to stop Brief reads/writes. Retain additive tables, receipts and existing recorded scores. Do not drop evidence or downgrade to an older writer while measurements are active: an older binary does not enforce the measurement-backed scoring rule. New clients must respect unsupported/unavailable capabilities on an older server. F16 is not implemented here.
+Disable the feature flag and restart the new runtime to stop Brief reads/writes. Retain additive tables, receipts, cited entries and existing recorded scores; an older build ignores `goal_observation` and reads a counted snapshot as a typed total whose one source is the goal's entry ledger at that revision (`observations:<goal id>`, `r<revision>`), so its reads keep working; it does not refuse typed totals on such a goal. Do not drop evidence or downgrade to an older writer while measurements are active: an older binary does not enforce the measurement-backed scoring rule. New clients must respect unsupported/unavailable capabilities on an older server. F16 is not implemented here.
