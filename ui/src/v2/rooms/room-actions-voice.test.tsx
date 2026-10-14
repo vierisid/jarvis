@@ -37,7 +37,7 @@ afterEach(async () => {
 });
 afterAll(() => GlobalRegistrator.unregister());
 
-type Dispatch = (req: { room: string; action: string; args: Record<string, unknown>; ts: number }, onResult?: (ok: boolean) => void) => void;
+type Dispatch = (req: import("./useRoomActionBus").RoomActionRequest, onResult?: (ok: boolean) => void) => void;
 
 async function mount(children: React.ReactNode): Promise<{ dispatch: Dispatch; posts: string[] }> {
   let dispatch!: Dispatch;
@@ -121,4 +121,62 @@ test("an action the room does not carry out is refused at once, not queued for t
   await act(async () => { await Promise.resolve(); });
   expect(results).toEqual([false, false, true]);
   expect(seen).toEqual(["switch_tab"]);
+});
+
+// #1010: the realtime path stops waiting after REALTIME_ROOM_ACTION_WAIT_MS
+// (3500ms) and tells the model it can't tell whether the action happened, but
+// the bus kept a queued action for ROOM_ACTION_QUEUE_TTL_MS (5000ms). A room
+// that mounted in between ran the first call alongside the model's retry.
+test("an action the daemon stopped waiting for does not run, queued or not", async () => {
+  let dispatch!: Dispatch;
+  const seen: string[] = [];
+  const results: Array<[string, boolean]> = [];
+  function Probe() { dispatch = bus.useRoomActionDispatcher().dispatch; return null; }
+  function Room() {
+    bus.useRoomActions("tasks", (action, args) => { seen.push(`${action}:${String(args.title)}`); return true; });
+    return null;
+  }
+  function Late({ on }: { on: boolean }) { return on ? React.createElement(Room) : null; }
+  host = document.createElement("div"); document.body.append(host);
+  root = createRoot(host);
+  const render = (on: boolean) => root!.render(
+    React.createElement(bus.RoomActionBusProvider, null, React.createElement(Probe), React.createElement(Late, { on })));
+  await act(async () => { render(false); });
+  const ts = Date.now();
+  const now = performance.now();
+  let socketOpen = true;
+  await act(async () => {
+    // Queued while the room mounts: one the daemon gives up on before the
+    // room is there, one whose socket closes (the daemon gives up on that at
+    // once), and one it is still waiting for.
+    dispatch({ room: "tasks", action: "create_task", args: { title: "given up" }, ts, expiresAt: now + 30 },
+      (ok) => results.push(["given up", ok]));
+    dispatch({ room: "tasks", action: "create_task", args: { title: "socket closed" }, ts, expiresAt: now + 60_000, stillAsked: () => socketOpen },
+      (ok) => results.push(["socket closed", ok]));
+    dispatch({ room: "tasks", action: "create_task", args: { title: "still waited" }, ts, expiresAt: now + 60_000, stillAsked: () => true },
+      (ok) => results.push(["still waited", ok]));
+  });
+  socketOpen = false;
+  await act(async () => { await new Promise((r) => setTimeout(r, 60)); });
+  await act(async () => { render(true); });
+  await act(async () => { await Promise.resolve(); });
+  expect(seen).toEqual(["create_task:still waited"]);
+  // The dropped ones are not reported: the daemon no longer listens for them.
+  expect(results).toEqual([["still waited", true]]);
+  // Mounted, an action that arrives already past its wait is dropped too.
+  await act(async () => {
+    dispatch({ room: "tasks", action: "create_task", args: { title: "late" }, ts, expiresAt: performance.now() - 1 });
+    dispatch({ room: "tasks", action: "create_task", args: { title: "asker gone" }, ts, stillAsked: () => false });
+    dispatch({ room: "tasks", action: "create_task", args: { title: "no deadline" }, ts });
+  });
+  expect(seen).toEqual(["create_task:still waited", "create_task:no deadline"]);
+});
+
+test("the dashboard ties an action it answers to the socket it came on (#1010)", async () => {
+  const { readFileSync } = await import("node:fs");
+  const src = readFileSync(new URL("../../hooks/useWebSocket.ts", import.meta.url), "utf8");
+  // Closing a socket makes every action it was asked to answer stale.
+  const onclose = src.slice(src.indexOf("ws.onclose = () => {"), src.indexOf("ws.onerror"));
+  expect(onclose).toContain("socketGenerationRef.current += 1;");
+  expect(src).toContain("req.stillAsked = () => socketGenerationRef.current === socket;");
 });

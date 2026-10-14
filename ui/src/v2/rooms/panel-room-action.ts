@@ -1,5 +1,6 @@
 import type { RoomActionRequest, RoomActionResultCallback } from "./useRoomActionBus";
 import { isPresentationRoomAction } from "../../../../src/daemon/room-actions";
+import { roomActionExpiry } from "../../../../src/daemon/room-action-results";
 
 /**
  * A native panel's half of a daemon `room_action` (T20c, #933).
@@ -25,8 +26,9 @@ export function handlePanelRoomActionMessage(
   if (!msg || typeof msg !== "object") return;
   const m = msg as {
     type?: string;
-    payload?: { source?: string; room?: string; action?: string; args?: Record<string, unknown>; resultId?: unknown };
+    payload?: { source?: string; room?: string; action?: string; args?: Record<string, unknown>; resultId?: unknown; expiresInMs?: unknown };
   };
+  const receivedAt = performance.now();
   if (m.type !== "notification" || m.payload?.source !== "room_action") return;
   if (!m.payload.room || !m.payload.action) return;
   // Panels take presentation actions only (the pebble sends tab switches).
@@ -34,12 +36,15 @@ export function handlePanelRoomActionMessage(
   // to run (#974), and a panel running it too would do it twice.
   if (!isPresentationRoomAction(m.payload.room, m.payload.action)) return;
   const resultId = typeof m.payload.resultId === "string" && m.payload.resultId ? m.payload.resultId : null;
+  // Only an action the daemon waits on expires (#1010).
+  const expiresAt = resultId ? roomActionExpiry(m.payload.expiresInMs, receivedAt) : undefined;
   dispatch(
     {
       room: m.payload.room,
       action: m.payload.action,
       args: m.payload.args ?? {},
       ts: Date.now(),
+      ...(expiresAt !== undefined ? { expiresAt } : {}),
     },
     resultId ? (accepted) => send(roomActionResultText(resultId, accepted)) : undefined,
   );
@@ -60,7 +65,7 @@ export function roomActionResultText(resultId: string, accepted: boolean): strin
  * ran it. Without that the daemon acknowledged room actions blindly.
  */
 export function dispatchDashboardRoomAction(
-  request: { room: string; action: string; args: Record<string, unknown>; ts: number; resultId?: string },
+  request: { room: string; action: string; args: Record<string, unknown>; ts: number; resultId?: string; expiresAt?: number; stillAsked?: () => boolean },
   dispatch: (req: RoomActionRequest, onResult?: RoomActionResultCallback) => void,
   send: (text: string) => void,
 ): void {

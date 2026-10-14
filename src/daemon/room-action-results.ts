@@ -23,13 +23,37 @@
 /**
  * How long a room's action bus keeps an action that arrived before the room
  * had registered a handler (a panel still mounting). After this the bus drops
- * it, so the daemon waits the same time: shorter, and a slow-mounting room's
- * real "yes" would be reported as no answer. It is not exact. The panel starts
- * its clock on arrival, after the daemon started its own, so a room that
- * mounts in the last transit time of the window can still answer after the
- * daemon gave up; the reply then says "didn't answer", which was so in time.
+ * it, so the classifier and pebble paths wait the same time: shorter, and a
+ * slow-mounting room's real "yes" would be reported as no answer. The
+ * realtime path waits less (REALTIME_ROOM_ACTION_WAIT_MS in ws-service.ts),
+ * so every action the daemon waits on carries its own wait as `expiresInMs`
+ * (#1010), and that, not this, is the bound for it.
  */
 export const ROOM_ACTION_QUEUE_TTL_MS = 5000;
+
+/**
+ * When a room action the daemon is waiting on stops being worth running
+ * (#1010), on the receiving clock: `receivedAt` plus the `expiresInMs` the
+ * daemon sent with it, or undefined when it sent none. Past this the daemon
+ * has already said it got no answer, and the caller may have asked again, so
+ * the bus drops the action rather than run it late.
+ *
+ * The daemon's clock started when it sent the action, this one when the
+ * client handled the message, so the action can still run after the daemon
+ * gave up by as long as that took: the network, any backlog in the daemon's
+ * send queue, and any time the page's main thread was busy before it read the
+ * message (a room's code still loading, the late-mount case itself). A
+ * relative wait, not the daemon's timestamp, because the two clocks need not
+ * agree at all; `receivedAt` should be monotonic (performance.now) so a wall
+ * clock step cannot stretch it.
+ *
+ * Anything but a finite, non-negative number is no deadline, as from a daemon
+ * that sends none: the daemon always sends its own timeout, which is neither.
+ */
+export function roomActionExpiry(expiresInMs: unknown, receivedAt: number): number | undefined {
+  if (typeof expiresInMs !== 'number' || !Number.isFinite(expiresInMs) || expiresInMs < 0) return undefined;
+  return receivedAt + expiresInMs;
+}
 
 export type RoomActionOutcome = 'accepted' | 'rejected' | 'no_answer';
 

@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { uuid } from "../lib/uuid";
 import { isPresentationRoomAction } from "../../../src/daemon/room-actions";
+import { roomActionExpiry } from "../../../src/daemon/room-action-results";
 
 export type MessageRole = "user" | "assistant" | "system";
 
@@ -572,6 +573,8 @@ export function useWebSocket() {
   const [roomActionRequest, setRoomActionRequest] = useState<DashboardRoomActionRequest | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  /** Bumped when a socket closes; tells a queued room action its asker is gone (#1010). */
+  const socketGenerationRef = useRef(0);
   // History is authoritative only for the first successful load. After that the
   // client holds messages the vault never persists (system notices, errors,
   // workflow lines), so a reconnect must not re-seed from the vault.
@@ -661,6 +664,8 @@ export function useWebSocket() {
     };
 
     ws.onclose = () => {
+      // Every room action this socket was asked to answer is now unanswerable.
+      socketGenerationRef.current += 1;
       setIsConnected(false);
       setIsResponding(false);
       currentChatRequestIdRef.current = null;
@@ -1115,6 +1120,13 @@ export function useWebSocket() {
         // Room is currently registered. `ts` bumps so the same action
         // repeated produces a new effect.
         const req = roomActionRequestFrom(payload, msg.timestamp);
+        if (req?.resultId) {
+          // The daemon stops waiting the moment this socket closes, and says
+          // it got no answer, so an action still queued then must not run
+          // on the next socket (#1010).
+          const socket = socketGenerationRef.current;
+          req.stillAsked = () => socketGenerationRef.current === socket;
+        }
         if (req) setRoomActionRequest(req);
       } else if (payload.source === "window_control") {
         // Phase 6.1.5 follow-up: voice window-control ("close", "expand",
@@ -1345,6 +1357,14 @@ export type DashboardRoomActionRequest = {
   args: Record<string, unknown>;
   ts: number;
   resultId?: string;
+  /**
+   * On this dashboard's monotonic clock (performance.now), when the daemon
+   * stops waiting for the answer (#1010). The bus does not run the action
+   * after this.
+   */
+  expiresAt?: number;
+  /** False once the socket the action came on has closed (#1010). */
+  stillAsked?: () => boolean;
 };
 
 /** A daemon `repeat_back_request`, or null when malformed. */
@@ -1360,9 +1380,9 @@ export function repeatBackFrom(payload: unknown, timestamp: number): PendingRepe
   };
 }
 
-export function roomActionRequestFrom(payload: unknown, ts: number): DashboardRoomActionRequest | null {
+export function roomActionRequestFrom(payload: unknown, ts: number, receivedAt: number = performance.now()): DashboardRoomActionRequest | null {
   if (!payload || typeof payload !== "object") return null;
-  const p = payload as { room?: unknown; action?: unknown; args?: unknown; resultId?: unknown; resultFrom?: unknown };
+  const p = payload as { room?: unknown; action?: unknown; args?: unknown; resultId?: unknown; resultFrom?: unknown; expiresInMs?: unknown };
   if (typeof p.room !== "string" || typeof p.action !== "string") return null;
   const req: DashboardRoomActionRequest = {
     room: p.room,
@@ -1370,7 +1390,13 @@ export function roomActionRequestFrom(payload: unknown, ts: number): DashboardRo
     args: p.args && typeof p.args === "object" ? (p.args as Record<string, unknown>) : {},
     ts,
   };
-  if (p.resultFrom === "dashboard" && typeof p.resultId === "string" && p.resultId) req.resultId = p.resultId;
+  if (p.resultFrom === "dashboard" && typeof p.resultId === "string" && p.resultId) {
+    req.resultId = p.resultId;
+    // Taken here, as the message arrives, not when React gets round to
+    // dispatching it: the daemon's wait has been running since it sent it.
+    const expiresAt = roomActionExpiry(p.expiresInMs, receivedAt);
+    if (expiresAt !== undefined) req.expiresAt = expiresAt;
+  }
   // An action that changes more than the screen is run only by the dashboard
   // the daemon addressed (#974); the daemon sends it nowhere else, and this
   // keeps it so if one ever reaches another dashboard.

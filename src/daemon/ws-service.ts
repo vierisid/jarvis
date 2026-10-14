@@ -3055,18 +3055,26 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       action: action.action,
       args: action.args ?? {},
     };
+    // Whoever is asked to answer is also told how long it is waited for
+    // (#1010): once this wait is over the caller has said it got no answer,
+    // and the realtime model, told it can't tell whether it happened, may
+    // ask again. The bus drops an action still queued past this, so that
+    // retry is not the second run of a create_task or start_server. The
+    // bus's own queue TTL (ROOM_ACTION_QUEUE_TTL_MS) is longer than the
+    // realtime wait, so without this a late-mounting room ran both.
+    const waited = { resultId: id, expiresInMs: timeoutMs };
     let reached: boolean;
     if (client) {
       if (presentation) this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
       reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
         type: 'notification',
-        payload: { ...payload, resultId: id, resultFrom: 'dashboard' },
+        payload: { ...payload, ...waited, resultFrom: 'dashboard' },
         timestamp: Date.now(),
       });
     } else {
       reached = this.wsServer.broadcastWithReceipt({
         type: 'notification',
-        payload: { ...payload, resultId: id },
+        payload: { ...payload, ...waited },
         timestamp: Date.now(),
       }) > 0;
     }

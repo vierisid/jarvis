@@ -8,6 +8,7 @@
 import { describe, expect, test } from 'bun:test';
 import { describeRoomAction, isVoiceAffirmative, roomActionReply, WebSocketService } from './ws-service.ts';
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
+import { ROOM_ACTION_QUEUE_TTL_MS } from './room-action-results.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { buildTaintGating } from '../authority/taint-gating.ts';
@@ -159,6 +160,47 @@ describe('dashboard voice room actions report what the room did (#965)', () => {
         'dashboard_room_action', { room: 'settings', action: 'disable_tts', args: {} }, speaker.ws);
       expect(reply).toBe(said);
     }
+  });
+
+  // #1010: the answerer is told how long it is waited for, so the bus can
+  // drop an action that would otherwise run after the caller gave up.
+  test('the dashboard asked is told how long the daemon waits, which is the wait itself', async () => {
+    const { svc, speaker, actionTo } = setup();
+    const t0 = Date.now();
+    expect(await svc.requestRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 40, { client: speaker.ws as never }))
+      .toBe('no_answer');
+    expect(Date.now() - t0).toBeGreaterThanOrEqual(39);
+    expect(actionTo(speaker)!.payload.expiresInMs).toBe(40);
+  });
+
+  test('the realtime tool waits less than the bus queues, and says so in the action', async () => {
+    const { internals, speaker, actionTo, answerWhenSent } = setup();
+    answerWhenSent(speaker, true);
+    await internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, speaker.ws);
+    const waited = actionTo(speaker)!.payload.expiresInMs as number;
+    // The measured gap the issue named: 3500ms against the bus's 5000ms.
+    expect(waited).toBe(3500);
+    expect(ROOM_ACTION_QUEUE_TTL_MS).toBe(5000);
+  });
+
+  test('the classifier path waits the full queue TTL, and says so', async () => {
+    const { internals, speaker, actionTo, answerWhenSent } = setup();
+    answerWhenSent(speaker, true);
+    await internals.handleVoiceRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x' } }, 'req', speaker.ws);
+    expect(actionTo(speaker)!.payload.expiresInMs).toBe(ROOM_ACTION_QUEUE_TTL_MS);
+  });
+
+  test('the panels are told too; a dashboard not asked is not', async () => {
+    const { svc, speaker, other, actionTo } = setup();
+    // The pebble's request: every panel may answer, so every one is told.
+    await svc.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20);
+    for (const c of [speaker, other]) expect(actionTo(c)!.payload).toMatchObject({ expiresInMs: 20 });
+    const { svc: svc2, speaker: s2, other: o2, actionTo: to2 } = setup();
+    await svc2.requestRoomAction({ room: 'settings', action: 'switch_tab', args: { tab: 'voice' } }, 20, { client: s2.ws as never });
+    expect(to2(s2)!.payload.expiresInMs).toBe(20);
+    // The copy every other dashboard gets for a tab switch is not waited on.
+    expect(to2(o2)!.payload.resultId).toBeUndefined();
+    expect(to2(o2)!.payload.expiresInMs).toBeUndefined();
   });
 
   test('an accepted presentation action is not reported as work started', async () => {

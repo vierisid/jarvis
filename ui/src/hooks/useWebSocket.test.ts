@@ -322,6 +322,18 @@ describe("roomActionRequestFrom (#965)", () => {
     }
   });
 
+  test("an action this dashboard answers expires when the daemon stops waiting, on this clock (#1010)", () => {
+    const task = { source: "room_action", room: "tasks", action: "create_task", args: { title: "Pay rent" }, resultId: "r1", resultFrom: "dashboard" };
+    // ts is the daemon's clock; the deadline is the arrival time here plus its wait.
+    expect(roomActionRequestFrom({ ...task, expiresInMs: 3500 }, 5, 1_000)?.expiresAt).toBe(4_500);
+    expect(roomActionRequestFrom({ ...task, expiresInMs: 0 }, 5, 1_000)?.expiresAt).toBe(1_000);
+    for (const bad of [undefined, -1, "3500", Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(roomActionRequestFrom({ ...task, expiresInMs: bad }, 5, 1_000)?.expiresAt).toBeUndefined();
+    }
+    // Not addressed here: nobody here is waited on, so nothing expires.
+    expect(roomActionRequestFrom({ ...base, resultId: "r1", expiresInMs: 3500 }, 5, 1_000)?.expiresAt).toBeUndefined();
+  });
+
   test("drops malformed actions", () => {
     expect(roomActionRequestFrom(null, 1)).toBeNull();
     expect(roomActionRequestFrom({ room: "settings" }, 1)).toBeNull();
