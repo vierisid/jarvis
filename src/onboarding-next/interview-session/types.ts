@@ -12,7 +12,9 @@ export interface Answer {
 }
 export type Command = { type: 'start' } | { type: 'read'; sessionId: string }
   | ({ type: 'answer' } & Answer)
-  | { type: 'retry' | 'skip'; sessionId: string };
+  | { type: 'retry'; sessionId: string }
+  /** Null means the authenticated current session before opening acknowledgement. */
+  | { type: 'skip'; sessionId: string | null };
 export interface Message { id: string; role: 'user' | 'assistant'; text: string; clientRequestId?: string }
 export interface Snapshot {
   schemaVersion: 1;

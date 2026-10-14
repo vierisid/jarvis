@@ -54,6 +54,7 @@ export function createInterviewClient(deps: {
       next.answer = null;
     }
     save(next); snapshot = structuredClone(s); error = null;
+    if (s.phase === 'done' || s.phase === 'skipped') for (const c of requests) c.abort();
   }
   async function request(c: Command) {
     if (disposed) return;
@@ -64,14 +65,15 @@ export function createInterviewClient(deps: {
     try {
       const result = await deps.send(c, controller.signal);
       if (disposed) return;
-      if (result.kind === 'ok') accept(result.snapshot, c.type === 'start');
+      if (result.kind === 'ok') accept(result.snapshot, c.type === 'start' || c.type === 'skip');
       else if (canReportError()) error = result.kind === 'conflict' ? 'The interview changed. Reconnect to restore it.' : 'The interview is unavailable. Reconnect or skip.';
     } catch {
       if (!disposed && canReportError()) error = 'Connection interrupted. Reconnect to restore your answer.';
     } finally { requests.delete(controller); active--; changed(); }
   }
   return {
-    state: () => structuredClone({ snapshot, draft: local.draft, pendingAnswer: local.answer, busy: active > 0, error }),
+    state: () => structuredClone({ snapshot, draft: local.draft, pendingAnswer: local.answer,
+      busy: active > 0 && snapshot?.phase !== 'done' && snapshot?.phase !== 'skipped', error }),
     setDraft(text: string) {
       if (disposed || text.length > 16_384) return;
       save({ ...local, draft: { text, clientRequestId: crypto.randomUUID() } }); changed();
@@ -86,7 +88,7 @@ export function createInterviewClient(deps: {
     },
     retry: () => active ? Promise.resolve() : local.answer ? request({ type: 'answer', ...local.answer })
       : local.sessionId ? request({ type: 'retry', sessionId: local.sessionId }) : request({ type: 'start' }),
-    skip: () => local.sessionId ? request({ type: 'skip', sessionId: local.sessionId }) : Promise.resolve(),
+    skip: () => request({ type: 'skip', sessionId: local.sessionId }),
     dispose() { disposed = true; for (const c of requests) c.abort(); requests.clear(); },
   };
 }

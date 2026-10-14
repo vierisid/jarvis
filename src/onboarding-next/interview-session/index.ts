@@ -22,7 +22,8 @@ function command(value: unknown): Command {
   if (typeof value.type !== 'string' || !Object.hasOwn(fields, value.type)) throw new Failure('invalid', 'invalid_command');
   const keys = fields[value.type]!;
   if (Object.keys(value).some(k => k !== 'type' && !keys.includes(k)) || keys.some(k => k === 'text'
-    ? typeof value.text !== 'string' || !value.text.trim() || value.text.length > MAX_TEXT : !identity(value[k]))) {
+    ? typeof value.text !== 'string' || !value.text.trim() || value.text.length > MAX_TEXT
+    : !(value.type === 'skip' && k === 'sessionId' && value[k] === null) && !identity(value[k]))) {
     throw new Failure('invalid', 'invalid_command');
   }
   return value as unknown as Command;
@@ -193,8 +194,11 @@ export function createInterviewSessionProvider<Context>(deps: Dependencies<Conte
         }
         const scope = authorize(context), c = command(input);
         const shouldDrive = deps.store.transaction(scope, tx => {
-          const r = tx.current === null && c.type === 'start' ? initial(scope) : readRecord(tx.current, scope);
-          if (c.type !== 'start' && c.sessionId !== r.snapshot.sessionId) throw new Failure('conflict', 'session_changed');
+          // A first Skip can arrive before Start or before its reply. Scope is
+          // still exclusively authenticated; it never selects another actor's session.
+          const currentSkip = c.type === 'skip' && c.sessionId === null;
+          const r = tx.current === null && (c.type === 'start' || currentSkip) ? initial(scope) : readRecord(tx.current, scope);
+          if (c.type !== 'start' && !currentSkip && c.sessionId !== r.snapshot.sessionId) throw new Failure('conflict', 'session_changed');
           if (tx.current === null) write(tx, r);
           if (c.type === 'skip') {
             if (!terminal(r.snapshot)) {

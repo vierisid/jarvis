@@ -149,6 +149,21 @@ describe('durable scoped written interview', () => {
     wait.resolve({ confirmedFactIds: ['late'] });
     expect(snapshot(await running)).toEqual(skipped); expect(skipped.messages.filter(m => m.role === 'assistant')).toHaveLength(1);
   });
+  test('skip before opening acknowledgement uses authenticated current scope, even before start arrives', async () => {
+    const f = fixture();
+    const skipped = snapshot(await f.provider.request(scope, { type: 'skip', sessionId: null }));
+    expect(skipped.phase).toBe('skipped'); expect(f.prepared).toEqual([]);
+    expect(snapshot(await f.provider.request(scope, { type: 'start' }))).toEqual(skipped);
+  });
+  test('skip with no client session ID cancels an in-flight opening', async () => {
+    const f = fixture(), wait = deferred<PreparedTurn>(), started = deferred<Parameters<InterviewerPort['prepare']>[0]>();
+    const p = createInterviewSessionProvider({ ...f.deps, interviewer: { ...f.interviewer,
+      async prepare(input) { started.resolve(input); return wait.promise; } } });
+    const opening = p.request(scope, { type: 'start' }); const input = await started.promise;
+    const result = await p.request(scope, { type: 'skip', sessionId: null });
+    wait.resolve(await f.interviewer.prepare(input)); await opening;
+    expect(snapshot(result).phase).toBe('skipped'); expect(f.commits).toHaveLength(0);
+  });
   test('turn timeout is bounded and late results cannot write facts', async () => {
     const f = fixture(), s = await f.start(), wait = deferred<PreparedTurn>();
     let input!: Parameters<InterviewerPort['prepare']>[0];

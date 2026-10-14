@@ -61,6 +61,11 @@ also rejects late replies from another process. Already committed facts are not
 undone. A skipped record preserves its accepted answer and any uncertain commit
 identity for profile reconciliation, without publishing a late bubble or marking
 the interview done. Done is exposed only after the profile receipt resolves.
+Before the first opening acknowledgement, Skip may send `sessionId: null` to end
+only the authenticated scope's current session. If it arrives before Start, the
+provider records a skipped session without calling the model; a later Start
+restores that terminal record. This does not allow an unauthenticated skip or a
+new session/reset.
 
 Transcript/checkpoint records are bounded to 32 turns, 16 KiB input/reply strings
 and 2 MB serialized state. The checkpoint omits the duplicate system prompt and

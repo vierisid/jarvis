@@ -62,6 +62,19 @@ test('dispose aborts pending transport and rejects its later snapshot', async ()
   const started = c.connect(); c.dispose(); expect(signal?.aborted).toBe(true); wait.resolve(ok(initial())); await started;
   expect(c.state().snapshot).toBeNull();
 });
+test('skip during the opening request works before the client knows its session ID', async () => {
+  const wait = deferred<Result>(); const commands: Command[] = []; let openingSignal: AbortSignal | undefined;
+  const c = createInterviewClient({ storage: storage(), storageKey: 'scope/tab', async send(command, signal) {
+    commands.push(command);
+    if (command.type === 'start') openingSignal = signal;
+    return command.type === 'start' ? wait.promise : ok({ ...initial(), cursor: 3, phase: 'skipped' });
+  } });
+  const opening = c.connect(); await c.skip();
+  const busyAfterSkip = c.state().busy, abortedAfterSkip = openingSignal?.aborted;
+  wait.resolve(ok(initial())); await opening;
+  expect(commands).toHaveLength(2); expect(c.state().snapshot?.phase).toBe('skipped');
+  expect(busyAfterSkip).toBe(false); expect(abortedAfterSkip).toBe(true);
+});
 test('a late transport failure cannot replace a confirmed terminal state with an error', async () => {
   const wait = deferred<Result>();
   const c = createInterviewClient({ storage: storage(), storageKey: 'scope/tab', async send(command) {
