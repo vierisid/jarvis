@@ -1,0 +1,79 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-01",
+  "title": "Persist a versioned onboarding journey",
+  "date": "2026-10-14",
+  "status": "implemented_reviewed_activation_blocked",
+  "repository": "vierisid/jarvis",
+  "branch": "onboarding/on-b-01",
+  "pr": "https://github.com/vierisid/jarvis/pull/1050",
+  "target": "main",
+  "baseline_sha": "1c2737a60d5580abea7d2feb9f2e845fdd491924",
+  "implementation_head": "3883ba6fc9d08c5aed82f561d241658730d59da3",
+  "implementation_tree": "677b22b749cf9c4b40d2c4022d4f110a9125f923",
+  "head_note": "Implementation head/tree bind all source validation. Subsequent delivery-only commits add this receipt/evidence; the final PR head is available from GitHub. A receipt cannot contain the hash of its own containing commit.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-on-b-01",
+  "contract": "Product/onboarding-implementation-roadmaps-2026-10-14-v1/handoff-contract-v1.json",
+  "figma": {
+    "checkpoint": "2410205462365531104",
+    "page": "1097:16402",
+    "card_node": "1097:16403",
+    "scope": "Backend-only provider. No visual changes or new visual certification."
+  },
+  "files": [
+    "src/onboarding-next/journey/",
+    "docs/onboarding-delivery/ON-B-01.json",
+    "docs/onboarding-delivery/evidence/ON-B-01/"
+  ],
+  "inspected_concurrent_work": [
+    { "pr": 994, "card": "F-26", "head": "70833765929908112de6ccf3b5c4739b00e892ef", "finding": "Existing unmerged Brief onboarding uses current legacy services and F-07. Read receipt; no imports or duplication of its composer/UI." },
+    { "pr": 1003, "card": "D-33", "head": "cb20c1add5e330ec4d5ae29259a92d66c629cb82", "finding": "Release switch implemented; integrated activation still blocked." },
+    { "finding": "Fetched origin, inspected all open D/F/Q/onboarding PR metadata. No sibling onboarding PR was open before implementation. Primary dirty checkout and other worktrees were preserved." }
+  ],
+  "capability_gate": {
+    "provides": ["journey.v1"],
+    "requires": [],
+    "registered": false,
+    "default_enabled": false,
+    "merged": false,
+    "deployed": false,
+    "production_enabled": false,
+    "runtime_owner": "ON-B-11",
+    "ui_owner": "ON-U-10",
+    "activation_blocked_on": ["ON-B-11 authenticated runtime registration and legacy/new write ownership", "ON-U-10 UI integration", "Selected B provider closure", "Candidate-bound ON-U-11 and ON-B-13 evidence", "Integrated D/F/Q release decision"]
+  },
+  "verification": [
+    { "check": "Independent clean worktree: pinned main plus ON-B-01 implementation only", "status": "passed", "tests": 147, "failures": 0, "assertions": 684, "evidence": "evidence/ON-B-01/independent-tests.log" },
+    { "check": "Journey focused suite", "status": "passed", "tests": 29, "failures": 0, "assertions": 281, "evidence": "evidence/ON-B-01/journey-tests.log" },
+    { "check": "Independent bunx tsc --noEmit and bun run build:ui", "status": "passed", "evidence": "evidence/ON-B-01/independent-build.log", "note": "Typecheck exited 0 with no output. UI has pre-existing @theme/@tailwind warnings." },
+    { "check": "bun run build:workflows and isolated buildEngineBundle with explicit stagingDir/bundleRoot", "status": "passed", "evidence": "evidence/ON-B-01/isolated-workflow-build.log" },
+    { "check": "check:no-ee, check:migrations, lint:templates, check:package and normal pre-commit hook", "status": "passed", "evidence": "evidence/ON-B-01/commit-hooks.log", "note": "Package guard used Bun's valid tarball list after npm produced no parseable list; no hook bypass." },
+    { "check": "Contract fixture host: empty registry, journey present, journey removed", "status": "passed", "evidence": "evidence/ON-B-01/journey-tests.log", "note": "Synthetic host, not ON-B-11. No provider requirements exist to remove." },
+    { "check": "Revert implementation in isolated worktree; tree equals pinned main", "status": "passed", "tests": 118, "failures": 0, "assertions": 403, "evidence": "evidence/ON-B-01/revert-tests.log", "note": "Legacy regressions, TypeScript and UI build pass after the actual git revert." },
+    { "check": "Actual production assembly and combined U/B/D/F/Q candidate", "status": "blocked", "note": "ON-B-11/ON-U-10 and complete candidate do not yet exist. Contract fixture results cannot certify them." },
+    { "check": "PR review skill, direct full-diff review and corrective re-review", "status": "passed", "evidence": "evidence/ON-B-01/review.md", "note": "Direct review by implementer; not an independent agent/human approval." },
+    { "check": "Full repository and platform CI", "status": "pending_at_receipt_creation", "url": "https://github.com/vierisid/jarvis/pull/1050/checks", "note": "Read results for the current PR head. Local evidence is focused, not a claim that all CI suites ran locally." }
+  ],
+  "evidence_classification": {
+    "real": ["SQLite transaction/rollback and independent OS-process race", "Existing vault schema, user-settings and profile services against temporary data", "Reload/restart persistence", "Typecheck/build/package and import-boundary checks"],
+    "synthetic": ["Legacy status matrix fixtures", "Authenticated actor/project callback fixtures", "Setup/interview/tour acknowledgements", "Job and flow/version references; no workflow was composed", "Optional runtime host fixture"],
+    "not_run": ["Paid/live models", "Google or real external account grants", "Browser/native WebView/OS permission evidence", "Production deployment/activation", "Real workflow creation/execution"]
+  },
+  "limitations": [
+    "No public API, new UI or runtime registration in this card. Host must derive scope from auth and keep acknowledgement port internal.",
+    "Legacy status is imported once. Host must coordinate legacy/new write ownership and reactivation after rollback, never feed synthetic/stale status into initialization.",
+    "2,048 durable transition receipts are retained without eviction; exhaustion returns transition_limit for operator investigation.",
+    "Unknown future fields survive. Unsupported schema/state and unreadable data fail closed without rewriting records.",
+    "Initial build:workflows used the existing builder's standard content-addressed cache; it was then rebuilt into dedicated staging/output paths. No shared cache was removed or daemon restarted.",
+    "Pinned Bun 1.4.2 was installed in a separate local toolchain directory; lockfile and dependencies were not changed."
+  ],
+  "rollback": "Disable/unregister journey.v1 or revert this additive code. Keep onboarding-next.journey.v1.* and all legacy settings/profile/connection/job/draft records. No deletion, down migration or automatic reset.",
+  "quick_check": {
+    "workdir": "/home/vierisid/.cache/codex/jarvis-on-b-01",
+    "command": "bun test src/onboarding-next/journey",
+    "expected": "29 tests pass. The temporary-store fixtures prove advance/reload, stale-write rejection, replay during a pending build and preservation of exact saved job/draft identities.",
+    "url": null,
+    "reason_no_url": "Backend-only default-off module; a URL would require the UI/runtime work owned by other cards."
+  },
+  "stop": "ON-B-01 only. ON-B-02 not started."
+}
