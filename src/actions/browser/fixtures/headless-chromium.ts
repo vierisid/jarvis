@@ -78,7 +78,7 @@ const WATCHDOG = `
 trap : TERM INT HUP
 trap '' PIPE
 profile=$1; shift
-"$@" </dev/null >/dev/null 2>&1 &
+"$@" </dev/null >/dev/null 2>"$profile/chromium.stderr" &
 c=$!
 echo "$c"
 read -r _ || :
@@ -259,20 +259,29 @@ export async function launchTestChromium(opts: {
     });
     if (!port) throw new Error('Chromium never wrote DevToolsActivePort');
 
+    let lastProbe = "no CDP response";
     const up = await waitFor(deadline, async () => {
       if (!processAlive(pid)) throw died();
       try {
         const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1000) });
+        lastProbe = `HTTP ${res.status}`;
+        await res.body?.cancel();
         return res.ok ? true : null;
-      } catch {
+      } catch (err) {
+        lastProbe = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
         return null;
       }
     });
-    if (!up) throw new Error(`Chromium CDP did not come up on port ${port}`);
+    if (!up) throw new Error(`Chromium CDP did not come up on port ${port} (${lastProbe})`);
 
     return { port, pid, profileDir, close };
   } catch (err) {
+    // Read before close(): both cleanup paths remove the profile. Keep only
+    // a bounded tail so a failed startup is diagnosable without noisy CI logs.
+    let stderr = '';
+    try { stderr = readFileSync(join(profileDir, 'chromium.stderr'), 'utf8').slice(-8_192).trim(); } catch { /* spawn failed */ }
     await close();
+    if (stderr) throw new Error(`${err instanceof Error ? err.message : String(err)}\nChromium stderr:\n${stderr}`, { cause: err });
     throw err;
   }
 }
