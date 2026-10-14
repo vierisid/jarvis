@@ -11,6 +11,7 @@ import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { outsideApprovalScope } from '../authority/approved-action-scope.ts';
+import { outsideExecutionScope } from '../actions/execution-scope.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 
 export type AsyncTaskStatus = 'running' | 'completed' | 'failed' | 'cancelled';
@@ -169,8 +170,16 @@ export class AgentTaskManager {
     // Fire runSubAgent without awaiting — runs in background. Outside any
     // approval scope, completion handlers included: an approved `manage_agents
     // spawn` starts its task from inside the approval, and nothing the task
-    // runs must inherit it (#932).
-    outsideApprovalScope(() => this.runSubAgentFn({
+    // runs must inherit it (#932). Outside the caller's dispatch fence too
+    // (#988): started from an approved workflow-delegated call, the task
+    // inherited that effect's fence, which refuses once the effect has
+    // settled, so the task died at its first model call. Its own abort signal
+    // and emergency watch are what stop it, so it no longer stops with the
+    // workflow run that started it. It does still inherit that run's machine
+    // binding and the call's template-delivery suppression: both fail closed
+    // (a sidecar call stays on the run's machine), and whether a task started
+    // from a run should keep any of the run's state is not settled here.
+    outsideExecutionScope(() => outsideApprovalScope(() => this.runSubAgentFn({
       agent,
       task,
       context,
@@ -216,7 +225,7 @@ export class AgentTaskManager {
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
       this.emit(asyncTask.status === 'cancelled' ? 'cancel' : 'fail', asyncTask);
       onComplete?.(asyncTask);
-    }));
+    })));
 
     return taskId;
   }
