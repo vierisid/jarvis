@@ -3,6 +3,8 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeWorkflowDb, initWorkflowDb } from '../../workflows/db/index';
+import { DEFAULT_IDS } from '../../workflows/db/schema';
+import { getFlow } from '../../workflows/db/repos/flow';
 import { configureWorkflowReadiness } from '../../workflows/db/repos/flow-readiness';
 import { createDraftVersion } from '../../workflows/db/repos/flow-version';
 import { getWorkflowComposition } from '../../workflows/db/repos/workflow-composition';
@@ -166,21 +168,30 @@ describe('production composition', () => {
     expect(none.contractReport).toBeUndefined();
   });
 
-  test('create with a description reroutes to compose and keeps the contract', async () => {
+  test.each([DEFAULT_IDS.project, 'proj_contract_other'])('create with a description keeps the contract in project %s', async (projectId) => {
     const llm: ComposerLlmClient = { async chat() { return { text: JSON.stringify(kept) }; } };
-    const tool = createManageWorkflowTool({ llm, pieceRegistry: catalog() });
+    const tool = createManageWorkflowTool({ llm, pieceRegistry: catalog(), callerProjectId: () => projectId });
     const rerouted = parse(await tool.execute({ action: 'create', ...request, contract }));
     expect(rerouted).toMatchObject({ ok: true, routedFrom: 'create', contractReport: { review: ['The reminder names the overdue invoices.'] } });
+    expect(getFlow(rerouted.flow.id)?.project_id).toBe(projectId);
+    expect(getWorkflowComposition(rerouted.compositionRecordId, projectId)?.specification.contract).toEqual(contract);
     const refused = parse(await tool.execute({ action: 'create', name: 'Another reminder', description: request.description,
       contract: { forbidden: { effects: ['send_fax'] } } }));
     expect(refused).toMatchObject({ ok: false, routedFrom: 'create', errors: [expect.stringContaining('unknown effect send_fax')] });
   });
 
-  test('publishing and enabling recheck the graph about to run against the contract it was composed under', async () => {
+  test.each([DEFAULT_IDS.project, 'proj_contract_other'])('publishing and enabling recheck the contract in project %s', async (projectId) => {
     const daily: JobContract = { outputs: [{ notify: { channels: ['dashboard'] } }], recipients: ['dashboard'], review: ['The summary is short.'] };
     const llm: ComposerLlmClient = { async chat() { return { text: JSON.stringify(flow(tell(['dashboard']))) }; } };
-    const tool = createManageWorkflowTool({ llm, pieceRegistry: catalog() });
+    const tool = createManageWorkflowTool({ llm, pieceRegistry: catalog(), callerProjectId: () => projectId });
     const composed = parse(await tool.execute({ action: 'compose', name: 'Daily summary', description: 'Tell me on the dashboard.', contract: daily }));
+    expect(getFlow(composed.flow.id)?.project_id).toBe(projectId);
+    expect(getWorkflowComposition(composed.compositionRecordId, projectId)?.specification.contract).toEqual(daily);
+    if (projectId !== DEFAULT_IDS.project) {
+      expect(getWorkflowComposition(composed.compositionRecordId)).toBeNull();
+      const outside = createManageWorkflowTool({ pieceRegistry: catalog() });
+      await expect(outside.execute({ action: 'publish', flow: composed.flow.id })).rejects.toThrow('workflow not found');
+    }
     const published = parse(await tool.execute({ action: 'publish', flow: composed.flow.id }));
     expect(published.contractReport).toEqual({ violations: [], review: ['The summary is short.'],
       verified: ['produces a notification to dashboard', 'nothing beyond the requested outputs is sent or addressed', 'reaches only dashboard'] });

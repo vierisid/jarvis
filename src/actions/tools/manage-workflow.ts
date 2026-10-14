@@ -285,7 +285,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       contract: {
         type: "object",
         description:
-          "compose only: what the user explicitly stated; the flow is checked against it. trigger {kind: " +
+          "compose: check the user's explicit requirements. trigger {kind: " +
           "manual|schedule|webhook|event|piece, cron, every, timezone, eventType, piece, trigger}; sources, outputs: " +
           "[{notify: {channels}} | {tool, params} | {piece, action, target}]; recipients; forbidden {effects e.g. " +
           "send_email, pieces, actions, tools, channels, agents}; review. Outputs list all it may send or address.",
@@ -1022,7 +1022,7 @@ function actSetStatus(
 function contractRecheck(flow: FlowRow, trigger: FlowTriggerNode): ReturnType<typeof recheckJobContract> {
   const recordId = parseFlowMetadata(flow)?.compositionRecordId;
   if (typeof recordId !== "string") return null;
-  return recheckJobContract(trigger, getWorkflowComposition(recordId)?.specification.contract);
+  return recheckJobContract(trigger, getWorkflowComposition(recordId, flow.project_id)?.specification.contract);
 }
 
 function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {

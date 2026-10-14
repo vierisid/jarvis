@@ -126,5 +126,24 @@
       "recipients read from each step's inputs",
       "a destination the job does not constrain is not checked"
     ]
+  },
+  "rebase_2026_10_14": {
+    "base": "6854e8a5f5ca9af247b09018f685c88aa8f4a5ec",
+    "main": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "owner_decision": "Combine main project isolation and Q04 contract generation checks/advisory publish-enable reports; scope journal lookup to flow.project_id.",
+    "changes": [
+      "Pass project and contract through both compose and create-with-description.",
+      "Read contract in the workflow project.",
+      "Keep main approval tool guidance; shorten equivalent contract parameter prose by 30 bytes to retain the existing total schema budget."
+    ],
+    "regression": "Non-default-project publish failed before lookup fix with absent contractReport; now both projects pass compose/create/publish/enable and foreign access refusal.",
+    "verification": {
+      "focused": "253 tests passed, 1732 assertions across 7 files",
+      "guards": "Normal commit hook must pass before this change is committed; final result recorded in rebase ledger"
+    },
+    "limitations": [
+      "Publish and enable contract reports remain advisory.",
+      "No real model calls or deployment."
+    ]
   }
 }
