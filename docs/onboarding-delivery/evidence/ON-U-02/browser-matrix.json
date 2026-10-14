@@ -1,0 +1,56 @@
+[
+  {
+    "bg": "rgb(19, 22, 26)",
+    "buttonHeight": 44,
+    "fg": "rgb(250, 251, 252)",
+    "fontsReady": "loaded",
+    "overflow": false,
+    "theme": "light",
+    "width": 1440
+  },
+  {
+    "bg": "rgb(238, 241, 244)",
+    "buttonHeight": 44,
+    "fg": "rgb(18, 20, 23)",
+    "fontsReady": "loaded",
+    "overflow": false,
+    "theme": "dark",
+    "width": 1440
+  },
+  {
+    "bg": "rgb(19, 22, 26)",
+    "buttonHeight": 44,
+    "fg": "rgb(250, 251, 252)",
+    "fontsReady": "loaded",
+    "overflow": false,
+    "theme": "light",
+    "width": 768
+  },
+  {
+    "bg": "rgb(238, 241, 244)",
+    "buttonHeight": 44,
+    "fg": "rgb(18, 20, 23)",
+    "fontsReady": "loaded",
+    "overflow": false,
+    "theme": "dark",
+    "width": 768
+  },
+  {
+    "bg": "rgb(19, 22, 26)",
+    "buttonHeight": 44,
+    "fg": "rgb(250, 251, 252)",
+    "fontsReady": "loaded",
+    "overflow": false,
+    "theme": "light",
+    "width": 390
+  },
+  {
+    "bg": "rgb(238, 241, 244)",
+    "buttonHeight": 44,
+    "fg": "rgb(18, 20, 23)",
+    "fontsReady": "loaded",
+    "overflow": false,
+    "theme": "dark",
+    "width": 390
+  }
+]

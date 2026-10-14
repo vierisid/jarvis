@@ -1,0 +1,59 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-02",
+  "date": "2026-10-14",
+  "status": "implemented_not_activated",
+  "branch": "onboarding/on-u-02",
+  "target": "main",
+  "baseSha": "a02343c6cedb49769424237429de58a1081a634b",
+  "implementationHead": "641ed92c141a09f93a734bd18552e0b537107ddc",
+  "headNote": "The evidence commit follows this implementation head. Use the PR head for the complete delivery.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-on-u-02",
+  "ownedPaths": ["ui/src/onboarding-next/views/explainer/", "docs/onboarding-delivery/ON-U-02.json", "docs/onboarding-delivery/evidence/ON-U-02/"],
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "1097:16402",
+    "nodes": ["1097:16424", "1097:68538"],
+    "checkpoint": "Onboarding · Tutorial focus contour · 2026-10-14",
+    "version": "2410205462365531104",
+    "inspected": "Live native text, geometry and both theme materials, plus the explainer canvas. No design edits."
+  },
+  "capabilityGate": {
+    "provides": ["explainer-view.v1"],
+    "requires": ["journey.v1", "setup.v1"],
+    "registered": false,
+    "enabled": false,
+    "enableAfter": ["ON-U-10", "ON-B-01", "ON-B-02", "verified combined D/F/Q release candidate"],
+    "runtimeOwner": "ON-B-11",
+    "awareness": "Conditional copy only. Actual support and readiness must come from ON-B-02."
+  },
+  "checks": [
+    {"name":"Explainer and legacy onboarding regressions", "command":"bun test ui/src/onboarding-next/views/explainer ui/src/v2/onboarding", "outcome":"passed", "tests":94, "failures":0},
+    {"name":"TypeScript", "command":"bunx tsc --noEmit", "outcome":"passed"},
+    {"name":"Production UI and isolated preview builds", "outcome":"passed", "note":"Existing @theme/@tailwind warnings remain. Production entry points do not import this optional view."},
+    {"name":"Repository hooks", "outcome":"passed", "scope":"EE imports, migration safety, 100 templates, package contents, related tests and typecheck"},
+    {"name":"Light/Dark responsive matrix", "outcome":"passed", "scope":"390x844, 768x1024, 1440x1100; no horizontal overflow; 44px controls; real merged globals/primitive styles"},
+    {"name":"Local state and keyboard behavior", "outcome":"passed", "scope":"DOM tests cover pending suppression/focus and escaped error retry. Browser Enter/Space emit one Continue/Back intent; pending is visibly disabled; error retries work."},
+    {"name":"Enlarged long content", "outcome":"passed", "scope":"390px viewport with 200% CSS preview zoom and long copy; vertically reachable actions retain intact labels"},
+    {"name":"Reduced motion", "outcome":"partially_verified", "scope":"Static diagram; scoped prefers-reduced-motion rule inspected, no-motion preview verified. Native OS preference not toggled."},
+    {"name":"Native WebView/browser zoom and screen reader", "outcome":"not_run", "reason":"CSS preview zoom and DOM semantics do not prove native zoom or assistive-technology behavior."},
+    {"name":"Actual optional host / missing-provider fallback / full journey", "outcome":"blocked", "reason":"ON-U-10 and ON-B-11 are absent. No full D/F/Q candidate or live onboarding cutover was tested."}
+  ],
+  "compatibility": {
+    "standalone": "Target base plus this PR only; no sibling imports or worktree-linked dependencies.",
+    "combinedWith": [
+      {"id":"ON-U-01", "pr":1051, "head":"30664ba286ef1697548c3b573aeb7fa224b5dc91"},
+      {"id":"ON-B-01", "pr":1050, "head":"e7a5e668e3287231197dc238978e2bb9bb86703e"}
+    ],
+    "combinedTree": "02c6a67f6ebce7d9ba3ffeafc560ef2f28f198a2",
+    "result": "Clean temporary merge; 45 tests, typecheck, UI and explainer preview builds passed.",
+    "removedModuleTree": "5edbe2fe362e24678562d40f83037999a999a47b",
+    "removedModuleResult": "Removed only ON-U-02 from the temporary candidate; remaining 38 tests, typecheck and production build passed. Restored module and aborted temporary merge; checkout returned clean to the UI code head.",
+    "limit": "Packaging/coexistence and removal only. UI callbacks were not wired to the journey provider. This is not proof of runtime fallback, Welcome-to-explainer routing or full D/F/Q integration."
+  },
+  "review": {"method":"PR reviewer skill, implementer self-review", "report":"evidence/ON-U-02/review.md", "remainingCodeFindings":0},
+  "evidence": "evidence/ON-U-02/verification.md",
+  "rollback": "Before registration, revert this PR. No data or route rollback is needed. After registration, disable the optional ON-U-10 entry before removing this view.",
+  "quickVerify": {"url":"http://127.0.0.1:4411/", "command":"bun ui/src/onboarding-next/views/explainer/preview/serve.ts", "actions":["Read the three-part sequence and build-your-own alternative", "Switch Light/Dark", "Tab to Back/Continue and activate; inspect the intent count", "Try Pending/Error and long copy at enlarged preview zoom"]},
+  "next": "ON-U-03"
+}
