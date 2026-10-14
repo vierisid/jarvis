@@ -62,6 +62,11 @@ async function activation(p: ReturnType<typeof createJourneyProvider>) {
   ready(await nav(p, { type: 'navigate', stepId: 'tour' }));
   ready(await ack(p, { type: 'tour_finished', state: 'done' }));
 }
+async function startBuild(p: ReturnType<typeof createJourneyProvider>, jobId: string) {
+  const buildRequestId = `request-${jobId}`;
+  ready(await ack(p, { type: 'reserve_build', buildRequestId }));
+  return ready(await ack(p, { type: 'build_started', buildRequestId, jobId }));
+}
 
 describe('versioned journey and legacy compatibility', () => {
   test('factories have no startup effects, and repeated reads retain one durable identity', async () => {
@@ -239,6 +244,162 @@ describe('revision checks, retry identities and scope', () => {
 });
 
 describe('acknowledgement boundaries and scoped tutorial replay', () => {
+  test.each(['failed', 'cancelled'] as const)('a persisted %s build can return to activation without losing its identity', async outcome => {
+    const f = fixture(); await activation(f.provider);
+    // A pre-reservation v1 record must remain recoverable after upgrading.
+    const record = JSON.parse(f.raw()!);
+    Object.assign(record.snapshot, { stepId: 'build', activationState: 'building', jobId: 'old-job' });
+    delete record.snapshot.buildRequestId;
+    delete record.snapshot.buildHistory;
+    f.writeRaw(JSON.stringify(record));
+    const recovered = ready(await ack(f.provider, {
+      type: 'build_finished_without_draft', buildRequestId: null, jobId: 'old-job', outcome,
+    }));
+    expect(recovered).toMatchObject({ stepId: 'activation', activationState: 'pending', jobId: null,
+      buildHistory: [{ buildRequestId: null, jobId: 'old-job', outcome }] });
+    expect(ready(await f.make(owner, f.open()).read())).toEqual(recovered);
+    expect(ready(await nav(f.provider, { type: 'explore' })).completion).toBe('explored');
+  });
+
+  test('a durable reservation blocks Explore in a second tab until delayed job acceptance is reconciled', async () => {
+    const f = fixture(); await activation(f.provider);
+    const stale = ready(await f.provider.read());
+    ready(await ack(f.provider, { type: 'reserve_build', buildRequestId: 'request-1' }));
+    const otherTab = f.make(owner, f.open());
+    expect(await nav(otherTab, { type: 'explore' }, stale)).toMatchObject({ reason: 'revision_conflict' });
+    expect(await nav(otherTab, { type: 'explore' })).toMatchObject({ reason: 'invalid_transition' });
+    expect(ready(await otherTab.read())).toMatchObject({ stepId: 'build', buildRequestId: 'request-1', jobId: null });
+    // ON-B-08 has accepted the reserved request; its acknowledgement arrives after a restart.
+    const accepted = ready(await ack(otherTab, { type: 'build_started', buildRequestId: 'request-1', jobId: 'accepted-job' }));
+    expect(accepted).toMatchObject({ stepId: 'build', completion: 'active', jobId: 'accepted-job' });
+    expect(ready(await ack(otherTab, { type: 'draft_saved', jobId: 'accepted-job', flowId: 'flow', versionId: 'version' })).stepId).toBe('result');
+  });
+
+  test.each(['failed', 'cancelled'] as const)('%s recovery allows a new request but rejects stale and reused attempt identities', async outcome => {
+    const f = fixture(); await activation(f.provider); await startBuild(f.provider, 'first-job');
+    const s = ready(await f.provider.read());
+    const release = { journeyId: s.journeyId, expectedRevision: s.revision, requestId: 'release', command: {
+      type: 'build_finished_without_draft', buildRequestId: 'request-first-job', jobId: 'first-job', outcome,
+    } } as const;
+    ready(await f.provider.acknowledge(release));
+    expect(await ack(f.provider, { type: 'reserve_build', buildRequestId: 'request-first-job' })).toMatchObject({ reason: 'invalid_transition' });
+    ready(await ack(f.provider, { type: 'reserve_build', buildRequestId: 'new-request' }));
+    expect(await ack(f.provider, { type: 'build_started', buildRequestId: 'request-first-job', jobId: 'first-job' })).toMatchObject({ reason: 'invalid_transition' });
+    expect(await ack(f.provider, { type: 'build_started', buildRequestId: 'new-request', jobId: 'first-job' })).toMatchObject({ reason: 'invalid_transition' });
+    ready(await ack(f.provider, { type: 'build_started', buildRequestId: 'new-request', jobId: 'new-job' }));
+    const current = ready(await f.provider.read());
+    // A retry of an applied receipt returns current state, never releases the new attempt.
+    expect(await f.provider.acknowledge(release)).toMatchObject({ replayed: true, snapshot: current });
+    expect(await ack(f.provider, release.command)).toMatchObject({ reason: 'invalid_transition' });
+    ready(await ack(f.provider, { type: 'draft_saved', jobId: 'new-job', flowId: 'new-flow', versionId: 'new-version' }));
+    const finished = ready(await nav(f.provider, { type: 'finish' }));
+    expect(finished.buildHistory).toEqual([{ buildRequestId: 'request-first-job', jobId: 'first-job', outcome }]);
+    expect(finished.draft).toEqual({ flowId: 'new-flow', versionId: 'new-version' });
+  });
+
+  test('Explore winning the revision race prevents reservation and unreserved job acknowledgement', async () => {
+    const f = fixture(); await activation(f.provider);
+    const s = ready(await f.provider.read());
+    ready(await nav(f.provider, { type: 'explore' }));
+    const reserve = { journeyId: s.journeyId, expectedRevision: s.revision, requestId: 'reserve',
+      command: { type: 'reserve_build', buildRequestId: 'not-accepted' } } as const;
+    expect(await f.provider.acknowledge(reserve)).toMatchObject({ reason: 'revision_conflict' });
+    expect(await ack(f.provider, reserve.command)).toMatchObject({ reason: 'invalid_transition' });
+    expect(await ack(f.provider, { type: 'build_started', buildRequestId: 'not-accepted', jobId: 'foreign-job' })).toMatchObject({ reason: 'invalid_transition' });
+    expect(ready(await f.provider.read())).toMatchObject({ completion: 'explored', buildRequestId: null, jobId: null });
+  });
+
+  test('two reservations race atomically and the winner survives a lost reply and restart', async () => {
+    const f = fixture(); await activation(f.provider);
+    const s = ready(await f.provider.read());
+    const requests = ['a', 'b'].map(id => ({ journeyId: s.journeyId, expectedRevision: s.revision, requestId: id,
+      command: { type: 'reserve_build', buildRequestId: `build-${id}` } } as const));
+    const results = await Promise.all([f.provider.acknowledge(requests[0]!), f.make(owner, f.open()).acknowledge(requests[1]!)]);
+    expect(results.filter(r => r.availability === 'ready')).toHaveLength(1);
+    expect(results.filter(r => r.availability === 'unavailable' && r.reason === 'revision_conflict')).toHaveLength(1);
+    const winner = requests[results.findIndex(r => r.availability === 'ready')]!;
+    const restarted = f.make(owner, f.open());
+    expect(await restarted.acknowledge(winner)).toMatchObject({ replayed: true, snapshot: { buildRequestId: winner.command.buildRequestId, jobId: null } });
+    expect(await nav(restarted, { type: 'navigate', stepId: 'activation' })).toMatchObject({ reason: 'invalid_transition' });
+  });
+
+  test('an unaccepted reservation can be released after authoritative reconciliation', async () => {
+    const f = fixture(); await activation(f.provider);
+    ready(await ack(f.provider, { type: 'reserve_build', buildRequestId: 'unaccepted-request' }));
+    const release = { type: 'build_finished_without_draft', buildRequestId: 'unaccepted-request', jobId: null, outcome: 'cancelled' } as const;
+    ready(await ack(f.provider, release));
+    const after = ready(await f.make(owner, f.open()).read());
+    expect(after).toMatchObject({ stepId: 'activation', buildRequestId: null, jobId: null,
+      buildHistory: [{ buildRequestId: 'unaccepted-request', jobId: null, outcome: 'cancelled' }] });
+    expect(await ack(f.provider, { type: 'build_started', buildRequestId: 'unaccepted-request', jobId: 'late-job' })).toMatchObject({ reason: 'invalid_transition' });
+    expect(ready(await nav(f.provider, { type: 'explore' })).completion).toBe('explored');
+  });
+
+  test('retrying an old reservation receipt after recovery does not reserve or reopen the journey', async () => {
+    const f = fixture(); await activation(f.provider);
+    const s = ready(await f.provider.read());
+    const reserve = { journeyId: s.journeyId, expectedRevision: s.revision, requestId: 'reservation-retry',
+      command: { type: 'reserve_build', buildRequestId: 'cancelled-request' } } as const;
+    ready(await f.provider.acknowledge(reserve));
+    ready(await ack(f.provider, { type: 'build_finished_without_draft', buildRequestId: 'cancelled-request', jobId: null, outcome: 'cancelled' }));
+    ready(await nav(f.provider, { type: 'explore' }));
+    const current = ready(await f.provider.read());
+    expect(await f.make(owner, f.open()).acknowledge(reserve)).toMatchObject({ replayed: true, snapshot: current });
+    expect(current).toMatchObject({ completion: 'explored', buildRequestId: null });
+    expect(ready(await f.provider.read())).toEqual(current);
+  });
+
+  test('recovery during tutorial replay changes only the return location and permits another reservation', async () => {
+    const f = fixture(); await activation(f.provider); await startBuild(f.provider, 'cancelled-job');
+    ready(await nav(f.provider, { type: 'replay_tutorial' }));
+    ready(await ack(f.provider, { type: 'tour_progress', stepId: 'memory' }));
+    expect(ready(await ack(f.provider, { type: 'build_finished_without_draft', buildRequestId: 'request-cancelled-job', jobId: 'cancelled-job', outcome: 'cancelled' }))).toMatchObject({
+      stepId: 'tour', tourStepId: 'memory', replayReturnStepId: 'activation', buildRequestId: null,
+    });
+    ready(await ack(f.provider, { type: 'reserve_build', buildRequestId: 'second-request' }));
+    expect(ready(await ack(f.provider, { type: 'tour_finished', state: 'done' }))).toMatchObject({ stepId: 'build', buildRequestId: 'second-request', jobId: null });
+    expect(ready(await ack(f.provider, { type: 'build_started', buildRequestId: 'second-request', jobId: 'second-job' })).jobId).toBe('second-job');
+  });
+
+  test('recovery rejects foreign identities, nonterminal observations, public commands and a committed draft', async () => {
+    const f = fixture(); await activation(f.provider); await startBuild(f.provider, 'current-job');
+    const release = { type: 'build_finished_without_draft', buildRequestId: 'request-current-job', jobId: 'current-job', outcome: 'cancelled' } as const;
+    for (const patch of [{ jobId: null }, { jobId: 'foreign' }, { buildRequestId: 'foreign' }, { buildRequestId: null },
+      { outcome: 'requested' }, { outcome: 'disconnected' }, { outcome: 'working' }, { outcome: 'succeeded' }]) {
+      expect((await ack(f.provider, { ...release, ...patch } as never)).availability).toBe('unavailable');
+    }
+    const s = ready(await f.provider.read());
+    for (const command of [release, { type: 'reserve_build', buildRequestId: 'public-request' },
+      { type: 'build_started', buildRequestId: 'request-current-job', jobId: 'current-job' }]) {
+      expect((await f.provider.transition({ journeyId: s.journeyId, expectedRevision: s.revision, requestId: 'public', command } as never)).availability).toBe('unavailable');
+    }
+    expect(ready(await f.provider.read())).toEqual(s);
+    ready(await ack(f.provider, { type: 'draft_saved', jobId: 'current-job', flowId: 'saved-flow', versionId: 'saved-version' }));
+    ready(await nav(f.provider, { type: 'replay_tutorial' }));
+    const saved = ready(await f.provider.read());
+    expect(await ack(f.provider, release)).toMatchObject({ reason: 'invalid_transition' });
+    expect(ready(await f.provider.read())).toEqual(saved);
+    expect(saved.draft).toEqual({ flowId: 'saved-flow', versionId: 'saved-version' });
+  });
+
+  test('reservation history preserves additive fields and refuses malformed or future outcomes without rewriting', async () => {
+    const f = fixture(); await activation(f.provider); await startBuild(f.provider, 'first-job');
+    ready(await ack(f.provider, { type: 'build_finished_without_draft', buildRequestId: 'request-first-job', jobId: 'first-job', outcome: 'failed' }));
+    const record = JSON.parse(f.raw()!);
+    record.snapshot.buildHistory[0].futureDetail = { retain: true };
+    f.writeRaw(JSON.stringify(record));
+    ready(await ack(f.provider, { type: 'reserve_build', buildRequestId: 'second-request' }));
+    expect(JSON.parse(f.raw()!).snapshot.buildHistory[0].futureDetail).toEqual({ retain: true });
+    for (const patch of [{ buildRequestId: 42 }, { buildHistory: {} },
+      { buildHistory: [{ buildRequestId: null, jobId: null, outcome: 'failed' }] },
+      { buildHistory: [{ buildRequestId: 'future-request', jobId: 'future-job', outcome: 'future-outcome' }] }]) {
+      const raw = JSON.stringify({ ...record, snapshot: { ...record.snapshot, ...patch } });
+      f.writeRaw(raw);
+      expect((await f.provider.read()).availability).not.toBe('ready');
+      expect(f.raw()).toBe(raw);
+    }
+  });
+
   test('setup acknowledgement is required before Google; interview acknowledgement before tour', async () => {
     const f = fixture();
     ready(await nav(f.provider, { type: 'navigate', stepId: 'explain' }));
@@ -262,7 +423,7 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
 
   test('pending job survives replay/restart, including a result arriving during replay', async () => {
     const f = fixture(); await activation(f.provider);
-    ready(await ack(f.provider, { type: 'build_started', jobId: 'job-1' }));
+    await startBuild(f.provider, 'job-1');
     expect((await nav(f.provider, { type: 'explore' })).availability).toBe('unavailable');
     ready(await nav(f.provider, { type: 'replay_tutorial' }));
     ready(await nav(f.provider, { type: 'replay_tutorial' }));
@@ -276,8 +437,9 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
 
   test('an accepted job acknowledgement can arrive after tutorial replay starts', async () => {
     const f = fixture(); await activation(f.provider);
+    ready(await ack(f.provider, { type: 'reserve_build', buildRequestId: 'reserved-request' }));
     ready(await nav(f.provider, { type: 'replay_tutorial' }));
-    expect(ready(await ack(f.provider, { type: 'build_started', jobId: 'accepted-job' }))).toMatchObject({
+    expect(ready(await ack(f.provider, { type: 'build_started', buildRequestId: 'reserved-request', jobId: 'accepted-job' }))).toMatchObject({
       stepId: 'tour', replayReturnStepId: 'build', jobId: 'accepted-job',
     });
     expect(ready(await ack(f.provider, { type: 'tour_finished', state: 'done' })).stepId).toBe('build');
@@ -288,7 +450,7 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
     const settings = { 'cfg.onboarding': '{"setup_completed_at":123,"unknownLegacy":true}', 'cfg.user': '{"name":"Fixture"}', 'cfg.channels': '{"connected":true}' };
     for (const [key, value] of Object.entries(settings)) f.db.run('INSERT INTO settings (key,value) VALUES (?,?)', [key, value]);
     await activation(f.provider);
-    ready(await ack(f.provider, { type: 'build_started', jobId: 'saved-job' }));
+    await startBuild(f.provider, 'saved-job');
     ready(await ack(f.provider, { type: 'draft_saved', jobId: 'saved-job', flowId: 'saved-flow', versionId: 'saved-version' }));
     ready(await nav(f.provider, { type: 'finish' }));
     const before = ready(await f.provider.read());

@@ -42,7 +42,7 @@ Finishing an ordinary tour leads to Activation. Explore first explicitly exits
 without creating a workflow; finishing Result exits after a draft acknowledgement.
 
 `acknowledge(...)` is an INTERNAL port for successful work by the other providers:
-setup, interview, tour, job acceptance and durable authorized draft reads. Never
+setup, interview, tour, build reservation/recovery, job acceptance and durable authorized draft reads. Never
 expose it as a public generic PATCH or forward an HTTP body to it. ON-B-02 must
 acknowledge successful setup before Google; ON-B-04/05 must acknowledge persisted
 interview completion; ON-B-06 owns room IDs; ON-B-08 owns job status and must
@@ -50,6 +50,42 @@ reconcile/retry its acknowledgement after a revision conflict; ON-B-10 must veri
 the exact authorized flow/version before `draft_saved`. This provider stores
 acknowledgements, not evidence that composition ran or that a workflow is runnable.
 It never publishes, enables, runs or modifies a workflow, profile or connection.
+
+### Build handshake and recovery
+
+1. After validating/fixing the intent, ON-B-08 must first commit
+   `reserve_build({buildRequestId})` through the internal acknowledgement port.
+   Use its existing scoped request/idempotency key. Only a successful, currently
+   matching reservation permits that provider to accept/enqueue the job. A retry
+   returns the CURRENT snapshot: check its active completion and matching
+   `buildRequestId`, not just `availability` or the historical `appliedRevision`.
+   ON-B-08 must still enforce its durable request-key cancellation fence at acceptance.
+   Reservation and Explore compete on the same journey revision; the loser cannot proceed.
+2. Reservation persists the request key at Build with `jobId: null`. It is not
+   evidence of queued or running composition. On restart, reconcile that exact
+   key with ON-B-08; never mint a replacement because the response was lost.
+   `build_started({buildRequestId,jobId})` attaches the accepted job only to the
+   matching live reservation. Explore/navigation remain blocked while reserved,
+   including after a refreshed read from another tab. Tutorial replay is allowed.
+3. For a confirmed failed/cancelled attempt, ON-B-08 may acknowledge
+   `build_finished_without_draft({buildRequestId,jobId,outcome})` ONLY after it
+   has fenced further work and verified the durable result association is absent.
+   A timeout, disconnected transport, cancellation request or failed read is not
+   that proof. Null `jobId` requires durable rejection/cancellation of the request
+   key so a delayed acceptance cannot create a job; a not-found lookup is insufficient.
+   If a draft won a cancellation race, reconcile it through ON-B-10 and send
+   `draft_saved` instead. The journey never deletes or rolls back a saved draft.
+4. Recovery retains request/job/outcome in `buildHistory`, returns to Activation
+   (or updates the return location during replay), and permits a new request or
+   Explore. Reusing a released request/job identity, or acknowledging an old
+   attempt against a new reservation, is rejected. Existing v1 jobs without a
+   reservation remain recoverable with null `buildRequestId`; both identities
+   may never be null. `buildRequestId` and `buildHistory` are optional on older v1 records.
+
+These are injected progress contracts only. This card does not implement the job
+store, cancellation/fencing or result reader; ON-B-08/10/11 must supply and verify
+them before activation. No direct `build_started` call without a reservation is
+accepted by this revision. The provider remains unregistered and default-off.
 
 `interviewState` begins at the contract's nonterminal `connecting` value, then
 records `done` or `skipped` on acknowledgement. This means unresolved interview

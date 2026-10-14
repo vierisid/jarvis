@@ -22,6 +22,15 @@ export interface JourneySnapshot {
   activationState: 'pending' | 'building' | 'draft_saved' | 'explored' | 'legacy_completed';
   completion: 'active' | 'completed' | 'explored' | 'legacy_completed';
   jobId: string | null;
+  /** Optional only for v1 records written before build reservation support. */
+  buildRequestId?: string | null;
+  /** Retain terminal identities so old events cannot attach to a new attempt. */
+  buildHistory?: Array<{
+    buildRequestId: string | null;
+    jobId: string | null;
+    outcome: 'failed' | 'cancelled';
+    [key: string]: unknown;
+  }>;
   draft: { flowId: string; versionId: string; [key: string]: unknown } | null;
   replayReturnStepId: JourneyStep | null;
   [key: string]: unknown;
@@ -49,7 +58,13 @@ export type Acknowledgement =
   | { type: 'interview_finished'; state: 'done' | 'skipped' }
   | { type: 'tour_progress'; stepId: string }
   | { type: 'tour_finished'; state: 'done' | 'skipped' }
-  | { type: 'build_started'; jobId: string }
+  /** MUST commit before ON-B-08 accepts/enqueues the corresponding request. */
+  | { type: 'reserve_build'; buildRequestId: string }
+  | { type: 'build_started'; buildRequestId: string; jobId: string }
+  /** Only after the owner fences further work and confirms terminal work AND no durable draft association.
+   * Null jobId requires durable rejection/cancellation of the unaccepted request key, not a missing read.
+   * Null buildRequestId is exclusively for pre-reservation v1 jobs. */
+  | { type: 'build_finished_without_draft'; buildRequestId: string | null; jobId: string | null; outcome: 'failed' | 'cancelled' }
   | { type: 'draft_saved'; jobId: string; flowId: string; versionId: string };
 
 export interface Transition<C = Navigation> {

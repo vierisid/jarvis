@@ -36,9 +36,30 @@ function parseStored(value: unknown, scope: Scope): StoredJourney {
     || (s.tourStepId !== null && !identity(s.tourStepId))
     || (s.legacyTourStepId !== null && !identity(s.legacyTourStepId))
     || (s.jobId !== null && !identity(s.jobId))
+    || (s.buildRequestId !== undefined && s.buildRequestId !== null && !identity(s.buildRequestId))
     || (s.draft !== null && (!object(s.draft) || !identity(s.draft.flowId) || !identity(s.draft.versionId)))
     || !Array.isArray(value.receipts) || value.receipts.length > MAX_RECEIPTS) {
     throw new JourneyError('invalid_record');
+  }
+  if (s.buildHistory !== undefined) {
+    if (!Array.isArray(s.buildHistory) || s.buildHistory.length > MAX_RECEIPTS) throw new JourneyError('invalid_record');
+    const requests = new Set<string>();
+    const jobs = new Set<string>();
+    for (const attempt of s.buildHistory) {
+      if (!object(attempt) || (attempt.buildRequestId !== null && !identity(attempt.buildRequestId))
+        || (attempt.jobId !== null && !identity(attempt.jobId))
+        || (attempt.buildRequestId === null && attempt.jobId === null)) throw new JourneyError('invalid_record');
+      if (!oneOf(attempt.outcome, ['failed', 'cancelled'])) throw new JourneyError('unsupported_state', true);
+      if (attempt.buildRequestId !== null) {
+        if (requests.has(attempt.buildRequestId as string)) throw new JourneyError('invalid_record');
+        requests.add(attempt.buildRequestId as string);
+      }
+      if (attempt.jobId !== null) {
+        if (jobs.has(attempt.jobId as string)) throw new JourneyError('invalid_record');
+        jobs.add(attempt.jobId as string);
+      }
+    }
+    if (requests.has(s.buildRequestId as string) || jobs.has(s.jobId as string)) throw new JourneyError('invalid_record');
   }
   const seen = new Set<string>();
   for (const r of value.receipts) {
@@ -68,6 +89,7 @@ function fromLegacy(scope: Scope, legacy: LegacyStatus): StoredJourney {
       tourStepId: null, legacyTourStepId: legacy.tutorial_progress_step,
       activationState: complete ? 'legacy_completed' : 'pending',
       completion: complete ? 'legacy_completed' : 'active', jobId: null, draft: null, replayReturnStepId: null,
+      buildRequestId: null, buildHistory: [],
     },
     receipts: [],
   };
@@ -83,17 +105,21 @@ function parseRequest(input: unknown, lane: 'navigation' | 'acknowledgement'): T
     navigate: ['stepId'], replay_tutorial: [], explore: [], finish: [],
   } : {
     setup_completed: [], interview_finished: ['state'], tour_progress: ['stepId'],
-    tour_finished: ['state'], build_started: ['jobId'], draft_saved: ['jobId', 'flowId', 'versionId'],
+    tour_finished: ['state'], reserve_build: ['buildRequestId'], build_started: ['buildRequestId', 'jobId'],
+    build_finished_without_draft: ['buildRequestId', 'jobId', 'outcome'], draft_saved: ['jobId', 'flowId', 'versionId'],
   };
   if (typeof c.type !== 'string' || !Object.hasOwn(keys, c.type)) throw new JourneyError('invalid_command');
   const fields = keys[c.type]!;
-  if (Object.keys(c).some(k => k !== 'type' && !fields.includes(k)) || fields.some(k => !identity(c[k]))) {
+  const nullable = c.type === 'build_finished_without_draft' ? ['buildRequestId', 'jobId'] : [];
+  if (Object.keys(c).some(k => k !== 'type' && !fields.includes(k))
+    || fields.some(k => !(nullable.includes(k) && c[k] === null) && !identity(c[k]))) {
     throw new JourneyError('invalid_command');
   }
   if (c.type === 'navigate' && !oneOf(c.stepId, JOURNEY_STEPS.slice(0, 7))) throw new JourneyError('invalid_command');
   if ((c.type === 'tour_finished' || c.type === 'interview_finished') && !oneOf(c.state, ['done', 'skipped'])) {
     throw new JourneyError('invalid_command');
   }
+  if (c.type === 'build_finished_without_draft' && !oneOf(c.outcome, ['failed', 'cancelled'])) throw new JourneyError('invalid_command');
   return input as unknown as Transition<Navigation | Acknowledgement>;
 }
 
@@ -115,7 +141,7 @@ function apply(s: JourneySnapshot, c: Navigation | Acknowledgement): JourneySnap
   const tourDone = s.tourState === 'done' || s.tourState === 'skipped';
   switch (c.type) {
     case 'navigate': {
-      requireState(s.completion === 'active' && s.replayReturnStepId === null && !s.jobId);
+      requireState(s.completion === 'active' && s.replayReturnStepId === null && !s.jobId && !s.buildRequestId);
       const adjacent: Partial<Record<JourneyStep, JourneyStep[]>> = {
         welcome: ['explain'], explain: ['welcome', 'legacy-provider-setup', 'google'],
         'legacy-provider-setup': ['explain', 'google'], google: ['explain', 'interview'],
@@ -147,11 +173,25 @@ function apply(s: JourneySnapshot, c: Navigation | Acknowledgement): JourneySnap
       // Completing the tour never completes an active journey.
       n.stepId = s.replayReturnStepId ?? 'activation'; n.replayReturnStepId = null;
       break;
-    case 'build_started':
-      requireState(s.completion === 'active' && at === 'activation' && !s.jobId
+    case 'reserve_build':
+      requireState(s.completion === 'active' && at === 'activation' && !s.jobId && !s.buildRequestId
+        && s.draft === null && !(s.buildHistory ?? []).some(a => a.buildRequestId === c.buildRequestId)
         && s.setupState === 'completed' && interviewDone && (tourDone || s.replayReturnStepId === 'activation'));
-      n.activationState = 'building'; n.jobId = c.jobId;
+      n.activationState = 'building'; n.buildRequestId = c.buildRequestId;
       if (s.replayReturnStepId !== null) n.replayReturnStepId = 'build'; else n.stepId = 'build';
+      break;
+    case 'build_started':
+      requireState(s.completion === 'active' && at === 'build' && s.buildRequestId === c.buildRequestId
+        && !s.jobId && s.draft === null && !(s.buildHistory ?? []).some(a => a.jobId === c.jobId));
+      n.jobId = c.jobId;
+      break;
+    case 'build_finished_without_draft':
+      requireState(s.completion === 'active' && at === 'build' && s.draft === null
+        && (s.buildRequestId ?? null) === c.buildRequestId && s.jobId === c.jobId
+        && (c.buildRequestId !== null || c.jobId !== null));
+      n.buildHistory = [...(s.buildHistory ?? []), { buildRequestId: c.buildRequestId, jobId: c.jobId, outcome: c.outcome }];
+      n.buildRequestId = null; n.jobId = null; n.activationState = 'pending';
+      if (s.replayReturnStepId !== null) n.replayReturnStepId = 'activation'; else n.stepId = 'activation';
       break;
     case 'draft_saved':
       requireState(s.completion === 'active' && s.jobId === c.jobId && at === 'build' && s.draft === null);
@@ -159,7 +199,7 @@ function apply(s: JourneySnapshot, c: Navigation | Acknowledgement): JourneySnap
       if (s.replayReturnStepId !== null) n.replayReturnStepId = 'result'; else n.stepId = 'result';
       break;
     case 'explore':
-      requireState(s.completion === 'active' && s.stepId === 'activation' && s.replayReturnStepId === null && s.jobId === null);
+      requireState(s.completion === 'active' && s.stepId === 'activation' && s.replayReturnStepId === null && s.jobId === null && !s.buildRequestId);
       n.completion = 'explored'; n.activationState = 'explored'; n.stepId = 'exited';
       break;
     case 'finish':
