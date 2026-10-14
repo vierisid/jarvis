@@ -50,7 +50,7 @@
     {
       "check": "Precision and missed routines separately measured",
       "status": "passed_synthetic",
-      "evidence": "Holdout: precision 8/8, Wilson 95% 67.6–100%; misses 3/11, 27.3%, interval 9.7–56.6%. Baseline 3/6 precision, 8/11 misses. Case-level outputs and corpus hashes retained."
+      "evidence": "Holdout: precision 8/8, Wilson 95% 67.6\u2013100%; misses 3/11, 27.3%, interval 9.7\u201356.6%. Baseline 3/6 precision, 8/11 misses. Case-level outputs and corpus hashes retained."
     },
     {
       "check": "Privacy retention and mixed-version compatibility",
@@ -111,5 +111,23 @@
     "New kinds require Q-13 constraint mapping at integration. Existing prepared branches have not been compiled or enabled together with this PR."
   ],
   "rollback": "Disable awareness for containment. Roll back breadth by removing the three added ROUTINES entries while retaining v2 privacy, phase and recurrence guards. Preserve the additive column, hypotheses, dismissals and user work; never replay effects or drop data. See docs/opportunity-routines.md.",
-  "quick_verification": "You can see this change in the JSON from bun run scripts/evaluate-opportunity-routines.ts, then inspect hold-call and the three listed misses. Run bun test src/awareness/job-hypotheses.test.ts for role references, real SQLite retention/restart, migration and device-gap regressions."
+  "quick_verification": "You can see this change in the JSON from bun run scripts/evaluate-opportunity-routines.ts, then inspect hold-call and the three listed misses. Run bun test src/awareness/job-hypotheses.test.ts for role references, real SQLite retention/restart, migration and device-gap regressions.",
+  "rebase_2026_10_14": {
+    "onto": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "original_head": "8ea4bc6d53d5884ca9ca51ff2cf8800ebb191874",
+    "conflicts": "None; both original patches unchanged in range-diff.",
+    "validation": {
+      "tests": "149 passed, zero failed, 573 assertions across ten files",
+      "evaluation": "46 synthetic cases; complete JSON report exactly matches the original committed report, including frozen corpus hashes and outcomes",
+      "typecheck": "passed"
+    },
+    "integration": "Remains independent on main. Q13 must retain constraint mappings for the three added routine kinds; no execution-stack merge or activation.",
+    "evidence_root": "/home/vierisid/.cache/codex/brief-rebase-20261014",
+    "evidence": [
+      "q-11-focused.log",
+      "q-11-evaluation.json",
+      "q-11-typecheck.log",
+      "q-11-commit.log"
+    ]
+  }
 }
