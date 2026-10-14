@@ -995,3 +995,202 @@ describe('a voice confirmation that ends is taken down where it was shown (#1011
     expect(gone(other)).toEqual([]);
   });
 });
+
+// #1009: realtime tool calls write `channel: 'voice'` audit rows, but every
+// room-action decision (a refusal, a hold, a confirmation, a run) reached only
+// the console, and the room-action path is the one that reaches `make dev`,
+// the user profile and commitments.
+describe('every voice room action decision writes an audit row (#1009)', () => {
+  type Sent = { type: string; payload: Record<string, unknown> };
+  type Row = { tool_name: string; action_category: string; authority_decision: string; approval_id: string | null; executed: boolean; channel: string; agent_id: string };
+  const setup = (opts: { tainted?: boolean } = {}) => {
+    const orchestrator = new AgentOrchestrator();
+    orchestrator.setTaintGating(buildTaintGating(undefined));
+    if (opts.tainted) (orchestrator as unknown as { realtimeTaint: Set<string> }).realtimeTaint.add('browser_navigate');
+    const base = makeService(orchestrator);
+    base.internals.wsServer.getClients().clear();
+    const mk = () => {
+      const sent: Sent[] = [];
+      return { sent, ws: { send: (raw: string) => { sent.push(JSON.parse(raw)); return raw.length; }, sendBinary: () => {} } };
+    };
+    const speaker = mk();
+    const other = mk();
+    for (const c of [speaker, other]) base.internals.wsServer.getClients().add(c.ws);
+    const rows: Row[] = [];
+    base.svc.setAuditTrail({ log: (e: Row) => { rows.push(e); return e; } } as never);
+    const internals = base.svc as unknown as {
+      executeRealtimeNavTool: (name: string, args: Record<string, unknown>, ws: unknown) => Promise<string | null>;
+      routeClassifiedVoiceIntent: (intent: Intent, trimmed: string, requestId: string, ws: unknown) => Promise<void>;
+      routeMessage: (msg: unknown, ws: unknown) => Promise<unknown>;
+      handleClientDisconnect: (ws: unknown) => void;
+      sweepVoiceConfirmations: (now: number) => void;
+      pendingVoiceConfirmations: Map<string, { createdAt: number }>;
+      wsServer: { getClients: () => Set<unknown> };
+    };
+    const real = base.svc.requestRoomAction.bind(base.svc);
+    (base.svc as unknown as { requestRoomAction: typeof real }).requestRoomAction = (a, _t, o) => real(a, 30, o);
+    (base.svc as unknown as { roomActionTargetLists: () => RoomActionTargetLists }).roomActionTargetLists = () => ({
+      project: async () => [{ id: 'proj-demo', name: 'demo' }], content: async () => [], task: async () => [],
+    });
+    // The speaker's room runs whatever it is sent.
+    const answering = () => {
+      const tick = setInterval(() => {
+        const a = speaker.sent.find((m) => m.payload?.source === 'room_action' && m.payload.resultId);
+        if (!a) return;
+        clearInterval(tick);
+        void internals.routeMessage({ type: 'room_action_result', payload: { resultId: a.payload.resultId, accepted: true }, timestamp: Date.now() }, speaker.ws);
+      }, 1);
+      // Never outlives the test, even one that fails before anything is sent.
+      setTimeout(() => clearInterval(tick), 2_000);
+    };
+    const intent = (room: string, action: string, args: Record<string, unknown>, over: Partial<Intent> = {}): Intent => ({
+      id: `i-${room}-${action}`, utterance: 'x', verb: 'show', object: null, args: {},
+      impact: 'read', confidence: 0.99, room_action: { room: room as never, action, args }, ...over,
+    });
+    const yes = (said: string): Intent => ({ id: `y-${Math.random()}`, utterance: said, verb: 'ask', object: null, args: {}, impact: 'read', confidence: 0.6, confirmation_response: 'approve' });
+    const brief = () => rows.map((r) => `${r.authority_decision}:${r.executed ? 'ran' : 'not-run'}:${r.channel}:${r.tool_name}`);
+    return { svc: base.svc, orchestrator, internals, speaker, other, rows, answering, intent, yes, brief };
+  };
+
+  test('the realtime path: a run, a refusal, and a view action, which writes nothing', async () => {
+    const t = setup();
+    t.answering();
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'set_filter', args: { field: 'status', value: 'done' } }, t.speaker.ws);
+    expect(t.brief()).toEqual(['allowed:ran:voice:room_action(tasks/create_task; via realtime; write_data; accepted)']);
+    expect(t.rows[0]).toMatchObject({ action_category: 'write_data', approval_id: null, agent_id: 'voice' });
+    const tainted = setup({ tainted: true });
+    await tainted.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'workspaces', action: 'create_project', args: { name: 'x' } }, tainted.speaker.ws);
+    expect(tainted.brief()).toEqual(['denied:not-run:voice:room_action(workspaces/create_project; via realtime; install_software, execute_command; tainted)']);
+    expect(tainted.rows[0]!.action_category).toBe('install_software');
+  });
+
+  test('a room that never answers is not recorded as having run it', async () => {
+    const t = setup();
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+    expect(t.brief()).toEqual(['allowed:not-run:voice:room_action(tasks/create_task; via realtime; write_data; no_answer)']);
+  });
+
+  test('a classifier hold, then a click that runs it, linked by the hold\'s id', async () => {
+    const t = setup();
+    await t.internals.routeClassifiedVoiceIntent(t.intent('settings', 'replay_onboarding', {}), 'replay onboarding', 'r', t.speaker.ws);
+    t.answering();
+    expect(await t.svc.resolveVoiceConfirmation('i-settings-replay_onboarding', 'confirm')).toEqual({ ok: true });
+    expect(t.brief()).toEqual([
+      'approval_required:not-run:voice:room_action(settings/replay_onboarding; via classifier; delete_data, modify_settings; held)',
+      'allowed:ran:click:room_action(settings/replay_onboarding; via confirm; delete_data, modify_settings; accepted)',
+    ]);
+    expect(t.rows.map((r) => r.approval_id)).toEqual(['i-settings-replay_onboarding', 'i-settings-replay_onboarding']);
+  });
+
+  test('a spoken yes that runs it, one that may not, and a spoken no', async () => {
+    const t = setup();
+    await t.internals.routeClassifiedVoiceIntent(t.intent('tasks', 'create_task', { title: 'x' }), 'add x', 'r', t.speaker.ws);
+    await t.internals.routeClassifiedVoiceIntent(t.yes('that sounds about right I guess'), 'that sounds about right I guess', 'r2', t.speaker.ws);
+    t.answering();
+    await t.internals.routeClassifiedVoiceIntent(t.yes('yes'), 'yes', 'r3', t.speaker.ws);
+    expect(t.brief()).toEqual([
+      'approval_required:not-run:voice:room_action(tasks/create_task; via classifier; write_data; held)',
+      'approval_required:not-run:voice:room_action(tasks/create_task; via confirm; write_data; refused_yes)',
+      'allowed:ran:voice:room_action(tasks/create_task; via confirm; write_data; accepted)',
+    ]);
+    const n = setup();
+    await n.internals.routeClassifiedVoiceIntent(n.intent('tasks', 'create_task', { title: 'x' }), 'add x', 'r', n.speaker.ws);
+    await n.internals.routeClassifiedVoiceIntent({ ...n.yes('no'), confirmation_response: 'cancel' }, 'no', 'r2', n.speaker.ws);
+    expect(n.brief().at(-1)).toBe('denied:not-run:voice:room_action(tasks/create_task; via confirm; write_data; cancelled)');
+  });
+
+  test('a click on No, a hold confirmed after Kill, and a hold that could not be settled', async () => {
+    const t = setup();
+    await t.internals.routeClassifiedVoiceIntent(t.intent('tasks', 'create_task', { title: 'x' }), 'add x', 'r', t.speaker.ws);
+    await t.svc.resolveVoiceConfirmation('i-tasks-create_task', 'cancel');
+    expect(t.brief().at(-1)).toBe('denied:not-run:click:room_action(tasks/create_task; via confirm; write_data; cancelled)');
+    const k = setup();
+    await k.internals.routeClassifiedVoiceIntent(k.intent('tasks', 'create_task', { title: 'x' }), 'add x', 'r', k.speaker.ws);
+    const emergency = new EmergencyController();
+    emergency.kill();
+    k.orchestrator.setEmergencyController(emergency);
+    await k.svc.resolveVoiceConfirmation('i-tasks-create_task', 'confirm');
+    expect(k.brief().at(-1)).toBe('denied:not-run:click:room_action(tasks/create_task; via confirm; write_data; killed)');
+    const s = setup();
+    await s.internals.routeClassifiedVoiceIntent(s.intent('workspaces', 'start_server', {}), 'start it', 'r', s.speaker.ws);
+    expect(s.brief()).toEqual(['denied:not-run:voice:room_action(workspaces/start_server; via classifier; execute_command; unsettled)']);
+  });
+
+  test('the classifier acting on its own reading is recorded as the classifier', async () => {
+    const t = setup();
+    t.answering();
+    // test_provider reads data, which is not governed: a sure reading acts.
+    await t.internals.routeClassifiedVoiceIntent(t.intent('settings', 'test_provider', { provider: 'openai' }), 'test openai', 'r', t.speaker.ws);
+    expect(t.brief()).toEqual(['allowed:ran:voice:room_action(settings/test_provider; via classifier; read_data; accepted)']);
+  });
+
+  test('a hold dropped when its dashboard goes, or when it times out, is recorded as never run', async () => {
+    const t = setup();
+    await t.internals.routeClassifiedVoiceIntent(t.intent('tasks', 'create_task', { title: 'a' }), 'a', 'r', t.speaker.ws);
+    await t.internals.routeClassifiedVoiceIntent({ ...t.intent('workspaces', 'stop_server', { name: 'demo' }), id: 'old' }, 'b', 'r', t.other.ws);
+    t.internals.wsServer.getClients().delete(t.speaker.ws);
+    t.internals.handleClientDisconnect(t.speaker.ws);
+    t.internals.pendingVoiceConfirmations.get('old')!.createdAt -= 10 * 60_000 + 1;
+    t.internals.sweepVoiceConfirmations(Date.now());
+    expect(t.brief().slice(2)).toEqual([
+      'denied:not-run:system:room_action(tasks/create_task; via classifier; write_data; disconnected)',
+      'denied:not-run:system:room_action(workspaces/stop_server; via classifier; execute_command; expired)',
+    ]);
+    expect(t.rows.slice(2).map((r) => r.approval_id)).toEqual(['i-tasks-create_task', 'old']);
+  });
+
+  test('a side-effecting action held only by the confidence route is recorded the same way', async () => {
+    // test_provider reads data, which is not governed: at 0.7 it is held by
+    // the confidence route, then confirmed, and its room never answers.
+    const t = setup();
+    await t.internals.routeClassifiedVoiceIntent(t.intent('settings', 'test_provider', { provider: 'openai' }, { confidence: 0.7 }), 'test openai', 'r', t.speaker.ws);
+    await t.svc.resolveVoiceConfirmation('i-settings-test_provider', 'confirm');
+    expect(t.brief()).toEqual([
+      'approval_required:not-run:voice:room_action(settings/test_provider; via classifier; read_data; held)',
+      'allowed:not-run:click:room_action(settings/test_provider; via confirm; read_data; no_answer)',
+    ]);
+    // And one that cannot be settled on that route is refused with a row.
+    const s = setup();
+    await s.internals.routeClassifiedVoiceIntent(s.intent('agents', 'spawn_agent', { specialist: 'research', task: 'x' }, { confidence: 0.7 }), 'x', 'r', s.speaker.ws);
+    expect(s.brief()).toEqual(['approval_required:not-run:voice:room_action(agents/spawn_agent; via classifier; spawn_agent; held)']);
+    const u = setup();
+    (u.svc as unknown as { roomActionTargetLists: () => RoomActionTargetLists }).roomActionTargetLists = () => ({
+      project: async () => { throw new Error('down'); }, content: async () => [], task: async () => [],
+    });
+    u.orchestrator.setTaintGating(buildTaintGating({ governed_categories: ['send_message'] } as never));
+    await u.internals.routeClassifiedVoiceIntent(u.intent('workspaces', 'stop_server', { name: 'demo' }, { confidence: 0.7 }), 'x', 'r', u.speaker.ws);
+    expect(u.brief()).toEqual(['denied:not-run:voice:room_action(workspaces/stop_server; via classifier; execute_command; unsettled)']);
+  });
+
+  test('a voice request for an authority grant is refused with a row, on both paths', async () => {
+    const t = setup();
+    await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'authority', action: 'grant_access', args: { action: 'send_email' } }, t.speaker.ws);
+    await t.internals.routeClassifiedVoiceIntent(t.intent('authority', 'revoke_access', { action: 'send_email' }), 'x', 'r', t.speaker.ws);
+    expect(t.brief()).toEqual([
+      'denied:not-run:voice:room_action(authority/grant_access; via realtime; modify_settings; not_a_room_action)',
+      'denied:not-run:voice:room_action(authority/revoke_access; via classifier; modify_settings; not_a_room_action)',
+    ]);
+  });
+
+  test('a hold still open at shutdown, or whose send throws, is closed in the audit', async () => {
+    const t = setup();
+    await t.internals.routeClassifiedVoiceIntent(t.intent('tasks', 'create_task', { title: 'a' }), 'a', 'r', t.speaker.ws);
+    await t.svc.stop();
+    expect(t.brief().at(-1)).toBe('denied:not-run:system:room_action(tasks/create_task; via classifier; write_data; shutdown)');
+    expect(t.internals.pendingVoiceConfirmations.size).toBe(0);
+    const f = setup();
+    await f.internals.routeClassifiedVoiceIntent(f.intent('tasks', 'create_task', { title: 'a' }), 'a', 'r', f.speaker.ws);
+    (f.svc as unknown as { requestRoomAction: () => never }).requestRoomAction = () => { throw new Error('boom'); };
+    expect(await f.svc.resolveVoiceConfirmation('i-tasks-create_task', 'confirm')).toEqual({ ok: false, reason: 'boom' });
+    expect(f.brief().at(-1)).toBe('allowed:not-run:click:room_action(tasks/create_task; via confirm; write_data; failed)');
+  });
+
+  test('a failing audit trail changes no decision', async () => {
+    const t = setup();
+    t.svc.setAuditTrail({ log: () => { throw new Error('disk full'); } } as never);
+    t.answering();
+    const reply = await t.internals.executeRealtimeNavTool('dashboard_room_action', { room: 'tasks', action: 'create_task', args: { title: 'x' } }, t.speaker.ws);
+    expect(reply).toContain('accepted it and started it');
+  });
+});

@@ -32,7 +32,9 @@
  */
 
 import { DEFAULT_TAINT_GOVERNED, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
-import { roomActionCategories } from './room-actions.ts';
+import { roomActionCategories, type RoomActionCategory } from './room-actions.ts';
+import type { RoomActionOutcome } from './room-action-results.ts';
+import type { AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import {
   collapseRoomActionAliases, matchByTitle, matchProjectByName, roomActionTargetKind, withRoomActionDefaults, type RoomActionTargetKind,
 } from './room-action-targets.ts';
@@ -56,21 +58,35 @@ export function realtimeRoomActionRefusal(
   ra: { room: string; action: string },
   ctx: RealtimeRoomActionContext,
 ): string | null {
+  return realtimeRoomActionDecision(ra, ctx)?.message ?? null;
+}
+
+/**
+ * realtimeRoomActionRefusal with why, for the audit row (#1009): the
+ * emergency state, `blocked`, or `tainted`.
+ */
+export function realtimeRoomActionDecision(
+  ra: { room: string; action: string },
+  ctx: RealtimeRoomActionContext,
+): { reason: 'paused' | 'killed' | 'blocked' | 'tainted'; message: string } | null {
   const categories = roomActionCategories(ra.room, ra.action);
   if (categories.length === 0) return null;
   const what = `${ra.room}/${ra.action}`;
   if (ctx.halted) {
-    return `[SYSTEM ${ctx.halted.toUpperCase()}] ${what} was not sent: actions are suspended while the system is ${ctx.halted}.`;
+    return { reason: ctx.halted === 'killed' ? 'killed' : 'paused', message: `[SYSTEM ${ctx.halted.toUpperCase()}] ${what} was not sent: actions are suspended while the system is ${ctx.halted}.` };
   }
   const blocked = categories.find((c) => ctx.blockedCategories.includes(c));
   if (blocked) {
-    return `[BLOCKED] ${what} (${blocked}) is in the realtime blocked-categories list and was not sent.`;
+    return { reason: 'blocked', message: `[BLOCKED] ${what} (${blocked}) is in the realtime blocked-categories list and was not sent.` };
   }
   const governed = taintProfile(ctx.taintGating, ctx.taint)?.governed_categories ?? [];
   const tainted = categories.find((c) => governed.includes(c));
   if (tainted) {
-    return `[BLOCKED] ${what} (${tainted}) was not sent: this session read outside content (${[...ctx.taint].join(', ')}) and voice cannot approve it. `
-      + 'Tell the user what you wanted to do and ask them to say it again as a fresh request.';
+    return {
+      reason: 'tainted',
+      message: `[BLOCKED] ${what} (${tainted}) was not sent: this session read outside content (${[...ctx.taint].join(', ')}) and voice cannot approve it. `
+        + 'Tell the user what you wanted to do and ask them to say it again as a fresh request.',
+    };
   }
   return null;
 }
@@ -89,6 +105,80 @@ export function classifierMustConfirmRoomAction(
 ): boolean {
   const governed: readonly string[] = gating?.governed_categories ?? DEFAULT_TAINT_GOVERNED;
   return roomActionCategories(ra.room, ra.action).some((c) => governed.includes(c));
+}
+
+/**
+ * Where a voice room action came from (#1009): the realtime model's tool
+ * call, the classifier (acting on its own reading, or holding the action for
+ * a yes, which is also the origin recorded when the hold is dropped), or the
+ * person's answer to a hold.
+ */
+export type RoomActionOrigin = 'realtime' | 'classifier' | 'confirm';
+
+export type RoomActionAuditRow = {
+  agent_id: string;
+  agent_name: string;
+  tool_name: string;
+  action_category: RoomActionCategory;
+  authority_decision: AuthorityDecisionType;
+  approval_id: string | null;
+  executed: boolean;
+  channel: ResolutionChannel;
+};
+
+/**
+ * What became of a voice room action, as its audit row records it (#1009):
+ * the room's answer when it was sent, or why it was not. `no_answer` is not
+ * "did not run": a room can run it and answer too late to be heard.
+ */
+export type RoomActionAuditReason =
+  | RoomActionOutcome
+  | 'held' | 'refused_yes' | 'cancelled' | 'unsettled' | 'blocked' | 'tainted'
+  | 'paused' | 'killed' | 'expired' | 'disconnected' | 'shutdown' | 'failed' | 'not_a_room_action';
+
+/**
+ * The audit row for a decision about a voice room action (#1009), or null for
+ * a view action, which changes only a screen. Realtime tool calls write
+ * `channel: 'voice'` rows; room actions reach `make dev`, the user profile
+ * and commitments through clicks no authority check sees, so for most of them
+ * this is the only record of what voice did (agents/spawn_agent also gets the
+ * lifecycle gate's own row, #986, when its handler starts the agent).
+ *
+ * The table has one category column. It holds the first category
+ * ROOM_ACTIONS lists for the action, and the tool name carries the room, the
+ * action, the origin, every category and the reason, e.g.
+ * `room_action(settings/replay_onboarding; via classifier; delete_data,
+ * modify_settings; held)`. `executed` is true only when the room said it ran
+ * the action; the reason says whether a false one was declined, unreached,
+ * or unanswered, which may still have run. `approval_id` is the hold's id,
+ * linking a hold to what became of it.
+ *
+ * An authority grant or revoke is not a room action and has no categories,
+ * but a voice path asking for one is what #969 refuses by name, so its
+ * refusal is recorded too, as `modify_settings`.
+ */
+export function roomActionAuditRow(
+  ra: { room: string; action: string },
+  origin: RoomActionOrigin,
+  decision: AuthorityDecisionType,
+  executed: boolean,
+  who: { agentId: string; agentName: string },
+  opts: { approvalId?: string | null; channel?: ResolutionChannel; reason: RoomActionAuditReason },
+): RoomActionAuditRow | null {
+  const listed = roomActionCategories(ra.room, ra.action);
+  const authorityOverride = ra.room === 'authority' && (ra.action === 'grant_access' || ra.action === 'revoke_access');
+  const categories: readonly RoomActionCategory[] = listed.length > 0 ? listed : authorityOverride ? ['modify_settings'] : [];
+  if (categories.length === 0) return null;
+  return {
+    agent_id: who.agentId,
+    agent_name: who.agentName,
+    tool_name: `room_action(${ra.room}/${ra.action}; via ${origin}; ${categories.join(', ')}; ${opts.reason})`,
+    action_category: categories[0]!,
+    authority_decision: decision,
+    approval_id: opts.approvalId ?? null,
+    executed,
+    channel: opts.channel ?? 'voice',
+  };
 }
 
 /** The items a held action can act on, read the way the dashboard reads them. */

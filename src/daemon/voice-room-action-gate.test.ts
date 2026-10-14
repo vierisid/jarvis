@@ -4,7 +4,42 @@
  */
 
 import { describe, expect, test } from 'bun:test';
-import { resolveHeldRoomAction, type RoomActionTargetLists } from './voice-room-action-gate.ts';
+import { realtimeRoomActionDecision, resolveHeldRoomAction, roomActionAuditRow, type RoomActionTargetLists } from './voice-room-action-gate.ts';
+import { buildTaintGating } from '../authority/taint-gating.ts';
+
+describe('roomActionAuditRow (#1009)', () => {
+  const who = { agentId: 'a1', agentName: 'Jarvis' };
+  test('a side-effecting action gets a row with every category, the origin, the reason and whether it ran', () => {
+    expect(roomActionAuditRow({ room: 'workspaces', action: 'create_project' }, 'confirm', 'allowed', true, who, { approvalId: 'h1', channel: 'click', reason: 'accepted' }))
+      .toEqual({
+        agent_id: 'a1', agent_name: 'Jarvis',
+        tool_name: 'room_action(workspaces/create_project; via confirm; install_software, execute_command; accepted)',
+        action_category: 'install_software', authority_decision: 'allowed', approval_id: 'h1', executed: true, channel: 'click',
+      });
+    expect(roomActionAuditRow({ room: 'tasks', action: 'create_task' }, 'realtime', 'denied', false, who, { reason: 'tainted' }))
+      .toMatchObject({ approval_id: null, channel: 'voice', executed: false });
+  });
+
+  test('a voice request for an authority grant or revoke is recorded; a view action, or anything else no room runs, is not', () => {
+    for (const action of ['grant_access', 'revoke_access']) {
+      expect(roomActionAuditRow({ room: 'authority', action }, 'realtime', 'denied', false, who, { reason: 'not_a_room_action' }))
+        .toMatchObject({ action_category: 'modify_settings', tool_name: `room_action(authority/${action}; via realtime; modify_settings; not_a_room_action)` });
+    }
+    expect(roomActionAuditRow({ room: 'tasks', action: 'set_filter' }, 'realtime', 'allowed', true, who, { reason: 'accepted' })).toBeNull();
+    expect(roomActionAuditRow({ room: 'authority', action: 'delete_everything' }, 'realtime', 'denied', false, who, { reason: 'not_a_room_action' })).toBeNull();
+    expect(roomActionAuditRow({ room: '__proto__', action: 'toString' }, 'realtime', 'denied', false, who, { reason: 'not_a_room_action' })).toBeNull();
+  });
+
+  test('a realtime refusal says why', () => {
+    const ctx = { halted: null, blockedCategories: [] as string[], taintGating: buildTaintGating(undefined), taint: new Set<string>() };
+    const ra = { room: 'tasks', action: 'create_task' };
+    expect(realtimeRoomActionDecision(ra, { ...ctx, halted: 'killed' })?.reason).toBe('killed');
+    expect(realtimeRoomActionDecision(ra, { ...ctx, halted: 'paused' })?.reason).toBe('paused');
+    expect(realtimeRoomActionDecision(ra, { ...ctx, blockedCategories: ['write_data'] })?.reason).toBe('blocked');
+    expect(realtimeRoomActionDecision(ra, { ...ctx, taint: new Set(['browser_navigate']) })?.reason).toBe('tainted');
+    expect(realtimeRoomActionDecision(ra, ctx)).toBeNull();
+  });
+});
 
 const lists = (over: Partial<RoomActionTargetLists> = {}): RoomActionTargetLists => ({
   project: async () => [{ id: 'p1', name: 'jarvis-landing' }, { id: 'p2', name: 'demo-app' }],
