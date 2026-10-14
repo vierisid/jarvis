@@ -1,7 +1,8 @@
 version: 2
 
 # GitHub Actions only (#646). Every workflow that holds a write scope,
-# id-token or a pull_request_target trigger pins its actions to commit SHAs,
+# id-token or a pull_request_target trigger, or that a push or a PR can
+# start (#984), pins its actions to commit SHAs,
 # with the version in a trailing comment (.github/scripts/
 # workflow-hardening.test.sh enforces it). A pin nobody bumps rots, so
 # Dependabot proposes the bumps and rewrites SHA and comment together.
