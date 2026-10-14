@@ -5,6 +5,8 @@ import { BriefConversationClient } from './client';
 import type { ConversationApi } from './api';
 import type { BriefConversation } from '../../../../src/brief/contracts';
 
+let useSocket: typeof import('../../hooks/useWebSocket').useWebSocket;
+let socketState: ReturnType<typeof useSocket>;
 let React: typeof import('react');
 let createRoot: typeof import('react-dom/client').createRoot;
 let Provider: typeof import('./provider').BriefConversationProvider;
@@ -34,6 +36,7 @@ beforeAll(async () => {
   (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
   React = await import('react'); ({ createRoot } = await import('react-dom/client'));
   ({ BriefConversationProvider: Provider, useBriefConversation: useChat } = await import('./provider'));
+  ({ useWebSocket: useSocket } = await import('../../hooks/useWebSocket'));
 });
 beforeEach(() => {
   originalFetch = globalThis.fetch; OriginalWebSocket = globalThis.WebSocket;
@@ -147,3 +150,58 @@ test('an accepted failed response exposes its explanation and never projects par
   expect(observed.items.find(item => item.id === 'answer')).toMatchObject({ text: 'Partial response', status: 'failed' });
   expect(observed.isResponding).toBe(false);
 });
+
+function ConnectionProbe({ chat }: { chat?: import('../../hooks/useWebSocket').WebSocketChatAdapter }) {
+  socketState = useSocket({ chat });
+  return null;
+}
+
+for (const change of ['disconnect', 'mode change', 'unmount'] as const) {
+  test(`queued room actions expire on ${change} and obsolete callbacks cannot affect the next connection`, async () => {
+    const adapter = { onOpen: () => {}, onClose: () => {}, onMessage: () => false };
+    await React.act(async () => root.render(<ConnectionProbe chat={adapter} />));
+    const first = sockets[0]!; await open(first);
+    const oldClose = first.onclose!;
+    const oldMessage = first.onmessage!;
+    const action = (id: string) => ({ source: 'room_action', room: 'tasks', action: 'create_task',
+      args: { title: id }, resultId: id, resultFrom: 'dashboard' });
+    await React.act(async () => first.receive('notification', action('old-action')));
+    const oldAction = socketState.roomActionRequest!;
+    expect(oldAction.resultId).toBe('old-action');
+    expect(oldAction.stillAsked?.()).toBe(true);
+
+    if (change === 'disconnect') {
+      await React.act(async () => first.close());
+    } else if (change === 'mode change') {
+      await React.act(async () => root.render(<ConnectionProbe />));
+    } else {
+      await React.act(async () => root.render(<div>Unmounted</div>));
+    }
+    expect(oldAction.stillAsked?.()).toBe(false);
+    expect(first.onclose).toBeNull();
+    expect(first.onmessage).toBeNull();
+    if (change === 'unmount') {
+      await React.act(async () => { oldClose(); window.dispatchEvent(new Event('jarvis:ws-reconnect')); });
+      expect(sockets).toHaveLength(1);
+      return;
+    }
+    if (change === 'disconnect') {
+      await React.act(async () => window.dispatchEvent(new Event('jarvis:ws-reconnect')));
+    }
+    expect(sockets).toHaveLength(2);
+    const current = sockets[1]!; await open(current);
+    await React.act(async () => current.receive('notification', action('current-action')));
+    const currentAction = socketState.roomActionRequest!;
+    expect(currentAction.resultId).toBe('current-action');
+    expect(currentAction.stillAsked?.()).toBe(true);
+    await React.act(async () => {
+      oldClose();
+      oldMessage({ data: JSON.stringify({ type: 'notification', payload: action('late-action'), timestamp: 20 }) });
+    });
+    expect(socketState.roomActionRequest).toBe(currentAction);
+    expect(currentAction.stillAsked?.()).toBe(true);
+    expect(oldAction.stillAsked?.()).toBe(false);
+    expect(socketState.isConnected).toBe(true);
+    expect(sockets.filter(socket => socket.readyState === 1)).toHaveLength(1);
+  });
+}
