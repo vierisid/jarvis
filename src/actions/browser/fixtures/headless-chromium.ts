@@ -259,13 +259,12 @@ export async function launchTestChromium(opts: {
     });
     if (!port) throw new Error('Chromium never wrote DevToolsActivePort');
 
-    let lastProbe = "no CDP response";
+    let lastProbe = 'no CDP response';
     const up = await waitFor(deadline, async () => {
       if (!processAlive(pid)) throw died();
       try {
         const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1000) });
         lastProbe = `HTTP ${res.status}`;
-        await res.body?.cancel();
         return res.ok ? true : null;
       } catch (err) {
         lastProbe = err instanceof Error ? `${err.name}: ${err.message}` : String(err);
