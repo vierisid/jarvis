@@ -190,7 +190,7 @@ jobs:
       # Not under the installer-* name: that is the signed installer, which
       # only sign-windows uploads and publish downloads by that pattern.
       - name: Upload unsigned installer
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: unsigned-installer-win32-x64
           path: sidecar/Jarvis-Setup.exe
@@ -231,7 +231,7 @@ jobs:
       # artifact is a zip any job in this run can write, and extracted over
       # sidecar/ it could replace scripts/sign-windows.sh before that runs
       # with the KMS token.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: unsigned-installer-win32-x64
           path: ${{ runner.temp }}/unsigned
@@ -332,7 +332,7 @@ jobs:
         working-directory: sidecar
         run: echo "sha256=$(sha256sum Jarvis-Setup.exe | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-win32-x64
           path: sidecar/Jarvis-Setup.exe
@@ -361,7 +361,7 @@ jobs:
 
       # Outside the checkout, as in sign-windows: extracted over sidecar/, an
       # artifact could replace the script that does the checking.
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: installer-win32-x64
           path: ${{ runner.temp }}/signed
@@ -553,7 +553,7 @@ jobs:
           sum="$(shasum -a 256 dist/macos/Install-Jarvis.dmg)"
           echo "sha256=${sum%% *}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: installer-darwin
           path: sidecar/dist/macos/Install-Jarvis.dmg
@@ -584,7 +584,7 @@ jobs:
       contents: write
     steps:
       - name: Download built installers
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: installer-*
           path: artifacts
