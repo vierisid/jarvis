@@ -1,0 +1,152 @@
+{
+  "schemaVersion": 1,
+  "card": "ON-B-04",
+  "title": "Recover written interview sessions",
+  "date": "2026-10-14",
+  "repository": "vierisid/jarvis",
+  "branch": "onboarding/on-b-04",
+  "pr": "https://github.com/vierisid/jarvis/pull/1061",
+  "target": "main",
+  "baseline": "5024ea7455a5613be0514475be32c0dee6de0edd",
+  "source_head": "74d64908a65b2682c7c1ee3befce52e16b01315f",
+  "delivery_head": {
+    "resolve": "git log -1 --format=%H -- docs/onboarding-delivery/ON-B-04.json",
+    "reason": "Avoids self-referential commit hash; final-head CI is reported on PR checks and final handoff"
+  },
+  "status": "implemented_unmerged_default_off",
+  "merge_after": [],
+  "enable_after": [
+    "ON-B-05 effect-staging adapter for existing interviewer and idempotent fact/wrap receipts",
+    "ON-B-11 authenticated runtime registration and journey acknowledgements",
+    "ON-U-04 / ON-U-10 controlled UI mapping and scoped draft storage",
+    "real provider/native WebView verification",
+    "verified combined D/F/Q candidate"
+  ],
+  "capability": {
+    "provides": [
+      "interview-session.v1"
+    ],
+    "requires": [
+      "interview-profile.v1"
+    ],
+    "registered": false,
+    "default_enabled": false,
+    "live_ready": false
+  },
+  "scope": [
+    "src/onboarding-next/interview-session/",
+    "docs/onboarding-delivery/ON-B-04.json",
+    "docs/onboarding-delivery/evidence/ON-B-04/"
+  ],
+  "concurrent_work_inspected": {
+    "ON-U-04": "#1056 at e7ce2d65d40cd6ac83f3e8421bbe27ef67845f16",
+    "ON-B-01": "#1050 existing vault settings transaction convention, no imports",
+    "ON-B-02": "#1055",
+    "ON-B-03": "#1059",
+    "ON-U-06": "#1060 separate owner",
+    "F-26": "#994 receipt and changes inspected; no session provider there",
+    "D/F/Q": "open PR targets/heads inspected, no stacking; primary dirty worktree preserved"
+  },
+  "checks": {
+    "runtime": "Bun 1.4.2",
+    "dependencies": "own frozen install; unchanged lockfile",
+    "module": {
+      "passed": 33,
+      "failed": 0,
+      "assertions": 192,
+      "files": 4
+    },
+    "focused": {
+      "passed": 142,
+      "failed": 0,
+      "assertions": 613,
+      "files": 16
+    },
+    "typecheck": "passed, including normal source commit hook",
+    "build_ui": "passed with existing Tailwind directive warnings",
+    "build_workflows": "forced pieces and engine build passed in task-owned outputs/staging",
+    "bundle_provider": "passed",
+    "bundle_browser": "passed in module regression",
+    "repository_guards": "all four passed through normal hooks; package guard used existing Bun fallback",
+    "review": {
+      "skill": "pr-reviewer",
+      "method": "direct implementer full-diff and surrounding-code review",
+      "independent_reviewer": false,
+      "remaining_source_blockers": 0,
+      "findings_fixed": 2,
+      "red_green": "two failures in review-regressions-red.log; final module.log all passing"
+    },
+    "full_ci": {
+      "status_at_receipt": "pending",
+      "final_evidence": "PR checks and final handoff for exact delivery head"
+    }
+  },
+  "independence": {
+    "alone_on_base": true,
+    "no_sibling_imports": true,
+    "no_shared_registration_edits": true,
+    "phases": {
+      "absent": {
+        "passed": 2,
+        "failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "standalone": {
+        "passed": 36,
+        "failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "combined": {
+        "passed": 67,
+        "failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      },
+      "provider-removed": {
+        "passed": 32,
+        "failed": 0,
+        "typecheck": "passed",
+        "build_ui": "passed"
+      }
+    },
+    "actual_assembly": "B05/B11/U10 absent; capability discovery fixture synthetic",
+    "evidence": "evidence/ON-B-04/independence.json"
+  },
+  "evidence": {
+    "real": [
+      "SQLite temporary files, reopen and separate connections",
+      "loopback WebSocket disconnect after acceptance and reconnect",
+      "existing interviewer text-only path with scripted model",
+      "actual U04 component rendering provider snapshot in isolated candidate",
+      "typecheck/builds/hooks"
+    ],
+    "mocked": [
+      "model generation and effect-staging port",
+      "profile commits and receipt reconciliation",
+      "authenticated owner/context",
+      "client storage",
+      "optional assembly discovery"
+    ],
+    "not_run": [
+      "paid/live model",
+      "real user profile mutations",
+      "native WebView UI",
+      "production daemon registration/deployment",
+      "workflow or external actions"
+    ]
+  },
+  "limitations": [
+    "Legacy runInterviewTurn writes facts/wrap inline. Activation requires ON-B-05 to bind the existing interviewer through a side-effect-free preparation adapter; it is deliberately not a default implementation.",
+    "Pure model inference can repeat after a crash before checkpoint persistence. The durable logical turn and write-attempt identity remain single; exactly-once remote inference is not claimed.",
+    "ProfilePort must reconcile durable receipts by attemptId and recheck signal/isCurrent before effects. An in-flight committed fact is not undone by skip.",
+    "B11 must preserve legacy completed eligibility, wire authenticated scope/vault bindings, terminal journey acknowledgements and vault Forget/retention policy.",
+    "U10 must scope drafts by authenticated account/project/tab, dispose on identity change, map busy/errors/recovery and reconcile transport snapshots.",
+    "Records remain one session per actor/project; no reset/re-enrol operation. Corrupt/future records fail closed without deletion.",
+    "Actual runtime/UI assembly, real model/profile provider effects and native WebView verification remain blocked."
+  ],
+  "rollback": "Disable/omit interview-session.v1 and use the unchanged legacy path. Preserve additive session records, drafts, confirmed facts and uncertain commit identities. No destructive migration or cleanup.",
+  "quick_check": "bun test --preload ./src/test-preload.ts src/onboarding-next/interview-session",
+  "next_card": "ON-B-05 not started; stop after ON-B-04"
+}

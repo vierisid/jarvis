@@ -1,0 +1,4 @@
+import {buildAllJarvisPieces} from '/home/vierisid/.cache/codex/jarvis-on-b-04/src/workflows/runner/engine-runtime/build-pieces.ts';
+import {buildEngineBundle} from '/home/vierisid/.cache/codex/jarvis-on-b-04/src/workflows/runner/engine-runtime/build.ts';
+console.log(await buildAllJarvisPieces({force:true}));
+console.log(await buildEngineBundle({force:true,stagingDir:'/home/vierisid/.cache/codex/jarvis-on-b-04-output/engine-staging',bundleRoot:'/home/vierisid/.cache/codex/jarvis-on-b-04-output/engine'}));

@@ -1,0 +1,10 @@
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/candidate.fixture.test.ts:
+(pass) synthetic assembly stays default-off and missing B05 is unsupported [0.02ms]
+(pass) present module closure is incomplete until B05 exists [0.07ms]
+
+ 2 pass
+ 0 fail
+ 3 expect() calls
+Ran 2 tests across 1 file. [13.00ms]

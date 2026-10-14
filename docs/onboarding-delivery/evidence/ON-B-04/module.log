@@ -1,0 +1,47 @@
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/interview-session/client.test.ts:
+(pass) refresh after lost acknowledgement retains immutable answer and a newer draft [1.16ms]
+(pass) reconnect reconciles an accepted answer without replay or clearing a newer draft [0.33ms]
+(pass) typed draft survives refresh before send and another account cannot read it [0.07ms]
+(pass) double send is guarded and snapshot revisions reject a late reply after skip [0.26ms]
+(pass) dispose aborts pending transport and rejects its later snapshot [0.16ms]
+(pass) a late transport failure cannot replace a confirmed terminal state with an error [0.21ms]
+(pass) a rejected competing-tab answer is released only after authoritative turn reconciliation [0.20ms]
+(pass) failed draft persistence prevents transmission and retains existing draft [0.16ms]
+(pass) another tab submitting identical text cannot acknowledge this client request [0.20ms]
+(pass) corrupt draft storage is preserved and does not trigger provider work [0.06ms]
+(pass) socket adapter correlates concurrent requests and ignores unrelated text/voice/binary [0.47ms]
+(pass) socket close, timeout and abort release listeners and reject pending work [10.42ms]
+(pass) server transport passes only authenticated context and rejects voice/extra envelope fields [0.32ms]
+
+src/onboarding-next/interview-session/module-boundary.test.ts:
+(pass) manifest is optional and owns no runtime registration or sibling import [0.42ms]
+(pass) client and transport bundle for the browser without server runtime modules [2.46ms]
+
+src/onboarding-next/interview-session/session.test.ts:
+(pass) durable scoped written interview > is inert by default and unavailable without either injected capability [17.65ms]
+(pass) durable scoped written interview > lost acknowledgement and duplicate answer return one persisted turn [38.75ms]
+(pass) durable scoped written interview > reopening the SQLite file restores the original opening and transcript [37.11ms]
+(pass) durable scoped written interview > two providers/connections serialize different tabs answering one prompt [34.38ms]
+(pass) durable scoped written interview > pure interviewer failure retains answer and retries with the original identity [42.67ms]
+(pass) durable scoped written interview > lost fact acknowledgement reconciles the same attempt without rerunning the model [42.83ms]
+(pass) durable scoped written interview > skip fences late model completion and preserves original answer [35.17ms]
+(pass) durable scoped written interview > skip fences late fact receipt without an assistant bubble or done state [34.37ms]
+(pass) durable scoped written interview > turn timeout is bounded and late results cannot write facts [46.05ms]
+(pass) durable scoped written interview > fact timeout retries only the same prepared write identity [52.21ms]
+(pass) durable scoped written interview > deadline expiry without a fired timer remains an explicit recoverable error [30.46ms]
+(pass) durable scoped written interview > expired crashed worker is fenced when another process resumes its lease [37.79ms]
+(pass) durable scoped written interview > reads and all mutations require authenticated actor/project and cannot adopt client scope [32.41ms]
+(pass) durable scoped written interview > auth loss during model work cannot publish or commit a reply [26.87ms]
+(pass) durable scoped written interview > future or corrupt records fail closed without overwriting them [17.55ms]
+(pass) durable scoped written interview > invalid, oversized and stale commands do not call the interviewer [18.36ms]
+(pass) durable scoped written interview > reuses the real existing interviewer for text-only turns with an injected model [32.12ms]
+
+src/onboarding-next/interview-session/socket.integration.test.ts:
+(pass) real loopback socket cut after acceptance, reconnect, and retry produce one answer and opening [40.90ms]
+
+ 33 pass
+ 0 fail
+ 192 expect() calls
+Ran 33 tests across 4 files. [660.00ms]
