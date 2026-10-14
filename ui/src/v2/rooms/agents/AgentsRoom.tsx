@@ -92,14 +92,18 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
     return data.roster.filter((a) => a.name.toLowerCase().includes(q));
   }, [data.roster, search]);
 
-  const handleSpawn = useCallback(
+  const spawnAndToast = useCallback(
     async (input: { specialist: string; task: string; context: string }) => {
       const result = await data.spawn(input);
       setToast({ text: result.message, tone: result.ok ? "ok" : "warn" });
       if (result.ok) setSpawnOpen(false);
-      return result.ok;
+      return result;
     },
     [data],
+  );
+  const handleSpawn = useCallback(
+    async (input: { specialist: string; task: string; context: string }) => (await spawnAndToast(input)).ok,
+    [spawnAndToast],
   );
 
   // Phase 6.3.5 — voice-driven Room actions. Each action mirrors a UI
@@ -128,14 +132,16 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "spawn_agent": {
         const specialist = typeof args.specialist === "string" ? args.specialist : "";
         if (!specialist) return false;
-        // Fire and forget — the spawn helper toasts on success/failure.
+        // Answered when POST /api/agents has (#991): carried out only when
+        // the agent actually started. A card raised for it (202), Pause or
+        // Kill (409), a refusal (403) or too many waiting (429) is not a
+        // spawn, so voice must not confirm one; the toast says which it was.
         // We do NOT open the dialog: voice spawn is fully autonomous.
-        handleSpawn({
+        return spawnAndToast({
           specialist,
           task: typeof args.task === "string" ? args.task : "",
           context: typeof args.context === "string" ? args.context : "",
-        });
-        return true;
+        }).then((result) => result.started === true);
       }
       default:
         return false;

@@ -54,26 +54,65 @@ function expired(req: RoomActionRequest): boolean {
   return true;
 }
 
+/** What a handler answers: true or a string ack when it carried the action out. */
+export type RoomActionAnswer = boolean | string | void;
+
 /**
- * Per-Room handler signature. Returns a string ack on success, false to
- * mean "I don't know that action" (the bus logs and the user gets nothing
- * — daemon already sent its own ack). Throwing is treated as a bug.
+ * Per-Room handler signature. Returns a string ack on success, false when
+ * the action was not carried out (an action it does not know, arguments it
+ * cannot use, or, for a promise, an outcome that was not the action). The
+ * bus logs it and the daemon says so. Throwing is treated as a bug.
+ *
+ * A promise, for an action whose outcome is decided elsewhere (#991): the
+ * agents room's spawn is a request the daemon may answer with a card, a
+ * refusal or a cap. The answer is reported when it settles; a rejected
+ * promise counts as not carried out.
  */
 export type RoomActionHandler = (
   action: string,
   args: Record<string, unknown>,
-) => boolean | string | void;
+) => RoomActionAnswer | PromiseLike<RoomActionAnswer>;
 
 /**
  * Told whether the room carried an action out (#933): true for `true` or a
- * string ack, false for anything else. Called once, when a handler runs; an
+ * string ack, false for anything else. Called once, when a handler's answer
+ * is known (when its promise settles, for one that returns a promise); an
  * action that waits in the queue and expires is never reported, so a caller
  * waiting on this needs its own timeout.
  */
 export type RoomActionResultCallback = (accepted: boolean) => void;
 
-const accepted = (result: boolean | string | void): boolean =>
+const accepted = (result: RoomActionAnswer): boolean =>
   result === true || typeof result === "string";
+
+function isThenable(value: unknown): value is PromiseLike<RoomActionAnswer> {
+  return typeof (value as { then?: unknown } | null | undefined)?.then === "function";
+}
+
+/** Report `result` to `onResult` once it is known, and log a rejection. */
+function report(
+  req: RoomActionRequest,
+  result: RoomActionAnswer | PromiseLike<RoomActionAnswer>,
+  onResult: RoomActionResultCallback | undefined,
+  label: string,
+): void {
+  const settle = (answer: RoomActionAnswer) => {
+    onResult?.(accepted(answer));
+    if (answer === false) {
+      console.warn(`[RoomActionBus] ${label} "${req.action}" rejected by "${req.room}"`);
+    }
+  };
+  // Any thenable, not only a native Promise: a handler's answer is reported
+  // when it settles, never read as "not carried out" because of its type.
+  if (isThenable(result)) {
+    result.then(settle, (err: unknown) => {
+      console.warn(`[RoomActionBus] ${label} "${req.action}" failed in "${req.room}":`, err);
+      settle(false);
+    });
+    return;
+  }
+  settle(result);
+}
 
 /**
  * Hand `room`'s handler only actions it is listed for in ROOM_ACTIONS
@@ -81,7 +120,7 @@ const accepted = (result: boolean | string | void): boolean =>
  * dashboard's own check, so no room_action, from whatever path, reaches a
  * handler with an action the table does not name.
  */
-function runHandler(handler: RoomActionHandler, req: RoomActionRequest): boolean | string | void {
+function runHandler(handler: RoomActionHandler, req: RoomActionRequest): RoomActionAnswer | PromiseLike<RoomActionAnswer> {
   if (!isRoomAction(req.room, req.action)) {
     console.warn(`[RoomActionBus] Refused "${req.action}" for room "${req.room}": not one of its actions`);
     return false;
@@ -131,13 +170,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
       console.log(
         `[RoomActionBus] Draining queued action "${req.action}" for room "${req.room}"`,
       );
-      const result = runHandler(handler, req);
-      onResult?.(accepted(result));
-      if (result === false) {
-        console.warn(
-          `[RoomActionBus] Queued action "${req.action}" rejected by "${req.room}"`,
-        );
-      }
+      report(req, runHandler(handler, req), onResult, "Queued action");
     }
   }, []);
 
@@ -182,13 +215,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
       return;
     }
     const top = stack[stack.length - 1]!;
-    const result = runHandler(top, req);
-    onResult?.(accepted(result));
-    if (result === false) {
-      console.warn(
-        `[RoomActionBus] Room "${req.room}" rejected action "${req.action}"`,
-      );
-    }
+    report(req, runHandler(top, req), onResult, "Action");
   }, []);
 
   const value = useMemo<BusInternal>(() => ({ register, dispatch }), [register, dispatch]);

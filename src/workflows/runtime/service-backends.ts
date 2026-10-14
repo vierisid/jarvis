@@ -57,7 +57,8 @@ import { getMachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability } from '../../sidecar/types';
 import { toolReturnText } from '../../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
-import { runAsApproved } from '../../authority/approved-action-scope.ts';
+import { outsideApprovalScope, runAsApproved } from '../../authority/approved-action-scope.ts';
+import type { ActionCategory } from '../../roles/authority';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -526,6 +527,8 @@ export function buildSandboxServiceBackends(
         if (gate.confirm === 'always') {
           return refuse(`Unsupported workflow capability: ${call.toolCall.name} requires the user's explicit confirmation, which a delegated agent cannot ask for; call it as a flow step so the approval is raised by the step that names it.`);
         }
+        // Set once the call is dispatched; read by `validateTarget` below.
+        let dispatched = false;
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
@@ -548,22 +551,43 @@ export function buildSandboxServiceBackends(
             ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
+            //
+            // And what the call does, when its gate says (#988): the card
+            // shows `target.intent` as its sentence. Before, it read only the
+            // tool's name -- "Manage agents" for a spawn that also starts a
+            // task -- which was harmless while the spawn sink asked again on
+            // its own card. That approval now answers the sink (`execute`
+            // below), so the card it buys has to say what it buys.
             prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
-              principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel } } }),
+              principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel },
+              ...(gate.intent ? { intent: gate.intent } : {}) } }),
             // The arguments are frozen but a path in them is resolved only
             // when the tool runs, possibly long after review. A write that now
             // reaches a stricter category than the gate judged (a relative
             // path under a different cwd, a file that became a shell rc or a
             // hook, #522) is not the call that was approved.
-            validateTarget: (args) => {
+            validateTarget: (args, target) => {
               const now = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, args);
               if (severityRank(now.actionCategory) > severityRank(call.actionCategory)) {
                 throw new ActionOutcomeError({ status: 'blocked', code: 'EFFECT_CHANGED_AFTER_REVIEW', effect: 'not_started',
                   message: `${call.toolCall.name} now reaches ${now.actionCategory}, not the ${call.actionCategory} it was reviewed as; dispatch blocked` });
               }
+              // A card that carried a sentence was an approval of THAT
+              // sentence, the deferred executor's rule (#988): a stop whose
+              // agent is now on a different task is not the stop approved.
+              // A record from before cards carried one has nothing to hold.
+              // Before dispatch only: this fence also runs at every checkpoint
+              // inside the call, where a sentence the call's own effect
+              // changed is not a change after approval.
+              const approved = typeof target.intent === 'string' ? target.intent.trim() : null;
+              if (!dispatched && approved !== null && (now.intent?.trim() ?? '') !== approved) {
+                throw new ActionOutcomeError({ status: 'blocked', code: 'EFFECT_CHANGED_AFTER_REVIEW', effect: 'not_started',
+                  message: `${call.toolCall.name}: what it would do changed after approval (approved: ${JSON.stringify(approved)}; now: ${JSON.stringify(now.intent?.trim() ?? '')}); dispatch blocked` });
+              }
             },
             execute: async (args, checkpoint) => {
               checkpoint();
+              dispatched = true;
               try {
                 // Delivery off (#586): the collapse below cannot keep a trusted
                 // trailer out of band, and a delivery is recorded when the tool
@@ -573,7 +597,36 @@ export function buildSandboxServiceBackends(
                 // sub-agent's. Suppressing nests inside that scope, which is the
                 // right way round: the innermost caller knows what happens to
                 // the value.
-                const raw = await withoutTemplateDelivery(() => registry.execute(call.toolCall.name, args));
+                const run = () => withoutTemplateDelivery(() => registry.execute(call.toolCall.name, args));
+                // Inside the approval this call was dispatched under (#988),
+                // as the deferred executor runs an approved card: a spawn or
+                // stop sink the call reaches reads it instead of asking a
+                // second time. Without it an approved `manage_agents spawn`
+                // raised another card and an approved `delegate_task` was
+                // refused. Only a card that named the act (`target.intent`,
+                // checked unchanged by `validateTarget` just before this),
+                // for the category it was approved as, spent by the first
+                // lifecycle decision and closed when this call settles.
+                //
+                // Source 'approval', not 'workflow_effect': this is a card a
+                // person approved for exactly this call, through the same
+                // surfaces as a deferred card, now naming the act. So it
+                // answers a taint-driven decision or a stop at the sink, as an
+                // approved deferred card does. Like one, it was judged for its
+                // own principal (the sub-agent), and the sink judges the
+                // primary under its live profile.
+                //
+                // Otherwise outside any approval: this runs inside the
+                // delegation's own scope (`m7.delegate` below), whose grant
+                // was for starting THIS sub-agent and is not one for a call
+                // the sub-agent makes. Its spawn spends it today; this does
+                // not depend on that.
+                const record = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
+                const approval = record?.approvalId && typeof record.target.intent === 'string'
+                  ? opts.approvalManager?.getRequest(record.approvalId) ?? null : null;
+                const raw = approval?.status === 'approved' && approval.execution_mode === 'workflow'
+                  ? await runAsApproved({ categories: [approval.action_category as ActionCategory], approvalId: approval.id, source: 'approval' }, run)
+                  : await outsideApprovalScope(run);
                 // One string only: this crosses the durable effect boundary, so a
                 // carrier would not survive it anyway. Collapsing puts any
                 // repo-authored trailer back in band, where the sub-agent runner
