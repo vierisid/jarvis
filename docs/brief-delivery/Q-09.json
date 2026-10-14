@@ -152,5 +152,29 @@
     "fix": "Format and truncate ordinary error messages before converting them to typed failures. Preserve existing ActionOutcomeError and WorkflowCancellationError instances.",
     "regression": "Before the fix: 3 failures and 2 passes in the new approval regression file. After the fix: 70 passed, zero failed, 238 assertions across six focused files, including 2.1 MB Error/string failures through the real DeferredExecutor, bounded live/stored receipts, uncertainty, ordinary reply compatibility and no duplicate dispatch.",
     "previous_ci": "Full CI passed on reviewed head dd016dfc (8736 pass, 32 skip, 0 fail). The correction commit requires a fresh CI run; see PR #942 for its final result."
+  },
+  "rebase_2026_10_14": {
+    "onto": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "original_head": "2659d9af1a029de2852e71864b728f7f0aee5142",
+    "decision": "Owner approved combining main one-call runAsApproved scope with Q09 collectActionVerification around the same runAsReviewed dispatch. Approved Spawn/Stop retain their grant; evidence does not cause a second execution.",
+    "range_diff": "All five original commits retained; approved execution wrapper combined.",
+    "validation": {
+      "affected_ts": "987 passed, 3 skipped, one existing Chrome navigation race failed across 51 files; affected browser file rerun by the final normal commit hook. No product failure found.",
+      "browser_race": "Unchanged main reproduced the same transitional colon URL in 10/10 targeted runs. Wait now skips that placeholder without relaxing blocked-page or file-content assertions; 10/10 targeted repetitions pass.",
+      "sidecar": "11 top-level tests / 19 test and subtest completions passed: typed outcomes, stale documents, focus-loss uncertainty, legacy protocol and reviewed snapshots.",
+      "typecheck": "passed",
+      "environment": "Bun 1.3.6; cached Google Chrome for Testing 143.0.7499.4. Initial Snap Chromium startup failed; cached Chrome ran the fixtures. Missing libx11-xcb-dev extracted from Ubuntu package into task cache for targeted Go tests, without changing system packages.",
+      "limits": "Three host launchChrome sandbox tests skip on this environment. No full repository suite or native Windows/macOS runtime certification locally; PR CI remains required."
+    },
+    "evidence_root": "/home/vierisid/.cache/codex/brief-rebase-20261014",
+    "evidence": [
+      "q-09-focused-chrome.log",
+      "q-09-main-browser-baseline.log",
+      "q-09-main-browser-race.log",
+      "q-09-browser-race-fixed.log",
+      "q-09-sidecar-targeted.log",
+      "q-09-typecheck.log",
+      "q-09-commit.log"
+    ]
   }
 }

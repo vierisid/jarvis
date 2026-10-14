@@ -75,9 +75,11 @@ restarts, real engine execution, pause/kill, and local/hosted selection.
 
 ## Integration, limits, and rollback
 
-This card starts from main `75bf90b1bf92849c3f1c18f90e5f05d2e61f8fb0`, which contains
-desktop bridge removal, bounded native calls, reviewed browser snapshot binding,
-and remote snapshot serialization absent from the older Q stack. It has no merge
+This card was rebased onto main `5024ea7455a5613be0514475be32c0dee6de0edd` on
+2026-10-14. It preserves desktop bridge removal, bounded native calls, reviewed
+browser snapshot binding, and remote snapshot serialization. Approved execution
+retains main's one-call approval scope, so Spawn/Stop actions consume their granted
+approval while verification observes that same dispatch. It has no merge
 or enable dependency on Q-07/Q-08 and does not merge that stack. When integrating
 Q-07/Q-08, preserve both their held/recovery outcomes and this additive verification
 field on replay, fresh completion, and API responses. F-21 is a read-only consumer.
