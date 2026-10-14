@@ -51,6 +51,7 @@ import type { AgentOrchestrator } from "../../agents/orchestrator";
 import type { AuthorityEngine } from "../../authority/engine";
 import type { AuditTrail } from "../../authority/audit";
 import { boundedApprovalLabel } from "../../authority/approval-delivery";
+import { outsideApprovalScope } from "../../authority/approved-action-scope";
 import type { EmergencyController } from "../../authority/emergency";
 import type { ActionCategory } from "../../roles/authority";
 import type { RoleDefinition } from "../../roles/types";
@@ -303,7 +304,12 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         dispatch: (call: GovernedToolCall) => continuation.dispatch(registry, call),
       } : null;
 
-      const result: SubAgentResult = await this.runSubAgentFn({
+      // Outside the delegation's approval (#988): a workflow boundary runs
+      // this call inside a grant for starting the child, which the spawn
+      // above has just used. Nothing the child's loop does is that act, so
+      // the loop does not see the grant, spent or not. A governed call it
+      // makes runs inside its own card's approval (service-backends.ts).
+      const result: SubAgentResult = await outsideApprovalScope(() => this.runSubAgentFn({
         agent: child,
         task: input.goal,
         context: "",
@@ -329,7 +335,7 @@ export class M7AgentDelegator implements PieceAgentDelegator {
           onTurn: state => durable.save({ ...state, status: "running" }),
         } : {}),
         ...(resume ? { resume } : {}),
-      });
+      }));
 
       // Walk the runSubAgent-supplied message log (NOT child.getMessages(),
       // which only carries user/assistant turns). The local log has every
