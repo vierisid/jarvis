@@ -42,6 +42,7 @@ import { combineDecisions } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
+import { runAsActingAgent } from './acting-agent.ts';
 
 const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents should be focused
 const MAX_TOOL_RESULT_CHARS = 6000;
@@ -666,6 +667,18 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
    */
   const inDeliveryScope = <T>(fn: () => Promise<T>): Promise<T> =>
     withTemplateDeliveryScope(`sub-agent:${agentId}`, fn);
+  /**
+   * Run one tool dispatch as this agent's call (#1014), so a spawn or stop it
+   * reaches is judged as this agent, and a child it starts is capped by it and
+   * runs under what it runs under: the profile it was given, and what it has
+   * read. Both dispatches below go through here, for the reason above. The
+   * profile is computed at the call, as `executeTool` computes its own.
+   */
+  const asThisAgent = <T>(fn: () => Promise<T>): Promise<T> => runAsActingAgent({
+    agentId,
+    profile: mergeProfiles(profile ?? null, taintProfile(taintGating ?? null, taint)),
+    taint: [...taint],
+  }, fn);
   const toolsUsed: string[] = resume ? [...resume.toolsUsed] : [];
   const totalUsage = resume ? { ...resume.tokensUsed } : { input: 0, output: 0 };
   const failedToolCalls: string[] = resume ? [...resume.failedToolCalls] : [];
@@ -848,7 +861,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       }
       noteToolCall(tc);
       sequence += 1;
-      const dispatched = await inDeliveryScope(() => executeTool(toolRegistry, tc, sequence, authorityCtx));
+      const dispatched = await asThisAgent(() => inDeliveryScope(() => executeTool(toolRegistry, tc, sequence, authorityCtx)));
       if ('paused' in dispatched) {
         return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration, offered: [...offered] };
       }
@@ -870,9 +883,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       fence();
       let governed: GovernedToolResult;
       try {
-        governed = await inDeliveryScope(() => governedTools({ toolCall: pending.toolCall, sequence: pending.sequence,
+        governed = await asThisAgent(() => inDeliveryScope(() => governedTools({ toolCall: pending.toolCall, sequence: pending.sequence,
           actionCategory: pending.actionCategory, toolCategory: pending.toolCategory, principal: pending.principal,
-          reason: pending.reason }));
+          reason: pending.reason })));
       } catch (err) {
         throw new GovernedDispatchError(err instanceof Error ? err.message : String(err), err);
       }

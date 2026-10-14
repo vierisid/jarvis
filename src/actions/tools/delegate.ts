@@ -14,7 +14,7 @@ import type { RoleDefinition } from '../../roles/types.ts';
 import type { ToolDefinition, ToolGate } from './registry.ts';
 import { runSubAgent, createScopedToolRegistry, type ProgressCallback } from '../../agents/sub-agent-runner.ts';
 import { forCard, withoutCardInvisibles } from '../../util/card-text.ts';
-import { AGENT_CONTEXT_MAX_CHARS, AGENT_TASK_MAX_CHARS, checkTaskBounds } from './agents.ts';
+import { AGENT_CONTEXT_MAX_CHARS, AGENT_TASK_MAX_CHARS, checkSpecialistId, checkTaskBounds, SPECIALIST_ID_MAX_CHARS } from './agents.ts';
 
 export type DelegateToolDeps = {
   orchestrator: AgentOrchestrator;
@@ -36,7 +36,7 @@ export type DelegateToolDeps = {
  */
 export function delegateTaskGate(params: Record<string, unknown>): ToolGate {
   const quoted = (v: unknown, max: number) => JSON.stringify(forCard(v, max));
-  const who = `Delegate to a ${forCard(params.specialist, 60) || 'specialist'} specialist`;
+  const who = `Delegate to a ${forCard(params.specialist, SPECIALIST_ID_MAX_CHARS) || 'specialist'} specialist`;
   const task = typeof params.task === 'string' && params.task.trim() ? params.task : null;
   const context = typeof params.context === 'string' && params.context.trim() ? params.context : null;
   const withContext = context ? ` with context ${quoted(context, AGENT_CONTEXT_MAX_CHARS)}` : '';
@@ -95,6 +95,12 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
         const available = Array.from(deps.specialists.keys()).join(', ');
         return `Error: Unknown specialist "${specialistId}". Available: ${available}`;
       }
+      // And it is the one the card named (#1019).
+      try {
+        checkSpecialistId(specialistId);
+      } catch (err) {
+        return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      }
 
       // Get the primary agent as parent
       const primary = deps.orchestrator.getPrimary();
@@ -133,7 +139,9 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
         // The sub-agent runs under the parent's authority engine and the
         // parent's effective profile (static restrictions plus the taint of
         // the turn that delegated), so delegation is not a way around the
-        // gate: governed actions are denied outright in a sub-agent.
+        // gate: governed actions are denied outright in a sub-agent. When a
+        // sub-agent is the one delegating, its restrictions and taint are
+        // added (#1014): the specialist never runs under less than it.
         const result = await runSubAgent({
           agent: subAgent,
           task,
@@ -148,7 +156,7 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
           auditTrail: deps.orchestrator.getAuditTrail() ?? undefined,
           emergencyController: deps.orchestrator.getEmergencyController() ?? undefined,
           temporaryGrants: deps.orchestrator.getTemporaryGrants(),
-          profile: deps.orchestrator.getEffectiveProfile(),
+          profile: deps.orchestrator.getProfileFor(subAgent.id),
           taintGating: deps.orchestrator.getTaintGating(),
         });
 
