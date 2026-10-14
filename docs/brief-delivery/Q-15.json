@@ -75,5 +75,27 @@
     "No live activation or release claim; final-head CI recorded in PR/task receipt"
   ],
   "rollback": "Restore only src/vault/recall-ranking.ts from 8a0da716; retain canonical qualification, contradiction, validity and all stored facts/evidence. No effects replay or data deletion. New founder regression exposes the prior relevance limitation.",
-  "quick_verification": "You can see this change in the held-similar-surname service fixture, then run bun run scripts/benchmark-founder-memory.ts heldout --check and inspect the email fact plus omitted wrong-person fact ID."
+  "quick_verification": "You can see this change in the held-similar-surname service fixture, then run bun run scripts/benchmark-founder-memory.ts heldout --check and inspect the email fact plus omitted wrong-person fact ID.",
+  "rebase_2026_10_14": {
+    "onto": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "original_head": "42ecdc0e8ca34fbdb57c5535fa7f9b9e8249e6b4",
+    "conflicts": "None; all five original patches unchanged in range-diff.",
+    "validation": {
+      "tests": "202 passed, one host keychain test skipped, zero failed; 1123 assertions across eighteen files",
+      "benchmarks": "12/12 development and 20/20 heldout cases; 36/36 and 60/60 observations. Both reports match original reports exactly except measured timing; zero wrong-person facts.",
+      "daemon_build": "passed, 1267 modules",
+      "dependencies": "Bun 1.4.3 (c6da4a4d3); frozen-lockfile installation with scripts disabled; package and lockfile unchanged"
+    },
+    "limits": "Synthetic author-visible evaluation; no combined Q16/F18 runtime or field-accuracy claim.",
+    "evidence_root": "/home/vierisid/.cache/codex/brief-rebase-20261014",
+    "evidence": [
+      "q-15-vault-tests.log",
+      "q-15-development.json",
+      "q-15-heldout.json",
+      "q-15-daemon-build.log",
+      "q-15-dependencies.log",
+      "q-15-range-diff.log",
+      "q-15-commit.log"
+    ]
+  }
 }
