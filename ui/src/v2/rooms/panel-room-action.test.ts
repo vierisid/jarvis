@@ -82,3 +82,11 @@ test("the dashboard shell wires daemon room actions through the answering dispat
   const ws = readFileSync(new URL("../../hooks/useWebSocket.ts", import.meta.url), "utf8");
   expect(ws).toContain("const req = roomActionRequestFrom(payload, msg.timestamp);");
 });
+
+test("a panel never runs an action that changes more than the screen (#974)", () => {
+  for (const [room, action] of [["tasks", "create_task"], ["agents", "spawn_agent"], ["settings", "enable_tts"], ["settings", "not_an_action"]]) {
+    const { dispatched, sent } = run(note({ room, action, resultId: "r1" }), true);
+    expect(dispatched).toEqual([]);
+    expect(sent).toEqual([]);
+  }
+});

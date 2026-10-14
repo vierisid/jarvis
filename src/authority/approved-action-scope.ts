@@ -22,9 +22,12 @@
  *
  * WHO ENTERS IT. Only trusted code that has itself decided the call may run:
  * the approval executor (an approved card), the realtime voice gate for the
- * categories its documented policy auto-approves, and the workflow effect
- * boundary for a delegation it authorised. Nothing reads it to grant anything
- * the engine denied: a hard deny at the sink still throws.
+ * categories its documented policy auto-approves, the workflow effect
+ * boundary for a delegation it authorised, and the per-call boundary for a
+ * workflow-delegated agent's call (#988) whose own card a person approved
+ * and which named the act: that one is an approved card too, so its source is
+ * 'approval'. Nothing reads it to grant anything the engine denied: a hard
+ * deny at the sink still throws.
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';

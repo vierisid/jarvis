@@ -108,7 +108,7 @@ describe('the daemon\'s acknowledgements name only real actions', () => {
     const table = src.slice(src.indexOf('function ackForRoomAction('));
     const cases = [...table.matchAll(/case '(\w+)':/g)].map((m) => m[1]!);
     expect(cases.length).toBeGreaterThan(30);
-    const all = new Set<string>(Object.values(ROOM_ACTIONS).flat());
+    const all = new Set<string>(Object.values(ROOM_ACTIONS).flatMap((a) => Object.keys(a)));
     // An ack for an action no handler runs (grant_access used to have one)
     // can never be said; it only misleads whoever reads the table.
     expect(cases.filter((c) => !all.has(c))).toEqual([]);

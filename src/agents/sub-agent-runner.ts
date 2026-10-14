@@ -726,8 +726,17 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
 
   // A cancellation is not an agent error: the caller stopped the run and
   // must not record anything for it.
+  // Latched for the run, so a Kill followed by a Reset before the next fence
+  // still stops it. Optional call: tests stand in partial controllers.
+  let killed = emergencyController?.getState() === 'killed';
+  const stopListening = emergencyController?.subscribe?.((state) => { if (state === 'killed') killed = true; });
   const fence = () => {
     if (signal?.aborted) throw new SubAgentCanceled(signal.reason ?? 'cancelled');
+    // Kill stops every sub-agent loop here, at the sink (#987), not only the
+    // task manager's: a synchronous delegate_task or a workflow delegation has
+    // no signal, and under Kill it otherwise ran on to its iteration cap with
+    // every tool refused. Pause does not stop it (left to the owner).
+    if (killed || emergencyController?.getState() === 'killed') throw new SubAgentCanceled('the system was killed');
     try { checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); }
   };
 
@@ -961,6 +970,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
         // was being stopped either way.
         : err instanceof SubAgentCanceled || signal?.aborted ? { canceled: true } : {}) });
   } finally {
+    stopListening?.();
     agent.idle();
   }
 }

@@ -313,6 +313,15 @@ describe("roomActionRequestFrom (#965)", () => {
     }
   });
 
+  test("runs an action that changes more than the screen only when it was addressed here (#974)", () => {
+    const task = { source: "room_action", room: "tasks", action: "create_task", args: { title: "Pay rent" } };
+    expect(roomActionRequestFrom({ ...task, resultId: "r1", resultFrom: "dashboard" }, 5))
+      .toEqual({ room: "tasks", action: "create_task", args: { title: "Pay rent" }, ts: 5, resultId: "r1" });
+    for (const extra of [{}, { resultId: "r1" }, { resultId: "r1", resultFrom: "panel" }, { resultId: "", resultFrom: "dashboard" }]) {
+      expect(roomActionRequestFrom({ ...task, ...extra }, 5)).toBeNull();
+    }
+  });
+
   test("drops malformed actions", () => {
     expect(roomActionRequestFrom(null, 1)).toBeNull();
     expect(roomActionRequestFrom({ room: "settings" }, 1)).toBeNull();

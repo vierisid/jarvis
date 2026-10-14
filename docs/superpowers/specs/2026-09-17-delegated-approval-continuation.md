@@ -79,7 +79,9 @@ asked with now.
   `requiredTools`, `succeeded` says only that the agent finished cleanly.
 - A stopped run keeps no conversation. Cancelling a run deletes its
   delegation rows, and a delegation the cancel interrupts answers
-  `canceled` and writes nothing back; deleting the run cascades.
+  `canceled` and writes nothing back; deleting the run cascades. An
+  emergency Kill also stops a delegation between turns (#987); it answers
+  `canceled` and leaves the last checkpoint as a crash would leave it.
 
 ## What this does not do
 

@@ -11,6 +11,8 @@ import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { outsideApprovalScope } from '../authority/approved-action-scope.ts';
+import { outsideExecutionScope } from '../actions/execution-scope.ts';
+import type { EmergencyController } from '../authority/emergency.ts';
 
 export type AsyncTaskStatus = 'running' | 'completed' | 'failed' | 'cancelled';
 
@@ -86,6 +88,10 @@ export class AgentTaskManager {
   private listeners = new Set<TaskLifecycleListener>();
   /** One per running task: aborting it stops that task's loop (#963). */
   private aborts = new Map<string, AbortController>();
+  /** The emergency controller each running task was started under (#987). */
+  private haltedBy = new Map<string, EmergencyController>();
+  /** Controllers this manager already listens to, so each is subscribed once. */
+  private watched = new WeakSet<EmergencyController>();
 
   /** `runSubAgentFn` is a test seam; production gets the real runner. */
   constructor(private readonly runSubAgentFn: typeof runSubAgent = runSubAgent) {}
@@ -158,13 +164,22 @@ export class AgentTaskManager {
     this.tasks.set(taskId, asyncTask);
     const abort = new AbortController();
     this.aborts.set(taskId, abort);
+    if (emergency) this.watchEmergency(emergency, taskId);
     this.emit('launch', asyncTask);
 
     // Fire runSubAgent without awaiting — runs in background. Outside any
     // approval scope, completion handlers included: an approved `manage_agents
     // spawn` starts its task from inside the approval, and nothing the task
-    // runs must inherit it (#932).
-    outsideApprovalScope(() => this.runSubAgentFn({
+    // runs must inherit it (#932). Outside the caller's dispatch fence too
+    // (#988): started from an approved workflow-delegated call, the task
+    // inherited that effect's fence, which refuses once the effect has
+    // settled, so the task died at its first model call. Its own abort signal
+    // and emergency watch are what stop it, so it no longer stops with the
+    // workflow run that started it. It does still inherit that run's machine
+    // binding and the call's template-delivery suppression: both fail closed
+    // (a sidecar call stays on the run's machine), and whether a task started
+    // from a run should keep any of the run's state is not settled here.
+    outsideExecutionScope(() => outsideApprovalScope(() => this.runSubAgentFn({
       agent,
       task,
       context,
@@ -176,6 +191,7 @@ export class AgentTaskManager {
       signal: abort.signal,
     }).then((result) => {
       this.aborts.delete(taskId);
+      this.haltedBy.delete(taskId);
       asyncTask.completedAt = Date.now();
       // A cancel that landed after the loop had already returned its answer
       // stopped nothing: the run completed, and its result stands.
@@ -195,6 +211,7 @@ export class AgentTaskManager {
       onComplete?.(asyncTask);
     }).catch((err) => {
       this.aborts.delete(taskId);
+      this.haltedBy.delete(taskId);
       asyncTask.status = asyncTask.cancelRequested !== undefined ? 'cancelled' : 'failed';
       asyncTask.completedAt = Date.now();
       asyncTask.result = {
@@ -208,7 +225,7 @@ export class AgentTaskManager {
       console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
       this.emit(asyncTask.status === 'cancelled' ? 'cancel' : 'fail', asyncTask);
       onComplete?.(asyncTask);
-    }));
+    })));
 
     return taskId;
   }
@@ -227,6 +244,32 @@ export class AgentTaskManager {
     if (task.cancelRequested === undefined) task.cancelRequested = reason;
     abort.abort(reason);
     return true;
+  }
+
+  /**
+   * Kill cancels every task started under that controller (#987). Before,
+   * Kill refused their tools and left their loops calling the model to the
+   * iteration cap (measured: 97 more model calls after Kill, then the task
+   * reported `completed`). Pause and Resume do not cancel anything here.
+   */
+  private watchEmergency(emergency: EmergencyController, taskId: string): void {
+    this.haltedBy.set(taskId, emergency);
+    if (this.watched.has(emergency)) return;
+    this.watched.add(emergency);
+    // For the manager's lifetime: one per daemon, and a listener with no
+    // tasks left under the controller does nothing.
+    emergency.subscribe((state) => {
+      if (state !== 'killed') return;
+      for (const [id, controller] of this.haltedBy) {
+        if (controller !== emergency) continue;
+        // One task's failure must not leave the rest running.
+        try {
+          this.cancel(id, 'the system was killed');
+        } catch (err) {
+          console.error(`[TaskManager] Kill could not cancel task ${id}:`, err instanceof Error ? err.message : err);
+        }
+      }
+    });
   }
 
   /** Cancel every running task of `agentId`; returns how many were asked to stop. */

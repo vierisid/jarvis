@@ -566,4 +566,17 @@ describe('what the pebble says when a background agent was not started (#932)', 
     expect(backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'denied', 'x'))).toContain('not allowed');
     expect(backgroundRefusalReply(new Error('boom'))).toBe("I couldn't start that background task.");
   });
+
+  test('a start refused because too many are already waiting says so, not "not allowed" (#989)', () => {
+    const reply = backgroundRefusalReply(new AgentLifecycleRefusal('spawn_agent', 'too_many_waiting', 'x'));
+    expect(reply).toContain('waiting for your approval');
+    expect(reply).not.toContain('not allowed');
+  });
+
+  test('a spoken task over the length bound asks for a shorter one (#989)', async () => {
+    const { HttpError, AGENT_TASK_MAX_CHARS } = await import('../actions/tools/agents.ts');
+    expect(backgroundRefusalReply(new HttpError(400, `The task is 700 characters; the limit is ${AGENT_TASK_MAX_CHARS}, so ...`)))
+      .toContain('shorter');
+    expect(backgroundRefusalReply(new HttpError(400, 'Unknown specialist'))).toBe("I couldn't start that background task.");
+  });
 });

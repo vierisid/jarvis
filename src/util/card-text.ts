@@ -58,6 +58,16 @@ const INVISIBLE = /[\p{Cf}\p{Default_Ignorable_Code_Point}]/gu;
  */
 const CONTROLS = /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/g;
 
+/**
+ * `value` without the characters `forCard` drops from a card, so a value run
+ * after approval holds exactly what the card showed (#989): tag characters
+ * spell hidden ASCII that a card never displays. Whitespace is kept; a line
+ * break shows as a space but hides nothing.
+ */
+export function withoutCardInvisibles(value: string): string {
+  return value.replace(INVISIBLE, '').replace(CONTROLS, '');
+}
+
 export function forCard(value: unknown, max = 600): string {
   const s = String(value ?? '').replace(INVISIBLE, '').replace(CONTROLS, '').replace(/\s+/g, ' ').trim();
   return s.length > max ? `${s.slice(0, max - 3)}...` : s;
