@@ -1,0 +1,247 @@
+{
+  "matrix": [
+    {
+      "theme": "light",
+      "width": 1440,
+      "height": 1000,
+      "contentFits": true,
+      "controls": true,
+      "focus": "Cancel build",
+      "overflow": false
+    },
+    {
+      "theme": "dark",
+      "width": 1440,
+      "height": 1000,
+      "contentFits": true,
+      "controls": true,
+      "focus": "Cancel build",
+      "overflow": false
+    },
+    {
+      "theme": "light",
+      "width": 768,
+      "height": 900,
+      "contentFits": true,
+      "controls": true,
+      "focus": "Cancel build",
+      "overflow": false
+    },
+    {
+      "theme": "dark",
+      "width": 768,
+      "height": 900,
+      "contentFits": true,
+      "controls": true,
+      "focus": "Cancel build",
+      "overflow": false
+    },
+    {
+      "theme": "light",
+      "width": 390,
+      "height": 844,
+      "contentFits": true,
+      "controls": true,
+      "focus": "Cancel build",
+      "overflow": false
+    },
+    {
+      "theme": "dark",
+      "width": 390,
+      "height": 844,
+      "contentFits": true,
+      "controls": true,
+      "focus": "Cancel build",
+      "overflow": false
+    }
+  ],
+  "recoveryStates": [
+    {
+      "scenario": "no-events",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Check status"
+        }
+      ],
+      "active": 0,
+      "heading": "Building your first workflow.",
+      "status": "Waiting for the first build update."
+    },
+    {
+      "scenario": "queued",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Check status"
+        },
+        {
+          "disabled": "false",
+          "label": "Cancel build"
+        }
+      ],
+      "active": 0,
+      "heading": "Building your first workflow.",
+      "status": "Your request is queued. We’ll show each step as work begins."
+    },
+    {
+      "scenario": "needs_input",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Add missing details"
+        },
+        {
+          "disabled": "false",
+          "label": "Check status"
+        },
+        {
+          "disabled": "false",
+          "label": "Cancel build"
+        },
+        {
+          "disabled": "false",
+          "label": "Explore Jarvis"
+        }
+      ],
+      "active": 0,
+      "heading": "One detail before we continue.",
+      "status": "Your original request is saved."
+    },
+    {
+      "scenario": "failed",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Retry build"
+        },
+        {
+          "disabled": "false",
+          "label": "Check status"
+        },
+        {
+          "disabled": "false",
+          "label": "Explore Jarvis"
+        }
+      ],
+      "active": 0,
+      "heading": "The build needs another try.",
+      "status": "The builder couldn’t finish the steps. Your original request is saved."
+    },
+    {
+      "scenario": "timed-out",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Check status"
+        },
+        {
+          "disabled": "true",
+          "label": "Cancel build"
+        }
+      ],
+      "active": 0,
+      "heading": "Waiting for an update.",
+      "status": "The status check timed out. We haven’t confirmed that the build stopped."
+    },
+    {
+      "scenario": "disconnected",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Check status"
+        },
+        {
+          "disabled": "true",
+          "label": "Cancel build"
+        }
+      ],
+      "active": 0,
+      "heading": "Reconnecting to your build.",
+      "status": "The connection was lost. Your build may still be running."
+    },
+    {
+      "scenario": "cancelling",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Check status"
+        },
+        {
+          "disabled": "true",
+          "label": "Cancellation requested"
+        }
+      ],
+      "active": 0,
+      "heading": "Stopping the build.",
+      "status": "Waiting for confirmation. The build may still finish."
+    },
+    {
+      "scenario": "cancelled",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Retry build"
+        },
+        {
+          "disabled": "false",
+          "label": "Check status"
+        },
+        {
+          "disabled": "false",
+          "label": "Explore Jarvis"
+        }
+      ],
+      "active": 0,
+      "heading": "The build was cancelled.",
+      "status": "Your request is still here."
+    },
+    {
+      "scenario": "succeeded",
+      "actions": [
+        {
+          "disabled": "false",
+          "label": "Check status"
+        },
+        {
+          "disabled": "false",
+          "label": "Explore Jarvis"
+        }
+      ],
+      "active": 0,
+      "heading": "Finishing your workflow.",
+      "status": "Checking the saved workflow before opening it."
+    },
+    {
+      "scenario": "unavailable",
+      "actions": [
+        {
+          "disabled": "true",
+          "label": "Check status"
+        },
+        {
+          "disabled": "true",
+          "label": "Cancel build"
+        }
+      ],
+      "active": 0,
+      "heading": "Build status is unavailable.",
+      "status": "Your request is still here. The build service needs to reconnect."
+    }
+  ],
+  "repeatedPhaseRequestCycles": [
+    "Putting the steps together: current step",
+    "Checking the review points: current step",
+    "Saving your draft: current step",
+    "Saving your draft: current step",
+    "Saving your draft: current step",
+    "Saving your draft: current step",
+    "Saving your draft: current step",
+    "Saving your draft: current step",
+    "Saving your draft: current step",
+    "Saving your draft: current step"
+  ],
+  "reducedMotionAnimation": "none",
+  "enlargedControlReachable": true,
+  "actualBuildOrCanvas": false
+}

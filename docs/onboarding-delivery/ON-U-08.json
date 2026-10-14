@@ -1,0 +1,191 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-08",
+  "date": "2026-10-14",
+  "status": "implemented_not_activated",
+  "branch": "onboarding/on-u-08",
+  "target": "main",
+  "baseSha": "5024ea7455a5613be0514475be32c0dee6de0edd",
+  "implementationHead": "93c9142b4ce23fec81bfc3585bfc277bc9611d78",
+  "headNote": "Implementation pinned above; the PR also includes delivery evidence. This is a pre-publication implementer review, not an independent approval.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-on-u-08",
+  "ownedPaths": [
+    "ui/src/onboarding-next/views/build/",
+    "docs/onboarding-delivery/ON-U-08.json",
+    "docs/onboarding-delivery/evidence/ON-U-08/"
+  ],
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "1097:16402",
+    "checkpoint": "Onboarding · Tutorial focus contour · 2026-10-14",
+    "version": "2410205462365531104",
+    "nodes": [
+      "1097:48188"
+    ],
+    "inspected": "Live Light loading composition inspected. Recovery and explicit saving phase come from the roadmap. Dark follows established onboarding/Brief tokens; no separate native Dark-frame verification claimed. No Figma edits."
+  },
+  "capabilityGate": {
+    "provides": [
+      "build-view.v1"
+    ],
+    "requires": [
+      "build-job.v1",
+      "draft-result.v1"
+    ],
+    "registered": false,
+    "enabled": false,
+    "enableAfter": [
+      "ON-U-10",
+      "ON-B-08 events",
+      "ON-B-10 authenticated durable result read",
+      "ON-B-11 registration",
+      "verified combined D/F/Q candidate"
+    ]
+  },
+  "checks": [
+    {
+      "name": "Module and legacy onboarding",
+      "outcome": "passed",
+      "tests": 116,
+      "newTests": 29,
+      "failures": 0,
+      "assertions": 423
+    },
+    {
+      "name": "New module tests",
+      "outcome": "passed",
+      "tests": 29,
+      "assertions": 100
+    },
+    {
+      "name": "TypeScript",
+      "outcome": "passed"
+    },
+    {
+      "name": "Production UI and independent preview builds",
+      "outcome": "passed",
+      "note": "Existing production CSS directive warnings. Standalone preview rebuilt at implementation head."
+    },
+    {
+      "name": "Normal implementation commit hooks",
+      "outcome": "passed",
+      "scope": "EE imports, migrations, 100 templates, package contents, 29 related tests, typecheck"
+    },
+    {
+      "name": "Browser layout matrix",
+      "outcome": "passed",
+      "scope": "1440x1000, 768x900 and 390x844 in Light and Dark. No horizontal overflow; content fits, controls at least 44px and keyboard reachable."
+    },
+    {
+      "name": "Browser recovery interactions",
+      "outcome": "passed",
+      "scope": "Ten scenario presentations, waiting for cancellation confirmation, reconnect/status recovery, stale updates ignored, success without durable reference held, failed navigation retried to exact sample version. No actual workflow run."
+    },
+    {
+      "name": "Repeated updates and accessibility examples",
+      "outcome": "passed",
+      "scope": "Ten request open/close, phase and stale-event cycles. Reduced-motion computed animation none; CSS 200% enlargement at 390px retains reachable focused action."
+    },
+    {
+      "name": "Actual B08/B10, U10/B11 discovery and complete D/F/Q activation",
+      "outcome": "blocked",
+      "reason": "Required providers, discovery/assembly and release evidence are absent from the independent base. No real workflow-generation, persistence or release-readiness claim."
+    },
+    {
+      "name": "Native WebView, screen reader, native browser zoom and OS reduced-motion preference",
+      "outcome": "not_run",
+      "reason": "Browser keyboard checks, explicit motion prop and CSS enlargement do not certify these environments."
+    },
+    {
+      "name": "GitHub CI",
+      "outcome": "not_run",
+      "reason": "Receipt captured before publication; inspect checks on the PR final head."
+    }
+  ],
+  "compatibility": {
+    "standalone": "Pinned main plus the owned optional module; no production sibling imports, registry, route, package or legacy UI changes.",
+    "combinedWith": [
+      {
+        "id": "ON-U-01",
+        "pr": 1051,
+        "head": "30664ba286ef1697548c3b573aeb7fa224b5dc91"
+      },
+      {
+        "id": "ON-U-02",
+        "pr": 1053,
+        "head": "82d011f0a8ea8205a7233cf9b141b0e363212ba1"
+      },
+      {
+        "id": "ON-U-03",
+        "pr": 1054,
+        "head": "5cc2b4397b6b79fe8d31e7dd1c058cfb8ee52d84"
+      },
+      {
+        "id": "ON-U-04",
+        "pr": 1056,
+        "head": "e7ce2d65d40cd6ac83f3e8421bbe27ef67845f16"
+      },
+      {
+        "id": "ON-U-05",
+        "pr": 1058,
+        "head": "34dcf1194dedd3bffca9d77d9a0badfbe37c2437"
+      },
+      {
+        "id": "ON-U-06",
+        "pr": 1060,
+        "head": "01a3ad86dced91e15b40c746be630e9657163e4a"
+      },
+      {
+        "id": "ON-U-07",
+        "pr": 1062,
+        "head": "fd94ad49df8dfaac766a357e2db20035d5084bb2"
+      },
+      {
+        "id": "ON-B-01",
+        "pr": 1050,
+        "head": "16e09ad5e891845905fcad872e98ef4f5109ba57"
+      },
+      {
+        "id": "ON-B-02",
+        "pr": 1055,
+        "head": "0f21d6d1848b4ea7acd5d01f76400c78b3c3068c"
+      },
+      {
+        "id": "ON-B-03",
+        "pr": 1059,
+        "head": "195381fc0ab40e29ee773fa6633044ddb846e6db"
+      },
+      {
+        "id": "ON-B-04",
+        "pr": 1061,
+        "head": "a1f0afd8d6bf572730beba3bf99a1ada2c4a7a08"
+      }
+    ],
+    "combinedTree": "615eb77c9308e6e4f17bff3f8c72b6f15d47d708",
+    "result": "Clean temporary merge; 262 UI/legacy tests (1049 assertions) and 332 onboarding-module tests (1914 assertions) passed. Scopes overlap and are not summed. Typecheck and production UI build passed.",
+    "removedModuleTree": "efcf2d91e0c9cfe78423c37b95bb3986c2591ab6",
+    "removedModuleResult": "Reverse-applied only ON-U-08 implementation: 233 remaining UI/legacy tests (949 assertions), typecheck and UI build passed. Temporary merge aborted and temporary worktree removed.",
+    "limit": "Packaging/coexistence/removal evidence, not live provider integration. D-33 release gate was blocked at audit. Later sibling heads are not certified by this candidate."
+  },
+  "review": {
+    "method": "PR reviewer skill, implementer self-review",
+    "report": "evidence/ON-U-08/review.md",
+    "remainingCodeFindings": 0,
+    "independentApproval": false
+  },
+  "evidence": "evidence/ON-U-08/verification.md",
+  "rollback": "Disable optional view before reverting if registered; revert owned files only. Preserve journey/request/job/draft data and legacy entry. No destructive migration.",
+  "quickVerify": {
+    "url": "http://127.0.0.1:4417/",
+    "command": "bun ui/src/onboarding-next/views/build/preview/serve.ts",
+    "actions": [
+      "Next phase changes only on a fixture event; stale update is ignored",
+      "Cancel build waits until Confirm cancellation",
+      "Select disconnected, then Check status",
+      "Select succeeded: no result until Verify saved draft",
+      "Fail next action before Verify saved draft; Try opening again uses the same reference",
+      "Try Light/Dark, narrow width and Reduce motion"
+    ]
+  },
+  "next": "ON-U-09"
+}
