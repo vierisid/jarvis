@@ -13,8 +13,8 @@ export interface JourneySnapshot {
   revision: number;
   stepId: JourneyStep;
   setupState: 'pending' | 'completed';
-  /** Null until acknowledged. This is not interview transport readiness. */
-  interviewState: null | 'done' | 'skipped';
+  /** Contract's unresolved initial state; no connection is started here. */
+  interviewState: 'connecting' | 'ready' | 'thinking' | 'error' | 'done' | 'skipped';
   tourState: 'pending' | 'in_progress' | 'done' | 'skipped';
   tourStepId: string | null;
   /** Kept verbatim for ON-B-06 to interpret; never used as a new room ID. */

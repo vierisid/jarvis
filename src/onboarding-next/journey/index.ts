@@ -25,7 +25,7 @@ function parseStored(value: unknown, scope: Scope): StoredJourney {
   if (s.schemaVersion !== 1) throw new JourneyError('unsupported_schema', true);
   // Future values stay untouched and cannot be interpreted as incomplete.
   if (!step(s.stepId) || !oneOf(s.setupState, ['pending', 'completed'])
-    || !oneOf(s.interviewState, [null, 'done', 'skipped'])
+    || !oneOf(s.interviewState, ['connecting', 'ready', 'thinking', 'error', 'done', 'skipped'])
     || !oneOf(s.tourState, ['pending', 'in_progress', 'done', 'skipped'])
     || !oneOf(s.activationState, ['pending', 'building', 'draft_saved', 'explored', 'legacy_completed'])
     || !oneOf(s.completion, ['active', 'completed', 'explored', 'legacy_completed'])
@@ -57,13 +57,13 @@ function fromLegacy(scope: Scope, legacy: LegacyStatus): StoredJourney {
     || (legacy.tutorial_progress_step !== null && !identity(legacy.tutorial_progress_step))) {
     throw new JourneyError('legacy_status_unknown');
   }
-  const interviewState = legacy.setup_skipped_profile ? 'skipped' : legacy.profile_completed ? 'done' : null;
+  const interviewState = legacy.setup_skipped_profile ? 'skipped' : legacy.profile_completed ? 'done' : 'connecting';
   const tourState = legacy.tutorial_completed ? 'done' : legacy.tutorial_dismissed ? 'skipped' : 'pending';
-  const complete = legacy.setup_completed && interviewState !== null && tourState !== 'pending';
+  const complete = legacy.setup_completed && interviewState !== 'connecting' && tourState !== 'pending';
   return {
     snapshot: {
       schemaVersion: 1, scopeId: scopeId(scope), journeyId: randomUUID(), revision: 0,
-      stepId: complete ? 'exited' : !legacy.setup_completed ? 'welcome' : interviewState === null ? 'interview' : 'tour',
+      stepId: complete ? 'exited' : !legacy.setup_completed ? 'welcome' : interviewState === 'connecting' ? 'interview' : 'tour',
       setupState: legacy.setup_completed ? 'completed' : 'pending', interviewState, tourState,
       tourStepId: null, legacyTourStepId: legacy.tutorial_progress_step,
       activationState: complete ? 'legacy_completed' : 'pending',
@@ -134,7 +134,7 @@ function apply(s: JourneySnapshot, c: Navigation | Acknowledgement): JourneySnap
       break;
     case 'interview_finished':
       requireState(s.completion === 'active' && s.setupState === 'completed');
-      requireState(s.interviewState === null || s.interviewState === c.state);
+      requireState(!interviewDone || s.interviewState === c.state);
       n.interviewState = c.state;
       break;
     case 'tour_progress':

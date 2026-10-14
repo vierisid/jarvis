@@ -49,11 +49,13 @@ the exact authorized flow/version before `draft_saved`. This provider stores
 acknowledgements, not evidence that composition ran or that a workflow is runnable.
 It never publishes, enables, runs or modifies a workflow, profile or connection.
 
-`interviewState` is null before a terminal acknowledgement, then the contract's
-`done` or `skipped`. It is independent of session transport state: this provider
-does not invent `ready`, `thinking` or a live session. Setup/tour/activation states
-record progress independently. A build or result arriving during tutorial replay
-updates its return location while preserving the tutorial location.
+`interviewState` begins at the contract's nonterminal `connecting` value, then
+records `done` or `skipped` on acknowledgement. This means unresolved interview
+progress, not a connection started by the journey provider. All six contract
+values are readable for compatibility; live session transport belongs to ON-B-04.
+Setup/tour/activation states record progress independently. A build or result
+arriving during tutorial replay updates its return location while preserving the
+tutorial location.
 
 ## Retries and reconciliation
 

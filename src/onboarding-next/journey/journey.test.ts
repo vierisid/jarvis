@@ -68,7 +68,7 @@ describe('versioned journey and legacy compatibility', () => {
     const f = fixture();
     expect(f.raw()).toBeNull();
     const first = ready(await f.provider.read());
-    expect(first).toMatchObject({ schemaVersion: 1, revision: 0, stepId: 'welcome', setupState: 'pending', interviewState: null });
+    expect(first).toMatchObject({ schemaVersion: 1, revision: 0, stepId: 'welcome', setupState: 'pending', interviewState: 'connecting' });
     expect(ready(await f.make(owner, f.open()).read())).toEqual(first);
     expect(JSON.parse(f.raw()!).snapshot).toEqual(first);
   });
