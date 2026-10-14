@@ -17,6 +17,7 @@ import { Chip, Icon } from "../../ui";
 import { openRoom } from "../../router";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
+import { pickRoomActionTarget, withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 import {
   useWorkspacesData,
   type Project,
@@ -236,9 +237,10 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
         setSearch(typeof args.query === "string" ? args.query : "");
         backToList();
         return true;
+      // A held voice action arrives with the project the person approved
+      // pinned by id (#1008); pickRoomActionTarget takes that one or none.
       case "select_project": {
-        const name = typeof args.name === "string" ? args.name : "";
-        const p = data.findByName(name);
+        const p = pickRoomActionTarget(data.projects, args, data.findByName);
         if (!p) return false;
         openProject(p);
         // The IDE only renders when the room is expanded (the inline
@@ -255,7 +257,8 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "create_project": {
         const name = typeof args.name === "string" ? args.name.trim() : "";
         if (!name) return false;
-        const template = typeof args.template === "string" ? args.template : "vite-react";
+        // The default is the one the daemon showed on the card (#1008).
+        const template = withRoomActionDefaults("workspaces", "create_project", args).template as string;
         (async () => {
           const r = await data.createProject({ name, template });
           if (r.ok) {
@@ -268,8 +271,7 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
         return true;
       }
       case "start_server": {
-        const name = typeof args.name === "string" ? args.name : "";
-        const p = name ? data.findByName(name) : activeProject;
+        const p = pickRoomActionTarget(data.projects, args, data.findByName, activeProject);
         if (!p) return false;
         (async () => {
           const r = await data.startServer(p.id);
@@ -278,8 +280,7 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
         return true;
       }
       case "stop_server": {
-        const name = typeof args.name === "string" ? args.name : "";
-        const p = name ? data.findByName(name) : activeProject;
+        const p = pickRoomActionTarget(data.projects, args, data.findByName, activeProject);
         if (!p) return false;
         (async () => {
           const r = await data.stopServer(p.id);

@@ -36,7 +36,7 @@ import {
   type InterviewSession,
 } from './onboarding-interviewer.ts';
 import { getMessages } from '../vault/conversations.ts';
-import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
+import { createCommitment, findCommitments, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { recordAgentActivity } from '../vault/agent-activity.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
@@ -58,7 +58,12 @@ import type { FileEntry } from '../sites/types.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
 import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
-import { classifierMustConfirmRoomAction, realtimeRoomActionRefusal, type RealtimeRoomActionContext } from './voice-room-action-gate.ts';
+import {
+  classifierMustConfirmRoomAction, realtimeRoomActionRefusal, resolveHeldRoomAction,
+  type RealtimeRoomActionContext, type RoomActionTargetLists,
+} from './voice-room-action-gate.ts';
+import { findContent } from '../vault/content-pipeline.ts';
+import { roomActionTargetKind } from './room-action-targets.ts';
 
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
@@ -1957,6 +1962,27 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
+   * The lists a held room action's item is found in (#1008), read from the
+   * same sources the rooms load them from: /api/sites/projects, /api/content
+   * and /api/vault/commitments.
+   */
+  protected roomActionTargetLists(): RoomActionTargetLists {
+    return {
+      project: async () => {
+        if (!this.siteBuilderService) throw new Error('site builder not available');
+        return this.siteBuilderService.listProjectsWithStatus();
+      },
+      content: async () => findContent({}),
+      task: async () => findCommitments({}),
+    };
+  }
+
+  /** `ra` with its defaults and its item settled before its card (#1008). */
+  private settleHeldRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }) {
+    return resolveHeldRoomAction(ra, this.roomActionTargetLists(), `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`);
+  }
+
+  /**
    * What a realtime room action is judged against (#973), read from the
    * orchestrator: its emergency state, and the taint gating and the session
    * taint its own realtime tool calls are judged against.
@@ -2520,6 +2546,15 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // classifier's reading alone, whatever confidence it gave itself (#973):
     // it is repeated back, and the person's yes runs it.
     if (intent.room_action && classifierMustConfirmRoomAction(intent.room_action, this.agentService.getOrchestrator().getTaintGating())) {
+      // The card shows what confirming runs, so whatever the handler would
+      // decide later (a default, the item a name matches, the selection) is
+      // decided now and pinned into the hold (#1008).
+      const settled = await this.settleHeldRoomAction(intent.room_action);
+      if (!settled.ok) {
+        this.broadcastAssistantAck(settled.message, requestId);
+        this.broadcastThinkingEnd(requestId);
+        return;
+      }
       const pending: PendingVoiceConfirmation = {
         id: intent.id,
         intent,
@@ -2528,7 +2563,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         channel: 'websocket',
         kind: 'repeat_back',
         createdAt: Date.now(),
-        roomAction: intent.room_action,
+        roomAction: settled.ra,
       };
       this.pendingVoiceConfirmations.set(pending.id, pending);
       this.broadcastRepeatBackRequest(pending);
@@ -2598,8 +2633,18 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // the transcript, which has no way to carry it out. One that changes
       // more than the screen is always a repeat-back, the card that shows
       // what confirming runs (#973); a clarifier shows only the intent.
-      const roomAction = intent.room_action && isRoomAction(intent.room_action.room, intent.room_action.action)
+      let roomAction: PendingVoiceConfirmation['roomAction'] = intent.room_action && isRoomAction(intent.room_action.room, intent.room_action.action)
         ? intent.room_action : undefined;
+      // A side-effecting one is settled before its card, as above (#1008).
+      if (roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) {
+        const settled = await this.settleHeldRoomAction(roomAction);
+        if (!settled.ok) {
+          this.broadcastAssistantAck(settled.message, requestId);
+          this.broadcastThinkingEnd(requestId);
+          return;
+        }
+        roomAction = settled.ra;
+      }
       const kind: PendingVoiceConfirmation['kind'] = route === 'clarify'
         && !(roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) ? 'clarifier' : 'repeat_back';
       const pending: PendingVoiceConfirmation = {
@@ -3335,12 +3380,30 @@ function navigateRoomNotice(key: string, requestId?: string): WSMessage {
  * every argument the classifier filled in, in full and JSON-quoted so a value
  * cannot pass for another argument, and what the action can do. The
  * arguments are what the classifier may have read wrong.
+ *
+ * The id a held action's item is pinned by (#1008) is left out: the name
+ * beside it is that item's own, set when it was pinned, and no other item
+ * has it (an ambiguous name is refused), so the id says nothing more to the
+ * person, and would be read aloud.
  */
 export function describeRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
-  const args = Object.entries(ra.args ?? {}).map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v) ?? String(v)}`);
+  const pinned = roomActionTargetKind(ra.room, ra.action) !== null;
+  const args = Object.entries(ra.args ?? {})
+    .filter(([k]) => !(pinned && k === 'id'))
+    .map(([k, v]) => `${visible(JSON.stringify(k))}: ${visible(JSON.stringify(v) ?? String(v))}`);
   const head = `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
   const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
   return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+}
+
+/**
+ * `s` with every control, format, line- or paragraph-separator character
+ * written as a visible `\uXXXX` (#1008). JSON leaves bidi overrides and
+ * zero-width characters as they are, and one in a value (from the classifier,
+ * or a stored item name) could reorder or hide the rest of the card.
+ */
+function visible(s: string): string {
+  return s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`);
 }
 
 /** What each category a room action can reach means, for the repeat-back. */

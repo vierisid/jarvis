@@ -172,6 +172,102 @@ test("an action the daemon stopped waiting for does not run, queued or not", asy
   expect(seen).toEqual(["create_task:still waited", "create_task:no deadline"]);
 });
 
+// #1008: a held voice action arrives with the item the person approved pinned
+// by id. The real Workspaces room acts on that one, not on what the name or
+// the selection would pick now, and on none when it is gone.
+test("Workspaces acts on the pinned project, or on none", async () => {
+  const { WorkspacesRoomBody } = await import("./workspaces/WorkspacesRoom");
+  const project = (id: string, name: string) => ({
+    id, name, path: `/p/${id}`, framework: "vite-react", devPort: null, devServerPid: null, status: "running",
+    gitBranch: null, gitDirty: false, createdAt: 0, lastOpenedAt: 0, githubUrl: null,
+  });
+  const posts: string[] = [];
+  let dispatch!: Dispatch;
+  function Probe() { dispatch = bus.useRoomActionDispatcher().dispatch; return null; }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if ((init?.method ?? "GET") !== "GET") { posts.push(String(input)); return NativeResponse.json({ ok: true, message: "stopped" }); }
+    return NativeResponse.json([project("p1", "demo"), project("p2", "demo-old")]);
+  }) as unknown as typeof fetch;
+  host = document.createElement("div"); document.body.append(host);
+  root = createRoot(host);
+  await act(async () => {
+    root!.render(React.createElement(bus.RoomActionBusProvider, null, React.createElement(Probe),
+      React.createElement(WorkspacesRoomBody, { mode: "expanded" })));
+  });
+  // Let the room load its list.
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  // Not vacuous: by name alone it is p1, the exact match.
+  expect(await send(dispatch, "workspaces", "stop_server", { name: "demo" })).toBe(true);
+  expect(posts).toEqual(["/api/sites/projects/p1/stop"]);
+  posts.length = 0;
+  // The pinned id says p2, and p2 is what runs.
+  expect(await send(dispatch, "workspaces", "stop_server", { name: "demo", id: "p2" })).toBe(true);
+  expect(posts).toEqual(["/api/sites/projects/p2/stop"]);
+  posts.length = 0;
+  // A pinned project that is gone is nothing, not the name's match.
+  expect(await send(dispatch, "workspaces", "stop_server", { name: "demo", id: "gone" })).toBe(false);
+  expect(posts).toEqual([]);
+});
+
+/** Mount `element` in a real bus, its GETs answered with `list`; returns the dispatcher and the writes. */
+async function mountRoom(element: React.ReactElement, list: unknown[] | null): Promise<{ dispatch: Dispatch; posts: string[] }> {
+  const posts: string[] = [];
+  let dispatch!: Dispatch;
+  function Probe() { dispatch = bus.useRoomActionDispatcher().dispatch; return null; }
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if ((init?.method ?? "GET") !== "GET") { posts.push(`${init!.method} ${String(input)}`); return NativeResponse.json({ ok: true, message: "done" }); }
+    return list === null ? new NativeResponse("{}", { status: 404 }) : NativeResponse.json(list);
+  }) as unknown as typeof fetch;
+  host = document.createElement("div"); document.body.append(host);
+  root = createRoot(host);
+  await act(async () => { root!.render(React.createElement(bus.RoomActionBusProvider, null, React.createElement(Probe), element)); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  return { dispatch, posts };
+}
+
+test("Content advances the pinned item, and a name that matches nothing is not the selection", async () => {
+  const { ContentRoomBody } = await import("./content/ContentRoom");
+  const item = (id: string, title: string) => ({ id, title, body: "", content_type: "blog", stage: "idea", tags: [], created_at: 0, updated_at: 0, scheduled_at: null, published_at: null, published_url: null, created_by: "user", sort_order: 0 });
+  const { dispatch, posts } = await mountRoom(React.createElement(ContentRoomBody, { mode: "expanded" }), [item("c1", "Launch post"), item("c2", "Q3 recap")]);
+  expect(await send(dispatch, "content", "select", { name: "launch" })).toBe(true);
+  // The old case fell back to the selection here and advanced "Launch post".
+  expect(await send(dispatch, "content", "advance", { name: "zzz" })).toBe(false);
+  expect(posts).toEqual([]);
+  expect(await send(dispatch, "content", "advance", { name: "Launch post", id: "c2" })).toBe(true);
+  expect(posts).toEqual(["POST /api/content/c2/advance"]);
+});
+
+test("Tasks completes the pinned task, not the first by that name", async () => {
+  const { TasksRoomBody } = await import("./tasks/TasksRoom");
+  const task = (id: string) => ({ id, what: "Pay rent", when_due: null, context: null, priority: "normal", status: "pending", assigned_to: null, created_from: null, created_at: 0, completed_at: null, result: null, retry_policy: null, sort_order: 0 });
+  const { dispatch, posts } = await mountRoom(React.createElement(TasksRoomBody, { mode: "expanded" }), [task("t1"), task("t2")]);
+  // Not vacuous: by name alone it is t1.
+  expect(await send(dispatch, "tasks", "complete_task", { name: "Pay rent" })).toBe(true);
+  expect(posts).toEqual(["PATCH /api/vault/commitments/t1"]);
+  posts.length = 0;
+  expect(await send(dispatch, "tasks", "complete_task", { name: "Pay rent", id: "t2" })).toBe(true);
+  expect(posts).toEqual(["PATCH /api/vault/commitments/t2"]);
+});
+
+test("Settings refuses a voice change with no voice, rather than set the voice \"undefined\"", async () => {
+  const { SettingsRoomBody } = await import("./settings/SettingsRoom");
+  const bodies: string[] = [];
+  // Nothing loads (404): the room renders with no config, and still takes actions.
+  const { dispatch, posts } = await mountRoom(React.createElement(SettingsRoomBody, { mode: "expanded" }), null);
+  const stub = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+    if ((init?.method ?? "GET") !== "GET") bodies.push(String(init?.body));
+    return stub(input, init);
+  }) as typeof fetch;
+  expect(await send(dispatch, "settings", "set_tts_voice", {})).toBe(false);
+  expect(await send(dispatch, "settings", "set_tts_voice", { voice: "  " })).toBe(false);
+  expect(posts).toEqual([]);
+  // Not vacuous: a real voice is sent.
+  expect(await send(dispatch, "settings", "set_tts_voice", { voice: "en-GB-Ryan" })).toBe(true);
+  expect(posts.filter((p) => p.endsWith("/api/config/tts"))).toHaveLength(1);
+  expect(bodies.some((b) => b.includes('"voice":"en-GB-Ryan"'))).toBe(true);
+});
+
 test("the dashboard ties an action it answers to the socket it came on (#1010)", async () => {
   const { readFileSync } = await import("node:fs");
   const src = readFileSync(new URL("../../hooks/useWebSocket.ts", import.meta.url), "utf8");

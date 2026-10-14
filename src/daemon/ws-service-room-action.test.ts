@@ -10,6 +10,10 @@ import { describeRoomAction, isVoiceAffirmative, roomActionReply, WebSocketServi
 import { TOOL_RESULT_GRACE_MS } from '../comms/realtime.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS } from './room-action-results.ts';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
+import type { RoomActionTargetLists } from './voice-room-action-gate.ts';
+import { closeDb, initDatabase } from '../vault/schema.ts';
+import { createCommitment } from '../vault/commitments.ts';
+import { createContent } from '../vault/content-pipeline.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { buildTaintGating } from '../authority/taint-gating.ts';
@@ -552,6 +556,12 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
     };
     const real = base.svc.requestRoomAction.bind(base.svc);
     (base.svc as unknown as { requestRoomAction: typeof real }).requestRoomAction = (a, _t, o) => real(a, 20, o);
+    // What the rooms would list (#1008): a held action's item is found here.
+    (base.svc as unknown as { roomActionTargetLists: () => RoomActionTargetLists }).roomActionTargetLists = () => ({
+      project: async () => [{ id: 'proj-demo', name: 'demo' }],
+      content: async () => [{ id: 'c-1', title: 'Launch post' }],
+      task: async () => [{ id: 't-1', what: 'Pay rent' }],
+    });
     const frames = () => [...speaker.sent, ...other.sent]
       .filter((m) => m.payload?.source === 'room_action' || m.payload?.source === 'navigate_room')
       .map((m) => `${m.payload.source}:${String(m.payload.action ?? m.payload.key)}`);
@@ -653,14 +663,83 @@ describe('voice room actions are held to what their handlers do (#973)', () => {
   });
 
   test('the classifier repeats a high-impact action back however sure it says it is, and runs nothing', async () => {
+    // The card shows the action as it will run (#1008): the handler's
+    // defaults filled in, and the project found and pinned by id. It used to
+    // show only what the classifier wrote, so "replay onboarding" hid the
+    // scope "all" that clears the profile.
+    const shown: Record<string, Record<string, unknown>> = {
+      'workspaces/start_server': { name: 'demo', id: 'proj-demo' },
+      'workspaces/select_project': { name: 'demo', id: 'proj-demo' },
+      'workspaces/create_project': { name: 'demo', template: 'vite-react' },
+      'settings/replay_onboarding': { scope: 'all' },
+    };
     for (const [room, action, args] of governed) {
       const { internals, speaker, other, frames } = setup();
       await internals.routeClassifiedVoiceIntent(intent(room, action, args), 'do it', 'req', speaker.ws);
       expect(frames()).toEqual([]);
       const card = other.sent.find((m) => m.payload?.source === 'repeat_back_request');
-      expect(card?.payload).toMatchObject({ id: `i-${room}-${action}`, transcript: 'do it', action: describeRoomAction({ room, action, args }) });
+      const runs = { room, action, args: shown[`${room}/${action}`] ?? args };
+      expect(card?.payload).toMatchObject({ id: `i-${room}-${action}`, transcript: 'do it', action: describeRoomAction(runs) });
       expect(internals.pendingVoiceConfirmations.size).toBe(1);
     }
+    expect(describeRoomAction({ room: 'settings', action: 'replay_onboarding', args: { scope: 'all' } }))
+      .toBe('Settings: replay onboarding {"scope": "all"} (deletes data; changes settings)');
+  });
+
+  test('confirming runs what the card showed, whatever the selection or the list did meanwhile (#1008)', async () => {
+    const { svc, internals, speaker, other } = setup();
+    await internals.routeClassifiedVoiceIntent(intent('workspaces', 'stop_server', { name: 'dem' }), 'stop demo', 'req', speaker.ws);
+    expect(other.sent.find((m) => m.payload?.source === 'repeat_back_request')!.payload.action)
+      .toBe('Workspaces: stop server {"name": "demo"} (runs a command on this machine)');
+    // A project created in between that "dem" would now match first changes nothing.
+    (svc as unknown as { roomActionTargetLists: () => RoomActionTargetLists }).roomActionTargetLists = () => ({
+      project: async () => [{ id: 'proj-dem', name: 'dem' }, { id: 'proj-demo', name: 'demo' }],
+      content: async () => [], task: async () => [],
+    });
+    expect(await internals.resolveVoiceConfirmation('i-workspaces-stop_server', 'confirm')).toEqual({ ok: true });
+    const sent = speaker.sent.find((m) => m.payload?.source === 'room_action')!;
+    expect(sent.payload).toMatchObject({ room: 'workspaces', action: 'stop_server', args: { name: 'demo', id: 'proj-demo' } });
+  });
+
+  test('a held action that would act on the selection, or on nothing, is not held: the person is asked to name it (#1008)', async () => {
+    const cases: Array<[string, string, Record<string, unknown>, string]> = [
+      ['workspaces', 'start_server', {}, 'I haven\'t done "Workspaces: start server": say which project by name, and I\'ll show you which one before I do it.'],
+      ['content', 'advance', {}, 'I haven\'t done "Content: advance": say which content item by name, and I\'ll show you which one before I do it.'],
+      ['tasks', 'complete_task', { name: 'zebra' }, 'I haven\'t done "Tasks: complete task": I couldn\'t find a task called "zebra".'],
+    ];
+    for (const [room, action, args, said] of cases) {
+      const { internals, speaker, other, frames } = setup();
+      await internals.routeClassifiedVoiceIntent(intent(room, action, args), 'do it', 'req', speaker.ws);
+      expect(frames()).toEqual([]);
+      expect(other.sent.some((m) => m.payload?.source === 'repeat_back_request')).toBe(false);
+      expect(internals.pendingVoiceConfirmations.size).toBe(0);
+      expect(other.sent.filter((m) => m.payload?.source === 'assistant_message').map((m) => m.payload.text)).toEqual([said]);
+    }
+  });
+
+  test('the lists a held action is settled against are the ones the rooms load (#1008)', async () => {
+    initDatabase(':memory:', { quiet: true });
+    try {
+      createCommitment('Pay rent');
+      createContent('Launch post');
+      const svc = makeService().svc as unknown as { roomActionTargetLists: () => RoomActionTargetLists };
+      const lists = svc.roomActionTargetLists();
+      expect((await lists.task()).map((t) => t.what)).toEqual(['Pay rent']);
+      expect((await lists.content()).map((c) => c.title)).toEqual(['Launch post']);
+      // No site builder, no projects: the hold is refused, not guessed.
+      await expect(lists.project()).rejects.toThrow('site builder not available');
+    } finally {
+      closeDb();
+    }
+  });
+
+  test('a side-effecting action held at low confidence is settled the same way (#1008)', async () => {
+    // Narrowed governed categories: create_project is held only by the
+    // confidence route, not the governed one.
+    const { internals, speaker, other } = setup({ gating: { governed_categories: ['send_message'] } as never });
+    await internals.routeClassifiedVoiceIntent(intent('workspaces', 'create_project', { name: 'site' }, { confidence: 0.7 }), 'x', 'req', speaker.ws);
+    expect(other.sent.find((m) => m.payload?.source === 'repeat_back_request')!.payload.action)
+      .toBe('Workspaces: create project {"name": "site", "template": "vite-react"} (installs software; runs a command on this machine)');
   });
 
   test('confirming the repeat-back runs the held action on the dashboard that spoke', async () => {
@@ -789,6 +868,22 @@ describe('describeRoomAction shows every argument the classifier filled in (#973
   test('a value cannot pass for another argument', () => {
     const shown = describeRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'Pay rent", "when": "never' } });
     expect(shown).toBe('Tasks: create task {"title": "Pay rent\\", \\"when\\": \\"never"} (saves data)');
+  });
+
+  test('a bidi override or invisible character is shown, not obeyed (#1008)', () => {
+    // Built from code points so this file holds none of them itself.
+    const [rlo, zwsp, lsep] = [0x202e, 0x200b, 0x2028].map((c) => String.fromCodePoint(c));
+    const shown = describeRoomAction({ room: 'tasks', action: 'create_task', args: { title: `Pay ${rlo}rent${zwsp}`, [`x${lsep}`]: 1 } });
+    expect(shown).toBe('Tasks: create task {"title": "Pay \\u202erent\\u200b", "x\\u2028": 1} (saves data)');
+    expect([...shown].filter((ch) => [0x202e, 0x200b, 0x2028].includes(ch.codePointAt(0)!))).toEqual([]);
+  });
+
+  test('a pinned item is shown by its name, without the id it is pinned by (#1008)', () => {
+    expect(describeRoomAction({ room: 'tasks', action: 'complete_task', args: { name: 'Pay rent', id: 't-1' } }))
+      .toBe('Tasks: complete task {"name": "Pay rent"} (saves data)');
+    // An action that pins nothing shows every argument.
+    expect(describeRoomAction({ room: 'tasks', action: 'create_task', args: { title: 'x', id: 'y' } }))
+      .toBe('Tasks: create task {"title": "x", "id": "y"} (saves data)');
   });
 });
 

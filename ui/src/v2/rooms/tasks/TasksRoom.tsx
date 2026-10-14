@@ -6,6 +6,7 @@ import { RoomShell } from "../RoomShell";
 import { openRoom } from "../../router";
 import { useRoomActions } from "../useRoomActionBus";
 import { parseRelativeDate } from "../../../../../src/voice/parse-date";
+import { pickRoomActionTarget, withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 import { useTasksData, type Task, type TaskPriority, type TaskStatus } from "./useTasksData";
 import "./TasksRoom.css";
 
@@ -86,9 +87,11 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
         (async () => { const r = await data.createTask({ what: title, when_due: parsed?.ts, priority: (args.priority as TaskPriority) ?? undefined, assigned_to: typeof args.assigned_to === "string" ? args.assigned_to : undefined }); setToast({ text: r.ok ? `Created task "${title}".` : r.message, tone: r.ok ? "ok" : "warn" }); })();
         return true;
       }
-      case "complete_task": { const t = data.findByName(typeof args.name === "string" ? args.name : ""); if (!t) return false; (async () => toastFrom(await data.updateStatus(t.id, "completed")))(); return true; }
-      case "update_priority": { const t = data.findByName(typeof args.name === "string" ? args.name : ""); if (!t) return false; (async () => toastFrom(await data.updatePriority(t.id, args.level as TaskPriority)))(); return true; }
-      case "reassign": { const t = data.findByName(typeof args.name === "string" ? args.name : ""); if (!t) return false; (async () => toastFrom(await data.reassign(t.id, (args.agent as string) ?? null)))(); return true; }
+      // A held voice action arrives with the task pinned by id, and any
+      // default filled in, as the daemon showed them on the card (#1008).
+      case "complete_task": { const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false; (async () => toastFrom(await data.updateStatus(t.id, "completed")))(); return true; }
+      case "update_priority": { const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false; (async () => toastFrom(await data.updatePriority(t.id, args.level as TaskPriority)))(); return true; }
+      case "reassign": { const t = pickRoomActionTarget(data.tasks, args, data.findByName); if (!t) return false; const agent = withRoomActionDefaults("tasks", "reassign", args).agent as string | null; (async () => toastFrom(await data.reassign(t.id, agent)))(); return true; }
       default: return false;
     }
   });

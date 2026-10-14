@@ -33,6 +33,9 @@
 
 import { DEFAULT_TAINT_GOVERNED, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 import { roomActionCategories } from './room-actions.ts';
+import {
+  collapseRoomActionAliases, matchByTitle, matchProjectByName, roomActionTargetKind, withRoomActionDefaults, type RoomActionTargetKind,
+} from './room-action-targets.ts';
 
 export type RealtimeRoomActionContext = {
   /** The emergency state when it stops execution (paused, killed), else null. */
@@ -86,4 +89,85 @@ export function classifierMustConfirmRoomAction(
 ): boolean {
   const governed: readonly string[] = gating?.governed_categories ?? DEFAULT_TAINT_GOVERNED;
   return roomActionCategories(ra.room, ra.action).some((c) => governed.includes(c));
+}
+
+/** The items a held action can act on, read the way the dashboard reads them. */
+export type RoomActionTargetLists = {
+  [K in RoomActionTargetKind]: () => Promise<ReadonlyArray<{ id: string } & Record<string, unknown>>>;
+};
+
+const TARGET_NOUN: Record<RoomActionTargetKind, string> = { project: 'project', content: 'content item', task: 'task' };
+
+/** What the person called an item, and the field the room matches it on. */
+function targetName(kind: RoomActionTargetKind, item: Record<string, unknown>): string {
+  const v = kind === 'project' ? item.name : kind === 'content' ? item.title : item.what;
+  return typeof v === 'string' ? v : '';
+}
+
+export type HeldRoomAction = { room: string; action: string; args?: Record<string, unknown> };
+
+/**
+ * A name the classifier gave, as a refusal repeats it to every dashboard:
+ * quoted, and cut at 80 characters, since it is not checked against anything.
+ */
+function quoted(s: string): string {
+  return JSON.stringify(s.length > 80 ? `${s.slice(0, 80)}...` : s);
+}
+
+/**
+ * `ra` as it will run, settled before the person is asked about it (#1008):
+ * every default its handler would supply filled in, and the item it acts on
+ * resolved by the room's own match and pinned by id, its full name shown in
+ * place of the one heard. Its handler takes a pinned id as given
+ * (pickRoomActionTarget), so the selection and the list changing between the
+ * card and the click cannot change what runs.
+ *
+ * An action that picks an item must name one: with no name its handler acts
+ * on whatever the dashboard has selected, which the daemon cannot see and
+ * the person cannot approve. Refused, with what to say instead, when no name
+ * was given, nothing matches, or the list cannot be read. `what` is how the
+ * refusal names the action.
+ */
+export async function resolveHeldRoomAction(
+  ra: HeldRoomAction,
+  lists: RoomActionTargetLists,
+  what: string,
+): Promise<{ ok: true; ra: HeldRoomAction } | { ok: false; message: string }> {
+  const args = withRoomActionDefaults(ra.room, ra.action, collapseRoomActionAliases(ra.room, ra.action, ra.args ?? {}));
+  const kind = roomActionTargetKind(ra.room, ra.action);
+  if (!kind) return { ok: true, ra: { ...ra, args } };
+  const noun = TARGET_NOUN[kind];
+  const not = `I haven't done "${what}"`;
+  const pinnedId = typeof args.id === 'string' && args.id ? args.id : null;
+  const name = typeof args.name === 'string' ? args.name.trim() : '';
+  if (!pinnedId && !name) {
+    return { ok: false, message: `${not}: say which ${noun} by name, and I'll show you which one before I do it.` };
+  }
+  let listed: ReadonlyArray<{ id: string } & Record<string, unknown>>;
+  try {
+    listed = await lists[kind]();
+  } catch (err) {
+    console.warn(`[voice] could not list ${noun}s for ${ra.room}/${ra.action}:`, err instanceof Error ? err.message : err);
+    return { ok: false, message: `${not}: I couldn't look up your ${noun}s just now.` };
+  }
+  // A finished task is not one a voice command completes, reprioritises or
+  // reassigns: a repeating "Pay rent" would otherwise pin last month's.
+  const items = kind === 'task' ? listed.filter((i) => i.status !== 'completed' && i.status !== 'failed') : listed;
+  const item = pinnedId
+    ? items.find((i) => i.id === pinnedId) ?? null
+    : kind === 'project'
+      ? matchProjectByName(items.map((i) => ({ ...i, name: targetName(kind, i) })), name)
+      : matchByTitle(items, (i) => targetName(kind, i), name);
+  if (!item) {
+    const said = pinnedId ? `with id ${quoted(pinnedId)}` : `called ${quoted(name)}`;
+    return { ok: false, message: `${not}: I couldn't find a ${noun} ${said}.` };
+  }
+  // The card shows the item by its name, so two by the same name are two
+  // the person cannot tell apart on it.
+  const shown = targetName(kind, item);
+  const same = items.filter((i) => targetName(kind, i).trim().toLowerCase() === shown.trim().toLowerCase()).length;
+  if (same > 1) {
+    return { ok: false, message: `${not}: ${same} ${noun}s are called ${JSON.stringify(shown)}, so I can't tell which you mean. Do it from the room.` };
+  }
+  return { ok: true, ra: { ...ra, args: { ...args, id: item.id, name: shown } } };
 }

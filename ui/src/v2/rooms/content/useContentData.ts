@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { matchByTitle } from "../../../../../src/daemon/room-action-targets";
 import { useLiveData } from "../../shell/LiveDataContext";
 
 const POLL_INTERVAL_MS = 8000;
@@ -146,13 +147,8 @@ export function useContentData() {
   }, [items]);
 
   const findByName = useCallback(
-    (name: string): ContentItem | null => {
-      const q = name.trim().toLowerCase();
-      if (!q) return null;
-      const exact = items.find((i) => i.title.toLowerCase() === q);
-      if (exact) return exact;
-      return items.find((i) => i.title.toLowerCase().includes(q)) ?? null;
-    },
+    // Shared with the daemon (#1008), as in Workspaces.
+    (name: string): ContentItem | null => matchByTitle(items, (i) => i.title, name),
     [items],
   );
 
