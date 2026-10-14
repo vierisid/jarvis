@@ -961,13 +961,15 @@ for (const name of Object.keys(jobs))
 //
 // publish-brain now runs beside publish-sidecar too, by design: the two are
 // released by one approval. The only command of its that this rule counts is
-// the pinned npm install, `npm install -g "npm@${NPM_VERSION}"`, which
-// publish-sidecar runs itself, and NPM_VERSION is an exact version that
-// workflow-hardening.test.sh holds both workflows to. That one line, spelled
-// exactly so on a line of its own and in publish-brain alone, is not
-// counted; anything else still is. The pin is the workflow-level env, so no
-// job or step may set NPM_VERSION over it, or the exempt line would install
-// whatever that names.
+// the pinned npm install, `npm install -g --offline --ignore-scripts
+// "$npm_tgz"` (#1000), which publish-sidecar runs itself: the tarball at
+// that path was fetched for NPM_VERSION and checked against NPM_INTEGRITY on
+// the lines before it, which workflow-hardening.test.sh holds both
+// workflows to. That one line, spelled exactly so on a line of its own and
+// in publish-brain alone, is not counted; anything else still is. The pins
+// are the workflow-level env, so no job or step may set NPM_VERSION or
+// NPM_INTEGRITY over them, or the exempt line would install whatever they
+// name.
 const upstreamOf = (j, target, seen = new Set()) => {
   if (j === target) return true;
   if (seen.has(j)) return false;
@@ -977,9 +979,11 @@ const upstreamOf = (j, target, seen = new Set()) => {
 if (!jobs["publish-sidecar"]) out.push("no publish-sidecar job, so nothing can be ordered around the sidecar publish");
 for (const [name, job] of Object.entries(jobs)) {
   const runs = (job.steps ?? []).map((st) => typeof st.run === "string" ? st.run : "").join("\n")
-    .split("\n").filter((l) => name !== "publish-brain" || !/^\s*npm install -g "npm@\$\{NPM_VERSION\}"\s*$/.test(l)).join("\n");
-  if (job.env && "NPM_VERSION" in job.env) out.push(name + ": sets NPM_VERSION over the workflow pin");
-  for (const st of job.steps ?? []) if (st.env && "NPM_VERSION" in st.env) out.push(name + ": a step sets NPM_VERSION over the workflow pin");
+    .split("\n").filter((l) => name !== "publish-brain" || !/^\s*npm install -g --offline --ignore-scripts "\$npm_tgz"\s*$/.test(l)).join("\n");
+  for (const pin of ["NPM_VERSION", "NPM_INTEGRITY"]) {
+    if (job.env && pin in job.env) out.push(name + ": sets " + pin + " over the workflow pin");
+    for (const st of job.steps ?? []) if (st.env && pin in st.env) out.push(name + ": a step sets " + pin + " over the workflow pin");
+  }
   // npm takes options before its verb too (npm -g install x).
   const depCode = /\b(?:bun\s+(?:install|i|add|run|test|x)|bunx|npx|npm(?:\s+-\S+)*\s+(?:ci|install|i|run|run-script|test|pack|exec|x))\b/;
   if (!depCode.test(runs) || !jobs["publish-sidecar"]) continue;
@@ -1333,11 +1337,11 @@ ${found}"
 		$'  publish-sidecar:\n    needs: [validate-tag, sidecar-build, pack-brain]' $'  publish-sidecar:\n    needs: [validate-tag, sidecar-build]' \
 		'pack-brain: installs dependencies while the sidecar publish may still be running'
 	mutant 'the brain publish running dependency code beside the sidecar publish (#952)' \
-		'          npm install -g "npm@${NPM_VERSION}"
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 
-      - uses: actions/download-artifact' '          npm install -g "npm@${NPM_VERSION}" left-pad
+      - uses: actions/download-artifact' '          npm install -g --offline --ignore-scripts "$npm_tgz" left-pad
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 
@@ -3876,6 +3880,137 @@ else
 		tag_mutant 'the single-ref endpoint again, seen in the call it makes (#998)' \
 			'/git/matching-refs/tags/' '/git/ref/tags/' \
 			'no tag of that name (an empty list) is free' free 0 '[]'
+	}
+fi
+
+echo
+echo "the pinned npm is installed from a tarball checked against NPM_INTEGRITY (executed verbatim) (#1000)"
+# Each step that installs npm (pack-brain, publish-brain, publish-sidecar)
+# runs against a curl stub serving a fixture tarball and an npm stub that
+# records what it is asked to install and hashes that file; openssl,
+# base64 and mktemp are the real ones. NPM_INTEGRITY is the fixture sha512,
+# as the workflow pin is the real tarball sha512 (workflow-hardening.test.sh
+# checks that one against the registry).
+NPM_STEPS=()
+for spec in "${WORKFLOW}|pack-brain|Install the pinned npm" "${WORKFLOW}|publish-brain|Ensure npm supports Trusted Publishing" \
+	"${SIDECAR_WORKFLOW}|publish-sidecar|Ensure npm supports Trusted Publishing"; do
+	IFS='|' read -r f j s <<<"$spec"
+	t="$(YQ_FILE="$f" yq step "$j" "$s")" || t=""
+	if [ -z "$t" ]; then no "found ${j}: ${s}"; else NPM_STEPS+=("$t"); fi
+done
+if [ "${#NPM_STEPS[@]}" = 3 ] && [ "${NPM_STEPS[0]}" = "${NPM_STEPS[1]}" ] && [ "${NPM_STEPS[1]}" = "${NPM_STEPS[2]}" ]; then
+	ok "the three npm install steps are one script"
+else
+	no "the three npm install steps are one script" "they differ, so the cases below hold for one of them only"
+fi
+NPM_STEP="${NPM_STEPS[0]:-}"
+mkdir -p "${WORK}/npmi/bin"
+cat >"${WORK}/npmi/bin/curl" <<-STUB
+	#!/bin/sh
+	printf '%s\n' "\$*" >>"${WORK}/npmi/curl.calls"
+	o=""; prev=""
+	for a in "\$@"; do [ "\$prev" = "-o" ] && o="\$a"; prev="\$a"; done
+	printf '%s' "\$o" >"${WORK}/npmi/opath"
+	rc="\$(cat "${WORK}/npmi/curl.rc")"
+	[ "\$rc" = 0 ] || exit "\$rc"
+	cat "${WORK}/npmi/served" >"\$o"
+STUB
+cat >"${WORK}/npmi/bin/npm" <<-STUB
+	#!/bin/sh
+	printf '%s\n' "\$*" >>"${WORK}/npmi/npm.calls"
+	if [ "\$1" = --version ]; then cat "${WORK}/npmi/reports"; echo; exit 0; fi
+	for a in "\$@"; do last="\$a"; done
+	openssl dgst -sha512 -binary "\$last" | base64 -w0 >"${WORK}/npmi/installed"
+STUB
+chmod +x "${WORK}/npmi/bin/curl" "${WORK}/npmi/bin/npm"
+printf 'the npm tarball this test pins\n' >"${WORK}/npmi/good"
+NPMI_GOOD="sha512-$(openssl dgst -sha512 -binary "${WORK}/npmi/good" | base64 -w0)"
+# npmi_case <label> <ok|refused> <served file> <curl exit> [VAR=value...]
+# A refused case must fail with an ::error:: and never ask npm to install.
+npmi_case() {
+	local label="$1" want="$2" served="$3" crc="$4"
+	shift 4
+	cp "$served" "${WORK}/npmi/served"
+	printf '%s' "$crc" >"${WORK}/npmi/curl.rc"
+	printf '12.1.0' >"${WORK}/npmi/reports"
+	rm -rf "${WORK}/npmi/tmp" "${WORK}/npmi/cwd" "${WORK}/npmi/curl.calls" "${WORK}/npmi/npm.calls" "${WORK}/npmi/installed" "${WORK}/npmi/opath"
+	# A directory of its own, holding what a relative TMPDIR would name, as
+	# a checkout could (review of #1000).
+	mkdir -p "${WORK}/npmi/tmp" "${WORK}/npmi/cwd/git+https:/evil.example/r"
+	# With the variables a runner sets, so code that acts only on a runner
+	# acts here too (review of #1000).
+	(cd "${WORK}/npmi/cwd" && env -i PATH="${WORK}/npmi/bin:$PATH" TMPDIR="${WORK}/npmi/tmp" GITHUB_ACTIONS=true CI=true RUNNER_TEMP="${WORK}/npmi/tmp" RUNNER_OS=Linux \
+		NPM_VERSION=12.1.0 NPM_INTEGRITY="$NPMI_GOOD" "$@" \
+		bash -e -c "${NPMI_STEP:-$NPM_STEP}") >"${WORK}/npmi/log" 2>&1
+	local rc=$? ok_=0 o curls npms
+	o="$(cat "${WORK}/npmi/opath" 2>/dev/null)"
+	# The step names its directory in full, under /tmp; removed here by
+	# that exact name.
+	if [[ "$o" =~ ^/tmp/npm\.[A-Za-z0-9]{10}/npm-[^/]*\.tgz$ ]]; then rm -rf -- "${o%/*}"; fi
+	curls="$(cat "${WORK}/npmi/curl.calls" 2>/dev/null)"
+	npms="$(cat "${WORK}/npmi/npm.calls" 2>/dev/null)"
+	case "$want" in
+	ok)
+		[ "$rc" -eq 0 ] && [[ "$o" =~ ^/tmp/npm\.[A-Za-z0-9]{10}/npm-12\.1\.0\.tgz$ ]] &&
+			[ "$curls" = "-fsS --proto =https --retry 3 --max-time 300 --max-filesize 67108864 -o ${o} https://registry.npmjs.org/npm/-/npm-12.1.0.tgz" ] &&
+			[ "$npms" = "install -g --offline --ignore-scripts ${o}"$'\n'"--version" ] &&
+			[ "sha512-$(cat "${WORK}/npmi/installed")" = "$NPMI_GOOD" ] && ok_=1
+		;;
+	refused) [ "$rc" -ne 0 ] && grep -q '^::error::' "${WORK}/npmi/log" && ! grep -q '^install' <<<"$npms" && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then
+		ok "npm install: ${label}"
+	else
+		no "npm install: ${label}" "exit ${rc}; curl: ${curls}; npm: ${npms}; log: $(cat "${WORK}/npmi/log")"
+	fi
+}
+printf 'some other npm tarball\n' >"${WORK}/npmi/evil"
+: >"${WORK}/npmi/empty"
+if [ -n "$NPM_STEP" ]; then
+	npmi_case 'the pinned tarball is fetched by its fixed URL, checked, and exactly it installed, offline and without scripts' ok "${WORK}/npmi/good" 0
+	npmi_case 'a dry run installs it the same way (#978)' ok "${WORK}/npmi/good" 0 DRY_RUN=true
+	# A relative TMPDIR used to make the path a git spec that npm fetched in
+	# place of the checked file (review of #1000).
+	npmi_case 'a relative TMPDIR does not move the download or what npm installs' ok "${WORK}/npmi/good" 0 TMPDIR=git+https:/evil.example/r
+	npmi_case 'a tarball with another sha512 is refused before npm installs anything' refused "${WORK}/npmi/evil" 0
+	npmi_case 'an empty download is refused' refused "${WORK}/npmi/empty" 0
+	npmi_case 'a failed download is refused' refused "${WORK}/npmi/good" 22
+	npmi_case 'an empty NPM_INTEGRITY is refused' refused "${WORK}/npmi/good" 0 NPM_INTEGRITY=
+	npmi_case 'NPM_INTEGRITY naming another tarball is refused' refused "${WORK}/npmi/good" 0 NPM_INTEGRITY="sha512-$(openssl dgst -sha512 -binary "${WORK}/npmi/evil" | base64 -w0)"
+	npmi_case 'an NPM_VERSION that is an alias is refused' refused "${WORK}/npmi/good" 0 NPM_VERSION=npm:evil-pkg@12.1.0
+	if [ -z "$(cat "${WORK}/npmi/curl.calls" 2>/dev/null)" ]; then
+		ok "npm install: an NPM_VERSION that is an alias is refused before anything is downloaded"
+	else
+		no "npm install: an NPM_VERSION that is an alias is refused before anything is downloaded" "curl: $(cat "${WORK}/npmi/curl.calls")"
+	fi
+	# npmi_mutant <label> <exact text> <replacement> <npmi_case arguments...>
+	npmi_mutant() {
+		local label="$1" old="$2" new="$3"
+		shift 3
+		local mutated
+		mutated="$(OLD="$old" NEW="$new" SRC="$NPM_STEP" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, () => process.env.NEW));')" || {
+			no "npm install mutant '${label}' could be applied (the step no longer has the text it mutates)"
+			return
+		}
+		local res; res="$(NPMI_STEP="$mutated" npmi_case "$@")"; if grep -q "^  FAIL" <<<"$res"; then ok "reports: ${label}"; else no "reports: ${label}" "the case passed a step with this hole"; fi
+	}
+	# shellcheck disable=SC2016 # literal workflow text, not shell.
+	{
+		npmi_mutant 'the tarball installed without its sha512 check (#1000)' \
+			$'[ "$got" = "$NPM_INTEGRITY" ] || { echo "::error::npm-${NPM_VERSION}.tgz from the registry is ${got}, not the pinned NPM_INTEGRITY (#1000)"; exit 1; }\n' '' \
+			'a tarball with another sha512 is refused before npm installs anything' refused "${WORK}/npmi/evil" 0
+		npmi_mutant 'npm installed by version again, whatever was checked (#1000)' \
+			'npm install -g --offline --ignore-scripts "$npm_tgz"' 'npm install -g "npm@${NPM_VERSION}"' \
+			'the pinned tarball is fetched by its fixed URL, checked, and exactly it installed, offline and without scripts' ok "${WORK}/npmi/good" 0
+		npmi_mutant 'the tarball installed with npm free to fetch (#1000)' \
+			'npm install -g --offline --ignore-scripts' 'npm install -g --ignore-scripts' \
+			'the pinned tarball is fetched by its fixed URL, checked, and exactly it installed, offline and without scripts' ok "${WORK}/npmi/good" 0
+		npmi_mutant 'the tarball fetched from another host (#1000)' \
+			'"https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"' '"https://registry.evil.example/npm-${NPM_VERSION}.tgz"' \
+			'the pinned tarball is fetched by its fixed URL, checked, and exactly it installed, offline and without scripts' ok "${WORK}/npmi/good" 0
+		npmi_mutant 'the version check dropped, so an alias reaches the download (#960, #1000)' \
+			$'[[ "$NPM_VERSION" =~ ^[0123456789]+\\.[0123456789]+\\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }\n' '' \
+			'an NPM_VERSION that is an alias is refused' refused "${WORK}/npmi/good" 0 NPM_VERSION=npm:evil-pkg@12.1.0
 	}
 fi
 echo

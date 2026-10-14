@@ -79,6 +79,16 @@ env:
   # v0.15.0 on 2026-09-30 both installed `latest` after 12.1.0 was published
   # and before 12.2.0 was); npm versions are immutable once published.
   NPM_VERSION: "12.1.0"
+  # ...and installed from a tarball that has this sha512, never by version
+  # (#1000): by version, npm takes whatever the registry serves for it, in a
+  # job that can publish. The value is the registry's dist.integrity for
+  # npm@12.1.0, which on 2026-10-14 matched the sha512 of the tarball it
+  # served (3053355 bytes, sha1 b1a65ce4, as dist.shasum) and carried two
+  # valid signatures by the registry key in /-/npm/v1/keys. Bump the two
+  # together, here and in sidecar-release.yml: workflow-hardening.test.sh
+  # fetches the registry dist.integrity for NPM_VERSION, and the tarball
+  # itself, and fails unless both match this.
+  NPM_INTEGRITY: "sha512-Fyhu62pNx70YCs/5+dEmJQTFVmSKwvo5CA0qvBkGDRpob42MJ6G2RQ2tdxeKM4nYnIZDqkYAxEgqtoejn9QGtQ=="
   # The QEMU binfmt image runs --privileged on the runner and its emulators
   # execute every arm64 build step. Was the action's default
   # `docker.io/tonistiigi/binfmt:latest`. qemu-v10.2.3 is the image `latest`
@@ -851,7 +861,18 @@ jobs:
           # path or a URL here would install some other package globally.
           # The digits are listed, not a range: a range follows the locale.
           [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }
-          npm install -g "npm@${NPM_VERSION}"
+          # From a tarball with the pinned sha512, never by version (#1000):
+          # fetched by its fixed registry URL into a fresh directory, so
+          # nothing earlier put a file or a link at that path, checked, and
+          # only then installed, offline and with no lifecycle scripts. npm
+          # bundles every dependency it has, so it fetches nothing else. The
+          # directory is named in full, never from TMPDIR: a relative one
+          # made the path a git spec that npm fetched instead (review).
+          npm_tgz="$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz"
+          curl -fsS --proto '=https' --retry 3 --max-time 300 --max-filesize 67108864 -o "$npm_tgz" "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz" || { echo "::error::could not download npm-${NPM_VERSION}.tgz from the registry (#1000)"; exit 1; }
+          got="sha512-$(openssl dgst -sha512 -binary "$npm_tgz" | base64 -w0)"
+          [ "$got" = "$NPM_INTEGRITY" ] || { echo "::error::npm-${NPM_VERSION}.tgz from the registry is ${got}, not the pinned NPM_INTEGRITY (#1000)"; exit 1; }
+          npm install -g --offline --ignore-scripts "$npm_tgz"
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 
@@ -949,7 +970,18 @@ jobs:
           # path or a URL here would install some other package globally.
           # The digits are listed, not a range: a range follows the locale.
           [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }
-          npm install -g "npm@${NPM_VERSION}"
+          # From a tarball with the pinned sha512, never by version (#1000):
+          # fetched by its fixed registry URL into a fresh directory, so
+          # nothing earlier put a file or a link at that path, checked, and
+          # only then installed, offline and with no lifecycle scripts. npm
+          # bundles every dependency it has, so it fetches nothing else. The
+          # directory is named in full, never from TMPDIR: a relative one
+          # made the path a git spec that npm fetched instead (review).
+          npm_tgz="$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz"
+          curl -fsS --proto '=https' --retry 3 --max-time 300 --max-filesize 67108864 -o "$npm_tgz" "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz" || { echo "::error::could not download npm-${NPM_VERSION}.tgz from the registry (#1000)"; exit 1; }
+          got="sha512-$(openssl dgst -sha512 -binary "$npm_tgz" | base64 -w0)"
+          [ "$got" = "$NPM_INTEGRITY" ] || { echo "::error::npm-${NPM_VERSION}.tgz from the registry is ${got}, not the pinned NPM_INTEGRITY (#1000)"; exit 1; }
+          npm install -g --offline --ignore-scripts "$npm_tgz"
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }
 

