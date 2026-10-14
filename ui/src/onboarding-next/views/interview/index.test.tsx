@@ -176,6 +176,15 @@ describe("ON-U-04 written interview", () => {
     expect(stage.scrollTop).toBe(445); expect(button("Latest question")).toBeDefined();
     await click("Latest question"); expect(stage.scrollTop).toBe(0); expect(button("Latest question")).toBeUndefined();
   });
+  test("a question retains its reading identity when it moves into history", async () => {
+    await mount();
+    const identity = host.querySelector("h1")!.getAttribute("data-reading-anchor");
+    await render({ cursor: 2, turnId: "question-2", messages: [...props.model.messages, { id: "question-2", role: "assistant", text: "What repeats?" }] });
+    const previous = Array.from(host.querySelectorAll("[data-reading-anchor]")).find(node => node.getAttribute("data-reading-anchor") === identity);
+    expect(previous?.textContent).toContain("What are you working on right now?");
+    expect(previous?.tagName).toBe("P");
+    expect(host.querySelector("h1")!.getAttribute("data-reading-anchor")).not.toBe(identity);
+  });
   test("resizing an unchanged draft grows the composer without a height-observer loop", async () => {
     const original = globalThis.ResizeObserver;
     const originalFrame = window.requestAnimationFrame;

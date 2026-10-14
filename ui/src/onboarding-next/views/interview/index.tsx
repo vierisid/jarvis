@@ -200,7 +200,7 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
           <div className="on-interview__stage-content">
             <div className="on-interview__pebble" aria-hidden="true"><span /></div>
             {!terminal && <p className="on-interview__phase">{PHASE_LABEL[model.phase]}{model.resumed && <span> · Resumed</span>}</p>}
-            <h1 id={headingId} data-reading-anchor={latest ? `question:${latest.id}` : "question"}>
+            <h1 id={headingId} data-reading-anchor={latest ? `message:${latest.id}` : "question"}>
               {model.phase === "done" ? "Got it." : model.phase === "skipped" ? "Interview skipped."
                 : latest?.text || (model.phase === "connecting" ? "Getting ready to chat…" : "Your interview will appear here.")}
             </h1>
