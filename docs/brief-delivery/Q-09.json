@@ -163,7 +163,7 @@
       "browser_race": "Unchanged main reproduced the same transitional colon URL in 10/10 targeted runs. Wait now skips that placeholder without relaxing blocked-page or file-content assertions; 10/10 targeted repetitions pass.",
       "sidecar": "11 top-level tests / 19 test and subtest completions passed: typed outcomes, stale documents, focus-loss uncertainty, legacy protocol and reviewed snapshots.",
       "typecheck": "passed",
-      "environment": "Bun 1.3.6; cached Google Chrome for Testing 143.0.7499.4. Initial Snap Chromium startup failed; cached Chrome ran the fixtures. Missing libx11-xcb-dev extracted from Ubuntu package into task cache for targeted Go tests, without changing system packages.",
+      "environment": "Bun 1.4.3 (c6da4a4d3); cached Google Chrome for Testing 143.0.7499.4. Initial Snap Chromium startup failed; cached Chrome ran the fixtures. Missing libx11-xcb-dev extracted from Ubuntu package into task cache for targeted Go tests, without changing system packages.",
       "limits": "Three host launchChrome sandbox tests skip on this environment. No full repository suite or native Windows/macOS runtime certification locally; PR CI remains required."
     },
     "evidence_root": "/home/vierisid/.cache/codex/brief-rebase-20261014",
