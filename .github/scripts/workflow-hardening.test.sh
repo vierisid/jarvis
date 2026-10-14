@@ -50,7 +50,9 @@
 #      the runner own GITHUB_*/RUNNER_*/ACTIONS_* names) or is an
 #      expression, every name it sets is one these jobs already use, it has
 #      no container or services, no step of it writes GITHUB_ENV or
-#      GITHUB_PATH, and its shells are plain; on the release path no
+#      GITHUB_PATH, and its shells are plain; (#1030) all of that also in a
+#      job that installs npm from its checked tarball or runs npm pack,
+#      whatever it holds (pack-brain); on the release path no
 #      checkout leaves its token in
 #      the repository config; no registry login happens on a dry run; and
 #      (#781) a privileged job takes an artifact only by a digest another
@@ -631,7 +633,31 @@ if (rule === "narrow") {
     // these jobs use today (knownEnv): a new one has to be argued for here.
     // And no container: or services: at all: container options pass any
     // docker flag, --env included, and the image runs every step.
-    if (oidc && typeof job.uses !== "string") {
+    // #1030: and in a job that installs npm from the checked tarball or
+    // runs npm pack, though it holds no id-token: pack-brain does both, and
+    // publish-brain publishes what it packed. Identified by the commands, not
+    // the job name, so a job renamed or added that packs is held too. What
+    // this buys is narrow: the install and pack steps run as written, with
+    // no BASH_ENV, PATH, NODE_OPTIONS or GITHUB_ENV line in front of them, so
+    // the npm integrity check (#1000) and the pack are what the script says.
+    // It does not stop code running in that job: bun install runs dependency
+    // lifecycle scripts and prepublishOnly runs repository code there by
+    // design (#682), and either can change what is packed. The digest check
+    // in publish-brain proves only that the tarball was not swapped after
+    // the pack, not that the pack ran clean code.
+    const npmInstallLine = "npm install -g --offline --ignore-scripts \"$npm_tgz\"";
+    // Continuation lines joined, so `npm \` then `pack` on the next is a pack.
+    // Options before the verb may take a value (npm --loglevel silent pack, review of #1030).
+    const packRe = cmd("npm(?:\\s+-\\S+(?:\\s+[^-\\s]\\S*)?)*\\s+pack\\b");
+    // Quotes and backslashes dropped for the pack test, as bash drops them
+    // ("npm" pack and n\\pm pack are npm pack), and bun pm pack is a pack too
+    // (security review of #1030). A verb that comes from a variable is not
+    // seen.
+    const bunPackRe = cmd("bun(?:\\s+-\\S+(?:\\s+[^-\\s]\\S*)?)*\\s+pm\\s+pack\\b");
+    const packs = runs.replace(/\\\n/g, " ").split("\n").map((l) => stripComment(l).trim()).some((l) => l === npmInstallLine ||
+      packRe.test(l.replace(/["\x27\\]/g, "")) || bunPackRe.test(l.replace(/["\x27\\]/g, "")));
+    const heldBy = oidc ? "a job holding id-token" : "a job that installs npm from its checked tarball or runs npm pack (#1030)";
+    if ((oidc || packs) && typeof job.uses !== "string") {
       const poison = /^(?:BASH_ENV|ENV|PATH|NODE_OPTIONS|LD_[A-Z0-9_]+|BASH_FUNC_.+|SHELLOPTS|BASHOPTS|PS4|(?:HTTPS?|ALL|NO|FTP)_PROXY|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|SSL_CERT_(?:FILE|DIR)|CURL_CA_BUNDLE|CURL_HOME|HOME|XDG_CONFIG_HOME|NODE_PATH|CDPATH|TMPDIR|OPENSSL_(?:CONF|MODULES|ENGINES)|GITHUB_.+|RUNNER_.+|ACTIONS_.+)$/i;
       // One set for all of these jobs: every name in it must mean nothing to
       // bash, node, npm, curl, git, glibc or the runner, only to scripts of
@@ -647,8 +673,8 @@ if (rule === "narrow") {
         // The Windows signers.
         "GCP_KMS_KEYRING", "ALLOW_UNSIGNED_WINDOWS", "GCP_ACCESS_TOKEN", "GCP_KMS_KEY_ALIAS",
       ]);
-      if (job.container !== undefined) out.push(name + ": runs in a container: in a job holding id-token");
-      if (job.services !== undefined) out.push(name + ": runs services: in a job holding id-token");
+      if (job.container !== undefined) out.push(name + ": runs in a container: in " + heldBy);
+      if (job.services !== undefined) out.push(name + ": runs services: in " + heldBy);
       const plainShell = ["bash", "sh", "bash -e {0}", "sh -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
       const fsteps = flatSteps(job.steps);
       const stepLabel = (st, via, i) => "step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (st.name ?? st.id ?? st.uses ?? String(i));
@@ -657,11 +683,11 @@ if (rule === "narrow") {
       for (const [lvl, e] of levels) {
         if (e === undefined || e === null) continue;
         if (typeof e !== "object" || Array.isArray(e)) {
-          out.push(name + ": " + lvl + " env is " + JSON.stringify(e) + ", not a mapping this rule can read, in a job holding id-token");
+          out.push(name + ": " + lvl + " env is " + JSON.stringify(e) + ", not a mapping this rule can read, in " + heldBy);
           continue;
         }
         for (const k of Object.keys(e))
-          if (poison.test(k)) out.push(name + ": " + lvl + " env sets " + k + " in a job holding id-token");
+          if (poison.test(k)) out.push(name + ": " + lvl + " env sets " + k + " in " + heldBy);
           else if (!knownEnv.has(k)) out.push(name + ": " + lvl + " env sets " + k + ", a name no job holding id-token uses yet: set it at the level of the job that reads it, or add it to knownEnv with a reason");
       }
       // ...nor set in the script itself (review of #999): an assignment or
@@ -669,15 +695,15 @@ if (rule === "narrow") {
       for (const [i, { st, via }] of fsteps.entries()) {
         const run = (typeof st.run === "string" ? st.run : "").replace(/\\\n/g, " ").split("\n").map(stripComment).join("\n");
         for (const m of run.matchAll(/(?:^|[\s;&|(`])(?:(?:export|declare|typeset|local|readonly|env)\s+(?:-\w+\s+)*)?([A-Za-z_][A-Za-z0-9_]*)\+?=/gm))
-          if (poison.test(m[1])) out.push(name + ": " + stepLabel(st, via, i) + " sets " + m[1] + " in its script, in a job holding id-token");
+          if (poison.test(m[1])) out.push(name + ": " + stepLabel(st, via, i) + " sets " + m[1] + " in its script, in " + heldBy);
       }
       for (const [i, { st, via }] of fsteps.entries()) {
         const text = [typeof st.run === "string" ? st.run : "", ...Object.values(st.env && typeof st.env === "object" ? st.env : {}).map(String)].join("\n");
         if (/GITHUB_(?:ENV|PATH)\b|_runner_file_commands/i.test(text))
-          out.push(name + ": " + stepLabel(st, via, i) + " writes GITHUB_ENV or GITHUB_PATH (env for every later step) in a job holding id-token");
+          out.push(name + ": " + stepLabel(st, via, i) + " writes GITHUB_ENV or GITHUB_PATH (env for every later step) in " + heldBy);
         const sh = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
         if (sh !== undefined && !plainShell.includes(String(sh).trim()))
-          out.push(name + ": " + stepLabel(st, via, i) + " runs in shell: " + sh + " in a job holding id-token");
+          out.push(name + ": " + stepLabel(st, via, i) + " runs in shell: " + sh + " in " + heldBy);
       }
     }
     // publish-brain is the tarball-only shape (#682): no checkout, nothing
@@ -2396,6 +2422,45 @@ echo "no env in a job holding id-token names code to run first, and no step writ
 	expect_caught 'an OpenSSL config that loads a module (#1000 review)' narrow "$WORKFLOWS/release-exec.yml" \
 		$'      - name: Ensure npm supports Trusted Publishing\n        run: |' $'      - name: Ensure npm supports Trusted Publishing\n        env:\n          OPENSSL_CONF: /tmp/evil.cnf\n        run: |' \
 		'publish-brain: step Ensure npm supports Trusted Publishing env sets OPENSSL_CONF in a job holding id-token'
+}
+
+echo
+echo "no env in the job that installs npm and packs the brain tarball names code to run first either (#1030)"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'BASH_ENV in the pack-brain job env (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-latest\n' $'    needs: [validate-tag, test, smoke-image]\n    runs-on: ubuntu-latest\n    env:\n      BASH_ENV: /tmp/x\n' \
+		'pack-brain: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'an earlier pack-brain step writing NODE_OPTIONS to GITHUB_ENV (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		'      - name: Install the pinned npm' $'      - run: echo "NODE_OPTIONS=--require /tmp/x.js" >> "$GITHUB_ENV"\n      - name: Install the pinned npm' \
+		'pack-brain: step 3 writes GITHUB_ENV or GITHUB_PATH (env for every later step) in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'PATH in the env of the pack step (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Pack\n        id: pack\n' $'      - name: Pack\n        id: pack\n        env:\n          PATH: /tmp/evil:/usr/bin:/bin\n' \
+		'pack-brain: step Pack env sets PATH in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'npm pointed at another registry for the pack, a name no such job uses (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Pack\n        id: pack\n' $'      - name: Pack\n        id: pack\n        env:\n          npm_config_registry: https://registry.evil.example/\n' \
+		'pack-brain: step Pack env sets npm_config_registry, a name no job holding id-token uses yet'
+	expect_caught 'a shell that sets BASH_ENV for the pack step (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Pack\n        id: pack\n' $'      - name: Pack\n        id: pack\n        shell: env BASH_ENV=/tmp/x bash -e {0}\n' \
+		'pack-brain: step Pack runs in shell: env BASH_ENV=/tmp/x bash -e {0} in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'NODE_OPTIONS exported in the pack script (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		'          dir="$RUNNER_TEMP/brain-pack"' $'          export NODE_OPTIONS=--require=/tmp/x.js\n          dir="$RUNNER_TEMP/brain-pack"' \
+		'pack-brain: step Pack sets NODE_OPTIONS in its script, in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a job of another name that only packs, with BASH_ENV (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: npm pack\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a pack with an option value before the verb, with BASH_ENV (review of #1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: npm --loglevel silent pack\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a pack with npm quoted, with BASH_ENV (security review of #1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: \x27"npm" pack\x27\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a pack by bun pm pack, with BASH_ENV (security review of #1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: bun pm pack\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
+	expect_caught 'a pack split across a continuation line, with BASH_ENV (#1030)' narrow "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions: {}\n    env:\n      BASH_ENV: /tmp/x\n    steps:\n      - run: |\n          npm \\\n            pack\n' \
+		'sneak: job env sets BASH_ENV in a job that installs npm from its checked tarball or runs npm pack (#1030)'
 }
 
 echo
