@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initDatabase, closeDb, getDb } from './schema.ts';
-import { addMessage, getOrCreateConversation, getRecentConversation } from './conversations.ts';
+import { addMessage, getMessages, getOrCreateConversation, getRecentConversation } from './conversations.ts';
 import { ConversationRepository } from './conversation-lifecycle.ts';
 
 const directories: string[] = [];
@@ -150,4 +150,56 @@ test('legacy channel reuse and history restoration remain separate from explicit
   expect(repo.messages(legacy.id).items[0]?.content).toBe('Legacy history');
   repo.setOpen(legacy.id, true);
   expect(repo.messages(explicit.conversationId).items[0]?.content).toBe('Explicit history');
+});
+
+for (const explicitWorkspace of [false, true]) {
+  test(`channel ownership and workspace boundaries survive restart (${explicitWorkspace ? 'explicit' : 'legacy null'} workspace)`, () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-f02-owner-'));
+    directories.push(dir);
+    const file = join(dir, 'vault.db');
+    let repo = new ConversationRepository(initDatabase(file, { quiet: true }));
+    const owners = [undefined, { sender: 'sender-a' }, { sender: 'sender-b' }];
+    const conversations = owners.map(owner => getOrCreateConversation('discord', owner));
+    expect(new Set(conversations.map(c => c.id)).size).toBe(3);
+    for (const [index, conversation] of conversations.entries()) {
+      addMessage(conversation.id, { role: 'user', content: `Private history ${index}` });
+      if (explicitWorkspace) {
+        getDb().run('UPDATE conversations SET workspace_id = ? WHERE id = ?', [repo.workspaceId, conversation.id]);
+      }
+      expect(repo.get(conversation.id).tab.open).toBe(false);
+      repo.rename(conversation.id, `Saved thread ${index}`);
+      repo.setOpen(conversation.id, true);
+      const foreign = new ConversationRepository(getDb(), 'foreign-sender-workspace').create();
+      getDb().run('UPDATE conversations SET channel = ?, sender = ?, last_message_at = ? WHERE id = ?',
+        ['discord', owners[index]?.sender ?? null, Date.now() + 10_000 + index, foreign.conversationId]);
+    }
+    const tabs = repo.tabs();
+    function verifyOwnership() {
+      for (const [index, owner] of owners.entries()) {
+        const found = getOrCreateConversation('discord', owner);
+        expect(found.id).toBe(conversations[index]!.id);
+        expect(found.sender).toBe(owner?.sender ?? null);
+        expect(repo.messages(found.id).items.map(m => m.content)).toEqual([`Private history ${index}`]);
+        expect(repo.get(found.id).title).toBe(`Saved thread ${index}`);
+      }
+      expect(repo.tabs()).toEqual(tabs);
+    }
+    verifyOwnership();
+    closeDb();
+    repo = new ConversationRepository(initDatabase(file, { quiet: true }));
+    verifyOwnership();
+  });
+}
+
+test('channel history keeps insertion order for equal timestamps despite the Brief cursor index', () => {
+  memory();
+  const conversation = getOrCreateConversation('telegram', { sender: 'sender-a' });
+  for (const [id, role] of [['z-first', 'user'], ['a-reply', 'assistant'], ['m-current', 'user']]) {
+    getDb().run('INSERT INTO conversation_messages (id, conversation_id, role, content, created_at) VALUES (?, ?, ?, ?, ?)',
+      [id!, conversation.id, role!, id!, 100]);
+  }
+  expect(getMessages(conversation.id).map(m => m.id)).toEqual(['z-first', 'a-reply', 'm-current']);
+  expect(getMessages(conversation.id, { limit: 2 }).map(m => m.id)).toEqual(['a-reply', 'm-current']);
+  expect(getMessages(conversation.id, { before: 101, limit: 2 }).map(m => m.id)).toEqual(['z-first', 'a-reply']);
+  expect(getMessages(conversation.id, { before: 100 })).toEqual([]);
 });

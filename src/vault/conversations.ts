@@ -166,14 +166,15 @@ export function getMessages(
 
   if (opts?.before) {
     const rows = db.prepare(
-      'SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at < ? ORDER BY created_at ASC LIMIT ?'
+      'SELECT * FROM conversation_messages WHERE conversation_id = ? AND created_at < ? ORDER BY created_at ASC, rowid ASC LIMIT ?'
     ).all(conversationId, opts.before, limit) as MessageRow[];
     return rows.map(parseMessage);
   }
 
-  // Get the last N messages, ordered ascending
+  // Equal timestamps retain insertion order, independently of the Brief cursor index.
+  // The channel handler relies on the current stored turn being last.
   const rows = db.prepare(
-    'SELECT * FROM (SELECT * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC LIMIT ?) ORDER BY created_at ASC'
+    'SELECT id, conversation_id, role, content, tool_calls, created_at FROM (SELECT rowid AS insertion_order, * FROM conversation_messages WHERE conversation_id = ? ORDER BY created_at DESC, rowid DESC LIMIT ?) ORDER BY created_at ASC, insertion_order ASC'
   ).all(conversationId, limit) as MessageRow[];
 
   return rows.map(parseMessage);
