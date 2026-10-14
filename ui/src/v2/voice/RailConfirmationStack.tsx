@@ -61,7 +61,7 @@ export function RailConfirmationStack() {
             key={r.id}
             kind="repeat-back"
             id={r.id}
-            title="Confirm what I heard"
+            title={r.action ? `Confirm before I do it: ${r.action}` : "Confirm what I heard"}
             transcript={r.transcript}
           />
         ))}

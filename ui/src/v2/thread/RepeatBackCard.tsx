@@ -6,6 +6,11 @@ import "./RepeatBackCard.css";
 export interface RepeatBackCardProps {
   transcript: string;
   confidence: number;
+  /**
+   * What confirming runs, when the daemon held a room action for the person
+   * to check (#973). The card then asks about that, not about the hearing.
+   */
+  action?: string;
   onConfirm?: () => void;
   onCancel?: () => void;
 }
@@ -19,6 +24,7 @@ export interface RepeatBackCardProps {
 export function RepeatBackCard({
   transcript,
   confidence,
+  action,
   onConfirm,
   onCancel,
 }: RepeatBackCardProps) {
@@ -38,9 +44,23 @@ export function RepeatBackCard({
       <div className="v2-repeatback__attribution">
         <span className="v2-repeatback__attribution-dot" aria-hidden="true" />
         Jarvis
-        <span className="v2-repeatback__attribution-tag">· didn&rsquo;t catch that</span>
-        <span className="v2-repeatback__conf">{Math.round(confidence * 100)}% match</span>
+        {action ? (
+          <span className="v2-repeatback__attribution-tag">&middot; confirm before I do it</span>
+        ) : (
+          <>
+            <span className="v2-repeatback__attribution-tag">&middot; didn&rsquo;t catch that</span>
+            <span className="v2-repeatback__conf">{Math.round(confidence * 100)}% match</span>
+          </>
+        )}
       </div>
+
+      {action && (
+        <div className="v2-repeatback__heard">
+          <span className="v2-repeatback__heard-text">
+            I&rsquo;ll do: <strong>{action}</strong>
+          </span>
+        </div>
+      )}
 
       <div className="v2-repeatback__heard">
         <Icon icon={Mic} size="sm" />

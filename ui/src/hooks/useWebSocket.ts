@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { uuid } from "../lib/uuid";
+import { isPresentationRoomAction } from "../../../src/daemon/room-actions";
 
 export type MessageRole = "user" | "assistant" | "system";
 
@@ -315,6 +316,11 @@ export type PendingRepeatBack = {
   transcript: string;
   confidence: number;
   timestamp: number;
+  /**
+   * Set when the daemon held a room action for the person to confirm (#973):
+   * what confirming runs, as the classifier read it.
+   */
+  action?: string;
 };
 
 type SidecarEventPayload = {
@@ -1079,14 +1085,8 @@ export function useWebSocket() {
           prev.some((c) => c.id === pending.id) ? prev : [...prev, pending],
         );
       } else if (payload.source === "repeat_back_request") {
-        const p = payload as { id?: string; transcript?: string; confidence?: number };
-        if (!p.id || !p.transcript) return;
-        const pending: PendingRepeatBack = {
-          id: p.id,
-          transcript: p.transcript,
-          confidence: typeof p.confidence === "number" ? p.confidence : 0.4,
-          timestamp: msg.timestamp,
-        };
+        const pending = repeatBackFrom(payload, msg.timestamp);
+        if (!pending) return;
         setRepeatBacks((prev) =>
           prev.some((r) => r.id === pending.id) ? prev : [...prev, pending],
         );
@@ -1336,6 +1336,8 @@ function buildIntentLabel(
  * set only when the daemon asked THIS dashboard to say whether the room ran it
  * (`resultFrom: "dashboard"`, #965); the pebble's requests carry a resultId
  * for the native panels to answer, and the dashboard must not answer those.
+ * Null for a malformed action, and for one that is not presentation and was
+ * not addressed to this dashboard (#974).
  */
 export type DashboardRoomActionRequest = {
   room: string;
@@ -1344,6 +1346,19 @@ export type DashboardRoomActionRequest = {
   ts: number;
   resultId?: string;
 };
+
+/** A daemon `repeat_back_request`, or null when malformed. */
+export function repeatBackFrom(payload: unknown, timestamp: number): PendingRepeatBack | null {
+  const p = (payload ?? {}) as { id?: unknown; transcript?: unknown; confidence?: unknown; action?: unknown };
+  if (typeof p.id !== "string" || !p.id || typeof p.transcript !== "string" || !p.transcript) return null;
+  return {
+    id: p.id,
+    transcript: p.transcript,
+    confidence: typeof p.confidence === "number" ? p.confidence : 0.4,
+    timestamp,
+    ...(typeof p.action === "string" && p.action ? { action: p.action } : {}),
+  };
+}
 
 export function roomActionRequestFrom(payload: unknown, ts: number): DashboardRoomActionRequest | null {
   if (!payload || typeof payload !== "object") return null;
@@ -1356,5 +1371,9 @@ export function roomActionRequestFrom(payload: unknown, ts: number): DashboardRo
     ts,
   };
   if (p.resultFrom === "dashboard" && typeof p.resultId === "string" && p.resultId) req.resultId = p.resultId;
+  // An action that changes more than the screen is run only by the dashboard
+  // the daemon addressed (#974); the daemon sends it nowhere else, and this
+  // keeps it so if one ever reaches another dashboard.
+  if (!req.resultId && !isPresentationRoomAction(req.room, req.action)) return null;
   return req;
 }

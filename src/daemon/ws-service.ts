@@ -57,7 +57,8 @@ import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-cont
 import type { FileEntry } from '../sites/types.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
-import { isRoomAction } from './room-actions.ts';
+import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
+import { classifierMustConfirmRoomAction, realtimeRoomActionRefusal, type RealtimeRoomActionContext } from './voice-room-action-gate.ts';
 
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
@@ -221,6 +222,12 @@ type PendingVoiceConfirmation = {
   channel: string;
   kind: 'clarifier' | 'repeat_back';
   createdAt: number;
+  /**
+   * A room action the classifier read but may not run on its own reading
+   * (#973). Confirming runs this action rather than handing the transcript
+   * to chat.
+   */
+  roomAction?: { room: string; action: string; args?: Record<string, unknown> };
 };
 
 /**
@@ -314,6 +321,34 @@ const VOICE_STOP_PHRASES = new Set([
   'jarvis quiet',
   'hey jarvis quiet',
 ]);
+
+/**
+ * How long a held room action (#973) can be confirmed by a spoken yes. A
+ * click on its card still works for the full VOICE_CONFIRMATION_TTL_MS; a
+ * "yes" said minutes later was most likely about something else.
+ */
+const HELD_ROOM_ACTION_VOICE_MS = 60_000;
+
+const VOICE_AFFIRMATIVE_PHRASES = new Set([
+  'yes', 'yeah', 'yep', 'yes please', 'yes do it', 'yes go ahead', 'do it', 'go ahead',
+  'confirm', 'confirmed', 'approve', 'approved',
+]);
+
+/**
+ * Whether the person said a plain yes, read from the transcript itself rather
+ * than from the classifier (#973): a held room action is held because the
+ * classifier's reading is not trusted, so the same classifier may not be the
+ * one that says the person agreed.
+ */
+export function isVoiceAffirmative(transcript: string): boolean {
+  const normalized = transcript
+    .toLowerCase()
+    .replace(/[.,!?;:]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .replace(/^(hey )?jarvis /, '');
+  return VOICE_AFFIRMATIVE_PHRASES.has(normalized);
+}
 
 export function isVoiceStopCommand(transcript: string): boolean {
   const normalized = transcript
@@ -1835,7 +1870,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // Dashboard nav/in-room actions are handled here (they broadcast to the
         // dashboard); everything else goes through the auto-approve tool bridge.
         if (REALTIME_NAV_TOOL_NAMES.has(name)) {
-          return this.executeRealtimeNavTool(name, args, ws).then((nav) => nav ?? 'Unknown navigation tool.');
+          return this.executeRealtimeNavTool(name, args, ws, { blockedCategories: resolved.blockedCategories })
+            .then((nav) => nav ?? 'Unknown navigation tool.');
         }
         return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories });
       },
@@ -1894,6 +1930,22 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
+   * What a realtime room action is judged against (#973), read from the
+   * orchestrator: its emergency state, and the taint gating and the session
+   * taint its own realtime tool calls are judged against.
+   */
+  private realtimeRoomActionContext(blockedCategories: readonly string[]): RealtimeRoomActionContext {
+    const orchestrator = this.agentService.getOrchestrator();
+    const emergency = orchestrator.getEmergencyController();
+    return {
+      halted: emergency && !emergency.canExecute() ? emergency.getState() : null,
+      blockedCategories,
+      taintGating: orchestrator.getTaintGating(),
+      taint: orchestrator.getTurnTaint(),
+    };
+  }
+
+  /**
    * Execute a dashboard navigation / in-room-action tool called by the realtime
    * voice model. Returns a short result string for the model to acknowledge, or
    * null if `name` isn't a navigation tool (so the caller falls through to the
@@ -1904,6 +1956,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     name: string,
     args: Record<string, unknown>,
     ws: ServerWebSocket<unknown>,
+    opts: { blockedCategories?: readonly string[] } = {},
   ): Promise<string | null> {
     if (!REALTIME_NAV_TOOL_NAMES.has(name)) return null;
     const reqId = crypto.randomUUID();
@@ -1943,18 +1996,28 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // anything else no handler runs, is refused before the room opens.
         const refused = roomActionRefusal({ room, action }, 'model');
         if (refused) return refused;
+        // Its handler's REST calls are clicks no gate sees, so the session is
+        // held here to what its own tool calls are held to (#973): an action
+        // that changes more than the screen is refused under Pause or Kill,
+        // in a blocked category, or once the session has read outside
+        // content. Nothing is sent, not even the navigation.
+        const held = realtimeRoomActionRefusal({ room, action }, this.realtimeRoomActionContext(opts.blockedCategories ?? []));
+        if (held) {
+          console.warn(`[WSService] refused realtime room action ${room}/${action}: ${held}`);
+          return held;
+        }
         // Auto-open the room first (no-op if already open), then dispatch,
         // mirroring the classifier path so the qualifier isn't dropped. The
         // dashboard this session runs on says whether the room ran it, and
         // the model is told that, not "Done" (#965).
-        this.broadcastRoomNavigation(room as RoomKey, reqId);
         const ra = { room, action, args: innerArgs };
+        this.navigateForRoomAction(ra, ws, reqId);
         // Shorter than the realtime session's wait for sibling tool results,
         // so a slow room cannot leave this result to be voiced on its own
         // (and the model, seeing none, calling the tool again).
         const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
         const reply = roomActionReply(ra, outcome);
-        return outcome === 'accepted' && action !== 'switch_tab'
+        return outcome === 'accepted' && !isPresentationRoomAction(room, action)
           ? `${reply} (${roomTitle(room)} accepted it and started it; it shows the result on screen.)`
           : reply;
       }
@@ -2357,7 +2420,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     const recentTurns = this.recentTurns('websocket');
     const userProfilePrompt = formatUserProfileForPrompt(getUserProfile());
     const intent = await classifyVoiceIntent(trimmed, recentTurns, llm, currentRoom, userProfilePrompt);
+    await this.routeClassifiedVoiceIntent(intent, trimmed, requestId, ws, shownApprovalId);
+  }
 
+  /**
+   * Act on what the classifier read `trimmed` as: navigation, a room action,
+   * a voice approve or cancel, chat, or a clarifier or repeat-back.
+   */
+  private async routeClassifiedVoiceIntent(
+    intent: Intent,
+    trimmed: string,
+    requestId: string,
+    ws: ServerWebSocket<unknown>,
+    shownApprovalId?: string | null,
+  ): Promise<void> {
     // Safety net: the classifier sometimes flags coherent multi-word
     // English as verb=unknown / low-confidence (especially conversational
     // openers like "I'm back at the PC, how are you?"). Repeat-back loops
@@ -2379,6 +2455,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       }
     }
 
+    // The classifier grades its own impact, and it was told a room action is
+    // always "read", which lets a write act at 0.6 confidence. What a room
+    // action does is in ROOM_ACTIONS, not in the model's reading (#973).
+    if (intent.room_action && intent.impact === 'read'
+      && roomActionCategories(intent.room_action.room, intent.room_action.action).length > 0) {
+      intent.impact = 'write';
+    }
     const route = routeByConfidence(intent);
 
     console.log(
@@ -2405,8 +2488,27 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // navigation. Room actions are always more specific (e.g. "show
     // pending tasks" → set_filter status=pending) — if we navigate
     // first, the qualifier ("pending") gets dropped and the user sees
-    // an unfiltered Room. Classifier emits room_action only when it's
-    // confident the user wants in-room behavior, so trust it.
+    // an unfiltered Room.
+    // A room action in the governed categories is never run on the
+    // classifier's reading alone, whatever confidence it gave itself (#973):
+    // it is repeated back, and the person's yes runs it.
+    if (intent.room_action && classifierMustConfirmRoomAction(intent.room_action, this.agentService.getOrchestrator().getTaintGating())) {
+      const pending: PendingVoiceConfirmation = {
+        id: intent.id,
+        intent,
+        transcript: trimmed,
+        ws,
+        channel: 'websocket',
+        kind: 'repeat_back',
+        createdAt: Date.now(),
+        roomAction: intent.room_action,
+      };
+      this.pendingVoiceConfirmations.set(pending.id, pending);
+      this.broadcastRepeatBackRequest(pending);
+      this.broadcastThinkingEnd(requestId);
+      return;
+    }
+
     if (route === 'act' && intent.room_action) {
       await this.handleVoiceRoomAction(intent.room_action, requestId, ws);
       this.broadcastThinkingEnd(requestId);
@@ -2431,7 +2533,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (route === 'act' && intent.confirmation_response) {
       const decision = intent.confirmation_response;
       try {
-        const resolved = await this.resolveLatestPendingByVoice(decision, intent.confidence, shownApprovalId);
+        const resolved = await this.resolveLatestPendingByVoice(decision, intent.confidence, shownApprovalId, { transcript: trimmed, ws });
         if (resolved) {
           if (resolved.kind === 'refused') {
             // In the thread, where the person reads replies: nothing was
@@ -2440,7 +2542,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           } else if (resolved.kind === 'gated') {
             // In the thread too, and saying which reason (#856).
             this.broadcastAssistantAck(resolved.message, requestId);
-          } else {
+          } else if (!(resolved.kind === 'room_action' && decision === 'approve')) {
+            // A confirmed room action has already said what its room did.
             const verb = decision === 'approve' ? 'Approving' : 'Cancelling';
             this.broadcastAssistantAck(`${verb} ${resolved.label}.`, requestId);
           }
@@ -2464,17 +2567,26 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       }, ws);
     } else {
       // Hold the transcript and ask the user to confirm before acting.
+      // Confirming a listed room action runs the action itself, not chat on
+      // the transcript, which has no way to carry it out. One that changes
+      // more than the screen is always a repeat-back, the card that shows
+      // what confirming runs (#973); a clarifier shows only the intent.
+      const roomAction = intent.room_action && isRoomAction(intent.room_action.room, intent.room_action.action)
+        ? intent.room_action : undefined;
+      const kind: PendingVoiceConfirmation['kind'] = route === 'clarify'
+        && !(roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) ? 'clarifier' : 'repeat_back';
       const pending: PendingVoiceConfirmation = {
         id: intent.id,
         intent,
         transcript: trimmed,
         ws,
         channel: 'websocket',
-        kind: route === 'clarify' ? 'clarifier' : 'repeat_back',
+        kind,
         createdAt: Date.now(),
+        ...(roomAction ? { roomAction } : {}),
       };
       this.pendingVoiceConfirmations.set(pending.id, pending);
-      if (route === 'clarify') {
+      if (kind === 'clarifier') {
         this.broadcastClarifierRequest(pending);
       } else {
         this.broadcastRepeatBackRequest(pending);
@@ -2537,8 +2649,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     decision: 'approve' | 'cancel',
     confidence = 1,
     shownApprovalId?: string | null,
+    speaker?: { transcript: string; ws: ServerWebSocket<unknown> },
   ): Promise<
-    | { kind: 'approval' | 'clarifier' | 'repeat_back'; label: string }
+    | { kind: 'approval' | 'clarifier' | 'repeat_back' | 'room_action'; label: string }
     | { kind: 'gated'; label: string; reason: VoiceApprovalGateReason; message: string }
     | { kind: 'refused'; message: string }
     | null
@@ -2676,6 +2789,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       const latest = Array.from(this.pendingVoiceConfirmations.values()).reduce((a, b) =>
         a.createdAt > b.createdAt ? a : b,
       );
+      // Only for an action that changes more than the screen: a held filter
+      // or tab switch needs no more than any other yes.
+      if (latest.roomAction && decision === 'approve' && !isPresentationRoomAction(latest.roomAction.room, latest.roomAction.action)) {
+        const refused = this.heldRoomActionVoiceRefusal(latest, speaker);
+        if (refused) return { kind: 'refused', message: refused };
+      }
       const result = await this.resolveVoiceConfirmation(
         latest.id,
         decision === 'approve' ? 'confirm' : 'cancel',
@@ -2685,7 +2804,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         ? latest.transcript.slice(0, 60) + '…'
         : latest.transcript;
       return {
-        kind: latest.kind === 'clarifier' ? 'clarifier' : 'repeat_back',
+        kind: latest.roomAction ? 'room_action' : latest.kind === 'clarifier' ? 'clarifier' : 'repeat_back',
         label,
       };
     }
@@ -2694,10 +2813,42 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
+   * Why a spoken yes may not run a held room action (#973), or null when it
+   * may. The yes must be a plain one in the transcript itself (not the
+   * classifier's reading, which is what the hold is checking), said on the
+   * dashboard the action was held for, within HELD_ROOM_ACTION_VOICE_MS,
+   * and with no other held action it could be about. Otherwise the card is
+   * clicked. A no always cancels.
+   */
+  private heldRoomActionVoiceRefusal(
+    held: PendingVoiceConfirmation,
+    speaker?: { transcript: string; ws: ServerWebSocket<unknown> },
+  ): string | null {
+    // The short form: the card shows the arguments, and this may be spoken.
+    const what = `${roomTitle(held.roomAction!.room)}: ${held.roomAction!.action.replace(/_/g, ' ')}`;
+    if (speaker && speaker.ws !== held.ws) {
+      return `I haven't done ${what}: it is waiting on another dashboard. Confirm it there.`;
+    }
+    if (!speaker || !isVoiceAffirmative(speaker.transcript)) {
+      return `I haven't done ${what}. To go ahead, say "yes" on its own or click its card.`;
+    }
+    const heldCount = [...this.pendingVoiceConfirmations.values()]
+      .filter((p) => p.roomAction && !isPresentationRoomAction(p.roomAction.room, p.roomAction.action)).length;
+    if (heldCount > 1) {
+      return `I haven't done anything: ${heldCount} actions are waiting for a yes. Click the one you mean.`;
+    }
+    if (Date.now() - held.createdAt > HELD_ROOM_ACTION_VOICE_MS) {
+      return `I haven't done ${what}: it has been waiting too long for a spoken yes. Click its card, or ask again.`;
+    }
+    return null;
+  }
+
+  /**
    * Resolve a pending voice confirmation. Called by the REST endpoints
    * `/api/voice/(clarifier|repeat-back)/:id/{confirm,cancel}`.
    *
-   * On confirm: forwards the held transcript to the chat agent.
+   * On confirm: runs the held room action when there is one (#973), and
+   * otherwise forwards the held transcript to the chat agent.
    * On cancel: drops the pending entry; the user-voice ThreadItem stays in
    * the thread but no assistant reply is generated.
    *
@@ -2727,6 +2878,21 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     if (decision === 'cancel') {
       return { ok: true };
+    }
+
+    if (pending.roomAction) {
+      // The person confirmed what the repeat-back said would happen (#973),
+      // so that is what runs, on the dashboard they spoke to.
+      this.broadcastThinkingStart(pending.id);
+      try {
+        await this.handleVoiceRoomAction(pending.roomAction, pending.id, pending.ws);
+        return { ok: true };
+      } catch (err) {
+        console.error('[WSService] resolveVoiceConfirmation room action error:', err);
+        return { ok: false, reason: err instanceof Error ? err.message : 'room-action-failed' };
+      } finally {
+        this.broadcastThinkingEnd(pending.id);
+      }
     }
 
     try {
@@ -2768,6 +2934,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         id: pending.id,
         transcript: pending.transcript,
         confidence: pending.intent.confidence,
+        // What confirming runs, for a held room action (#973): the person
+        // checks the classifier's reading, not just what they said.
+        ...(pending.roomAction ? { action: describeRoomAction(pending.roomAction) } : {}),
       },
       timestamp: Date.now(),
     };
@@ -2790,11 +2959,24 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * RoomKey) — bypasses the chat agent.
    */
   broadcastRoomNavigation(key: RoomKey, requestId?: string): void {
-    this.wsServer.broadcast({
-      type: 'notification',
-      payload: { source: 'navigate_room', key, requestId },
-      timestamp: Date.now(),
-    });
+    this.wsServer.broadcast(navigateRoomNotice(key, requestId));
+  }
+
+  /**
+   * Open the room a voice room action is for, on the same dashboards the
+   * action goes to (#974): every one for a presentation action, only
+   * `client` for any other, which no other dashboard runs.
+   */
+  private navigateForRoomAction(
+    ra: { room: string; action: string },
+    client: ServerWebSocket<unknown>,
+    requestId?: string,
+  ): void {
+    if (isPresentationRoomAction(ra.room, ra.action)) {
+      this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
+      return;
+    }
+    this.wsServer.sendToClient(client, navigateRoomNotice(ra.room, requestId));
   }
 
   /**
@@ -2828,16 +3010,23 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
-   * Broadcast a room action and wait to hear whether a room ran it (#933).
+   * Send a room action and wait to hear whether a room ran it (#933).
    * Resolves `accepted` or `rejected` on the first answer, and `no_answer`
    * when none comes: nobody connected who could answer, or a room that never
    * mounted.
    *
    * Without `client` the native panels answer (the pebble's tab switch). With
-   * `client`, the action still goes to everyone, but only that dashboard gets
-   * the resultId, is asked to answer (`resultFrom: 'dashboard'`), and is
-   * listened to (#965): a dashboard voice turn asks the dashboard the user
-   * spoke to.
+   * `client`, only that dashboard gets the resultId, is asked to answer
+   * (`resultFrom: 'dashboard'`), and is listened to (#965): a dashboard voice
+   * turn asks the dashboard the user spoke to.
+   *
+   * Who else gets it depends on what the action does (#974). A presentation
+   * action (ROOM_ACTIONS `view`, such as `switch_tab`) goes to every
+   * dashboard and panel too, so they stay in step. Any other goes to `client`
+   * alone: every dashboard with the room mounted, or mounting it within the
+   * bus's queue TTL, runs the handler it is sent, so a broadcast `create_task`
+   * made one task per open dashboard while the user heard one answer. Without
+   * a `client` such an action has nobody to go to and is refused.
    */
   requestRoomAction(
     action: { room: string; action: string; args?: Record<string, unknown> },
@@ -2851,6 +3040,14 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       return Promise.resolve('rejected');
     }
     const client = opts?.client;
+    const presentation = isPresentationRoomAction(action.room, action.action);
+    if (!presentation && !client) {
+      // Reported as `rejected`, the same as a room declining it: no caller
+      // sends one without a client today, so nobody hears this as the room's
+      // answer. A caller that could must say why itself.
+      console.warn(`[WSService] refused room action ${action.room}/${action.action}: it changes more than the screen, and no dashboard was named to run it`);
+      return Promise.resolve('rejected');
+    }
     const { id, outcome } = this.roomActionResults.open(timeoutMs, client);
     const payload = {
       source: 'room_action',
@@ -2860,7 +3057,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     };
     let reached: boolean;
     if (client) {
-      this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
+      if (presentation) this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
       reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
         type: 'notification',
         payload: { ...payload, resultId: id, resultFrom: 'dashboard' },
@@ -2897,7 +3094,19 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       this.broadcastAssistantAck(refused, requestId);
       return;
     }
-    this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
+    // Under Pause or Kill nothing beyond the screen runs, here as on the
+    // realtime path (#973). This is the one sink for the classifier and for a
+    // confirmed hold, so a hold confirmed after Kill does not run either.
+    const emergency = roomActionCategories(ra.room, ra.action).length > 0
+      ? this.agentService.getOrchestrator().getEmergencyController()
+      : null;
+    if (emergency && !emergency.canExecute()) {
+      const state = emergency.getState();
+      console.warn(`[WSService] refused voice room action ${ra.room}/${ra.action}: system ${state}`);
+      this.broadcastAssistantAck(`I didn't do that: actions are suspended while the system is ${state}. Ask again once it is resumed.`, requestId);
+      return;
+    }
+    this.navigateForRoomAction(ra, ws, requestId);
     const outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
     console.log(`[WSService] room action ${ra.room}/${ra.action}: ${outcome}`);
     this.broadcastAssistantAck(roomActionReply(ra, outcome), requestId);
@@ -3073,6 +3282,35 @@ function ackForWindowControl(ctrl: WindowControl): string {
       return `Tidying up. Bringing all rooms back inline.`;
   }
 }
+
+/** The dashboard's instruction to open a room. */
+function navigateRoomNotice(key: string, requestId?: string): WSMessage {
+  return { type: 'notification', payload: { source: 'navigate_room', key, requestId }, timestamp: Date.now() };
+}
+
+/**
+ * A held room action as the repeat-back shows it (#973): the room, the action,
+ * every argument the classifier filled in, in full and JSON-quoted so a value
+ * cannot pass for another argument, and what the action can do. The
+ * arguments are what the classifier may have read wrong.
+ */
+export function describeRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
+  const args = Object.entries(ra.args ?? {}).map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v) ?? String(v)}`);
+  const head = `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
+  const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
+  return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+}
+
+/** What each category a room action can reach means, for the repeat-back. */
+const ROOM_ACTION_EFFECT: Record<RoomActionCategory, string> = {
+  read_data: 'reads data',
+  write_data: 'saves data',
+  delete_data: 'deletes data',
+  execute_command: 'runs a command on this machine',
+  install_software: 'installs software',
+  modify_settings: 'changes settings',
+  spawn_agent: 'starts an agent',
+};
 
 /**
  * What to say about a room action once the room has answered, or not (#965).
