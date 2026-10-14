@@ -256,6 +256,49 @@ test('replay completes an old cached running turn outside the latest fifty turns
   expect(() => f.client.send(a, 'Can continue')).not.toThrow();
 });
 
+for (const paginated of [false, true]) {
+  test(`lost acceptance outside the latest fifty turns clears pending sends (${paginated ? 'paginated replay, newer draft' : 'single page, unchanged draft'})`, async () => {
+    const records = new Map<string, string>();
+    const storage = { getItem: (key: string) => records.get(key) ?? null, setItem: (key: string, value: string) => { records.set(key, value); } };
+    const f = fixture(storage); await f.client.start(); const a = await f.client.add(); await f.open();
+    f.client.store.setDraft(a, 'Before disconnect');
+    const first = f.client.send(a, 'Before disconnect');
+    // The server accepts, but both its acknowledgment and live events are lost.
+    f.turns.accept({ ...first, text: 'Before disconnect' });
+    f.client.adapter.onClose();
+    f.turns.start(first);
+    for (let i = 0; i < (paginated ? 510 : 1); i++) f.turns.text(first, 'x');
+    f.turns.finish(first, 'completed');
+    for (let i = 0; i < 51; i++) {
+      const later = { conversationId: a, turnId: `later-${i}`, requestId: `later-request-${i}`, text: 'Later' };
+      f.turns.accept(later); f.turns.start(later); f.turns.text(later, 'Done'); f.turns.finish(later, 'completed');
+    }
+    if (paginated) {
+      const second = new BriefConversationClient(f.api, storage); cleanups.push(() => second.stop()); await second.start();
+      second.store.setDraft(a, 'New question in the other window');
+    }
+    expect(f.client.getSnapshot().pendingSends).toHaveLength(1);
+    f.client.adapter.onOpen(f.socket); await until(() => f.client.getSnapshot().connected);
+    let page = f.sync(a);
+    expect(page.hasMore).toBe(paginated);
+    expect(page.turns).toHaveLength(50);
+    expect(page.turns.some(turn => turn.requestId === first.requestId)).toBe(false);
+    expect(page.events.some(event => event.requestId === first.requestId && event.payload.kind === 'message')).toBe(true);
+    while (page.hasMore) page = f.sync(a);
+    expect(f.client.getSnapshot().pendingSends).toEqual([]);
+    expect(f.client.store.getSnapshot().conversations[a]?.draft).toBe(paginated ? 'New question in the other window' : '');
+    expect(f.client.store.getSnapshot().conversations[a]?.turns[first.turnId]?.state).toBe('completed');
+    // There is no resend to trigger a duplicate acknowledgment and another full replay.
+    expect(f.sent.filter(frame => frame.type === 'brief_chat_send')).toHaveLength(1);
+    const subscriptions = f.sent.filter(frame => frame.type === 'brief_chat_subscribe').length;
+    expect(subscriptions).toBe(paginated ? 3 : 2);
+    f.client.adapter.onClose(); await f.open();
+    expect(f.sent.filter(frame => frame.type === 'brief_chat_send')).toHaveLength(1);
+    expect(f.sent.filter(frame => frame.type === 'brief_chat_subscribe')).toHaveLength(subscriptions + 1);
+    expect(() => f.client.send(a, 'Can continue')).not.toThrow();
+  });
+}
+
 test('failed turn details survive live delivery, reconnect and a daemon restart', async () => {
   const f = fixture(); await f.client.start(); const a = await f.client.add(); await f.open();
   const ref = f.client.send(a, 'Fail after partial output');

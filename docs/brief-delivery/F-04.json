@@ -72,12 +72,38 @@
     "browser_bundle": "passed: bun build ui/src/brief/chat/provider.tsx --target=browser; 14 modules, no server runtime dependencies",
     "typescript": "passed: bun x tsc --noEmit",
     "guards": "Normal commit hook result recorded in the PR description",
-    "full_suite": "Not run locally; exact-head remote CI is reported separately"
+    "full_suite": "Not run locally; exact-head remote CI is reported separately",
+    "recovery_review_2026_10_14": {
+      "finding": "R1: lost acceptance outside the latest fifty turns left an outbox request stuck in resend/full-replay recovery",
+      "reviewed_head": "72f3078a4857e28ae6738c336f55f2988bf6f31b",
+      "runtime": "Bun 1.3.6 (d530ed99), WSL Ubuntu",
+      "regressions": {
+        "command": "bun test ui/src/brief/chat/client.test.ts --test-name-pattern \"lost acceptance outside\"",
+        "before_fix_failed": 2,
+        "after_fix_passed": 2,
+        "assertions": 26,
+        "red_log": "docs/brief-delivery/evidence/F-04/recovery-red.log",
+        "green_log": "docs/brief-delivery/evidence/F-04/recovery-green.log"
+      },
+      "affected": {
+        "command": "bun test ui/src/brief ui/src/hooks/useWebSocket.test.ts ui/src/hooks/useWebSocket.realtime-status.test.ts src/brief src/vault/conversation-lifecycle.test.ts src/vault/conversation-schema.test.ts src/vault/chat-turns.test.ts src/daemon/api-brief-conversations.test.ts src/daemon/api-brief.test.ts src/daemon/ws-service-conversation.test.ts src/util/model-exec-env.test.ts src/model-exec-env-sites.test.ts src/workflows/adapters/untrusted-reach.test.ts",
+        "passed": 211,
+        "failed": 0,
+        "assertions": 1597,
+        "files": 22,
+        "log": "docs/brief-delivery/evidence/F-04/recovery-affected.log"
+      },
+      "typescript": "passed: bun x tsc --noEmit",
+      "browser_bundle": "passed: bun build ui/src/brief/chat/provider.tsx --target=browser --outdir /tmp/jarvis-f04-recovery-browser; 14 modules",
+      "scope": "F-04 only; downstream branches have not been rebased or cherry-picked",
+      "remote_ci": "See PR #738 for checks on the pushed head. Previous Docker and label jobs were cancelled before steps ran because hosted runners were not acquired."
+    }
   },
   "review_fixes": [
     "Replay compacts only the delivered event prefix; per-message snapshot watermarks retain missed history without repeated text, and old terminal events unblock cached running turns.",
     "Atomic field writes preserve drafts, attachment references and scroll across windows; original v1 records remain readable. Acceptance checks for a newer draft saved by another window.",
-    "Turn error codes and messages survive live delivery, replay and daemon restart; latest failure is exposed per conversation, and partial output keeps a failed/cancelled item status."
+    "Turn error codes and messages survive live delivery, replay and daemon restart; latest failure is exposed per conversation, and partial output keeps a failed/cancelled item status.",
+    "Canonical message and terminal events in validated replay pages clear accepted outbox requests outside the bounded latest-fifty turn list, stopping repeated resends and preserving newer drafts."
 ],
   "manual_checks": {
     "main_and_open_prs": "Fetched and checked before editing; D/Q feature work is on separate branches. F-03's corrected Tests/Docker checks pass.",
@@ -96,5 +122,5 @@
   ],
   "rollback": "Disable chatState activation and keep the existing dashboard entry. Retain local draft keys and server conversations. Do not delete messages, drop tables or replay work.",
   "quick_verification": "docs/brief-chat-state.md",
-  "next_task": "F-05 not started"
+  "next_task": "Continue sequential F-line CI review; next non-green PR is F-08 #755 as of 2026-10-14."
 }

@@ -24,12 +24,19 @@ temporary SQLite, an OS-assigned local port and a deterministic fake model. It
 checks two separate histories, reconnect, reopen, reload and exactly two executions.
 No live daemon, account, model, paid service or user database is used.
 
-Expected: **35 focused tests pass**. Review regressions cover a missed answer split
+Expected: **37 focused tests pass**. Review regressions cover a missed answer split
 across replay pages outside the latest-ten snapshot, a cached running turn outside
 the latest fifty turns, history loaded before subscription, two windows sharing
 storage, legacy draft recovery, and generation/restart errors. Seven cases fail
 on the original F-04 commit and pass with the review fixes. See the retained
 `docs/brief-delivery/evidence/F-04/review-{red,green,affected}.log` files.
+
+The 2026-10-14 recovery regressions cover acceptance lost before disconnect,
+followed by 51 later turns. Both single-page and paginated replay clear the old
+pending send without resending it, preserve a newer draft from another window,
+and permit the next send. Both cases fail on `72f3078a` and pass with the fix;
+see `docs/brief-delivery/evidence/F-04/recovery-{red,green,affected}.log`.
+
 
 ## Integration contract
 
@@ -119,7 +126,9 @@ Snapshot messages are canonical as of `sequence`. Replay compaction advances onl
 to the delivered page's `nextSequence`, preserving later pages even when their
 events precede the snapshot watermark. Each canonical message has its own sequence
 watermark, so covered text is not appended twice while older missed messages and
-terminal events still replay. Reordered live events are projected in sequence
+terminal events still replay. Validated replay messages and terminal events also
+reconcile pending sends, even when their turns have left the latest-fifty list.
+Reordered live events are projected in sequence
 order; gaps are valid. History-only rows are reconstructed when replay reaches
 them, preserving their canonical timestamps without duplicating their full text.
 History reads can fill missing rows but cannot replace newer streamed content.
@@ -155,4 +164,5 @@ no database migration. Code merged: no. Release enabled: no. See
 `docs/brief-delivery/F-04.json` for exact verification evidence and limitations.
 
 Design reference: [conversation lifecycle, Figma node 81:212](https://www.figma.com/design/eNfKeirIKLZLlZEasrurZa/Jarvis-Brief-Working-design?node-id=81-212).
-No tab styling or new visual affordance is included. F-05 is not started.
+No tab styling or new visual affordance is included. Later F-line work is tracked
+in separate stacked PRs; this recovery fix updates F-04 only.

@@ -132,6 +132,10 @@ export class BriefConversationClient {
         this.syncRequests.delete(id); this.store.setError(id, 'Invalid conversation synchronization response.'); return true;
       }
       this.syncRequests.delete(id); this.store.applySnapshot(payload); this.store.setError(id, null);
+      // The turn list is bounded; replay still proves acceptance for older pending sends.
+      for (const event of payload.events) {
+        if (event.payload.kind === 'message' || event.payload.kind === 'terminal') this.accepted(event.requestId);
+      }
       for (const turn of payload.turns) this.accepted(turn.requestId);
       if (payload.hasMore) this.sync(id, payload.nextSequence);
       else {
