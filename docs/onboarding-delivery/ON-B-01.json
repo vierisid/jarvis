@@ -52,6 +52,7 @@
     { "check": "Revert implementation in isolated worktree; tree equals pinned main", "status": "passed", "tests": 118, "failures": 0, "assertions": 403, "evidence": "evidence/ON-B-01/revert-tests.log", "note": "Legacy regressions, TypeScript and UI build pass after the actual git revert." },
     { "check": "Actual production assembly and combined U/B/D/F/Q candidate", "status": "blocked", "note": "ON-B-11/ON-U-10 and complete candidate do not yet exist. Contract fixture results cannot certify them." },
     { "check": "PR review skill, direct full-diff review and corrective re-review", "status": "passed", "evidence": "evidence/ON-B-01/review.md", "note": "Direct review by implementer; not an independent agent/human approval." },
+    { "check": "Remove the two review fixes in isolated worktree, then restore committed source", "status": "passed", "evidence": "evidence/ON-B-01/regression-green.log", "note": "Exactly the bodyless-mutation and delayed-job-acknowledgement tests fail without the fixes; 29 journey tests pass after restoration. Intentional failures are recorded in regression-red.log." },
     { "check": "Full repository and platform CI", "status": "pending_at_receipt_creation", "url": "https://github.com/vierisid/jarvis/pull/1050/checks", "note": "Read results for the current PR head. Local evidence is focused, not a claim that all CI suites ran locally." }
   ],
   "evidence_classification": {
