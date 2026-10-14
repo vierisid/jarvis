@@ -16,6 +16,10 @@ import {
   type RoomActionCategory,
 } from './room-actions.ts';
 import type { ActionCategory } from '../roles/authority.ts';
+import {
+  collapseRoomActionAliases, matchByTitle, matchProjectByName, pickRoomActionTarget, ROOM_ACTION_ALIASES, ROOM_ACTION_DEFAULTS,
+  ROOM_ACTION_TARGETS, withRoomActionDefaults,
+} from './room-action-targets.ts';
 
 // Every category the table can name is a real authority category.
 const _categoryIsAuthority: ActionCategory = '' as RoomActionCategory;
@@ -256,5 +260,327 @@ describe('each room action\'s impact matches what its handler does (#973, #974)'
     expect(isPresentationRoomAction('__proto__', 'toString')).toBe(false);
     expect(isPresentationRoomAction('settings', 'hasOwnProperty')).toBe(false);
     expect(roomActionCategories('usage', 'switch_tab')).toEqual([]);
+  });
+});
+
+/**
+ * room -> action -> the code that runs it, with the handler's name for its
+ * arguments. A `case` with no statements runs the next one's code; a handler
+ * with no switch is its one action's code.
+ */
+function handlerCode(): Record<string, Record<string, { nodes: readonly ts.Node[]; args: string }>> {
+  const found: Record<string, Record<string, { nodes: readonly ts.Node[]; args: string }>> = {};
+  for (const file of sourceFiles(ROOMS_DIR)) {
+    const text = readFileSync(file, 'utf8');
+    if (!text.includes('useRoomActions(')) continue;
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const visit = (node: ts.Node): void => {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'useRoomActions') {
+        const [roomArg, handler] = node.arguments as unknown as [ts.StringLiteral, ts.ArrowFunction];
+        const room = roomArg.text;
+        const action = (handler.parameters[0]!.name as ts.Identifier).text;
+        const argParam = handler.parameters[1]?.name;
+        if (argParam && !ts.isIdentifier(argParam)) throw new Error(`${file}: a handler whose arguments this test cannot follow`);
+        const args = argParam ? argParam.text : 'args';
+        const body = ts.isBlock(handler.body) ? handler.body.statements : [handler.body];
+        const sw = body.find((st): st is ts.SwitchStatement => ts.isSwitchStatement(st)
+          && ts.isIdentifier(st.expression) && st.expression.text === action);
+        const actions: Record<string, { nodes: readonly ts.Node[]; args: string }> = {};
+        if (sw) {
+          const clauses = sw.caseBlock.clauses;
+          clauses.forEach((clause, i) => {
+            if (!ts.isCaseClause(clause)) return;
+            let j = i;
+            while (j < clauses.length - 1 && clauses[j]!.statements.length === 0) j += 1;
+            actions[(clause.expression as ts.StringLiteral).text] = { nodes: clauses[j]!.statements, args };
+          });
+        } else {
+          const only = Object.keys(ROOM_ACTIONS[room as keyof typeof ROOM_ACTIONS] ?? {});
+          actions[only[0]!] = { nodes: body, args };
+        }
+        found[room] = actions;
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(sf);
+  }
+  return found;
+}
+
+/** Every node under `nodes` that `match` picks. */
+function findAll<T>(nodes: readonly ts.Node[], match: (n: ts.Node) => T | null): T[] {
+  const out: T[] = [];
+  const walk = (n: ts.Node): void => {
+    const m = match(n);
+    if (m !== null) out.push(m);
+    ts.forEachChild(n, walk);
+  };
+  nodes.forEach(walk);
+  return out;
+}
+
+const unwrap = (e: ts.Expression): ts.Expression => {
+  let x = e;
+  while (ts.isParenthesizedExpression(x) || ts.isAsExpression(x) || ts.isNonNullExpression(x)) x = x.expression;
+  return x;
+};
+
+/**
+ * A default written into a handler: `args.x ?? <literal>`, or
+ * `typeof args.x === ... ? args.x : <literal>`, where the literal is a
+ * non-empty string, a number, a boolean or null. An empty string or undefined
+ * is the argument being absent, which the handler then refuses or leaves to
+ * the daemon's own default; it does not change what runs.
+ */
+function inlineDefaults(nodes: readonly ts.Node[], args: string): string[] {
+  const argOf = (e: ts.Expression): string | null => argName(e, args);
+  const literal = (e: ts.Expression): string | null => {
+    const x = unwrap(e);
+    if (ts.isStringLiteral(x) || ts.isNoSubstitutionTemplateLiteral(x)) return x.text === '' ? null : JSON.stringify(x.text);
+    if (ts.isNumericLiteral(x)) return x.text;
+    if (x.kind === ts.SyntaxKind.TrueKeyword) return 'true';
+    if (x.kind === ts.SyntaxKind.FalseKeyword) return 'false';
+    if (x.kind === ts.SyntaxKind.NullKeyword) return 'null';
+    return null;
+  };
+  return findAll(nodes, (n) => {
+    if (ts.isBinaryExpression(n) && (n.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      || n.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+      const a = argOf(n.left);
+      const d = literal(n.right);
+      if (a && d) return `${a}=${d}`;
+    }
+    if (ts.isConditionalExpression(n)) {
+      // Either way round: `... ? args.x : "d"` or `... ? "d" : args.x`.
+      for (const [arg, lit] of [[n.whenTrue, n.whenFalse], [n.whenFalse, n.whenTrue]] as const) {
+        const a = argOf(arg);
+        const d = literal(lit);
+        if (a && d) return `${a}=${d}`;
+      }
+    }
+    // `const { x = "d" } = args`
+    if (ts.isVariableDeclaration(n) && n.initializer && ts.isIdentifier(unwrap(n.initializer))
+      && (unwrap(n.initializer) as ts.Identifier).text === args && ts.isObjectBindingPattern(n.name)) {
+      for (const el of n.name.elements) {
+        const d = el.initializer ? literal(el.initializer) : null;
+        const key = el.propertyName && ts.isIdentifier(el.propertyName) ? el.propertyName.text : ts.isIdentifier(el.name) ? el.name.text : '?';
+        if (d) return `${key}=${d}`;
+      }
+    }
+    return null;
+  });
+}
+
+/** `args.x` or `args["x"]` as "x", else null. */
+function argName(e: ts.Expression, args: string): string | null {
+  const x = unwrap(e);
+  if (ts.isPropertyAccessExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === args) return x.name.text;
+  if (ts.isElementAccessExpression(x) && ts.isIdentifier(x.expression) && x.expression.text === args
+    && ts.isStringLiteral(x.argumentExpression)) return x.argumentExpression.text;
+  return null;
+}
+
+/**
+ * Where a case lets one argument stand in for another: `args.a ?? args.b`,
+ * `args.a || args.b`, or `args.a ? ... : <something reading args.b>`. The
+ * daemon must collapse those before a card (ROOM_ACTION_ALIASES), or the card
+ * shows both and the handler runs one.
+ */
+function argAliases(nodes: readonly ts.Node[], args: string): string[] {
+  const reads = (n: ts.Node): string[] => findAll([n], (m) => (ts.isExpression(m) ? argName(m, args) : null));
+  return findAll(nodes, (n) => {
+    if (ts.isBinaryExpression(n) && (n.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken
+      || n.operatorToken.kind === ts.SyntaxKind.BarBarToken)) {
+      const a = argName(n.left, args);
+      const b = argName(n.right, args);
+      if (a && b && a !== b) return `${a}|${b}`;
+    }
+    if (ts.isConditionalExpression(n)) {
+      const a = argName(n.condition, args);
+      const other = a ? reads(n.whenFalse).filter((b) => b !== a) : [];
+      if (a && other.length > 0) return `${a}|${[...new Set(other)].join('+')}`;
+    }
+    return null;
+  });
+}
+
+/**
+ * Where a side-effecting case reaches for an item other than through
+ * pickRoomActionTarget(<list>, args, ...): the selection by name, or a
+ * `.find(` on a list. Either would ignore a pinned id.
+ */
+function unpinnedLookups(nodes: readonly ts.Node[], args: string): string[] {
+  const inPicker = new Set<ts.Node>();
+  findAll(nodes, (n) => {
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'pickRoomActionTarget') {
+      findAll([n], (m) => { inPicker.add(m); return null; });
+    }
+    return null;
+  });
+  return findAll(nodes, (n) => {
+    if (inPicker.has(n)) return null;
+    if (ts.isIdentifier(n) && (n.text === 'selected' || n.text === 'activeProject')) return n.text;
+    if (ts.isCallExpression(n) && ts.isPropertyAccessExpression(n.expression)
+      && ['find', 'findByName', 'findByTitle'].includes(n.expression.name.text)) return `.${n.expression.name.text}(`;
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression)
+      && ['matchProjectByName', 'matchByTitle'].includes(n.expression.text)) return `${n.expression.text}(`;
+    return null;
+  }).concat(findAll(nodes, (n) => {
+    // The picker is handed the case's own arguments, so a pinned id reaches it.
+    if (!(ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'pickRoomActionTarget')) return null;
+    const second = n.arguments[1];
+    return second && ts.isIdentifier(second) && second.text === args ? null : 'pickRoomActionTarget(<not args>)';
+  }));
+}
+
+/** The (room, action) every call to `fn` in `nodes` names, as "room/action". */
+function callsTo(nodes: readonly ts.Node[], fn: string, withLiterals: boolean): string[] {
+  return findAll(nodes, (n) => {
+    if (!ts.isCallExpression(n)) return null;
+    const callee = n.expression;
+    const name = ts.isIdentifier(callee) ? callee.text : ts.isPropertyAccessExpression(callee) ? callee.name.text : null;
+    if (name !== fn) return null;
+    if (!withLiterals) return fn;
+    const [r, a] = n.arguments;
+    return r && a && ts.isStringLiteral(r) && ts.isStringLiteral(a) ? `${r.text}/${a.text}` : '<non-literal>';
+  });
+}
+
+const tableEntries = (table: Record<string, Record<string, unknown>>) =>
+  Object.entries(table).flatMap(([room, actions]) => Object.keys(actions).map((a) => `${room}/${a}`)).sort();
+
+describe('what a held room action does is decided before the card, from the handlers\' own tables (#1008)', () => {
+  const code = handlerCode();
+  const sideEffecting = Object.entries(code).flatMap(([room, actions]) =>
+    Object.entries(actions).filter(([action]) => !isPresentationRoomAction(room, action)).map(([action, c]) => ({ room, action, ...c })));
+
+  test('no side-effecting case supplies a default of its own: each one is in ROOM_ACTION_DEFAULTS, and its case uses it', () => {
+    // Not vacuous: the cases were read.
+    expect(sideEffecting.length).toBeGreaterThan(25);
+    const inline = sideEffecting.flatMap(({ room, action, nodes, args }) => inlineDefaults(nodes, args).map((d) => `${room}/${action}: ${d}`));
+    expect(inline).toEqual([]);
+    const users = sideEffecting.flatMap(({ room, action, nodes }) =>
+      callsTo(nodes, 'withRoomActionDefaults', true).map((named) => {
+        // A case reads its own defaults, never another action's.
+        expect(named).toBe(`${room}/${action}`);
+        return named;
+      }));
+    expect([...new Set(users)].sort()).toEqual(tableEntries(ROOM_ACTION_DEFAULTS));
+    expect(users.length).toBeGreaterThanOrEqual(4);
+  });
+
+  test('the detector sees a default written inline', () => {
+    const sf = ts.createSourceFile('x.tsx', [
+      'const a = typeof args.template === "string" ? args.template : "vite-react";',
+      'const b = String(args.scope ?? "all");',
+      'const c = (args.level as GoalLevel) ?? "task";',
+      'const d = (args.agent as string) ?? null;',
+      'const e = typeof args.name === "string" ? args.name : "";',
+      'const f = (args.priority as P) ?? undefined;',
+      'const g = args.voice || "alloy";',
+      'const h = typeof args.mode !== "string" ? "fast" : args.mode;',
+      'const { size = 3, color: c = "red", other } = args;',
+      'const i = args["tone"] ?? `warm`;',
+    ].join('\n'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    expect(inlineDefaults(sf.statements, 'args')).toEqual([
+      'template="vite-react"', 'scope="all"', 'level="task"', 'agent=null', 'voice="alloy"', 'mode="fast"', 'size=3', 'tone="warm"',
+    ]);
+  });
+
+  test('every argument a side-effecting case lets stand in for another is collapsed before the card, and only those', () => {
+    const found = sideEffecting.filter(({ nodes, args }) => argAliases(nodes, args).length > 0)
+      .map(({ room, action }) => `${room}/${action}`).sort();
+    expect(found).toEqual(tableEntries(ROOM_ACTION_ALIASES));
+    expect(found.length).toBeGreaterThanOrEqual(3);
+    const sf = ts.createSourceFile('x.tsx', 'const a = String(args.provider ?? args.name ?? ""); const r = args.ref ? String(args.ref) : args.p && args.m ? 1 : 2;',
+      ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    expect(argAliases(sf.statements, 'args')).toEqual(['provider|name', 'ref|p+m']);
+  });
+
+  test('the alias collapse keeps the argument the handler runs', () => {
+    expect(collapseRoomActionAliases('settings', 'set_default_model', { ref: 'a:b', provider: 'x', model: 'y' })).toEqual({ ref: 'a:b' });
+    expect(collapseRoomActionAliases('settings', 'set_model', { provider: 'x', model: 'y' })).toEqual({ ref: 'x:y' });
+    expect(collapseRoomActionAliases('settings', 'set_model', { provider: 'x' })).toEqual({});
+    expect(collapseRoomActionAliases('settings', 'test_provider', { provider: 'openai', name: 'groq' })).toEqual({ provider: 'openai' });
+    expect(collapseRoomActionAliases('settings', 'test_provider', { name: 'groq' })).toEqual({ provider: 'groq' });
+    const args = { title: 'x' };
+    expect(collapseRoomActionAliases('tasks', 'create_task', args)).toBe(args);
+  });
+
+  test('every side-effecting case that picks an item goes through pickRoomActionTarget with its own arguments, and only those in ROOM_ACTION_TARGETS', () => {
+    // A direct lookup, or the selection used outside the picker, would ignore
+    // a pinned id; so would a picker handed anything but the case's args.
+    const direct = sideEffecting.flatMap(({ room, action, nodes, args }) => unpinnedLookups(nodes, args).map((f) => `${room}/${action}: ${f}`));
+    expect(direct).toEqual([]);
+    const sf = ts.createSourceFile('x.tsx', [
+      'const a = pickRoomActionTarget(data.items, args, data.findByName, selected);',
+      'const b = data.projects.find((p) => p.id === x);',
+      'const c = pickRoomActionTarget(data.items, { name: args.name }, data.findByName);',
+      'go(activeProject);',
+    ].join('\n'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    expect(unpinnedLookups(sf.statements, 'args')).toEqual(['.find(', 'activeProject', 'pickRoomActionTarget(<not args>)']);
+    const pickers = sideEffecting.filter(({ nodes }) => callsTo(nodes, 'pickRoomActionTarget', false).length > 0)
+      .map(({ room, action }) => `${room}/${action}`).sort();
+    expect(pickers).toEqual(tableEntries(ROOM_ACTION_TARGETS));
+    expect(pickers.length).toBeGreaterThanOrEqual(9);
+  });
+
+  test('each target kind is the item its room holds', () => {
+    const kinds = Object.fromEntries(Object.entries(ROOM_ACTION_TARGETS).map(([room, a]) => [room, [...new Set(Object.values(a))]]));
+    expect(kinds).toEqual({ workspaces: ['project'], content: ['content'], tasks: ['task'] });
+    for (const entry of tableEntries(ROOM_ACTION_TARGETS)) {
+      const [room, action] = entry.split('/') as [string, string];
+      expect([entry, isPresentationRoomAction(room, action), isRoomAction(room, action)]).toEqual([entry, false, true]);
+    }
+    for (const entry of tableEntries(ROOM_ACTION_DEFAULTS)) {
+      const [room, action] = entry.split('/') as [string, string];
+      expect([entry, isPresentationRoomAction(room, action), isRoomAction(room, action)]).toEqual([entry, false, true]);
+    }
+  });
+});
+
+describe('withRoomActionDefaults and pickRoomActionTarget (#1008)', () => {
+  test('a left-out, mistyped or unknown argument becomes the handler\'s default; a good one stays', () => {
+    expect(withRoomActionDefaults('settings', 'replay_onboarding', {})).toEqual({ scope: 'all' });
+    expect(withRoomActionDefaults('settings', 'replay_onboarding', { scope: 'tutorials' })).toEqual({ scope: 'all' });
+    expect(withRoomActionDefaults('settings', 'replay_onboarding', { scope: 5 })).toEqual({ scope: 'all' });
+    expect(withRoomActionDefaults('settings', 'replay_onboarding', { scope: 'tutorial' })).toEqual({ scope: 'tutorial' });
+    expect(withRoomActionDefaults('workspaces', 'create_project', { name: 'x' })).toEqual({ name: 'x', template: 'vite-react' });
+    expect(withRoomActionDefaults('workspaces', 'create_project', { name: 'x', template: 'astro' })).toEqual({ name: 'x', template: 'astro' });
+    expect(withRoomActionDefaults('goals', 'create_goal', { title: 't' })).toEqual({ title: 't', level: 'task' });
+    expect(withRoomActionDefaults('tasks', 'reassign', { name: 'rent' })).toEqual({ name: 'rent', agent: null });
+    expect(withRoomActionDefaults('tasks', 'reassign', { name: 'rent', agent: 'research' })).toEqual({ name: 'rent', agent: 'research' });
+    // An action with no defaults, and a hostile name, are left alone.
+    const args = { title: 'x' };
+    expect(withRoomActionDefaults('tasks', 'create_task', args)).toBe(args);
+    expect(withRoomActionDefaults('__proto__', 'toString', args)).toBe(args);
+  });
+
+  test('a pinned id is that item or none; else the name; only with no name, the selection', () => {
+    const items = [{ id: 'a', name: 'alpha' }, { id: 'b', name: 'beta' }];
+    const byName = (n: string) => items.find((i) => i.name.includes(n)) ?? null;
+    const selected = items[1]!;
+    expect(pickRoomActionTarget(items, { id: 'a', name: 'beta' }, byName, selected)).toBe(items[0]!);
+    expect(pickRoomActionTarget(items, { id: 'gone', name: 'alpha' }, byName, selected)).toBeNull();
+    expect(pickRoomActionTarget(items, { name: 'alp' }, byName, selected)).toBe(items[0]!);
+    // A name that matches nothing is nothing, not the selection.
+    expect(pickRoomActionTarget(items, { name: 'zeta' }, byName, selected)).toBeNull();
+    expect(pickRoomActionTarget(items, {}, byName, selected)).toBe(selected);
+    // A blank name is a name that matches nothing, as the rooms had it.
+    expect(pickRoomActionTarget(items, { name: '  ' }, byName, selected)).toBeNull();
+    expect(pickRoomActionTarget(items, {}, byName)).toBeNull();
+  });
+
+  test('the shared matchers match as the rooms did', () => {
+    const projects = [{ name: 'jarvis-landing' }, { name: 'demo-app' }, { name: 'docs site' }];
+    expect(matchProjectByName(projects, 'Jarvis Landing')).toBe(projects[0]!);
+    expect(matchProjectByName(projects, 'landing')).toBe(projects[0]!);
+    expect(matchProjectByName(projects, 'demo application')).toBe(projects[1]!);
+    expect(matchProjectByName(projects, 'zzz')).toBeNull();
+    expect(matchProjectByName(projects, ' ')).toBeNull();
+    const tasks = [{ what: 'Pay rent to landlord' }, { what: 'rent' }];
+    expect(matchByTitle(tasks, (t) => t.what, 'RENT')).toBe(tasks[1]!);
+    expect(matchByTitle(tasks, (t) => t.what, 'landlord')).toBe(tasks[0]!);
+    expect(matchByTitle(tasks, (t) => t.what, '')).toBeNull();
   });
 });

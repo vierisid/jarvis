@@ -29,6 +29,7 @@ import {
 } from "./useGoalsData";
 import "./GoalsRoom.css";
 import { isRoomTab, type RoomTab } from "../../../../../src/daemon/room-tabs";
+import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 
 type TabId = RoomTab<"goals">;
 
@@ -145,7 +146,8 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
       case "create_goal": {
         const title = typeof args.title === "string" ? args.title.trim() : "";
         if (!title) return false;
-        const level = (args.level as GoalLevel) ?? "task";
+        // The default the daemon showed on the card (#1008).
+        const level = withRoomActionDefaults("goals", "create_goal", args).level as GoalLevel;
         // The classifier may pass deadline as a relative string; we accept
         // a numeric epoch ms only here (the schedule_event path covers
         // date parsing for calendar — for goals we let the user set the

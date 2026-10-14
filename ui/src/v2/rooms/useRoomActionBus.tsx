@@ -32,6 +32,26 @@ export interface RoomActionRequest {
   action: string;
   args: Record<string, unknown>;
   ts: number;
+  /**
+   * On this page's monotonic clock (performance.now), when whoever asked
+   * stops waiting to hear (#1010). Past it the action is dropped, queued or
+   * not: the daemon has already said it got no answer, and a retry that
+   * prompted must not be the second run.
+   */
+  expiresAt?: number;
+  /**
+   * False once whoever asked can no longer hear the answer (#1010): the
+   * socket it came on closed, and the daemon gave up on it then.
+   */
+  stillAsked?: () => boolean;
+}
+
+/** Whether `req`'s caller has stopped waiting for it (#1010). */
+function expired(req: RoomActionRequest): boolean {
+  const late = req.expiresAt !== undefined && performance.now() >= req.expiresAt;
+  if (!late && req.stillAsked?.() !== false) return false;
+  console.warn(`[RoomActionBus] Dropped "${req.action}" for room "${req.room}": the daemon stopped waiting for it`);
+  return true;
 }
 
 /** What a handler answers: true or a string ack when it carried the action out. */
@@ -131,7 +151,10 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
   // frame, but the SettingsRoom body needs a tick or two to mount + run
   // its `useRoomActions` effect. Without queueing, the action lands in
   // the void and the user sees the room open but TTS not toggle.
-  // Shared with the daemon, which waits this long for a room to answer.
+  // Shared with the daemon, whose classifier and pebble paths wait this long
+  // for a room to answer. The realtime path waits less; an action it asked
+  // for carries its own deadline (`expiresAt`, #1010), which is the bound
+  // that counts for it.
   const QUEUE_TTL_MS = ROOM_ACTION_QUEUE_TTL_MS;
   const queueRef = useRef<
     Partial<Record<RoomKey, Array<{ req: RoomActionRequest; queuedAt: number; onResult?: RoomActionResultCallback }>>>
@@ -141,7 +164,7 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
     const queue = queueRef.current[room];
     if (!queue || queue.length === 0) return;
     const now = Date.now();
-    const fresh = queue.filter((q) => now - q.queuedAt < QUEUE_TTL_MS);
+    const fresh = queue.filter((q) => now - q.queuedAt < QUEUE_TTL_MS && !expired(q.req));
     queueRef.current[room] = [];
     for (const { req, onResult } of fresh) {
       console.log(
@@ -175,6 +198,8 @@ export function RoomActionBusProvider({ children }: { children: React.ReactNode 
       onResult?.(false);
       return;
     }
+    // Not reported: the daemon no longer listens for this answer.
+    if (expired(req)) return;
     const stack = handlersRef.current[req.room as RoomKey];
     if (!stack || stack.length === 0) {
       // No handler yet — queue and wait for one to register. Common

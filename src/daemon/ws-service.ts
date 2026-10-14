@@ -21,7 +21,7 @@ import { approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { approvalIntentFields, approvalIntentParts, boundedApprovalLabel, formatApprovalIntent } from '../authority/approval-delivery.ts';
-import type { AuditTrail } from '../authority/audit.ts';
+import type { AuditTrail, AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { classifyVoiceIntent, type RecentTurn } from '../agents/voice-intent-classifier.ts';
@@ -36,7 +36,7 @@ import {
   type InterviewSession,
 } from './onboarding-interviewer.ts';
 import { getMessages } from '../vault/conversations.ts';
-import { createCommitment, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
+import { createCommitment, findCommitments, updateCommitmentStatus, updateCommitmentAssignee } from '../vault/commitments.ts';
 import { recordAgentActivity } from '../vault/agent-activity.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
@@ -58,7 +58,13 @@ import type { FileEntry } from '../sites/types.ts';
 import { ROOM_ACTION_QUEUE_TTL_MS, RoomActionResults, type RoomActionOutcome } from './room-action-results.ts';
 import { PEBBLE_ROOMS, tabSwitchReply } from './pebble-intents.ts';
 import { isPresentationRoomAction, isRoomAction, roomActionCategories, type RoomActionCategory } from './room-actions.ts';
-import { classifierMustConfirmRoomAction, realtimeRoomActionRefusal, type RealtimeRoomActionContext } from './voice-room-action-gate.ts';
+import {
+  classifierMustConfirmRoomAction, realtimeRoomActionDecision, resolveHeldRoomAction, roomActionAuditRow,
+  type RoomActionAuditReason, type RoomActionOrigin,
+  type RealtimeRoomActionContext, type RoomActionTargetLists,
+} from './voice-room-action-gate.ts';
+import { findContent } from '../vault/content-pipeline.ts';
+import { roomActionTargetKind } from './room-action-targets.ts';
 
 /** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
 const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
@@ -250,8 +256,9 @@ const VOICE_CONFIRMATION_SWEEP_INTERVAL_MS = 60_000;
  * be unit-tested without spinning up a real WebSocket server.
  *
  * Returns the number of pendingVoiceConfirmations entries removed (the
- * other two are at most 1 each — one entry per ws). Mostly useful so the
- * test can assert "we swept N abandoned cards" without re-querying.
+ * other two are at most 1 each -- one entry per ws), and their ids, so the
+ * caller can take those cards down on every dashboard that shows them
+ * (#1011).
  */
 export function cleanupPerSocketMaps<W>(
   ws: W,
@@ -260,7 +267,7 @@ export function cleanupPerSocketMaps<W>(
   pendingVoiceConfirmations: Map<string, { ws: W }>,
   realtimeSessions?: Map<W, unknown>,
   pendingVoiceFrames?: Map<W, unknown>,
-): { voiceRemoved: boolean; interviewRemoved: boolean; pendingRemoved: number } {
+): { voiceRemoved: boolean; interviewRemoved: boolean; pendingRemoved: number; pendingRemovedIds: string[] } {
   const voiceRemoved = voiceSessions.delete(ws);
   const interviewRemoved = interviewSessions.delete(ws);
   // Backstop only: closeRealtimeVoice runs first on disconnect and owns the
@@ -272,20 +279,20 @@ export function cleanupPerSocketMaps<W>(
     realtimeSessions.delete(ws);
   }
   pendingVoiceFrames?.delete(ws);
-  let pendingRemoved = 0;
+  const pendingRemovedIds: string[] = [];
   for (const [id, pending] of pendingVoiceConfirmations) {
     if (pending.ws === ws) {
       pendingVoiceConfirmations.delete(id);
-      pendingRemoved += 1;
+      pendingRemovedIds.push(id);
     }
   }
-  return { voiceRemoved, interviewRemoved, pendingRemoved };
+  return { voiceRemoved, interviewRemoved, pendingRemoved: pendingRemovedIds.length, pendingRemovedIds };
 }
 
 /**
  * Pure TTL-sweep helper: removes pendingVoiceConfirmations entries older
  * than `ttlMs` and returns the ids of removed entries so the caller can
- * notify the originating clients (`voice_confirmation_expired`).
+ * take their cards down (`voice_confirmation_expired`, to every client).
  *
  * Extracted so the TTL contract can be unit-tested deterministically by
  * passing an explicit `now` rather than relying on real time.
@@ -587,28 +594,7 @@ export class WebSocketService implements Service {
         onConnect: (_ws) => {
           console.log('[WSService] Client connected');
         },
-        onDisconnect: (ws) => {
-          this.cancelActiveChat(ws, 'disconnect', false);
-          // A room action this dashboard was asked about can no longer be
-          // answered: say so now rather than after the wait (#965).
-          this.roomActionResults.abandonAnswerer(ws);
-          // Tear down any realtime voice session (closes the OpenAI WS + timer).
-          this.closeRealtimeVoice(ws);
-          // Clean up every per-socket map so a long-running daemon doesn't
-          // accumulate dead-socket entries across reconnects. See
-          // cleanupPerSocketMaps for the contract; tested in
-          // ws-service-cleanup.test.ts.
-          cleanupPerSocketMaps(
-            ws,
-            this.voiceSessions as unknown as Map<typeof ws, unknown>,
-            this.interviewSessions as unknown as Map<typeof ws, unknown>,
-            this.pendingVoiceConfirmations as unknown as Map<string, { ws: typeof ws }>,
-            this.realtimeSessions as unknown as Map<typeof ws, unknown>,
-            this.pendingVoiceFrames as unknown as Map<typeof ws, unknown>,
-          );
-          this.endInterviewSession(ws);
-          console.log('[WSService] Client disconnected');
-        },
+        onDisconnect: (ws) => this.handleClientDisconnect(ws),
       });
 
       // Start the server
@@ -618,29 +604,10 @@ export class WebSocketService implements Service {
       // an active client that receives a clarifier and then ignores it
       // (user walks away, switches context) leaves the entry forever.
       // 60s tick, 10-min TTL — see sweepExpiredVoiceConfirmations.
-      this.voiceConfirmationSweepTimer = setInterval(() => {
-        const expired = sweepExpiredVoiceConfirmations(
-          this.pendingVoiceConfirmations as unknown as Map<string, { ws: ServerWebSocket<unknown>; createdAt: number }>,
-          Date.now(),
-          VOICE_CONFIRMATION_TTL_MS,
-        );
-        for (const { id, ws } of expired) {
-          // Tell the originating client so the card UI can dismiss itself
-          // rather than stay rendered forever.
-          try {
-            ws.send(JSON.stringify({
-              type: 'voice_confirmation_expired',
-              payload: { id },
-              timestamp: Date.now(),
-            }));
-          } catch (err) {
-            // Socket may have died between map-read and send; safe to
-            // ignore. Use debug instead of warn so a burst of expirations
-            // against half-closed sockets doesn't spam the daemon log.
-            console.debug('[WSService] voice_confirmation_expired send failed:', err);
-          }
-        }
-      }, VOICE_CONFIRMATION_SWEEP_INTERVAL_MS);
+      this.voiceConfirmationSweepTimer = setInterval(
+        () => this.sweepVoiceConfirmations(Date.now()),
+        VOICE_CONFIRMATION_SWEEP_INTERVAL_MS,
+      );
 
       this._status = 'running';
       console.log(`[WSService] Started on port ${this.port}`);
@@ -650,12 +617,98 @@ export class WebSocketService implements Service {
     }
   }
 
+  /** The clarifiers and repeat-backs still waiting for an answer (#1011). */
+  pendingVoiceConfirmationIds(): string[] {
+    return [...this.pendingVoiceConfirmations.keys()];
+  }
+
+  /** A dashboard or panel socket closed. */
+  private handleClientDisconnect(ws: ServerWebSocket<unknown>): void {
+    this.cancelActiveChat(ws, 'disconnect', false);
+    // A room action this dashboard was asked about can no longer be
+    // answered: say so now rather than after the wait (#965).
+    this.roomActionResults.abandonAnswerer(ws);
+    // Tear down any realtime voice session (closes the OpenAI WS + timer).
+    this.closeRealtimeVoice(ws);
+    // Clean up every per-socket map so a long-running daemon doesn't
+    // accumulate dead-socket entries across reconnects. See
+    // cleanupPerSocketMaps for the contract; tested in
+    // ws-service-cleanup.test.ts.
+    const holds = this.heldRoomActions((p) => p.ws === ws);
+    const { pendingRemovedIds } = cleanupPerSocketMaps(
+      ws,
+      this.voiceSessions as unknown as Map<typeof ws, unknown>,
+      this.interviewSessions as unknown as Map<typeof ws, unknown>,
+      this.pendingVoiceConfirmations as unknown as Map<string, { ws: typeof ws }>,
+      this.realtimeSessions as unknown as Map<typeof ws, unknown>,
+      this.pendingVoiceFrames as unknown as Map<typeof ws, unknown>,
+    );
+    // Its clarifier and repeat-back cards went to every dashboard, and a
+    // click on one now finds nothing: take them down everywhere (#1011).
+    for (const id of pendingRemovedIds) this.broadcastVoiceConfirmationGone(id, 'disconnected');
+    // A held action that will now never run is recorded as such (#1009).
+    for (const [id, ra] of holds) this.auditRoomAction(ra, 'classifier', 'denied', false, { approvalId: id, channel: 'system', reason: 'disconnected' });
+    this.endInterviewSession(ws);
+    console.log('[WSService] Client disconnected');
+  }
+
+  /**
+   * Drop the voice confirmations older than VOICE_CONFIRMATION_TTL_MS, and
+   * take their cards down on every dashboard that was shown them (#1011).
+   * The sweep timer calls this; it used to tell only the socket that spoke,
+   * in a message no dashboard handled.
+   */
+  private sweepVoiceConfirmations(now: number): void {
+    const holds = this.heldRoomActions(() => true);
+    const expired = sweepExpiredVoiceConfirmations(
+      this.pendingVoiceConfirmations as unknown as Map<string, { ws: ServerWebSocket<unknown>; createdAt: number }>,
+      now,
+      VOICE_CONFIRMATION_TTL_MS,
+    );
+    for (const { id } of expired) {
+      this.broadcastVoiceConfirmationGone(id, 'expired');
+      const ra = holds.get(id);
+      if (ra) this.auditRoomAction(ra, 'classifier', 'denied', false, { approvalId: id, channel: 'system', reason: 'expired' });
+    }
+  }
+
+  /** id -> held room action, for the pending confirmations `which` picks. */
+  private heldRoomActions(which: (p: PendingVoiceConfirmation) => boolean): Map<string, NonNullable<PendingVoiceConfirmation['roomAction']>> {
+    const out = new Map<string, NonNullable<PendingVoiceConfirmation['roomAction']>>();
+    for (const [id, p] of this.pendingVoiceConfirmations) if (p.roomAction && which(p)) out.set(id, p.roomAction);
+    return out;
+  }
+
+  /**
+   * A clarifier or repeat-back card that can no longer be answered, sent to
+   * the audience its request went to: every client (broadcastClarifierRequest,
+   * broadcastRepeatBackRequest). A card that looks live but is dead teaches
+   * people to click without reading, which is what the card is there to stop.
+   *
+   * One source, `voice_confirmation_expired`, for both endings; `reason` says
+   * which, for logs and any client that wants it, and dashboards treat them
+   * alike. It replaces a top-level `voice_confirmation_expired` message that
+   * went to the originating socket only and that no client handled.
+   */
+  private broadcastVoiceConfirmationGone(id: string, reason: 'expired' | 'disconnected'): void {
+    this.wsServer.broadcast({
+      type: 'notification',
+      payload: { source: 'voice_confirmation_expired', id, reason },
+      timestamp: Date.now(),
+    });
+  }
+
   async stop(): Promise<void> {
     this._status = 'stopping';
     if (this.voiceConfirmationSweepTimer) {
       clearInterval(this.voiceConfirmationSweepTimer);
       this.voiceConfirmationSweepTimer = null;
     }
+    // Holds live in memory only: a stop ends them, and says so (#1009).
+    for (const [id, ra] of this.heldRoomActions(() => true)) {
+      this.auditRoomAction(ra, 'classifier', 'denied', false, { approvalId: id, channel: 'system', reason: 'shutdown' });
+    }
+    this.pendingVoiceConfirmations.clear();
     this.wsServer.stop();
     this._status = 'stopped';
     console.log('[WSService] Stopped');
@@ -1930,6 +1983,52 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   /**
+   * The lists a held room action's item is found in (#1008), read from the
+   * same sources the rooms load them from: /api/sites/projects, /api/content
+   * and /api/vault/commitments.
+   */
+  protected roomActionTargetLists(): RoomActionTargetLists {
+    return {
+      project: async () => {
+        if (!this.siteBuilderService) throw new Error('site builder not available');
+        return this.siteBuilderService.listProjectsWithStatus();
+      },
+      content: async () => findContent({}),
+      task: async () => findCommitments({}),
+    };
+  }
+
+  /**
+   * Write the audit row for a decision about a voice room action (#1009):
+   * every one that changes more than the screen, refused, held, run or
+   * dropped. A failure to write it changes nothing about the decision, as on
+   * the lifecycle sinks (#986). With no primary agent (tests, a daemon still
+   * starting) the row is written as agent "voice", where the realtime tool
+   * path writes none: a decision with no row is the gap this closes.
+   */
+  private auditRoomAction(
+    ra: { room: string; action: string },
+    origin: RoomActionOrigin,
+    decision: AuthorityDecisionType,
+    executed: boolean,
+    opts: { approvalId?: string | null; channel?: ResolutionChannel; reason: RoomActionAuditReason },
+  ): void {
+    try {
+      const primary = this.agentService.getOrchestrator().getPrimary();
+      const row = roomActionAuditRow(ra, origin, decision, executed,
+        { agentId: primary?.id ?? 'voice', agentName: primary?.agent.role.name ?? 'voice' }, opts);
+      if (row) this.auditTrail?.log(row);
+    } catch (err) {
+      console.warn(`[WSService] could not audit room action ${ra.room}/${ra.action}:`, err instanceof Error ? err.message : err);
+    }
+  }
+
+  /** `ra` with its defaults and its item settled before its card (#1008). */
+  private settleHeldRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }) {
+    return resolveHeldRoomAction(ra, this.roomActionTargetLists(), `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`);
+  }
+
+  /**
    * What a realtime room action is judged against (#973), read from the
    * orchestrator: its emergency state, and the taint gating and the session
    * taint its own realtime tool calls are judged against.
@@ -1995,16 +2094,21 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // this path consults the authority engine, so an authority grant, or
         // anything else no handler runs, is refused before the room opens.
         const refused = roomActionRefusal({ room, action }, 'model');
-        if (refused) return refused;
+        if (refused) {
+          // Recorded only for an authority grant or revoke (#1009).
+          this.auditRoomAction({ room, action }, 'realtime', 'denied', false, { reason: 'not_a_room_action' });
+          return refused;
+        }
         // Its handler's REST calls are clicks no gate sees, so the session is
         // held here to what its own tool calls are held to (#973): an action
         // that changes more than the screen is refused under Pause or Kill,
         // in a blocked category, or once the session has read outside
         // content. Nothing is sent, not even the navigation.
-        const held = realtimeRoomActionRefusal({ room, action }, this.realtimeRoomActionContext(opts.blockedCategories ?? []));
+        const held = realtimeRoomActionDecision({ room, action }, this.realtimeRoomActionContext(opts.blockedCategories ?? []));
         if (held) {
-          console.warn(`[WSService] refused realtime room action ${room}/${action}: ${held}`);
-          return held;
+          console.warn(`[WSService] refused realtime room action ${room}/${action}: ${held.message}`);
+          this.auditRoomAction({ room, action }, 'realtime', 'denied', false, { reason: held.reason });
+          return held.message;
         }
         // Auto-open the room first (no-op if already open), then dispatch,
         // mirroring the classifier path so the qualifier isn't dropped. The
@@ -2016,6 +2120,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // so a slow room cannot leave this result to be voiced on its own
         // (and the model, seeing none, calling the tool again).
         const outcome = await this.requestRoomAction(ra, REALTIME_ROOM_ACTION_WAIT_MS, { client: ws });
+        this.auditRoomAction(ra, 'realtime', 'allowed', outcome === 'accepted', { reason: outcome });
         const reply = roomActionReply(ra, outcome);
         return outcome === 'accepted' && !isPresentationRoomAction(room, action)
           ? `${reply} (${roomTitle(room)} accepted it and started it; it shows the result on screen.)`
@@ -2493,6 +2598,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // classifier's reading alone, whatever confidence it gave itself (#973):
     // it is repeated back, and the person's yes runs it.
     if (intent.room_action && classifierMustConfirmRoomAction(intent.room_action, this.agentService.getOrchestrator().getTaintGating())) {
+      // The card shows what confirming runs, so whatever the handler would
+      // decide later (a default, the item a name matches, the selection) is
+      // decided now and pinned into the hold (#1008).
+      const settled = await this.settleHeldRoomAction(intent.room_action);
+      if (!settled.ok) {
+        this.auditRoomAction(intent.room_action, 'classifier', 'denied', false, { approvalId: intent.id, reason: 'unsettled' });
+        this.broadcastAssistantAck(settled.message, requestId);
+        this.broadcastThinkingEnd(requestId);
+        return;
+      }
       const pending: PendingVoiceConfirmation = {
         id: intent.id,
         intent,
@@ -2501,9 +2616,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         channel: 'websocket',
         kind: 'repeat_back',
         createdAt: Date.now(),
-        roomAction: intent.room_action,
+        roomAction: settled.ra,
       };
       this.pendingVoiceConfirmations.set(pending.id, pending);
+      this.auditRoomAction(settled.ra, 'classifier', 'approval_required', false, { approvalId: pending.id, reason: 'held' });
       this.broadcastRepeatBackRequest(pending);
       this.broadcastThinkingEnd(requestId);
       return;
@@ -2571,8 +2687,19 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // the transcript, which has no way to carry it out. One that changes
       // more than the screen is always a repeat-back, the card that shows
       // what confirming runs (#973); a clarifier shows only the intent.
-      const roomAction = intent.room_action && isRoomAction(intent.room_action.room, intent.room_action.action)
+      let roomAction: PendingVoiceConfirmation['roomAction'] = intent.room_action && isRoomAction(intent.room_action.room, intent.room_action.action)
         ? intent.room_action : undefined;
+      // A side-effecting one is settled before its card, as above (#1008).
+      if (roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) {
+        const settled = await this.settleHeldRoomAction(roomAction);
+        if (!settled.ok) {
+          this.auditRoomAction(roomAction, 'classifier', 'denied', false, { approvalId: intent.id, reason: 'unsettled' });
+          this.broadcastAssistantAck(settled.message, requestId);
+          this.broadcastThinkingEnd(requestId);
+          return;
+        }
+        roomAction = settled.ra;
+      }
       const kind: PendingVoiceConfirmation['kind'] = route === 'clarify'
         && !(roomAction && !isPresentationRoomAction(roomAction.room, roomAction.action)) ? 'clarifier' : 'repeat_back';
       const pending: PendingVoiceConfirmation = {
@@ -2586,6 +2713,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         ...(roomAction ? { roomAction } : {}),
       };
       this.pendingVoiceConfirmations.set(pending.id, pending);
+      // A view action held for a clarifier writes nothing (#1009).
+      if (roomAction) this.auditRoomAction(roomAction, 'classifier', 'approval_required', false, { approvalId: pending.id, reason: 'held' });
       if (kind === 'clarifier') {
         this.broadcastClarifierRequest(pending);
       } else {
@@ -2793,11 +2922,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // or tab switch needs no more than any other yes.
       if (latest.roomAction && decision === 'approve' && !isPresentationRoomAction(latest.roomAction.room, latest.roomAction.action)) {
         const refused = this.heldRoomActionVoiceRefusal(latest, speaker);
-        if (refused) return { kind: 'refused', message: refused };
+        if (refused) {
+          // Still held, still a card to click, as a gated voice approval is.
+          this.auditRoomAction(latest.roomAction, 'confirm', 'approval_required', false, { approvalId: latest.id, channel: 'voice', reason: 'refused_yes' });
+          return { kind: 'refused', message: refused };
+        }
       }
       const result = await this.resolveVoiceConfirmation(
         latest.id,
         decision === 'approve' ? 'confirm' : 'cancel',
+        'voice',
       );
       if (!result.ok) return null;
       const label = latest.transcript.length > 60
@@ -2858,6 +2992,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   async resolveVoiceConfirmation(
     id: string,
     decision: 'confirm' | 'cancel',
+    // How the person answered, for a held room action's audit row (#1009):
+    // the REST endpoints are a card click, a spoken answer passes 'voice'.
+    via: 'click' | 'voice' = 'click',
   ): Promise<{ ok: boolean; reason?: string }> {
     const pending = this.pendingVoiceConfirmations.get(id);
     if (!pending) return { ok: false, reason: 'not-found' };
@@ -2877,6 +3014,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     this.wsServer.broadcast(message);
 
     if (decision === 'cancel') {
+      if (pending.roomAction) this.auditRoomAction(pending.roomAction, 'confirm', 'denied', false, { approvalId: id, channel: via, reason: 'cancelled' });
       return { ok: true };
     }
 
@@ -2885,7 +3023,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // so that is what runs, on the dashboard they spoke to.
       this.broadcastThinkingStart(pending.id);
       try {
-        await this.handleVoiceRoomAction(pending.roomAction, pending.id, pending.ws);
+        await this.handleVoiceRoomAction(pending.roomAction, pending.id, pending.ws, { origin: 'confirm', approvalId: id, channel: via });
         return { ok: true };
       } catch (err) {
         console.error('[WSService] resolveVoiceConfirmation room action error:', err);
@@ -2972,11 +3110,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     client: ServerWebSocket<unknown>,
     requestId?: string,
   ): void {
-    if (isPresentationRoomAction(ra.room, ra.action)) {
-      this.broadcastRoomNavigation(ra.room as RoomKey, requestId);
-      return;
-    }
-    this.wsServer.sendToClient(client, navigateRoomNotice(ra.room, requestId));
+    const notice = navigateRoomNotice(ra.room, requestId);
+    const reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, notice);
+    // As with the action itself: the others follow only once the dashboard
+    // that asked has it (#1011).
+    if (reached && isPresentationRoomAction(ra.room, ra.action)) this.wsServer.broadcastWithReceipt(notice, client);
   }
 
   /**
@@ -3011,9 +3149,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
   /**
    * Send a room action and wait to hear whether a room ran it (#933).
-   * Resolves `accepted` or `rejected` on the first answer, and `no_answer`
-   * when none comes: nobody connected who could answer, or a room that never
-   * mounted.
+   * Resolves `accepted` or `rejected` on the first answer, `no_answer` when
+   * none comes (a room that never mounted, a dashboard that closed before it
+   * answered), and `unreached` at once when no socket took the frame
+   * (nobody connected who could answer, #1011).
    *
    * Without `client` the native panels answer (the pebble's tab switch). With
    * `client`, only that dashboard gets the resultId, is asked to answer
@@ -3055,22 +3194,36 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       action: action.action,
       args: action.args ?? {},
     };
+    // Whoever is asked to answer is also told how long it is waited for
+    // (#1010): once this wait is over the caller has said it got no answer,
+    // and the realtime model, told it can't tell whether it happened, may
+    // ask again. The bus drops an action still queued past this, so that
+    // retry is not the second run of a create_task or start_server. The
+    // bus's own queue TTL (ROOM_ACTION_QUEUE_TTL_MS) is longer than the
+    // realtime wait, so without this a late-mounting room ran both.
+    const waited = { resultId: id, expiresInMs: timeoutMs };
     let reached: boolean;
     if (client) {
-      if (presentation) this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
       reached = this.wsServer.getClients().has(client) && this.wsServer.sendToClient(client, {
         type: 'notification',
-        payload: { ...payload, resultId: id, resultFrom: 'dashboard' },
+        payload: { ...payload, ...waited, resultFrom: 'dashboard' },
         timestamp: Date.now(),
       });
+      // The others follow the dashboard that asked, and only once it has the
+      // action: otherwise they would switch while it is reported unreached,
+      // and "nothing was done" would be untrue (#1011).
+      if (presentation && reached) this.wsServer.broadcastWithReceipt({ type: 'notification', payload, timestamp: Date.now() }, client);
     } else {
       reached = this.wsServer.broadcastWithReceipt({
         type: 'notification',
-        payload: { ...payload, resultId: id },
+        payload: { ...payload, ...waited },
         timestamp: Date.now(),
       }) > 0;
     }
-    // Nobody connected to answer: say so now rather than after the timeout.
+    // Nobody took the frame: say so now rather than after the timeout, and
+    // not as "sent but no answer" (#1011). That includes a dashboard whose
+    // socket is closing but whose close has not been handled yet, where the
+    // send is dropped.
     if (!reached) this.roomActionResults.abandon(id);
     return outcome;
   }
@@ -3085,12 +3238,18 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     ra: { room: string; action: string; args?: Record<string, unknown> },
     requestId: string,
     ws: ServerWebSocket<unknown>,
+    // Who sent it, for its audit row (#1009): the classifier on its own
+    // reading, or the person's yes to a hold (its id, and click or voice).
+    audit: { origin: Exclude<RoomActionOrigin, 'realtime'>; approvalId?: string; channel?: Exclude<ResolutionChannel, 'system'> } = { origin: 'classifier' },
   ): Promise<void> {
+    const auditOpts = { approvalId: audit.approvalId ?? null, channel: audit.channel ?? 'voice' };
     // The classifier turns plain speech into this with no confirmation, so
     // it is held to the same list as the realtime tool (#969).
     const refused = roomActionRefusal(ra, 'user');
     if (refused) {
       console.warn(`[WSService] refused voice room action ${ra.room}/${ra.action}: not a room action`);
+      // Recorded only for an authority grant or revoke (#1009).
+      this.auditRoomAction(ra, audit.origin, 'denied', false, { ...auditOpts, reason: 'not_a_room_action' });
       this.broadcastAssistantAck(refused, requestId);
       return;
     }
@@ -3103,12 +3262,21 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (emergency && !emergency.canExecute()) {
       const state = emergency.getState();
       console.warn(`[WSService] refused voice room action ${ra.room}/${ra.action}: system ${state}`);
+      this.auditRoomAction(ra, audit.origin, 'denied', false, { ...auditOpts, reason: state === 'killed' ? 'killed' : 'paused' });
       this.broadcastAssistantAck(`I didn't do that: actions are suspended while the system is ${state}. Ask again once it is resumed.`, requestId);
       return;
     }
-    this.navigateForRoomAction(ra, ws, requestId);
-    const outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
+    let outcome: RoomActionOutcome;
+    try {
+      this.navigateForRoomAction(ra, ws, requestId);
+      outcome = await this.requestRoomAction(ra, ROOM_ACTION_QUEUE_TTL_MS, { client: ws });
+    } catch (err) {
+      // The decision still gets its row, so a hold is never left open in it.
+      this.auditRoomAction(ra, audit.origin, 'allowed', false, { ...auditOpts, reason: 'failed' });
+      throw err;
+    }
     console.log(`[WSService] room action ${ra.room}/${ra.action}: ${outcome}`);
+    this.auditRoomAction(ra, audit.origin, 'allowed', outcome === 'accepted', { ...auditOpts, reason: outcome });
     this.broadcastAssistantAck(roomActionReply(ra, outcome), requestId);
   }
 
@@ -3293,12 +3461,30 @@ function navigateRoomNotice(key: string, requestId?: string): WSMessage {
  * every argument the classifier filled in, in full and JSON-quoted so a value
  * cannot pass for another argument, and what the action can do. The
  * arguments are what the classifier may have read wrong.
+ *
+ * The id a held action's item is pinned by (#1008) is left out: the name
+ * beside it is that item's own, set when it was pinned, and no other item
+ * has it (an ambiguous name is refused), so the id says nothing more to the
+ * person, and would be read aloud.
  */
 export function describeRoomAction(ra: { room: string; action: string; args?: Record<string, unknown> }): string {
-  const args = Object.entries(ra.args ?? {}).map(([k, v]) => `${JSON.stringify(k)}: ${JSON.stringify(v) ?? String(v)}`);
+  const pinned = roomActionTargetKind(ra.room, ra.action) !== null;
+  const args = Object.entries(ra.args ?? {})
+    .filter(([k]) => !(pinned && k === 'id'))
+    .map(([k, v]) => `${visible(JSON.stringify(k))}: ${visible(JSON.stringify(v) ?? String(v))}`);
   const head = `${roomTitle(ra.room)}: ${ra.action.replace(/_/g, ' ')}`;
   const effects = roomActionCategories(ra.room, ra.action).map((c) => ROOM_ACTION_EFFECT[c]);
   return [args.length > 0 ? `${head} {${args.join(', ')}}` : head, ...(effects.length > 0 ? [`(${effects.join('; ')})`] : [])].join(' ');
+}
+
+/**
+ * `s` with every control, format, line- or paragraph-separator character
+ * written as a visible `\uXXXX` (#1008). JSON leaves bidi overrides and
+ * zero-width characters as they are, and one in a value (from the classifier,
+ * or a stored item name) could reorder or hide the rest of the card.
+ */
+function visible(s: string): string {
+  return s.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, (c) => `\\u${c.codePointAt(0)!.toString(16).padStart(4, '0')}`);
 }
 
 /** What each category a room action can reach means, for the repeat-back. */
@@ -3331,6 +3517,8 @@ export function roomActionReply(
       return `${title} didn't accept that.`;
     case 'no_answer':
       return `I sent that to ${title}, but it didn't answer, so I can't tell whether it happened.`;
+    case 'unreached':
+      return `I couldn't reach ${title} on the dashboard, so nothing was done.`;
   }
 }
 

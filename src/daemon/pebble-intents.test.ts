@@ -265,6 +265,8 @@ describe('in-panel navigation names only tabs the room has (#933)', () => {
     expect(tabSwitchReply('Settings', 'billing', 'rejected')).toBe("Settings didn't switch to billing.");
     expect(tabSwitchReply('Settings', 'voice', 'no_answer'))
       .toBe("I asked Settings to switch to voice, but it didn't answer.");
+    // Nothing reached a panel, so it does not claim to have asked (#1011).
+    expect(tabSwitchReply('Settings', 'voice', 'unreached')).toBe("I couldn't reach Settings to switch it to voice.");
   });
 });
 

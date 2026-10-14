@@ -285,6 +285,8 @@ export function tabSwitchReply(title: string, tabRaw: string, outcome: RoomActio
       return `${title} didn't switch to ${tabRaw}.`;
     case 'no_answer':
       return `I asked ${title} to switch to ${tabRaw}, but it didn't answer.`;
+    case 'unreached':
+      return `I couldn't reach ${title} to switch it to ${tabRaw}.`;
   }
 }
 

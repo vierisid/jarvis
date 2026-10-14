@@ -32,6 +32,7 @@ import { useBilling } from "../../billing/useBilling";
 import { billingTabVisible } from "../../billing/billing-view";
 import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab } from "../../shell/settings-tab-request";
 import { isRoomTab, ROOM_TABS, type RoomTab } from "../../../../../src/daemon/room-tabs";
+import { withRoomActionDefaults } from "../../../../../src/daemon/room-action-targets";
 import "./SettingsRoom.css";
 
 export type SettingsTab = RoomTab<"settings">;
@@ -270,7 +271,9 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         return true;
       }
       case "set_tts_voice": {
-        const voice = String(args.voice);
+        // Not String(args.voice): a voice left out became the voice
+        // "undefined", which no card showed (#1008).
+        const voice = typeof args.voice === "string" ? args.voice.trim() : "";
         if (!voice) return false;
         setTab("channels");
         (async () => {
@@ -315,14 +318,10 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         // resetOnboarding(), which clears the right localStorage keys
         // and reloads the page so the OnboardingGate (when it ships)
         // re-evaluates its initial state cleanly.
-        const rawScope = String(args.scope ?? "all");
-        const scope: OnboardingResetScope =
-          rawScope === "setup" ||
-          rawScope === "profile" ||
-          rawScope === "tutorial" ||
-          rawScope === "all"
-            ? rawScope
-            : "all";
+        // No scope, or one it does not know, is "all", which clears the
+        // user profile; the daemon shows that on the card before a held
+        // voice action runs, from the same defaults (#1008).
+        const scope = withRoomActionDefaults("settings", "replay_onboarding", args).scope as OnboardingResetScope;
         showToast("Replaying onboarding — reloading…", "ok");
         (async () => {
           try {

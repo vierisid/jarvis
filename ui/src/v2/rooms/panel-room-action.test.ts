@@ -83,6 +83,29 @@ test("the dashboard shell wires daemon room actions through the answering dispat
   expect(ws).toContain("const req = roomActionRequestFrom(payload, msg.timestamp);");
 });
 
+test("the dashboard hands the bus the deadline and the asker with the action (#1010)", () => {
+  const dispatched: unknown[] = [];
+  const stillAsked = () => true;
+  dispatchDashboardRoomAction(
+    { room: "tasks", action: "create_task", args: { title: "x" }, ts: 1, resultId: "r9", expiresAt: 123, stillAsked },
+    (req) => { dispatched.push(req); },
+    () => {},
+  );
+  expect(dispatched).toEqual([{ room: "tasks", action: "create_task", args: { title: "x" }, ts: 1, expiresAt: 123, stillAsked }]);
+});
+
+test("a panel passes on how long the daemon waits, on its own clock (#1010)", () => {
+  const dispatched: Array<{ expiresAt?: number }> = [];
+  const before = performance.now();
+  handlePanelRoomActionMessage(note({ resultId: "r1", expiresInMs: 3500 }), (req) => { dispatched.push(req); }, () => {});
+  handlePanelRoomActionMessage(note({ expiresInMs: 3500 }), (req) => { dispatched.push(req); }, () => {});
+  const after = performance.now();
+  expect(dispatched[0]!.expiresAt!).toBeGreaterThanOrEqual(before + 3500);
+  expect(dispatched[0]!.expiresAt!).toBeLessThanOrEqual(after + 3500);
+  // Nobody waits on an action without a resultId, so it does not expire.
+  expect(dispatched[1]!.expiresAt).toBeUndefined();
+});
+
 test("a panel never runs an action that changes more than the screen (#974)", () => {
   for (const [room, action] of [["tasks", "create_task"], ["agents", "spawn_agent"], ["settings", "enable_tts"], ["settings", "not_an_action"]]) {
     const { dispatched, sent } = run(note({ room, action, resultId: "r1" }), true);

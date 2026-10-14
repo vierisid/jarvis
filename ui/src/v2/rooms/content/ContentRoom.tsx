@@ -6,6 +6,7 @@ import { Tabs, StatusChip, Select, EmptyState, Toast, Skeleton, type Tone } from
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { parseRelativeDate } from "../../../../../src/voice/parse-date";
+import { pickRoomActionTarget } from "../../../../../src/daemon/room-action-targets";
 import {
   useContentData, type ContentItem, type ContentStage, type ContentType, type ContentStageNote, type ContentAttachment,
 } from "./useContentData";
@@ -69,13 +70,15 @@ export function ContentRoomBody({ mode }: { mode: RoomBodyMode }) {
         (async () => { const r = await data.createContent({ title, content_type: (args.type as ContentType) ?? undefined }); if (r.ok) setSelectedId(r.item.id); setToast({ text: r.ok ? `Created "${title}"` : r.message, tone: r.ok ? "ok" : "warn" }); })();
         return true;
       }
+      // The item a held voice action was approved for is pinned by id
+      // (#1008). A name that matches nothing is nothing, not the selection.
       case "advance": case "regress": {
-        const it = (typeof args.name === "string" && args.name ? data.findByName(args.name) : null) ?? selected; if (!it) return false;
+        const it = pickRoomActionTarget(data.items, args, data.findByName, selected); if (!it) return false;
         (async () => { const r = await (action === "advance" ? data.advance(it.id) : data.regress(it.id)); setToast({ text: r.message, tone: r.ok ? "ok" : "warn" }); })();
         return true;
       }
       case "schedule": {
-        const it = (typeof args.name === "string" && args.name ? data.findByName(args.name) : null) ?? selected; if (!it) return false;
+        const it = pickRoomActionTarget(data.items, args, data.findByName, selected); if (!it) return false;
         const parsed = typeof args.when === "string" ? parseRelativeDate(args.when) : null;
         if (!parsed) { setToast({ text: "Couldn't parse that date.", tone: "warn" }); return true; }
         (async () => { const r = await data.schedule(it.id, parsed.ts); setToast({ text: r.message, tone: r.ok ? "ok" : "warn" }); })();
