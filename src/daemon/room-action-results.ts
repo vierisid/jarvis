@@ -56,27 +56,55 @@ export function roomActionExpiry(expiresInMs: unknown, receivedAt: number): numb
 }
 
 /**
- * What became of a room action: a room ran it, a room declined it, it was
- * sent and nobody answered in time, or it never reached anyone who could run
- * it (#1011: a socket closing as it was sent takes no frame, and "I sent that"
- * was untrue).
+ * What a room can answer about an action it was sent: it ran it, it declined
+ * it, or it asked for it and a card is now waiting on the person (#1016), so
+ * nothing has run yet and nothing was refused either. A spawn the route holds
+ * for approval (202) is the case today; it used to be reported as declined,
+ * and the realtime model, told "didn't accept", could ask again and raise
+ * another card.
  */
-export type RoomActionOutcome = 'accepted' | 'rejected' | 'no_answer' | 'unreached';
+const ROOM_ANSWERS = ['accepted', 'rejected', 'pending'] as const;
+export type RoomAnswer = (typeof ROOM_ANSWERS)[number];
+
+/**
+ * The answer a `room_action_result` payload carries, or null when it is not
+ * one. `accepted` is the boolean every client sends; `outcome` says which no
+ * a false one is, and must agree with it: a payload whose two halves disagree
+ * is malformed, not an answer.
+ */
+export function roomAnswerOf(accepted: unknown, outcome?: unknown): RoomAnswer | null {
+  if (typeof accepted !== 'boolean') return null;
+  if (outcome === undefined) return accepted ? 'accepted' : 'rejected';
+  if (!(ROOM_ANSWERS as readonly unknown[]).includes(outcome)) return null;
+  return (outcome === 'accepted') === accepted ? outcome as RoomAnswer : null;
+}
+
+/**
+ * What became of a room action: what the room answered (RoomAnswer); or the
+ * room took it and was still working on it when the wait ran out (#1015:
+ * its answer waits on a request to the daemon, and a dev server gets 30s to
+ * come up where the realtime path waits 3.5s); or it was sent and nobody
+ * answered in time; or it never reached anyone who could run it (#1011: a
+ * socket closing as it was sent takes no frame, and "I sent that" was
+ * untrue).
+ */
+export type RoomActionOutcome = RoomAnswer | 'started' | 'no_answer' | 'unreached';
 
 export class RoomActionResults {
-  private pending = new Map<string, { settle: (o: RoomActionOutcome) => void; answerer?: unknown }>();
+  private pending = new Map<string, { settle: (o: RoomActionOutcome) => void; answerer?: unknown; started?: boolean }>();
 
   constructor(private readonly newId: () => string = () => crypto.randomUUID()) {}
 
   /**
-   * Start waiting. `outcome` resolves on the first answer, or `no_answer` after
-   * `timeoutMs`. With `answerer`, only an answer from that client counts
+   * Start waiting. `outcome` resolves on the first answer, or after
+   * `timeoutMs` with `started` when the room said it had started on it, else
+   * `no_answer`. With `answerer`, only an answer from that client counts
    * (#965): a dashboard voice turn asks the dashboard the user spoke to.
    */
   open(timeoutMs: number, answerer?: unknown): { id: string; outcome: Promise<RoomActionOutcome> } {
     const id = this.newId();
     const outcome = new Promise<RoomActionOutcome>((resolve) => {
-      const timer = setTimeout(() => this.finish(id, 'no_answer'), timeoutMs);
+      const timer = setTimeout(() => this.finish(id, this.pending.get(id)?.started ? 'started' : 'no_answer'), timeoutMs);
       // A pending answer must not hold the daemon open at shutdown.
       (timer as { unref?: () => void }).unref?.();
       this.pending.set(id, {
@@ -91,15 +119,29 @@ export class RoomActionResults {
   }
 
   /**
-   * An answer from a client. Anything but a known id and a boolean is ignored:
-   * this arrives over the dashboard socket, so it is not trusted to be well
-   * formed, and an answer for an entry already settled changes nothing.
+   * An answer from a client. Anything but a known id and a well-formed answer
+   * (roomAnswerOf) is ignored: this arrives over the dashboard socket, so it
+   * is not trusted to be well formed, and an answer for an entry already
+   * settled changes nothing.
    */
-  answer(id: unknown, accepted: unknown, from?: unknown): void {
-    if (typeof id !== 'string' || typeof accepted !== 'boolean') return;
+  answer(id: unknown, accepted: unknown, from?: unknown, outcome?: unknown): void {
+    const answer = roomAnswerOf(accepted, outcome);
+    if (typeof id !== 'string' || answer === null) return;
     const entry = this.pending.get(id);
     if (entry?.answerer !== undefined && entry.answerer !== from) return;
-    this.finish(id, accepted ? 'accepted' : 'rejected');
+    this.finish(id, answer);
+  }
+
+  /**
+   * The room has taken the action and its answer waits on work still running
+   * (#1015). Not an answer: the entry stays open for the real one, and only
+   * changes what the wait running out means. The same checks as an answer.
+   */
+  started(id: unknown, from?: unknown): void {
+    if (typeof id !== 'string') return;
+    const entry = this.pending.get(id);
+    if (!entry || (entry.answerer !== undefined && entry.answerer !== from)) return;
+    entry.started = true;
   }
 
   /** Stop waiting now: the action reached no one who could answer (#1011). */
@@ -107,7 +149,11 @@ export class RoomActionResults {
     this.finish(id, 'unreached');
   }
 
-  /** Stop waiting on everything only `answerer` could answer: it has gone. */
+  /**
+   * Stop waiting on everything only `answerer` could answer: it has gone.
+   * `no_answer` even for an action it said it had started: the page doing
+   * the work has gone, and its request may have gone with it.
+   */
   abandonAnswerer(answerer: unknown): void {
     if (answerer === undefined) return;
     for (const [id, entry] of [...this.pending]) {

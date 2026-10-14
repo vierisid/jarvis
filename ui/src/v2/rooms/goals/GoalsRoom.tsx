@@ -153,16 +153,16 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
         // date parsing for calendar — for goals we let the user set the
         // deadline in the dialog if they want a fancy date).
         const deadline = typeof args.deadline === "number" ? args.deadline : undefined;
-        (async () => {
-          const r = await data.createQuick({ title, level, deadline });
+        // Answered once the write has settled, with whether it worked (#1015).
+        return data.createQuick({ title, level, deadline }).then((r) => {
           if (r.ok) {
             setSelectedId(r.goal.id);
             setToast({ text: `Created "${r.goal.title}".`, tone: "ok" });
           } else {
             setToast({ text: r.message, tone: "warn" });
           }
-        })();
-        return true;
+          return r.ok;
+        });
       }
       default:
         return false;

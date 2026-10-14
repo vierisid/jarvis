@@ -73,4 +73,42 @@ describe('RoomActionResults', () => {
     results.answer(panels.id, true);
     expect(await panels.outcome).toBe('accepted');
   });
+
+  // #1015: a room that has taken an action and is still on it says so.
+  test('started changes only what a wait running out means, and only from whoever may answer', async () => {
+    const results = new RoomActionResults(ids);
+    const asked = {};
+    const slow = results.open(10, asked);
+    results.started(slow.id, asked);
+    expect(results.size).toBe(1);
+    expect(await slow.outcome).toBe('started');
+    // An answer in time still settles it, started or not.
+    const quick = results.open(1000, asked);
+    results.started(quick.id, asked);
+    results.answer(quick.id, false, asked);
+    expect(await quick.outcome).toBe('rejected');
+    // Not from another client, not for an id it does not know, not after the end.
+    const other = results.open(10, asked);
+    results.started(other.id, {});
+    results.started('no-such-id', asked);
+    results.started(7, asked);
+    expect(await other.outcome).toBe('no_answer');
+    results.started(slow.id, asked);
+    expect(results.size).toBe(0);
+    // With no answerer, as for the pebble's panels, anyone may say it.
+    const panels = results.open(10);
+    results.started(panels.id, {});
+    expect(await panels.outcome).toBe('started');
+  });
+
+  test('a started wait whose dashboard goes is no answer, not started', async () => {
+    // The page that was working on it has gone, and its request with it may
+    // have been cut off: nothing says the work goes on.
+    const results = new RoomActionResults(ids);
+    const gone = {};
+    const w = results.open(1000, gone);
+    results.started(w.id, gone);
+    results.abandonAnswerer(gone);
+    expect(await w.outcome).toBe('no_answer');
+  });
 });

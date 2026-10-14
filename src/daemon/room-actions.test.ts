@@ -132,7 +132,83 @@ describe('ROOM_ACTIONS matches the rooms\' handlers', () => {
  * sets off (a useEffect on the selected project), or one inside a function
  * imported from another file that the handler calls outside an async block.
  */
-const PURE_HOOK_CALL = /^(find\w*|refresh|toggleSource|setTimeWindow|setLiveTail)$/;
+// goToWeek and goToToday move the week the calendar shows.
+const PURE_HOOK_CALL = /^(find\w*|refresh|toggleSource|setTimeWindow|setLiveTail|goToWeek|goToToday)$/;
+
+/**
+ * What counts as work in one room file (see handlerEffects): `sites` are the
+ * outermost nodes under `nodes` that do work, each an await or an async
+ * function, a `.then`, a fetch, a call on a `use...Data` / `use...Feed`
+ * hook's result other than a lookup or a re-read, or a call to a helper the
+ * file defines whose body does work.
+ */
+function effectModel(sf: ts.SourceFile): {
+  sites: (nodes: readonly ts.Node[]) => ts.Node[];
+  effectful: (nodes: readonly ts.Node[]) => boolean;
+} {
+  const isFn = (n: ts.Node | undefined): n is ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration => !!n
+    && (ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n));
+  const isAsyncFn = (n: ts.Node | undefined): boolean => isFn(n)
+    && !!n.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword);
+  const isHookCall = (n: ts.Expression | undefined): boolean => !!n && ts.isCallExpression(n)
+    && ts.isIdentifier(n.expression) && /^use\w*(Data|Feed)$/.test(n.expression.text);
+  const helpers = new Map<string, ts.Node>();
+  const hookObjects = new Set<string>();
+  const hookMethods = new Set<string>();
+  const collect = (n: ts.Node): void => {
+    if (ts.isVariableDeclaration(n) && n.initializer) {
+      const init = n.initializer;
+      if (ts.isIdentifier(n.name)) {
+        const wrapped = ts.isCallExpression(init) ? init.arguments[0] : undefined;
+        if (isFn(init)) helpers.set(n.name.text, init);
+        else if (isFn(wrapped)) helpers.set(n.name.text, wrapped);
+        if (isHookCall(init)) hookObjects.add(n.name.text);
+      } else if (ts.isObjectBindingPattern(n.name) && isHookCall(init)) {
+        for (const el of n.name.elements) if (ts.isIdentifier(el.name)) hookMethods.add(el.name.text);
+      }
+    }
+    if (ts.isFunctionDeclaration(n) && n.name) helpers.set(n.name.text, n);
+    ts.forEachChild(n, collect);
+  };
+  collect(sf);
+  // Helpers being read, so one that calls itself, or another that calls it
+  // back, is not followed round. Not a cache: a helper read while another
+  // was mid-read could be answered wrongly, and the answer kept.
+  const reading = new Set<string>();
+  const isWork = (n: ts.Node): boolean => {
+    if (ts.isAwaitExpression(n) || isAsyncFn(n)) return true;
+    if (!ts.isCallExpression(n)) return false;
+    const callee = n.expression;
+    if (ts.isIdentifier(callee)) {
+      const name = callee.text;
+      if (name === 'fetch' || (hookMethods.has(name) && !PURE_HOOK_CALL.test(name))) return true;
+      const helper = helpers.get(name);
+      if (helper && !reading.has(name)) {
+        reading.add(name);
+        const works = sites([helper]).length > 0;
+        reading.delete(name);
+        if (works) return true;
+      }
+    }
+    if (ts.isPropertyAccessExpression(callee)) {
+      // Any link of a promise chain: work reached through it settles later.
+      if (['then', 'catch', 'finally'].includes(callee.name.text)) return true;
+      if (ts.isIdentifier(callee.expression) && hookObjects.has(callee.expression.text)
+        && !PURE_HOOK_CALL.test(callee.name.text)) return true;
+    }
+    return false;
+  };
+  const sites = (nodes: readonly ts.Node[]): ts.Node[] => {
+    const out: ts.Node[] = [];
+    const walk = (n: ts.Node): void => {
+      if (isWork(n)) { out.push(n); return; }
+      ts.forEachChild(n, walk);
+    };
+    nodes.forEach(walk);
+    return out;
+  };
+  return { sites, effectful: (nodes) => sites(nodes).length > 0 };
+}
 
 function handlerEffects(): Record<string, Record<string, boolean>> {
   const found: Record<string, Record<string, boolean>> = {};
@@ -140,58 +216,7 @@ function handlerEffects(): Record<string, Record<string, boolean>> {
     const text = readFileSync(file, 'utf8');
     if (!text.includes('useRoomActions(')) continue;
     const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-    const isFn = (n: ts.Node | undefined): n is ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration => !!n
-      && (ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n));
-    const isAsyncFn = (n: ts.Node | undefined): boolean => isFn(n)
-      && !!n.modifiers?.some((m) => m.kind === ts.SyntaxKind.AsyncKeyword);
-    const isHookCall = (n: ts.Expression | undefined): boolean => !!n && ts.isCallExpression(n)
-      && ts.isIdentifier(n.expression) && /^use\w*(Data|Feed)$/.test(n.expression.text);
-    const helpers = new Map<string, ts.Node>();
-    const hookObjects = new Set<string>();
-    const hookMethods = new Set<string>();
-    const collect = (n: ts.Node): void => {
-      if (ts.isVariableDeclaration(n) && n.initializer) {
-        const init = n.initializer;
-        if (ts.isIdentifier(n.name)) {
-          const wrapped = ts.isCallExpression(init) ? init.arguments[0] : undefined;
-          if (isFn(init)) helpers.set(n.name.text, init);
-          else if (isFn(wrapped)) helpers.set(n.name.text, wrapped);
-          if (isHookCall(init)) hookObjects.add(n.name.text);
-        } else if (ts.isObjectBindingPattern(n.name) && isHookCall(init)) {
-          for (const el of n.name.elements) if (ts.isIdentifier(el.name)) hookMethods.add(el.name.text);
-        }
-      }
-      if (ts.isFunctionDeclaration(n) && n.name) helpers.set(n.name.text, n);
-      ts.forEachChild(n, collect);
-    };
-    collect(sf);
-    const effectful = (nodes: readonly ts.Node[], seen = new Set<string>()): boolean => {
-      let hit = false;
-      const walk = (n: ts.Node): void => {
-        if (hit) return;
-        if (ts.isAwaitExpression(n) || isAsyncFn(n)) { hit = true; return; }
-        if (ts.isCallExpression(n)) {
-          const callee = n.expression;
-          if (ts.isIdentifier(callee)) {
-            const name = callee.text;
-            if (name === 'fetch' || (hookMethods.has(name) && !PURE_HOOK_CALL.test(name))) { hit = true; return; }
-            const helper = helpers.get(name);
-            if (helper && !seen.has(name)) {
-              seen.add(name);
-              if (effectful([helper], seen)) { hit = true; return; }
-            }
-          }
-          if (ts.isPropertyAccessExpression(callee)) {
-            if (callee.name.text === 'then') { hit = true; return; }
-            if (ts.isIdentifier(callee.expression) && hookObjects.has(callee.expression.text)
-              && !PURE_HOOK_CALL.test(callee.name.text)) { hit = true; return; }
-          }
-        }
-        ts.forEachChild(n, walk);
-      };
-      nodes.forEach(walk);
-      return hit;
-    };
+    const { effectful } = effectModel(sf);
     const visit = (node: ts.Node): void => {
       if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'useRoomActions') {
         const [roomArg, handler] = node.arguments as unknown as [ts.StringLiteral, ts.ArrowFunction];
@@ -536,6 +561,182 @@ describe('what a held room action does is decided before the card, from the hand
       const [room, action] = entry.split('/') as [string, string];
       expect([entry, isPresentationRoomAction(room, action), isRoomAction(room, action)]).toEqual([entry, false, true]);
     }
+  });
+});
+
+/**
+ * Where a side-effecting case answers before its work has settled (#1015):
+ * work that is not part of what the case returns (an async block run and
+ * dropped, a call whose promise nobody waits on), or a `return true` or a
+ * string ack, which is a yes whatever the request then does. Every case that
+ * changes more than the screen must hand the bus the promise of its work and
+ * answer from how that settled; spawn_agent did since #991, and the others
+ * said yes as the request went out, so voice confirmed failed saves, a PATCH
+ * that always answered 400 (#1020) and a heartbeat write with no endpoint.
+ *
+ * The same holds inside what is returned: in a `.then` / `.catch` /
+ * `.finally` callback, or an async function the case returns, work must be
+ * awaited or returned there, or it runs on after the answer (the old
+ * create_project opened the project it made that way). Work inside a
+ * function the case only defines or passes elsewhere is not answered for.
+ *
+ * It reads one file's syntax, as handlerEffects does: work inside a helper
+ * the case returns is not looked into, and a call to a function imported
+ * from another file is not seen as work. Anything written under a return or
+ * an await counts as kept, so `return (data.save(), true)`, `return
+ * data.save() && true` and `return void data.save()` pass, and the
+ * callbacks of a call that is not a promise chain (`Promise.all(xs.map(...))`)
+ * are not looked into; a promise put in a variable and awaited later is
+ * flagged. No room handler is written any of those ways.
+ */
+function earlyAnswers(nodes: readonly ts.Node[]): string[] {
+  if (nodes.length === 0) return [];
+  const { sites } = effectModel(nodes[0]!.getSourceFile());
+  const isFnNode = (n: ts.Node): n is ts.FunctionLikeDeclaration => ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n) || ts.isMethodDeclaration(n);
+  const brief = (n: ts.Node) => n.getText().replace(/\s+/g, ' ').slice(0, 50);
+  const out: string[] = [];
+  // Whether `site` is kept by `owner` (the case, or a function inside what
+  // it returns): returned or awaited by it, or an arrow's whole body.
+  const kept = (site: ts.Node, owner: ts.Node): boolean => {
+    if (ts.isAwaitExpression(site) && enclosing(site) === owner) return true;
+    for (let n: ts.Node = site; n !== owner; n = n.parent) {
+      const p = n.parent;
+      if (!p) return false;
+      if (p === owner && isFnNode(owner) && owner.body === n && !ts.isBlock(n)) return true;
+      if (isFnNode(p) && p !== owner) return false;
+      if ((ts.isReturnStatement(p) || ts.isAwaitExpression(p)) && enclosing(p) === owner) return true;
+    }
+    return false;
+  };
+  const enclosing = (n: ts.Node): ts.Node | undefined => {
+    for (let p = n.parent; p; p = p.parent) if (isFnNode(p) || p === caseOwner) return p;
+    return undefined;
+  };
+  const caseOwner = nodes[0]!.parent;
+  // Look inside what a kept site hands back: the callbacks of a promise
+  // chain, every link of it, and the body of an async function.
+  const inside = (site: ts.Node): void => {
+    const x = ts.isAwaitExpression(site) ? unwrap(site.expression) : site;
+    if (isFnNode(x)) { check(x.body ? [x.body] : [], x); return; }
+    if (ts.isCallExpression(x) && ts.isPropertyAccessExpression(x.expression) && ['then', 'catch', 'finally'].includes(x.expression.name.text)) {
+      for (const arg of x.arguments) if (isFnNode(arg)) check(arg.body ? [arg.body] : [], arg);
+      inside(unwrap(x.expression.expression));
+      return;
+    }
+    // An async function called where it is defined, (async () => {...})().
+    if (ts.isCallExpression(x) && isFnNode(unwrap(x.expression))) inside(unwrap(x.expression));
+  };
+  const check = (body: readonly ts.Node[], owner: ts.Node): void => {
+    for (const site of sites(body)) {
+      if (!kept(site, owner)) out.push(`work outside the answer: ${brief(site)}`);
+      else inside(site);
+    }
+  };
+  check(nodes, caseOwner);
+  // A yes of the case's own, not of a function inside it.
+  const ownReturn = (r: ts.Node): boolean => {
+    for (let n = r.parent; n && n !== caseOwner; n = n.parent) if (isFnNode(n)) return false;
+    return true;
+  };
+  for (const r of findAll(nodes, (n) => (ts.isReturnStatement(n) && ownReturn(n) ? n : null))) {
+    const e = r.expression ? unwrap(r.expression) : null;
+    if (e && (e.kind === ts.SyntaxKind.TrueKeyword || ts.isStringLiteral(e) || ts.isNoSubstitutionTemplateLiteral(e) || ts.isTemplateExpression(e))) {
+      out.push(`answers ${brief(e)} before anything settled`);
+    }
+  }
+  return out;
+}
+
+/**
+ * room -> work in its handler outside the switch on the action, which runs
+ * for every action, view ones included, and is answered by none.
+ */
+function workAroundSwitch(): Record<string, string[]> {
+  const found: Record<string, string[]> = {};
+  for (const file of sourceFiles(ROOMS_DIR)) {
+    const text = readFileSync(file, 'utf8');
+    if (!text.includes('useRoomActions(')) continue;
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const { sites } = effectModel(sf);
+    for (const call of findAll([sf], (n) => (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === 'useRoomActions' ? n : null))) {
+      const handler = call.arguments[1] as ts.ArrowFunction;
+      const body = ts.isBlock(handler.body) ? handler.body.statements : [handler.body];
+      if (!body.some((st) => ts.isSwitchStatement(st))) continue;
+      found[(call.arguments[0] as ts.StringLiteral).text] = sites(body.filter((st) => !ts.isSwitchStatement(st))).map((n) => n.getText().slice(0, 50));
+    }
+  }
+  return found;
+}
+
+describe('a side-effecting room action is answered from its settled work (#1015)', () => {
+  test('no side-effecting case says yes before its request has settled', () => {
+    const code = handlerCode();
+    const cases = Object.entries(code).flatMap(([room, actions]) =>
+      Object.entries(actions).filter(([action]) => !isPresentationRoomAction(room, action)).map(([action, c]) => ({ room, action, nodes: c.nodes })));
+    // Not vacuous: every side-effecting action in the table was read.
+    const listed = Object.entries(ROOM_ACTIONS).flatMap(([room, a]) => Object.keys(a).filter((x) => !isPresentationRoomAction(room, x)));
+    expect(cases.length).toBe(listed.length);
+    expect(cases.length).toBeGreaterThan(30);
+    const early = cases.flatMap(({ room, action, nodes }) => earlyAnswers(nodes).map((e) => `${room}/${action}: ${e}`));
+    expect(early).toEqual([]);
+    const around = workAroundSwitch();
+    expect(Object.keys(around).length).toBeGreaterThanOrEqual(11);
+    expect(Object.values(around).flat()).toEqual([]);
+  });
+
+  test('the detector sees an answer given early, and not one given late', () => {
+    const sf = ts.createSourceFile('x.tsx', [
+      'function Room() {',
+      '  const data = useThingData();',
+      '  const helper = async () => { await data.save(); };',
+      '  useRoomActions("x", (action, args) => {',
+      '    switch (action) {',
+      '      case "a": { (async () => { await data.save(); })(); return true; }',
+      '      case "b": { data.save(); return true; }',
+      '      case "c": { return data.save().then((r) => r.ok); }',
+      '      case "d": { helper(); return "Saved."; }',
+      '      case "e": { const later = () => { return data.save(); }; later(); return false; }',
+      '      case "f": { return (async () => { await data.save(); return true; })(); }',
+      '      case "g": { if (!args.x) return false; setTimeout(() => data.save(), 0); return data.find(args.x).then(() => true); }',
+      '      case "h": { if (!args.x) return false; return helper().then(() => `Saved ${args.x}.`); }',
+      // Work dropped inside what is returned runs on after the answer.
+      '      case "i": { return data.create().then((r) => { data.open(r.id); return true; }); }',
+      '      case "j": { return (async () => { await data.create(); data.open(); return true; })(); }',
+      '      case "k": { return data.create().then((r) => data.open(r.id)).then(() => true); }',
+      '      case "l": { return (async () => { await data.create(); await data.open(); return true; })(); }',
+      '      case "m": { return data.create().then(async (r) => { await data.open(r.id); return r.ok; }).catch(() => { data.undo(); return false; }); }',
+      // Every link of a chain is looked into, an async function called where
+      // it is written too, and a catch that hands back its own work is fine.
+      '      case "n": { return data.create().then((r) => { data.open(); return r; }).then(() => true); }',
+      '      case "o": { return (async () => { await (async () => { data.drop(); })(); return true; })(); }',
+      '      case "p": { return data.create().then(() => true).catch(() => data.undo().then(() => false)); }',
+      '      case "q": { return data.create().then(() => true).finally(() => { data.undo(); }); }',
+      '    }',
+      '  });',
+      '}',
+    ].join('\n'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+    const sw = findAll([sf], (n) => (ts.isSwitchStatement(n) ? n : null))[0]!;
+    const found = Object.fromEntries(sw.caseBlock.clauses.map((c) => [(c as ts.CaseClause).expression.getText().replace(/"/g, ''), earlyAnswers(c.statements)]));
+    expect(found).toEqual({
+      a: ['work outside the answer: async () => { await data.save(); }', 'answers true before anything settled'],
+      b: ['work outside the answer: data.save()', 'answers true before anything settled'],
+      c: [],
+      d: ['work outside the answer: helper()', 'answers "Saved." before anything settled'],
+      e: ['work outside the answer: data.save()', 'work outside the answer: later()'],
+      f: [],
+      // data.find is a lookup, so only the dropped save is work.
+      g: ['work outside the answer: data.save()'],
+      h: [],
+      i: ['work outside the answer: data.open(r.id)'],
+      j: ['work outside the answer: data.open()'],
+      k: [],
+      l: [],
+      m: ['work outside the answer: data.undo()'],
+      n: ['work outside the answer: data.open()'],
+      o: ['work outside the answer: data.drop()'],
+      p: [],
+      q: ['work outside the answer: data.undo()'],
+    });
   });
 });
 

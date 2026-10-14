@@ -44,7 +44,8 @@ import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-versi
 
 const VALID_ENTITY_TYPES = new Set(['person', 'project', 'tool', 'place', 'concept', 'event']);
 import { getDb } from '../vault/schema.ts';
-import { findCommitments, getUpcoming, createCommitment, getCommitment, updateCommitmentStatus, reorderCommitments } from '../vault/commitments.ts';
+import { findCommitments, getUpcoming, createCommitment, getCommitment, patchCommitment, reorderCommitments } from '../vault/commitments.ts';
+import { validateCommitmentPatch } from './commitment-patch.ts';
 import { getOrCreateConversation, getMessages, getRecentConversation } from '../vault/conversations.ts';
 import { telegramAllowList, discordAllowList } from '../comms/channels/allow-list.ts';
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
@@ -686,25 +687,29 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!commitment) return error('Commitment not found', 404);
         return json(commitment);
       },
+      // Status, priority or assigned_to, alone or together, and nothing else
+      // (#1020): the Tasks room sends priority and assigned_to on their own.
       PATCH: async (req: Request & { params: { id: string } }) => {
+        let body: unknown;
         try {
-          const body = await req.json() as { status?: CommitmentStatus; result?: string };
-          const id = req.params.id;
-
-          if (!body.status) return error('Missing "status" field');
-
-          const validStatuses: CommitmentStatus[] = ['pending', 'active', 'completed', 'failed', 'escalated'];
-          if (!validStatuses.includes(body.status)) {
-            return error(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
-          }
-
-          const updated = updateCommitmentStatus(id, body.status, body.result);
-          if (!updated) return error('Commitment not found', 404);
-          ctx.wsService?.broadcastTaskUpdate(updated, 'updated');
-          return json(updated);
-        } catch (err) {
+          body = await req.json();
+        } catch {
           return error('Invalid request body');
         }
+        const parsed = validateCommitmentPatch(body);
+        if (!parsed.ok) return error(parsed.error);
+        let updated: ReturnType<typeof patchCommitment>;
+        try {
+          updated = patchCommitment(req.params.id, parsed.patch);
+        } catch (err) {
+          // Not the request's fault, and not for the caller to read: an
+          // uncaught throw here answers with Bun's error page and its stack.
+          console.error('[api] task update failed:', err);
+          return error('Could not update the task', 500);
+        }
+        if (!updated) return error('Commitment not found', 404);
+        ctx.wsService?.broadcastTaskUpdate(updated, 'updated');
+        return json(updated);
       },
     },
 

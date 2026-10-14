@@ -177,12 +177,11 @@ export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
         const predicate = typeof args.predicate === "string" ? args.predicate : "";
         const object = typeof args.object === "string" ? args.object : "";
         if (!subject || !predicate || !object) return false;
-        // Fire-and-forget; the rememberThat helper toasts on success/failure.
-        (async () => {
-          const r = await data.rememberThat(subject, predicate, object);
+        // Answered once the write has settled, with whether it worked (#1015).
+        return data.rememberThat(subject, predicate, object).then((r) => {
           setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
-        })();
-        return true;
+          return r.ok;
+        });
       }
       default:
         return false;
