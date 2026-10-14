@@ -1,0 +1,1024 @@
+{
+  "matrix": [
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 622.0625,
+            "height": 44,
+            "left": 123,
+            "right": 195,
+            "top": 578.0625,
+            "width": 72,
+            "x": 123,
+            "y": 578.0625
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 622.0625,
+            "height": 44,
+            "left": 195,
+            "right": 267,
+            "top": 578.0625,
+            "width": 72,
+            "x": 195,
+            "y": 578.0625
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 686.0625,
+            "height": 44,
+            "left": 91,
+            "right": 299,
+            "top": 642.0625,
+            "width": 208,
+            "x": 91,
+            "y": 642.0625
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 738.0625,
+            "height": 44,
+            "left": 95,
+            "right": 295,
+            "top": 694.0625,
+            "width": 200,
+            "x": 95,
+            "y": 694.0625
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Light",
+      "heading": {
+        "bottom": 365.53125,
+        "height": 50.59375,
+        "left": 24,
+        "right": 366,
+        "top": 314.9375,
+        "width": 342,
+        "x": 24,
+        "y": 314.9375
+      },
+      "height": 844,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "light",
+      "width": 390
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 622.0625,
+            "height": 44,
+            "left": 123,
+            "right": 195,
+            "top": 578.0625,
+            "width": 72,
+            "x": 123,
+            "y": 578.0625
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 622.0625,
+            "height": 44,
+            "left": 195,
+            "right": 267,
+            "top": 578.0625,
+            "width": 72,
+            "x": 195,
+            "y": 578.0625
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 686.0625,
+            "height": 44,
+            "left": 91,
+            "right": 299,
+            "top": 642.0625,
+            "width": 208,
+            "x": 91,
+            "y": 642.0625
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 738.0625,
+            "height": 44,
+            "left": 95,
+            "right": 295,
+            "top": 694.0625,
+            "width": 200,
+            "x": 95,
+            "y": 694.0625
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Dark",
+      "heading": {
+        "bottom": 365.53125,
+        "height": 50.59375,
+        "left": 24,
+        "right": 366,
+        "top": 314.9375,
+        "width": 342,
+        "x": 24,
+        "y": 314.9375
+      },
+      "height": 844,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 714.03125,
+            "height": 44,
+            "left": 312,
+            "right": 384,
+            "top": 670.03125,
+            "width": 72,
+            "x": 312,
+            "y": 670.03125
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 714.03125,
+            "height": 44,
+            "left": 384,
+            "right": 456,
+            "top": 670.03125,
+            "width": 72,
+            "x": 384,
+            "y": 670.03125
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 778.03125,
+            "height": 44,
+            "left": 280,
+            "right": 488,
+            "top": 734.03125,
+            "width": 208,
+            "x": 280,
+            "y": 734.03125
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 830.03125,
+            "height": 44,
+            "left": 284,
+            "right": 484,
+            "top": 786.03125,
+            "width": 200,
+            "x": 284,
+            "y": 786.03125
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Light",
+      "heading": {
+        "bottom": 475.5,
+        "height": 50.59375,
+        "left": 184,
+        "right": 584,
+        "top": 424.90625,
+        "width": 400,
+        "x": 184,
+        "y": 424.90625
+      },
+      "height": 1024,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 714.03125,
+            "height": 44,
+            "left": 312,
+            "right": 384,
+            "top": 670.03125,
+            "width": 72,
+            "x": 312,
+            "y": 670.03125
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 714.03125,
+            "height": 44,
+            "left": 384,
+            "right": 456,
+            "top": 670.03125,
+            "width": 72,
+            "x": 384,
+            "y": 670.03125
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 778.03125,
+            "height": 44,
+            "left": 280,
+            "right": 488,
+            "top": 734.03125,
+            "width": 208,
+            "x": 280,
+            "y": 734.03125
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 830.03125,
+            "height": 44,
+            "left": 284,
+            "right": 484,
+            "top": 786.03125,
+            "width": 200,
+            "x": 284,
+            "y": 786.03125
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Dark",
+      "heading": {
+        "bottom": 475.5,
+        "height": 50.59375,
+        "left": 184,
+        "right": 584,
+        "top": 424.90625,
+        "width": 400,
+        "x": 184,
+        "y": 424.90625
+      },
+      "height": 1024,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 740.0625,
+            "height": 44,
+            "left": 648,
+            "right": 720,
+            "top": 696.0625,
+            "width": 72,
+            "x": 648,
+            "y": 696.0625
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 740.0625,
+            "height": 44,
+            "left": 720,
+            "right": 792,
+            "top": 696.0625,
+            "width": 72,
+            "x": 720,
+            "y": 696.0625
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 804.0625,
+            "height": 44,
+            "left": 616,
+            "right": 824,
+            "top": 760.0625,
+            "width": 208,
+            "x": 616,
+            "y": 760.0625
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 856.0625,
+            "height": 44,
+            "left": 620,
+            "right": 820,
+            "top": 812.0625,
+            "width": 200,
+            "x": 620,
+            "y": 812.0625
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Light",
+      "heading": {
+        "bottom": 501.53125,
+        "height": 50.59375,
+        "left": 520,
+        "right": 920,
+        "top": 450.9375,
+        "width": 400,
+        "x": 520,
+        "y": 450.9375
+      },
+      "height": 1100,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 740.0625,
+            "height": 44,
+            "left": 648,
+            "right": 720,
+            "top": 696.0625,
+            "width": 72,
+            "x": 648,
+            "y": 696.0625
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 740.0625,
+            "height": 44,
+            "left": 720,
+            "right": 792,
+            "top": 696.0625,
+            "width": 72,
+            "x": 720,
+            "y": 696.0625
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 804.0625,
+            "height": 44,
+            "left": 616,
+            "right": 824,
+            "top": 760.0625,
+            "width": 208,
+            "x": 616,
+            "y": 760.0625
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 856.0625,
+            "height": 44,
+            "left": 620,
+            "right": 820,
+            "top": 812.0625,
+            "width": 200,
+            "x": 620,
+            "y": 812.0625
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Dark",
+      "heading": {
+        "bottom": 501.53125,
+        "height": 50.59375,
+        "left": 520,
+        "right": 920,
+        "top": 450.9375,
+        "width": 400,
+        "x": 520,
+        "y": 450.9375
+      },
+      "height": 1100,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "dark",
+      "width": 1440
+    }
+  ],
+  "earlierChecks": [
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 622.0625,
+            "height": 44,
+            "left": 123,
+            "right": 195,
+            "top": 578.0625,
+            "width": 72,
+            "x": 123,
+            "y": 578.0625
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 622.0625,
+            "height": 44,
+            "left": 195,
+            "right": 267,
+            "top": 578.0625,
+            "width": 72,
+            "x": 195,
+            "y": 578.0625
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 686.0625,
+            "height": 44,
+            "left": 91,
+            "right": 299,
+            "top": 642.0625,
+            "width": 208,
+            "x": 91,
+            "y": 642.0625
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 738.0625,
+            "height": 44,
+            "left": 95,
+            "right": 295,
+            "top": 694.0625,
+            "width": 200,
+            "x": 95,
+            "y": 694.0625
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Dark",
+      "heading": {
+        "bottom": 365.53125,
+        "height": 50.59375,
+        "left": 24,
+        "right": 366,
+        "top": 314.9375,
+        "width": 342,
+        "x": 24,
+        "y": 314.9375
+      },
+      "height": 844,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "dark",
+      "width": 390
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 714.03125,
+            "height": 44,
+            "left": 312,
+            "right": 384,
+            "top": 670.03125,
+            "width": 72,
+            "x": 312,
+            "y": 670.03125
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 714.03125,
+            "height": 44,
+            "left": 384,
+            "right": 456,
+            "top": 670.03125,
+            "width": 72,
+            "x": 384,
+            "y": 670.03125
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 778.03125,
+            "height": 44,
+            "left": 280,
+            "right": 488,
+            "top": 734.03125,
+            "width": 208,
+            "x": 280,
+            "y": 734.03125
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 830.03125,
+            "height": 44,
+            "left": 284,
+            "right": 484,
+            "top": 786.03125,
+            "width": 200,
+            "x": 284,
+            "y": 786.03125
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Dark",
+      "heading": {
+        "bottom": 475.5,
+        "height": 50.59375,
+        "left": 184,
+        "right": 584,
+        "top": 424.90625,
+        "width": 400,
+        "x": 184,
+        "y": 424.90625
+      },
+      "height": 1024,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "dark",
+      "width": 768
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 714.03125,
+            "height": 44,
+            "left": 312,
+            "right": 384,
+            "top": 670.03125,
+            "width": 72,
+            "x": 312,
+            "y": 670.03125
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 714.03125,
+            "height": 44,
+            "left": 384,
+            "right": 456,
+            "top": 670.03125,
+            "width": 72,
+            "x": 384,
+            "y": 670.03125
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 778.03125,
+            "height": 44,
+            "left": 280,
+            "right": 488,
+            "top": 734.03125,
+            "width": 208,
+            "x": 280,
+            "y": 734.03125
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 830.03125,
+            "height": 44,
+            "left": 284,
+            "right": 484,
+            "top": 786.03125,
+            "width": 200,
+            "x": 284,
+            "y": 786.03125
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Light",
+      "heading": {
+        "bottom": 475.5,
+        "height": 50.59375,
+        "left": 184,
+        "right": 584,
+        "top": 424.90625,
+        "width": 400,
+        "x": 184,
+        "y": 424.90625
+      },
+      "height": 1024,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "light",
+      "width": 768
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 740.0625,
+            "height": 44,
+            "left": 648,
+            "right": 720,
+            "top": 696.0625,
+            "width": 72,
+            "x": 648,
+            "y": 696.0625
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 740.0625,
+            "height": 44,
+            "left": 720,
+            "right": 792,
+            "top": 696.0625,
+            "width": 72,
+            "x": 720,
+            "y": 696.0625
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 804.0625,
+            "height": 44,
+            "left": 616,
+            "right": 824,
+            "top": 760.0625,
+            "width": 208,
+            "x": 616,
+            "y": 760.0625
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 856.0625,
+            "height": 44,
+            "left": 620,
+            "right": 820,
+            "top": 812.0625,
+            "width": 200,
+            "x": 620,
+            "y": 812.0625
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Light",
+      "heading": {
+        "bottom": 501.53125,
+        "height": 50.59375,
+        "left": 520,
+        "right": 920,
+        "top": 450.9375,
+        "width": 400,
+        "x": 520,
+        "y": 450.9375
+      },
+      "height": 1100,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 740.0625,
+            "height": 44,
+            "left": 648,
+            "right": 720,
+            "top": 696.0625,
+            "width": 72,
+            "x": 648,
+            "y": 696.0625
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 740.0625,
+            "height": 44,
+            "left": 720,
+            "right": 792,
+            "top": 696.0625,
+            "width": 72,
+            "x": 720,
+            "y": 696.0625
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 804.0625,
+            "height": 44,
+            "left": 616,
+            "right": 824,
+            "top": 760.0625,
+            "width": 208,
+            "x": 616,
+            "y": 760.0625
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 856.0625,
+            "height": 44,
+            "left": 620,
+            "right": 820,
+            "top": 812.0625,
+            "width": 200,
+            "x": 620,
+            "y": 812.0625
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Dark",
+      "heading": {
+        "bottom": 501.53125,
+        "height": 50.59375,
+        "left": 520,
+        "right": 920,
+        "top": 450.9375,
+        "width": 400,
+        "x": 520,
+        "y": 450.9375
+      },
+      "height": 1100,
+      "horizontalOverflow": false,
+      "scrollable": false,
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 604.21875,
+            "height": 88,
+            "left": 570,
+            "right": 714,
+            "top": 516.21875,
+            "width": 144,
+            "x": 570,
+            "y": 516.21875
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 604.21875,
+            "height": 88,
+            "left": 714,
+            "right": 858,
+            "top": 516.21875,
+            "width": 144,
+            "x": 714,
+            "y": 516.21875
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 732.21875,
+            "height": 88,
+            "left": 506,
+            "right": 922,
+            "top": 644.21875,
+            "width": 416,
+            "x": 506,
+            "y": 644.21875
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 836.21875,
+            "height": 88,
+            "left": 514,
+            "right": 914,
+            "top": 748.21875,
+            "width": 400,
+            "x": 514,
+            "y": 748.21875
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "Set up Jarvis",
+      "heading": {
+        "bottom": 51.78125,
+        "height": 151.78125,
+        "left": 314,
+        "right": 1114,
+        "top": -100,
+        "width": 800,
+        "x": 314,
+        "y": -100
+      },
+      "height": 1100,
+      "horizontalOverflow": false,
+      "scrollable": true,
+      "theme": "light",
+      "width": 1440
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 604.21875,
+            "height": 88,
+            "left": 570,
+            "right": 714,
+            "top": 516.21875,
+            "width": 144,
+            "x": 570,
+            "y": 516.21875
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 604.21875,
+            "height": 88,
+            "left": 714,
+            "right": 858,
+            "top": 516.21875,
+            "width": 144,
+            "x": 714,
+            "y": 516.21875
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 732.21875,
+            "height": 88,
+            "left": 506,
+            "right": 922,
+            "top": 644.21875,
+            "width": 416,
+            "x": 506,
+            "y": 644.21875
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 836.21875,
+            "height": 88,
+            "left": 514,
+            "right": 914,
+            "top": 748.21875,
+            "width": 400,
+            "x": 514,
+            "y": 748.21875
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "I’ll do this later",
+      "heading": {
+        "bottom": 51.78125,
+        "height": 151.78125,
+        "left": 314,
+        "right": 1114,
+        "top": -100,
+        "width": 800,
+        "x": 314,
+        "y": -100
+      },
+      "height": 1100,
+      "horizontalOverflow": false,
+      "scrollable": true,
+      "theme": "dark",
+      "width": 1440
+    },
+    {
+      "controls": [
+        {
+          "rect": {
+            "bottom": 460.1875,
+            "height": 88,
+            "left": 45,
+            "right": 189,
+            "top": 372.1875,
+            "width": 144,
+            "x": 45,
+            "y": 372.1875
+          },
+          "text": "Light"
+        },
+        {
+          "rect": {
+            "bottom": 460.1875,
+            "height": 88,
+            "left": 189,
+            "right": 333,
+            "top": 372.1875,
+            "width": 144,
+            "x": 189,
+            "y": 372.1875
+          },
+          "text": "Dark"
+        },
+        {
+          "rect": {
+            "bottom": 588.1875,
+            "height": 88,
+            "left": 48,
+            "right": 330,
+            "top": 500.1875,
+            "width": 282,
+            "x": 48,
+            "y": 500.1875
+          },
+          "text": "Set up Jarvis"
+        },
+        {
+          "rect": {
+            "bottom": 692.1875,
+            "height": 88,
+            "left": 48,
+            "right": 330,
+            "top": 604.1875,
+            "width": 282,
+            "x": 48,
+            "y": 604.1875
+          },
+          "text": "I’ll do this later"
+        }
+      ],
+      "focus": "I’ll do this later",
+      "heading": {
+        "bottom": -611.4375,
+        "height": 303.5625,
+        "left": 48,
+        "right": 330,
+        "top": -915,
+        "width": 282,
+        "x": 48,
+        "y": -915
+      },
+      "height": 844,
+      "horizontalOverflow": false,
+      "scrollable": true,
+      "theme": "light",
+      "width": 390
+    }
+  ],
+  "keyboard": {
+    "setupEnter": "one intent",
+    "exitSpace": "one intent",
+    "focus": "visible outline"
+  },
+  "zoom": {
+    "method": "CSS zoom 200% with half-size fixture layout",
+    "nativeBrowserZoom": "not verified; automation shortcuts did not change the browser zoom"
+  },
+  "pendingErrorGeometryStable": true
+}

@@ -1,0 +1,52 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-01",
+  "date": "2026-10-14",
+  "status": "implemented_not_activated",
+  "branch": "onboarding/on-u-01",
+  "target": "main",
+  "baseSha": "1c2737a60d5580abea7d2feb9f2e845fdd491924",
+  "implementationHead": "8a18382b519733673093ce8cc75752b29363e1cb",
+  "headNote": "The delivery-evidence commit follows this code head; use the PR head for the complete delivery.",
+  "worktree": "/home/vierisid/.cache/codex/jarvis-on-u-01",
+  "ownedPaths": ["ui/src/onboarding-next/views/welcome/", "docs/onboarding-delivery/ON-U-01.json", "docs/onboarding-delivery/evidence/ON-U-01/"],
+  "figma": {
+    "file": "eNfKeirIKLZLlZEasrurZa",
+    "page": "1097:16402",
+    "nodes": ["1097:16403", "1097:68522"],
+    "checkpoint": "Onboarding · Tutorial focus contour · 2026-10-14",
+    "version": "2410205462365531104",
+    "inspected": "Native text, colors, dimensions, corners and mark rotation; live welcome prototype. No design edits."
+  },
+  "capabilityGate": {
+    "provides": ["welcome-view.v1"],
+    "requires": ["journey.v1", "setup.v1"],
+    "registered": false,
+    "enabled": false,
+    "enableAfter": ["ON-U-10", "ON-B-01", "ON-B-02", "verified combined D/F/Q release candidate"]
+  },
+  "checks": [
+    {"name":"Welcome and legacy onboarding regressions", "command":"bun test ui/src/onboarding-next/views/welcome ui/src/v2/onboarding", "outcome":"passed", "tests":96, "failures":0},
+    {"name":"TypeScript", "command":"bunx tsc --noEmit", "outcome":"passed"},
+    {"name":"Production UI build", "command":"bun run build:ui", "outcome":"passed", "note":"Existing @theme/@tailwind warnings remain. Existing entry bundles do not import this optional view."},
+    {"name":"Standalone welcome build", "command":"bun build ui/src/onboarding-next/views/welcome/preview/index.html --outdir /tmp/on-u-01-preview-build", "outcome":"passed"},
+    {"name":"Repository commit checks", "outcome":"passed", "scope":"EE imports, migration safety, 100 templates, package contents, 9 related tests and typecheck"},
+    {"name":"Responsive visual matrix", "outcome":"passed", "scope":"Light/Dark at 390x844, 768x1024, 1440x1100; no horizontal overflow; real merged global/primitive styles loaded"},
+    {"name":"Keyboard and local states", "outcome":"passed", "scope":"Enter setup and Space exit emit one intent each; focus outline visible; DOM regression checks pending guards/focus, controlled themes and escaped errors"},
+    {"name":"Long content and enlarged content", "outcome":"passed", "scope":"200% CSS preview zoom at 1440 and 390, including long copy; internal scrolling retains reachable actions"},
+    {"name":"Native browser/WebView 200% zoom", "outcome":"not_run", "reason":"Browser automation zoom shortcuts did not change the actual browser zoom. CSS-zoom evidence is labeled separately."},
+    {"name":"Actual optional assembly / missing-provider fallback", "outcome":"blocked", "reason":"ON-U-10 and ON-B-11 are absent from this base. No fabricated registration or runtime fallback pass."}
+  ],
+  "compatibility": {
+    "standalone": "Target base plus this PR only; no sibling imports or worktree-linked dependencies.",
+    "combinedWith": {"pr":1050,"head":"3883ba6fc9d08c5aed82f561d241658730d59da3","module":"ON-B-01"},
+    "combinedTree": "486a58ca0fd63ca28845704b36459f94c7f36f11",
+    "result": "Clean temporary merge; 38 tests passed, typecheck, production UI and standalone preview built. Merge aborted afterwards; temporary checkout returned clean to the UI code head.",
+    "limit": "Module coexistence only. UI callbacks were not wired to the journey provider; no full D/F/Q candidate, host discovery, provider-removal runtime fallback or live onboarding tested."
+  },
+  "review": {"method":"PR reviewer skill, implementer self-review", "report":"evidence/ON-U-01/review.md", "remainingCodeFindings":0},
+  "evidence": "evidence/ON-U-01/verification.md",
+  "rollback": "Before registration, revert this PR. No data, route or provider rollback is needed. After registration, disable the optional ON-U-10 entry before removing this module.",
+  "quickVerify": {"url":"http://127.0.0.1:4410/", "command":"bun ui/src/onboarding-next/views/welcome/preview/serve.ts", "actions":["Switch Light/Dark", "Tab to Set up Jarvis and press Enter; one intent appears in the preview toolbar", "Try Pending/Error, long copy and 200% preview zoom"]},
+  "next": "ON-U-02"
+}
