@@ -190,12 +190,36 @@ jobs:
           if [ "${DRY_RUN}" = "true" ]; then
             should_release=true
             echo "::notice::Dry run — building/validating sidecar v${VERSION} without publishing."
-          elif npm view "@usejarvis/sidecar@${VERSION}" version >/dev/null 2>&1; then
-            should_release=false
-            echo "::notice::@usejarvis/sidecar@${VERSION} is already published — skipping sidecar release (no-op)."
           else
-            should_release=true
-            echo "Sidecar v${VERSION} is not yet on npm — releasing."
+            # Released only on a clean "not found" (#979). Any other failure
+            # of the lookup -- a 5xx, a rate limit, an auth error, a network
+            # error, an answer that does not parse -- used to read as "not
+            # published" and send a version already out to publish-sidecar.
+            # npm view --json puts the error, code included, on stdout; E404
+            # is both "no such version" (the package answered without it)
+            # and "no such package" (a first release). Measured on npm 10.8.2,
+            # 11.6.2 and 12.1.0: a published version prints "1.2.3" on 10 and
+            # 11 and ["1.2.3"] on 12. npm has retried a transient error twice
+            # (fetch-retries) before it reports one here.
+            view_rc=0
+            view="$(npm view "@usejarvis/sidecar@${VERSION}" version --json 2>/dev/null)" || view_rc=$?
+            # Exactly one JSON value is an answer; nothing, two, or text that
+            # does not parse is not, and reads as null.
+            answer="$(jq -sc 'if length == 1 then .[0] else null end' <<<"$view" 2>/dev/null)" || answer=null
+            errfield() { jq -r --arg f "$1" 'if type == "object" and (.error | type) == "object" then .error[$f] | strings else empty end' <<<"$answer"; }
+            if [ "$view_rc" -eq 0 ] && jq -e --arg v "$VERSION" '. == $v or . == [$v]' <<<"$answer" >/dev/null; then
+              should_release=false
+              echo "::notice::@usejarvis/sidecar@${VERSION} is already published -- skipping sidecar release (no-op)."
+            elif [ "$view_rc" -ne 0 ] && [ "$(errfield code)" = "E404" ]; then
+              should_release=true
+              echo "Sidecar v${VERSION} is not yet on npm -- releasing."
+            else
+              # npm text, control characters dropped, so it stays one line
+              # and cannot start a workflow command of its own.
+              printf '::error::Could not establish whether @usejarvis/sidecar@%s is on npm (npm view exit %s, code %s: %s), so this run will not decide to publish it (#979). Re-run this job.\n' \
+                "$VERSION" "$view_rc" "$(errfield code | tr -d '\000-\037')" "$(errfield summary | tr -d '\000-\037')"
+              exit 1
+            fi
           fi
           if [ "$should_release" != true ]; then build=false; publish=false; fi
           {
@@ -903,6 +927,10 @@ jobs:
       - name: Ensure npm supports Trusted Publishing
         run: |
           set -euo pipefail
+          # Checked where it is used (#960): whatever set it, an alias, a
+          # path or a URL here would install some other package globally.
+          # The digits are listed, not a range: a range follows the locale.
+          [[ "$NPM_VERSION" =~ ^[0123456789]+\.[0123456789]+\.[0123456789]+$ ]] || { echo "::error::NPM_VERSION is not an exact x.y.z, so it could name another package (#960)"; exit 1; }
           npm install -g "npm@${NPM_VERSION}"
           got="$(npm --version)"
           [ "$got" = "$NPM_VERSION" ] || { echo "::error::npm on PATH is $got, expected $NPM_VERSION"; exit 1; }

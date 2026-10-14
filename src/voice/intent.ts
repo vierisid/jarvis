@@ -73,8 +73,11 @@ export type Intent = {
    * the dashboard via a `room_action` notification; the UI's action bus
    * dispatches to whichever Room is currently registered.
    *
-   * Always read-only impact (it's a UI command, not a daemon action) — the
-   * daemon doesn't gate this through the soft-approval pipeline.
+   * Not read-only just because it is a UI command: the room's handler makes
+   * the same REST calls a click would, so `create_task` writes a commitment
+   * and `start_server` runs `make dev`. The daemon takes what an action does
+   * from ROOM_ACTIONS, not from `impact`, and repeats back any action in the
+   * taint-governed categories before running it (#973).
    */
   room_action?: RoomAction;
 

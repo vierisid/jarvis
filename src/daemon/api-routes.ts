@@ -3668,9 +3668,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      * Voice clarifier / repeat-back resolution.
      * The daemon holds a pending utterance when the classifier confidence is
      * <0.85; the dashboard renders a clarifier or repeat-back card; this
-     * endpoint resolves it. `confirm` forwards the held transcript to the
-     * chat agent; `cancel` drops the request silently (the user-voice
-     * ThreadItem stays in the thread, no assistant reply follows).
+     * endpoint resolves it. `confirm` runs a held room action (#973), or
+     * else forwards the held transcript to the chat agent; `cancel` drops
+     * the request silently (the user-voice ThreadItem stays in the thread,
+     * no assistant reply follows).
      */
     '/api/voice/clarifier/:id/confirm': {
       POST: async (req: Request & { params: { id: string } }) => {

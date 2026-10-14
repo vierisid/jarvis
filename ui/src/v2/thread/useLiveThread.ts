@@ -79,6 +79,7 @@ export function useLiveThread() {
         id: r.id,
         transcript: r.transcript,
         confidence: r.confidence,
+        ...(r.action ? { action: r.action } : {}),
         t: formatTime(r.timestamp),
       }),
     );

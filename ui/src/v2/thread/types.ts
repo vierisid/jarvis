@@ -109,6 +109,8 @@ export type ThreadItem =
       id: string;
       transcript: string;
       confidence: number;
+      /** What confirming runs, when the daemon held a room action (#973). */
+      action?: string;
       t: string;
     }
   | {

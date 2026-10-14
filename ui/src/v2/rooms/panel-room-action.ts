@@ -1,4 +1,5 @@
 import type { RoomActionRequest, RoomActionResultCallback } from "./useRoomActionBus";
+import { isPresentationRoomAction } from "../../../../src/daemon/room-actions";
 
 /**
  * A native panel's half of a daemon `room_action` (T20c, #933).
@@ -28,6 +29,10 @@ export function handlePanelRoomActionMessage(
   };
   if (m.type !== "notification" || m.payload?.source !== "room_action") return;
   if (!m.payload.room || !m.payload.action) return;
+  // Panels take presentation actions only (the pebble sends tab switches).
+  // Anything that changes more than the screen is the addressed dashboard's
+  // to run (#974), and a panel running it too would do it twice.
+  if (!isPresentationRoomAction(m.payload.room, m.payload.action)) return;
   const resultId = typeof m.payload.resultId === "string" && m.payload.resultId ? m.payload.resultId : null;
   dispatch(
     {

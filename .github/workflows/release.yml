@@ -62,10 +62,18 @@ jobs:
       # required `test` since 2026-10-05. It is on the checkout so that the
       # branch push and `gh pr create` are the same actor; the PR-opened event
       # is what has to be attributed to a real token for CI to start.
+      #
+      # persist-credentials: false (#982). The default leaves the PAT in
+      # .git/config for every later step, `npm version` and `bun -e`
+      # included, in a job holding contents, pull-requests and actions write.
+      # The one push that needs it takes it from its step env through a
+      # credential helper instead (see "Create release PR"); the branch
+      # deletes go through the API with this job's GITHUB_TOKEN.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
           token: ${{ secrets.RELEASE_PR_TOKEN }}
+          persist-credentials: false
 
       # Pinned, never `latest` (#681): this job's token can push a v* tag and
       # dispatch a real release. Same version as test.yml and release-exec.yml.
@@ -119,6 +127,20 @@ jobs:
           # Overrides the job-level github.token for this step only (#929), so
           # the PR is opened by the PAT and its CI starts.
           GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}
+          # The branch push authenticates with that same GH_TOKEN (#982): the
+          # checkout no longer leaves it in .git/config. Git asks this helper
+          # for a credential when github.com answers 401, and the helper reads
+          # the token from its environment at that moment, so it is never in
+          # a file, a remote URL or an argument, and nothing prints it. The
+          # empty first entry drops any helper configured elsewhere on the
+          # runner, the second answers for https://github.com alone, and git
+          # may not fall back to a prompt.
+          GIT_TERMINAL_PROMPT: "0"
+          GIT_CONFIG_COUNT: "2"
+          GIT_CONFIG_KEY_0: credential.helper
+          GIT_CONFIG_VALUE_0: ""
+          GIT_CONFIG_KEY_1: credential.https://github.com.helper
+          GIT_CONFIG_VALUE_1: '!f() { if [ "$1" = get ] && [ -n "$GH_TOKEN" ]; then printf "username=x-access-token\npassword=%s\n" "$GH_TOKEN"; fi; }; f'
         run: |
           set -euo pipefail
           BRANCH="release/v${NEW}"
@@ -200,10 +222,18 @@ jobs:
             -f ref="refs/tags/v${NEW}" \
             -f sha="${SHA}"
 
+      # Through the API with the job token (#982): the checkout persists no
+      # credential, so a `git push --delete` here would fail, and the
+      # `|| true` it carried would hide that and leave the branch behind.
+      # Still not fatal, since the tag is pushed and the release has to be
+      # started, but a failure is reported rather than swallowed.
       - name: Delete release branch
         env:
           NEW: ${{ steps.version.outputs.NEW }}
-        run: git push origin --delete "release/v${NEW}" || true
+        run: |
+          if ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then
+            echo "::warning::Could not delete the branch release/v${NEW}; delete it by hand."
+          fi
 
       # Dispatch AND wait (#683). This used to dispatch and exit, so a failed
       # or cancelled release left the merged bump and the pushed tag with
@@ -246,6 +276,8 @@ jobs:
               gh pr close "$PR_URL" --comment "Release workflow run failed; closing. See the workflow logs." || true
             fi
           fi
-          if [ -n "$NEW" ]; then
-            git push origin --delete "release/v${NEW}" || true
+          # As in "Delete release branch" (#982). The branch may never have
+          # been pushed, so a failure here only warns.
+          if [ -n "$NEW" ] && ! gh api -X DELETE "repos/${GITHUB_REPOSITORY}/git/refs/heads/release/v${NEW}"; then
+            echo "::warning::Could not delete the branch release/v${NEW}; if it exists, delete it by hand."
           fi

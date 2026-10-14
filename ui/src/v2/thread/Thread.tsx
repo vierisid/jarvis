@@ -358,6 +358,7 @@ function ItemRenderer({
         <RepeatBackCard
           transcript={item.transcript}
           confidence={item.confidence}
+          action={item.action}
           onConfirm={() => onRepeatBack?.(item.id, "confirm")}
           onCancel={() => onRepeatBack?.(item.id, "cancel")}
         />
