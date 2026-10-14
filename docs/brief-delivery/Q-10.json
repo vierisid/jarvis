@@ -149,5 +149,27 @@
   ],
   "ci": {
     "status": "See the PR checks for the current head; local evidence does not imply CI completion."
+  },
+  "rebase_2026_10_14": {
+    "onto": "b82cd480f0d4d1c04a91d1d2c7b8925991581253",
+    "main": "5024ea7455a5613be0514475be32c0dee6de0edd",
+    "original_head": "23c05aaafdb0dc0f2dc4b96052ca085febe88600",
+    "decision": "Owner approved main single delegation approval with Q10 stable identity and uncertain-outcome projection around that same execution. Delegated tool calls keep their own principal, intent and approval scopes.",
+    "range_diff": "All three original commits retained; only the approved service-backends wrapper combination changed the original patches.",
+    "validation": {
+      "status": "passed",
+      "typecheck": "passed",
+      "ui_build": "passed with existing CSS at-rule warnings",
+      "affected_tests": "453 passed, zero failed, 2604 assertions across 22 files, including real engine restart/nested continuation, main delegation approval scopes, project-safe child lookup and dashboard render tests",
+      "environment": "Bun 1.3.6; isolated rebuilt engine cache; no live provider effects"
+    },
+    "evidence_root": "/home/vierisid/.cache/codex/brief-rebase-20261014",
+    "evidence": [
+      "q-10-focused.log",
+      "q-10-typecheck.log",
+      "q-10-ui-build.log",
+      "q-10-range-diff.log",
+      "q-10-commit.log"
+    ]
   }
 }

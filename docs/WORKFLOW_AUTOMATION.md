@@ -493,6 +493,13 @@ is recorded after it ran.
 
 ### Required nested workflow continuation (Q-10)
 
+On the 2026-10-14 rebase, delegated execution keeps main's single-use approval
+for starting the agent. The same execution then supplies Q-10's stable delegation
+identity and uncertain-outcome report. An approval to start the agent does not
+authorize its later tool calls; those retain their own principal, intent and
+approval checks. An uncertain tool effect remains uncertain even if the agent
+finishes its conversation.
+
 `jarvis-trigger.run_workflow` keeps its asynchronous default. Opt into **Wait
 for completion** when the next step requires the child to succeed. The parent
 parks on a daemon-owned waitpoint; the timer scheduler resumes it through the
