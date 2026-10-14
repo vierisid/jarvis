@@ -1,0 +1,91 @@
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/journey/journey.test.ts:
+(pass) versioned journey and legacy compatibility > factories have no startup effects, and repeated reads retain one durable identity [11.70ms]
+(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":false,"profile_completed":true,"tutorial_completed":true,"tutorial_dismissed":false,"tutorial_progress_step":null} [14.20ms]
+(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":true,"profile_completed":false,"tutorial_completed":false,"tutorial_dismissed":true,"tutorial_progress_step":null} [13.50ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [6.86ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [6.88ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [6.76ms]
+(pass) versioned journey and legacy compatibility > unreachable legacy status never writes incomplete progress [4.30ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [3.69ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [4.15ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [3.85ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {broken [7.02ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: null [6.77ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {} [6.92ms]
+(pass) versioned journey and legacy compatibility > future fields survive transitions and future schema/state values are read-only [23.02ms]
+(pass) revision checks, retry identities and scope > two tabs/connections race: one wins; stale writer receives the latest snapshot [10.58ms]
+(pass) revision checks, retry identities and scope > independent OS processes cannot both commit the same revision [28.55ms]
+(pass) revision checks, retry identities and scope > lost acknowledgement retry works after restart and later progress, changed key body conflicts [14.92ms]
+(pass) revision checks, retry identities and scope > unauthorized readers never touch persistence; actor/project isolation rejects copied identities [21.38ms]
+(pass) revision checks, retry identities and scope > client-supplied ownership and acknowledgements are rejected [8.55ms]
+(pass) revision checks, retry identities and scope > mutation without a body cannot initialize a journey [4.02ms]
+(pass) revision checks, retry identities and scope > a failed write rolls back; the same request can be retried [10.75ms]
+(pass) revision checks, retry identities and scope > cross-tab reconciliation ignores old snapshots and retains progress on outages without allowing writes [13.92ms]
+14 | const owner = { actorId: 'test-actor', projectId: 'test-project' };
+15 | const cleanup: Array<() => void> = [];
+16 | afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
+17 | 
+18 | function ready(result: JourneyResult): JourneySnapshot {
+19 |   expect(result.availability).toBe('ready');
+                                   ^
+error: expect(received).toBe(expected)
+
+Expected: "ready"
+Received: "unavailable"
+
+      at ready (/home/vierisid/.cache/codex/jarvis-on-b-01/src/onboarding-next/journey/journey.test.ts:19:31)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-01/src/onboarding-next/journey/journey.test.ts:248:23)
+(fail) acknowledgement boundaries and scoped tutorial replay > a persisted failed build can return to activation without losing its identity [34.25ms]
+14 | const owner = { actorId: 'test-actor', projectId: 'test-project' };
+15 | const cleanup: Array<() => void> = [];
+16 | afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
+17 | 
+18 | function ready(result: JourneyResult): JourneySnapshot {
+19 |   expect(result.availability).toBe('ready');
+                                   ^
+error: expect(received).toBe(expected)
+
+Expected: "ready"
+Received: "unavailable"
+
+      at ready (/home/vierisid/.cache/codex/jarvis-on-b-01/src/onboarding-next/journey/journey.test.ts:19:31)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-01/src/onboarding-next/journey/journey.test.ts:248:23)
+(fail) acknowledgement boundaries and scoped tutorial replay > a persisted cancelled build can return to activation without losing its identity [36.86ms]
+14 | const owner = { actorId: 'test-actor', projectId: 'test-project' };
+15 | const cleanup: Array<() => void> = [];
+16 | afterEach(() => { while (cleanup.length) cleanup.pop()!(); });
+17 | 
+18 | function ready(result: JourneyResult): JourneySnapshot {
+19 |   expect(result.availability).toBe('ready');
+                                   ^
+error: expect(received).toBe(expected)
+
+Expected: "ready"
+Received: "unavailable"
+
+      at ready (/home/vierisid/.cache/codex/jarvis-on-b-01/src/onboarding-next/journey/journey.test.ts:19:31)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-01/src/onboarding-next/journey/journey.test.ts:260:5)
+(fail) acknowledgement boundaries and scoped tutorial replay > a durable reservation blocks Explore in a second tab until delayed job acceptance is reconciled [34.40ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > setup acknowledgement is required before Google; interview acknowledgement before tour [32.43ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > tour completion leaves activation visible; Explore first finishes without a workflow [41.13ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > pending job survives replay/restart, including a result arriving during replay [57.12ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > an accepted job acknowledgement can arrive after tutorial replay starts [41.69ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > tutorial reset preserves completed setup, profile/connection settings and exact draft; disabling provider leaves legacy readable [63.05ms]
+
+src/onboarding-next/journey/module-boundary.test.ts:
+(pass) contract fixture host bundles with zero modules, journey only, and journey removed [28.61ms]
+
+src/onboarding-next/journey/settings.test.ts:
+(pass) real vault/user-settings/profile services remain readable after provider restart and rollback [221.05ms]
+
+3 tests failed:
+(fail) acknowledgement boundaries and scoped tutorial replay > a persisted failed build can return to activation without losing its identity [34.25ms]
+(fail) acknowledgement boundaries and scoped tutorial replay > a persisted cancelled build can return to activation without losing its identity [36.86ms]
+(fail) acknowledgement boundaries and scoped tutorial replay > a durable reservation blocks Explore in a second tab until delayed job acceptance is reconciled [34.40ms]
+
+ 29 pass
+ 3 fail
+ 334 expect() calls
+Ran 32 tests across 3 files. [860.00ms]

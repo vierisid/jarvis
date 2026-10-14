@@ -1,0 +1,53 @@
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/journey/journey.test.ts:
+(pass) versioned journey and legacy compatibility > factories have no startup effects, and repeated reads retain one durable identity [18.78ms]
+(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":false,"profile_completed":true,"tutorial_completed":true,"tutorial_dismissed":false,"tutorial_progress_step":null} [23.80ms]
+(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":true,"profile_completed":false,"tutorial_completed":false,"tutorial_dismissed":true,"tutorial_progress_step":null} [21.75ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [9.02ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [9.63ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [9.98ms]
+(pass) versioned journey and legacy compatibility > unreachable legacy status never writes incomplete progress [7.18ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [5.66ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [4.46ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [4.81ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {broken [11.56ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: null [9.59ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {} [9.40ms]
+(pass) versioned journey and legacy compatibility > future fields survive transitions and future schema/state values are read-only [34.39ms]
+(pass) revision checks, retry identities and scope > two tabs/connections race: one wins; stale writer receives the latest snapshot [13.75ms]
+(pass) revision checks, retry identities and scope > independent OS processes cannot both commit the same revision [32.13ms]
+(pass) revision checks, retry identities and scope > lost acknowledgement retry works after restart and later progress, changed key body conflicts [18.49ms]
+(pass) revision checks, retry identities and scope > unauthorized readers never touch persistence; actor/project isolation rejects copied identities [33.52ms]
+(pass) revision checks, retry identities and scope > client-supplied ownership and acknowledgements are rejected [11.71ms]
+(pass) revision checks, retry identities and scope > mutation without a body cannot initialize a journey [6.18ms]
+(pass) revision checks, retry identities and scope > a failed write rolls back; the same request can be retried [14.59ms]
+(pass) revision checks, retry identities and scope > cross-tab reconciliation ignores old snapshots and retains progress on outages without allowing writes [20.54ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > a persisted failed build can return to activation without losing its identity [56.59ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > a persisted cancelled build can return to activation without losing its identity [61.48ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > a durable reservation blocks Explore in a second tab until delayed job acceptance is reconciled [58.44ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > failed recovery allows a new request but rejects stale and reused attempt identities [71.42ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > cancelled recovery allows a new request but rejects stale and reused attempt identities [82.31ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > Explore winning the revision race prevents reservation and unreserved job acknowledgement [49.06ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > two reservations race atomically and the winner survives a lost reply and restart [45.30ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > an unaccepted reservation can be released after authoritative reconciliation [56.16ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > retrying an old reservation receipt after recovery does not reserve or reopen the journey [62.95ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > recovery during tutorial replay changes only the return location and permits another reservation [88.71ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > recovery rejects foreign identities, nonterminal observations, public commands and a committed draft [69.33ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > reservation history preserves additive fields and refuses malformed or future outcomes without rewriting [85.02ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > setup acknowledgement is required before Google; interview acknowledgement before tour [47.87ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > tour completion leaves activation visible; Explore first finishes without a workflow [57.18ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > pending job survives replay/restart, including a result arriving during replay [78.38ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > an accepted job acknowledgement can arrive after tutorial replay starts [55.27ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > tutorial reset preserves completed setup, profile/connection settings and exact draft; disabling provider leaves legacy readable [88.49ms]
+
+src/onboarding-next/journey/module-boundary.test.ts:
+(pass) contract fixture host bundles with zero modules, journey only, and journey removed [31.13ms]
+
+src/onboarding-next/journey/settings.test.ts:
+(pass) real vault/user-settings/profile services remain readable after provider restart and rollback [254.92ms]
+
+ 41 pass
+ 0 fail
+ 660 expect() calls
+Ran 41 tests across 3 files. [1.77s]

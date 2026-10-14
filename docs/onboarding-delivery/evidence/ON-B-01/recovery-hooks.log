@@ -1,0 +1,62 @@
+[pre-commit] Checking for Activepieces EE-licensed code...
+[check-no-ee-imports] OK -- no Activepieces EE-licensed code found.
+[pre-commit] Checking migrations are expand/contract (rollback-safe)...
+[check-migrations] OK -- no un-acknowledged contracting DDL.
+[pre-commit] Linting webapp templates...
+
+100 templates: 0 errors, 0 warnings
+[pre-commit] Checking the published tarball still ships what consumers read...
+[check-package-files] note: npm: ran cleanly but produced no parseable file list
+[check-package-files] OK -- all 3 required path(s) present in the bun tarball (2413 files).
+[pre-commit] Running 1 related test file(s) (180s timeout)...
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/journey/journey.test.ts:
+(pass) versioned journey and legacy compatibility > factories have no startup effects, and repeated reads retain one durable identity [10.17ms]
+(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":false,"profile_completed":true,"tutorial_completed":true,"tutorial_dismissed":false,"tutorial_progress_step":null} [14.87ms]
+(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":true,"profile_completed":false,"tutorial_completed":false,"tutorial_dismissed":true,"tutorial_progress_step":null} [15.01ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [7.28ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [7.21ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [7.15ms]
+(pass) versioned journey and legacy compatibility > unreachable legacy status never writes incomplete progress [4.18ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [4.78ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [3.99ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [4.31ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {broken [7.35ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: null [6.74ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {} [7.09ms]
+(pass) versioned journey and legacy compatibility > future fields survive transitions and future schema/state values are read-only [24.39ms]
+(pass) revision checks, retry identities and scope > two tabs/connections race: one wins; stale writer receives the latest snapshot [11.60ms]
+(pass) revision checks, retry identities and scope > independent OS processes cannot both commit the same revision [27.95ms]
+(pass) revision checks, retry identities and scope > lost acknowledgement retry works after restart and later progress, changed key body conflicts [14.04ms]
+(pass) revision checks, retry identities and scope > unauthorized readers never touch persistence; actor/project isolation rejects copied identities [19.56ms]
+(pass) revision checks, retry identities and scope > client-supplied ownership and acknowledgements are rejected [6.96ms]
+(pass) revision checks, retry identities and scope > mutation without a body cannot initialize a journey [3.81ms]
+(pass) revision checks, retry identities and scope > a failed write rolls back; the same request can be retried [10.48ms]
+(pass) revision checks, retry identities and scope > cross-tab reconciliation ignores old snapshots and retains progress on outages without allowing writes [16.13ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > a persisted failed build can return to activation without losing its identity [46.34ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > a persisted cancelled build can return to activation without losing its identity [45.24ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > a durable reservation blocks Explore in a second tab until delayed job acceptance is reconciled [43.04ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > failed recovery allows a new request but rejects stale and reused attempt identities [64.83ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > cancelled recovery allows a new request but rejects stale and reused attempt identities [57.51ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > Explore winning the revision race prevents reservation and unreserved job acknowledgement [42.12ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > two reservations race atomically and the winner survives a lost reply and restart [36.86ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > an unaccepted reservation can be released after authoritative reconciliation [42.72ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > retrying an old reservation receipt after recovery does not reserve or reopen the journey [45.29ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > recovery during tutorial replay changes only the return location and permits another reservation [62.46ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > recovery rejects foreign identities, nonterminal observations, public commands and a committed draft [51.71ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > reservation history preserves additive fields and refuses malformed or future outcomes without rewriting [70.11ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > setup acknowledgement is required before Google; interview acknowledgement before tour [33.59ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > tour completion leaves activation visible; Explore first finishes without a workflow [49.32ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > pending job survives replay/restart, including a result arriving during replay [59.15ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > an accepted job acknowledgement can arrive after tutorial replay starts [46.29ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > tutorial reset preserves completed setup, profile/connection settings and exact draft; disabling provider leaves legacy readable [75.66ms]
+
+ 39 pass
+ 0 fail
+ 641 expect() calls
+Ran 39 tests across 1 file. [1128.00ms]
+[pre-commit] Type checking...
+[pre-commit] All checks passed.
+[onboarding/on-b-01 b6cde5b5] Reserve onboarding builds and recover confirmed terminal attempts
+ 4 files changed, 265 insertions(+), 12 deletions(-)
