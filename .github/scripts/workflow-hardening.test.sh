@@ -70,7 +70,12 @@
 #      its CI runs and main's required `test` check can pass (#935); a step
 #      before it refuses an empty secret; the PAT is read nowhere else; and
 #      rule 4 counts a job that reads any non-GITHUB_TOKEN secret as holding
-#      write, where no JavaScript runtime may run at all.
+#      write, where no JavaScript runtime may run at all. (#983) The same for
+#      every workflow that opens a PR with create-pull-request (the webview_go
+#      bump too), and no Go build or test and no repository script runs where
+#      a write scope or a secret is held either; the webview PR job takes from
+#      its artifact exactly the vendored tree, hidden files included, and no
+#      link and no .git (that step executed against hostile fixtures).
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -102,7 +107,7 @@ trap 'rm -rf "$WORK"' EXIT
 
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
-#          | mutable | narrow | pushcache | catalog-pr | npmpin
+#          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -180,7 +185,18 @@ if (rule === "reach") {
   const quiet = new Set(["schedule", "workflow_dispatch"]);
   if (!triggers.length || triggers.some((t) => !quiet.has(String(t)))) out.push("yes");
 }
+if (rule === "opens-pr") {
+  // Prints "yes" when a step, local actions included, is create-pull-request:
+  // every such workflow is held to catalog-pr below (#983), not a list. And
+  // "gh" when a run: opens one through gh or the pulls API instead (review
+  // of #983), which catalog-pr cannot read: those are listed below.
+  const steps = Object.values(jobs).flatMap((job) => flatSteps(job.steps).map((x) => x.st));
+  if (steps.some((st) => String(st.uses ?? "").toLowerCase().startsWith("peter-evans/create-pull-request@"))) out.push("yes");
+  else if (steps.some((st) => typeof st.run === "string" && /\bgh\s+pr\s+create\b|\bgh\s+api\b[^\n]*\/pulls\b/.test(st.run))) out.push("gh");
+}
 if (rule === "catalog-pr") {
+  // Every bot PR (#983: the webview_go bump too, since #981 the catalog), as
+  // the catalog PR was first:
   // The catalog PR is opened with RELEASE_PR_TOKEN, never GITHUB_TOKEN: GitHub
   // holds the CI of a PR that GITHUB_TOKEN opens or pushes for approval, so
   // main never sees its required `test` check and the PR cannot merge (#935).
@@ -238,6 +254,14 @@ if (rule === "untrusted") {
   const bunInstall = new RegExp("\\bbun" + flags + "\\s+(?:install|i)\\b");
   const frozen = /--frozen-lockfile(?![=\w-])/;
   const thirdParty = /\bscripts\/(sync-pieces-catalog|inspect-verified-pieces)\.ts\b/;
+  // #983: a Go build, vet or test compiles and runs module code (the webview
+  // bump links fresh upstream code into the sidecar tests), and a script of
+  // this repository (scripts/vendor-webview.sh fetches that upstream code)
+  // is repository code. Neither runs where a write scope or a secret is held.
+  // go -C dir test, and go tool, too; a script path behind a directory
+  // ($GITHUB_WORKSPACE/scripts/x, .github/scripts/x) too (review of #983).
+  const goCode = /(?:^|[\s;&|(])go\s+(?:-C\s+\S+\s+)?(?:build|test|vet|run|generate|install|get|mod|tool)\b/;
+  const repoScript = /(?:^|[\s;&|(\/])(?:\.\/)?scripts\/[\w.\/-]+/;
   // One logical line per command: continuations joined, comments dropped, and
   // quoted text blanked so an `echo "bun install failed"` is not an install.
   let pkgScripts = {};
@@ -290,6 +314,8 @@ if (rule === "untrusted") {
         const holding = writes(perm) ? JSON.stringify(perm) : "a secret other than GITHUB_TOKEN";
         if (held && install.test(bare)) out.push(label + via + ": installs dependencies in a job holding " + holding + ": " + t);
         if (held && thirdParty.test(bare)) out.push(label + via + ": processes third-party data in a job holding " + holding + ": " + t);
+        if (held && goCode.test(bare)) out.push(label + via + ": builds or tests Go code (module code is compiled or run) in a job holding " + holding + ": " + t);
+        if (held && repoScript.test(bare)) out.push(label + via + ": runs a repository script in a job holding " + holding + ": " + t);
         // The write job takes generated TypeScript from a read-only job, and
         // the first thing to run it must be the PR CI, not this job: no
         // JavaScript runtime at all here, whatever script it is pointed at.
@@ -1732,14 +1758,49 @@ process.stdout.write(s.slice(a, b + end.length));
 }
 
 echo
-echo "the catalog sync processes third-party data without write access"
+echo "the catalog sync and the webview bump process third-party data without write access"
 expect_clean "sync-pieces-catalog.yml: no job that installs dependencies or runs the generator holds a write scope; installs are frozen" \
 	untrusted "$WORKFLOWS/sync-pieces-catalog.yml"
+expect_clean "update-webview.yml: no job that builds or tests upstream Go code, or runs a repository script, holds a write scope or a secret (#983)" \
+	untrusted "$WORKFLOWS/update-webview.yml"
 
 echo
-echo "the catalog PR is opened with a token whose CI runs"
-expect_clean "sync-pieces-catalog.yml: create-pull-request takes RELEASE_PR_TOKEN alone, after a step that refuses without it" \
-	catalog-pr "$WORKFLOWS/sync-pieces-catalog.yml"
+echo "every PR opened with create-pull-request takes a token whose CI runs (#981, #983)"
+opens_pr=()
+opens_gh=()
+for f in "$WORKFLOWS"/*.yml; do
+	o="$(check opens-pr "$f")" || {
+		no "$(basename "$f"): opens-pr check ran" "the bun helper failed"
+		continue
+	}
+	[ -n "$o" ] || continue
+	if [ "$o" = gh ]; then opens_gh+=("$(basename "$f")"); continue; fi
+	opens_pr+=("$(basename "$f")")
+	expect_clean "$(basename "$f"): create-pull-request takes RELEASE_PR_TOKEN alone, after a step that refuses without it" catalog-pr "$f"
+done
+# Both bot PRs, found by the derivation, or it is broken rather than the
+# repository clean.
+if [ "$(printf '%s\n' "${opens_pr[@]}" | LC_ALL=C sort | tr '\n' ' ')" = "sync-pieces-catalog.yml update-webview.yml " ]; then
+	ok "the workflows that open a PR with create-pull-request are the catalog sync and the webview bump (#983)"
+else
+	no "the workflows that open a PR with create-pull-request are the catalog sync and the webview bump (#983)" "found: ${opens_pr[*]}"
+fi
+# A PR opened through gh is not read by catalog-pr. release.yml opens the
+# release PR that way, and its PAT is held instead by push_cred_check (read
+# exactly three times, for github.com alone) and its own refusal (#929).
+# Any other workflow doing so has to be argued for here.
+if [ "$(printf '%s\n' "${opens_gh[@]}" | sed '/^$/d' | LC_ALL=C sort | tr '\n' ' ')" = "release.yml " ]; then
+	ok "the only workflow that opens a PR through gh is release.yml (review of #983)"
+else
+	no "the only workflow that opens a PR through gh is release.yml (review of #983)" "found: ${opens_gh[*]}"
+fi
+copy="${WORK}/opens-gh.yml"
+# shellcheck disable=SC2016 # JavaScript source, not shell.
+FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+await Bun.write(process.env.TO, s.replace("\njobs:\n", () => "\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    steps:\n      - run: gh pr create --fill\n"));
+'
+if [ "$(check opens-pr "$copy")" = gh ]; then ok "reports: a workflow that opens a PR through gh (review of #983)"; else no "reports: a workflow that opens a PR through gh (review of #983)"; fi
 
 echo
 echo "each rule reports the hole it exists for (mutated copies)"
@@ -2347,9 +2408,18 @@ echo "no checkout leaves a write token or a secret on disk, and a push brings it
 	expect_caught 'the release cut job persisting its PAT on purpose (#982)' narrow "$WORKFLOWS/release.yml" \
 		$'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n          persist-credentials: false\n' $'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n          persist-credentials: true\n' \
 		'cut: checkout leaves the token in .git/config'
-	expect_caught 'a write-scoped job off the release path persisting its token (#982)' narrow "$WORKFLOWS/update-webview.yml" \
+	# The webview build job is read-only since #983, so a copy gives it its
+	# old write scope back first: what is tested is a write-scoped job off
+	# the release path, as before the split.
+	FROM="$WORKFLOWS/update-webview.yml" TO="${WORK}/uw-write.yml" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const old = "    timeout-minutes: 30\n    permissions:\n      contents: read\n";
+if (!s.includes(old)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(old, "    timeout-minutes: 30\n    permissions:\n      contents: write\n"));
+' || no "the webview build job write-scope copy could be made (update-webview.yml no longer has the text it mutates)"
+	expect_caught 'a write-scoped job off the release path persisting its token (#982)' narrow "${WORK}/uw-write.yml" \
 		$'        with:\n          persist-credentials: false\n      - uses: actions/setup-go@' '      - uses: actions/setup-go@' \
-		'update: checkout leaves the token in .git/config'
+		'build: checkout leaves the token in .git/config'
 	expect_caught 'a read-only job persisting a secret it checked out with (#982)' narrow "$WORKFLOWS/docker-build.yml" \
 		$'\n\n      - name: Set up Docker Buildx\n' $'\n        with:\n          token: ${{ secrets.SOME_PAT }}\n\n      - name: Set up Docker Buildx\n' \
 		'docker-build: checkout leaves the token in .git/config'
@@ -2569,6 +2639,348 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 		'          GIT_TERMINAL_PROMPT: "0"' '          GIT_TERMINAL_PROMPT: "1"' \
 		'GIT_TERMINAL_PROMPT is not 0'
 }
+
+echo
+echo "the webview_go bump PR is opened with the PAT, by a job that runs no upstream code (#983)"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	expect_caught 'the webview PR falling back to GITHUB_TOKEN again, as before #983' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		'          token: ${{ secrets.RELEASE_PR_TOKEN }}' '          token: ${{ secrets.WEBVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}' \
+		'publish: step Open / update the bump PR: token is "${{ secrets.WEBVIEW_BOT_TOKEN || secrets.GITHUB_TOKEN }}", not secrets.RELEASE_PR_TOKEN alone'
+	expect_caught 'the webview PR opened with the default token (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		$'          token: ${{ secrets.RELEASE_PR_TOKEN }}\n' '' \
+		'token is "the default github.token"'
+	expect_caught 'the webview PR with no refusal when its token is missing (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		'          if [ -z "$WEBVIEW_PR_TOKEN" ]; then' '          if false; then' \
+		'publish: step Open / update the bump PR: no earlier step refuses when RELEASE_PR_TOKEN is empty'
+	expect_caught 'a webview refusal that only warns (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		$'on this repository."\n            exit 1\n' $'on this repository."\n' \
+		'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+	expect_caught 'a webview refusal under a condition the PR step does not have (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		$'      - name: Refuse without the webview PR token\n' $'      - name: Refuse without the webview PR token\n        if: github.event_name == \x27schedule\x27\n' \
+		'no earlier step refuses when RELEASE_PR_TOKEN is empty'
+	expect_caught 'the PAT handed to the job that builds upstream code (#983)' catalog-pr "$WORKFLOWS/update-webview.yml" \
+		$'        env:\n          CGO_ENABLED: "1"\n        run: |\n          set -euo pipefail\n          go vet ./...' $'        env:\n          CGO_ENABLED: "1"\n          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n        run: |\n          set -euo pipefail\n          go vet ./...' \
+		'secrets.RELEASE_PR_TOKEN is read 3 times'
+	# ...and the same, seen by the rule that keeps upstream code away from
+	# any secret: the Go tests run with the PAT in reach.
+	expect_caught 'the build job reading the PAT while it runs the Go tests (#983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		$'        env:\n          CGO_ENABLED: "1"\n        run: |\n          set -euo pipefail\n          go vet ./...' $'        env:\n          CGO_ENABLED: "1"\n          GH_TOKEN: ${{ secrets.RELEASE_PR_TOKEN }}\n        run: |\n          set -euo pipefail\n          go vet ./...' \
+		'build: step Compat - build + vet + test (linux/amd64, cgo): builds or tests Go code (module code is compiled or run) in a job holding a secret other than GITHUB_TOKEN: go test ./...'
+	expect_caught 'the Go tests back in the job holding the PAT (#983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		'      - name: Open / update the bump PR' $'      - run: cd sidecar && go test ./...\n      - name: Open / update the bump PR' \
+		'publish: step 4: builds or tests Go code (module code is compiled or run) in a job holding a secret other than GITHUB_TOKEN'
+	expect_caught 'go -C running the Go tests in the job holding the PAT (review of #983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		'      - name: Open / update the bump PR' $'      - run: go -C sidecar test ./...\n      - name: Open / update the bump PR' \
+		'publish: step 4: builds or tests Go code'
+	expect_caught 'a repository script behind a directory in the job holding the PAT (review of #983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		'      - name: Open / update the bump PR' $'      - run: $GITHUB_WORKSPACE/scripts/vendor-webview.sh x\n      - name: Open / update the bump PR' \
+		'publish: step 4: runs a repository script'
+	expect_caught 'the vendoring script back in the job holding the PAT (#983)' untrusted "$WORKFLOWS/update-webview.yml" \
+		'      - name: Open / update the bump PR' $'      - run: scripts/vendor-webview.sh "$VERSION"\n      - name: Open / update the bump PR' \
+		'publish: step 4: runs a repository script in a job holding a secret other than GITHUB_TOKEN'
+	expect_caught 'the job holding the PAT checking out with its token persisted (#983)' narrow "$WORKFLOWS/update-webview.yml" \
+		$'        with:\n          persist-credentials: false\n\n      - uses: actions/download-artifact@' $'\n      - uses: actions/download-artifact@' \
+		'publish: checkout leaves the token in .git/config'
+}
+# The vendor dir carries a .gitattributes, which upload-artifact leaves out
+# unless it is asked to include hidden files; the PR would then delete it.
+hidden_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const up = (d.jobs?.build?.steps ?? []).filter((s) => String(s.uses ?? "").toLowerCase().startsWith("actions/upload-artifact@") && s.with?.name === "webview-bump");
+if (up.length !== 1) console.log("build uploads webview-bump " + up.length + " times, not once");
+else if (up[0].with["include-hidden-files"] !== true) console.log("the webview-bump upload leaves hidden files out (include-hidden-files is " + JSON.stringify(up[0].with["include-hidden-files"]) + ")");
+'
+}
+found="$(hidden_check "$WORKFLOWS/update-webview.yml")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "update-webview.yml: the vendored tree is uploaded with its hidden files (#983)"; else no "update-webview.yml: the vendored tree is uploaded with its hidden files (#983)" "$found"; fi
+copy="${WORK}/hidden.yml"
+if FROM="$WORKFLOWS/update-webview.yml" TO="$copy" OLD=$'          include-hidden-files: true\n' NEW='' bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+' && grep -qF 'leaves hidden files out' <<<"$(hidden_check "$copy")"; then
+	ok "reports: the vendored tree uploaded without its hidden files (#983)"
+else
+	no "reports: the vendored tree uploaded without its hidden files (#983)"
+fi
+# The job holding the PAT runs exactly these steps and nothing else
+# (review of #983): the refusal, a checkout, the artifact, the copy, and
+# create-pull-request, the two scripts line for line (comment and blank
+# lines aside), each step with no shell, working directory or env beyond
+# its own, and the job with no env, defaults, container or services. A
+# list of what may not run there (Go, a script) is never complete; this is
+# the list of what does.
+# pat_job_check <workflow>: one violation per line, nothing when clean.
+pat_job_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const out = [];
+const job = d.jobs?.publish ?? {};
+const code = (r) => String(r).split("\n").map((l) => l.trim()).filter((l) => l && !l.startsWith("#"));
+const scripts = [
+  // Refuse without the webview PR token
+  [
+    "if [ -z \"$WEBVIEW_PR_TOKEN\" ]; then",
+    "echo \"::error::RELEASE_PR_TOKEN is not set, so the webview_go bump PR would open without CI and could never merge (#983).\"",
+    "echo \"Add a fine-grained PAT with Contents: read and write, and Pull requests: read and write, on this repository.\"",
+    "exit 1",
+    "fi",
+  ],
+  // Put the vendored tree in place
+  [
+    "set -euo pipefail",
+    "in=\"$RUNNER_TEMP/webview-bump\"",
+    "if [ -n \"$(find \"$in\" -mindepth 1 -not -type f -not -type d -print -quit)\" ]; then",
+    "echo \"::error::the webview-bump artifact holds something other than files and directories\"",
+    "exit 1",
+    "fi",
+    "if [ -n \"$(find \"$in\" -mindepth 1 -iname .git -print -quit)\" ]; then",
+    "echo \"::error::the webview-bump artifact holds a .git\"",
+    "exit 1",
+    "fi",
+    "if [ -n \"$(LC_ALL=C find \"$in\" -mindepth 1 -name \x27*[!A-Za-z0-9._+-]*\x27 -print -quit)\" ]; then",
+    "echo \"::error::the webview-bump artifact holds a name outside A-Za-z0-9._+-\"",
+    "exit 1",
+    "fi",
+    "if [ \"$(find \"$in\" -mindepth 1 -maxdepth 1 | wc -l)\" != 3 ] || [ ! -f \"$in/go.mod\" ] || [ ! -f \"$in/go.sum\" ] || [ ! -d \"$in/webview_go\" ]; then",
+    "echo \"::error::the webview-bump artifact is not the vendor dir and the two module files\"",
+    "exit 1",
+    "fi",
+    "if [ \"$(cat \"$in/webview_go/UPSTREAM_VERSION\" 2>/dev/null)\" != \"$VERSION\" ]; then",
+    "echo \"::error::the vendored tree records another version than ${VERSION}\"",
+    "exit 1",
+    "fi",
+    "rm -rf sidecar/third_party/webview_go",
+    "cp -R \"$in/webview_go\" sidecar/third_party/webview_go",
+    "cp \"$in/go.mod\" \"$in/go.sum\" sidecar/",
+  ],
+];
+const want = [
+  { name: "Refuse without the webview PR token", run: scripts[0], env: ["WEBVIEW_PR_TOKEN"] },
+  { uses: "actions/checkout@" },
+  { uses: "actions/download-artifact@" },
+  { name: "Put the vendored tree in place", run: scripts[1], env: ["VERSION"] },
+  { uses: "peter-evans/create-pull-request@" },
+];
+for (const k of ["env", "defaults", "container", "services", "continue-on-error"]) if (job[k] !== undefined) out.push("publish: has " + k + ":");
+const steps = job.steps ?? [];
+if (steps.length !== want.length) out.push("publish: runs " + steps.length + " steps, not the " + want.length + " listed");
+steps.forEach((st, i) => {
+  const w = want[i] ?? {};
+  const label = "publish: step " + (st.name ?? st.uses ?? String(i));
+  for (const k of Object.keys(st)) if (!["name", "id", "if", "env", "run", "uses", "with"].includes(k)) out.push(label + " has " + k + ":");
+  if (w.uses !== undefined && !String(st.uses ?? "").toLowerCase().startsWith(w.uses)) out.push(label + " is not " + w.uses);
+  if (w.run !== undefined) {
+    if (st.name !== w.name || typeof st.run !== "string") out.push(label + " is not the step " + w.name);
+    else if (JSON.stringify(code(st.run)) !== JSON.stringify(w.run)) out.push(label + " runs a script other than the listed one: " + JSON.stringify(code(st.run).filter((l, n) => l !== w.run[n])));
+  } else if (st.run !== undefined) out.push(label + " runs a script");
+  const env = Object.keys(st.env ?? {});
+  if (JSON.stringify(env) !== JSON.stringify(w.env ?? [])) out.push(label + " has env " + JSON.stringify(env) + ", not " + JSON.stringify(w.env ?? []));
+});
+if (out.length) console.log(out.join("\n"));
+'
+}
+found="$(pat_job_check "$WORKFLOWS/update-webview.yml")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "update-webview.yml: the job holding the PAT runs exactly its listed steps (review of #983)"; else no "update-webview.yml: the job holding the PAT runs exactly its listed steps (review of #983)" "$found"; fi
+# pat_job_caught <label> <exact text> <replacement> <reason>
+pat_job_caught() {
+	local copy="${WORK}/pat-job.yml"
+	if ! FROM="$WORKFLOWS/update-webview.yml" TO="$copy" OLD="$2" NEW="$3" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
+'; then
+		no "PAT job mutant '$1' could be applied (update-webview.yml no longer has the text it mutates)"
+		return
+	fi
+	found="$(pat_job_check "$copy")" || found="the bun helper failed"
+	if grep -qF -- "$4" <<<"$found"; then ok "reports: $1"; else no "reports: $1, for the reason it exists" "wanted '${4}', got: ${found}"; fi
+}
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	pat_job_caught 'the artifact run by a step added to the job holding the PAT (review of #983)' \
+		'      - name: Open / update the bump PR' $'      - run: bash "$RUNNER_TEMP/webview-bump/webview_go/build.sh"\n      - name: Open / update the bump PR' \
+		'publish: runs 6 steps, not the 5 listed'
+	pat_job_caught 'the artifact run from inside the copy step (review of #983)' \
+		'          cp "$in/go.mod" "$in/go.sum" sidecar/' $'          cp "$in/go.mod" "$in/go.sum" sidecar/\n          bash "$in/webview_go/build.sh" || true' \
+		'publish: step Put the vendored tree in place runs a script other than the listed one'
+	pat_job_caught 'make run in place of the copy (review of #983)' \
+		'          rm -rf sidecar/third_party/webview_go' '          make -C sidecar' \
+		'runs a script other than the listed one'
+	pat_job_caught 'an action of another name in the job holding the PAT (review of #983)' \
+		'        uses: peter-evans/create-pull-request@' '        uses: evil/create-pull-request@' \
+		'publish: step Open / update the bump PR is not peter-evans/create-pull-request@'
+	pat_job_caught 'the copy run from another directory (review of #983)' \
+		$'      - name: Put the vendored tree in place\n' $'      - name: Put the vendored tree in place\n        working-directory: scripts\n' \
+		'publish: step Put the vendored tree in place has working-directory:'
+	pat_job_caught 'env for every step of the job holding the PAT (review of #983)' \
+		$'    timeout-minutes: 15\n    permissions:\n      contents: read\n    steps:\n      # Refuse' $'    timeout-minutes: 15\n    env:\n      GOFLAGS: -mod=mod\n    permissions:\n      contents: read\n    steps:\n      # Refuse' \
+		'publish: has env:'
+}
+# A job that runs past timeout-minutes is cancelled, not failed, so the
+# report job takes a cancelled build or publish too (review of #983).
+report_check() {
+	# shellcheck disable=SC2016 # JavaScript source, not shell.
+	FILE="$1" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const c = String(d.jobs?.report?.if ?? "");
+for (const j of ["build", "publish"]) for (const r of ["failure", "cancelled"])
+  if (!c.includes("needs." + j + ".result") || !c.includes(r)) { console.log("the report job does not run on a " + r + " " + j + ": " + c); }
+if (!/^always\(\) && /.test(c)) console.log("the report job if: does not start with always(), so a cancelled job skips it: " + c);
+'
+}
+found="$(report_check "$WORKFLOWS/update-webview.yml")" || found="the bun helper failed"
+if [ -z "$found" ]; then ok "update-webview.yml: a failed or timed-out bump files the tracking issue (review of #983)"; else no "update-webview.yml: a failed or timed-out bump files the tracking issue (review of #983)" "$found"; fi
+copy="${WORK}/report.yml"
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+if FROM="$WORKFLOWS/update-webview.yml" TO="$copy" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+const m = /    if: always\(\) && needs\.check\.outputs\.changed == .true. && .*\n/.exec(s);
+if (!m) process.exit(2);
+await Bun.write(process.env.TO, s.replace(m[0], () => "    if: failure() && needs.check.outputs.changed == \x27true\x27\n"));
+' && grep -qF 'does not start with always()' <<<"$(report_check "$copy")"; then
+	ok "reports: the report job back on failure() alone, which a timeout skips (review of #983)"
+else
+	no "reports: the report job back on failure() alone, which a timeout skips (review of #983)"
+fi
+# check, executed verbatim with a dispatch input (so nothing is fetched):
+# the pinned version, which the build job writes into the PR, is held to the
+# same alphabet as the new one (security review of #983).
+CHECK_STEP="$(FILE="$WORKFLOWS/update-webview.yml" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const st = (d.jobs?.check?.steps ?? []).find((s) => s.id === "cmp");
+if (!st || typeof st.run !== "string") process.exit(2);
+process.stdout.write(st.run);
+')" || CHECK_STEP=""
+# check_case <label> <ok|refused> <pinned version file content>
+check_case() {
+	local d="${WORK}/wvcheck" rc=0
+	rm -rf "$d" && mkdir -p "$d/ws/sidecar/third_party/webview_go"
+	printf '%s' "$3" >"$d/ws/sidecar/third_party/webview_go/UPSTREAM_VERSION"
+	: >"$d/out"
+	(cd "$d/ws" && env -i PATH="$PATH" GITHUB_OUTPUT="$d/out" INPUT_VERSION=v0.0.0-20260101000000-abcdef123456 MODULE=github.com/webview/webview_go bash -e -c "${CHECK_STEP_UNDER_TEST:-$CHECK_STEP}") >"$d/log" 2>&1 || rc=$?
+	local ok_=0
+	case "$2" in
+	ok) [ "$rc" -eq 0 ] && grep -qxF 'changed=true' "$d/out" && grep -qxF "current=$3" "$d/out" && ok_=1 ;;
+	refused) [ "$rc" -ne 0 ] && ! grep -q '^changed=' "$d/out" && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then ok "webview check: $1"; else no "webview check: $1" "exit ${rc}; out: $(cat "$d/out"); log: $(cat "$d/log")"; fi
+}
+if [ -z "$CHECK_STEP" ]; then
+	no "found update-webview.yml check: cmp"
+else
+	check_case 'a plain pinned version is read' ok 'v0.0.0-20240101000000-0123456789ab'
+	check_case 'a pinned version carrying another output line is refused' refused $'v1\nchanged=false'
+	check_case 'a pinned version with shell text in it is refused' refused 'v1$(id)'
+	check_case 'an empty pinned version is refused' refused ''
+	mutated="$(SRC="$CHECK_STEP" bun -e '
+const s = process.env.SRC;
+const m = /case "\$current" in\n[^\n]*\nesac\n/.exec(s);
+if (!m) process.exit(2);
+process.stdout.write(s.replace(m[0], () => ""));
+')" || mutated=""
+	if [ -z "$mutated" ]; then
+		no "webview check mutant could be applied (the step no longer has the text it mutates)"
+	elif grep -q "^  FAIL" <<<"$(CHECK_STEP_UNDER_TEST="$mutated" check_case 'a pinned version carrying another output line is refused' refused $'v1\nchanged=false')"; then
+		ok "reports: the pinned version taken unchecked again (security review of #983)"
+	else
+		no "reports: the pinned version taken unchecked again (security review of #983)" "the case passed a step with this hole"
+	fi
+fi
+# The copy into the checkout, executed verbatim against artifacts shaped as
+# a job running upstream code could shape them. Each case runs in a fixture
+# workspace of its own; an accepted artifact must replace the vendor dir
+# exactly (a file upstream dropped is dropped, the hidden one kept), and a
+# refused one must fail with an ::error:: and leave the checkout untouched.
+COPY_STEP="$(FILE="$WORKFLOWS/update-webview.yml" bun -e '
+const d = Bun.YAML.parse(await Bun.file(process.env.FILE).text());
+const st = (d.jobs?.publish?.steps ?? []).find((s) => s.name === "Put the vendored tree in place");
+if (!st || typeof st.run !== "string") process.exit(2);
+process.stdout.write(st.run);
+')" || COPY_STEP=""
+# copy_case <label> <ok|refused> <shell run in the artifact dir to shape it>
+copy_case() {
+	local label="$1" want="$2" shape="$3" d="${WORK}/wvcopy"
+	rm -rf "$d" && mkdir -p "$d/ws/sidecar/third_party/webview_go/libs" "$d/tmp/webview-bump/webview_go/libs/webview"
+	printf 'old\n' >"$d/ws/sidecar/third_party/webview_go/dropped.go"
+	printf 'old attrs\n' >"$d/ws/sidecar/third_party/webview_go/.gitattributes"
+	printf 'module old\n' >"$d/ws/sidecar/go.mod"
+	printf 'old sum\n' >"$d/ws/sidecar/go.sum"
+	printf 'package webview\n' >"$d/tmp/webview-bump/webview_go/webview.go"
+	printf '* -text\n' >"$d/tmp/webview-bump/webview_go/.gitattributes"
+	printf 'v1.2.3\n' >"$d/tmp/webview-bump/webview_go/UPSTREAM_VERSION"
+	printf 'header\n' >"$d/tmp/webview-bump/webview_go/libs/webview/webview.h"
+	printf 'module new\n' >"$d/tmp/webview-bump/go.mod"
+	printf 'new sum\n' >"$d/tmp/webview-bump/go.sum"
+	(cd "$d/tmp/webview-bump" && eval "$shape") || {
+		no "webview copy: ${label} (the fixture could not be shaped)"
+		return
+	}
+	cp -R "$d/ws" "$d/before"
+	local rc=0
+	(cd "$d/ws" && env -i PATH="$PATH" RUNNER_TEMP="$d/tmp" VERSION=v1.2.3 bash -e -c "${COPY_STEP_UNDER_TEST:-$COPY_STEP}") >"$d/log" 2>&1 || rc=$?
+	local ok_=0
+	case "$want" in
+	ok) [ "$rc" -eq 0 ] && diff -r "$d/tmp/webview-bump/webview_go" "$d/ws/sidecar/third_party/webview_go" >/dev/null &&
+		cmp -s "$d/tmp/webview-bump/go.mod" "$d/ws/sidecar/go.mod" && cmp -s "$d/tmp/webview-bump/go.sum" "$d/ws/sidecar/go.sum" && ok_=1 ;;
+	refused) [ "$rc" -ne 0 ] && grep -q '^::error::' "$d/log" && diff -r "$d/before" "$d/ws" >/dev/null && ok_=1 ;;
+	esac
+	if [ "$ok_" = 1 ]; then ok "webview copy: ${label}"; else no "webview copy: ${label}" "exit ${rc}; log: $(cat "$d/log")"; fi
+}
+if [ -z "$COPY_STEP" ]; then
+	no "found update-webview.yml publish: Put the vendored tree in place"
+else
+	copy_case 'the vendored tree replaces the old one, its hidden file kept and a dropped file dropped' ok ':'
+	copy_case 'a link inside the vendored tree is refused' refused 'ln -s /etc/passwd webview_go/libs/evil.h'
+	copy_case 'a module file that is a link is refused' refused 'rm go.sum && ln -s /etc/passwd go.sum'
+	copy_case 'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit'
+	copy_case 'a .git file is refused' refused 'printf "gitdir: /tmp/x\n" >webview_go/.git'
+	copy_case 'an extra file beside the tree is refused' refused 'printf x >evil.sh'
+	copy_case 'a missing go.sum is refused' refused 'rm go.sum'
+	copy_case 'the vendor dir as a file is refused' refused 'rm -r webview_go && printf x >webview_go'
+	# Review of #983: case, a newline in a name, and the version recorded.
+	copy_case 'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout'
+	copy_case 'a name with a newline in it, faking the listing, is refused' refused 'rm -r webview_go go.mod go.sum && mkdir "$(printf "go.mod f\ngo.sum f\nwebview_go")"'
+	copy_case 'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
+	copy_case 'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
+	copy_case 'a tree recording no version is refused' refused 'rm webview_go/UPSTREAM_VERSION'
+	# copy_mutant <label> <exact text> <replacement> <copy_case arguments...>
+	copy_mutant() {
+		local label="$1" old="$2" new="$3"
+		shift 3
+		local mutated
+		mutated="$(OLD="$old" NEW="$new" SRC="$COPY_STEP" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, () => process.env.NEW));')" || {
+			no "webview copy mutant '${label}' could be applied (the step no longer has the text it mutates)"
+			return
+		}
+		local res; res="$(COPY_STEP_UNDER_TEST="$mutated" copy_case "$@")"; if grep -q "^  FAIL" <<<"$res"; then ok "reports: ${label}"; else no "reports: ${label}" "the case passed a step with this hole"; fi
+	}
+	# shellcheck disable=SC2016 # literal workflow text, not shell.
+	{
+		copy_mutant 'the webview copy taking links (#983)' \
+			'-not -type f -not -type d -print -quit' '-false -print -quit' \
+			'a link inside the vendored tree is refused' refused 'ln -s /etc/passwd webview_go/libs/evil.h'
+		copy_mutant 'the webview copy taking a .git (#983)' \
+			'-iname .git -print -quit' '-iname .nothing -print -quit' \
+			'a nested .git directory is refused' refused 'mkdir -p webview_go/libs/.git/hooks && printf x >webview_go/libs/.git/hooks/pre-commit'
+		copy_mutant 'the webview copy taking any shape of artifact (#983)' \
+			'if [ "$(find "$in" -mindepth 1 -maxdepth 1 | wc -l)" != 3 ] || [ ! -f "$in/go.mod" ] || [ ! -f "$in/go.sum" ] || [ ! -d "$in/webview_go" ]; then' 'if false; then' \
+			'an extra file beside the tree is refused' refused 'printf x >evil.sh'
+		copy_mutant 'the webview copy matching .git in one case only (review of #983)' \
+			'-iname .git -print -quit' '-name .git -print -quit' \
+			'a .GIT directory, which a case-insensitive git reads as .git, is refused' refused 'mkdir -p webview_go/libs/.GIT/hooks && printf x >webview_go/libs/.GIT/hooks/post-checkout'
+		copy_mutant 'the webview copy taking any name (review of #983)' \
+			"-name '*[!A-Za-z0-9._+-]*' -print -quit" '-false -print -quit' \
+			'a name with a space in it is refused' refused 'printf x >"webview_go/a b.go"'
+		copy_mutant 'the webview copy taking a tree of another version (review of #983)' \
+			'!= "$VERSION" ]; then' '= x ]; then' \
+			'a tree recording another version is refused' refused 'printf "v9.9.9\n" >webview_go/UPSTREAM_VERSION'
+	}
+fi
 
 echo
 echo "${pass} passed, ${fail} failed"
