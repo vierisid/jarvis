@@ -2,7 +2,7 @@ bun test v1.4.2 (744846f84)
 
 src/daemon/api-onboarding-hosted.test.ts:
 Database initialized at: :memory:
-(pass) POST /api/onboarding/setup on a hosted install > drops provider config a bypassing client sends, and keeps the plan defaults live [10.67ms]
+(pass) POST /api/onboarding/setup on a hosted install > drops provider config a bypassing client sends, and keeps the plan defaults live [10.74ms]
 Database initialized at: :memory:
 [LLM] Built provider 'usejarvis_ai' (kind=usejarvis_ai)
 [LLM] Tier 'conversation' references unregistered provider 'usejarvis_ai' - skipping.
@@ -10,7 +10,7 @@ Database initialized at: :memory:
 [LLM] Tier 'medium' references unregistered provider 'usejarvis_ai' - skipping.
 [LLM] Tier 'low' references unregistered provider 'usejarvis_ai' - skipping.
 [LLM] Providers active after hot-reload: usejarvis_ai
-(pass) POST /api/onboarding/setup on a hosted install > a clean hosted payload (mode + enabled only) reports nothing dropped [10.98ms]
+(pass) POST /api/onboarding/setup on a hosted install > a clean hosted payload (mode + enabled only) reports nothing dropped [10.93ms]
 Database initialized at: :memory:
 [LLM] Built provider 'usejarvis_ai' (kind=usejarvis_ai)
 [LLM] Tier 'conversation' references unregistered provider 'usejarvis_ai' - skipping.
@@ -18,51 +18,51 @@ Database initialized at: :memory:
 [LLM] Tier 'medium' references unregistered provider 'usejarvis_ai' - skipping.
 [LLM] Tier 'low' references unregistered provider 'usejarvis_ai' - skipping.
 [LLM] Providers active after hot-reload: usejarvis_ai
-(pass) POST /api/onboarding/setup on a hosted install > still completes setup, so onboarding does not replay next launch [7.65ms]
+(pass) POST /api/onboarding/setup on a hosted install > still completes setup, so onboarding does not replay next launch [8.03ms]
 Database initialized at: :memory:
-(pass) POST /api/onboarding/setup on a hosted install > the tts whitelist admits enabled ONLY — a smuggled provider is still dropped [6.84ms]
+(pass) POST /api/onboarding/setup on a hosted install > the tts whitelist admits enabled ONLY — a smuggled provider is still dropped [7.24ms]
 Database initialized at: :memory:
 [LLM] Built provider 'anthropic' (kind=anthropic)
 [LLM] llm.default ('anthropic:claude-x') references unregistered provider 'anthropic' - skipping.
 [LLM] Providers active after hot-reload: anthropic
-(pass) POST /api/onboarding/setup on a hosted install > a self-hosted install is untouched by the guard [18.92ms]
+(pass) POST /api/onboarding/setup on a hosted install > a self-hosted install is untouched by the guard [11.71ms]
 
 src/daemon/user-settings.test.ts:
 Database initialized at: :memory:
-(pass) user-settings > workflows: file-provided SYSTEM path keys win over a saved user section [8.01ms]
+(pass) user-settings > workflows: file-provided SYSTEM path keys win over a saved user section [7.64ms]
 Database initialized at: :memory:
-(pass) user-settings > save -> merge round-trips a section into the config [10.69ms]
+(pass) user-settings > save -> merge round-trips a section into the config [10.12ms]
 Database initialized at: :memory:
-(pass) user-settings > object sections merge OVER defaults so old rows never strip new fields [7.05ms]
+(pass) user-settings > object sections merge OVER defaults so old rows never strip new fields [7.51ms]
 Database initialized at: :memory:
-(pass) user-settings > absent sections leave the config untouched [6.91ms]
+(pass) user-settings > absent sections leave the config untouched [6.93ms]
 Database initialized at: :memory:
 [UserSettings] Corrupt JSON for cfg.tts; ignoring stored value
 [UserSettings] Corrupt JSON for cfg.tts; ignoring stored value
 [UserSettings] Corrupt JSON for cfg.tts; ignoring stored value
 (pass) user-settings > corrupt stored JSON is ignored, not fatal [6.79ms]
 Database initialized at: :memory:
-(pass) user-settings > import: UNCHANGED file never clobbers dashboard edits [7.48ms]
+(pass) user-settings > import: UNCHANGED file never clobbers dashboard edits [7.13ms]
 Database initialized at: :memory:
 [UserSettings] Imported stt credential(s) from config.yaml into the encrypted keychain — the plaintext value can be removed from the file
-(pass) user-settings > import: a provider-less stt row is stamped with the effective provider [9.72ms]
+(pass) user-settings > import: a provider-less stt row is stamped with the effective provider [11.47ms]
 Database initialized at: :memory:
 [UserSettings] Imported stt credential(s) from config.yaml into the encrypted keychain — the plaintext value can be removed from the file
-(pass) user-settings > import: an explicit stt provider in the file is imported unchanged [11.70ms]
+(pass) user-settings > import: an explicit stt provider in the file is imported unchanged [12.53ms]
 Database initialized at: :memory:
-(pass) user-settings > import: an EDITED file value applies over the DB (editor-less sections stay tunable) [7.95ms]
+(pass) user-settings > import: an EDITED file value applies over the DB (editor-less sections stay tunable) [7.77ms]
 Database initialized at: :memory:
-(pass) user-settings > import: pre-tracking DB values are baselined, not clobbered, then file edits apply [7.53ms]
+(pass) user-settings > import: pre-tracking DB values are baselined, not clobbered, then file edits apply [7.45ms]
 Database initialized at: :memory:
-(pass) user-settings > null rawYaml (no config file) imports nothing [7.27ms]
+(pass) user-settings > null rawYaml (no config file) imports nothing [6.50ms]
 Database initialized at: :memory:
-(pass) user-settings > section-saved listener fires AFTER the write, with the section name [7.84ms]
+(pass) user-settings > section-saved listener fires AFTER the write, with the section name [6.92ms]
 Database initialized at: :memory:
-(pass) user-settings > saveGoogleSettings notifies the listener with 'google' [9.10ms]
+(pass) user-settings > saveGoogleSettings notifies the listener with 'google' [6.52ms]
 Database initialized at: :memory:
 [UserSettings] Section-saved listener failed for 'active_role': 214 |     expect(events).toEqual(['google']);
 215 |   });
-216 | 
+216 |
 217 |   test('a throwing listener never fails the save', () => {
 218 |     setSectionSavedListener(() => {
 219 |       throw new Error('listener boom');
@@ -73,173 +73,173 @@ error: listener boom
       at saveUserSection (/home/vierisid/.cache/codex/jarvis-on-b-01-verify/src/daemon/user-settings.ts:109:3)
       at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-01-verify/src/daemon/user-settings.test.ts:222:68)
 
-(pass) user-settings > a throwing listener never fails the save [7.30ms]
+(pass) user-settings > a throwing listener never fails the save [7.21ms]
 Database initialized at: :memory:
-(pass) user-settings > setSectionSavedListener(null) detaches [7.43ms]
+(pass) user-settings > setSectionSavedListener(null) detaches [6.82ms]
 Database initialized at: :memory:
-(pass) user-settings > google: DB is only a fallback - a file-provided client always wins [7.25ms]
+(pass) user-settings > google: DB is only a fallback - a file-provided client always wins [6.83ms]
 Database initialized at: :memory:
-(pass) user-settings > persistUserPatch: a provider-less patch NEVER stamps a provider into the row [10.30ms]
+(pass) user-settings > persistUserPatch: a provider-less patch NEVER stamps a provider into the row [9.59ms]
 Database initialized at: :memory:
-(pass) user-settings > persistUserPatch: merges over the STORED row, not the in-memory merged section [10.24ms]
+(pass) user-settings > persistUserPatch: merges over the STORED row, not the in-memory merged section [10.15ms]
 Database initialized at: :memory:
-(pass) user-settings > persistUserPatch: an explicit provider in the patch is recorded as intent [8.10ms]
+(pass) user-settings > persistUserPatch: an explicit provider in the patch is recorded as intent [7.35ms]
 Database initialized at: :memory:
-(pass) user-settings > persistUserPatch: notifies the section-saved listener (hot-reload choke point) [8.69ms]
+(pass) user-settings > persistUserPatch: notifies the section-saved listener (hot-reload choke point) [8.60ms]
 Database initialized at: :memory:
-(pass) user-settings > persistUserPatch: keychain key survives an {enabled}-only patch [10.96ms]
+(pass) user-settings > persistUserPatch: keychain key survives an {enabled}-only patch [9.99ms]
 Database initialized at: :memory:
-(pass) user-settings > persistUserPatch: switching STT provider keeps BOTH stored keys [11.09ms]
+(pass) user-settings > persistUserPatch: switching STT provider keeps BOTH stored keys [10.26ms]
 Database initialized at: :memory:
-(pass) user-settings > persistUserPatch: a patch touching one sub-block does not delete a sibling key [12.14ms]
+(pass) user-settings > persistUserPatch: a patch touching one sub-block does not delete a sibling key [12.08ms]
 Database initialized at: :memory:
-(pass) user-settings > end to end: legacy file -> import -> discard -> merge equals old behavior [20.52ms]
+(pass) user-settings > end to end: legacy file -> import -> discard -> merge equals old behavior [19.57ms]
 Database initialized at: :memory:
-(pass) persistPlainUserPatch > persists only the patched key, not the merged defaults [7.93ms]
+(pass) persistPlainUserPatch > persists only the patched key, not the merged defaults [7.57ms]
 Database initialized at: :memory:
-(pass) persistPlainUserPatch > merges over an existing row instead of replacing it [6.13ms]
+(pass) persistPlainUserPatch > merges over an existing row instead of replacing it [5.64ms]
 
 src/onboarding-next/journey/journey.test.ts:
-(pass) versioned journey and legacy compatibility > factories have no startup effects, and repeated reads retain one durable identity [9.12ms]
-(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":false,"profile_completed":true,"tutorial_completed":true,"tutorial_dismissed":false,"tutorial_progress_step":null} [14.48ms]
-(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":true,"profile_completed":false,"tutorial_completed":false,"tutorial_dismissed":true,"tutorial_progress_step":null} [14.73ms]
-(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [7.29ms]
-(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [6.89ms]
-(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [6.82ms]
-(pass) versioned journey and legacy compatibility > unreachable legacy status never writes incomplete progress [4.35ms]
-(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [4.52ms]
-(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [3.71ms]
-(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [4.09ms]
-(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {broken [7.51ms]
-(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: null [11.86ms]
-(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {} [8.49ms]
-(pass) versioned journey and legacy compatibility > future fields survive transitions and future schema/state values are read-only [26.83ms]
-(pass) revision checks, retry identities and scope > two tabs/connections race: one wins; stale writer receives the latest snapshot [11.54ms]
-(pass) revision checks, retry identities and scope > independent OS processes cannot both commit the same revision [28.07ms]
-(pass) revision checks, retry identities and scope > lost acknowledgement retry works after restart and later progress, changed key body conflicts [15.76ms]
-(pass) revision checks, retry identities and scope > unauthorized readers never touch persistence; actor/project isolation rejects copied identities [20.09ms]
-(pass) revision checks, retry identities and scope > client-supplied ownership and acknowledgements are rejected [7.10ms]
-(pass) revision checks, retry identities and scope > mutation without a body cannot initialize a journey [4.12ms]
-(pass) revision checks, retry identities and scope > a failed write rolls back; the same request can be retried [11.42ms]
-(pass) revision checks, retry identities and scope > cross-tab reconciliation ignores old snapshots and retains progress on outages without allowing writes [13.98ms]
-(pass) acknowledgement boundaries and scoped tutorial replay > setup acknowledgement is required before Google; interview acknowledgement before tour [28.92ms]
-(pass) acknowledgement boundaries and scoped tutorial replay > tour completion leaves activation visible; Explore first finishes without a workflow [38.97ms]
-(pass) acknowledgement boundaries and scoped tutorial replay > pending job survives replay/restart, including a result arriving during replay [46.94ms]
-(pass) acknowledgement boundaries and scoped tutorial replay > an accepted job acknowledgement can arrive after tutorial replay starts [37.46ms]
-(pass) acknowledgement boundaries and scoped tutorial replay > tutorial reset preserves completed setup, profile/connection settings and exact draft; disabling provider leaves legacy readable [56.38ms]
+(pass) versioned journey and legacy compatibility > factories have no startup effects, and repeated reads retain one durable identity [10.37ms]
+(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":false,"profile_completed":true,"tutorial_completed":true,"tutorial_dismissed":false,"tutorial_progress_step":null} [19.66ms]
+(pass) versioned journey and legacy compatibility > completed and skipped legacy users are not reenrolled: {"setup_completed":true,"setup_skipped_profile":true,"profile_completed":false,"tutorial_completed":false,"tutorial_dismissed":true,"tutorial_progress_step":null} [14.67ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [7.14ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [10.90ms]
+(pass) versioned journey and legacy compatibility > maps incomplete legacy records conservatively [12.61ms]
+(pass) versioned journey and legacy compatibility > unreachable legacy status never writes incomplete progress [6.32ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [6.12ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [6.07ms]
+(pass) versioned journey and legacy compatibility > malformed status never creates a new journey [5.45ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {broken [11.70ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: null [11.02ms]
+(pass) versioned journey and legacy compatibility > unreadable stored JSON is not treated as missing: {} [10.94ms]
+(pass) versioned journey and legacy compatibility > future fields survive transitions and future schema/state values are read-only [39.47ms]
+(pass) revision checks, retry identities and scope > two tabs/connections race: one wins; stale writer receives the latest snapshot [16.15ms]
+(pass) revision checks, retry identities and scope > independent OS processes cannot both commit the same revision [31.63ms]
+(pass) revision checks, retry identities and scope > lost acknowledgement retry works after restart and later progress, changed key body conflicts [23.71ms]
+(pass) revision checks, retry identities and scope > unauthorized readers never touch persistence; actor/project isolation rejects copied identities [26.41ms]
+(pass) revision checks, retry identities and scope > client-supplied ownership and acknowledgements are rejected [9.63ms]
+(pass) revision checks, retry identities and scope > mutation without a body cannot initialize a journey [6.31ms]
+(pass) revision checks, retry identities and scope > a failed write rolls back; the same request can be retried [15.53ms]
+(pass) revision checks, retry identities and scope > cross-tab reconciliation ignores old snapshots and retains progress on outages without allowing writes [23.16ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > setup acknowledgement is required before Google; interview acknowledgement before tour [53.27ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > tour completion leaves activation visible; Explore first finishes without a workflow [64.30ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > pending job survives replay/restart, including a result arriving during replay [81.90ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > an accepted job acknowledgement can arrive after tutorial replay starts [65.89ms]
+(pass) acknowledgement boundaries and scoped tutorial replay > tutorial reset preserves completed setup, profile/connection settings and exact draft; disabling provider leaves legacy readable [98.38ms]
 
 src/onboarding-next/journey/module-boundary.test.ts:
-(pass) contract fixture host bundles with zero modules, journey only, and journey removed [24.09ms]
+(pass) contract fixture host bundles with zero modules, journey only, and journey removed [25.31ms]
 
 src/onboarding-next/journey/settings.test.ts:
-(pass) real vault/user-settings/profile services remain readable after provider restart and rollback [214.68ms]
+(pass) real vault/user-settings/profile services remain readable after provider restart and rollback [298.90ms]
 
 ui/src/v2/onboarding/external-open.test.ts:
-(pass) openedOrHandedOff > a real window is a success, host routing or not [2.11ms]
-(pass) openedOrHandedOff > null with the host routing is a hand-off, not a failure [0.04ms]
+(pass) openedOrHandedOff > a real window is a success, host routing or not [0.05ms]
+(pass) openedOrHandedOff > null with the host routing is a hand-off, not a failure [0.02ms]
 (pass) openedOrHandedOff > null with no host routing is the one real failure [0.01ms]
 (pass) openedOrHandedOff > only the exact flag counts [0.01ms]
-(pass) openedOrHandedOff > no window at all (server render) is not a hand-off
-(pass) openExternal > severs the opener instead of passing noopener [0.07ms]
+(pass) openedOrHandedOff > no window at all (server render) is not a hand-off [0.01ms]
+(pass) openExternal > severs the opener instead of passing noopener [0.05ms]
 (pass) openExternal > a blocked popup comes back as null [0.02ms]
-(pass) openExternal > survives a browser that refuses the opener write [0.08ms]
-(pass) host-injection contract > the sidecar injects the flag this module reads [0.14ms]
-(pass) host-injection contract > every platform reports whether it installed routing [0.11ms]
-(pass) host-injection contract > the platforms that need a popup setting both set AND verify it [0.06ms]
+(pass) openExternal > survives a browser that refuses the opener write [0.05ms]
+(pass) host-injection contract > the sidecar injects the flag this module reads [0.11ms]
+(pass) host-injection contract > every platform reports whether it installed routing [0.08ms]
+(pass) host-injection contract > the platforms that need a popup setting both set AND verify it [0.05ms]
 
 ui/src/v2/onboarding/llm-setup.test.ts:
-(pass) Anthropic onboarding model selection > omits the curated model when testing a custom endpoint [0.03ms]
-(pass) Anthropic onboarding model selection > keeps the selected model for official Anthropic and other providers [0.02ms]
-(pass) Anthropic onboarding model selection > keeps a model picked from the discovered gateway catalog [0.02ms]
+(pass) Anthropic onboarding model selection > omits the curated model when testing a custom endpoint [0.02ms]
+(pass) Anthropic onboarding model selection > keeps the selected model for official Anthropic and other providers [0.01ms]
+(pass) Anthropic onboarding model selection > keeps a model picked from the discovered gateway catalog
 (pass) Anthropic onboarding model selection > re-discovers when the selection is not in the known catalog
-(pass) Anthropic onboarding model selection > saves the validated gateway model ahead of the curated selection [0.02ms]
-(pass) NVIDIA live catalog selection > keeps a selection that remains in the live catalog [0.02ms]
-(pass) NVIDIA live catalog selection > replaces a retired selection with the preferred live model [0.02ms]
+(pass) Anthropic onboarding model selection > saves the validated gateway model ahead of the curated selection [0.01ms]
+(pass) NVIDIA live catalog selection > keeps a selection that remains in the live catalog [0.01ms]
+(pass) NVIDIA live catalog selection > replaces a retired selection with the preferred live model [0.03ms]
 (pass) NVIDIA live catalog selection > tries the next preferred chat model before the alphabetical first [0.01ms]
 (pass) NVIDIA live catalog selection > falls back predictably when no preferred model is available [0.01ms]
 
 ui/src/v2/onboarding/permission-rows.test.ts:
-(pass) displayRows > macOS shows all four, ordered by what fails silently first [0.03ms]
-(pass) displayRows > Linux shows nothing at all [0.02ms]
-(pass) displayRows > Windows shows only the microphone link, with no state and its own copy [0.06ms]
+(pass) displayRows > macOS shows all four, ordered by what fails silently first [0.04ms]
+(pass) displayRows > Linux shows nothing at all [0.03ms]
+(pass) displayRows > Windows shows only the microphone link, with no state and its own copy [0.05ms]
 (pass) displayRows > a row with no readable state is never marked required [0.02ms]
 (pass) displayRows > a permission name this build has never heard of is skipped [0.03ms]
 (pass) displayRows > each row carries how it is obtained, so the button can say so [0.03ms]
 (pass) displayRows > an unavailable report yields no rows [0.01ms]
-(pass) displayRows > the screen offers exactly four permissions, and required is exactly two [0.06ms]
-(pass) outstandingRequired > names only the rows that fail silently and are not granted [0.07ms]
-(pass) outstandingRequired > the microphone is never outstanding -- macOS asks for it in the moment [0.04ms]
-(pass) outstandingRequired > nothing is outstanding once the two are granted [0.02ms]
+(pass) displayRows > the screen offers exactly four permissions, and required is exactly two [0.05ms]
+(pass) outstandingRequired > names only the rows that fail silently and are not granted [0.09ms]
+(pass) outstandingRequired > the microphone is never outstanding -- macOS asks for it in the moment [0.05ms]
+(pass) outstandingRequired > nothing is outstanding once the two are granted [0.03ms]
 (pass) allSettled > false while any readable row is ungranted [0.05ms]
-(pass) allSettled > true when every readable row is granted [0.02ms]
+(pass) allSettled > true when every readable row is granted [0.03ms]
 (pass) allSettled > a stateless row does not hold it open forever [0.02ms]
-(pass) needsRestartNote > silent until the user has actually been sent to that pane [0.01ms]
-(pass) needsRestartNote > shown when they have been and the row is still not granted [0.02ms]
-(pass) needsRestartNote > gone once the row is granted [0.02ms]
-(pass) unavailableCopy > every reason has its own sentence [0.06ms]
+(pass) needsRestartNote > silent until the user has actually been sent to that pane [0.02ms]
+(pass) needsRestartNote > shown when they have been and the row is still not granted [0.01ms]
+(pass) needsRestartNote > gone once the row is granted
+(pass) unavailableCopy > every reason has its own sentence [0.07ms]
 (pass) unavailableCopy > offline and no_sidecar do not say the same thing
-(pass) requestFeedback > a granted-by-dialog request says nothing [0.03ms]
+(pass) requestFeedback > a granted-by-dialog request says nothing [0.04ms]
 (pass) requestFeedback > a pane that opened says nothing [0.01ms]
 (pass) requestFeedback > an available:false answer is never silent [0.03ms]
-(pass) requestFeedback > a refusal carries the reason the desktop app gave [0.01ms]
-(pass) requestFeedback > a pane that did not open names where to go by hand [0.01ms]
+(pass) requestFeedback > a refusal carries the reason the desktop app gave [0.02ms]
+(pass) requestFeedback > a pane that did not open names where to go by hand [0.02ms]
 (pass) requestFeedback > a launcher error is passed through, not swallowed [0.01ms]
 (pass) requestFeedback > an unreadable body is reported rather than treated as success
 
 ui/src/v2/onboarding/OnboardingWizard.steps.test.ts:
 (pass) stepsFor > self-hosted keeps every screen (configuring an LLM is mandatory there) [0.04ms]
-(pass) stepsFor > hosted drops exactly brain, hearing and speaking — nothing else [0.05ms]
+(pass) stepsFor > hosted drops exactly brain, hearing and speaking — nothing else [0.06ms]
 (pass) stepsFor > the steps that survive keep their original relative order [0.04ms]
-(pass) stepsFor > every resume target exists on both installs [0.08ms]
+(pass) stepsFor > every resume target exists on both installs [0.11ms]
 (pass) stepGatedOnProbe > unknown probe gates exactly the provisioned screens [0.05ms]
-(pass) stepGatedOnProbe > a resolved probe gates nothing (either verdict) [0.02ms]
-(pass) resolveStepKey > a key present in the list renders as itself [0.04ms]
+(pass) stepGatedOnProbe > a resolved probe gates nothing (either verdict) [0.03ms]
+(pass) resolveStepKey > a key present in the list renders as itself [0.05ms]
 (pass) resolveStepKey > a hidden key resolves to Permissions, never the terminal screen [0.02ms]
 
 ui/src/v2/onboarding/OnboardingWizard.tour.test.tsx:
-(pass) tour slides > labels the static dashboard as a preview [28.49ms]
-(pass) tour slides > copy, counter and position always describe the SAME slide [16.35ms]
-(pass) tour slides > the counter's total matches the slides that actually exist [9.18ms]
-(pass) tour slides > each slide is a NEW element, never a mutated one [8.09ms]
-(pass) tour slides > the last slide finishes instead of advancing [14.56ms]
-(pass) tour slides > Skip tour dismisses rather than completing [5.35ms]
-(pass) tour keyboard focus > advancing keeps focus on the button that was activated [6.51ms]
-(pass) tour keyboard focus > the first slide does not grab focus on its own [2.16ms]
+(pass) tour slides > labels the static dashboard as a preview [24.87ms]
+(pass) tour slides > copy, counter and position always describe the SAME slide [16.95ms]
+(pass) tour slides > the counter's total matches the slides that actually exist [9.50ms]
+(pass) tour slides > each slide is a NEW element, never a mutated one [7.82ms]
+(pass) tour slides > the last slide finishes instead of advancing [17.74ms]
+(pass) tour slides > Skip tour dismisses rather than completing [5.91ms]
+(pass) tour keyboard focus > advancing keeps focus on the button that was activated [7.34ms]
+(pass) tour keyboard focus > the first slide does not grab focus on its own [2.13ms]
 
 ui/src/v2/onboarding/stt-setup.test.ts:
 (pass) localSTTSetup > sends the loaded endpoint and dialect [0.04ms]
 (pass) localSTTSetup > sends nothing when the stored config was not read and nothing was edited [0.02ms]
 (pass) localSTTSetup > sends only the edited dialect when the stored config was not read [0.01ms]
-(pass) localSTTSetup > sends only the edited endpoint when the stored config was not read
+(pass) localSTTSetup > sends only the edited endpoint when the stored config was not read [0.01ms]
 (pass) localSTTSetup > never sends a blank endpoint
 
 ui/src/v2/onboarding/useInterviewSession.test.tsx:
-(pass) written interview session > requests written replies and never listens to or plays legacy voice messages [1.74ms]
-(pass) written interview session > prevents rapid duplicate replies and preserves rejected answers for retry [1.31ms]
-(pass) written interview session > completion stays complete when audio, stale replies or socket close arrive [0.69ms]
-(pass) written interview session > reports disconnected sessions and detaches all socket handlers on unmount [4.30ms]
-(pass) written interview UI > offers written answers and keeps Skip available without requesting a microphone [5.51ms]
-(pass) written interview UI > retains a typed answer if sending fails and displays it once sent [6.07ms]
-(pass) written interview UI > a failed turn returns the answer to the composer instead of showing it twice [6.37ms]
-(pass) written interview UI > Enter never submits during composition, with Shift, or while a reply is pending [4.59ms]
+(pass) written interview session > requests written replies and never listens to or plays legacy voice messages [1.91ms]
+(pass) written interview session > prevents rapid duplicate replies and preserves rejected answers for retry [1.39ms]
+(pass) written interview session > completion stays complete when audio, stale replies or socket close arrive [0.76ms]
+(pass) written interview session > reports disconnected sessions and detaches all socket handlers on unmount [0.78ms]
+(pass) written interview UI > offers written answers and keeps Skip available without requesting a microphone [5.64ms]
+(pass) written interview UI > retains a typed answer if sending fails and displays it once sent [6.77ms]
+(pass) written interview UI > a failed turn returns the answer to the composer instead of showing it twice [7.17ms]
+(pass) written interview UI > Enter never submits during composition, with Shift, or while a reply is pending [5.29ms]
 
 ui/src/v2/onboarding/WorkflowActivation.test.tsx:
-(pass) first workflow activation > starts empty, offers editable examples and hands off only on a deliberate click [5.90ms]
-(pass) first workflow activation > Explore Jarvis first skips without fabricating a workflow request [2.68ms]
-(pass) first workflow activation > blocks duplicate handoffs and keeps the task when opening fails [4.41ms]
-(pass) the request survives the gate refresh, waits for connection, preserves edits on reopen and never sends itself [48.59ms]
-(pass) a failed completion refresh retains the activation task and can be retried [32.27ms]
-(pass) a skip that saves but cannot load the dashboard says so, and retrying works [22.18ms]
+(pass) first workflow activation > starts empty, offers editable examples and hands off only on a deliberate click [6.47ms]
+(pass) first workflow activation > Explore Jarvis first skips without fabricating a workflow request [3.23ms]
+(pass) first workflow activation > blocks duplicate handoffs and keeps the task when opening fails [5.01ms]
+(pass) the request survives the gate refresh, waits for connection, preserves edits on reopen and never sends itself [51.28ms]
+(pass) a failed completion refresh retains the activation task and can be retried [42.97ms]
+(pass) a skip that saves but cannot load the dashboard says so, and retrying works [23.04ms]
 
 ui/src/v2/onboarding/useOnboardingStatus.test.tsx:
-(pass) a local phase flip costs exactly one status read, not two [59.82ms]
-(pass) a local phase flip still reaches other subscribers, each re-reading once [38.88ms]
-(pass) a peer tab's broadcast triggers exactly one re-read [68.56ms]
-(pass) a local flip overlapping a peer-driven read is still broadcast [38.73ms]
-(pass) a reset fired through resetClient reaches a mounted tab [38.66ms]
-(pass) unmounting closes the channel, so a later broadcast reads nothing [31.60ms]
+(pass) a local phase flip costs exactly one status read, not two [59.84ms]
+(pass) a local phase flip still reaches other subscribers, each re-reading once [38.80ms]
+(pass) a peer tab's broadcast triggers exactly one re-read [68.22ms]
+(pass) a local flip overlapping a peer-driven read is still broadcast [38.33ms]
+(pass) a reset fired through resetClient reaches a mounted tab [38.42ms]
+(pass) unmounting closes the channel, so a later broadcast reads nothing [31.40ms]
 
  147 pass
  0 fail
  684 expect() calls
-Ran 147 tests across 14 files. [1.70s]
+Ran 147 tests across 14 files. [2.03s]

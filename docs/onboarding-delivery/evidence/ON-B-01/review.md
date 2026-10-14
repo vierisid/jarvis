@@ -2,7 +2,7 @@
 
 Direct review using the PR reviewer skill of PR #1050, base
 `1c2737a60d5580abea7d2feb9f2e845fdd491924`, implementation head
-`3883ba6fc9d08c5aed82f561d241658730d59da3`. Read the complete source/test/doc diff,
+`84ea7303bd4857ad14f010eb4cb69659fc7f3b79`. Read the complete source/test/doc diff,
 current settings/profile services, onboarding status/gate/reset paths, repository
 checks and F-26/D-33 delivery context. The implementation matches ON-B-01: an
 injected, unregistered journey provider with additive SQLite persistence and no
@@ -22,7 +22,7 @@ review or a submitted GitHub approval; CI was pending at this review snapshot.
 
 ### Issues
 
-No remaining blocking findings in the reviewed revision. Two implementation-pass
+No remaining blocking findings in the reviewed revision. Three implementation-pass
 findings were corrected before the committed head:
 
 1. **Major / Correctness:** a bodyless transition could take the read path and
@@ -32,6 +32,11 @@ findings were corrected before the committed head:
    its acknowledgement could reject the job because the tutorial state was reset.
    `index.ts:150` permits an acknowledgement from the retained Activation return
    step. The delayed-job and result-during-replay tests preserve the same job/result.
+3. **Major / Backward Compatibility:** the initial interview projection used null,
+   outside the contract's frozen vocabulary. `index.ts:60` now uses the nonterminal
+   `connecting` value, never claims a ready session and reads all six v1 values.
+   The fresh-journey regression asserts that literal value. All 147 regressions,
+   TypeScript and UI build pass on both the original base and newer main `a02343c6`.
 
 The initial subprocess fixture also used an incomplete SQLite open flag set. It
 now specifies read/write without create and the real process-race test passes.
