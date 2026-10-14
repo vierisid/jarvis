@@ -256,7 +256,7 @@ const VOICE_CONFIRMATION_SWEEP_INTERVAL_MS = 60_000;
  * be unit-tested without spinning up a real WebSocket server.
  *
  * Returns the number of pendingVoiceConfirmations entries removed (the
- * other two are at most 1 each — one entry per ws), and their ids, so the
+ * other two are at most 1 each -- one entry per ws), and their ids, so the
  * caller can take those cards down on every dashboard that shows them
  * (#1011).
  */

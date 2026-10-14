@@ -1408,7 +1408,9 @@ export function stillPendingVoiceConfirmations(body: unknown): ((card: { id: str
   if (!Array.isArray(b.ids) || typeof b.at !== "number") return null;
   const ids = new Set(b.ids.filter((id): id is string => typeof id === "string"));
   const at = b.at;
-  return (card) => ids.has(card.id) || card.timestamp > at;
+  // >= not >: a card stamped in the same millisecond the list was read was
+  // not in it, and dropping it would hide a hold that is still waiting.
+  return (card) => ids.has(card.id) || card.timestamp >= at;
 }
 
 /** A daemon `repeat_back_request`, or null when malformed. */

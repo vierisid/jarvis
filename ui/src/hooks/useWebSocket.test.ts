@@ -330,6 +330,9 @@ describe("a voice confirmation card comes down when it can no longer be answered
     expect(keep({ id: "dead", timestamp: 500 })).toBe(false);
     // Arrived after the list was read: not judged by it.
     expect(keep({ id: "new", timestamp: 1_001 })).toBe(true);
+    // Stamped in the same millisecond the list was read: it was not in the
+    // list, so it is still waiting and must stay.
+    expect(keep({ id: "same-ms", timestamp: 1_000 })).toBe(true);
     // A reply it cannot read takes nothing down.
     for (const bad of [null, {}, { ids: ["x"] }, { ids: "x", at: 1 }, { at: 1 }]) {
       expect(stillPendingVoiceConfirmations(bad)).toBeNull();
