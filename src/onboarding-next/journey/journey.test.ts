@@ -284,7 +284,7 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
   });
 
   test('tutorial reset preserves completed setup, profile/connection settings and exact draft; disabling provider leaves legacy readable', async () => {
-    const f = fixture();
+    const f = fixture({ ...fresh, tutorial_progress_step: 'brief:v1:memory' });
     const settings = { 'cfg.onboarding': '{"setup_completed_at":123,"unknownLegacy":true}', 'cfg.user': '{"name":"Fixture"}', 'cfg.channels': '{"connected":true}' };
     for (const [key, value] of Object.entries(settings)) f.db.run('INSERT INTO settings (key,value) VALUES (?,?)', [key, value]);
     await activation(f.provider);
@@ -292,7 +292,7 @@ describe('acknowledgement boundaries and scoped tutorial replay', () => {
     ready(await ack(f.provider, { type: 'draft_saved', jobId: 'saved-job', flowId: 'saved-flow', versionId: 'saved-version' }));
     ready(await nav(f.provider, { type: 'finish' }));
     const before = ready(await f.provider.read());
-    ready(await nav(f.provider, { type: 'replay_tutorial' }));
+    expect(ready(await nav(f.provider, { type: 'replay_tutorial' })).legacyTourStepId).toBeNull();
     ready(await ack(f.provider, { type: 'tour_progress', stepId: 'memory' }));
     expect(ready(await f.make(owner, f.open()).read()).tourStepId).toBe('memory');
     const after = ready(await ack(f.provider, { type: 'tour_finished', state: 'done' }));

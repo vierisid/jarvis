@@ -36,6 +36,8 @@ navigation, `replay_tutorial`, `explore` and `finish`. Replay is the sole reset
 operation in this provider. There is deliberately no full/profile/setup deletion
 operation. It resets only tutorial progress, retains completion, setup, interview,
 job and draft identities, and returns to the prior location when the tour ends.
+It clears the journey's copied legacy tour-step hint too, without changing the
+original legacy settings row.
 Finishing an ordinary tour leads to Activation. Explore first explicitly exits
 without creating a workflow; finishing Result exits after a draft acknowledgement.
 

@@ -171,6 +171,7 @@ function apply(s: JourneySnapshot, c: Navigation | Acknowledgement): JourneySnap
       // A second replay request while already replaying never loses the return location.
       if (s.replayReturnStepId === null && s.stepId !== 'tour') n.replayReturnStepId = s.stepId;
       n.stepId = 'tour'; n.tourState = 'pending'; n.tourStepId = null;
+      n.legacyTourStepId = null;
       break;
   }
   return n;
