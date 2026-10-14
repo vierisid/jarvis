@@ -11,7 +11,7 @@ import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../../db/index";
 import { setEncryptionKey } from "../../db/encryption";
 import { createFlow, getFlow, setPublishedVersion, updateFlowStatus } from "../../db/repos/flow";
 import { createDraftVersion, lockVersion, updateDraftVersion } from "../../db/repos/flow-version";
-import { listRuns, updateRun } from "../../db/repos/flow-run";
+import { createFlowRun, getFlowRun, listRuns, updateRun } from "../../db/repos/flow-run";
 import { claimNextJob, queueStats } from "../../db/repos/job-queue";
 import { configureWorkflowReadiness } from "../../db/repos/flow-readiness";
 import { deleteConnection, upsertConnection } from "../../db/repos/app-connection";
@@ -21,6 +21,7 @@ import { WorkflowEventBus } from "../../runtime/event-bus";
 import { WorkflowEventBuffer } from "../../runtime/event-buffer";
 import { CronScheduler, setCronTimezone } from "../../../lib/cron-scheduler";
 import type { EngineRuntime } from "../engine-runtime/engine-runtime";
+import { createManageWorkflowTool } from "../../../actions/tools/manage-workflow";
 import { createWorkflowRoutes } from "../../api/routes";
 import { Worker } from "../../queue/worker";
 import { createRunFlowHandler, RUN_FLOW } from "../handler";
@@ -613,6 +614,45 @@ describe("the time-zone warning", () => {
 });
 
 describe("the delivery ledger", () => {
+  test.each(['api', 'chat'])('project checks precede cancellation and history access through %s', async (surface) => {
+    const projectId = 'proj_delivery_other';
+    const flow = createFlow({ projectId });
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Private workflow', trigger: { name: 'trigger', type: 'EMPTY' } as any });
+    const runs = (['QUEUED', 'PAUSED', 'RUNNING'] as const).map(status =>
+      createFlowRun({ flowId: flow.id, flowVersionId: version.id, status }));
+    const fire = recordFire({ flowId: flow.id, source: 'webhook', outcome: 'blocked', runId: runs[0]!.id });
+    const foreign = createWorkflowRoutes();
+    const own = createWorkflowRoutes({ callerProjectId: () => projectId });
+    const flowRequest = (method = 'GET') => Object.assign(new Request('http://x/api/workflows/' + flow.id, { method }), { params: { id: flow.id } });
+    const runRequest = () => Object.assign(new Request('http://x/api/workflow-runs/' + runs[0]!.id), { params: { runId: runs[0]!.id } });
+    expect((await foreign['/api/workflows/:id/fires']!.GET!(flowRequest())).status).toBe(404);
+    expect((await foreign['/api/workflow-runs/:runId']!.GET!(runRequest())).status).toBe(404);
+    if (surface === 'api') {
+      expect((await foreign['/api/workflows/:id']!.DELETE!(flowRequest('DELETE'))).status).toBe(404);
+    } else {
+      await expect(createManageWorkflowTool({}).execute({ action: 'delete', flow: flow.id })).rejects.toThrow('workflow not found');
+    }
+    expect(getFlow(flow.id)?.project_id).toBe(projectId);
+    expect(runs.map(run => getFlowRun(run.id)?.status)).toEqual(['QUEUED', 'PAUSED', 'RUNNING']);
+    expect(listFlowFires(flow.id)).toHaveLength(1);
+    const history = await own['/api/workflows/:id/fires']!.GET!(flowRequest());
+    expect(history.status).toBe(200);
+    expect((await history.json() as { fires: { id: string }[] }).fires[0]?.id).toBe(fire!.id);
+    const runResponse = await own['/api/workflow-runs/:runId']!.GET!(runRequest());
+    expect(runResponse.status).toBe(200);
+    expect((await runResponse.json() as { fire: { id: string } }).fire.id).toBe(fire!.id);
+    if (surface === 'api') {
+      expect((await own['/api/workflows/:id']!.DELETE!(flowRequest('DELETE'))).status).toBe(200);
+    } else {
+      const result = await createManageWorkflowTool({ callerProjectId: () => projectId }).execute({ action: 'delete', flow: flow.id });
+      expect(JSON.parse(String(result))).toMatchObject({ id: flow.id, deleted: true });
+    }
+    expect(getFlow(flow.id)).toBeNull();
+    expect(listFlowFires(flow.id).filter(fire => fire.source === 'lifecycle' && fire.outcome === 'stopped')).toHaveLength(3);
+    // Retention is separate from access: a deleted workflow no longer grants access to its ledger.
+    expect((await own['/api/workflows/:id/fires']!.GET!(flowRequest())).status).toBe(404);
+  });
+
   test("pages newest first without skipping rows handled in the same millisecond", () => {
     const { flowId } = webhook();
     const now = Date.now();

@@ -722,7 +722,7 @@ export class TriggerManager {
     return getWorkflowDb().transaction(() => {
       const now = Date.now();
       const created = createFlowRun({ flowId, flowVersionId: versionId,
-        projectId: getFlow(flowId)?.project_id, triggeredBy: `trigger:${kind}`,
+        triggeredBy: `trigger:${kind}`,
         status: 'FAILED', startTime: now, tags: ['workflow-readiness'] });
       return updateRun(created.id, { finishTime: now, stepsCount: 0,
         failedStep: { name: '<readiness>', displayName: 'Workflow readiness', errorMessage: error.message },
@@ -822,7 +822,7 @@ export class TriggerManager {
     this.liveRefusals.delete(flowId);
     const claimed = claimFire({ flowId, flowVersionId: versionId, source: opts.source, dedupeKey: opts.dedupeKey,
       duplicateSince: opts.duplicateSince, scheduledFor: opts.scheduledFor, lateMs: opts.lateMs, detail: opts.detail }, () => {
-      const run = createFlowRun({ flowId, flowVersionId: versionId, projectId: getFlow(flowId)!.project_id,
+      const run = createFlowRun({ flowId, flowVersionId: versionId,
         triggeredBy: `trigger:${opts.kind}`, startTime: Date.now() });
       enqueue({
         jobType: RUN_FLOW,

@@ -136,6 +136,8 @@ outlives a deleted workflow.
 
 Read it at `GET /api/workflows/:id/fires?limit=&cursor=`, which returns
 `{ fires, next }` newest first; pass `next` back as `cursor` for older rows.
+The endpoint requires an existing workflow in the caller's project. Records
+for deleted workflows remain stored but are not exposed by this endpoint.
 Each row has a `label`: missed, blocked, skipped, stopped, delayed, or the
 run's own state (queued, running, paused, completed, completed late, failed).
 Delayed means the work began more than a minute after it was due: handled late,
