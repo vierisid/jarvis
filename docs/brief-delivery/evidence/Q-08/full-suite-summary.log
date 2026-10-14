@@ -1,21 +1,20 @@
-Full suite on brief/q-08 at 4cc84f2c (local WSL2, a fresh checkout of the commit; load average about 0.9 at start).
+Full suite on brief/q-08 at 81257557 (local WSL2, a fresh checkout of the commit).
 $ bun test --preload ./src/test-preload.ts
- 7849 pass
- 86 skip
+ 7860 pass
+ 85 skip
  7 fail
-Ran 7942 tests across 428 files. [926.32s]
+Ran 7952 tests across 429 files. [741.61s]
 
 Failures:
-(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [110.89ms]
-(fail) page-writable element refs (#592, integration) > (unnamed) [512.76ms]
-(fail) browser primitives (integration) > (unnamed) [513.18ms]
-(fail) browser local-file lockdown (integration, #521) > (unnamed) [532.94ms]
-(fail) webapp template delivery via browser tools (integration) > (unnamed) [561.57ms]
-(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [512.37ms]
-(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [542.19ms]
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [30.18ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [45546.12ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [45647.19ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [5001.27ms]
+(fail) browser primitives (integration) > (unnamed) [45841.50ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [45627.63ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [44050.81ms]
 
-All 7 are among the 9 that also fail on the base with no Q work applied (below): git config lint and six Chromium launches on this machine. The two engine-reaper tests of that set passed in this run. No other test fails.
-An earlier run of the same code, one commit back, had two composer tests time out at about 6 seconds while other test runs shared the machine; alone they take 1 to 2 seconds, and in this run they pass.
+All 7 are among the 9 that also fail on the base with no Q work applied (below): git config lint, Chromium launches and engine reapers on this machine. No other test fails.
 CI on the final head runs the full suite.
 
 Baseline: the same test files on brief/foundations 462d955d with no Q work applied

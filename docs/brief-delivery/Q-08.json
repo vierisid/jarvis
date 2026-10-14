@@ -13,7 +13,7 @@
   "status": {
     "implementation": "verified locally",
     "merge": "not_merged",
-    "capability_ready": "an Authority recheck of every approved call as the agent it was asked for; dashboard-only review cards; approvals held while paused; realtime voice cards instead of auto-approval; Pause holds and Kill stops for agents, workflows, triggers and continuations; piece approvals bound to the whole input; distinct receipts and audited decisions; active once merged, with no flag",
+    "capability_ready": "an Authority recheck of every approved call as the agent it was asked for; dashboard-only review cards; approvals held while paused; Pause holds and Kill stops for agents, workflows, triggers and continuations, and a held step resumes as it was about to run; piece approvals bound to the whole input; distinct receipts and audited decisions; realtime voice keeps a spoken command as the authorization and runs nothing without a primary agent; active once merged, with no flag",
     "release_enabled": false,
     "publication": "PR #891 open against brief/q-06 (stacked); https://github.com/vierisid/jarvis/pull/891"
   },
@@ -24,14 +24,14 @@
   },
   "ownership": {
     "implementer": "Core-quality line",
-    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+    "independent_reviewer": "PR review of 30735315 on 14 October requested changes, fixed in 15bd2a44 and 81257557 (see review); Lapo coordinates technical review and shared-file integration"
   },
   "merge_after": [
     "Q-06 (#806): this branch is stacked on brief/q-06"
   ],
   "enable_after": [],
   "decisions": [
-    "Voice leaves a card (owner decision, 7 October): in a live voice conversation, an action that needs approval is not run; it leaves an approval card on the dashboard and in chat, and Jarvis says so. Realtime voice auto-approved such calls before.",
+    "A spoken command is the authorization (owner decision, 14 October, replacing 7 October's \"voice leaves a card\" after review): realtime voice runs an action that needs approval when asked, audited as approved by voice, as before Q-08 and as main's #1006 has it. A tainted session's approvals, cards that must be clicked and the blocked categories are still refused; with no primary agent nothing runs.",
     "Voice may keep pressing dashboard buttons (owner decision): granting access, running a workflow, starting an agent or restarting Jarvis by voice stay as they are; recorded as a known path.",
     "Pause holds, Kill stops (owner decision). Pause: nothing new starts or continues; queued and waiting work waits; a scheduled time is skipped and shown; a webhook is told to retry later; approving a card waits for Resume; a run already executing parks at its next step and Resume releases it. Kill: also stops every unfinished run, denies every pending approval and stops tools in flight at their next dispatch checkpoint; Reset starts nothing again.",
     "Approving from chat (owner decision): only a sender on the channel's allowed users list, with the card's 8-character id; with no list, chat can still deny. Main's #851, merged since, also refuses deny from an unlisted sender; integration takes main's stricter rule unless the owner wants deny back.",
@@ -39,15 +39,15 @@
   ],
   "behavior": [
     "An approval request records whom it was asked for (role, level, profile). When the approved call runs, the executor judges it again as that agent, the way its gate did, with the approval standing in for the approval it asked for: a deny override, a context rule or a revoked permission added since the card was raised stops it. A request from before records no one and is asked for again.",
-    "A card that must be reviewed on screen (browser and desktop actions) is approved on the dashboard only: a chat reply, a toast or a spoken yes is refused and the card stays pending, and the executor refuses an approval from anywhere else.",
+    "A card that must be reviewed on screen (browser and desktop actions) is approved on the dashboard only: a chat reply, a toast or a spoken yes is refused, saying why, and the card stays pending; its desktop notification offers Review in Jarvis instead of Approve; and the executor refuses an approval from anywhere else.",
     "Two surfaces deciding one request dispatch it once (compare-and-set decision, one execution claim), now tested through the shared decision path.",
-    "Approving while Jarvis is paused or stopped is refused, saying so; the card stays pending for Resume. Denying works.",
-    "Realtime voice: a call that needs approval leaves a deferred card with the agent's principal and is not run; with no approval channel it is refused; with no primary agent the gate fails closed.",
-    "A request_approval the person did not approve (denied, expired or unanswered) governs its category for the rest of the turn, so a later tool call in it needs its own approval. A task cancelled while its card waits withdraws the card. A spoken yes or no decides nothing while more than one card waits.",
-    "Pause and Kill below every UI control: tool dispatch refuses at the agent gates (existing) and, on Kill, at every dispatch checkpoint inside a running tool; the workflow worker claims nothing; a job claimed as the pause began goes back untouched; Kill stops every unfinished run and denies every pending approval; triggers start nothing (a scheduled time is recorded as skipped, keyed so it is not run late; a webhook gets 503 with Retry-After; an event source is not polled, so its items wait); timers, approvals and resume URLs wake nothing (a resume URL answers 503); starting a run by hand (dashboard, chat, work item) is refused, saying why; a governed workflow step, a community piece or a CODE step reached while paused parks on a HOLD waitpoint that Resume releases (a resume URL never can); a recorded piece or delegation authorization is not handed out again while paused or stopped.",
+    "Approving while Jarvis is paused or stopped is refused, saying so, and the card stays pending for Resume: a refused notification shows the card again with the reason, and the dashboard shows the server's reason. Denying works. Running an approval a restart left unresolved waits the same way.",
+    "Realtime voice: a spoken command is the authorization (owner decision, 14 October), so a call that needs approval runs, audited as approval_required and executed; a tainted session's approval, a click-only card and the blocked categories are refused; with no primary agent the gate fails closed.",
+    "A request_approval the person did not approve (denied, expired or unanswered) governs its category for the rest of the turn, so a later tool call in it needs its own approval. A task cancelled while its card waits withdraws the card, and the dashboard drops it. A spoken yes or no decides nothing while more than one card waits.",
+    "Pause and Kill below every UI control: tool dispatch refuses at the agent gates (existing) and, on Kill, at every dispatch checkpoint inside a running tool; the workflow worker claims nothing; a job claimed as the pause began goes back untouched; Kill stops every unfinished run and denies every pending approval; triggers start nothing (a scheduled time is recorded as skipped, keyed so it is not run late; a webhook gets 503 with Retry-After; an event source is not polled, so its items wait, and items a poll had already taken are queued for Resume); timers, approvals and resume URLs wake nothing (a resume URL answers 503 while paused, 409 under Kill); starting a run by hand (dashboard, chat, work item) is refused, saying why; a governed workflow step, a community piece or a CODE step reached while paused parks on a HOLD waitpoint that Resume releases (a resume URL never can, and none is listed for it), and then runs as it was about to: from the start if it had not run, or resuming its own pause with its payload, so a Delay still waits its full time; a recorded piece or delegation authorization is not handed out again while paused or stopped.",
     "The emergency controller is the one source of truth: the engine's copy of the state follows every change (it was the boot snapshot, which kept workflows blocked after Resume), a learning accept no longer writes the state back (which could turn a Kill to normal across a restart), and every change is audited.",
-    "A governed piece's approval binds a digest of the whole resolved input, connection excluded, alongside the card's projection: a longer body or more recipients than the card could show need a new approval.",
-    "Receipts stay distinct: a tool that could not say whether it took effect leaves the request unresolved (unknown, never run again, closed by a person); nothing started is blocked, not failed. Chat replies, the dashboard notification, the tray and the Task complete toast say what the receipt says. Every decision is audited with its surface (click, chat, notification, voice) and every receipt with its outcome.",
+    "A governed piece's approval binds a digest of the whole resolved input, connection excluded, alongside the card's projection: a longer body or more recipients than the card could show need a new approval. An effect recorded before this build, without the digest, is matched without it once and bound to it from then on.",
+    "Receipts stay distinct: a tool that could not say whether it took effect leaves the request unresolved (unknown, never run again, closed by a person); nothing started is blocked, not failed. Chat replies, the dashboard notification, the tray and the Task complete toast say what the receipt says. Every decision a person makes is audited with its surface (click, chat, notification, voice) and every receipt, refusals included, with its outcome. A community piece or CODE step leaves an admission row recording the dispatch; Jarvis's own pieces (audited at the boundary) and built-in steps leave none. Unanswered cards expire after 24 hours and leave the dashboard.",
     "A config change is validated before it is applied, and a level that is not a number counts for nothing (it used to pass every level check). A learning suggestion can be accepted only if the learner made it.",
     "Work-item runs check the workflow's CODE-step grant, as every other start does."
   ],
@@ -55,12 +55,12 @@
     {
       "check": "No route can execute an unapproved governed action or reuse approval for changed parameters",
       "status": "passed",
-      "evidence": "src/authority/entry-matrix.test.ts (permissions judged again as the asking agent; no recorded principal is asked again; click-only cards on the dashboard only; a denied intent cannot be walked around; a cancelled task withdraws its card), src/agents/orchestrator-realtime.test.ts (voice leaves a card), src/workflows/runtime/governed-pieces.test.ts (a piece approval covers the whole input), src/workflows/runtime/workflow-authority.test.ts (changed parameters and edited versions, existing); evidence/Q-08/revert-checks.log"
+      "evidence": "src/authority/entry-matrix.test.ts (permissions judged again as the asking agent; no recorded principal is asked again; click-only cards on the dashboard only; a denied intent cannot be walked around; a cancelled task withdraws its card), src/agents/orchestrator-realtime.test.ts (no primary agent fails closed), src/agents/taint-gating.test.ts (a tainted voice call is refused), src/workflows/runtime/governed-pieces.test.ts (a piece approval covers the whole input, with inputs only the digest tells apart), src/workflows/runtime/workflow-authority.test.ts (changed parameters and edited versions, existing); evidence/Q-08/revert-checks.log"
     },
     {
       "check": "Two surfaces produce one dispatch; denial/emergency are enforced below UI controls",
       "status": "passed",
-      "evidence": "src/authority/entry-matrix.test.ts (three surfaces deciding at once dispatch once; approving waits while paused; Kill denies pending approvals and stops a tool in flight), src/workflows/runtime/emergency-hold.test.ts (worker, handler, Kill sweep, timers, resume URLs, holds, starts by hand, the daemon's Kill and Resume), src/workflows/runner/triggers/delivery.test.ts (triggers under Pause and Kill), src/goals/work-items.test.ts, src/actions/tools/manage-workflow.test.ts; evidence/Q-08/revert-checks.log"
+      "evidence": "src/authority/entry-matrix.test.ts (three surfaces deciding at once dispatch once; approving waits while paused; Kill denies pending approvals and stops a tool in flight), src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts (the real engine: a held Delay, Wait for Approval and CODE step resume as they were about to run), src/workflows/runtime/emergency-hold.test.ts (worker, handler, Kill sweep, timers, resume URLs, holds, starts by hand, the daemon's Kill and Resume), src/workflows/runner/triggers/delivery.test.ts (triggers under Pause and Kill), src/goals/work-items.test.ts, src/actions/tools/manage-workflow.test.ts; evidence/Q-08/revert-checks.log"
     },
     {
       "check": "Chat, manual Run, scheduled workflow, opportunity activation, child workflow, delegated agent and raw UI actions covered; policy change after approval, argument and version edits, emergency pause/kill and parallel approval tested; approved/executed/failed/unknown distinct",
@@ -71,12 +71,17 @@
   "verification": [
     {
       "command": "bun test --preload ./src/test-preload.ts",
-      "result": "7,849 pass, 86 skip, 7 fail of 7,942 tests across 428 files (local WSL2, a fresh checkout of 4cc84f2c). All 7 also fail on brief/foundations 462d955d with no Q work applied: git config lint and six Chromium launches on this machine. CI on the final head runs the full suite.",
+      "result": "7,860 pass, 85 skip, 7 fail of 7,952 tests across 429 files (local WSL2, a fresh checkout of 81257557, the final code head). All 7 also fail on brief/foundations 462d955d with no Q work applied: git config lint and six Chromium launches on this machine. CI on the final head runs the full suite.",
       "log": "evidence/Q-08/full-suite-summary.log"
     },
     {
+      "command": "JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts src/workflows/runner/engine-runtime/outer-worker-delay.test.ts",
+      "result": "4 pass, 0 fail: the real engine, built for the run (a held Delay waits its full time, a held Wait for Approval waits for its link, a held CODE step runs once; the existing delay continuation).",
+      "log": "evidence/Q-08/q08-tests.log"
+    },
+    {
       "command": "bun test --preload ./src/test-preload.ts src/agents/agent-history.test.ts src/agents/agent-spawn-authority.test.ts src/agents/browser-intent.test.ts src/agents/orchestrator-progress.test.ts src/agents/orchestrator-realtime.test.ts src/agents/orchestrator-task-call.test.ts src/agents/orchestrator-tier-fallback.test.ts src/agents/path-parity-scope.test.ts src/agents/progress.test.ts src/agents/skill-authority.test.ts src/agents/sub-agent-runner.test.ts src/agents/taint-gating.test.ts src/agents/task-manager.test.ts src/agents/tool-filter-wiring.test.ts src/agents/untrusted-results.test.ts src/agents/voice-intent-classifier.test.ts src/authority/approval-delivery.test.ts src/authority/approval-receipts.test.ts src/authority/authority.test.ts src/authority/background-profile.test.ts src/authority/builtin-tool-coverage.test.ts src/authority/quick-override.test.ts src/authority/tool-gate.test.ts src/daemon/api-approval-resolution.test.ts src/daemon/approval-decision.test.ts src/daemon/channel-service.test.ts src/daemon/ws-service-cleanup.test.ts src/daemon/ws-service-voice-start.test.ts src/authority/entry-matrix.test.ts src/workflows/runtime/emergency-hold.test.ts src/actions/tools/manage-workflow.test.ts src/goals/work-items.test.ts src/lib/cron-occurrence.test.ts src/lib/cron-timezone.test.ts src/lib/cron-validation.test.ts src/roles/authority.test.ts src/roles/persisted-frame.test.ts src/roles/prompt-builder.test.ts src/roles/untrusted-import-guard.test.ts src/roles/untrusted.test.ts src/workflows/api/routes.test.ts src/workflows/api/version-ownership.test.ts src/workflows/queue/queue.test.ts src/workflows/runner/handler.test.ts src/workflows/runner/triggers/cron.test.ts src/workflows/runner/triggers/delivery.test.ts src/workflows/runner/triggers/manager.test.ts src/workflows/runner/triggers/rate-limiter.test.ts src/workflows/runtime/bounded-tools.test.ts src/workflows/runtime/cancellation-authority.integration.test.ts src/workflows/runtime/cancellation.test.ts src/workflows/runtime/continuation.test.ts src/workflows/runtime/delegated-approval.test.ts src/workflows/runtime/desktop-outcomes.test.ts src/workflows/runtime/engine-bundle-purity.test.ts src/workflows/runtime/event-buffer.test.ts src/workflows/runtime/event-types.test.ts src/workflows/runtime/governed-pieces.test.ts src/workflows/runtime/llm-output-contract.test.ts src/workflows/runtime/llm-output-outcomes.test.ts src/workflows/runtime/piece-catalog.test.ts src/workflows/runtime/piece-executor-gate.drift.test.ts src/workflows/runtime/piece-input.drift.test.ts src/workflows/runtime/resolved-input-guard.test.ts src/workflows/runtime/safe-expression.test.ts src/workflows/runtime/shared-runtime-paths.test.ts src/workflows/runtime/test-fixtures-drift.test.ts src/workflows/runtime/workflow-authority.test.ts src/workflows/runtime/workflow-machine-binding.test.ts src/workflows/runtime/workflow-readiness.test.ts src/workflows/runtime/workflow-skill-effect.test.ts src/workflows/sandbox-api/engine-token-rebind.test.ts src/workflows/sandbox-api/native-connections.test.ts src/workflows/sandbox-api/rpc.test.ts src/workflows/sandbox-api/sandbox-api.test.ts src/workflows/sandbox-api/worker-rpc.test.ts src/workflows/timer-scheduler.test.ts",
-      "result": "1,744 pass, 0 fail across 77 files at 4cc84f2c: the Q-08 tests plus the Authority, approval, agent, channel, voice, workflow runtime, runner, trigger, queue, API and goal suites they touch",
+      "result": "1,753 pass, 0 fail across 77 files (a fresh checkout of 81257557).",
       "log": "evidence/Q-08/q08-tests.log"
     },
     {
@@ -90,8 +95,8 @@
       "log": "evidence/Q-08/guards.log"
     },
     {
-      "command": "remove each of 64 guarantees in turn and run its test",
-      "result": "64 of 64 removals fail their tests; source restored. The log lists the file, the exact text removed and its replacement for each.",
+      "command": "remove each of 82 guarantees in turn and run its test",
+      "result": "82 of 82 removals fail their tests; source restored. 62 carried from the first round (two realtime-card checks dropped with the voice decision of 14 October, three re-anchored to code this round changed) and 20 new for the review findings. The log lists the file, the exact text removed and its replacement for each.",
       "log": "evidence/Q-08/revert-checks.log"
     }
   ],
@@ -101,25 +106,28 @@
   "quick_verify": {
     "cwd": "repository root, on brief/q-08",
     "command": "bun test --preload ./src/test-preload.ts src/authority/entry-matrix.test.ts src/workflows/runtime/emergency-hold.test.ts",
-    "expected": "35 pass",
-    "manual": "On a dev daemon: press Pause with a workflow waiting on a delay that comes due, then Resume (it continues after Resume, not before); press Kill with a run queued and a card pending (the run is stopped and the card denied, each saying why); in a voice session ask for something that needs approval (a card appears on the dashboard and nothing runs); approve a browser-action card from Telegram (refused: approve it on the dashboard).",
-    "screenshot": "not applicable: no visible UI changes"
+    "expected": "39 pass",
+    "manual": "On a dev daemon: press Pause while a workflow runs a step just before a one-minute Delay, then Resume (the delay starts after Resume and waits its full minute); press Kill with a run queued and a card pending (the run is stopped and the card denied, each saying why); in a voice session ask for something that needs approval (it runs, and the audit trail shows it approved by voice); approve a browser-action card from Telegram (refused: approve it on the dashboard); press Approve on a desktop notification while paused (it comes back saying Jarvis is paused).",
+    "screenshot": "not taken: the visible changes are text (a refusal reason on a card, a stat label, a waitpoint line)",
+    "engine": "JARVIS_TEST_ENGINE_BUILD=1 bun test --preload ./src/test-preload.ts src/workflows/runner/engine-runtime/emergency-hold-engine.test.ts: 3 pass"
   },
-  "migration": "Additive: column approval_requests.principal and waitpoint type HOLD. A pending request created before this build has no principal; if approved, it is refused when it runs and asked for again.",
-  "rollback": "Revert the Q-08 commits. The column and the waitpoint type are additive and ignored by older builds. Resume Jarvis before rolling back: a HOLD waitpoint left by a run parked while paused is not released by an older build.",
+  "migration": "Additive: column approval_requests.principal, waitpoint type HOLD and the jarvisParked key in a parked step's output. A pending request created before this build has no principal; if approved, it is refused when it runs and asked for again. A governed piece effect recorded before this build is matched without the whole-input digest once, then bound to it.",
+  "rollback": "Revert the Q-08 commits. The column, the waitpoint type and the output key are additive and ignored by older builds. Resume Jarvis before rolling back: a HOLD waitpoint left by a run parked while paused is not released by an older build.",
   "limitations": [
     "Voice can still press dashboard buttons that change permissions or start work (owner decision).",
     "Community pieces run with Jarvis's own permissions and can read any saved connection: the Library's opt-in trust model, unchanged.",
     "A delegated agent's allowed calls are checked but not listed as run effects (Q-10).",
     "Approval cards show what will happen, not the raw arguments (dashboard work).",
-    "Kill stops a tool at its next dispatch checkpoint: one command already running on a machine finishes; a sub-agent's model loop is not aborted, its tool calls are refused.",
+    "Kill stops a tool at its next dispatch checkpoint: one command already running on a machine finishes. A sub-agent started by a tool stops at its next turn. A tool stopped this way is recorded as \"may have happened\", even at its first checkpoint, since a checkpoint cannot tell whether an earlier dispatch took place; a card caught there is closed by a person.",
+    "Under Kill a webhook sender is still told to retry, so a retry after Reset starts a run; scheduled times during Kill stay skipped.",
+    "On macOS a notification for a click-only card still shows Approve (macOS sets the buttons by kind); pressing it brings the card back saying to approve it on the dashboard.",
     "An intent grant (request_approval) is recorded as executed.",
     "Opportunity activation has no route of its own; accepted work items start through the run route.",
-    "The 24-hour expiry and the Kill and Resume wiring in daemon/index.ts are thin calls into tested functions; the daemon process itself is not started by the tests."
+    "The 24-hour expiry, the Kill and Resume wiring and the notification handling in daemon/index.ts are thin calls into tested functions; the daemon process itself is not started by the tests."
   ],
   "found": [
     "An approved request ran under the permissions in force when it was raised: tightening permissions afterwards did not stop it, inline, deferred or after a restart.",
-    "Realtime voice auto-approved every call that needed approval except taint-gated ones, and ran ungated with no primary agent.",
+    "Realtime voice ran ungated and unaudited when no primary agent was active.",
     "A click-only review card could be approved from Telegram, Discord or a toast; only voice refused it.",
     "Kill only changed a flag: nothing stopped runs, denied pending approvals or interrupted tools, and the engine's copy of the state was the boot snapshot (workflows stayed blocked after Resume until a restart, and a learning accept could write a Kill back to normal).",
     "Under Pause the workflow worker kept claiming jobs, triggers kept starting runs, timers, approvals and resume URLs kept waking runs, and an approved step reached while paused was refused for good instead of held.",
@@ -132,13 +140,45 @@
     "Work-item runs skipped the CODE-step grant check."
   ],
   "integration": [
-    "Stacked on Q-06 (#806): merge Q-06 first.",
-    "main, approvals (#788, #807, #825, #851, #874): take main's findByShortId (ShortIdMatch, exactly 8 lower-case hex), its allow-list check for chat decisions (#811, which also refuses deny from an unlisted sender) and its voice binding to the card on screen (#809) instead of Q-08's versions; keep Q-08's dashboard-only rule for click-only cards (add it to channelApprovalReply and notificationApprovalDecision), the held-while-paused outcome in applyApprovalDecision and the voice path, the executor's permission recheck, refuse helper, outcome mapping and receipt audit inside main's receipt shape (content, trailer), and principal on createRequest beside main's ApprovalGuard binding.",
-    "main and F-14 (#785), F-06 (#745), F-19 (#840), actions/tools/registry.ts: wrap the tool call as withExecutionScope(killFence, () => observeToolExecution(name, () => tool.execute(params))).",
-    "F-14 (#785) and F-19 (#840), engine admission (piece-effect-guard.ts, piece-executor.ts, jarvis-pieces.ts, service-backends.ts): keep F-14's decision-document protocol (editable input, documentProtocol, document on authorization) and Q-08's admission of every step, held reply and inputDigest; send the editable document as the governed input and compute inputDigest over the input the engine will run after applyDocument.",
-    "F-12 (#775), deferred-executor.ts and approval-decision.ts: keep F-12's assertCurrent fence around the claim and the decision writes, and Q-08's checks after the claim.",
-    "Q-05 (#778), effect-boundary.ts and service-backends.ts: keep Q-05's revalidate hooks in policy() and the checkpoint, and Q-08's pause hold before the decision and before the claim.",
-    "F-03 (#727) and F-05 (#740) merge cleanly."
+    "Checked against main at c06b16c1: a trial merge of 81257557 conflicts in 16 files, 5 of them from Q-06 alone; orchestrator.ts merges cleanly since the voice decision of 14 October.",
+    "Merge Q-06 (#806) first. At that level, #917 put each run in its flow's project (createFlowRun takes no projectId) and #841 scopes the workflow routes to the caller's project, so /api/workflows/:id/fires needs the same scope.",
+    "Must change at the merge, or main breaks: agents/lifecycle-gate.ts (#986) creates cards with no principal, which Q-08's executor refuses when they run, so approving Spawn or Terminate would do nothing; record the acting agent's principal there and add a lifecycle test that wires the executor's Authority engine (main's do not, so they stay green).",
+    "Must change at the merge: main lets an agent stop card run during an emergency (#963, isAgentStopCard), but Q-08 answers held to every approve before the executor; exempt stop cards from held in applyApprovalDecision and in voice. Whether Kill's deny-all spares them too is an owner call, since #1012 already stops agent loops on Kill.",
+    "Must change at the merge: main's gated voice reply requires a reason, so Q-08's held reply fails the type check; return { kind: 'refused', message: heldApprovalMessage(state) }. Main's tests that pin Pause as a block (workflow-authority.test.ts, the paused cases) expect the hold instead.",
+    "Take main's version: findByShortId (#851); the chat allow-list rules (#851, #881, #918), porting entry-matrix.test.ts's channelSenderMayApprove and CHANNEL_APPROVE_NOT_ALLOWED cases to them; voice decisions bound to the card on screen (#809, #855) instead of Q-08's more-than-one-card rule; the realtime path (#972, #1006, #1013), which matches the 14 October decision, keeping only Q-08's fail-closed check for a missing primary agent.",
+    "Keep from Q-08 inside main's shapes: the dashboard-only rule for click-only cards (add it to channelApprovalReply and notificationApprovalDecision), the held outcome, the executor's recheck, refusal receipts and outcome mapping inside main's receipt shape, and principal beside main's ApprovalGuard.",
+    "registry.ts: withExecutionScope(killFence, () => observeToolExecution(name, () => tool.execute(params))); a background task started with main's outsideExecutionScope (#1013) still passes the fence on each of its registry calls. service-backends.ts (#1013): keep main's delegated-call approval scope and Q-08's step admission.",
+    "Already safe on main: the whole-input test uses inputs of the same length and count, so it still proves the digest under main's re-projection (#691). After the merge, docs/authority-entry-points.md Limits: voice no longer grants authority (#972) and Kill stops sub-agent loops (#1012).",
+    "Open brief PRs on the same files: F-14 (#785) and F-19 (#840) keep their decision-document protocol and Q-08's admission, held reply, inputDigest and jarvisParked, sending the editable document as the governed input and digesting the input that runs after applyDocument; F-12 (#775) keeps assertCurrent around the claim and the decision writes, Q-08's checks following the claim; Q-05 (#778) keeps its revalidate hooks, Q-08's holds before the decision and before the claim; F-06 (#745) takes the registry.ts wrap above; F-03 (#727) and F-05 (#740) merge cleanly."
   ],
-  "next": "Bind each run's effects to its approval receipt for delegated agents (Q-10); show raw arguments on approval cards; decide whether voice may keep pressing permission and start buttons; isolate community pieces from saved connections. Separate cards."
+  "next": "Owner sign-off on Kill stopping waiting runs (decision 1). Bind each run's effects to its approval receipt for delegated agents (Q-10); show raw arguments on approval cards; decide whether voice may keep pressing permission and start buttons; isolate community pieces from saved connections. Separate cards.",
+  "review": {
+    "first_push": "30735315",
+    "date": "2026-10-14",
+    "result": "An independent PR review requested changes: 22 items (2 blocking this PR, 4 blocking the merge into main, 16 smaller), three questions and one older bug. Fixed in 15bd2a44, with a test follow-up in 81257557; every guarantee, earlier and new, has a test that fails when it is removed (82 of 82 removals fail their tests).",
+    "owner_decision": "14 October: a spoken command is the authorization, replacing 7 October's \"voice leaves a card\"; realtime voice keeps its auto-approval and its refusals.",
+    "blocking": [
+      "[1] a step held while paused came back as RESUME with an empty payload: a Delay skipped its wait, a Wait for Approval failed reading a payload it never got; parked steps now record how they were about to run",
+      "[13] no test drove the engine half; emergency-hold-engine.test.ts runs the real engine and CI builds it"
+    ],
+    "merge_into_main": [
+      "[7] lifecycle cards with no principal, [8] stop cards held under Pause, [10] the voice reply type: written into integration",
+      "[9] realtime voice policy: decided by the owner, matching main",
+      "[11] the whole-input test now uses inputs only the digest tells apart, so it holds on main",
+      "[12] the integration notes, rewritten against main c06b16c1"
+    ],
+    "minor": [
+      "poll items taken as Pause landed were lost [2]; every non-adapter step wrote an executed community-piece row [3]; four executor refusals skipped their receipt row [4]; decisions counted as auto-approved [5]; a padded category escaped the declined-intent rule [6]",
+      "notifications and the dashboard hid held and needs_dashboard [15]; refusals for community and CODE steps said Governed piece [16]; withdrawn and expired cards stayed on the dashboard [17]; approvals parked before the digest failed as changed [18]",
+      "stale realtime copy [19, resolved by the owner decision]; docs, receipt and PR body inaccuracies [20]; leftovers [21]; a HOLD listed a resume URL that always answered 403 [22]; test gaps: the worker's guard, the delegation replay hold, the admission route [14]"
+    ],
+    "questions": [
+      "Q1 webhooks under Kill are still told to retry: kept and documented",
+      "Q2 the Kill fence reports may have happened even at a first checkpoint: kept as the safe direction and documented",
+      "Q3 Kill also stops waiting runs: open for the owner's sign-off (decision 1)"
+    ],
+    "also_fixed": [
+      "P1 (older): running an approval a restart left unresolved while paused closed it for good; it now waits"
+    ]
+  }
 }
