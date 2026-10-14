@@ -24,7 +24,7 @@
   },
   "ownership": {
     "implementer": "Core-quality line",
-    "independent_reviewer": "pending; Lapo coordinates technical review and shared-file integration"
+    "independent_reviewer": "PR review of af3db12d on 14 October requested changes, fixed in 90b80616 (see review); Lapo coordinates technical review and shared-file integration"
   },
   "merge_after": [
     "F-15 (#796): this branch is stacked on brief/f-15"
@@ -36,14 +36,16 @@
     "One cited entry per counted thing (owner decision, 14 October): each signed partner is its own entry naming who, when it happened and the source version it came from, recorded or confirmed by the person. Provider-verified records only were not chosen.",
     "The number is derived from the entries (owner decision, 14 October): a counted goal's value is the number of distinct things whose latest entry counts them; nobody types it. A typed total with supporting entries was not chosen.",
     "Parent goals stay independent (owner decision, 14 October), as F-15 has them: a child's entries never change its parent. An opt-in union of a subtree was not chosen.",
-    "Counts of distinct things first (owner decision, 14 October): signed partners, customers, deals, hires. Amounts such as revenue stay on F-15's typed snapshot."
+    "Counts of distinct things first (owner decision, 14 October): signed partners, customers, deals, hires. Amounts such as revenue stay on F-15's typed snapshot.",
+    "A new counted measure reads as unknown until its first entry (owner decision, 14 October, after review): a typed total switched to counting keeps its legacy score and health instead of dropping to zero.",
+    "There is no way back from a counted measure to a typed total (owner decision, 14 October, after review); deleting the goal remains the only exit."
   ],
   "behavior": [
-    "A goal can be defined as a counted measure (unit, whole-number baseline, larger whole-number target up to 1,000). Its value is the number of distinct things whose latest cited entry counts them, its score the existing absolute progress, never a delta. Defining it replaces a typed total, so the value becomes the count of cited entries; defining it again keeps the entries; the unit stays once entries count.",
-    "An entry names the thing (compared without case, width or spacing differences), when it happened (not in the future) and a cited source version, and is `counted` or `retracted`. A thing counts once per goal; a source version is cited once per goal and may support other goals; a correction names the thing's latest entry and each entry is corrected at most once, so every thing keeps one lineage. A retraction lowers the count; a later count raises it again; a detail correction keeps the count and writes no progress entry.",
-    "Entries, the count, the snapshot, the score, progress history and the goal_measurement_recorded event (basis observations, entryId, kind, corrects) commit in one immediate transaction. Exact replay returns the receipt, including after a restart; reusing a request ID with different content conflicts.",
+    "A goal can be defined as a counted measure (unit, whole-number baseline, larger whole-number target up to 1,000). Until its first entry the value is unknown, so a typed total switched to counting keeps its legacy score and health; once the goal has any entry the value is the number of distinct things whose latest cited entry counts them, zero included, and its score the existing absolute progress. Defining it again keeps the entries and writes progress only when the score changes; the unit stays once the goal has any entry; there is no way back to a typed total.",
+    "An entry names the thing (compared without case, width, spacing or invisible formatting, with full case folding; no control characters, something visible required), when it happened (not in the future) and a cited source version, and is counted or retracted. A thing counts once per goal; a correction names the thing's latest entry on the same goal and each entry is corrected at most once, so every thing keeps one lineage; a refusal says whether the named entry is on another goal, for another thing or already corrected. A source version backs one counted thing at a time: a date fix may cite it again, and a thing taken back out frees it for the right one. A retraction lowers the count, a later count raises it, a detail correction keeps it and writes no progress.",
+    "Entries, the count, the snapshot, the score, progress history and the goal_measurement_recorded event commit in one immediate transaction. Each known count is also a timed measurement receipt (request ID entry:<entry id>, the entry ledger as evidence), so measurement history covers counted goals; receipts keep the snapshot without the list of counted entries. Exact replay returns the receipt, including after a restart.",
     "On a counted goal a typed total, a legacy score and a work result's goalScore are refused; automatic reviews still cannot score it (a passed work result cited by a review is rejected with no_verified_score_mapping). Activity notes and accepted or checked work never create an entry.",
-    "The Brief read keeps the kinds apart: a counted measure has measurementDefinition.basis observations and one observation reference per counted thing; a typed total has basis reported and one source reference. Qualification stays user_reported: entries are the person's citations, not provider verification.",
+    "The Brief read keeps the kinds apart: a counted measure has measurementDefinition.basis observations and one observation reference per counted thing, IDs goal_observation:<entry id>, apart from awareness observations; a typed total has basis reported and one source reference. Qualification stays user_reported.",
     "Routes under F-15's capability, authentication, no-store and 8 KiB rules: POST /api/brief/goals/:id/measurement/counted, POST and GET /api/brief/goals/:id/observations (GET ?requestId= recovers a receipt)."
   ],
   "acceptance": [
@@ -60,7 +62,7 @@
     {
       "check": "Duplicate business events, multiple related goals, parent/child rollups, reopened goals and negative corrections tested",
       "status": "passed",
-      "evidence": "src/goals/observations.test.ts (the same partner, source version or request cannot count twice, across a restart too; one partner counted once in each of two goals; a child's entries, retraction and deletion leave its parent unchanged; a goal completed, corrected and reopened keeps one count; a retraction lowers it and a later count restores it, with the lineage readable)"
+      "evidence": "src/goals/observations.test.ts (the same partner, written with different width, case, spacing or formatting, source version or request cannot count twice, across a restart and between two processes; one partner counted once in each of two goals; a child's entries, retraction and deletion leave its parent unchanged; a goal completed, corrected and reopened keeps one count; a retraction lowers it, a later count restores it, a date fix and a typo fix keep their citations, with the lineage readable)"
     },
     {
       "check": "Automatic reviews stay within the no-verified-mapping boundary",
@@ -76,12 +78,12 @@
   "verification": [
     {
       "command": "bun test --preload ./src/test-preload.ts",
-      "result": "8,200 pass, 89 skip, 7 fail of 8,296 tests (local WSL2, a fresh checkout of 456dcbd3). All 7 also fail on brief/f-15 bc0fdf9c with no Q-17 work applied: git config lint and six Chromium launches on this machine. CI on the final head runs the full suite.",
+      "result": "8,207 pass, 89 skip, 7 fail of 8,303 tests (local WSL2, a fresh checkout of 90b80616). All 7 also fail on brief/f-15 bc0fdf9c with no Q-17 work applied: git config lint and six Chromium launches on this machine. CI on the final head runs the full suite.",
       "log": "evidence/Q-17/full-suite-summary.log"
     },
     {
       "command": "bun test --preload ./src/test-preload.ts src/goals src/brief src/daemon/api-brief-goal-measurements.test.ts src/daemon/api-routes.test.ts",
-      "result": "577 pass, 6 skip, 0 fail across 38 files: goals, Brief, the measurement routes and the API routes (a fresh checkout of 456dcbd3).",
+      "result": "584 pass, 6 skip, 0 fail across 38 files: goals, Brief, the measurement routes and the API routes (a fresh checkout of 90b80616).",
       "log": "evidence/Q-17/q17-tests.log"
     },
     {
@@ -95,8 +97,8 @@
       "log": "evidence/Q-17/guards.log"
     },
     {
-      "command": "remove each of 22 guarantees in turn and run its test",
-      "result": "22 of 22 removals fail their tests; source restored. The log lists the file, the exact text removed and its replacement for each.",
+      "command": "remove each of 33 guarantees in turn and run its test",
+      "result": "33 of 33 removals fail their tests; source restored. 22 from the first round (six re-anchored to code the review round changed) and 11 for the review fixes. The log lists the file, the exact text removed and its replacement for each.",
       "log": "evidence/Q-17/revert-checks.log"
     }
   ],
@@ -106,19 +108,21 @@
   "quick_verify": {
     "cwd": "repository root, on brief/q-17",
     "command": "bun test --preload ./src/test-preload.ts src/goals/observations.test.ts src/daemon/api-brief-goal-measurements.test.ts",
-    "expected": "19 pass",
-    "manual": "On a dev daemon with JARVIS_BRIEF_GOAL_MEASUREMENTS=1: POST /api/brief/goals/<id>/measurement/counted {\"requestId\":\"c1\",\"revision\":0,\"definition\":{\"unit\":\"signed partners\",\"baseline\":0,\"target\":10}}, then POST /api/brief/goals/<id>/observations six times with distinct subjects and source versions; GET /api/brief/goals/<id> shows value 6, score 0.6 and six observation references; posting the same partner again answers 409.",
+    "expected": "26 pass",
+    "manual": "On a dev daemon with JARVIS_BRIEF_GOAL_MEASUREMENTS=1: POST /api/brief/goals/<id>/measurement/counted {\"requestId\":\"c1\",\"revision\":0,\"definition\":{\"unit\":\"signed partners\",\"baseline\":0,\"target\":10}}, then POST /api/brief/goals/<id>/observations six times with distinct subjects and source versions; GET /api/brief/goals/<id> reads unknown before the first entry, then value 6, score 0.6 and six observation references; posting the same partner again answers 409.",
     "screenshot": "not applicable: no visible UI changes"
   },
-  "migration": "Additive: table goal_observation, and optional snapshot fields basis and counted. Existing goals and typed totals are unchanged. A counted snapshot names its goal's entry ledger at that revision as its evidence, so a build without Q-17 reads it as a typed total.",
+  "migration": "Additive: table goal_observation with indexes, and optional snapshot fields basis and counted. Existing goals and typed totals are unchanged. A known counted snapshot names its goal's entry ledger at that revision as its evidence and is also a timed measurement receipt, so a build without Q-17 reads it as a typed total; an unknown one reads as an unknown measure.",
   "rollback": "Revert the Q-17 commit, or disable F-15's flag. Keep goal_observation and its entries. A build without Q-17 reads a counted snapshot as a typed total whose source is the entry ledger, so its reads keep working, but it accepts a typed total on such a goal.",
   "limitations": [
     "Entries are the person's citations: user reported, never provider verified. No connected source records an entry automatically; that needs its own tested mapping, explicitly installed.",
-    "Things are matched by name without case, width or spacing differences; spelling variants (Acme Inc. and Acme) are not merged, the person corrects them.",
+    "Things are matched by name without case, width, spacing or invisible formatting differences; spelling variants (Acme Inc. and Acme) are not merged, the person corrects them. The key is stored when an entry is written, so a runtime whose Unicode data changed a stored key would start a second lineage for that thing.",
     "Counts only. Amounts such as revenue stay on F-15's typed snapshot.",
-    "A counted measure holds at most 1,000 things; a goal keeps at most 20,000 entries, corrections included.",
+    "A counted measure holds at most 1,000 things; a goal keeps at most 20,000 entries, corrections included, and a retraction is still accepted there, so an overstated count can always be lowered.",
     "Parents and children are independent: no subtree union.",
-    "No dashboard presentation: D-track cards show entries and lineage."
+    "No dashboard presentation: D-track cards show entries and lineage.",
+    "A retraction is final until a later count of the same thing, and its date is the person's statement, not checked against the entry it takes back.",
+    "The baseline only sets where the progress scale starts: things from before the goal still need their own entries."
   ],
   "found": [
     "F-15's typed total carries one citation for the whole number, so six signed partners could not be traced to six things, and a typed six and six evidenced partners looked the same.",
@@ -126,8 +130,27 @@
   ],
   "integration": [
     "Merge F-15 (#796) and its F stack first; main c06b16c1 has no goal measurements.",
-    "F-16 (#805) computes goal changes from goal_measurement_receipt rows only. A counted goal changes through goal_observation entries, so F-16 shows no change for it until it also reads entries (the count at the window's start and end by recordedAt), or Q-17 also writes a snapshot receipt per entry. Decide at integration; neither branch is wrong alone.",
+    "F-16 (#805) computes goal changes from timed goal_measurement_receipt rows; counted goals now write one per known count, carrying basis observations. F-16 must treat a change of basis between two points as a changed definition, as it does a changed unit, baseline or target, so switching a typed six to a count of three is not read as a loss of three. Documented in docs/brief-goal-measurements.md.",
     "Shared files: src/brief/contracts.ts gains an optional measurementDefinition.basis; src/vault/goal-measurement-schema.ts gains goal_observation; the measurement routes file is refactored around one body reader."
   ],
-  "next": "Dashboard presentation of entries and lineage (D-track); a tested automatic mapping from a connected source, explicitly installed; amounts as cited entries. Separate cards."
+  "next": "Dashboard presentation of entries and lineage (D-track); a tested automatic mapping from a connected source, explicitly installed; amounts as cited entries. Separate cards.",
+  "review": {
+    "first_push": "af3db12d",
+    "date": "2026-10-14",
+    "result": "An independent PR review requested changes: 2 blocking, 10 smaller, five questions. All fixed in 90b80616 with the owner's answers to two questions; 33 of 33 removals fail their tests.",
+    "blocking": [
+      "C1: the one-source-version-per-goal rule refused a date fix citing the same contract and kept a typo's contract from the right name; a source version now backs one counted thing at a time",
+      "I1: F-16 read only typed receipts, so counted goals showed stale changes or none while coverage read complete; each known count is now a timed receipt, and F-16's basis rule is documented"
+    ],
+    "minor": [
+      "the unit lock lapsed once every thing was retracted (C2); retractions were refused at the entry cap (C3); invisible characters, C1 controls and full case folding escaped the subject key (C4)",
+      "observation references collided with awareness observations (I2); receipts copied the full counted list (P1); missing tests: the entry cap, folding, two processes, corrections naming another thing or goal, the older build's read path (T1)",
+      "a doc example the validator refuses and an incomplete 409 list (D1); a correction naming another thing was told to refresh (N1); redefinitions wrote progress with an unchanged score (N2); a no-op type (N3)"
+    ],
+    "questions": [
+      "Q1 zero or unknown for a new counted measure: unknown until the first entry (owner decision)",
+      "Q2 no exit from a counted measure: intended (owner decision)",
+      "Q3 retractions are final until a later count and their date is not checked; Q4 a stored key could split after a Unicode change; Q5 the baseline only places the scale: all three kept and documented"
+    ]
+  }
 }

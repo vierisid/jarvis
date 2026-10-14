@@ -1,18 +1,18 @@
-Full suite on brief/q-17 at 456dcbd3 (local WSL2, a fresh checkout of the commit).
+Full suite on brief/q-17 at 90b80616 (local WSL2, a fresh checkout of the commit).
 $ bun test --preload ./src/test-preload.ts
- 8200 pass
+ 8207 pass
  89 skip
  7 fail
-Ran 8296 tests across 463 files. [839.60s]
+Ran 8303 tests across 463 files. [859.07s]
 
 Failures:
-(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [30.22ms]
-(fail) webapp template delivery via browser tools (integration) > (unnamed) [45692.80ms]
-(fail) browser local-file lockdown (integration, #521) > (unnamed) [45718.56ms]
-(fail) page-writable element refs (#592, integration) > (unnamed) [5000.84ms]
-(fail) browser primitives (integration) > (unnamed) [44188.23ms]
-(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [44013.37ms]
-(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [45923.89ms]
+(fail) what else in .git is checked > a legacy branches/ file is refused, an empty branches/ is not [29.23ms]
+(fail) webapp template delivery via browser tools (integration) > (unnamed) [45708.92ms]
+(fail) browser local-file lockdown (integration, #521) > (unnamed) [45527.97ms]
+(fail) page-writable element refs (#592, integration) > (unnamed) [5001.85ms]
+(fail) browser primitives (integration) > (unnamed) [45705.75ms]
+(fail) launchTestChromium > answers on the port it wrote, and close() removes browser and profile [45688.06ms]
+(fail) launchTestChromium > the browser dies with its owner even when the owner is SIGKILLed [44153.03ms]
 
 All of them also fail on the base with no Q-17 work applied (below): git config lint and Chromium launches on this machine. No other test fails.
 CI on the final head runs the full suite.
