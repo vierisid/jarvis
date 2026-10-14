@@ -1,0 +1,95 @@
+bun test v1.3.6 (d530ed99)
+
+ui/src/onboarding-next/views/tour/index.test.tsx:
+(pass) approved descriptor renders in order: {"id":"today","room":"Today","title":"Start with what matters.","body":"See what needs your attention, the work Jarvis has moved forward and the next step toward your goal.","node":"1097:16634"} [30.57ms]
+(pass) approved descriptor renders in order: {"id":"workflows","room":"Workflows","title":"Describe the work. Review the steps.","body":"Start with a prompt, inspect the canvas and return to the workflows already working for you.","node":"1097:19145"} [8.92ms]
+(pass) approved descriptor renders in order: {"id":"opportunities","room":"Opportunities","title":"A routine, ready to improve.","body":"Jarvis connects repeated work to your goal and prepares the workflow. Review it, then approve and enable.","node":"1097:21538"} [9.80ms]
+(pass) approved descriptor renders in order: {"id":"needs-you","room":"Needs you","title":"Your judgment, at the right moment.","body":"When work needs your approval, review the actual document here. Approve it, edit it or keep it as a draft.","node":"1097:23684"} [4.81ms]
+(pass) approved descriptor renders in order: {"id":"goals","room":"Goals","title":"Give the work a direction.","body":"Set what you want to achieve. Follow the path, see progress and ask Jarvis for the best next step.","node":"1097:25442"} [3.56ms]
+(pass) approved descriptor renders in order: {"id":"memory","room":"Memory","title":"Useful context stays with you.","body":"Find the facts and preferences Jarvis remembers. Open a memory to review, edit or forget it.","node":"1097:27524"} [6.07ms]
+(pass) approved descriptor renders in order: {"id":"connected-workspace","room":"Connected workspace","title":"Bring your work together.","body":"See connected computers and services here. Add another service when a workflow needs it.","node":"1097:30152"} [3.85ms]
+(pass) approved descriptor renders in order: {"id":"authority","room":"Authority","title":"You decide what needs approval.","body":"Choose the authority level and the actions that should ask first. These rules apply inside workflows too.","node":"1097:32089"} [3.05ms]
+(pass) approved descriptor renders in order: {"id":"profile","room":"Profile","title":"A workspace that knows you.","body":"Open your name in the sidebar to reach Profile, Settings and Billing. Keep your profile up to date here.","node":"1097:34599"} [3.62ms]
+(pass) approved descriptor renders in order: {"id":"settings","room":"Settings","title":"Make Jarvis feel right for you.","body":"Choose your appearance and everyday preferences. Your work stays in place when the look changes.","node":"1097:37315"} [6.79ms]
+(pass) approved descriptor renders in order: {"id":"billing","room":"Billing","title":"Keep your plan in view.","body":"Find your plan, usage and billing details together. You can return here through the account menu.","node":"1097:39626"} [2.99ms]
+(pass) approved descriptor renders in order: {"id":"pebble","room":"Pebble","title":"A conversation beside your work.","body":"Open the Pebble in the lower-right corner. Ask for help, refine a workflow or think through a decision.","node":"1097:42287"} [2.84ms]
+(pass) next does not advance without authoritative acknowledgement and double clicks emit once [16.15ms]
+(pass) back is bounded and restores Next focus without remounting action row [12.75ms]
+72 |   await render({ stepId, revision: 1 });
+73 |   const title = host.querySelector("h2")!;
+74 |   expect(document.activeElement === title).toBe(true);
+75 |   expect(next.getAttribute("aria-disabled")).toBe("true");
+76 |   props.renderer = readyRenderer; await render();
+77 |   expect(document.activeElement === next).toBe(true);
+                                               ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-u-05/ui/src/onboarding-next/views/tour/index.test.tsx:77:43)
+(fail) delayed workflows room restores its primary focus after loading [8.18ms]
+72 |   await render({ stepId, revision: 1 });
+73 |   const title = host.querySelector("h2")!;
+74 |   expect(document.activeElement === title).toBe(true);
+75 |   expect(next.getAttribute("aria-disabled")).toBe("true");
+76 |   props.renderer = readyRenderer; await render();
+77 |   expect(document.activeElement === next).toBe(true);
+                                               ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-u-05/ui/src/onboarding-next/views/tour/index.test.tsx:77:43)
+(fail) delayed pebble room restores its primary focus after loading [10.90ms]
+83 | test("delayed focus recovery waits for host navigation to be ready too", async () => {
+84 |   await mount(); const next = button("Next");
+85 |   await render({ stepId: "workflows", revision: 1, phase: "moving" });
+86 |   expect(document.activeElement === host.querySelector("h2")).toBe(true);
+87 |   await render({ phase: "ready" });
+88 |   expect(document.activeElement === next).toBe(true);
+                                               ^
+error: expect(received).toBe(expected)
+
+Expected: true
+Received: false
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-u-05/ui/src/onboarding-next/views/tour/index.test.tsx:88:43)
+(fail) delayed focus recovery waits for host navigation to be ready too [6.37ms]
+(pass) room readiness respects the user's focus choice: Back [10.73ms]
+(pass) room readiness respects the user's focus choice: Skip tour [6.36ms]
+(pass) room readiness respects the user's focus choice: returned title [12.73ms]
+(pass) skip is distinct from completion and never marks onboarding done [6.58ms]
+(pass) last step emits a Pebble handoff, not completion or a chat mutation [9.94ms]
+(pass) theme light and both sidebar states retain step and focus [5.54ms]
+(pass) theme dark and both sidebar states retain step and focus [8.73ms]
+(pass) inert room is hidden from focus and capture blocks synthetic send/submit effects [5.73ms]
+(pass) unavailable unsupported renderer cannot advance but can return or skip [4.87ms]
+(pass) unavailable loading renderer cannot advance but can return or skip [10.21ms]
+(pass) unavailable error renderer cannot advance but can return or skip [3.26ms]
+(pass) absent or incorrectly declared renderer is never invoked or considered ready [4.05ms]
+(pass) throwing or null room content fails closed [8.50ms]
+(pass) nested renderer exception is contained and disables advancement [7.03ms]
+(pass) invalid model fails closed: {"sessionId":null} [7.28ms]
+(pass) invalid model fails closed: {"sessionId":" "} [3.89ms]
+(pass) invalid model fails closed: {"revision":-1} [3.62ms]
+(pass) invalid model fails closed: {"revision":null} [3.32ms]
+(pass) invalid model fails closed: {"revision":1.5} [7.42ms]
+(pass) invalid model fails closed: {"stepId":"retired-room"} [3.40ms]
+(pass) invalid model fails closed: {"phase":"future-state"} [3.52ms]
+(pass) unknown step never invokes a fallback room [1.68ms]
+(pass) missing navigation owner and moving state never emit intents [6.75ms]
+(pass) provider errors require new revision; failed navigation can retry without changing position [6.93ms]
+(pass) late rejection cannot clear the current step's pending request [5.11ms]
+(pass) ten forward/back cycles retain the same primary and correct position [37.72ms]
+
+3 tests failed:
+(fail) delayed workflows room restores its primary focus after loading [8.18ms]
+(fail) delayed pebble room restores its primary focus after loading [10.90ms]
+(fail) delayed focus recovery waits for host navigation to be ready too [6.37ms]
+
+ 40 pass
+ 3 fail
+ 187 expect() calls
+Ran 43 tests across 1 file. [670.00ms]

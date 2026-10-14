@@ -1,5 +1,29 @@
 # ON-U-05 verification
 
+## R1 follow-up
+
+Fixes the review of `0ef5525dab47b25d3ae2eee8d4aaeb211f5bc4b1`; use the current
+PR head for this follow-up. Original implementation evidence remains below.
+
+- Deferred focus now completes when both the room and navigation are ready.
+  It only moves from the fallback heading; leaving that heading cancels recovery.
+- Added six regressions: delayed ordinary/final room, delayed host readiness,
+  Back/Skip choice preservation and leaving/returning to the heading.
+- Before the fix: three recovery tests fail ([log](r1-before.log)). After:
+  130 tests, zero failures, 516 assertions ([log](r1-tests.log)).
+- TypeScript, production UI and preview builds passed. Existing CSS warnings
+  remain. An initial preview build command lacked Bun on PATH; rerunning with
+  the installed absolute executable succeeded without code changes.
+- In-app browser: actual Enter advances into a loading room, focus temporarily
+  rests on its heading, then returns to Next. Verified in Light and Dark.
+  Actual Tab during loading moves to Skip and stays there once ready.
+- Preview now offers a delayed adapter with a 1.2-second fixture delay. Select
+  it, wait, focus Next, press Enter and leave the keyboard idle to see recovery.
+  Repeat and press Tab during loading to check user focus is respected.
+- The delta was reread against R1: no routing, persistence, capability or
+  production registration changes. No new code findings. Original native
+  screen-reader and actual D-room integration limitations remain.
+
 Source: 5c8869439f5a5ff3cc83a0bdd30f0b6366172314.
 Base: 5024ea7455a5613be0514475be32c0dee6de0edd.
 Branch: onboarding/on-u-05. Dedicated worktree, no sibling source imports.

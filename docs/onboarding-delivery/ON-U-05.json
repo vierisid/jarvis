@@ -7,7 +7,7 @@
   "target": "main",
   "baseSha": "5024ea7455a5613be0514475be32c0dee6de0edd",
   "implementationHead": "5c8869439f5a5ff3cc83a0bdd30f0b6366172314",
-  "headNote": "Delivery evidence commit follows implementation. Use the PR head for the complete delivery.",
+  "headNote": "Initial implementation is pinned above. Use the current PR head for delivery including the R1 follow-up below.",
   "worktree": "/home/vierisid/.cache/codex/jarvis-on-u-05",
   "ownedPaths": [
     "ui/src/onboarding-next/views/tour/",
@@ -56,10 +56,10 @@
       "name": "Tour and legacy onboarding",
       "command": "bun test ui/src/onboarding-next/views/tour ui/src/v2/onboarding",
       "outcome": "passed",
-      "tests": 124,
-      "newTests": 37,
+      "tests": 130,
+      "newTests": 43,
       "failures": 0,
-      "expectations": 496
+      "expectations": 516
     },
     {
       "name": "TypeScript",
@@ -147,6 +147,17 @@
     "report": "evidence/ON-U-05/review.md",
     "remainingCodeFindings": 0
   },
+  "reviewFixes": [
+    {
+      "id": "R1",
+      "reviewedHead": "0ef5525dab47b25d3ae2eee8d4aaeb211f5bc4b1",
+      "outcome": "fixed",
+      "change": "Recover primary focus after delayed room/navigation readiness only while the user remains on the fallback title. Blur cancels recovery.",
+      "regression": "Six added cases; three recovery cases fail before the fix. All 130 focused/legacy tests pass afterwards, with 516 assertions.",
+      "browser": "In-app browser: loading title to focused Next in Light and Dark; Tab to Skip while loading retains Skip focus after readiness.",
+      "evidence": "evidence/ON-U-05/verification.md#r1-follow-up"
+    }
+  ],
   "evidence": "evidence/ON-U-05/verification.md",
   "rollback": "Disable the optional view before reverting if registered. Keep legacy onboarding, journey/profile/connection/job records. No destructive migration.",
   "quickVerify": {

@@ -18,6 +18,13 @@ It does not activate onboarding or claim the real D room integration is complete
 
 ### Issues
 
+Follow-up R1 from review of `0ef5525d` is resolved: delayed room/host readiness
+restores primary focus only while the user remains on the fallback title.
+Leaving the title cancels recovery, including an intentional return to read it.
+Six regression cases cover recovery and focus preservation; three fail without
+the fix. 130 focused/legacy tests, TypeScript, both builds and browser Enter/Tab
+checks pass. See verification.md#r1-follow-up for the scoped evidence.
+
 No remaining code findings in the reviewed scope. The concrete issues found and
 fixed during this pass are recorded in verification.md: compact positioning,
 label-height drift, styling bleed, enlargement and unknown-phase handling.

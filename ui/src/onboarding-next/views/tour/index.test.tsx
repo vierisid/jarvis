@@ -65,6 +65,41 @@ test("back is bounded and restores Next focus without remounting action row", as
   button("Back").focus(); await click("Back"); expect(intents[0]?.to).toBe("today");
   await render({ stepId: "today", revision: 2 }); expect(document.activeElement).toBe(next);
 });
+test.each(["workflows", "pebble"] as const)("delayed %s room restores its primary focus after loading", async stepId => {
+  await mount(); const next = button("Next"); const readyRenderer = props.renderer;
+  await click("Next");
+  props.renderer = { isolation: "fixture-only", renderRoom: () => ({ status: "loading" }) };
+  await render({ stepId, revision: 1 });
+  const title = host.querySelector("h2")!;
+  expect(document.activeElement === title).toBe(true);
+  expect(next.getAttribute("aria-disabled")).toBe("true");
+  props.renderer = readyRenderer; await render();
+  expect(document.activeElement === next).toBe(true);
+  expect(next.getAttribute("aria-disabled")).toBe("false");
+  await act(async () => next.click());
+  expect(intents.at(-1)?.action).toBe(stepId === "pebble" ? "open-pebble" : "next");
+  expect(intents.at(-1)?.from).toBe(stepId);
+});
+test("delayed focus recovery waits for host navigation to be ready too", async () => {
+  await mount(); const next = button("Next");
+  await render({ stepId: "workflows", revision: 1, phase: "moving" });
+  expect(document.activeElement === host.querySelector("h2")).toBe(true);
+  await render({ phase: "ready" });
+  expect(document.activeElement === next).toBe(true);
+});
+test.each(["Back", "Skip tour", "returned title"])("room readiness respects the user's focus choice: %s", async target => {
+  await mount(); const readyRenderer = props.renderer;
+  props.renderer = { isolation: "fixture-only", renderRoom: () => ({ status: "loading" }) };
+  await render({ stepId: "workflows", revision: 1 });
+  const title = host.querySelector<HTMLElement>("h2")!;
+  button(target === "returned title" ? "Back" : target).focus();
+  if (target === "returned title") title.focus();
+  const chosen = document.activeElement;
+  props.renderer = readyRenderer; await render();
+  expect(document.activeElement === chosen).toBe(true);
+  await render({ theme: "dark", sidebar: "rail" });
+  expect(document.activeElement === chosen).toBe(true);
+});
 test("skip is distinct from completion and never marks onboarding done", async () => {
   await mount({ stepId: "goals" }); await click("Skip tour");
   expect(intents).toEqual([{ sessionId: "tour-1", revision: 0, from: "goals", action: "skip" }]); expect(effects).toBe(0);

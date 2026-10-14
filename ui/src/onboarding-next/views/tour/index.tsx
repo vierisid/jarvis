@@ -64,6 +64,7 @@ export function TourView({ model, renderer, onNavigate, sidebarWidth, reducedMot
   const uid = useId();
   const nextRef = useRef<HTMLButtonElement>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
+  const awaitingPrimaryFocus = useRef(false);
   const mounted = useRef(true);
   const locked = useRef<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -94,8 +95,17 @@ export function TourView({ model, renderer, onNavigate, sidebarWidth, reducedMot
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   // Keep the same Next node across steps; theme/sidebar changes must not steal focus.
   useEffect(() => {
-    (nextRef.current?.getAttribute("aria-disabled") === "false" ? nextRef.current : titleRef.current)?.focus({ preventScroll: true });
+    const primaryReady = nextRef.current?.getAttribute("aria-disabled") === "false";
+    awaitingPrimaryFocus.current = !primaryReady;
+    (primaryReady ? nextRef.current : titleRef.current)?.focus({ preventScroll: true });
   }, [model.sessionId, model.stepId]);
+  // Complete a deferred step focus only while the user remains on its fallback title.
+  useEffect(() => {
+    if (!canNavigate || !roomReady || !awaitingPrimaryFocus.current) return;
+    awaitingPrimaryFocus.current = false;
+    const title = titleRef.current;
+    if (title && title.ownerDocument.activeElement === title) nextRef.current?.focus({ preventScroll: true });
+  }, [model.sessionId, model.stepId, canNavigate, roomReady]);
 
   const navigate = (action: TourIntent["action"]) => {
     if (!canNavigate || !step || !model.sessionId || locked.current === key) return;
@@ -128,7 +138,7 @@ export function TourView({ model, renderer, onNavigate, sidebarWidth, reducedMot
           <span className="on-tour__count">{index < 0 ? "--" : String(index + 1).padStart(2, "0")} / 12</span>
           <span aria-hidden="true">·</span><span>{step?.room ?? "Unavailable"}</span>
         </p>
-        <h2 ref={titleRef} tabIndex={-1} id={`${uid}-title`}>{step?.title ?? "Your tour will resume here."}</h2>
+        <h2 ref={titleRef} tabIndex={-1} id={`${uid}-title`} onBlur={() => { awaitingPrimaryFocus.current = false; }}>{step?.title ?? "Your tour will resume here."}</h2>
         <p className="on-tour__body" id={`${uid}-body`}>{step?.body ?? "Your progress has not been changed."}</p>
         <p className="on-tour__status" role="status" aria-live="polite">{status || "\u00a0"}</p>
         <footer className="on-tour__actions">

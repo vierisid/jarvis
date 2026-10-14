@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { TOUR_STEPS, TourView, type TourIntent, type TourModel, type TourRoomRenderer } from "../index";
 import "./preview.css";
@@ -16,6 +16,14 @@ const renderer: TourRoomRenderer = { isolation: "fixture-only", renderRoom: ({ s
 function Preview() {
   const [model, setModel] = useState<TourModel>({ sessionId: "tour-fixture", stepId: "today", revision: 0, phase: "ready", theme: "light", sidebar: "expanded" });
   const [scenario, setScenario] = useState("ready");
+  const [loadedStep, setLoadedStep] = useState<string | null>(null);
+  useEffect(() => {
+    setLoadedStep(null);
+    if (scenario !== "delayed") return;
+    const timer = setTimeout(() => setLoadedStep(model.stepId), 1200);
+    return () => clearTimeout(timer);
+  }, [scenario, model.stepId]);
+  const roomState = scenario === "delayed" ? loadedStep === model.stepId ? "ready" : "loading" : scenario;
   const [reduced, setReduced] = useState(false);
   const [zoom, setZoom] = useState(false);
   const [intent, setIntent] = useState("No navigation yet.");
@@ -32,12 +40,12 @@ function Preview() {
     <label>Room <select value={model.stepId} onChange={event => setModel({ ...model, stepId: event.target.value, revision: model.revision + 1 })}>{TOUR_STEPS.map(step => <option key={step.id} value={step.id}>{step.room}</option>)}</select></label>
     <button onClick={() => setModel({ ...model, theme: model.theme === "light" ? "dark" : "light" })}>Switch to {model.theme === "light" ? "dark" : "light"}</button>
     <button onClick={() => setModel({ ...model, sidebar: model.sidebar === "rail" ? "expanded" : "rail" })}>{model.sidebar === "rail" ? "Expand" : "Collapse"} sidebar</button>
-    <label>Room adapter <select value={scenario} onChange={event => { setScenario(event.target.value); setModel({ ...model, revision: model.revision + 1 }); }}><option>ready</option><option>absent</option><option>loading</option><option>error</option></select></label>
+    <label>Room adapter <select value={scenario} onChange={event => { setScenario(event.target.value); setModel({ ...model, revision: model.revision + 1 }); }}><option>ready</option><option>delayed</option><option>absent</option><option>loading</option><option>error</option></select></label>
     <label><input type="checkbox" checked={reduced} onChange={event => setReduced(event.target.checked)} />Reduced motion</label>
     <label><input type="checkbox" checked={zoom} onChange={event => setZoom(event.target.checked)} />200% preview</label>
     <output aria-live="polite">{intent}</output>
   </div><main className="tour-preview-stage" style={{ zoom: zoom ? 2 : 1 }}>
-    <TourView model={model} onNavigate={onNavigate} reducedMotion={reduced} renderer={scenario === "absent" ? undefined : scenario === "ready" ? renderer : { isolation: "fixture-only", renderRoom: () => ({ status: scenario as "loading" | "error" }) }} />
+    <TourView model={model} onNavigate={onNavigate} reducedMotion={reduced} renderer={roomState === "absent" ? undefined : roomState === "ready" ? renderer : { isolation: "fixture-only", renderRoom: () => ({ status: roomState as "loading" | "error" }) }} />
   </main></>;
 }
 createRoot(document.getElementById("root")!).render(<Preview />);

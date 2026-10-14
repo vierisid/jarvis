@@ -32,7 +32,10 @@ primary label is Open Pebble, not Finish. ON-U-06 owns the subsequent reflow.
 - Unknown IDs/revisions/phases and missing navigation fail closed. Missing rooms
   leave Back and Skip available when the session is valid; Next stays disabled.
 - On a new session/step, focus moves to the same primary button, or the title
-  when advancement is unavailable. Theme/sidebar-only updates retain focus.
+  when advancement is unavailable. Once the room and navigation become ready,
+  the primary receives focus only if the user has stayed on that fallback title.
+  Leaving the title cancels recovery, including when the user returns to read it.
+  Theme/sidebar-only updates retain focus.
   The host must restore focus when unmounting the tour or entering U06.
 
 ## Room renderer and safety
@@ -76,6 +79,9 @@ bun ui/src/onboarding-next/views/tour/preview/serve.ts
 Open http://127.0.0.1:4414/. Next through twelve cards, Back, then Open Pebble
 or Skip. The review output shows only the intent. Switch Light/Dark, sidebar,
 reduced motion, 200% CSS preview and absent/loading/error adapters.
+To check delayed focus recovery, choose the delayed adapter, wait, then focus Next
+and press Enter. Each room takes 1.2 seconds to load in this fixture; focus should
+return from the title to Next. Tab away while loading to verify it stays put.
 The backdrop is an explicitly labeled renderer fixture, not the D dashboard.
 The preview loads the approved Google Fonts; system fonts remain available offline.
 No backend, real account, connection or workflow is used.
