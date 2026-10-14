@@ -63,11 +63,14 @@ export type PersistentAgentRequest = { specialist: string; task?: string; contex
  * request is not valid or invalid by whether it happened to need approval.
  * The orchestrator's tool-layer gate builds its card before `execute`, so an
  * over-long model call can still be shown there; approving it runs nothing.
+ * `delegate_task` starts a specialist on a task too, and its card shows them
+ * in the same budgets (`delegateTaskGate`, #990), so it is held to the same
+ * bounds.
  */
 export const AGENT_TASK_MAX_CHARS = 600;
 export const AGENT_CONTEXT_MAX_CHARS = 300;
 
-function checkTaskBounds(task: string | undefined, context: string | undefined): void {
+export function checkTaskBounds(task: string | undefined, context: string | undefined): void {
   if (task && task.length > AGENT_TASK_MAX_CHARS) {
     throw new HttpError(400, `The task is ${task.length} characters; the limit is ${AGENT_TASK_MAX_CHARS}, so the approval card can show all of it. Shorten it.`);
   }
