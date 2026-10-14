@@ -304,7 +304,9 @@ else {
   if (st.if !== undefined) out.push("the watch step has an if: (" + st.if + "), so it can be skipped on its own");
   if (st["continue-on-error"] !== undefined) out.push("the watch step has continue-on-error, so a failed release would not fail release.yml");
   for (const k of ["TAG", "SHA"]) if (!st.env?.[k]) out.push("the watch step is not given " + k);
-  const tag = steps.findIndex((s) => typeof s.run === "string" && /refs\/tags\//.test(s.run));
+  // The step that creates the tag, not any step that names one: the tag
+  // guard reads refs/tags/ too, and runs first (#998).
+  const tag = steps.findIndex((s) => typeof s.run === "string" && /-f\s+ref="refs\/tags\//.test(s.run));
   if (tag < 0 || tag > i) out.push("the watch step runs before the tag exists");
   // The bound must end before the job clock does, or the job is killed
   // with no word of which run it was waiting on.

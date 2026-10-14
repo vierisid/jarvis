@@ -44,7 +44,9 @@
 #   digest that ships, gating the publish.
 #   Plus (#684, #818) the version gates of sidecar-release.yml and
 #   installer-release.yml, executed verbatim against hostile VERSION files,
-#   and no ${{ }} inside any run: of either workflow.
+#   and no ${{ }} inside any run: of either workflow, nor (#998) of
+#   release.yml, whose tag guard is executed verbatim against a gh stub
+#   answering as gh does for each outcome measured.
 #   Plus one sink executed directly -- pack-brain's `npm version` -- with a
 #   hostile value and no validator in front of it, to show the env-quoted form
 #   is safe on its own and not just because the gate stopped the input.
@@ -2054,15 +2056,18 @@ done
 }
 
 echo
-echo "sidecar-release.yml and installer-release.yml: no \${{ }} inside run: (#684, #818)"
+echo "sidecar-release.yml, installer-release.yml and release.yml: no \${{ }} inside run: (#684, #818, #998)"
 # The reusable sidecar workflow runs in the same release, and its publish job
 # holds id-token too. Its versions come from sidecar/VERSION rather than the
 # tag, so the gate above does not cover them; the structure rule does. The
 # installer release reads sidecar/installer/VERSION the same way, and its
-# publish job holds contents: write (#818).
+# publish job holds contents: write (#818). release.yml cuts the release
+# holding contents, pull-requests and actions write, and was the last
+# workflow with an expression inside run: (#998).
 SIDECAR_WORKFLOW="${SIDECAR_RELEASE_WORKFLOW:-${HERE}/../workflows/sidecar-release.yml}"
 INSTALLER_WORKFLOW="${INSTALLER_RELEASE_WORKFLOW:-${HERE}/../workflows/installer-release.yml}"
-for f in "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
+CUT_WORKFLOW="${CUT_RELEASE_WORKFLOW:-${HERE}/../workflows/release.yml}"
+for f in "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW" "$CUT_WORKFLOW"; do
 	found="$(YQ_FILE="$f" yq run-expressions)" || {
 		no "$(basename "$f") run-expression check ran" "the bun helper failed"
 		found=""
@@ -2073,7 +2078,7 @@ for f in "$SIDECAR_WORKFLOW" "$INSTALLER_WORKFLOW"; do
 		no "$(basename "$f"): every run: takes its values through env:" "$found"
 	fi
 done
-# run_expression_mutant <file> <exact text> <replacement>
+# run_expression_mutant <file> <exact text> <replacement> [label]
 run_expression_mutant() {
 	local copy="${WORK}/run-expression-mutant.yml"
 	rm -f "$copy"
@@ -2084,9 +2089,9 @@ if (!s.includes(process.env.OLD)) process.exit(2);
 await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 ' || no "the $(basename "$1") mutant could be applied (the workflow no longer has the text it mutates)"
 	if [ -f "$copy" ] && [ -n "$(YQ_FILE="$copy" yq run-expressions)" ]; then
-		ok "reports: a \${{ }} expression back inside a $(basename "$1") run:"
+		ok "reports: a \${{ }} expression back inside a $(basename "$1") run:${4:+ (${4})}"
 	else
-		no "reports: a \${{ }} expression back inside a $(basename "$1") run:"
+		no "reports: a \${{ }} expression back inside a $(basename "$1") run:${4:+ (${4})}"
 	fi
 }
 # shellcheck disable=SC2016 # literal workflow text, not shell.
@@ -2097,6 +2102,12 @@ await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
 	run_expression_mutant "$INSTALLER_WORKFLOW" \
 		'echo "::notice::DRY RUN -- built and signed installer v${INSTALLER_VERSION} without publishing"' \
 		'echo "::notice::DRY RUN -- built and signed installer v${{ needs.resolve.outputs.version }} without publishing"'
+	run_expression_mutant "$CUT_WORKFLOW" \
+		'gh api "repos/${GITHUB_REPOSITORY}/git/refs" \' \
+		'gh api "repos/${{ github.repository }}/git/refs" \' 'Tag merge commit'
+	run_expression_mutant "$CUT_WORKFLOW" \
+		'refs="$(gh api "repos/${GITHUB_REPOSITORY}/git/matching-refs/tags/v${NEW}" 2>"$err")" || rc=$?' \
+		'refs="$(gh api "repos/${{ github.repository }}/git/matching-refs/tags/v${NEW}" 2>"$err")" || rc=$?' 'the tag guard'
 }
 
 echo
@@ -3729,6 +3740,144 @@ $(cut -f1,2 "${WORK}/sp/results")"
 		$'a real run would stop here (#958)."\n' $'a real run would stop here (#958)."\n                  exit 1\n' \
 		'dry run, a comparison that cannot complete: a warning, not a failure (#966, #958)'
 }
+
+echo
+echo "release.yml tag guard (executed verbatim) (#998)"
+# The guard decides whether the bump PR may open. It used to read any gh api
+# failure as "no such tag", so a rate limit or a 5xx let the bump merge and
+# the tag step then fail on a tag that existed. The stub prints what gh
+# 2.102.0 printed on stdout and stderr for each case, exits as gh did, and
+# records how it was called: measured against GitHub (a tag that exists, a
+# tag that does not, a repository that does not, a bad token, a refused
+# proxy) and against a local server answering each status (403, 429, 500,
+# 502, 503, and a 200 carrying HTML, nothing or an object). Ref objects are
+# cut to the field the guard reads.
+TAG_GUARD="$(YQ_FILE="${CUT_WORKFLOW}" yq step cut 'Guard - tag must not already exist')" || TAG_GUARD=""
+if [ -z "$TAG_GUARD" ]; then
+	no "found release.yml's tag guard step"
+else
+	mkdir -p "${WORK}/ghstub"
+	cat >"${WORK}/ghstub/gh" <<-STUB
+		#!/bin/sh
+		printf '%s\n' "\$*" >>"${WORK}/ghstub/calls"
+		cat "${WORK}/ghstub/stdout"
+		cat "${WORK}/ghstub/stderr" >&2
+		exit "\$(cat "${WORK}/ghstub/rc")"
+	STUB
+	chmod +x "${WORK}/ghstub/gh"
+	# tag_case <label> <free|taken|blocked|fail> <gh exit> <gh stdout> [gh stderr]
+	tag_case() {
+		local label="$1" want="$2"
+		printf '%s' "$4" >"${WORK}/ghstub/stdout"
+		printf '%s' "${5:-}" >"${WORK}/ghstub/stderr"
+		printf '%s' "$3" >"${WORK}/ghstub/rc"
+		rm -f "${WORK}/ghstub/calls"
+		# As the runner runs a step with no shell: (bash -e {0}), from a
+		# directory of its own.
+		mkdir -p "${WORK}/tg"
+		(cd "${WORK}/tg" && env -i PATH="${WORK}/ghstub:$PATH" GITHUB_REPOSITORY=o/r NEW=1.2.3 \
+			bash -e -c "$TAG_GUARD") >"${WORK}/tg/log" 2>&1
+		RC=$?
+		local calls ok_=0
+		calls="$(cat "${WORK}/ghstub/calls" 2>/dev/null)"
+		case "$want" in
+		free) [ "$RC" -eq 0 ] && ! grep -q '::error::' "${WORK}/tg/log" && ok_=1 ;;
+		taken) [ "$RC" -ne 0 ] && grep -qxF '::error::Tag v1.2.3 already exists' "${WORK}/tg/log" && ok_=1 ;;
+		blocked) [ "$RC" -ne 0 ] && grep -qxF '::error::A tag under v1.2.3/ exists, so the tag v1.2.3 cannot be created' "${WORK}/tg/log" && ok_=1 ;;
+		fail) [ "$RC" -ne 0 ] && grep -qF '::error::Could not establish whether the tag v1.2.3 exists' "${WORK}/tg/log" && ok_=1 ;;
+		esac
+		if [ "$ok_" = 1 ] && [ "$calls" = 'api repos/o/r/git/matching-refs/tags/v1.2.3' ]; then
+			ok "tag guard: ${label}"
+		else
+			no "tag guard: ${label}" "exit ${RC}; gh calls: ${calls}; log: $(cat "${WORK}/tg/log")"
+		fi
+	}
+	gh_404=$'{"message":"Not Found","documentation_url":"https://docs.github.com/rest/git/refs#list-matching-references","status":"404"}'
+	gh_401=$'{\r\n  "message": "Bad credentials",\r\n  "documentation_url": "https://docs.github.com/rest",\r\n  "status": "401"\r\n}'
+	ref_exact='[{"ref":"refs/tags/v1.2.3","object":{"sha":"0000000000000000000000000000000000000001","type":"commit"}}]'
+	ref_longer='[{"ref":"refs/tags/v1.2.3-rc.1","object":{"sha":"0000000000000000000000000000000000000002","type":"commit"}},{"ref":"refs/tags/v1.2.30","object":{"sha":"0000000000000000000000000000000000000003","type":"commit"}}]'
+	ref_both='[{"ref":"refs/tags/v1.2.3","object":{"sha":"0000000000000000000000000000000000000001","type":"commit"}},{"ref":"refs/tags/v1.2.30","object":{"sha":"0000000000000000000000000000000000000003","type":"commit"}}]'
+	tag_case 'no tag of that name (an empty list) is free' free 0 '[]'
+	tag_case 'the tag itself is taken' taken 0 "$ref_exact"
+	tag_case 'only longer tags sharing the prefix (v1.2.3-rc.1, v1.2.30) is free' free 0 "$ref_longer"
+	tag_case 'the tag among longer ones is taken' taken 0 "$ref_both"
+	# git refuses refs/tags/v1.2.3 while refs/tags/v1.2.3/x exists, so the
+	# tag step would fail after the bump merged (review of #998).
+	tag_case 'a tag under v1.2.3/ blocks it' blocked 0 '[{"ref":"refs/tags/v1.2.3/x","object":{"sha":"0000000000000000000000000000000000000004","type":"commit"}}]'
+	tag_case 'a 404 (as for a repository that does not exist) fails' fail 1 "$gh_404" 'gh: Not Found (HTTP 404)'
+	tag_case 'a bad token (401) fails' fail 1 "$gh_401" 'gh: Bad credentials (HTTP 401)'
+	tag_case 'a rate limit (403) fails' fail 1 '{"message":"API rate limit exceeded for installation ID 1.","documentation_url":"https://docs.github.com/rest/overview/rate-limits-for-the-rest-api","status":"403"}' 'gh: API rate limit exceeded for installation ID 1. (HTTP 403)'
+	tag_case 'a rate limit (429) fails' fail 1 '{"message":"API rate limit exceeded","status":"429"}' 'gh: API rate limit exceeded (HTTP 429)'
+	tag_case 'a 500 fails' fail 1 '{"message":"Server Error"}' 'gh: Server Error (HTTP 500)'
+	tag_case 'a 502 with an HTML body fails' fail 1 '<html>bad gateway</html>' 'gh: HTTP 502'
+	tag_case 'a 503 fails' fail 1 '{"message":"Service Unavailable"}' 'gh: Service Unavailable (HTTP 503)'
+	tag_case 'a network error fails' fail 1 '' 'Get "https://api.github.com/repos/o/r/git/matching-refs/tags/v1.2.3": proxyconnect tcp: dial tcp 127.0.0.1:9: i/o timeout'
+	tag_case 'gh not found at all fails' fail 127 ''
+	tag_case 'a 200 carrying HTML (a captive portal) fails' fail 0 '<html>login</html>'
+	if grep -qF 'gh api exit 0: ; answer: <html>login</html>)' "${WORK}/tg/log"; then
+		ok "tag guard: an answer that is not a list of refs is shown in the error"
+	else
+		no "tag guard: an answer that is not a list of refs is shown in the error" "$(cat "${WORK}/tg/log")"
+	fi
+	tag_case 'a 200 carrying nothing fails' fail 0 ''
+	tag_case 'a 200 carrying one ref object, not a list, fails' fail 0 '{"ref":"refs/tags/v1.2.3"}'
+	tag_case 'two JSON values fails' fail 0 $'[]\n'"$ref_exact"
+	tag_case 'a list of names, not ref objects, fails' fail 0 '["refs/tags/v1.2.3"]'
+	tag_case 'a ref object without a ref field fails' fail 0 '[{"name":"refs/tags/v1.2.3"}]'
+	tag_case 'the tag beside a ref that is not a string fails' fail 0 '[{"ref":"refs/tags/v1.2.3"},{"ref":1}]'
+	tag_case 'a ref that is not a string fails' fail 0 '[{"ref":1}]'
+	tag_case 'a failing gh that printed an empty list fails' fail 1 '[]'
+	tag_case 'gh error text carrying a workflow command fails on one line' fail 1 '' $'gh: x\n::add-mask::y\r::stop-commands::z (HTTP 500)'
+	if [ "$(grep -c '^::' "${WORK}/tg/log")" = 1 ]; then
+		ok "tag guard: gh error text cannot start a workflow command"
+	else
+		no "tag guard: gh error text cannot start a workflow command" "$(cat "${WORK}/tg/log")"
+	fi
+	# The cases hold the decision only while the step is the one they ran.
+	# Each mutant reopens one hole in a copy of the step, and the case it
+	# exists for must then fail.
+	# tag_mutant <label> <exact text> <replacement> <tag_case arguments...>
+	tag_mutant() {
+		local label="$1" old="$2" new="$3"
+		shift 3
+		local mutated
+		mutated="$(OLD="$old" NEW="$new" SRC="$TAG_GUARD" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, process.env.NEW));')" || {
+			no "tag guard mutant '${label}' could be applied (the step no longer has the text it mutates)"
+			return
+		}
+		local res; res="$(TAG_GUARD="$mutated" tag_case "$@")"; if grep -q "^  FAIL" <<<"$res"; then ok "reports: ${label}"; else no "reports: ${label}" "the case passed a step with this hole"; fi
+	}
+	# shellcheck disable=SC2016 # literal workflow text, not shell.
+	{
+		tag_mutant 'any failure read as a free tag, as before #998' \
+			$'\nfree)\n' $'\nfree|unknown)\n' \
+			'a 503 fails' fail 1 '{"message":"Service Unavailable"}' 'gh: Service Unavailable (HTTP 503)'
+		tag_mutant 'a 404 read as a free tag (#998)' \
+			'[ "$rc" -eq 0 ] || verdict=unknown' '[ "$rc" -eq 0 ] || verdict=unknown; grep -q "HTTP 404" "$err" && verdict=free' \
+			'a 404 (as for a repository that does not exist) fails' fail 1 "$gh_404" 'gh: Not Found (HTTP 404)'
+		tag_mutant 'the exit status of gh not consulted (#998)' \
+			'[ "$rc" -eq 0 ] || verdict=unknown' ':' \
+			'a failing gh that printed an empty list fails' fail 1 '[]'
+		tag_mutant 'any tag sharing the prefix read as this one (#998)' \
+			'any(.[0][]; .ref == $ref)' 'any(.[0][]; .ref | startswith($ref))' \
+			'only longer tags sharing the prefix (v1.2.3-rc.1, v1.2.30) is free' free 0 "$ref_longer"
+		tag_mutant 'the tag looked for only as the first ref (#998)' \
+			'any(.[0][]; .ref == $ref)' '.[0][0].ref == $ref' \
+			'the tag among longer ones is taken' taken 0 "$(jq -c 'reverse' <<<"$ref_both")"
+		tag_mutant 'the first of several answers taken as the answer (#998)' \
+			'if length == 1 and' 'if length >= 1 and' \
+			'two JSON values fails' fail 0 $'[]\n'"$ref_exact"
+		tag_mutant 'a malformed list of refs trusted as an answer (it reads as taken) (#998)' \
+			'(.[0] | type == "array" and all(.[]; type == "object" and (.ref | type) == "string"))' '(.[0] | type == "array")' \
+			'the tag beside a ref that is not a string fails' fail 0 '[{"ref":"refs/tags/v1.2.3"},{"ref":1}]'
+		tag_mutant 'a tag under the name read as no tag (#998 review)' \
+			' elif any(.[0][]; .ref | startswith($ref + "/")) then "blocked"' '' \
+			'a tag under v1.2.3/ blocks it' blocked 0 '[{"ref":"refs/tags/v1.2.3/x"}]'
+		tag_mutant 'the single-ref endpoint again, seen in the call it makes (#998)' \
+			'/git/matching-refs/tags/' '/git/ref/tags/' \
+			'no tag of that name (an empty list) is free' free 0 '[]'
+	}
+fi
 echo
 echo "${pass} passed, ${fail} failed"
 [ "$fail" -eq 0 ]
