@@ -12,7 +12,7 @@ import type { AgentOrchestrator } from '../../agents/orchestrator.ts';
 import type { LLMManager } from '../../llm/manager.ts';
 import type { RoleDefinition } from '../../roles/types.ts';
 import type { ToolDefinition, ToolGate } from './registry.ts';
-import { forCard, withoutCardInvisibles } from '../../util/card-text.ts';
+import { escapedLiteralForCard, forCard, withoutCardInvisibles } from '../../util/card-text.ts';
 import type { AgentTaskManager, AsyncTask } from '../../agents/task-manager.ts';
 import { createScopedToolRegistry, type ProgressCallback } from '../../agents/sub-agent-runner.ts';
 
@@ -69,6 +69,42 @@ export type PersistentAgentRequest = { specialist: string; task?: string; contex
  */
 export const AGENT_TASK_MAX_CHARS = 600;
 export const AGENT_CONTEXT_MAX_CHARS = 300;
+/** How much of a specialist id a start card shows (`manageAgentsGate`, `delegateTaskGate`). */
+export const SPECIALIST_ID_MAX_CHARS = 60;
+
+/**
+ * Refuse a specialist id the card cannot show exactly (#1019). The card names
+ * the specialist through `forCard`, which drops invisible characters and cuts
+ * at SPECIALIST_ID_MAX_CHARS, while the specialist is looked up by the raw id:
+ * `re<ZWSP>searcher` read as `researcher`, and two ids sharing their first 57
+ * characters read the same, so a card could name one role and start another.
+ *
+ * Refused rather than shown in full. Showing in full cannot fix the first
+ * case (no card shows an invisible character), and the id sits in the middle
+ * of the sentence, where `forCard` wants a short budget so a value cannot
+ * forge the rest of it. Called for an id that IS a specialist, after the
+ * lookup, so a mistyped one still gets the list of those that exist. Shipped
+ * ids are short and plain; it trips only on a role added to the install's
+ * `roles/specialists` with such an id, which then fails with a sentence saying
+ * why instead of starting something the card did not name. The same rule as
+ * #989 applied to task text, on every path that starts a specialist whose card
+ * names it: `manage_agents spawn` (and the dashboard, voice and approved cards
+ * through it) and `delegate_task`. A workflow delegation's card names no
+ * specialist at all, which is its own defect.
+ *
+ * A round trip through the card, not an allowlist: a look-alike letter from
+ * another script shows as itself, so it passes. Only role files in the
+ * install can add an id.
+ */
+export function checkSpecialistId(id: unknown): asserts id is string {
+  if (typeof id !== 'string' || forCard(id, SPECIALIST_ID_MAX_CHARS) !== id) {
+    // Escaped and bounded: the id is the very value a card cannot show.
+    const shown = escapedLiteralForCard(String(id).slice(0, SPECIALIST_ID_MAX_CHARS + 20));
+    throw new HttpError(400, `The approval card cannot show the specialist id ${shown} exactly `
+      + `(it holds invisible characters, extra whitespace, or more than ${SPECIALIST_ID_MAX_CHARS} characters), so it is not started. `
+      + 'Give the role a plain id.');
+  }
+}
 
 export function checkTaskBounds(task: string | undefined, context: string | undefined): void {
   if (task && task.length > AGENT_TASK_MAX_CHARS) {
@@ -105,6 +141,7 @@ export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string, 
   if (!role) {
     throw new HttpError(400, `Unknown specialist "${specialistId}". Available: ${Array.from(deps.specialists.keys()).join(', ')}`);
   }
+  checkSpecialistId(specialistId);
 
   const primary = deps.orchestrator.getPrimary();
   if (!primary) {
@@ -365,7 +402,7 @@ export function manageAgentsGate(params: Record<string, unknown>, lookup?: Agent
   const context = typeof params.context === 'string' && params.context.trim() ? params.context : null;
   const withContext = context ? ` with context ${quoted(context, AGENT_CONTEXT_MAX_CHARS)}` : '';
   if (params.action === 'spawn') {
-    const who = `Start a ${forCard(params.specialist, 60) || 'specialist'} background agent`;
+    const who = `Start a ${forCard(params.specialist, SPECIALIST_ID_MAX_CHARS) || 'specialist'} background agent`;
     return { actionCategory: 'spawn_agent', intent: task ? `${who}${withContext} on the task ${quoted(task, AGENT_TASK_MAX_CHARS)}` : who };
   }
   if (params.action === 'terminate') {
