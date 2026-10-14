@@ -1228,7 +1228,7 @@ mutant() {
 const s = await Bun.file(process.env.FROM).text();
 const n = s.split(process.env.OLD).length - 1;
 if (n !== 1) { console.error("anchor occurs " + n + " times"); process.exit(2); }
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 '; then
 		no "mutant '${label}' could be applied (the workflow no longer has the text it mutates)"
 		return
@@ -2090,7 +2090,7 @@ run_expression_mutant() {
 	FROM="$1" TO="$copy" OLD="$2" NEW="$3" bun -e '
 const s = await Bun.file(process.env.FROM).text();
 if (!s.includes(process.env.OLD)) process.exit(2);
-await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+await Bun.write(process.env.TO, s.replace(process.env.OLD, () => process.env.NEW));
 ' || no "the $(basename "$1") mutant could be applied (the workflow no longer has the text it mutates)"
 	if [ -f "$copy" ] && [ -n "$(YQ_FILE="$copy" yq run-expressions)" ]; then
 		ok "reports: a \${{ }} expression back inside a $(basename "$1") run:${4:+ (${4})}"
@@ -3036,7 +3036,7 @@ else
 		local label="$1" old="$2" new="$3"
 		shift 3
 		local mutated
-		mutated="$(OLD="$old" NEW="$new" SRC="$RESOLVE" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, process.env.NEW));')" || {
+		mutated="$(OLD="$old" NEW="$new" SRC="$RESOLVE" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, () => process.env.NEW));')" || {
 			no "resolve mutant '${label}' could be applied (the step no longer has the text it mutates)"
 			return
 		}
@@ -3845,7 +3845,7 @@ else
 		local label="$1" old="$2" new="$3"
 		shift 3
 		local mutated
-		mutated="$(OLD="$old" NEW="$new" SRC="$TAG_GUARD" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, process.env.NEW));')" || {
+		mutated="$(OLD="$old" NEW="$new" SRC="$TAG_GUARD" bun -e 'const s = process.env.SRC; if (!s.includes(process.env.OLD)) process.exit(2); process.stdout.write(s.replace(process.env.OLD, () => process.env.NEW));')" || {
 			no "tag guard mutant '${label}' could be applied (the step no longer has the text it mutates)"
 			return
 		}
