@@ -9,8 +9,8 @@ import { calculateGoalHealth } from './health.ts';
 import { validateProposal, planProposal } from './proposal.ts';
 import { enumeration, invalid, number, record, keys, text, validateGoalFields, GOAL_LEVELS } from './validation.ts';
 import { validateReviewScores, saveGoalReviewRecord, type GoalReviewBundle } from './review-evidence.ts';
-import { countedObservationIds, latestObservation, ledgerEvidence, MAX_COUNTED, MAX_ENTRIES_PER_GOAL, subjectKey, validateCountedDefinition,
-  validateObservationCommand, type ObservationEntry, type ObservationReceipt } from './observations.ts';
+import { countedObservationIds, hasObservations, latestObservation, ledgerEvidence, MAX_COUNTED, MAX_ENTRIES_PER_GOAL, receiptMeasurement,
+  sourceBacks, subjectKey, validateCountedDefinition, validateObservationCommand, type ObservationEntry, type ObservationReceipt } from './observations.ts';
 
 const terminal = (status: GoalStatus) => ['completed', 'failed', 'killed'].includes(status);
 const applications = new WeakMap<Database, GoalApplicationService>();
@@ -133,8 +133,11 @@ export class GoalApplicationService {
   /**
    * Q-17: measure a goal by counting cited entries, one per thing (signed
    * partners, customers, deals). Its value is the number of things whose
-   * latest entry counts them; it is never typed. Defining it again keeps the
-   * entries and their count; the unit stays once entries count toward it.
+   * latest entry counts them; it is never typed. Until its first entry it is
+   * unknown, not zero, so a typed total switched to counting keeps its legacy
+   * score and health (owner decision). Defining it again keeps the entries and
+   * their count; the unit stays once the goal has any entry. There is no way
+   * back to a typed total (owner decision).
    */
   defineCountedMeasurement(id: string, raw: unknown): GoalMeasurementReceipt {
     text(id, 'goal_id', true, 512);
@@ -145,19 +148,19 @@ export class GoalApplicationService {
       const prior = this.replayedMeasurement(id, command.requestId, serialized);
       if (prior) return prior;
       if ((before.measurement?.revision ?? 0) !== command.revision) throw new GoalMeasurementConflict('Measurement changed; refresh before saving');
-      const counted = countedObservationIds(this.db, id);
+      const known = hasObservations(this.db, id), counted = countedObservationIds(this.db, id);
       const { unit, baseline, target } = command.definition;
-      if (counted.length && before.measurement?.unit !== unit)
-        throw new GoalMeasurementConflict('A counted measure keeps its unit once entries count toward it');
-      const measurement: GoalMeasurement = { unit, baseline, target, value: counted.length, measuredAt: Date.now(),
-        evidence: ledgerEvidence(id, command.revision + 1), revision: command.revision + 1, qualification: 'user_reported',
+      // Kept entries, retracted ones included, are never re-read under another unit.
+      if (known && before.measurement?.unit !== unit)
+        throw new GoalMeasurementConflict('A counted measure keeps its unit once it has entries');
+      const revision = command.revision + 1;
+      const measurement: GoalMeasurement = { unit, baseline, target, value: known ? counted.length : null, measuredAt: known ? Date.now() : null,
+        evidence: known ? ledgerEvidence(id, revision) : null, revision, qualification: known ? 'user_reported' : null,
         basis: 'observations', counted };
+      const score = measurementProgress(measurement);
       const applied = this.applyMeasurement(id, before, measurement, `Counted measure: ${counted.length} cited ${unit} (user recorded)`,
-        { requestId: command.requestId, basis: 'observations' }, true);
-      const receipt: GoalMeasurementReceipt = { goalId: id, requestId: command.requestId, measurement, score: applied.score, progressId: applied.progressId };
-      this.db.run('INSERT INTO goal_measurement_receipt VALUES (?, ?, ?, ?, ?, ?)',
-        [id, command.requestId, serialized, JSON.stringify(receipt), null, null]);
-      return receipt;
+        { requestId: command.requestId, basis: 'observations' }, score !== null && score !== before.score);
+      return this.saveMeasurementReceipt(id, command.requestId, serialized, measurement, applied);
     });
   }
   /**
@@ -184,34 +187,64 @@ export class GoalApplicationService {
       if (definition?.basis !== 'observations') throw new GoalMeasurementConflict('Define a counted measure for this goal before recording entries');
       const input = command.entry, key = subjectKey(input.subject);
       const sourceKey = JSON.stringify([input.source.id, input.source.revision]);
-      if (this.db.query('SELECT 1 FROM goal_observation WHERE goal_id = ? AND source_key = ?').get(id, sourceKey))
-        throw new GoalMeasurementConflict('This source version is already cited by an entry on this goal');
+      // A source version backs one counted thing at a time on a goal: one contract
+      // cannot count two partners. A date fix may cite it again, and a thing
+      // taken back out frees it for the thing it should have named.
+      const backs = input.kind === 'counted' ? sourceBacks(this.db, id, sourceKey) : null;
+      if (backs && backs.subjectKey !== key)
+        throw new GoalMeasurementConflict(`This source version already backs ${backs.subject} (entry ${backs.id}); take that back out first or cite another version`);
       const latest = latestObservation(this.db, id, key);
       if (input.corrects === null && latest) throw new GoalMeasurementConflict(latest.kind === 'counted'
         ? `${latest.subject} is already counted (entry ${latest.id}); correct that entry to change it`
         : `${latest.subject} was taken back out (entry ${latest.id}); count it again by correcting that entry`);
-      if (input.corrects !== null && latest?.id !== input.corrects)
-        throw new GoalMeasurementConflict('A correction names the latest entry for the same thing; refresh before correcting');
+      if (input.corrects !== null && latest?.id !== input.corrects) {
+        const named = this.db.query<{ subject_key: string }, [string, string]>('SELECT subject_key FROM goal_observation WHERE goal_id = ? AND id = ?')
+          .get(id, input.corrects);
+        throw new GoalMeasurementConflict(!named ? 'The corrected entry is not on this goal'
+          : named.subject_key !== key ? 'The corrected entry is for a different thing; a correction keeps the same thing'
+          : 'The corrected entry has been corrected since; refresh and correct the latest one');
+      }
       if (input.kind === 'retracted' && latest?.kind !== 'counted') throw new GoalMeasurementConflict('Only a counted thing can be taken back out');
       const counting = input.kind === 'counted' && latest?.kind !== 'counted';
       const entries = this.db.query<{ n: number; seq: number }, [string]>(
         'SELECT COUNT(*) AS n, COALESCE(MAX(seq), 0) AS seq FROM goal_observation WHERE goal_id = ?',
       ).get(id)!;
-      if (entries.n >= MAX_ENTRIES_PER_GOAL) throw new GoalMeasurementConflict(`A goal keeps at most ${MAX_ENTRIES_PER_GOAL} entries`);
+      // A retraction stays possible at the cap, so an overstated count can always
+      // be lowered; each needs a counted latest entry, so they cannot pile up.
+      if (input.kind !== 'retracted' && entries.n >= MAX_ENTRIES_PER_GOAL)
+        throw new GoalMeasurementConflict(`A goal keeps at most ${MAX_ENTRIES_PER_GOAL} entries`);
       if (counting && (definition.counted?.length ?? 0) >= MAX_COUNTED) throw new GoalMeasurementConflict(`A counted measure holds at most ${MAX_COUNTED} things`);
       const entry: ObservationEntry = { id: generateId(), goalId: id, ...input, subjectKey: key, recordedAt: Date.now(), qualification: 'user_reported' };
       this.db.run('INSERT INTO goal_observation VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [entry.id, id, entries.seq + 1, command.requestId, serialized,
         key, entry.kind, sourceKey, entry.corrects, JSON.stringify(entry), '']);
-      const counted = countedObservationIds(this.db, id);
+      const counted = countedObservationIds(this.db, id), revision = definition.revision + 1;
       const measurement: GoalMeasurement = { ...definition, value: counted.length, measuredAt: entry.recordedAt,
-        evidence: ledgerEvidence(id, definition.revision + 1), revision: definition.revision + 1, counted };
+        evidence: ledgerEvidence(id, revision), revision, qualification: 'user_reported', counted };
       const applied = this.applyMeasurement(id, before, measurement, `Counted measure: ${counted.length} cited ${definition.unit} (user recorded)`,
         { requestId: command.requestId, basis: 'observations', entryId: entry.id, kind: entry.kind, corrects: entry.corrects },
         counted.length !== definition.value);
-      const receipt: ObservationReceipt = { goalId: id, requestId: command.requestId, entry, measurement, score: applied.score, progressId: applied.progressId };
+      // Every change of the count is also a timed measurement receipt, as a typed
+      // total's is, so readers of measurement history (F-16) see counted goals.
+      this.saveMeasurementReceipt(id, `entry:${entry.id}`, serialized, measurement, applied);
+      const receipt: ObservationReceipt = { goalId: id, requestId: command.requestId, entry, measurement: receiptMeasurement(measurement),
+        score: applied.score, progressId: applied.progressId };
       this.db.run('UPDATE goal_observation SET receipt = ? WHERE id = ?', [JSON.stringify(receipt), entry.id]);
       return receipt;
     });
+  }
+  /**
+   * A counted measure's receipt: timed and naming the entry ledger once the
+   * count is known, so measurement history covers counted goals too. It holds
+   * the snapshot without the list of counted entries, which only the current
+   * snapshot keeps.
+   */
+  private saveMeasurementReceipt(id: string, requestId: string, serialized: string, measurement: GoalMeasurement,
+    applied: { score: number; progressId: string | null }): GoalMeasurementReceipt {
+    const receipt: GoalMeasurementReceipt = { goalId: id, requestId, measurement: receiptMeasurement(measurement), score: applied.score, progressId: applied.progressId };
+    const evidenceKey = measurement.evidence ? JSON.stringify([measurement.evidence.id, measurement.evidence.revision]) : null;
+    this.db.run('INSERT INTO goal_measurement_receipt VALUES (?, ?, ?, ?, ?, ?)',
+      [id, requestId, serialized, JSON.stringify(receipt), evidenceKey, measurement.measuredAt]);
+    return receipt;
   }
   /** An exact replay of a committed measurement request returns its receipt; different content conflicts. */
   private replayedMeasurement(id: string, requestId: string, serialized: string): GoalMeasurementReceipt | null {

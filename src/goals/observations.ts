@@ -1,5 +1,5 @@
 import type { Database } from 'bun:sqlite';
-import { plainLabel, type GoalMeasurementReceipt } from './measurements';
+import { plainLabel, type GoalMeasurement, type GoalMeasurementReceipt } from './measurements';
 import { enumeration, invalid, keys, number, record } from './validation';
 
 /**
@@ -51,8 +51,7 @@ export interface ObservationEntry extends ObservationEntryInput {
   recordedAt: number;
   qualification: 'user_reported';
 }
-export interface ObservationReceipt extends Omit<GoalMeasurementReceipt, 'requestId'> {
-  requestId: string;
+export interface ObservationReceipt extends GoalMeasurementReceipt {
   entry: ObservationEntry;
 }
 
@@ -74,6 +73,7 @@ export function validateObservationCommand(raw: unknown): ObservationCommand {
   const e = record(input.entry, 'entry'); keys(e, ['kind', 'subject', 'observedAt', 'source', 'corrects'], 'entry');
   const kind = enumeration(e.kind, ['counted', 'retracted'] as const, 'entry.kind');
   const subject = plainLabel(e.subject, 'entry.subject', 200);
+  if (!subjectKey(subject)) invalid('entry.subject', 'must name something visible');
   const observedAt = number(e.observedAt, 'entry.observedAt', 0, Date.now(), true);
   const s = record(e.source, 'entry.source'); keys(s, ['id', 'revision'], 'entry.source');
   const source = { id: plainLabel(s.id, 'entry.source.id', 512), revision: plainLabel(s.revision, 'entry.source.revision', 128) };
@@ -87,13 +87,38 @@ export function ledgerEvidence(goalId: string, revision: number): { id: string; 
   return { id: `observations:${goalId}`, revision: `r${revision}` };
 }
 
-/** Who or what was counted, compared without case, width or spacing differences. */
+/**
+ * Who or what was counted, compared without case, width, spacing or invisible
+ * formatting differences: `ＡＣＭＥ`, `Acme` followed by a zero-width space and
+ * `acme` are one partner, and `Straße` is `STRASSE`. Computed when an entry is
+ * written and stored with it.
+ */
 export function subjectKey(subject: string): string {
-  return subject.normalize('NFKC').replace(/\s+/gu, ' ').trim().toLocaleLowerCase('en-US');
+  return subject.normalize('NFKC').replace(/\p{Cf}/gu, '').replace(/\s+/gu, ' ').trim().toUpperCase().toLowerCase();
 }
 
 /** An entry no later entry corrects: the latest word on its thing. */
 const LATEST = 'NOT EXISTS (SELECT 1 FROM goal_observation later WHERE later.corrects = goal_observation.id)';
+
+/** A snapshot as receipts keep it: without the list of counted entries, which only the current snapshot holds. */
+export function receiptMeasurement(measurement: GoalMeasurement): GoalMeasurement {
+  const { counted: _counted, ...rest } = measurement;
+  return rest;
+}
+
+/** Whether the goal has any entry at all, a retraction included: its count is then known, even at zero. */
+export function hasObservations(db: Database, goalId: string): boolean {
+  return !!db.query<{ one: number }, [string]>('SELECT 1 AS one FROM goal_observation WHERE goal_id = ? LIMIT 1').get(goalId);
+}
+/** The thing whose current count a source version backs on this goal, or null when it backs none. */
+export function sourceBacks(db: Database, goalId: string, sourceKey: string): { id: string; subject: string; subjectKey: string } | null {
+  const row = db.query<{ entry: string }, [string, string]>(
+    `SELECT entry FROM goal_observation WHERE goal_id = ? AND source_key = ? AND kind = 'counted' AND ${LATEST}`,
+  ).get(goalId, sourceKey);
+  if (!row) return null;
+  const entry = JSON.parse(row.entry) as ObservationEntry;
+  return { id: entry.id, subject: entry.subject, subjectKey: entry.subjectKey };
+}
 
 /** Every entry of a goal, oldest first, corrections included. */
 export function listObservations(db: Database, goalId: string): ObservationEntry[] {

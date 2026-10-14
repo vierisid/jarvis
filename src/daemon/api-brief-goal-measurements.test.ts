@@ -124,7 +124,8 @@ test('Q-17: counted measures and their entries go through the same gated routes,
   const table = routes();
   const define = { requestId: 'count-1', revision: 0, definition: { unit: 'signed partners', baseline: 0, target: 10 } };
   const defined = await call(table, counted, 'POST', define);
-  expect(defined).toMatchObject({ status: 200, body: { measurement: { basis: 'observations', value: 0 } } });
+  expect(defined).toMatchObject({ status: 200, body: { measurement: { basis: 'observations', value: null } } });
+  expect((await call(table)).body.data).toMatchObject({ measurement: null, progress: { value: null, basis: 'unknown' } });
   expect((await call(table, write, 'GET', undefined, '?requestId=count-1')).body.receipt).toEqual(defined.body);
   const acme = { requestId: 'acme', entry: { kind: 'counted', subject: 'Acme', observedAt: Date.now() - 1000,
     source: { id: 'crm:acme', revision: 'v1' }, corrects: null } };
@@ -140,5 +141,7 @@ test('Q-17: counted measures and their entries go through the same gated routes,
   // A typed total on a counted goal is a conflict, not a write.
   expect((await call(table, write, 'POST', command())).status).toBe(409);
   expect((await call(table)).body.data).toMatchObject({ measurementDefinition: { basis: 'observations' },
-    measurement: { value: 1, qualification: 'user_reported', provenance: [{ kind: 'observation', id: saved.body.entry.id, revision: null }] } });
+    measurement: { value: 1, qualification: 'user_reported', provenance: [{ kind: 'observation', id: `goal_observation:${saved.body.entry.id}`, revision: null }] } });
+  // The entry's timed snapshot receipt is recoverable through the measurement route too.
+  expect((await call(table, write, 'GET', undefined, `?requestId=entry:${saved.body.entry.id}`)).body.receipt).toMatchObject({ measurement: { value: 1 } });
 });

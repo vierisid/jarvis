@@ -37,10 +37,10 @@ export interface GoalMeasurementReceipt {
   progressId: string | null;
 }
 export class GoalMeasurementConflict extends Error {}
-/** Trimmed plain text: no surrounding space and no control characters. */
+/** Trimmed plain text: no surrounding space and no control characters (C0, DEL or C1). */
 export const plainLabel = (value: unknown, path: string, max: number) => {
   const result = text(value, path, true, max);
-  if (result !== result.trim() || /[\x00-\x1f\x7f]/.test(result)) invalid(path, 'must be trimmed plain text');
+  if (result !== result.trim() || /\p{Cc}/u.test(result)) invalid(path, 'must be trimmed plain text');
   return result;
 };
 export function validateMeasurementCommand(raw: unknown): GoalMeasurementCommand {

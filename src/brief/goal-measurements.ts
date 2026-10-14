@@ -21,9 +21,10 @@ export function projectMeasuredGoal(goal: Goal): BriefGoal {
     measurement: measurement?.value != null ? {
       value: measurement.value, unit: measurement.unit, baseline: measurement.baseline, target: measurement.target,
       asOf: measurement.measuredAt!, qualification: 'user_reported',
-      // A counted measure names each counted thing's entry (Q-17); a typed total names its one source.
+      // A counted measure names each counted thing's entry (Q-17), namespaced
+      // apart from awareness observations; a typed total names its one source.
       provenance: measurement.basis === 'observations'
-        ? (measurement.counted ?? []).map(id => ({ kind: 'observation' as const, id, revision: null }))
+        ? (measurement.counted ?? []).map(id => ({ kind: 'observation' as const, id: `goal_observation:${id}`, revision: null }))
         : [{ kind: 'source', id: measurement.evidence!.id, revision: measurement.evidence!.revision }],
     } : null,
   };
