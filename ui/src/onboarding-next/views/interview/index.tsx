@@ -128,12 +128,33 @@ function InterviewPanel({ model, onDraftChange, onSubmit, onRetry, onSkip, onCon
     observer.observe(box);
     return () => observer.disconnect();
   }, [terminal]);
-  useLayoutEffect(() => {
+  const resizeComposer = () => {
     const input = inputRef.current;
     if (!input) return;
     input.style.height = "0px";
-    input.style.height = `${Math.max(44, Math.min(input.scrollHeight, 132))}px`;
-  }, [model.draft.text, terminal]);
+    const border = input.offsetHeight - input.clientHeight;
+    input.style.height = `${Math.max(44, Math.min(input.scrollHeight + border, 132))}px`;
+  };
+  useLayoutEffect(resizeComposer, [model.draft.text, terminal]);
+  useLayoutEffect(() => {
+    const input = inputRef.current;
+    if (!input || typeof ResizeObserver === "undefined") return;
+    let width = input.getBoundingClientRect().width;
+    let frame: number | undefined;
+    const observer = new ResizeObserver(() => {
+      const nextWidth = input.getBoundingClientRect().width;
+      if (nextWidth === width) return; // Height changes must not form a resize loop.
+      width = nextWidth;
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+      // Changing observed geometry inside delivery causes browser loop warnings.
+      frame = window.requestAnimationFrame(() => { frame = undefined; resizeComposer(); });
+    });
+    observer.observe(input);
+    return () => {
+      observer.disconnect();
+      if (frame !== undefined) window.cancelAnimationFrame(frame);
+    };
+  }, [terminal]);
   useLayoutEffect(() => {
     if (retryFocus.current && model.phase !== "error") {
       if (document.activeElement === document.body) {

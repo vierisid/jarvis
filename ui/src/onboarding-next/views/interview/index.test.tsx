@@ -176,4 +176,42 @@ describe("ON-U-04 written interview", () => {
     expect(stage.scrollTop).toBe(445); expect(button("Latest question")).toBeDefined();
     await click("Latest question"); expect(stage.scrollTop).toBe(0); expect(button("Latest question")).toBeUndefined();
   });
+  test("resizing an unchanged draft grows the composer without a height-observer loop", async () => {
+    const original = globalThis.ResizeObserver;
+    const originalFrame = window.requestAnimationFrame;
+    const frames: FrameRequestCallback[] = [];
+    window.requestAnimationFrame = callback => { frames.push(callback); return frames.length; };
+    const observations: { target?: Element; notify: () => void }[] = [];
+    globalThis.ResizeObserver = class {
+      record: { target?: Element; notify: () => void };
+      constructor(callback: () => void) { this.record = { notify: callback }; observations.push(this.record); }
+      observe(target: Element) { this.record.target = target; }
+      disconnect() {}
+      unobserve() {}
+    } as unknown as typeof ResizeObserver;
+    try {
+      await mount();
+      const field = input();
+      let width = 800;
+      Object.defineProperty(field, "scrollHeight", { configurable: true, get: () => width < 300 ? 82 : 42 });
+      field.getBoundingClientRect = () => ({ width } as DOMRect);
+      const observed = observations.find(item => item.target === field);
+      expect(observed).toBeDefined();
+      const resize = async () => { await act(async () => { observed!.notify(); frames.splice(0).forEach(callback => callback(0)); }); };
+      await resize();
+      expect(field.style.height).toBe("44px");
+      width = 278;
+      await resize();
+      expect(field.style.height).toBe("82px");
+      await resize();
+      expect(field.style.height).toBe("82px");
+      expect(field.value).toBe(answer.text);
+      width = 800;
+      await resize();
+      expect(field.style.height).toBe("44px");
+    } finally {
+      globalThis.ResizeObserver = original;
+      window.requestAnimationFrame = originalFrame;
+    }
+  });
 });
