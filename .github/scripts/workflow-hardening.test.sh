@@ -18,7 +18,12 @@
 #      or a `pull_request_target` trigger. A fixed list of "the publish path"
 #      missed release.yml and sync-pieces-catalog.yml, whose tokens can create
 #      a v* tag and dispatch a real release, and installer-release.yml, which
-#      signs and publishes installers.
+#      signs and publishes installers. (#984) The same holds for every
+#      workflow a push or a pull request can start, whatever it holds: a PR
+#      opened with RELEASE_PR_TOKEN starts its CI with no approval, on a tree
+#      carrying freshly fetched upstream data, so a moved tag there runs on
+#      the runner unattended. Derived the same way: any trigger other than
+#      schedule and workflow_dispatch, which no push or PR can cause, counts.
 #   4. The catalog sync (#686) handles third-party data -- the activepieces
 #      monorepo, npm registry answers, and the dependencies whose lifecycle
 #      scripts `bun install` runs -- only in jobs with no write scope and no
@@ -96,8 +101,8 @@ WORK="$(mktemp -d)" || exit 1
 trap 'rm -rf "$WORK"' EXIT
 
 # check <rule> <file>: one violation per line, nothing when clean.
-#   rule = scoped | publish-perms | pinned | authority | untrusted | mutable
-#          | narrow | pushcache | catalog-pr | npmpin
+#   rule = scoped | publish-perms | pinned | authority | reach | untrusted
+#          | mutable | narrow | pushcache | catalog-pr | npmpin
 check() {
 	# shellcheck disable=SC2016 # JavaScript source, not shell: nothing should expand.
 	RULE="$1" FILE="$2" REPO="${REPO_DIR:-${HERE}/../..}" bun -e '
@@ -162,6 +167,18 @@ if (rule === "authority") {
   if (grants(doc.permissions) || Object.values(jobs).some((j) => grants(j.permissions)) ||
       triggers.includes("pull_request_target") || secret || Object.values(jobs).some((j) => j.secrets === "inherit"))
     out.push("yes");
+}
+if (rule === "reach") {
+  // Prints "yes" when a push or a pull request can start the workflow (#984).
+  // The triggers that cannot are listed, not the ones that can: an event
+  // added later (workflow_run, merge_group, a workflow_call from a PR
+  // workflow, a repository_dispatch the PAT can send) counts until it is
+  // argued for here. Branch and path filters are not read: a bot PR touches
+  // whatever its workflow adds, and a filter is not a boundary.
+  const on = doc.on ?? doc[true] ?? {};
+  const triggers = typeof on === "string" ? [on] : Array.isArray(on) ? on : Object.keys(on);
+  const quiet = new Set(["schedule", "workflow_dispatch"]);
+  if (!triggers.length || triggers.some((t) => !quiet.has(String(t)))) out.push("yes");
 }
 if (rule === "catalog-pr") {
   // The catalog PR is opened with RELEASE_PR_TOKEN, never GITHUB_TOKEN: GitHub
@@ -1113,18 +1130,86 @@ echo "the publish path holds nothing by default"
 expect_clean "release-exec.yml: permissions {} at the top, every job explicit" publish-perms "$WORKFLOWS/release-exec.yml"
 
 echo
-echo "every action in a workflow that holds authority is pinned to a commit"
+echo "every action in a workflow that holds authority, or that a push or a PR can start, is pinned to a commit"
 held=0
+reached=()
+authed=()
+pinchecked=()
 for f in "$WORKFLOWS"/*.yml; do
 	auth="$(check authority "$f")" || {
 		no "$(basename "$f"): authority check ran" "the bun helper failed"
 		continue
 	}
+	reach="$(check reach "$f")" || {
+		no "$(basename "$f"): reach check ran" "the bun helper failed"
+		continue
+	}
+	[ -n "$reach" ] && reached+=("$(basename "$f")")
+	[ -n "$auth" ] && authed+=("$(basename "$f")")
+	[ -n "$auth" ] || [ -n "$reach" ] || continue
+	pinchecked+=("$(basename "$f")")
+	expect_clean "$(basename "$f")" pinned "$f"
 	[ -n "$auth" ] || continue
 	held=$((held + 1))
-	expect_clean "$(basename "$f")" pinned "$f"
 	expect_clean "$(basename "$f"): fetches nothing by a floating version or an undigested image" mutable "$f"
 done
+# The two PR workflows that hold no authority, which only the reach
+# derivation brings under the pin (#984): read from what the loop above
+# pin-checked, not from what reach answered, so a loop that stopped
+# applying the pin to reached workflows fails here (review of #984).
+for f in docker-build.yml test.yml; do
+	if printf '%s\n' "${pinchecked[@]}" | grep -qxF "$f"; then
+		ok "the pin rule is applied to ${f}, which a PAT-opened PR starts (#984)"
+	else
+		no "the pin rule is applied to ${f}, which a PAT-opened PR starts (#984)" "pin-checked: ${pinchecked[*]}"
+	fi
+done
+# ...and to exactly the workflows that hold authority or that a push or a
+# PR can start, no fewer.
+want="$(printf '%s\n' "${authed[@]}" "${reached[@]}" | sed '/^$/d' | LC_ALL=C sort -u | tr '\n' ' ')"
+got="$(printf '%s\n' "${pinchecked[@]}" | LC_ALL=C sort -u | tr '\n' ' ')"
+if [ -n "$want" ] && [ "$got" = "$want" ]; then
+	ok "the pin rule is applied to every workflow that holds authority or that a push or a PR can start (#984)"
+else
+	no "the pin rule is applied to every workflow that holds authority or that a push or a PR can start (#984)" "wanted: ${want}; pin-checked: ${got}"
+fi
+# Every loop here reads *.yml, and GitHub runs *.yaml from the same
+# directory too, so one named that way would pass every rule unread
+# (security review of #984). None may exist.
+# yaml_check <dir>: the .yaml files in it, one per line.
+yaml_check() { find "$1" -maxdepth 1 -name '*.yaml' -printf '%f\n'; }
+found="$(yaml_check "$WORKFLOWS")"
+if [ -z "$found" ]; then ok "no workflow is named *.yaml, which every rule here would skip (#984)"; else no "no workflow is named *.yaml, which every rule here would skip (#984)" "$found"; fi
+rm -rf "${WORK}/yamldir" && mkdir -p "${WORK}/yamldir" && cp "$WORKFLOWS/test.yml" "${WORK}/yamldir/evade.yaml"
+if [ "$(yaml_check "${WORK}/yamldir")" = "evade.yaml" ]; then ok "reports: a workflow named *.yaml (#984)"; else no "reports: a workflow named *.yaml (#984)"; fi
+# reach_case <label> <yes|no> <file> <exact text> <replacement>: the
+# derivation on a mutated copy, both ways, so it can be neither always yes
+# nor always no.
+reach_case() {
+	local copy="${WORK}/reach.yml"
+	if ! FROM="$3" TO="$copy" OLD="$4" NEW="$5" bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.TO, s.replace(process.env.OLD, process.env.NEW));
+'; then
+		no "reach mutant '$1' could be applied (the workflow no longer has the text it mutates)"
+		return
+	fi
+	local got
+	got="$(check reach "$copy")" || got="(the bun helper failed)"
+	if { [ "$2" = yes ] && [ "$got" = yes ]; } || { [ "$2" = no ] && [ -z "$got" ]; }; then ok "reach: $1"; else no "reach: $1" "wanted ${2}, got: ${got:-nothing}"; fi
+}
+# docker-build.yml holds no authority, so every answer below is the
+# trigger derivation alone. Its `on:` key is renamed out of the way and a
+# new one put in front.
+reach_case 'a workflow only a schedule or a dispatch starts is not reached (#984)' no "$WORKFLOWS/docker-build.yml" \
+	$'\non:\n' $'\non:\n  schedule:\n    - cron: "0 0 * * *"\n  workflow_dispatch:\nx-was-on:\n'
+reach_case 'a workflow_run trigger, which a PR run can fire, is reached (#984)' yes "$WORKFLOWS/docker-build.yml" \
+	$'\non:\n' $'\non:\n  workflow_run:\n    workflows: [Tests]\nx-was-on:\n'
+reach_case 'a reusable workflow, which a PR workflow can call, is reached (#984)' yes "$WORKFLOWS/docker-build.yml" \
+	$'\non:\n' $'\non:\n  workflow_call:\n  workflow_dispatch:\nx-was-on:\n'
+reach_case 'a bare pull_request trigger is reached (#984)' yes "$WORKFLOWS/docker-build.yml" \
+	$'\non:\n' $'\non: pull_request\nx-was-on:\n'
 # Both npm publishers install the same npm, so a bump cannot leave one on
 # the version Trusted Publishing was proven with and the other not.
 npm_pins="$(for f in release-exec.yml sidecar-release.yml; do
@@ -1630,8 +1715,18 @@ done
 	expect_caught 'a cached build uploading the directory holding its output (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
 		'      - name: Check the release cache guard has not been disarmed' $'      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: image\n          path: ${{ runner.temp }}\n      - name: Check the release cache guard has not been disarmed' \
 		'restores cache-from "type=gha" in a job that builds an image and uploads an artifact'
+	# The whole build step is replaced, so its text is read from the
+	# workflow (it carries the action SHA, which an anchor never spells).
+	build_step="$(FILE="$WORKFLOWS/docker-build.yml" bun -e '
+const s = await Bun.file(process.env.FILE).text();
+const a = s.indexOf("      - name: Build Docker image (validate)\n        uses: docker/build-push-action@");
+const end = "          cache-to: type=gha,mode=max\n";
+const b = s.indexOf(end, a);
+if (a < 0 || b < 0) process.exit(2);
+process.stdout.write(s.slice(a, b + end.length));
+')" || build_step="(the build step was not found)"
 	expect_caught 'a classic docker build with a cache, saved and uploaded (#868 review)' pushcache "$WORKFLOWS/docker-build.yml" \
-		$'      - name: Build Docker image (validate)\n        uses: docker/build-push-action@v7\n        with:\n          context: .\n          file: ./Dockerfile\n          platforms: linux/amd64\n          push: false\n          load: true\n          tags: ${{ env.IMAGE_TAG }}\n          build-args: VERSION=0.0.0-ci\n          cache-from: type=gha\n          cache-to: type=gha,mode=max\n' \
+		"$build_step"$'\n' \
 		$'      - run: docker build --cache-from jarvis:ci -t jarvis:ci . && docker save jarvis:ci -o i.tar\n      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1\n        with:\n          name: image\n          path: i.tar\n' \
 		'runs a build with --cache-from in a job that builds an image and uploads an artifact'
 }
@@ -1657,12 +1752,32 @@ expect_caught 'write scopes back at the top of the publish path' publish-perms "
 	$'permissions: {}\n' $'permissions:\n  contents: write\n'
 expect_caught 'a major tag on the publish path' pinned "$WORKFLOWS/release-exec.yml" \
 	'uses: softprops/action-gh-release@' 'uses: softprops/action-gh-release@v2 #'
-# A read-only workflow gaining a write scope must come under the pin rule:
-# test.yml still uses tags, so granting it write has to surface them.
+# #984: the PR workflows, which hold no authority, each back on a tag.
+expect_caught 'the image build of a catalog PR back on a tag (#984)' pinned "$WORKFLOWS/docker-build.yml" \
+	'uses: docker/build-push-action@' 'uses: docker/build-push-action@v7 #' \
+	'docker-build: uses docker/build-push-action@v7 (not a full commit SHA)'
+expect_caught 'the buildx setup of a catalog PR back on a tag (#984)' pinned "$WORKFLOWS/docker-build.yml" \
+	'uses: docker/setup-buildx-action@' 'uses: docker/setup-buildx-action@v4 #' \
+	'docker-build: uses docker/setup-buildx-action@v4 (not a full commit SHA)'
+expect_caught 'the checkout of a catalog PR image build back on a tag (#984)' pinned "$WORKFLOWS/docker-build.yml" \
+	'uses: actions/checkout@' 'uses: actions/checkout@v7 #' \
+	'docker-build: uses actions/checkout@v7 (not a full commit SHA)'
+expect_caught 'the test run of every PR back on a tag (#984)' pinned "$WORKFLOWS/test.yml" \
+	'uses: dorny/paths-filter@' 'uses: dorny/paths-filter@v4 #' \
+	'changes: uses dorny/paths-filter@v4 (not a full commit SHA)'
+# A read-only workflow gaining a write scope must come under the pin rule.
+# test.yml is pinned since #984, so the copy also takes one action back to a
+# tag; and the unmutated test.yml must hold no authority, or the yes below
+# would not be the write scope.
+if [ -z "$(check authority "$WORKFLOWS/test.yml")" ]; then
+	ok "test.yml, as committed, holds no authority (so the two cases below are the mutation)"
+else
+	no "test.yml, as committed, holds no authority (so the two cases below are the mutation)"
+fi
 copy="${WORK}/authority.yml"
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("permissions:\n  contents: read\n", "permissions:\n  contents: write\n"));
+await Bun.write(process.env.TO, s.replace("permissions:\n  contents: read\n", "permissions:\n  contents: write\n").replace("uses: actions/checkout@", "uses: actions/checkout@v7 #"));
 '
 if [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
 	ok "reports: a read-only workflow that gains a write scope while using tags"
@@ -1670,11 +1785,11 @@ else
 	no "reports: a read-only workflow that gains a write scope while using tags"
 fi
 # #687: a secret is authority on its own. test.yml stays read-only here and
-# only gains a secret reference; its tags must surface.
+# only gains a secret reference; its tag (put back, as above) must surface.
 # shellcheck disable=SC2016 # JavaScript source, not shell.
 FROM="$WORKFLOWS/test.yml" TO="$copy" bun -e '
 const s = await Bun.file(process.env.FROM).text();
-await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n"));
+await Bun.write(process.env.TO, s.replace("\nenv:\n", "\nenv:\n  SOME_KEY: ${{ secrets.SOME_KEY }}\n").replace("uses: actions/checkout@", "uses: actions/checkout@v7 #"));
 '
 if [ -n "$(check authority "$copy")" ] && [ -n "$(check pinned "$copy")" ]; then
 	ok "reports: a read-only workflow that reads a secret while using tags"
@@ -1692,11 +1807,27 @@ if [ -z "$(check authority "$copy")" ]; then
 else
 	no "a read-only workflow reading only secrets.GITHUB_TOKEN holds no authority"
 fi
-# #687: the pin rule descends into local composite actions. bun-setup still
-# uses tags, so an authority workflow that starts using it must be reported.
-expect_caught 'a local composite action with tagged actions, used where authority is held' pinned "$WORKFLOWS/release.yml" \
-	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/bun-setup
-      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
+# #687: the pin rule descends into local composite actions. bun-setup is
+# pinned since #984, so a copy of the repository with its setup-bun back on
+# a tag stands in for it (the rule reads local actions from REPO_DIR).
+rm -rf "${WORK}/tagged-repo" && mkdir -p "${WORK}/tagged-repo/.github" && cp -R "${HERE}/../actions" "${WORK}/tagged-repo/.github/actions"
+if FROM="${WORK}/tagged-repo/.github/actions/bun-setup/action.yml" OLD='    - uses: oven-sh/setup-bun@' NEW='    - uses: oven-sh/setup-bun@v2 #' bun -e '
+const s = await Bun.file(process.env.FROM).text();
+if (!s.includes(process.env.OLD)) process.exit(2);
+await Bun.write(process.env.FROM, s.replace(process.env.OLD, process.env.NEW));
+'; then
+	REPO_DIR="${WORK}/tagged-repo" expect_caught 'a local composite action with tagged actions, used where authority is held' pinned "$WORKFLOWS/release.yml" \
+		'      - uses: oven-sh/setup-bun@' $'      - uses: ./.github/actions/bun-setup\n      - uses: oven-sh/setup-bun@' \
+		'(via ./.github/actions/bun-setup): uses oven-sh/setup-bun@v2 (not a full commit SHA)'
+	# ...and in the PR workflow that runs it, which holds no authority (#984).
+	if found="$(REPO_DIR="${WORK}/tagged-repo" check pinned "$WORKFLOWS/test.yml")" && grep -qF '(via ./.github/actions/bun-setup): uses oven-sh/setup-bun@v2 (not a full commit SHA)' <<<"$found"; then
+		ok "reports: a tag back in the composite action test.yml runs (#984)"
+	else
+		no "reports: a tag back in the composite action test.yml runs (#984)" "got: ${found}"
+	fi
+else
+	no "the bun-setup tag mutant could be applied (action.yml no longer has the text it mutates)"
+fi
 expect_caught 'a cached Bun inside a local composite action, used where authority is held' mutable "$WORKFLOWS/release.yml" \
 	'      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0' '      - uses: ./.github/actions/bun-setup
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0'
@@ -2220,10 +2351,10 @@ echo "no checkout leaves a write token or a secret on disk, and a push brings it
 		$'        with:\n          persist-credentials: false\n      - uses: actions/setup-go@' '      - uses: actions/setup-go@' \
 		'update: checkout leaves the token in .git/config'
 	expect_caught 'a read-only job persisting a secret it checked out with (#982)' narrow "$WORKFLOWS/docker-build.yml" \
-		$'      - uses: actions/checkout@v7\n' $'      - uses: actions/checkout@v7\n        with:\n          token: ${{ secrets.SOME_PAT }}\n' \
+		$'\n\n      - name: Set up Docker Buildx\n' $'\n        with:\n          token: ${{ secrets.SOME_PAT }}\n\n      - name: Set up Docker Buildx\n' \
 		'docker-build: checkout leaves the token in .git/config'
 	expect_caught 'the same checkout spelled in another case (#982)' narrow "$WORKFLOWS/docker-build.yml" \
-		$'      - uses: actions/checkout@v7\n' $'      - uses: Actions/Checkout@v7\n        with:\n          token: ${{ secrets.SOME_PAT }}\n' \
+		$'      - uses: actions/checkout@' $'      - with:\n          token: ${{ secrets.SOME_PAT }}\n        uses: Actions/Checkout@' \
 		'docker-build: checkout leaves the token in .git/config'
 	expect_caught 'the release branch pushed with no credential helper (#982)' narrow "$WORKFLOWS/release.yml" \
 		$'          GIT_CONFIG_KEY_1: credential.https://github.com.helper\n' '' \
