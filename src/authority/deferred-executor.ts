@@ -189,9 +189,11 @@ export class DeferredExecutor {
     // must not execute. Close the request out (mirroring the error path)
     // so it doesn't linger as an approved-but-never-executed zombie.
     // One exemption (#963): a card that only STOPS a background agent. Under
-    // Pause or Kill the agent's model loop still runs, and at the shipped
-    // levels a card is the only way to stop it, so blocking that card would
-    // leave the halted system spending tokens with no way to end it.
+    // Pause the agent's model loop still runs, and at the shipped levels a
+    // card is the only way to stop it, so blocking that card would leave the
+    // paused system spending tokens with no way to end it. Under Kill the
+    // task is already cancelled (#987); a stop card then still removes the
+    // agent itself, which Kill does not, and that is harmless.
     if (this.emergencyController && !this.emergencyController.canExecute() && !isAgentStopCard(request)) {
       const state = this.emergencyController.getState();
       const blocked = `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`;

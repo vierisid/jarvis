@@ -248,7 +248,7 @@ function lifecycleRefusalResponse(err: AgentLifecycleRefusal): Response {
   if (err.kind === 'approval_required' && err.approvalId) {
     return json({ approval_required: true, approval_id: err.approvalId, message: err.message }, 202);
   }
-  return error(err.message, err.kind === 'halted' ? 409 : 403);
+  return error(err.message, err.kind === 'halted' ? 409 : err.kind === 'too_many_waiting' ? 429 : 403);
 }
 
 function errorFromException(err: unknown): Response {

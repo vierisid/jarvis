@@ -35,6 +35,7 @@ import { ROOM_TABS, roomTabs, type RoomTab, type TabbedRoom } from './room-tabs.
 import type { RoomActionOutcome } from './room-action-results.ts';
 import { AgentLifecycleRefusal } from '../agents/lifecycle-gate.ts';
 import { TaskHaltedError } from '../agents/task-manager.ts';
+import { AGENT_TASK_MAX_CHARS, HttpError } from '../actions/tools/agents.ts';
 
 /**
  * Words that may come before a command without making it part of a sentence:
@@ -585,8 +586,14 @@ export function backgroundRefusalReply(err: unknown): string {
         : "Starting that background agent needs your approval, and I can't ask for it from here.";
     }
     if (err.kind === 'halted') return "Jarvis is paused, so I can't start a background agent.";
+    if (err.kind === 'too_many_waiting') {
+      return "Several requests to start background agents are already waiting for your approval. Decide on those first.";
+    }
     return "I'm not allowed to start background agents.";
   }
   if (err instanceof TaskHaltedError) return "Jarvis is paused, so I can't start a background agent.";
+  if (err instanceof HttpError && err.status === 400 && err.message.includes(`limit is ${AGENT_TASK_MAX_CHARS}`)) {
+    return "That task is too long for me to start as one background agent. Say a shorter version.";
+  }
   return "I couldn't start that background task.";
 }
