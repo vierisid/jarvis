@@ -93,6 +93,13 @@ test('authenticated WebSocket routing gates the feature, scopes approvals and pr
     expect(scoped.frames.slice(scopedCount).some(frame => frame.type === 'stream' || frame.type === 'thinking_end' || frame.type === 'task_event')).toBe(false);
     expect(JSON.stringify(scoped.frames)).not.toContain('legacy-private');
     expect(generations).toBe(1);
+    // The real socket disconnect must detach Brief without removing the other clients.
+    const serverClient = [...service.getServer().getClients()].find(client => transport.hasClient(client));
+    expect(serverClient).toBeDefined();
+    scoped.socket.close();
+    await until(() => !service.getServer().getClients().has(serverClient!));
+    expect(transport.hasClient(serverClient!)).toBe(false);
+    expect(service.getServer().getClients().size).toBe(2);
   } finally {
     for (const client of clients) client.close();
     await service.stop(); await transport.idle(); closeDb();

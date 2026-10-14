@@ -65,12 +65,12 @@ import {
 } from './voice-room-action-gate.ts';
 import { findContent } from '../vault/content-pipeline.ts';
 import { roomActionTargetKind } from './room-action-targets.ts';
-
-/** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
-const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
 import type { BriefCapabilities } from '../brief/capabilities.ts';
 import { safeChatIdentity, type BriefChatTransport } from '../brief/chat-transport.ts';
 import { currentBriefTurn } from '../brief/chat-context.ts';
+
+/** How long a realtime nav tool waits for the room to answer: inside TOOL_RESULT_GRACE_MS. */
+const REALTIME_ROOM_ACTION_WAIT_MS = Math.min(ROOM_ACTION_QUEUE_TTL_MS, TOOL_RESULT_GRACE_MS - 500);
 
 type VoiceSession = {
   requestId: string;

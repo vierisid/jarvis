@@ -21,6 +21,7 @@ export function withExecutionScope<T>(checkpoint: () => void, execute: () => T, 
 export function outsideExecutionScope<T>(fn: () => T): T {
   return scope.exit(fn);
 }
+
 /** Pass the caller's cancellation to dependencies that can stop in-flight work. */
 export function executionSignal(): AbortSignal | undefined { return scope.getStore()?.signal; }
 

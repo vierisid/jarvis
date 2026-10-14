@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { checkpointExecution, executionSignal, withExecutionScope } from './execution-scope.ts';
+import { checkpointExecution, executionSignal, outsideExecutionScope, withExecutionScope } from './execution-scope.ts';
 
 test('nested execution scopes retain both dispatch fences and parent cancellation', () => {
   const parent = new AbortController(), child = new AbortController();
@@ -30,5 +30,26 @@ test('concurrent execution scopes never share cancellation signals', async () =>
     a.abort();
     expect(executionSignal()!.aborted).toBe(controller === a);
   }, controller.signal)));
+  expect(executionSignal()).toBeUndefined();
+});
+
+test('detached background work keeps its own cancellation after the caller settles', async () => {
+  const caller = new AbortController(), background = new AbortController();
+  let release!: () => void;
+  const ready = new Promise<void>(resolve => { release = resolve; });
+  await withExecutionScope(() => caller.signal.throwIfAborted(), async () => {
+    const task = outsideExecutionScope(() => withExecutionScope(() => background.signal.throwIfAborted(), async () => {
+      await ready;
+      expect(executionSignal()).toBe(background.signal);
+      expect(() => checkpointExecution()).not.toThrow();
+      background.abort(new Error('Background stopped'));
+      expect(() => checkpointExecution()).toThrow('Background stopped');
+    }, background.signal));
+    caller.abort(new Error('Caller settled'));
+    expect(() => checkpointExecution()).toThrow('Caller settled');
+    release();
+    await task;
+    expect(executionSignal()).toBe(caller.signal);
+  }, caller.signal);
   expect(executionSignal()).toBeUndefined();
 });
