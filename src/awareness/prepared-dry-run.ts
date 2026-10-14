@@ -113,12 +113,14 @@ export class PreparedDryRunner {
 
   private constructor(private readonly api: SandboxApi, private readonly runtime: EngineRuntime) {}
 
-  /** `bundlePath` is the built engine bundle the daemon already runs (`buildEngineBundle`). */
-  static async start(bundlePath: string): Promise<PreparedDryRunner> {
+  /** Pass the daemon's built engine path and verified digest from `buildEngineBundle`. */
+  static async start(bundlePath: string, expectedDigest: string | null): Promise<PreparedDryRunner> {
     const holder: { runner?: PreparedDryRunner } = {};
     const api = new SandboxApi({ services: dryServices(() => holder.runner?.active ?? null) });
+    // Validate the required integrity contract before opening the API listener.
+    const runtime = new EngineRuntime({ api, bundlePath, expectedDigest });
     await api.start({ host: '127.0.0.1', port: 0 });
-    holder.runner = new PreparedDryRunner(api, new EngineRuntime({ api, bundlePath }));
+    holder.runner = new PreparedDryRunner(api, runtime);
     return holder.runner;
   }
 

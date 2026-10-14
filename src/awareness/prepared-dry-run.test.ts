@@ -75,8 +75,8 @@ describe('prepared dry runner (real engine)', () => {
     await buildAllJarvisPieces();
     // Readiness uses the real pieces' metadata, as the daemon does.
     const api = new SandboxApi({ services: { credentialResolver: new CredentialResolver() } });
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath, expectedDigest: bundle.digest });
     await api.start({ host: '127.0.0.1', port: 0 });
-    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
     try {
       const handle = await runtime.acquire({ runId: 'q13-metadata', projectId: DEFAULT_IDS.project });
       try {
@@ -87,7 +87,7 @@ describe('prepared dry runner (real engine)', () => {
         configureWorkflowReadiness({ pieces: new PieceCatalog(entries) });
       } finally { await handle.release(); }
     } finally { await runtime.shutdown(); await api.stop(); }
-    runner = await PreparedDryRunner.start(bundle.bundlePath);
+    runner = await PreparedDryRunner.start(bundle.bundlePath, bundle.digest);
   }, 300_000);
 
   afterAll(async () => {

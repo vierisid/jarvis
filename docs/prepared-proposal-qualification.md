@@ -94,6 +94,11 @@ Editor sample data and OAuth token refreshes do not change it.
 
 ## Dry runner
 
+Construct the runner with `PreparedDryRunner.start(bundle.bundlePath, bundle.digest)`
+from `buildEngineBundle()`. The engine digest is checked at each process start,
+using main's integrity contract. It is separate from the workflow-version digest
+that qualifies the proposal.
+
 `PreparedDryRunner` runs the exact version once in the real engine, on a fixture,
 with every service it can reach simulated:
 
