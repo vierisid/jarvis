@@ -9,8 +9,8 @@
   "pr": "https://github.com/vierisid/jarvis/pull/1050",
   "target": "main",
   "baseline_sha": "1c2737a60d5580abea7d2feb9f2e845fdd491924",
-  "implementation_head": "84ea7303bd4857ad14f010eb4cb69659fc7f3b79",
-  "implementation_tree": "519259fde52365f52680138c354dc159d7f8775d",
+  "implementation_head": "25392cb204630cd75f6ec05cd6cf0eca837861ae",
+  "implementation_tree": "562626c5c1c6f40d07971d5e27832220fe22ee18",
   "additional_main_candidate": "a02343c6cedb49769424237429de58a1081a634b",
   "head_note": "Implementation head/tree bind all source validation. Subsequent delivery-only commits add this receipt/evidence; the final PR head is available from GitHub. A receipt cannot contain the hash of its own containing commit.",
   "worktree": "/home/vierisid/.cache/codex/jarvis-on-b-01",
@@ -44,9 +44,9 @@
     "activation_blocked_on": ["ON-B-11 authenticated runtime registration and legacy/new write ownership", "ON-U-10 UI integration", "Selected B provider closure", "Candidate-bound ON-U-11 and ON-B-13 evidence", "Integrated D/F/Q release decision"]
   },
   "verification": [
-    { "check": "Independent clean worktree: pinned main plus ON-B-01 implementation only", "status": "passed", "tests": 147, "failures": 0, "assertions": 684, "evidence": "evidence/ON-B-01/independent-tests.log" },
-    { "check": "Newer main a02343c6 plus only the two ON-B-01 source commits", "status": "passed", "tests": 147, "failures": 0, "assertions": 684, "evidence": "evidence/ON-B-01/current-main-tests.log", "note": "Main advanced during delivery. The clean candidate also passes TypeScript and UI build with the same final module tree." },
-    { "check": "Journey focused suite", "status": "passed", "tests": 29, "failures": 0, "assertions": 281, "evidence": "evidence/ON-B-01/journey-tests.log" },
+    { "check": "Independent clean worktree: pinned main plus ON-B-01 implementation only", "status": "passed", "tests": 147, "failures": 0, "assertions": 685, "evidence": "evidence/ON-B-01/independent-tests.log" },
+    { "check": "Newer main a02343c6 plus only the three ON-B-01 source commits", "status": "passed", "tests": 147, "failures": 0, "assertions": 685, "evidence": "evidence/ON-B-01/current-main-tests.log", "note": "Main advanced during delivery. The clean candidate also passes TypeScript and UI build with the same final module tree." },
+    { "check": "Journey focused suite", "status": "passed", "tests": 29, "failures": 0, "assertions": 282, "evidence": "evidence/ON-B-01/journey-tests.log" },
     { "check": "Independent bunx tsc --noEmit and bun run build:ui", "status": "passed", "evidence": "evidence/ON-B-01/independent-build.log", "note": "Typecheck exited 0 with no output. UI has pre-existing @theme/@tailwind warnings." },
     { "check": "bun run build:workflows and isolated buildEngineBundle with explicit stagingDir/bundleRoot", "status": "passed", "evidence": "evidence/ON-B-01/isolated-workflow-build.log" },
     { "check": "check:no-ee, check:migrations, lint:templates, check:package and normal pre-commit hook", "status": "passed", "evidence": "evidence/ON-B-01/commit-hooks.log", "note": "Package guard used Bun's valid tarball list after npm produced no parseable list; no hook bypass." },
@@ -54,7 +54,7 @@
     { "check": "Revert implementation in isolated worktree; tree equals pinned main", "status": "passed", "tests": 118, "failures": 0, "assertions": 403, "evidence": "evidence/ON-B-01/revert-tests.log", "note": "Legacy regressions, TypeScript and UI build pass after the actual git revert." },
     { "check": "Actual production assembly and combined U/B/D/F/Q candidate", "status": "blocked", "note": "ON-B-11/ON-U-10 and complete candidate do not yet exist. Contract fixture results cannot certify them." },
     { "check": "PR review skill, direct full-diff review and corrective re-review", "status": "passed", "evidence": "evidence/ON-B-01/review.md", "note": "Direct review by implementer; not an independent agent/human approval." },
-    { "check": "Remove the two review fixes in isolated worktree, then restore committed source", "status": "passed", "evidence": "evidence/ON-B-01/regression-green.log", "note": "Exactly the bodyless-mutation and delayed-job-acknowledgement tests fail without the fixes; 29 journey tests pass after restoration. Intentional failures are recorded in regression-red.log." },
+    { "check": "Remove the three logic fixes in isolated worktree, then restore committed source", "status": "passed", "evidence": "evidence/ON-B-01/regression-green.log", "note": "Exactly the bodyless-mutation, delayed-job-acknowledgement and tutorial-reset tests fail without the fixes; 29 journey tests pass after restoration. Intentional failures are recorded in regression-red.log." },
     { "check": "Full repository and platform CI", "status": "pending_at_receipt_creation", "url": "https://github.com/vierisid/jarvis/pull/1050/checks", "note": "Read results for the current PR head. Local evidence is focused, not a claim that all CI suites ran locally." }
   ],
   "evidence_classification": {

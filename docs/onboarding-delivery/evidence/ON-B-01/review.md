@@ -2,7 +2,7 @@
 
 Direct review using the PR reviewer skill of PR #1050, base
 `1c2737a60d5580abea7d2feb9f2e845fdd491924`, implementation head
-`84ea7303bd4857ad14f010eb4cb69659fc7f3b79`. Read the complete source/test/doc diff,
+`25392cb204630cd75f6ec05cd6cf0eca837861ae`. Read the complete source/test/doc diff,
 current settings/profile services, onboarding status/gate/reset paths, repository
 checks and F-26/D-33 delivery context. The implementation matches ON-B-01: an
 injected, unregistered journey provider with additive SQLite persistence and no
@@ -22,11 +22,11 @@ review or a submitted GitHub approval; CI was pending at this review snapshot.
 
 ### Issues
 
-No remaining blocking findings in the reviewed revision. Three implementation-pass
+No remaining blocking findings in the reviewed revision. Four implementation-pass
 findings were corrected before the committed head:
 
 1. **Major / Correctness:** a bodyless transition could take the read path and
-   initialize a journey. `index.ts:182` now distinguishes read/navigation/internal
+   initialize a journey. `index.ts:183` now distinguishes read/navigation/internal
    lanes explicitly; the mutation-without-body regression verifies no row is written.
 2. **Major / Correctness:** starting tutorial replay after job acceptance but before
    its acknowledgement could reject the job because the tutorial state was reset.
@@ -37,12 +37,17 @@ findings were corrected before the committed head:
    `connecting` value, never claims a ready session and reads all six v1 values.
    The fresh-journey regression asserts that literal value. All 147 regressions,
    TypeScript and UI build pass on both the original base and newer main `a02343c6`.
+4. **Minor / Correctness:** tutorial replay retained the imported legacy room hint,
+   leaving old progress available to the future room adapter after reset.
+   `index.ts:174` now clears that copied hint while retaining the legacy settings
+   row. The tutorial-reset regression starts with an old Memory hint and verifies
+   its removal alongside preservation of setup, profile and draft references.
 
 The initial subprocess fixture also used an incomplete SQLite open flag set. It
 now specifies read/write without create and the real process-race test passes.
-Both correctness regressions were also proven in the isolated verification
-worktree: removing the two fixes produced exactly those two failures (25 pass,
-2 fail); restoring the committed implementation produced 29 pass, 0 fail. See
+All three logic regressions were also proven in the isolated verification
+worktree: removing the three fixes produced exactly those three failures (24 pass,
+3 fail); restoring the committed implementation produced 29 pass, 0 fail. See
 `regression-red.log` and `regression-green.log`. No fault injection was committed
 to the delivery branch.
 
