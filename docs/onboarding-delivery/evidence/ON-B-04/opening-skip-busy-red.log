@@ -1,0 +1,35 @@
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/interview-session/client.test.ts:
+(pass) refresh after lost acknowledgement retains immutable answer and a newer draft [1.00ms]
+(pass) reconnect reconciles an accepted answer without replay or clearing a newer draft [0.27ms]
+(pass) typed draft survives refresh before send and another account cannot read it [0.06ms]
+(pass) double send is guarded and snapshot revisions reject a late reply after skip [0.40ms]
+(pass) dispose aborts pending transport and rejects its later snapshot [0.13ms]
+71 |   } });
+72 |   const opening = c.connect(); await c.skip();
+73 |   const busyAfterSkip = c.state().busy, abortedAfterSkip = openingSignal?.aborted;
+74 |   wait.resolve(ok(initial())); await opening;
+75 |   expect(commands).toHaveLength(2); expect(c.state().snapshot?.phase).toBe('skipped');
+76 |   expect(busyAfterSkip).toBe(false); expect(abortedAfterSkip).toBe(true);
+                             ^
+error: expect(received).toBe(expected)
+
+Expected: false
+Received: true
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-04/src/onboarding-next/interview-session/client.test.ts:76:25)
+(fail) skip during the opening request works before the client knows its session ID [0.41ms]
+(pass) a late transport failure cannot replace a confirmed terminal state with an error [0.19ms]
+(pass) a rejected competing-tab answer is released only after authoritative turn reconciliation [0.20ms]
+(pass) failed draft persistence prevents transmission and retains existing draft [0.15ms]
+(pass) another tab submitting identical text cannot acknowledge this client request [0.18ms]
+(pass) corrupt draft storage is preserved and does not trigger provider work [0.04ms]
+(pass) socket adapter correlates concurrent requests and ignores unrelated text/voice/binary [0.45ms]
+(pass) socket close, timeout and abort release listeners and reject pending work [10.44ms]
+(pass) server transport passes only authenticated context and rejects voice/extra envelope fields [0.35ms]
+
+ 13 pass
+ 1 fail
+ 42 expect() calls
+Ran 14 tests across 1 file. [33.00ms]

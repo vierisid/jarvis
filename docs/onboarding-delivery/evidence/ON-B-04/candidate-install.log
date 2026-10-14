@@ -39,4 +39,4 @@ $ git config core.hooksPath .githooks 2>/dev/null || true
 + yaml@2.8.2
 + typescript@5.9.3
 
-262 packages installed [751.00ms]
+262 packages installed [678.00ms]

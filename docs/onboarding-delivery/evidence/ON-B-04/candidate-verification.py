@@ -1,8 +1,8 @@
 from pathlib import Path
 import json, os, subprocess
-candidate=Path('/home/vierisid/.cache/codex/jarvis-on-b-04-candidate').resolve()
+candidate=Path('/home/vierisid/.cache/codex/jarvis-on-b-04-candidate-v2').resolve()
 output=Path('/home/vierisid/.cache/codex/jarvis-on-b-04-output').resolve()
-assert candidate.parent==Path('/home/vierisid/.cache/codex') and candidate.name=='jarvis-on-b-04-candidate'
+assert candidate.parent==Path('/home/vierisid/.cache/codex') and candidate.name=='jarvis-on-b-04-candidate-v2'
 assert subprocess.check_output(['git','rev-parse','HEAD'],cwd=candidate,text=True).strip()=='5024ea7455a5613be0514475be32c0dee6de0edd'
 env=dict(os.environ,PATH='/home/vierisid/.cache/codex/toolchains/bun-1.4.2/bun-linux-x64:/usr/local/bin:/usr/bin:/bin')
 modules=[('src/onboarding-next/interview-session','interview'),('ui/src/onboarding-next/views/interview','view')]
@@ -49,11 +49,11 @@ test('actual provider snapshot supplies actual U04 view through structural ports
  command(['bun','run','build:ui'],phase+'-build-ui')
 command(['bun','install','--frozen-lockfile'],'candidate-install')
 fixture('absent')
-command(['git','restore','--source=74d64908a65b2682c7c1ee3befce52e16b01315f','--staged','--worktree','--','src/onboarding-next/interview-session'],'load-standalone')
+command(['git','restore','--source=5b2c5e4033a78daf1efb5a2f852ab25bdbe4d0d0','--staged','--worktree','--','src/onboarding-next/interview-session'],'load-standalone')
 fixture('standalone')
 command(['git','restore','--source=e7ce2d65d40cd6ac83f3e8421bbe27ef67845f16','--staged','--worktree','--','ui/src/onboarding-next/views/interview'],'load-view')
 fixture('combined')
-source=(candidate/'src/onboarding-next/interview-session').resolve();dest=(output/'rollback-interview-session').resolve()
+source=(candidate/'src/onboarding-next/interview-session').resolve();dest=(output/'rollback-interview-session-v2').resolve()
 assert source.is_relative_to(candidate) and dest.is_relative_to(output) and not dest.exists()
 source.rename(dest)
 fixture('provider-removed')

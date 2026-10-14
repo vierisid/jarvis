@@ -1,0 +1,89 @@
+bun test v1.4.2 (744846f84)
+
+src/onboarding-next/interview-session/client.test.ts:
+(pass) refresh after lost acknowledgement retains immutable answer and a newer draft [1.15ms]
+(pass) reconnect reconciles an accepted answer without replay or clearing a newer draft [0.37ms]
+(pass) typed draft survives refresh before send and another account cannot read it [0.08ms]
+(pass) double send is guarded and snapshot revisions reject a late reply after skip [0.31ms]
+(pass) dispose aborts pending transport and rejects its later snapshot [0.18ms]
+68 |     commands.push(command);
+69 |     return command.type === 'start' ? wait.promise : ok({ ...initial(), cursor: 3, phase: 'skipped' });
+70 |   } });
+71 |   const opening = c.connect(); await c.skip();
+72 |   wait.resolve(ok(initial())); await opening;
+73 |   expect(commands).toHaveLength(2); expect(c.state().snapshot?.phase).toBe('skipped');
+                        ^
+error: expect(received).toHaveLength(expected)
+
+Expected length: 2
+Received length: 1
+
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-04/src/onboarding-next/interview-session/client.test.ts:73:20)
+(fail) skip during the opening request works before the client knows its session ID [0.37ms]
+(pass) a late transport failure cannot replace a confirmed terminal state with an error [0.26ms]
+(pass) a rejected competing-tab answer is released only after authoritative turn reconciliation [0.22ms]
+(pass) failed draft persistence prevents transmission and retains existing draft [0.20ms]
+(pass) another tab submitting identical text cannot acknowledge this client request [0.20ms]
+(pass) corrupt draft storage is preserved and does not trigger provider work [0.06ms]
+(pass) socket adapter correlates concurrent requests and ignores unrelated text/voice/binary [0.53ms]
+(pass) socket close, timeout and abort release listeners and reject pending work [10.31ms]
+(pass) server transport passes only authenticated context and rejects voice/extra envelope fields [0.24ms]
+
+src/onboarding-next/interview-session/session.test.ts:
+(pass) durable scoped written interview > is inert by default and unavailable without either injected capability [19.67ms]
+(pass) durable scoped written interview > lost acknowledgement and duplicate answer return one persisted turn [45.58ms]
+(pass) durable scoped written interview > reopening the SQLite file restores the original opening and transcript [46.53ms]
+(pass) durable scoped written interview > two providers/connections serialize different tabs answering one prompt [43.19ms]
+(pass) durable scoped written interview > pure interviewer failure retains answer and retries with the original identity [57.93ms]
+(pass) durable scoped written interview > lost fact acknowledgement reconciles the same attempt without rerunning the model [61.98ms]
+(pass) durable scoped written interview > skip fences late model completion and preserves original answer [44.62ms]
+(pass) durable scoped written interview > skip fences late fact receipt without an assistant bubble or done state [48.45ms]
+11 |
+12 | const scope = { actorId: 'actor-a', projectId: 'project-a' };
+13 | const disposers: (() => void)[] = [];
+14 | afterEach(() => { while (disposers.length) disposers.pop()!(); });
+15 | export function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
+16 | export function snapshot(result: Result) { expect(result.kind).toBe('ok'); if (result.kind !== 'ok') throw new Error(result.reason); return result.snapshot; }
+                                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "ok"
+Received: "invalid"
+
+      at snapshot (/home/vierisid/.cache/codex/jarvis-on-b-04/src/onboarding-next/interview-session/session.test.ts:16:64)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-04/src/onboarding-next/interview-session/session.test.ts:154:21)
+(fail) durable scoped written interview > skip before opening acknowledgement uses authenticated current scope, even before start arrives [6.10ms]
+11 |
+12 | const scope = { actorId: 'actor-a', projectId: 'project-a' };
+13 | const disposers: (() => void)[] = [];
+14 | afterEach(() => { while (disposers.length) disposers.pop()!(); });
+15 | export function deferred<T>() { let resolve!: (v: T) => void; const promise = new Promise<T>(r => { resolve = r; }); return { promise, resolve }; }
+16 | export function snapshot(result: Result) { expect(result.kind).toBe('ok'); if (result.kind !== 'ok') throw new Error(result.reason); return result.snapshot; }
+                                                                    ^
+error: expect(received).toBe(expected)
+
+Expected: "ok"
+Received: "invalid"
+
+      at snapshot (/home/vierisid/.cache/codex/jarvis-on-b-04/src/onboarding-next/interview-session/session.test.ts:16:64)
+      at <anonymous> (/home/vierisid/.cache/codex/jarvis-on-b-04/src/onboarding-next/interview-session/session.test.ts:165:12)
+(fail) durable scoped written interview > skip with no client session ID cancels an in-flight opening [25.31ms]
+(pass) durable scoped written interview > turn timeout is bounded and late results cannot write facts [64.06ms]
+(pass) durable scoped written interview > fact timeout retries only the same prepared write identity [73.69ms]
+(pass) durable scoped written interview > deadline expiry without a fired timer remains an explicit recoverable error [47.91ms]
+(pass) durable scoped written interview > expired crashed worker is fenced when another process resumes its lease [66.76ms]
+(pass) durable scoped written interview > reads and all mutations require authenticated actor/project and cannot adopt client scope [55.32ms]
+(pass) durable scoped written interview > auth loss during model work cannot publish or commit a reply [41.50ms]
+(pass) durable scoped written interview > future or corrupt records fail closed without overwriting them [30.48ms]
+(pass) durable scoped written interview > invalid, oversized and stale commands do not call the interviewer [29.82ms]
+(pass) durable scoped written interview > reuses the real existing interviewer for text-only turns with an injected model [55.44ms]
+
+3 tests failed:
+(fail) skip during the opening request works before the client knows its session ID [0.37ms]
+(fail) durable scoped written interview > skip before opening acknowledgement uses authenticated current scope, even before start arrives [6.10ms]
+(fail) durable scoped written interview > skip with no client session ID cancels an in-flight opening [25.31ms]
+
+ 30 pass
+ 3 fail
+ 173 expect() calls
+Ran 33 tests across 2 files. [904.00ms]

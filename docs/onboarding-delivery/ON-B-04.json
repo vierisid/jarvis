@@ -8,7 +8,7 @@
   "pr": "https://github.com/vierisid/jarvis/pull/1061",
   "target": "main",
   "baseline": "5024ea7455a5613be0514475be32c0dee6de0edd",
-  "source_head": "74d64908a65b2682c7c1ee3befce52e16b01315f",
+  "source_head": "5b2c5e4033a78daf1efb5a2f852ab25bdbe4d0d0",
   "delivery_head": {
     "resolve": "git log -1 --format=%H -- docs/onboarding-delivery/ON-B-04.json",
     "reason": "Avoids self-referential commit hash; final-head CI is reported on PR checks and final handoff"
@@ -51,15 +51,15 @@
     "runtime": "Bun 1.4.2",
     "dependencies": "own frozen install; unchanged lockfile",
     "module": {
-      "passed": 33,
+      "passed": 36,
       "failed": 0,
-      "assertions": 192,
+      "assertions": 204,
       "files": 4
     },
     "focused": {
-      "passed": 142,
+      "passed": 145,
       "failed": 0,
-      "assertions": 613,
+      "assertions": 625,
       "files": 16
     },
     "typecheck": "passed, including normal source commit hook",
@@ -73,8 +73,8 @@
       "method": "direct implementer full-diff and surrounding-code review",
       "independent_reviewer": false,
       "remaining_source_blockers": 0,
-      "findings_fixed": 2,
-      "red_green": "two failures in review-regressions-red.log; final module.log all passing"
+      "findings_fixed": 3,
+      "red_green": "two client recovery failures in review-regressions-red.log; three opening-Skip failures in opening-skip-red.log and busy-state failure in opening-skip-busy-red.log; final module.log all passing"
     },
     "full_ci": {
       "status_at_receipt": "pending",
@@ -93,13 +93,13 @@
         "build_ui": "passed"
       },
       "standalone": {
-        "passed": 36,
+        "passed": 39,
         "failed": 0,
         "typecheck": "passed",
         "build_ui": "passed"
       },
       "combined": {
-        "passed": 67,
+        "passed": 70,
         "failed": 0,
         "typecheck": "passed",
         "build_ui": "passed"
