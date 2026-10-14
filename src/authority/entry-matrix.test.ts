@@ -16,7 +16,7 @@ import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts'
 import { ActionOutcomeError, type ActionFailure } from '../actions/action-outcome.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import { applyApprovalDecision, applyExecutionResolution, channelDecisionReply, notificationDecisionNote, type ApprovalDecisionDeps } from '../daemon/approval-decision.ts';
-import { ChannelService, CHANNEL_APPROVE_NOT_ALLOWED, channelSenderMayApprove } from '../daemon/channel-service.ts';
+import { ChannelService, channelDecisionNeedsAllowList } from '../daemon/channel-service.ts';
 import { createApiRoutes, type ApiContext } from '../daemon/api-routes.ts';
 import { WebSocketService } from '../daemon/ws-service.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
@@ -236,39 +236,29 @@ describe('what a receipt says', () => {
 });
 
 describe('approving from chat', () => {
-  test('needs a sender on the channel\'s allowed users list', () => {
-    const cfg = (telegram: number[], discord: string[]) => ({ channels: { telegram: { enabled: true, bot_token: 't', allowed_users: telegram },
-      discord: { enabled: true, bot_token: 't', allowed_users: discord } } }) as never;
-    expect(channelSenderMayApprove(cfg([], []), 'telegram', 42)).toBe(false);
-    expect(channelSenderMayApprove(cfg([42], []), 'telegram', 42)).toBe(true);
-    expect(channelSenderMayApprove(cfg([42], []), 'telegram', 7)).toBe(false);
-    expect(channelSenderMayApprove(cfg([], ['u-1']), 'discord', 'u-1')).toBe(true);
-    expect(channelSenderMayApprove(cfg([42], []), 'discord', 42)).toBe(false);
-  });
-
-  test('a sender not on the list can deny but not approve', async () => {
+  test('a sender not on the list cannot approve or deny', async () => {
     const svc = new ChannelService({ channels: { telegram: { enabled: false, bot_token: '', allowed_users: [] } } } as never, {} as never);
     const handled: string[] = [];
     svc.setApprovalHandler(async (action, shortId) => { handled.push(`${action} ${shortId}`); return 'ok'; });
     const message = (text: string) => ({ id: '1', channel: 'telegram', from: 'someone', text, timestamp: 0, metadata: { chatId: 1, userId: 99 } });
     const handle = (svc as unknown as { handleChannelMessage(m: unknown): Promise<string> }).handleChannelMessage.bind(svc);
-    expect(await handle(message('approve abcdef12'))).toBe(CHANNEL_APPROVE_NOT_ALLOWED);
-    expect(await handle(message('deny abcdef12'))).toBe('ok');
-    expect(handled).toEqual(['deny abcdef12']);
+    expect(await handle(message('approve abcdef12'))).toBe(channelDecisionNeedsAllowList('telegram'));
+    expect(await handle(message('deny abcdef12'))).toBe(channelDecisionNeedsAllowList('telegram'));
+    expect(handled).toEqual([]);
   });
 
-  test('names exactly one card, by at least the 8 characters the card shows', () => {
+  test('names exactly one card, by exactly the 8 characters the card shows', () => {
     const p = pipeline();
     const insert = (id: string) => getDb().run(`INSERT INTO approval_requests (id, agent_id, agent_name, tool_name, tool_arguments, action_category, urgency, reason, context, status, execution_mode, created_at)
       VALUES (?, 'a', 'PA', 'write_file', '{}', 'write_data', 'normal', 'r', '', 'pending', 'deferred', ?)`, [id, Date.now()]);
     insert('aaaa1111-0000-0000-0000-000000000001');
     insert('aaaa1111-0000-0000-0000-000000000002');
     insert('bbbb2222-0000-0000-0000-000000000003');
-    expect(p.approvals.findByShortId('a')).toBeNull();
-    expect(p.approvals.findByShortId('bbbb')).toBeNull(); // unique, but shorter than the card shows
-    expect(p.approvals.findByShortId('aaaa1111')).toBeNull(); // two cards share it
-    expect(p.approvals.findByShortId('bbbb2222')!.id).toBe('bbbb2222-0000-0000-0000-000000000003');
-    expect(p.approvals.findByShortId('aaaa1111-0000-0000-0000-000000000002')!.id).toBe('aaaa1111-0000-0000-0000-000000000002');
+    expect(p.approvals.findByShortId('a')).toEqual({ status: 'malformed' });
+    expect(p.approvals.findByShortId('bbbb')).toEqual({ status: 'malformed' }); // unique, but shorter than the card shows
+    expect(p.approvals.findByShortId('aaaa1111')).toEqual({ status: 'ambiguous' }); // two cards share it
+    expect(p.approvals.findByShortId('bbbb2222')).toMatchObject({ status: 'found', request: { id: 'bbbb2222-0000-0000-0000-000000000003' } });
+    expect(p.approvals.findByShortId('aaaa1111-0000-0000-0000-000000000002')).toEqual({ status: 'malformed' });
   });
 });
 
@@ -402,8 +392,8 @@ describe('a spoken yes or no', () => {
 
   test('decides nothing while more than one card waits', async () => {
     const v = voice();
-    v.ask(); v.ask();
-    expect(await v.ws.resolveLatestPendingByVoice('approve', 0.99)).toMatchObject({ kind: 'gated', message: expect.stringContaining('2 approvals are waiting') });
+    v.ask(); const last = v.ask();
+    expect(await v.ws.resolveLatestPendingByVoice('approve', 0.99, last.id)).toMatchObject({ kind: 'refused' });
     expect(v.approvals.getPending()).toHaveLength(2);
     expect(v.runs).toEqual([]);
   });
@@ -412,12 +402,12 @@ describe('a spoken yes or no', () => {
     const controller = new EmergencyController();
     setActiveEmergencyController(controller);
     const v = voice();
-    v.ask();
+    const req = v.ask();
     controller.pause();
-    expect(await v.ws.resolveLatestPendingByVoice('approve', 0.99)).toMatchObject({ kind: 'gated' });
+    expect(await v.ws.resolveLatestPendingByVoice('approve', 0.99, req.id)).toMatchObject({ kind: 'refused', message: expect.stringContaining('paused') });
     expect(v.runs).toEqual([]);
     controller.resume();
-    expect(await v.ws.resolveLatestPendingByVoice('approve', 0.99)).toMatchObject({ kind: 'approval' });
+    expect(await v.ws.resolveLatestPendingByVoice('approve', 0.99, req.id)).toMatchObject({ kind: 'approval' });
     expect(v.runs).toHaveLength(1);
   });
 });

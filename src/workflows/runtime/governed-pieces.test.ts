@@ -995,9 +995,9 @@ describe('#694: an own __proto__ key is projected, not dropped', () => {
     expect(request.tool_arguments).toBe(EXPECTED);
     // The fence is taken over the projection that names the field, so an
     // approval of it cannot be replayed against one that does not.
-    expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input: JSON.parse(EXPECTED) }));
+    expect(effect.requestDigest).toBe(digest({ piece: GMAIL, action: 'send_email', input: JSON.parse(EXPECTED), inputDigest: await pieceInputDigest(JSON.parse(RAW)) }));
     expect(effect.requestDigest).not.toBe(digest({ piece: GMAIL, action: 'send_email',
-      input: { body: { y: 1 }, n: {}, s: {}, subject: 'x' } }));
+      input: { body: { y: 1 }, n: {}, s: {}, subject: 'x' }, inputDigest: await pieceInputDigest(JSON.parse(RAW)) }));
   });
 });
 

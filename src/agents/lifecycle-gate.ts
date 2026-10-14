@@ -225,6 +225,11 @@ export function raiseLifecycleCard(
     context: gateContext(gate, via.toolName, via.toolArguments),
     executionMode: 'deferred',
     toolRegistry: deps.toolRegistry,
+    principal: {
+      agentRoleId: req.actor.agent.role.id,
+      agentAuthorityLevel: req.actor.agent.authority.max_authority_level,
+      profile: deps.profile,
+    },
   });
   try {
     deps.onApprovalNeeded?.(request);

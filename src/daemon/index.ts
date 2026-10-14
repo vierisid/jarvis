@@ -4620,24 +4620,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
     };
 
-    // One approval notification. A card that must be reviewed on screen can be
-    // approved on the dashboard only (Q-08), so its toast offers Deny and Review
-    // in Jarvis, not Approve (macOS keys its buttons off the kind and still shows
-    // Approve; pressing it says why, below). `note` replaces the body when the
-    // card is shown again after an approve it refused.
+    // Whole, readable requests can be approved from a notification. On-screen
+    // review uses main's approval_review kind, including on macOS. A held
+    // decision can redisplay the card with an explanation in its meta.
     const notifyApproval = (req: ApprovalRequest, note?: string): void => {
-      const impact = impactFromCategory(req.action_category);
-      notifyAll({
-        id: req.id,
-        kind: 'approval',
-        title: `Approve: ${trayHumanizeTool(req.tool_name)}?`,
-        body: note ?? (req.reason?.trim() || `${req.agent_name} wants to run ${trayHumanizeTool(req.tool_name)}.`),
-        meta: `${impact} · ${req.tool_name}`,
-        destructive: impact === 'destructive',
-        actions: approvalNeedsClick(req)
-          ? [{ id: 'deny', label: 'Deny' }, { id: 'review', label: 'Review in Jarvis', primary: true }]
-          : [{ id: 'deny', label: 'Deny' }, { id: 'approve', label: 'Approve', primary: true }],
-      });
+      const { approvable: _approvable, ...toast } = approvalToast(req);
+      // Keep the full action description; any refusal explains the existing card.
+      notifyAll(note ? { ...toast, meta: `${toast.meta} · ${note}` } : toast);
     };
 
     // New pending approvals → one notification each, deduped and recent-only so a

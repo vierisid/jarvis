@@ -376,6 +376,7 @@ describe('workflow effect boundary', () => {
       if (outcome === 'pause') {
         // Pause holds the approved effect before its claim; Resume runs it once (Q-08).
         expect((await f.invoke()).approval?.hold).toMatch(/paused/i);
+        expect(f.approvals.getRequest(id)).toMatchObject({ status: 'approved', execution_outcome: null, execution_claimed_at: null });
         expect(f.calls).toHaveLength(0);
         f.emergency.resume();
         await f.invoke();
@@ -399,12 +400,12 @@ describe('workflow effect boundary', () => {
   // `resolveEffectContext` before the record is even read, so its effect is
   // never finalised at all and stays `pending`. That is not a blocked path and
   // is outside #845.
-  for (const outcome of ['pause', 'kill', 'policy-change'] as const) {
+  for (const outcome of ['kill', 'policy-change'] as const) {
     test(`an approved effect refused at dispatch by ${outcome} closes its approval as blocked (#845)`, async () => {
       const f = fixture(); f.authority.setGovernedCategories(['write_data']);
       const id = (await f.invoke()).approval!.approvalId;
       f.approvals.approve(id, 'test');
-      if (outcome === 'pause' || outcome === 'kill') f.emergency[outcome]();
+      if (outcome === 'kill') f.emergency[outcome]();
       if (outcome === 'policy-change') f.authority.addOverride({ action: 'write_data', allowed: false });
       await expect(f.invoke()).rejects.toThrow();
       expect(f.calls).toHaveLength(0);
@@ -427,8 +428,8 @@ describe('workflow effect boundary', () => {
         const f = fixture(); f.authority.setGovernedCategories(['write_data']);
         const id = (await f.invoke()).approval!.approvalId;
         if (outcome === 'denied') f.approvals.deny(id, 'test'); else f.approvals.expireOld(-1);
-        if (via === 'a policy block') f.emergency.pause();
-        await expect(f.invoke()).rejects.toThrow(via === 'a policy block' ? /system paused/ : /effect was not executed/);
+        if (via === 'a policy block') f.emergency.kill();
+        await expect(f.invoke()).rejects.toThrow(via === 'a policy block' ? /system killed/ : /effect was not executed/);
         expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('blocked');
         expect(f.approvals.getRequest(id)).toMatchObject({ status: outcome, execution_outcome: null });
       });

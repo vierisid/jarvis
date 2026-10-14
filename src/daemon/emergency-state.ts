@@ -7,13 +7,14 @@
  *    used to be the boot snapshot, which kept workflows blocked after Resume),
  *    and the change is audited.
  *  - Kill: every unfinished workflow run is stopped, saying why, and every
- *    pending approval is denied, so nothing raised before the Kill runs after
- *    Reset. Tools in flight stop at their next dispatch checkpoint
+ *    pending work approval is denied. Stop agent cards remain available so
+ *    agents can still be removed. Reset does not revive the stopped work. Tools in flight stop at their next dispatch checkpoint
  *    (actions/tools/registry.ts).
  *  - Back to normal (Resume, Reset): workflow steps held while paused are
  *    released.
  */
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
+import { isAgentStopCard } from '../authority/deferred-executor.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
@@ -43,7 +44,7 @@ export function applyEmergencyState(state: EmergencyState, deps: EmergencyStateD
     try { stoppedRuns = stopUnfinishedRunsForKill(); }
     catch (err) { console.error('[Emergency] Kill could not stop every workflow run:', err); }
     try {
-      const denied = deps.approvalManager.denyAllPending('emergency-kill');
+      const denied = deps.approvalManager.denyAllPending('emergency-kill', isAgentStopCard);
       deniedApprovals = denied.length;
       for (const request of denied) deps.onApprovalDenied?.(request);
     } catch (err) {

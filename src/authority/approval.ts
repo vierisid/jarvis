@@ -567,15 +567,17 @@ export class ApprovalManager {
   }
 
   /**
-   * Kill: deny every pending request, workflow ones included, so nothing
-   * raised before the Kill can be approved after Reset (Q-08). Returns the
+   * Kill: deny pending work, including workflow requests, so Reset does not
+   * revive it. The caller may preserve Stop agent cards (Q-08). Returns the
    * denied rows, for the dashboard to drop their cards.
    */
-  denyAllPending(decidedBy: string): ApprovalRequest[] {
+  denyAllPending(decidedBy: string, preserve?: (request: ApprovalRequest) => boolean): ApprovalRequest[] {
     const db = getDb();
     const ids = (db.query(`SELECT id FROM approval_requests WHERE status = 'pending'`).all() as Array<{ id: string }>).map((row) => row.id);
     const denied: ApprovalRequest[] = [];
     for (const id of ids) {
+      const pending = preserve ? this.getRequest(id) : null;
+      if (pending && preserve?.(pending)) continue;
       const row = this.deny(id, decidedBy);
       if (row) denied.push(row);
     }

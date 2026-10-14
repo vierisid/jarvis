@@ -910,16 +910,13 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(ran).toBe(1);
   });
 
-  test('a fence raised inside the tool under its approval is a failed effect the agent continues from, with its receipt', async () => {
+  test('Kill inside an approved tool cancels the delegated agent and preserves the failed effect receipt', async () => {
     const ids = createRun();
     const f = backends(ids, { writeInterrupts: true });
     const parked = await f.delegate({ requiredTools: ['write_file'] });
     f.approvals.approve(parked.approval!.approvalId, 'test');
     const done = await f.delegate({ requiredTools: ['write_file'] });
-    expect(done.status).toBe('completed');
-    expect(done.toolCalls[0]!.error).not.toMatch(/APPROVAL DENIED/);
-    expect(done.toolCalls[0]!.error).toContain('system killed');
-    expect(done.outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED', effect: 'may_have_occurred' });
+    expect(done).toMatchObject({ status: 'canceled', outcome: { status: 'error', code: 'AGENT_CANCELED' } });
     expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'failed', outcome: { code: 'TOOL_FAILED', effect: 'may_have_occurred' } });
     // The effect record holds the detail, but since #845 the approval is no
     // longer left `approved` with no outcome: a dispatched call that failed

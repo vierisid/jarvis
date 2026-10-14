@@ -221,6 +221,7 @@ function lifecycleHarness(opts: {
   const executor = new DeferredExecutor(approvals, audit);
   executor.setToolRegistry(registry);
   executor.setEmergencyController(emergency);
+  executor.setAuthorityEngine(orch.getAuthorityEngine()!);
   const subAgents = () => orch.getAllAgents().filter((a) => a.id !== primary.id);
   const spawnRows = () => audit.query({ action: 'spawn_agent' }).filter((r) => r.tool_name === 'spawn_agent(spec)');
   return { orch, approvals, audit, emergency, cards, primary, specialist, runs, taskManager, deps, executor, subAgents, spawnRows };
@@ -587,7 +588,8 @@ describe('the delegate_task card names the specialist and the task it runs (#990
     const args = { specialist: 'spec', task: 'look', context: '' };
     const card = (intent: string) => h.approvals.createRequest({ agentId: h.primary.id, agentName: 'PA', toolName: 'delegate_task',
       toolArguments: args, actionCategory: 'spawn_agent', urgency: 'normal', reason: 'spawn_agent requires approval',
-      context: JSON.stringify({ intent }), executionMode: 'deferred', toolRegistry: h.orch.getToolRegistry()! });
+      context: JSON.stringify({ intent }), executionMode: 'deferred', toolRegistry: h.orch.getToolRegistry()!,
+      principal: { agentRoleId: h.primary.agent.role.id, agentAuthorityLevel: h.primary.agent.authority.max_authority_level } });
     const stale = card('Delegate to a spec specialist the task "something else"');
     h.approvals.approve(stale.id, 'dashboard');
     expect(await h.executor.executeApproved(stale.id, 'dashboard')).toContain('what it would do changed after approval');

@@ -18,7 +18,7 @@ import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
 import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
 import { approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
-import type { DeferredExecutor } from '../authority/deferred-executor.ts';
+import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-executor.ts';
 import { activeEmergencyState, type EmergencyState } from '../authority/emergency.ts';
 import { approvalIntentFields, approvalIntentParts, boundedApprovalLabel, formatApprovalIntent } from '../authority/approval-delivery.ts';
 import type { AuditTrail, AuthorityDecisionType, ResolutionChannel } from '../authority/audit.ts';
@@ -2914,7 +2914,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         if (decision === 'approve') {
           // Pause holds: approving waits for Resume (Q-08).
           const emergency = activeEmergencyState();
-          if (emergency !== 'normal') return { kind: 'gated', label, message: heldApprovalMessage(emergency) };
+          if (emergency !== 'normal' && !isAgentStopCard(latest)) return { kind: 'refused', message: heldApprovalMessage(emergency) };
           const approved = this.approvalManager.approve(latest.id, 'voice');
           if (!approved) return null;
           // Audit the voice resolution distinctly from the click path so

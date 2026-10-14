@@ -46,6 +46,17 @@ describe('applyApprovalDecision', () => {
     };
   });
 
+  test('click-only cards cannot be approved through main channel or notification wrappers', async () => {
+    const req = makeRequest(mgr);
+    getDb().run('UPDATE approval_requests SET context = ? WHERE id = ?',
+      [JSON.stringify({ confirm: 'always', intent: 'Click Send in Mail' }), req.id]);
+    expect(await channelApprovalReply('approve', req.id.slice(0, 8), 'telegram', deps))
+      .toContain('Approve it on the Jarvis dashboard');
+    expect(await notificationApprovalDecision({ id: req.id, kind: 'approval', action: 'approve' }, deps)).toBeNull();
+    expect(mgr.getRequest(req.id)?.status).toBe('pending');
+    expect(executions).toBe(0);
+  });
+
   test('approve executes the deferred action and broadcasts', async () => {
     const req = makeRequest(mgr);
     const outcome = await applyApprovalDecision('approve', req.id, 'notification', deps);

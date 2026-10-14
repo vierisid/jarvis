@@ -788,3 +788,14 @@ describe('#813: the task-complete toast names what was done', () => {
     expect(index).not.toMatch(/title: 'Task complete',[\s\S]{0,300}?req\.reason/);
   });
 });
+
+
+describe('Q-08 on-screen review retains main delivery safeguards', () => {
+  test('a short click-only card uses the review-only notification kind', () => {
+    const t = approvalToast(makeRequest({ tool_name: 'ui_act', action_category: 'send_email',
+      context: JSON.stringify({ confirm: 'always', intent: 'Click Send in Mail' }) }));
+    expect(t).toMatchObject({ approvable: false, kind: 'approval_review', body: 'Click Send in Mail' });
+    expect(t.actions.map((a) => a.id)).toEqual(['review', 'dismiss']);
+    expect(t.meta).toContain('requires on-screen review');
+  });
+});

@@ -21,13 +21,12 @@ suites they sit beside (`workflow-authority.test.ts`,
   that needs approval runs when asked, audited as approved by voice. A tainted
   session's approvals, cards that must be clicked and the blocked categories
   are still refused.
-- **Voice may keep pressing dashboard buttons** (grant access, run a workflow,
-  start an agent, restart Jarvis) as it does today. Recorded as a known path:
-  those buttons act as a click would.
+- **Voice keeps main's room-action checks.** Authority grants and revokes
+  require a click; workflow starts and agent actions keep their current gates.
 - **Pause holds, Kill stops** (below).
-- **Approving from chat** needs a sender on that channel's allowed users list
-  and the 8-character id from the card. With no list set, chat can deny but not
-  approve.
+- **Chat decisions** require a sender on the channel's current allowed users
+  list for both approve and deny, and exactly the card's 8-character ID.
+  Ambiguous IDs are refused.
 
 Defaults: a chat or background card nobody answers expires after 24 hours
 (workflow approvals keep their own lifecycle); community pieces and CODE steps
@@ -40,10 +39,10 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
 | Chat tool call (main agent) | Authority per category, profile, taint | Permissions judged again as the same agent; arguments, intent and UI subject as stored | Refused | Refused; a tool in flight stops at its next checkpoint |
 | Background agent | Same, with its level cap | Same, cap included | Refused | Refused |
 | Chat sub-agent | Same, with the parent's profile | No approvals outside workflows | Refused | Refused |
-| Approval from the dashboard | Compare-and-set decision, then one claim | As above | Approving waits for Resume (refused, saying so); denying works | Pending cards are denied |
-| Approval from Telegram or Discord | Allowed sender, exact card id | As above; click-only cards refused | Approving waits for Resume | Pending cards are denied |
-| Approval from a toast | Click-only cards offer Review in Jarvis, not Approve, and are refused; a refused approve shows the card again, saying why | As above | Approving waits for Resume | Pending cards are denied |
-| Spoken yes or no | Only with exactly one card waiting; not destructive or click-only | As above | Approving waits for Resume | Pending cards are denied |
+| Approval from the dashboard | Compare-and-set decision, then one claim | As above | Approving waits for Resume (refused, saying so); denying works | Work cards denied; Stop agent remains available |
+| Approval from Telegram or Discord | Allowed sender, exact card id | As above; click-only cards refused | Approving waits for Resume | Work cards denied; Stop agent remains available |
+| Approval from a toast | Only whole, readable cards can be approved; click-only cards use the review-only notification kind | As above | Approving waits for Resume | Work cards denied; Stop agent remains available |
+| Spoken yes or no | Bound to the card shown at speech start; ambiguity, destructive and click-only cards refused | As above | Approving waits for Resume | Work cards denied; Stop agent remains available |
 | Realtime voice | Authority per category; the spoken command is the approval; a tainted session's approval, a click-only card or a blocked category is refused | | Refused | Refused |
 | A denied `request_approval` | The category needs its own approval for the rest of the turn | | | |
 | Manual Run, `manage_workflow` run, work item | Readiness, CODE grant (work items too) | | Refused, saying why | Refused |
@@ -75,7 +74,7 @@ stay opt-in, without per-run approval, but obey Pause and Kill and are audited.
 ## Pause and Kill
 
 Pause holds. Nothing new starts or continues: agents' tools are refused,
-approving a card waits for Resume (denying works), the workflow worker claims
+approving work waits for Resume (denying and Stop agent still work), the workflow worker claims
 nothing, triggers start nothing (a scheduled time is
 skipped and shown, a webhook is told to retry, a poll waits), timers,
 approvals and resume URLs wake nothing, and manual starts are refused. A
@@ -86,8 +85,9 @@ Items a poll had already taken when Pause came are queued for Resume. Work in
 flight finishes.
 
 Kill stops. On top of the hold, every unfinished workflow run is stopped,
-saying why, every pending approval is denied, and a tool in flight stops at
-its next dispatch checkpoint. Reset starts nothing again.
+saying why, pending work approvals are denied, and a tool in flight stops at
+its next dispatch checkpoint. Stop agent cards remain available during Pause
+and Kill. Reset does not revive stopped runs or denied work.
 
 The controller is the one source of truth: the engine's copy of the state is
 updated on every change, and accepting a learning suggestion no longer writes
@@ -106,17 +106,17 @@ its outcome. A card closed without a person (Kill, a cancelled task, the
 
 ## Limits
 
-- Voice can still press dashboard buttons that change permissions or start
-  work (owner decision).
+- Voice cannot grant or revoke Authority permissions; those remain clicks.
+  Other room actions retain main's permission and confirmation checks.
 - Community pieces run with Jarvis's own permissions and can read any saved
   connection: the Library's opt-in trust model, not changed here.
 - A delegated agent's allowed calls are checked but not listed as run effects
   (Q-10).
 - Approval cards show what will happen, not the raw arguments.
 - Kill stops a tool at its next dispatch checkpoint: one command already
-  running on a machine finishes. A sub-agent started by a tool stops at its
-  next turn, which passes the same checkpoint; its tool calls are refused in
-  any case.
+  running on a machine finishes. Main's task manager also cancels sub-agent
+  model loops. The orchestrator's own chat and background turns can continue
+  asking the model with their tools refused.
 - A tool stopped by Kill is recorded as "may have happened", even at its first
   checkpoint: a checkpoint cannot tell whether an earlier dispatch took place,
   so a card caught there is closed by a person, never run again.

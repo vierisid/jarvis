@@ -10,7 +10,7 @@
  */
 
 import { APPROVAL_SHORT_ID_LENGTH, approvalNeedsClick, DASHBOARD_DECIDER, executionState, type ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
-import type { DeferredExecutor } from '../authority/deferred-executor.ts';
+import { isAgentStopCard, type DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { AuditTrail, ResolutionChannel } from '../authority/audit.ts';
 import { activeEmergencyState } from '../authority/emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -74,7 +74,7 @@ export async function applyApprovalDecision(
     // Pause holds: nothing new starts, an approval included. The card waits
     // for Resume instead of turning into a refused run (Q-08).
     const emergency = activeEmergencyState();
-    if (pending?.status === 'pending' && emergency !== 'normal') {
+    if (pending?.status === 'pending' && emergency !== 'normal' && !isAgentStopCard(pending)) {
       return { status: 'held', request: pending, state: emergency };
     }
     const approved = approvalManager.approve(requestId, decidedBy);
@@ -143,11 +143,7 @@ export async function channelApprovalReply(
   if (action === 'approve' && !approvalChannelCard(request).approvable) return CHANNEL_APPROVE_REFUSED;
 
   const outcome = await applyApprovalDecision(action, request.id, channel, deps);
-  if (outcome.status === 'already_decided') return 'Request already decided';
-  if (outcome.status === 'denied') return `Denied: ${request.tool_name}`;
-  if (outcome.executed) return `Approved and executed. Result: ${outcome.result.slice(0, 200)}`;
-  if (outcome.error) return `Approved, but execution failed: ${outcome.error.slice(0, 200)}`;
-  return 'Approved. The agent will continue and report back in chat.';
+  return channelDecisionReply(outcome, request);
 }
 
 /**
@@ -181,8 +177,8 @@ export async function notificationApprovalDecision(
 /** What a person approving while Jarvis is paused or stopped is told (Q-08). */
 export function heldApprovalMessage(state: 'paused' | 'killed'): string {
   return state === 'paused'
-    ? 'Jarvis is paused, so nothing can be approved now. Resume Jarvis, then approve it; it is still waiting.'
-    : 'Jarvis was stopped with Kill, so nothing can be approved now. Reset Jarvis first.';
+    ? 'Jarvis is paused, so this action waits. Resume Jarvis, then approve it; it is still waiting.'
+    : 'Jarvis was stopped with Kill, so this action cannot be approved. Reset Jarvis and make a fresh request.';
 }
 
 /**
@@ -257,7 +253,7 @@ export async function applyExecutionResolution(
   // Paused or stopped: running it waits, as approving does (Q-08). Claimed
   // now, the executor's emergency gate would close it as refused for good.
   const emergency = activeEmergencyState();
-  if (emergency !== 'normal') {
+  if (emergency !== 'normal' && !isAgentStopCard(current)) {
     return { status: 'not_executable', reason: emergency === 'paused'
       ? 'Jarvis is paused, so nothing can run now. Resume Jarvis, then run it; it is still waiting.'
       : 'Jarvis was stopped with Kill, so nothing can run now. Reset Jarvis first.' };

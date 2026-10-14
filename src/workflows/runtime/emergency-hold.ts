@@ -9,8 +9,8 @@
  * `continuation.ts`). Queued and waiting work simply waits.
  *
  * Kill stops. On top of the hold, every unfinished run is stopped, saying
- * why, and every pending approval is denied (`daemon/index.ts`); Reset
- * starts nothing again.
+ * why, and pending work approvals are denied (`daemon/index.ts`). Stop agent
+ * cards remain available; Reset does not restart stopped work.
  *
  * The state is the daemon's emergency controller, read through
  * `activeEmergencyState`; unwired (tests, tools) it is normal.

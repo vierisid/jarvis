@@ -63,7 +63,8 @@ describe("Pause against the real engine: a held step runs as it was about to (Q-
 
   beforeAll(async () => {
     if (skip) return;
-    const bundlePath = (initialCached ?? await buildEngineBundle()).bundlePath;
+    const bundle = initialCached ?? await buildEngineBundle();
+    const bundlePath = bundle.bundlePath;
     if (buildOptIn) for (const pieceDir of pieceDirs) await buildPiece(pieceDir);
     tempDir = mkdtempSync(resolve(tmpdir(), "jarvis-emergency-hold-"));
     // One database for both: approvals and the audit trail live beside the workflow tables.
@@ -90,7 +91,7 @@ describe("Pause against the real engine: a held step runs as it was about to (Q-
     };
     api = new SandboxApi({ services: { ...backends, pieceAuthorize } });
     await api.start({ port: 0 });
-    runtime = new EngineRuntime({ api, bundlePath, devPieces: ["jarvis-test", "delay", "approval"] });
+    runtime = new EngineRuntime({ api, bundlePath, expectedDigest: bundle.digest, devPieces: ["jarvis-test", "delay", "approval"] });
   }, 120_000);
 
   afterAll(async () => {

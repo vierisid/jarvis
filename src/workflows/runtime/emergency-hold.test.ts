@@ -219,16 +219,24 @@ describe("the daemon's Kill and Resume (daemon/emergency-state.ts)", () => {
     return { authorityEngine, approvalManager, denied, onApprovalDenied: (r: { id: string }) => denied.push(r.id) };
   }
 
-  test("Kill stops every unfinished run and denies every pending approval; the engine's copy of the state follows", () => {
+  test("Kill stops every unfinished run and denies pending work, keeping Stop agent available", () => {
     const d = deps();
     const { runId } = queued();
     const card = d.approvalManager.createRequest({ agentId: "a", agentName: "PA", toolName: "write_file", toolArguments: {},
       actionCategory: "write_data", urgency: "normal", reason: "r", context: "" });
+    const stop = d.approvalManager.createRequest({ agentId: "a", agentName: "PA", toolName: "manage_agents",
+      toolArguments: { action: "terminate", agent_id: "worker" }, actionCategory: "terminate_agent",
+      urgency: "normal", reason: "Stop worker", context: "" });
     controller.kill();
     expect(applyEmergencyState("killed", d)).toMatchObject({ stoppedRuns: 1, deniedApprovals: 1 });
+    expect(d.approvalManager.getRequest(stop.id)?.status).toBe("pending");
+    expect(d.authorityEngine.getConfig().emergency_state).toBe("killed");
+    controller.reset();
+    applyEmergencyState("normal", d);
+    expect(d.approvalManager.getRequest(card.id)?.status).toBe("denied");
     expect(getFlowRun(runId)?.status).toBe("STOPPED");
     expect(d.denied).toEqual([card.id]);
-    expect(d.authorityEngine.getConfig().emergency_state).toBe("killed");
+    expect(d.authorityEngine.getConfig().emergency_state).toBe("normal");
   });
 
   test("Resume releases the steps held while paused", () => {
