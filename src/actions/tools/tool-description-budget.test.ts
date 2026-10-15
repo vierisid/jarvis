@@ -53,9 +53,13 @@ const workflowWithLibrary = createManageWorkflowTool(
  * Ceilings are the measured post-#504 size plus a small margin. They are a
  * ratchet, not a target: a change that needs more room should say why in its
  * own commit rather than nudging the number.
+ *
+ * manage_workflow grew by its optional `contract` parameter (Q-04, ~460 B): the
+ * only way the chat model can state the job's checkable constraints, so the
+ * composer can hold the flow to them (docs/workflow-job-contract.md).
  */
 const TOOLS: { tool: ToolDefinition; ceiling: number }[] = [
-  { tool: workflowNoLibrary, ceiling: 2650 },
+  { tool: workflowNoLibrary, ceiling: 3100 },
   { tool: contentPipelineTool, ceiling: 1750 },
   { tool: createRequestApprovalTool(stub({})), ceiling: 1650 },
   { tool: createManageGoalsTool(stub({})), ceiling: 1500 },
@@ -95,14 +99,15 @@ describe('#504 tool description budget', () => {
   it('manage_workflow stays bounded in its library variant too', () => {
     // The suggest-install paragraph is the difference; it must not become a
     // licence to regrow the rest.
-    expect(bytes(workflowWithLibrary)).toBeLessThanOrEqual(2950);
+    expect(bytes(workflowWithLibrary)).toBeLessThanOrEqual(3350);
     expect(bytes(workflowWithLibrary)).toBeGreaterThan(bytes(workflowNoLibrary));
   });
 
   it('the six together stay well under a third of the budget', () => {
     const total = TOOLS.reduce((s, { tool }) => s + bytes(tool), 0);
-    // 14,072 B before #504. The point of the ceiling is that the trim holds.
-    expect(total).toBeLessThanOrEqual(10_000);
+    // 14,072 B before #504. The point of the ceiling is that the trim holds;
+    // Q-04's contract parameter is the one addition since.
+    expect(total).toBeLessThanOrEqual(10_300);
   });
 });
 

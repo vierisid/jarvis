@@ -26,6 +26,8 @@ import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts"
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { ComposerLlmClient } from "./workflow-composer.ts";
 import { composePersistedFlow } from "./persisted-workflow-composer.ts";
+import { recheckJobContract, type JobContract } from "./job-contract.ts";
+import { getWorkflowComposition } from "../../workflows/db/repos/workflow-composition.ts";
 
 /**
  * Minimal tool-registry shape the composer surfaces in its planner prompt.
@@ -56,6 +58,7 @@ import {
   createDraftVersion,
   getFlowVersion,
   getLatestDraft,
+  type FlowTriggerNode,
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
 import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
@@ -279,6 +282,15 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           '(schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ...").',
         required: false,
       },
+      contract: {
+        type: "object",
+        description:
+          "compose: check the user's explicit requirements. trigger {kind: " +
+          "manual|schedule|webhook|event|piece, cron, every, timezone, eventType, piece, trigger}; sources, outputs: " +
+          "[{notify: {channels}} | {tool, params} | {piece, action, target}]; recipients; forbidden {effects e.g. " +
+          "send_email, pieces, actions, tools, channels, agents}; review. Outputs list all it may send or address.",
+        required: false,
+      },
       limit: {
         type: "number",
         description: "Cap for list_runs (default 25).",
@@ -368,7 +380,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           const name = requireString(params, "name");
           const description = typeof params["description"] === "string" ? params["description"].trim() : "";
           if (description.length > 0) {
-            const composed = await actCompose(name, description, deps, project);
+            const composed = await actCompose(name, description, deps, project, params["contract"]);
             // ACCEPTED COST of one block per action: `note` is repo-authored
             // guidance to the model, and framing the whole return puts it under
             // a preamble that says not to follow instructions inside the block.
@@ -430,7 +442,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           );
         case "compose":
           return framedForModel(
-            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project),
+            await actCompose(requireString(params, "name"), requireString(params, "description"), deps, project, params["contract"]),
             "a composed workflow and the composer's text",
           );
         default:
@@ -993,7 +1005,24 @@ function actSetStatus(
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   const updated = getFlow(flow.id);
   if (!updated) return { error: "flow vanished after update" };
-  return stoppedRuns ? { ...summarizeFlow(updated), stoppedRuns } : summarizeFlow(updated);
+  // Enabling runs the published version, so that is the graph rechecked.
+  const published = status === "ENABLED" && updated.published_version_id ? getFlowVersion(updated.published_version_id) : null;
+  const report = published ? contractRecheck(updated, published.trigger) : null;
+  const summary = stoppedRuns ? { ...summarizeFlow(updated), stoppedRuns } : summarizeFlow(updated);
+  return report ? { contractReport: report, ...summary } : summary;
+}
+
+/**
+ * The job contract a flow was composed under, rechecked against the graph
+ * about to run, so the user sees what still holds and what to confirm when
+ * publishing or enabling, even after the draft was edited. Advisory, like the
+ * OS warnings: the user may have changed the job on purpose. Null for a flow
+ * composed without a contract.
+ */
+function contractRecheck(flow: FlowRow, trigger: FlowTriggerNode): ReturnType<typeof recheckJobContract> {
+  const recordId = parseFlowMetadata(flow)?.compositionRecordId;
+  if (typeof recordId !== "string") return null;
+  return recheckJobContract(trigger, getWorkflowComposition(recordId, flow.project_id)?.specification.contract);
 }
 
 function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
@@ -1015,11 +1044,14 @@ function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unk
   // is not enrolled yet, and blocking someone's publish over a heuristic would
   // be worse than the mismatch it prevents.
   const warnings = publishOsWarnings(target.trigger, deps);
+  const report = contractRecheck(flow, target.trigger);
   const { flow: updated } = publishFlowVersion(flow.id, target.id);
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
-  return warnings.length > 0
-    ? { ...summarizeFlow(updated), warnings }
-    : summarizeFlow(updated);
+  return {
+    ...(report ? { contractReport: report } : {}),
+    ...summarizeFlow(updated),
+    ...(warnings.length > 0 ? { warnings } : {}),
+  };
 }
 
 /**
@@ -1050,6 +1082,7 @@ async function actCompose(
   description: string,
   deps: ManageWorkflowDeps,
   project: string,
+  contract?: unknown,
 ): Promise<Record<string, unknown>> {
   if (!deps.llm) {
     throw new Error("compose: an LLM client is not configured for this build");
@@ -1093,9 +1126,11 @@ async function actCompose(
     const targets = deps.executionTargets();
     if (targets.length > 0) composeDeps.executionTargets = targets;
   }
-  // The journal goes in the same project as the flow, or the flow's
-  // `compositionRecordId` names a record its own project cannot read.
-  const result = await composePersistedFlow(composeDeps, { name, description }, project);
+  // Keep the flow and its composition journal in the caller's project.
+  // The composer validates the contract and checks every candidate against it.
+  // A null contract, as some models send for an unused optional parameter, is none.
+  const stated = contract ?? undefined;
+  const result = await composePersistedFlow(composeDeps, { name, description, ...(stated !== undefined ? { contract: stated as JobContract } : {}) }, project);
 
   if (!result.ok) {
     return {
@@ -1121,6 +1156,9 @@ async function actCompose(
   });
   return {
     ok: true,
+    // What the contract check proved, and what the user should confirm. First,
+    // so the framed payload's length cap cuts the flow summary, not this.
+    ...(result.contractReport ? { contractReport: result.contractReport } : {}),
     flow: summarizeFlow(getFlow(flow.id) ?? flow),
     versionId: version.id,
     compositionRecordId: result.compositionRecordId,

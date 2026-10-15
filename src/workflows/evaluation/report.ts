@@ -1,14 +1,29 @@
 import { fingerprint } from '../../actions/tools/composition-provenance';
 import { summarize } from './runner';
-import type { EvaluationRow } from './types';
+import { measure, type ScheduledItem } from './measures';
+import type { EvaluationRow, QualityTask } from './types';
 
-export function report(rows: EvaluationRow[]) {
-  const groups = new Map<string, EvaluationRow[]>();
-  for (const row of rows) {
-    const key = [row.kind, row.split, row.policy, row.condition].join('/');
-    groups.set(key, [...groups.get(key) ?? [], row]);
+/** What a run scheduled, so unrun work stays in each group's denominator. */
+export interface ReportContext {
+  tasks: QualityTask[]; scheduled: ScheduledItem[];
+  run: { kind: EvaluationRow['kind']; split: QualityTask['split']; profileId: string | null };
+}
+const groupKey = (kind: string, split: string, policy: string, condition: string, profileId: string | null | undefined) =>
+  [kind, split, policy, condition].join('/') + (profileId ? '@' + profileId : '');
+
+export function report(rows: EvaluationRow[], context?: ReportContext) {
+  const groups = new Map<string, { rows: EvaluationRow[]; notRun: ScheduledItem[] }>();
+  const group = (key: string) => groups.get(key) ?? (groups.set(key, { rows: [], notRun: [] }), groups.get(key)!);
+  for (const row of rows) group(groupKey(row.kind, row.split, row.policy, row.condition, row.profile?.id)).rows.push(row);
+  if (context) {
+    const done = new Set(rows.map(r => [r.taskId, r.policy, r.repeat, r.condition].join('\0')));
+    for (const item of context.scheduled) {
+      if (done.has([item.taskId, item.policy, item.repeat, item.condition].join('\0'))) continue;
+      group(groupKey(context.run.kind, context.run.split, item.policy, item.condition, context.run.profileId)).notRun.push(item);
+    }
   }
-  return Object.fromEntries([...groups].map(([key, values]) => [key, summarize(values)]));
+  return Object.fromEntries([...groups].map(([key, g]) => [key, context
+    ? { ...summarize(g.rows), measures: measure(g.rows, context.tasks, g.notRun) } : summarize(g.rows)]));
 }
 export interface HumanReview {
   rowId: string; rowSha256: string; reviewer: string; intentCorrect: boolean;
