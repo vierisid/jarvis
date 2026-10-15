@@ -173,10 +173,10 @@ export class BriefCompositionProvider {
           if (!owns()) throw new Error('Composition is no longer active');
           this.db.run('UPDATE brief_workflow_composition_jobs SET checked_candidates = checked_candidates + 1, updated_at = ? WHERE id = ?', [Date.now(), row.id]);
           deps.onCandidate?.(candidate);
-        } }, { name: row.name, description: row.prompt, signal: active.abort.signal }, { projectId: this.projectId, onJournal: id => {
+        } }, { name: row.name, description: row.prompt, signal: active.abort.signal }, this.projectId, id => {
           if (!owns()) throw new Error('Composition is no longer active');
           this.db.run('UPDATE brief_workflow_composition_jobs SET composition_id = ?, updated_at = ? WHERE id = ?', [id, Date.now(), row.id]);
-        } });
+        });
         const result = await Promise.race([compose, new Promise<never>((_, reject) => {
           if (active.abort.signal.aborted) reject(new Error('Composition stopped'));
           else active.abort.signal.addEventListener('abort', () => reject(new Error('Composition stopped')), { once: true });
