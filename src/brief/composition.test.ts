@@ -359,3 +359,12 @@ test('schema is additive and idempotent over saved receipts and journals', async
   ensureCompositionJobSchema(getWorkflowDb()); ensureCompositionJobSchema(getWorkflowDb());
   expect(p.get(job.jobId)).toEqual(saved); expect(count('workflow_composition')).toBe(1); expect(count('flow')).toBe(1);
 });
+
+test('the composition journal and its draft are recorded in the provider project', async () => {
+  const p = provider(undefined, 1000, 'project-a');
+  const { job } = p.submit(input); await p.idle(); const ready = p.get(job.jobId);
+  expect(ready.state).toBe('draft_ready');
+  const rows = (table: string, id: string) => getWorkflowDb().query<{ project_id: string }, [string]>(`SELECT project_id FROM ${table} WHERE id = ?`).get(id)!.project_id;
+  expect(rows('workflow_composition', ready.compositionId!)).toBe('project-a');
+  expect(rows('flow', ready.workflow!.flowId)).toBe('project-a');
+});
