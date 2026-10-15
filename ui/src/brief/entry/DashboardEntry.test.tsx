@@ -87,6 +87,24 @@ test("isolated preview owns no live connection, fetch or onboarding side effects
   expect(connections).toBe(1); expect(starts).toBe(1);
 });
 
+test("style specimen is an isolated, scoped preview with working theme and text controls", async () => {
+  await mount("http://localhost:4381/?brief=preview&specimen=styles#/_brief_preview");
+  const specimen = host.querySelector<HTMLElement>("main.brief-root.brief-specimen");
+  expect(specimen).not.toBeNull();
+  expect(specimen!.getAttribute("data-brief-theme")).toBe("light");
+  expect(host.querySelector(".brief-type-room-title")).not.toBeNull();
+  expect(host.querySelectorAll('[role="progressbar"]').length).toBe(5);
+  await click("Switch to dark");
+  expect(specimen!.getAttribute("data-brief-theme")).toBe("dark");
+  expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
+  await click("200% text");
+  expect(specimen!.style.getPropertyValue("--brief-text-scale")).toBe("2");
+  expect(network).toEqual([]); expect(connections).toBe(0); expect(gates).toBe(0);
+  await route("http://localhost:4381/#/");
+  expect(host.querySelector(".brief-root")).toBeNull();
+  expect(connections).toBe(1);
+});
+
 test("real Brief entry remains behind the existing onboarding gate", async () => {
   function SetupGate() { return <div>Complete existing onboarding</div>; }
   await mount("http://localhost:4381/?brief=1#/brief/today", {}, SetupGate);

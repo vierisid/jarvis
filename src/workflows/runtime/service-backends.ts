@@ -228,7 +228,7 @@ export function buildSandboxServiceBackends(
           },
           execute: async (args, checkpoint) => { checkpoint(); return toolAdapter.execute(req.toolName, args); } });
         return reply.approval ? { result: null, toolName: req.toolName, approval: reply.approval }
-          : { result: reply.result, toolName: req.toolName };
+          : { result: reply.result, toolName: req.toolName, ...(reply.outcome ? { outcome: reply.outcome } : {}) };
       }
     : undefined;
 
