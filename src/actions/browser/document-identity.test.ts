@@ -1,3 +1,4 @@
+import { withMachineScope } from '../machine-scope';
 /**
  * #603 - "the document identity says unchanged when the thing it identifies has
  * changed", in the three ways that were reachable:
@@ -151,6 +152,18 @@ describe('#603 what the document identity has to mean', () => {
     await ctrl.snapshot();
     return { fake: fake!, ctrl: ctrl! };
   };
+
+  test('workflow stale-document refusal is typed and never clicks', async () => {
+    const { fake, ctrl } = await connected();
+    const snap = await ctrl.snapshot();
+    expect(snap.browserDocumentId).toBe('LOADER-1');
+    fake.setGeneration('dom');
+    await expect(withMachineScope({ resolveTarget: () => null, assertDispatch: () => {}, binding: () => null },
+      () => ctrl.click(2))).rejects.toMatchObject({ outcome: {
+        status: 'blocked', code: 'BROWSER_ACTION_REFUSED', effect: 'not_started',
+      } });
+    expect(fake.presses()).toEqual([]);
+  });
 
   test('a pushState does not cost an ordinary SPA click', async () => {
     const { fake, ctrl } = await connected();

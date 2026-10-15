@@ -19,6 +19,7 @@ const SIDECAR_NOTE = 'process started (pid 7) but whether a window opened could 
 
 function manager(reply: unknown): SidecarManager {
   return {
+    getConnectionSessionId: () => 'fixture-session',
     listSidecars: () => [{ id: 'sc1', name: 'linux-box', connected: true, capabilities: ['desktop'], unavailable_capabilities: [] }],
     dispatchRPC: async () => reply,
   } as unknown as SidecarManager;
