@@ -20,11 +20,12 @@ import { composeFlow, type ComposeDeps, type ComposerChatReply, type ComposerLlm
  * rolling back always restores the prompt that was measured.
  */
 const PINNED_PROMPTS: Record<string, Record<string, string>> = {
-  'w8-2': {
-    bare: '30611449358646e651994a5dfba50bf850c69afb4968b99008a8cd0c64cccfa9',
-    production: 'bb58575f4437263fb084bd5e34e8e24c046335ebda9e3ce3da3f3750f5a09e84',
-    'hosted production': 'c262301771d7e0f5466584b9d03cf87d359f9ed194dfc720be7eaf294f3e4f6a',
-    'tool names only': '1219234f35ed3085d13fc04f0f8df28b54e162c24bd56932e42a5dafd587f705',
+  // w8-3 (#1065) fences catalog, tool, role and repair text as untrusted content.
+  'w8-3': {
+    bare: '62395ceb35fe6215beb7a36a19338c5a706f5bf9283e95bf339d400d314fbeee',
+    production: '7d92d0ae8835f01920dc93386697199cd8a9cf4d28d6658fb6c8aab0b24d9d62',
+    'hosted production': '50b09c7486cfd034ad8e1ce36df92e5869d78cedd1dab6d87ffa251d1ca00968',
+    'tool names only': '5f053e6a131f0eae15ee8756433f4657938fa2f41867b3b5e4a3e2e861ae1a1a',
   },
 };
 const PINNED_POLICIES: Record<PlanningPolicy, string> = {
@@ -66,13 +67,21 @@ const valid = { displayName: request.name, trigger: { name: 'trigger', type: 'EM
 const invalid = { displayName: request.name, trigger: { name: 'trigger', type: 'EMPTY',
   nextAction: { name: 'tell', type: 'PIECE', settings: { pieceName: 'missing', actionName: 'x', input: {} } } } };
 const MARKER = 'Composition context (JSON):\n';
+/** Untrusted-content fences carry a fresh nonce per call; the pin is on the words around them, not the nonce. */
+const stable = (text: string) => text.replace(/([0-9a-f]{32})( UNTRUSTED_CONTENT>>>)/g, '<nonce>$2')
+  .replace(/(<<<UNTRUSTED_CONTENT )[0-9a-f]{32}/g, '$1<nonce>');
+const CLOSE = '\n<nonce> UNTRUSTED_CONTENT>>>';
 /** A prompt with what the validator writes taken out: the reported errors and the candidate context. Everything else is the composer's. */
-function instructions(text: string): string {
+function instructions(raw: string): string {
+  const text = stable(raw);
   const at = text.indexOf(MARKER);
   if (at < 0) return text;
-  const errors: string[] = JSON.parse(text.slice(at + MARKER.length)).errors ?? [];
+  const end = text.indexOf(CLOSE, at);
+  const json = end < 0 ? text.slice(at + MARKER.length) : text.slice(at + MARKER.length, end);
+  const errors: string[] = JSON.parse(json).errors ?? [];
   const head = text.slice(0, at);
-  return (errors.length ? head.replace('\n' + errors.map(e => `  - ${e}`).join('\n'), '\n<errors>') : head) + MARKER + '<context>';
+  return (errors.length ? head.replace('\n' + errors.map(e => `  - ${e}`).join('\n'), '\n<errors>') : head) + MARKER + '<context>'
+    + (end < 0 ? '' : text.slice(end));
 }
 
 /** Every system, user and tool-result message and tool definition the composer sends, on both paths, through a repair. */
@@ -80,7 +89,7 @@ async function sentPrompts(policy: PlanningPolicy, environment: Partial<ComposeD
   const oneShot: unknown[] = [], toolLoop: Array<{ definitions: unknown; messages: Array<{ role: string; content: string }> }> = [];
   let calls = 0;
   const plain: ComposerLlmClient = { async chat({ prompt, system }) {
-    oneShot.push({ system, prompt: instructions(prompt) });
+    oneShot.push({ system: stable(system ?? ''), prompt: instructions(prompt) });
     return { text: JSON.stringify(++calls === 1 ? invalid : valid) };
   } };
   expect((await composeFlow({ ...environment, llm: plain, pieceRegistry: catalog(), planningPolicy: policy }, request)).ok).toBe(true);
@@ -90,7 +99,7 @@ async function sentPrompts(policy: PlanningPolicy, environment: Partial<ComposeD
     async chatTools(messages, definitions): Promise<ComposerChatReply> {
       // System prompts verbatim; the composer's user prompts and tool results with the validator's words taken out.
       toolLoop.push({ definitions, messages: messages.filter(m => m.role !== 'assistant')
-        .map(m => ({ role: m.role, content: m.role === 'system' ? m.content : instructions(m.content) })) });
+        .map(m => ({ role: m.role, content: m.role === 'system' ? stable(m.content) : instructions(m.content) })) });
       return { content: '', tool_calls: [{ id: `t${turns}`, name: 'submit_flow', arguments: ++turns === 1 ? invalid : valid }] };
     },
   };
@@ -164,7 +173,7 @@ describe('production policy selection', () => {
 
     test('each composition records the policy that ran and sends its prompt; switching back rolls back the next one', async () => {
       const systems: string[] = [];
-      const llm: ComposerLlmClient = { async chat({ system }) { systems.push(system ?? ''); return { text: JSON.stringify(valid) }; } };
+      const llm: ComposerLlmClient = { async chat({ system }) { systems.push(stable(system ?? '')); return { text: JSON.stringify(valid) }; } };
       let selected: PlanningPolicy = 'deterministic-first-v1';
       configurePlanningPolicy(() => selected);
       const promoted = await composePersistedFlow({ llm, pieceRegistry: catalog() }, request);
