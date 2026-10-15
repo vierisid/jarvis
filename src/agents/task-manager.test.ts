@@ -4,6 +4,7 @@ import { AgentInstance } from './agent.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
 import { EmergencyController } from '../authority/emergency.ts';
+import { currentBriefTurn, withBriefTurn } from '../brief/chat-context.ts';
 
 /** A runner whose tasks finish only when the test says so. */
 function controllableRunner() {
@@ -31,6 +32,18 @@ const launchOptions = (id: string) =>
     llmManager: {},
     toolRegistry: {},
   }) as unknown as Parameters<AgentTaskManager['launch']>[0];
+
+describe('a background task outlives the Brief chat turn that started it', () => {
+  test('the task runs outside that turn, so its progress and approval cards are not filed under it', async () => {
+    let seen: unknown = 'not run';
+    const run = (async () => { seen = currentBriefTurn(); return new Promise(() => {}); }) as unknown as ConstructorParameters<typeof AgentTaskManager>[0];
+    const manager = new AgentTaskManager(run);
+    const turn = { conversationId: 'c', turnId: 't', requestId: 'r', signal: new AbortController().signal, progress: () => {} };
+    withBriefTurn(turn, () => manager.launch(launchOptions('brief')));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toBeUndefined();
+  });
+});
 
 describe('AgentTaskManager running-task cap', () => {
   test(`refuses a task past ${MAX_RUNNING_TASKS} running, leaves no record of it, and a finish frees a slot`, async () => {
