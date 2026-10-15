@@ -16,13 +16,59 @@
 
 // ── Types ──
 
+/**
+ * One occurrence a job fires for. `key` names the wall-clock minute the
+ * expression matched, in the cron timezone ("2026-03-08T02:30"): it is the same
+ * after a restart and for both passes through the autumn hour that happens
+ * twice, so callers can use it as the occurrence's identity.
+ */
+export type CronOccurrence = {
+  /** Start of the occurrence's minute (epoch ms); after a spring-forward jump, the first minute after it. */
+  at: number;
+  key: string;
+  /** How long after `at` the tick ran. */
+  lateMs: number;
+  /** The named minute did not exist because clocks jumped forward; it fires once, right after the jump. */
+  shifted?: true;
+};
+
+/** Missed occurrences older than the newest `CRON_MISSED_LISTED`, counted rather than listed. */
+export type CronMissedSummary = { count: number; from: number; through: number };
+
+export type CronScheduleOptions = {
+  /**
+   * Occurrences whose minute passed more than `CRON_GRACE_MS` before a tick
+   * saw them (the host slept, the process stalled). They are reported, never
+   * run late: the newest `CRON_MISSED_LISTED` one by one, older ones within
+   * `CRON_MISSED_LOOKBACK_MS` counted in `older`.
+   */
+  onMissed?: (missed: CronOccurrence[], older?: CronMissedSummary) => void;
+  /**
+   * Occurrences after this time are due when the job starts. By default the
+   * registration minute is the first one due; a caller that has already
+   * accounted for everything up to some earlier time (a workflow's startup
+   * check for missed times) starts from there, so the minutes in between are
+   * neither lost nor counted twice.
+   */
+  dueAfter?: number;
+};
+
+/** A tick this late after its minute still fires; later than this, the occurrence was missed. */
+export const CRON_GRACE_MS = 2 * 60_000;
+/** Missed occurrences are looked for this far back. */
+export const CRON_MISSED_LOOKBACK_MS = 7 * 24 * 60 * 60_000;
+/** Missed occurrences reported one by one; older ones are counted. */
+export const CRON_MISSED_LISTED = 100;
+
 export type CronJob = {
   id: string;
   expression: string;
-  callback: () => void;
+  callback: (occurrence: CronOccurrence) => void;
   lastRun: number | null;
   nextRun: number;
   handle: ReturnType<typeof setInterval>;
+  /** Evaluate the job as of `nowMs`. The interval calls it; tests drive time with `runDue`. */
+  tick?: (nowMs: number) => void;
 };
 
 export type CronJobInfo = {
@@ -155,6 +201,7 @@ export function getCronTimezone(): string | null {
 }
 
 let wallClockFormatter: Intl.DateTimeFormat | null = null;
+const zoneFormatters = new Map<string, Intl.DateTimeFormat>();
 
 const DOW_INDEX: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 
@@ -169,7 +216,12 @@ interface WallClock {
 
 /** Wall-clock components of a timestamp in the configured cron timezone. */
 function wallClock(date: Date): WallClock {
-  if (!cronTimezone) {
+  return wallClockIn(date, cronTimezone);
+}
+
+/** Wall-clock components of a timestamp in `zone`, or in this machine's zone when null. */
+function wallClockIn(date: Date, zone: string | null): WallClock {
+  if (!zone) {
     return {
       minute: date.getMinutes(),
       hour: date.getHours(),
@@ -179,18 +231,11 @@ function wallClock(date: Date): WallClock {
       year: date.getFullYear(),
     };
   }
-  wallClockFormatter ??= new Intl.DateTimeFormat('en-US', {
-    timeZone: cronTimezone,
-    hourCycle: 'h23',
-    minute: 'numeric',
-    hour: 'numeric',
-    day: 'numeric',
-    month: 'numeric',
-    weekday: 'short',
-    year: 'numeric',
-  });
+  const formatter = zone === cronTimezone
+    ? wallClockFormatter ??= zoneFormatter(zone)
+    : zoneFormatters.get(zone) ?? (zoneFormatters.set(zone, zoneFormatter(zone)), zoneFormatters.get(zone)!);
   const parts: Record<string, string> = {};
-  for (const part of wallClockFormatter.formatToParts(date)) {
+  for (const part of formatter.formatToParts(date)) {
     parts[part.type] = part.value;
   }
   return {
@@ -201,6 +246,59 @@ function wallClock(date: Date): WallClock {
     dow: DOW_INDEX[parts.weekday!] ?? 0,
     year: Number(parts.year),
   };
+}
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** The wall-clock minute as text ("2026-03-08T02:30"): comparable, and stable across restarts. */
+function wallKey(wc: WallClock): string {
+  return `${wc.year}-${pad2(wc.month)}-${pad2(wc.dom)}T${pad2(wc.hour)}:${pad2(wc.minute)}`;
+}
+
+/** The next wall-clock minute by the calendar, whether or not the zone's clocks show it. */
+function addWallMinute(wc: WallClock): WallClock {
+  let { minute, hour, dom, month, year, dow } = wc;
+  minute++;
+  if (minute === 60) { minute = 0; hour++; }
+  if (hour === 24) { hour = 0; dom++; dow = (dow + 1) % 7; }
+  if (dom > new Date(Date.UTC(year, month, 0)).getUTCDate()) { dom = 1; month++; }
+  if (month === 13) { month = 1; year++; }
+  return { minute, hour, dom, month, dow, year };
+}
+
+type ParsedCron = ReturnType<typeof parseExpression>;
+
+function matchesWall(parsed: ParsedCron, wc: WallClock): boolean {
+  return parsed.minutes.includes(wc.minute) && parsed.hours.includes(wc.hour) && parsed.daysOfMonth.includes(wc.dom)
+    && parsed.months.includes(wc.month) && parsed.daysOfWeek.includes(wc.dow);
+}
+
+/**
+ * A minute the expression names that clocks skipped when they jumped forward
+ * into the minute starting at `atMs` (2:30 on a spring-forward night), or null.
+ */
+function skippedOccurrence(parsed: ParsedCron, atMs: number): { at: number; key: string; shifted: true } | null {
+  const now = wallKey(wallClock(new Date(atMs)));
+  let step = addWallMinute(wallClock(new Date(atMs - 60_000)));
+  // No jump, or clocks went back: nothing was skipped.
+  if (wallKey(step) >= now) return null;
+  for (let i = 0; i < 180 && wallKey(step) < now; i++, step = addWallMinute(step)) {
+    if (matchesWall(parsed, step)) return { at: atMs, key: wallKey(step), shifted: true };
+  }
+  return null;
+}
+
+function zoneFormatter(zone: string): Intl.DateTimeFormat {
+  return new Intl.DateTimeFormat('en-US', {
+    timeZone: zone,
+    hourCycle: 'h23',
+    minute: 'numeric',
+    hour: 'numeric',
+    day: 'numeric',
+    month: 'numeric',
+    weekday: 'short',
+    year: 'numeric',
+  });
 }
 
 /** Local calendar date as a single comparable number (yyyymmdd). */
@@ -261,17 +359,40 @@ export class CronScheduler {
    */
   static matches(expression: string, date: Date = new Date()): boolean {
     try {
-      const { minutes, hours, daysOfMonth, months, daysOfWeek } = parseExpression(expression);
+      return matchesWall(parseExpression(expression), wallClock(date));
+    } catch {
+      return false;
+    }
+  }
 
-      const { minute, hour, dom, month, dow } = wallClock(date);
+  /**
+   * The occurrences after `afterMs` up to and including `untilMs`, one per
+   * wall-clock minute: the autumn hour that happens twice yields its minutes
+   * once. Bounded by `limit`.
+   */
+  static occurrencesBetween(expression: string, afterMs: number, untilMs: number, limit = 1_000): Array<{ at: number; key: string }> {
+    const out: Array<{ at: number; key: string }> = [];
+    const seen = new Set<string>();
+    let cursor = new Date(afterMs);
+    for (let i = 0; i < limit; i++) {
+      // Bounded at `untilMs`: a sparse expression (yearly) must not scan a
+      // year ahead on every tick.
+      const next = CronScheduler.nextRun(expression, cursor, untilMs + 1);
+      if (!next || next.getTime() > untilMs) break;
+      const key = wallKey(wallClock(next));
+      if (!seen.has(key)) {
+        seen.add(key);
+        out.push({ at: next.getTime(), key });
+      }
+      cursor = next;
+    }
+    return out;
+  }
 
-      return (
-        minutes.includes(minute) &&
-        hours.includes(hour) &&
-        daysOfMonth.includes(dom) &&
-        months.includes(month) &&
-        daysOfWeek.includes(dow)
-      );
+  /** Whether the expression matches `date` read in `zone` rather than the configured zone. */
+  static matchesIn(expression: string, date: Date, zone: string): boolean {
+    try {
+      return matchesWall(parseExpression(expression), wallClockIn(date, zone));
     } catch {
       return false;
     }
@@ -283,8 +404,8 @@ export class CronScheduler {
    * @param from - start searching from this date (default: now)
    * @returns Date of next execution, or null if none found within 1 year
    */
-  static nextRun(expression: string, from: Date = new Date()): Date | null {
-    if (cronTimezone) return CronScheduler.nextRunInTimezone(expression, from);
+  static nextRun(expression: string, from: Date = new Date(), limitMs?: number): Date | null {
+    if (cronTimezone) return CronScheduler.nextRunInTimezone(expression, from, limitMs);
     try {
       const { minutes, hours, daysOfMonth, months, daysOfWeek } = parseExpression(expression);
 
@@ -296,6 +417,7 @@ export class CronScheduler {
       // Search up to 1 year ahead (minute-by-minute is too slow; step by minute smartly)
       const limit = new Date(from);
       limit.setFullYear(limit.getFullYear() + 1);
+      if (limitMs !== undefined && limitMs < limit.getTime()) limit.setTime(limitMs);
 
       const candidate = new Date(start);
 
@@ -368,13 +490,13 @@ export class CronScheduler {
    * next hour boundary) keep it fast; hour offsets in :30/:45 zones are safe
    * because jumps are derived from the wall-clock minute.
    */
-  private static nextRunInTimezone(expression: string, from: Date): Date | null {
+  private static nextRunInTimezone(expression: string, from: Date, limitMs?: number): Date | null {
     try {
       const { minutes, hours, daysOfMonth, months, daysOfWeek } = parseExpression(expression);
 
       // Start from the next whole minute.
       let ts = Math.floor(from.getTime() / 60_000) * 60_000 + 60_000;
-      const limit = from.getTime() + 366 * 24 * 60 * 60_000;
+      const limit = Math.min(from.getTime() + 366 * 24 * 60 * 60_000, limitMs ?? Number.MAX_SAFE_INTEGER);
       let guard = 0;
 
       while (ts < limit && ++guard < 600_000) {
@@ -403,12 +525,27 @@ export class CronScheduler {
 
   /**
    * Schedule a recurring callback based on a cron expression.
-   * Uses setInterval to check every 30 seconds whether the expression matches.
+   * Uses setInterval to check every 30 seconds which occurrences have come due.
+   *
+   * Each occurrence fires once: a tick up to `CRON_GRACE_MS` late still fires
+   * it (with its lateness); older ones are reported to `onMissed` and never
+   * run late. The autumn hour that happens twice fires its minutes once, a
+   * minute skipped by a spring-forward jump fires once right after the jump,
+   * and a clock stepped back does not fire a minute again.
    */
-  schedule(id: string, expression: string, callback: () => void): void {
+  schedule(id: string, expression: string, callback: (occurrence: CronOccurrence) => void, options: CronScheduleOptions = {}): void {
     if (this.jobs.has(id)) {
       this.cancel(id);
     }
+    const run = (occurrence: CronOccurrence): void => {
+      const job = this.jobs.get(id);
+      if (job) job.lastRun = Date.now();
+      try {
+        callback(occurrence);
+      } catch (err) {
+        console.error(`[CronScheduler] Job "${id}" threw an error:`, err);
+      }
+    };
 
     // Sub-minute path: `@every <n>(s|m|h)`. Use setInterval directly so the
     // trigger fires at the requested cadence instead of being clamped to the
@@ -417,16 +554,11 @@ export class CronScheduler {
     if (everyMs !== null) {
       const fireAt = Date.now() + everyMs;
       const handle = setInterval(() => {
+        const now = Date.now();
         const job = this.jobs.get(id);
-        if (job) {
-          job.lastRun = Date.now();
-          job.nextRun = Date.now() + everyMs;
-        }
-        try {
-          callback();
-        } catch (err) {
-          console.error(`[CronScheduler] Job "${id}" threw an error:`, err);
-        }
+        if (job) job.nextRun = now + everyMs;
+        const slot = Math.floor(now / everyMs);
+        run({ at: slot * everyMs, key: `every:${everyMs}:${slot}`, lateMs: now - slot * everyMs });
       }, everyMs);
       this.jobs.set(id, {
         id,
@@ -443,41 +575,85 @@ export class CronScheduler {
     }
 
     // Standard 5-field cron path.
-    parseExpression(expression);
+    const parsed = parseExpression(expression);
 
     const nextRun = CronScheduler.nextRun(expression);
     if (!nextRun) {
       throw new Error(`Cron expression "${expression}" has no upcoming execution times`);
     }
 
-    let lastTickMinute = -1;
+    // Epoch minutes evaluated so far. By default the registration minute is
+    // due, so a job registered at 09:00:40 still fires its 09:00 occurrence.
+    let evaluatedThrough = options.dueAfter !== undefined
+      ? Math.floor(options.dueAfter / 60_000)
+      : Math.floor(Date.now() / 60_000) - 1;
+    // Wall-clock keys already fired or reported missed, so the repeated autumn
+    // hour fires once and nothing repeats after the clock is moved back.
+    const handled = new Set<string>();
+    const handledOrder: string[] = [];
+    const remember = (key: string): void => {
+      handled.add(key);
+      handledOrder.push(key);
+      if (handledOrder.length > 1_024) handled.delete(handledOrder.shift()!);
+    };
 
-    const handle = setInterval(() => {
-      const now = new Date();
-      // Epoch minute -- monotonically increasing across years/DST/leap
-      // seconds, unlike the old `year*525960 + ...` formula whose
-      // coefficients (a year isn't exactly 525960 minutes) only happen
-      // to dedupe correctly because intra-month days never overflow.
-      const currentMinute = Math.floor(now.getTime() / 60_000);
-
-      // Only evaluate once per minute
-      if (currentMinute === lastTickMinute) return;
-      lastTickMinute = currentMinute;
-
-      if (CronScheduler.matches(expression, now)) {
-        const job = this.jobs.get(id);
-        if (job) {
-          job.lastRun = Date.now();
-          const next = CronScheduler.nextRun(expression, now);
-          job.nextRun = next ? next.getTime() : Date.now();
-        }
+    const tick = (nowMs: number): void => {
+      const current = Math.floor(nowMs / 60_000);
+      if (current <= evaluatedThrough) {
+        // Same minute again, or a small step back: nothing new is due. A clock
+        // corrected far back (a host running an hour fast) would otherwise
+        // silence the job until it caught up; every minute already fired or
+        // missed is remembered, so carrying on from now repeats nothing.
+        if ((evaluatedThrough - current) * 60_000 <= CRON_GRACE_MS) return;
+        console.warn(`[CronScheduler] Job "${id}": the clock moved back ${evaluatedThrough - current} minute(s); continuing from now`);
+        evaluatedThrough = current - 1;
+      }
+      const from = evaluatedThrough;
+      evaluatedThrough = current;
+      const missed: CronOccurrence[] = [];
+      const due: CronOccurrence[] = [];
+      // After a long sleep only the last `CRON_MISSED_LOOKBACK_MS` is looked at.
+      const windowStart = Math.max(from * 60_000, nowMs - CRON_MISSED_LOOKBACK_MS);
+      for (const occurrence of CronScheduler.occurrencesBetween(expression, windowStart, current * 60_000, 100_000)) {
+        if (handled.has(occurrence.key)) continue;
+        const lateMs = nowMs - occurrence.at;
+        (lateMs > CRON_GRACE_MS ? missed : due).push({ ...occurrence, lateMs });
+      }
+      // What was missed is reported first, so a record of the tick reads in
+      // the order the times came due: the newest listed, older ones counted.
+      if (missed.length) {
+        for (const occurrence of missed) remember(occurrence.key);
+        const listed = missed.slice(-CRON_MISSED_LISTED);
+        const older = missed.slice(0, missed.length - listed.length);
         try {
-          callback();
+          options.onMissed?.(listed, older.length
+            ? { count: older.length, from: older[0]!.at, through: older[older.length - 1]!.at } : undefined);
         } catch (err) {
-          console.error(`[CronScheduler] Job "${id}" threw an error:`, err);
+          console.error(`[CronScheduler] Job "${id}" missed-occurrence handler threw:`, err);
         }
       }
-    }, 30_000);
+      for (const occurrence of due) {
+        remember(occurrence.key);
+        run(occurrence);
+      }
+      // A minute that clocks skipped when they jumped forward fires once,
+      // right after the jump. Only while ticking normally: a jump during a
+      // long stall is part of what was missed.
+      if (current - from <= 2) {
+        for (let minute = from + 1; minute <= current; minute++) {
+          const shifted = skippedOccurrence(parsed, minute * 60_000);
+          if (shifted && !handled.has(shifted.key)) {
+            remember(shifted.key);
+            run({ ...shifted, lateMs: nowMs - shifted.at });
+          }
+        }
+      }
+      // The next run is for display; work it out only when something fired.
+      const job = this.jobs.get(id);
+      if (job && (due.length || job.nextRun <= nowMs)) job.nextRun = CronScheduler.nextRun(expression, new Date(nowMs))?.getTime() ?? nowMs;
+    };
+
+    const handle = setInterval(() => tick(Date.now()), 30_000);
 
     this.jobs.set(id, {
       id,
@@ -486,9 +662,15 @@ export class CronScheduler {
       lastRun: null,
       nextRun: nextRun.getTime(),
       handle,
+      tick,
     });
 
     console.log(`[CronScheduler] Scheduled job "${id}" (${expression}), next run: ${nextRun.toISOString()}`);
+  }
+
+  /** Evaluate a job as of `nowMs` without waiting for its interval. */
+  runDue(id: string, nowMs = Date.now()): void {
+    this.jobs.get(id)?.tick?.(nowMs);
   }
 
   /**

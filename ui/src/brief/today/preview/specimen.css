@@ -1,0 +1,62 @@
+.brief-root.brief-today-specimen { display:flex; flex-direction:column; height:100dvh; overflow:auto; }
+.brief-root .brief-today-review-toolbar { position:sticky; left:0; display:flex; align-items:center; flex-wrap:wrap; flex:none; gap:8px 16px; padding:8px 18px; background:var(--brief-soft); border-bottom:1px solid var(--brief-card-edge); color:var(--brief-secondary); font:400 12px/18px var(--brief-sans); }
+.brief-root .brief-today-review-toolbar label { display:flex; align-items:center; gap:6px; }
+.brief-root .brief-today-review-toolbar :is(button,select) { min-height:32px; background:var(--brief-card); color:var(--brief-ink); border:1px solid var(--brief-card-edge); border-radius:var(--brief-corner-control); padding:4px 8px; }
+.brief-root .brief-today-review-toolbar small { flex-basis:100%; font-size:12px; }
+.brief-root .brief-today-review-viewport { flex:1; min-height:540px; }
+.brief-root .brief-today-review-viewport > .brief-navigation { height:100%; }
+.brief-root .brief-today-sample-goal { padding:18px; }
+.brief-root .brief-today-sample-goal h2 { margin:0; }
+.brief-root .brief-today-sample-goal p { margin:4px 0 0; }
+.brief-root .sample-goal-value { display:flex; align-items:baseline; gap:12px; margin:16px 0 10px; font-variant-numeric:tabular-nums; }
+.brief-root .sample-goal-value strong { font-size:34px; line-height:38px; }
+.brief-root .sample-goal-value > span { font-size:20px; color:var(--brief-secondary); }
+.brief-root .sample-goal-value small { font-size:12px; }
+.brief-root .sample-goal-value small:last-child { margin-left:auto; }
+.brief-root .sample-driver { display:grid; grid-template-columns:1fr 64px 65px; gap:12px; align-items:center; font-size:12px; margin:18px 0; }
+.brief-root .sample-driver > span:last-child { text-align:right; color:var(--brief-secondary); font-family:var(--brief-mono); }
+.brief-root .sample-driver i { height:4px; background:var(--brief-progress-remaining); }
+.brief-root .sample-driver b { display:block; height:4px; background:var(--brief-progress-complete); }
+.brief-root .sample-driver:nth-child(2) b { background:var(--brief-progress-middle); }
+.brief-root .sample-goal-next { display:flex; justify-content:space-between; padding-top:16px; margin-top:20px; border-top:1px solid var(--brief-card-edge); font:700 14px/20px var(--brief-sans); }
+.brief-root [data-compact="true"] > .brief-today-sample-goal .sample-goal-drivers { display:none; }
+.brief-root [data-compact="true"] > .brief-today-sample-goal .sample-goal-next { border:0; margin-top:12px; padding-top:0; }
+.brief-root .brief-today-sample-outcomes { padding:28px 30px; display:grid; grid-template-columns:1.2fr 1fr; gap:28px; }
+.brief-root .sample-time { font:700 88px/1.1 var(--brief-sans); letter-spacing:-2px; white-space:nowrap; font-variant-numeric:tabular-nums; }
+.brief-root .sample-time small { font-size:42px; font-weight:400; }
+.brief-root .sample-week { display:flex; justify-content:space-between; align-items:end; gap:20px; margin-top:28px; }
+.brief-root .sample-week > div { flex:1; display:grid; justify-items:center; gap:10px; color:var(--brief-secondary); font-size:12px; }
+.brief-root .sample-week i { width:min(100%,40px); border-radius:var(--brief-corner-segment); background:var(--brief-progress-remaining); }
+.brief-root .sample-week > div:last-child i { background:var(--brief-progress-complete); }
+.brief-root .sample-week-caption { display:block; margin-top:22px; font-size:16px; }
+.brief-root .sample-outcome-goal { border-left:1px solid var(--brief-card-edge); padding-left:28px; display:flex; flex-direction:column; justify-content:space-between; gap:18px; }
+.brief-root .sample-outcome-goal > div:not(.brief-progress) { display:flex; align-items:center; flex-wrap:wrap; gap:16px; }
+.brief-root .sample-outcome-goal strong { font-size:52px; line-height:1.1; font-variant-numeric:tabular-nums; }
+.brief-root .sample-outcome-goal span { font-size:14px; }.brief-root .sample-outcome-goal small { display:block; color:var(--brief-secondary); margin-top:8px; }
+.brief-root .brief-today-sample-activity { padding:18px; }
+.brief-root .brief-today-sample-activity h2 { margin:0 0 20px; }
+.brief-root .brief-today-sample-activity > div { display:flex; flex-wrap:wrap; justify-content:space-between; gap:20px; }
+.brief-root .brief-today-sample-activity > div > div { display:grid; gap:12px; }
+.brief-root .brief-today-sample-activity strong { font-size:13px; }.brief-root .brief-today-sample-activity span { font-size:12px; color:var(--brief-secondary); }
+.brief-root .brief-today-sample-opportunity { padding:22px; }
+.brief-root .brief-today-sample-opportunity h3 { margin:0 0 24px; }
+.brief-root .brief-today-sample-opportunity small { font-size:12px; color:var(--brief-secondary); }
+.brief-root .brief-today-sample-opportunity p { font:400 14px/22px var(--brief-sans); margin:8px 0 20px; }
+.brief-root .brief-today-sample-opportunity strong { display:flex; align-items:center; gap:8px; font-size:14px; }
+.brief-root .sample-conversation-tabs { padding:8px 12px; margin-right:36px; background:var(--brief-soft); border-radius:var(--brief-corner-control); font-size:13px; }
+.brief-root .sample-conversation-thread { flex:1; min-height:0; overflow:auto; padding-top:36px; }
+.brief-root .sample-conversation-thread h2 { margin:0; }
+.brief-root .sample-conversation-suggestions { display:flex; flex-wrap:wrap; gap:8px; padding-block:16px; }
+.brief-root .sample-conversation-input { width:100%; height:56px; min-height:56px; flex:none; resize:none; background:var(--brief-card); color:var(--brief-ink); border:1px solid var(--brief-field-edge); border-radius:var(--brief-corner-card); padding:12px; font:400 14px/20px var(--brief-sans); }
+.brief-root .sample-conversation-input:focus-visible { outline:2px solid var(--brief-focus); outline-offset:2px; }
+.brief-root [data-compact="true"] .sample-week, .brief-root [data-compact="true"] .sample-week-caption { display:none; }
+.brief-root [data-compact="true"] .brief-today-sample-outcomes { min-height:224px; align-items:center; }
+@container brief-work (max-width:650px) {
+  .brief-root .sample-time { font-size:66px; }.brief-root .sample-time small { font-size:30px; }
+  .brief-root .sample-outcome-goal strong { font-size:36px; }
+  .brief-root .brief-today-sample-outcomes { gap:18px; padding:24px 20px; }.brief-root .sample-outcome-goal { padding-left:18px; }
+}
+@container brief-work (max-width:450px) {
+  .brief-root .brief-today-sample-outcomes { grid-template-columns:1fr; }
+  .brief-root .sample-outcome-goal { border-left:0; padding-left:0; border-top:1px solid var(--brief-card-edge); padding-top:18px; }
+}
