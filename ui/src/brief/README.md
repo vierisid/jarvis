@@ -145,3 +145,32 @@ renders it, so the room's ancestors stay mounted; only the navigation chrome is 
 
 `?brief=preview&specimen=navigation#/_brief_preview` opens the shell with local fixture data. It
 starts no API read, socket or account action.
+
+## Pebble workspace
+
+`shell/pebble-layout/PebbleLayout.tsx` wraps the room inside `NavigationShell`. Opening Pebble grows
+one clipped 58px surface from the workspace's bottom-right corner into a conversation panel (360-447px)
+and reserves that width beside the room; closing reverses toward the same corner. The room, its
+selection and drafts, and the supplied conversation stay mounted through open/close, route, theme and
+sidebar changes.
+
+- The conversation comes only from the composition root as `conversation: BriefConversationBinding`
+  (`source` plus `content`). The host creates no thread, socket, microphone, request or persistence.
+  Without a binding (the default today, `main.tsx` passes none) the opener is hidden and inert and the
+  released Talk/Pebble overlay is untouched. `source` must be `"live"` in live mode and `"fixture"` in
+  preview mode, otherwise nothing mounts.
+- The opener is gated by the same `canMountNavigation` check as the navigation chrome. Losing that
+  capability hides the panel without remounting the room or the conversation.
+- `shell.chatOpen` is the only open state. Escape inside the panel closes it unless an inner control
+  already handled it; focus moves to an element marked `data-pebble-focus` (else the panel) on open and
+  back to the initiating control (else the opener) on close.
+- Below 960px of workspace width (`PEBBLE_SPLIT_MIN` in `layout.ts`) the same panel replaces the work
+  viewport; the hidden room stays mounted, `inert` and keeps its scroll.
+- Width/height use D-04 `reflow` motion and the reading body a `reveal` fade; resizing the workspace
+  follows immediately. `reducedMotion` and the OS setting place every change at once.
+- Rooms read `usePebbleWorkspace()` (open, split/single, working and conversation widths) or the
+  `brief-work` CSS container to adapt without remounting.
+- `shell/pebble-layout/figma-reference.json` records the UI-11 source values.
+
+`?brief=preview&specimen=pebble#/_brief_preview` opens an illustrative review with fixture rooms
+(Today, canvas, list, detail, form) and a fixture conversation. It starts no API read, socket or voice.
