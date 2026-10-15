@@ -139,20 +139,16 @@ and [Slack conversations.history](https://docs.slack.dev/reference/methods/conve
 The installed npm bundles for Gmail 0.17.0 and Slack 0.21.0 were inspected for
 return envelopes and token selection; they are not copied into this repository.
 
-## Stack integration and rollback
+## Integration and rollback
 
-Q-07 was rebased on 2026-10-14 onto Q-08 #891 at
-`5353482f02f2c9d555cae6553519e4e5cddcfe16`, which includes Q-06 #806 and main
-`5024ea7455a5613be0514475be32c0dee6de0edd`. This retains the existing stack
-order and adds no product prerequisite. The PR remains unmerged.
-
-Keep current main's stricter channel allowlists for approve **and deny**, exact
-short-ID matching, review-only delivery restrictions, ApprovalGuard and argument /
-version checks when integrating Q-08. Q-07 does not replace those files or
-introduce an approval/execute endpoint. Preserve Q-08's Pause/Kill and approval
-revalidation around this completion protocol. Main + the full F stack are not
-certified by this stacked PR's tests. F-21 overlaps API projections only; recovery
-writes stay in this module.
+Q-07 builds on Q-08's execution holds: Pause and Kill, the run-time approval
+recheck and typed outcomes still apply around this completion protocol, which
+adds no approval or execute endpoint. A tracked send is audited when its
+dispatch is handed to the engine and again when its completion receipt is
+recorded. Upgrade note: a Gmail/Slack send recorded under the legacy `piece`
+route (for example a card parked across the upgrade) is refused and needs a new
+intentional run, and a tracked send whose step fails is no longer retried by
+the engine under the original authorization.
 
 Rollback by reverting Q-07 and rebuilding the daemon/engine together. Retain the
 additive table and effect records for audit. Before running an older binary,

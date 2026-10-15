@@ -800,6 +800,11 @@ export function buildSandboxServiceBackends(
    * failed can repeat that call under the original decision. Any change to the
    * arguments, the version or the Authority decision invalidates the record and
    * stops the dispatch.
+   *
+   * Except a tracked send (Q-07, `tracksPieceCompletion`): its record stays
+   * `dispatching` until the engine posts the completion receipt, so a retry
+   * after a failed or lost send is refused instead of sending again, and a
+   * retry after a recorded receipt gets the stored result back.
    */
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
     const resolved = resolveGovernedPieceAction(req.piece, req.action);
