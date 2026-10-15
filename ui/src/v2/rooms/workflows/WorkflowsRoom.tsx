@@ -515,9 +515,14 @@ function RunStatusIcon({ status }: { status: FlowRunStatus }): React.ReactElemen
  * waitpoint -- which can happen briefly while the engine is between
  * uploadRunLog calls, or if the run was paused via a non-webhook path.
  */
-function PausedRunCallout({ runId }: { runId: string }): React.ReactElement {
+interface RunWaitpoint {
+  id: string; stepName: string; type: string; resumeUrl?: string;
+  child?: { childRunId: string; status: string; executionPath: Array<[string, number]> };
+}
+
+export function PausedRunCallout({ runId }: { runId: string }): React.ReactElement {
   const [waitpoints, setWaitpoints] = useState<
-    Array<{ id: string; stepName: string; type: string; resumeUrl: string }> | null
+    Array<RunWaitpoint> | null
   >(null);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -530,7 +535,7 @@ function PausedRunCallout({ runId }: { runId: string }): React.ReactElement {
           return;
         }
         const body = (await r.json()) as {
-          waitpoints: Array<{ id: string; stepName: string; type: string; resumeUrl: string }>;
+          waitpoints: Array<RunWaitpoint>;
         };
         if (!cancelled) setWaitpoints(body.waitpoints);
       } catch (e) {
@@ -543,7 +548,7 @@ function PausedRunCallout({ runId }: { runId: string }): React.ReactElement {
   }, [runId]);
   return (
     <div className="wf-runs__paused">
-      <strong>Paused:</strong> waiting for an external signal.{" "}
+      <strong>Paused:</strong> waiting to continue.{" "}
       {error ? (
         <span className="wf-runs__paused-err">Couldn't load waitpoints: {error}</span>
       ) : waitpoints === null ? (
@@ -558,8 +563,13 @@ function PausedRunCallout({ runId }: { runId: string }): React.ReactElement {
           {waitpoints.map((wp) => (
             <li key={wp.id}>
               <span className="wf-runs__paused-step">step <code>{wp.stepName}</code></span>{" "}
-              ({wp.type}) -- POST any JSON body to{" "}
-              <code>{wp.resumeUrl}</code> to resume.
+              {wp.child ? <span>
+                Waiting for child run <code>{wp.child.childRunId}</code> ({wp.child.status}).
+                {wp.child.executionPath.length > 0 && <> Iteration: {wp.child.executionPath.map(([step, index]) => `${step}[${index}]`).join(' / ')}.</>}
+                {' '}Continues automatically when the child finishes.
+              </span> : <span>
+                ({wp.type}) -- POST any JSON body to <code>{wp.resumeUrl}</code> to resume.
+              </span>}
             </li>
           ))}
         </ul>

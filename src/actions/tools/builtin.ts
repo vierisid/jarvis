@@ -5,6 +5,8 @@
  * run_command, read_file, write_file, list_directory
  */
 
+import { browserActionFailure, browserActionError } from '../browser/action-failure';
+import { recordActionVerification, observedPage } from '../action-verification';
 import {
   readFileSync, writeFileSync, readdirSync, statSync, existsSync, unlinkSync, chmodSync, renameSync, rmSync,
   realpathSync, openSync, closeSync, fstatSync, readSync, readlinkSync, constants as fsConstants,
@@ -21,7 +23,7 @@ import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upl
 import type { ApprovalGuard, ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import {
-  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
+  routeToSidecar, routeScreenshotToSidecar, routeBrowserReadToSidecar, captureMachineApprovalGuard, autoTargetForCapability, resolveToolTarget, findSidecar, getSidecarManager,
   routeElementActionToSidecar, remoteSnapshotGeneration, currentSnapshotReader, currentSnapshotReadLog,
   type SidecarPageRead,
 } from './sidecar-route.ts';
@@ -1227,6 +1229,7 @@ function browserCallGuard(
     // element-addressed tools are the opposite -- they cannot work without the
     // snapshot that minted their ids, so for them a cold browser at review
     // really does mean nothing was reviewed.
+    const machineCurrent = captureMachineApprovalGuard(params.target, 'browser', tool);
     const mayConnectLazily = !opts.bindDocument;
     const local = reviewedRoute ? null : browser.captureApprovalGuard(mayConnectLazily, opts);
     // What the remote call will be held to (#676), captured NOW -- the newest
@@ -1262,7 +1265,7 @@ function browserCallGuard(
       } catch {
         return false;
       }
-      if (nowRoute !== reviewedRoute) return false;
+      if (nowRoute !== reviewedRoute || !machineCurrent()) return false;
       // Remote: nothing in this process holds the reviewed surface. The
       // sidecar runs its own document and generation checks at use time --
       // against the generation `reviewed` carries, for an element action --
@@ -1373,7 +1376,7 @@ export const browserNavigateTool: ToolDefinition = {
     try {
       url = checkNavigationUrl(params.url as string);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionFailure(`Error: ${err instanceof Error ? err.message : String(err)}`);
     }
     const target = resolveBrowserTarget(params, 'browser_navigate');
     if (target) {
@@ -1382,13 +1385,14 @@ export const browserNavigateTool: ToolDefinition = {
       reportSkippedPlaybook('browser_navigate', target, read);
       return globalWebappTemplateDelivery.withInstructions(read.text, read.pageUrl);
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       const snap = await browser.navigate(url);
+      recordActionVerification('browser_navigate', observedPage(snap.browserUrl, snap.browserDocumentId));
       return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1411,13 +1415,14 @@ export const browserSnapshotTool: ToolDefinition = {
       reportSkippedPlaybook('browser_snapshot', target, read);
       return globalWebappTemplateDelivery.withInstructions(read.text, read.pageUrl);
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       const snap = await browser.snapshot();
+      recordActionVerification('browser_snapshot', observedPage(snap.browserUrl, snap.browserDocumentId));
       return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1458,15 +1463,15 @@ export const browserClickTool: ToolDefinition = {
         double: params.double,
       }, currentReviewedExecution());
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       return await browser.click(params.element_id as number, {
         button: params.button === 'right' ? 'right' : 'left',
         double: (params.double as boolean) ?? false,
       });
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1494,12 +1499,12 @@ export const browserHoverTool: ToolDefinition = {
       return routeElementActionToSidecar(target, 'browser_hover', { element_id: params.element_id },
         currentReviewedExecution());
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       return await browser.hover(params.element_id as number);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1526,12 +1531,12 @@ export const browserPressKeyTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_press_key', { key: params.key }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       return await browser.pressKey(params.key as string);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1578,8 +1583,8 @@ export const browserTypeTool: ToolDefinition = {
         append: params.append,
       }, currentReviewedExecution());
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       return await browser.type(
         params.element_id as number,
@@ -1588,7 +1593,7 @@ export const browserTypeTool: ToolDefinition = {
         (params.append as boolean) ?? false,
       );
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1609,8 +1614,8 @@ export const browserScreenshotTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_screenshot', {}, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       const { base64, mimeType } = await browser.screenshotBuffer();
       return {
@@ -1620,7 +1625,7 @@ export const browserScreenshotTool: ToolDefinition = {
         ],
       } satisfies ToolResult;
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1726,16 +1731,16 @@ export const browserUploadFileTool: ToolDefinition = {
     // No sidecar route exists for uploads, so the generic "use a sidecar"
     // guidance would send the agent in circles - say so explicitly.
     if (isLocalBrowserDisabled()) {
-      return 'Error: browser_upload_file requires the LOCAL browser, which is disabled on this machine (browser.local: false), and file upload has no sidecar route yet. This action is unavailable - do NOT retry.';
+      return browserActionFailure('Error: browser_upload_file requires the LOCAL browser, which is disabled on this machine (browser.local: false), and file upload has no sidecar route yet. This action is unavailable - do NOT retry.');
     }
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       return await browser.uploadFile(
         params.file_path as string,
         params.selector as string | undefined,
       );
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1770,14 +1775,14 @@ export const browserScrollTool: ToolDefinition = {
         amount: params.amount,
       }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       const direction = (params.direction as string) === 'up' ? 'up' : 'down';
       const amount = params.amount as number | undefined;
       return await browser.scroll(direction, amount);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      return browserActionError(err);
     }
   },
 };
@@ -1804,8 +1809,8 @@ export const browserEvaluateTool: ToolDefinition = {
     if (target) {
       return routeToSidecar(target, 'browser_evaluate', { expression: params.expression }, 'browser');
     }
-    if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
-    if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
+    if (isLocalBrowserDisabled()) return browserActionFailure(LOCAL_BROWSER_DISABLED_MSG);
+    if (isNoLocalTools()) return browserActionFailure(LOCAL_DISABLED_MSG);
     try {
       const result = await browser.evaluate(params.expression as string);
       if (result === undefined || result === null) return '(no return value)';
@@ -1818,8 +1823,7 @@ export const browserEvaluateTool: ToolDefinition = {
       const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
       return truncateMarked(text, MAX_PAGE_CONTROLLED_REPLY);
     } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      return `Error: ${truncateMarked(message, MAX_PAGE_CONTROLLED_REPLY)}`;
+      return browserActionError(err, message => truncateMarked(message, MAX_PAGE_CONTROLLED_REPLY));
     }
   },
 };
@@ -1880,9 +1884,10 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       execute: async (params) => {
         try {
           const snap = await ctrl.navigate(params.url as string);
+          recordActionVerification('browser_navigate', observedPage(snap.browserUrl, snap.browserDocumentId));
           return templateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },
@@ -1894,9 +1899,10 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       execute: async () => {
         try {
           const snap = await ctrl.snapshot();
+          recordActionVerification('browser_snapshot', observedPage(snap.browserUrl, snap.browserDocumentId));
           return templateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },
@@ -1912,7 +1918,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
             double: (params.double as boolean) ?? false,
           });
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },
@@ -1930,7 +1936,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
             (params.append as boolean) ?? false,
           );
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },
@@ -1943,7 +1949,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
         try {
           return await ctrl.hover(params.element_id as number);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },
@@ -1956,7 +1962,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
         try {
           return await ctrl.pressKey(params.key as string);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },
@@ -1971,7 +1977,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
           const amount = params.amount as number | undefined;
           return await ctrl.scroll(direction, amount);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },
@@ -1986,7 +1992,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
           if (result === undefined || result === null) return '(no return value)';
           return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },
@@ -2005,7 +2011,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
             ],
           } satisfies ToolResult;
         } catch (err) {
-          return `Error: ${err instanceof Error ? err.message : String(err)}`;
+          return browserActionError(err);
         }
       },
     },

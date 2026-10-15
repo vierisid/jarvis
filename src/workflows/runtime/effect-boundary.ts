@@ -1,3 +1,5 @@
+import { collectActionVerification } from '../../actions/action-verification';
+import type { ActionOutcome } from '../../actions/action-outcome';
 import { combineDecisions, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
 import type { AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
@@ -70,7 +72,7 @@ export interface EffectInvocation {
    */
   aboveLevelFloor?: ActionCategory;
 }
-export type EffectReply = { result: unknown; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
+export type EffectReply = { result: unknown; outcome?: ActionOutcome; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
 
 /**
  * Give an approved workflow approval its receipt when its effect ends without
@@ -187,7 +189,7 @@ export class WorkflowEffectBoundary {
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
       throw new Error('Workflow effect changed since it was recorded; start a new run for new arguments or version');
     }
-    if (effect?.status === 'succeeded') return { result: effect.result };
+    if (effect?.status === 'succeeded') return { result: effect.result, ...(effect.outcome ? { outcome: effect.outcome } : {}) };
     if (effect?.outcome && effect.outcome.status !== 'succeeded') throw new ActionOutcomeError(effect.outcome);
     if (effect?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
     if (effect && effect.status !== 'pending') throw new Error(effect.error ?? `Workflow effect is ${effect.status}`);
@@ -328,7 +330,7 @@ export class WorkflowEffectBoundary {
         // have claimed or completed this effect; never overwrite its outcome
         // with the pre-delivery pending snapshot.
         const latest = getWorkflowEffect(id);
-        if (latest?.status === 'succeeded') return { result: latest.result };
+        if (latest?.status === 'succeeded') return { result: latest.result, ...(latest.outcome ? { outcome: latest.outcome } : {}) };
         if (latest?.outcome && latest.outcome.status !== 'succeeded') throw new ActionOutcomeError(latest.outcome);
         if (latest?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
         if (!latest || latest.status !== 'pending') throw new Error(latest?.error ?? 'Workflow effect is no longer pending');
@@ -387,8 +389,10 @@ export class WorkflowEffectBoundary {
       // `checkpointExecution()` for cancellation; inside a governed effect that
       // has to mean Authority and emergency state as well. Scopes compose, so
       // this adds to the run's cancellation fence rather than replacing it.
-      const result = await withExecutionScope(checkpoint,
-        () => input.execute(JSON.parse(canonicalJson(record.arguments)), checkpoint));
+      const { result, verification } = await collectActionVerification(input.toolName, input.toolCategory,
+        () => withExecutionScope(checkpoint,
+          () => input.execute(JSON.parse(canonicalJson(record.arguments)), checkpoint)));
+      if (verification) record.outcome = { status: 'succeeded', verification };
       // NOT bounded and NOT defanged, deliberately: this is replay and
       // idempotency state that a resumed run reads back instead of acting again,
       // its shape is pinned by #567 (`cancellation-authority.integration.test.ts`),
@@ -416,15 +420,18 @@ export class WorkflowEffectBoundary {
       // truncated, unparseable JSON prefix read as text, so the decoded form
       // never materialises. A consumer that ever `JSON.parse`d a receipt would
       // reopen it.
-      if (record.approvalId) approvals!.markExecuted(record.approvalId, boundedReceiptText(canonicalJson({ effectId: id, result: record.result }), RECEIPT_MAX_CHARS));
+      if (record.approvalId) approvals!.markExecuted(record.approvalId, boundedReceiptText(canonicalJson({ effectId: id, result: record.result, ...(record.outcome ? { outcome: record.outcome } : {}) }), RECEIPT_MAX_CHARS));
       log(true);
-      return { result: record.result };
+      return { result: record.result, ...(record.outcome ? { outcome: record.outcome } : {}) };
     } catch (error) {
       if (error instanceof ActionOutcomeError) {
         record.outcome = error.outcome;
         record.status = error.outcome.status === 'error' ? 'failed' : error.outcome.status;
         record.error = error.message;
       } else {
+        // Completion/persistence failed after the adapter returned. Do not
+        // leave a success outcome attached to a failed durable receipt.
+        delete record.outcome;
         record.status = 'failed'; record.error = `Effect dispatch failed; partial effects may have occurred: ${(error as Error).message}`;
       }
       record.finishedAt = Date.now(); saveWorkflowEffect(record);

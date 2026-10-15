@@ -23,6 +23,7 @@ import type { SidecarManager } from '../../sidecar/manager.ts';
 /** A manager advertising one connected sidecar with the browser capability. */
 function fakeBrowserSidecar(): SidecarManager {
   return {
+    getConnectionSessionId: () => 'fixture-session',
     listSidecars: () => [{ id: 'remote-box', connected: true, capabilities: ['browser'] }],
   } as unknown as SidecarManager;
 }
@@ -105,6 +106,7 @@ describe('#602 the main registry binds a reviewed browser call', () => {
   });
 
   test('a call reviewed for a sidecar is not bound to the local controller', () => {
+    setSidecarManagerRef(fakeBrowserSidecar());
     // The local epoch says nothing about a remote browser, and on a
     // sidecar-only machine the local controller is never connected.
     const guard = browserScrollTool.captureApprovalGuard!({ target: 'remote-box', direction: 'down' });

@@ -1,52 +1,12 @@
 import type { Goal } from '../goals/types.ts';
-import type { JobHypothesis, JobKind, JobSignal, OpportunityAssessment } from './opportunity-types.ts';
+import type { JobHypothesis, JobSignal, OpportunityAssessment } from './opportunity-types.ts';
 
-export const OPPORTUNITY_WINDOW_MS = 14 * 86_400_000;
-const EPISODE_GAP_MS = 30 * 60_000;
-
-// Deliberately bounded vocabulary: these cues support asking about a job, not
-// claiming that it was performed. App names alone never match. No model calls.
-const JOBS: Array<{
-  kind: JobKind; pattern: RegExp; cue: string;
-  title: string; proposedOutcome: string; question: string;
-}> = [
-  {
-    kind: 'invoice_review',
-    pattern: /\b(?:(?:unpaid|overdue|outstanding) invoices?|invoices? (?:overdue|unpaid|outstanding))\b/i,
-    cue: 'unpaid or overdue invoices',
-    title: 'Review invoices needing follow-up',
-    proposedOutcome: 'A checked list of unpaid invoices and draft follow-ups for approval.',
-    question: 'Is reviewing unpaid invoices a recurring job, and what output would help?',
-  },
-  {
-    kind: 'lead_followup',
-    pattern: /\b(?:(?:lead|prospect)s? (?:follow[ -]?up|outreach)|(?:follow[ -]?up|outreach) (?:for |with )?(?:lead|prospect)s?)\b/i,
-    cue: 'lead or prospect follow-up',
-    title: 'Prepare lead follow-ups',
-    proposedOutcome: 'A checked list of leads due for follow-up and drafts for approval.',
-    question: 'Is following up with leads a recurring job, and what output would help?',
-  },
-  {
-    kind: 'recurring_report',
-    pattern: /\b(?:daily|weekly|monthly) (?:sales |revenue |pipeline |performance |status )?report\b/i,
-    cue: 'daily, weekly or monthly report',
-    title: 'Prepare a recurring report',
-    proposedOutcome: 'A draft report with source references and figures checked before sharing.',
-    question: 'Do you prepare this report repeatedly, and which sources and checks does it need?',
-  },
-];
-
-export function classifyJobSignals(input: {
-  captureId: string; timestamp: number; app?: string | null;
-  windowTitle?: string | null; ocrText?: string | null;
-}): JobSignal[] {
-  if (!input.captureId || !Number.isFinite(input.timestamp)) return [];
-  const text = `${input.windowTitle?.slice(0, 240) ?? ''}\n${input.ocrText?.slice(0, 2000) ?? ''}`;
-  return JOBS.filter(job => job.pattern.test(text)).map(job => ({
-    captureId: input.captureId, observedAt: input.timestamp,
-    app: (input.app || 'Unknown app').slice(0, 100), kind: job.kind, cue: job.cue,
-  }));
-}
+import { ROUTINES, ROUTINE_POLICY } from './routine-catalog.ts';
+import { groupRoutineEpisodes, OPPORTUNITY_WINDOW_MS } from './routine-episodes.ts';
+import { rankOpportunityGoals } from './goal-relevance.ts';
+import { REPORT_CADENCES, routineKey, sameRoutine } from './routine-identity.ts';
+export { OPPORTUNITY_WINDOW_MS } from './routine-episodes.ts';
+export { classifyJobSignals } from './routine-signals.ts';
 
 /** Pure boundary: retained observations + current active goals, no writes or execution. */
 export function assessJobHypotheses(
@@ -55,46 +15,42 @@ export function assessJobHypotheses(
   const recent = signals.filter(s => s.observedAt >= now - OPPORTUNITY_WINDOW_MS && s.observedAt <= now);
   const proposals: JobHypothesis[] = [];
   let recurring = false;
-  for (const job of JOBS) {
-    const seen = new Set<string>();
-    const observations = recent.filter(s => {
-      if (s.kind !== job.kind || seen.has(s.captureId)) return false;
-      seen.add(s.captureId);
-      return true;
-    }).sort((a, b) => a.observedAt - b.observedAt || a.captureId.localeCompare(b.captureId));
-    const episodes: JobSignal[] = [];
-    let lastObserved = -Infinity;
-    for (const signal of observations) {
-      // Continuous captures count as one episode, even across midnight or sessions.
-      if (signal.observedAt - lastObserved >= EPISODE_GAP_MS) episodes.push(signal);
-      lastObserved = signal.observedAt;
-    }
-    const days = new Set(episodes.map(s => new Date(s.observedAt).toISOString().slice(0, 10)));
+  const jobs = ROUTINES.flatMap(job => (job.kind === 'recurring_report' ? [undefined, ...REPORT_CADENCES] : [undefined])
+    .map(cadence => ({ job, cadence })));
+  for (const { job, cadence } of jobs) {
+    const episodes = groupRoutineEpisodes(recent.filter(s => s.kind === job.kind
+      && (job.kind !== 'recurring_report' || s.routine?.cadence === cadence)), now);
+    const days = new Set(episodes.map(e => new Date(e.source.observedAt).toISOString().slice(0, 10)));
     if (episodes.length < 3 || days.size < 2) continue;
     recurring = true;
-    const patternKey = `job-v1:${job.kind}`;
-    if (knownPatterns.has(patternKey)) continue;
-    // One representative per episode, bounded by a 14-day / 30-minute window.
-    const evidence = episodes;
-    const goalCandidates = goals.filter(g => g.status === 'active' && job.pattern.test(
-      `${g.title} ${g.description} ${g.success_criteria}`,
-    )).slice(0, 5).map(g => ({
-      goalId: g.id, title: g.title,
-      reason: `The goal and observed activity both mention ${job.cue}. This does not establish that the activity serves the goal.`,
-      evidenceCaptureIds: evidence.map(e => e.captureId),
-      basis: 'text_overlap_requires_confirmation' as const,
-    }));
-    proposals.push({
+    // Preserve durable dismissal/interest identity across the policy upgrade.
+    const patternKey = routineKey(job.kind, cadence);
+    if ([...knownPatterns].some(key => sameRoutine(key, patternKey))) continue;
+    const evidence = episodes.map(e => e.output);
+    const hypothesis: JobHypothesis = {
       schemaVersion: 1, assessedAt: now, patternKey, kind: job.kind,
-      job: { title: job.title, proposedOutcome: job.proposedOutcome, question: job.question },
+      job: cadence ? {
+        title: `Prepare a ${cadence} report`,
+        proposedOutcome: `A draft ${cadence} report with source references and figures checked before sharing.`,
+        question: `Do you prepare this ${cadence} report repeatedly, and which sources and checks does it need?`,
+      } : { title: job.title, proposedOutcome: job.proposedOutcome, question: job.question },
       evidence,
+      routine: {
+        policy: ROUTINE_POLICY,
+        ...(cadence ? { cadence } : {}),
+        episodes: episodes.map(episode => Object.fromEntries(
+          (['source', 'operation', 'output'] as const).map(stage => [stage, {
+            captureId: episode[stage].captureId, observedAt: episode[stage].observedAt, cue: job.labels[stage],
+          }]),
+        ) as NonNullable<JobHypothesis['routine']>['episodes'][number]),
+      },
       recurrence: {
         episodes: episodes.length, distinctDays: days.size,
-        firstObservedAt: observations[0]!.observedAt,
-        lastObservedAt: observations.at(-1)!.observedAt,
+        firstObservedAt: episodes[0]!.source.observedAt,
+        lastObservedAt: episodes.at(-1)!.output.observedAt,
         windowDays: 14, basis: 'observed_activity',
       },
-      goalCandidates,
+      goalCandidates: [],
       feasibility: {
         status: 'unverified',
         requiredChecks: ['source_access', 'output_destination', 'authority', 'workflow_preflight', 'model_profile_quality'],
@@ -106,9 +62,10 @@ export function assessJobHypotheses(
         'The job, scope and expected outcome need user confirmation.',
         'Goal candidates are possible relevance only; no goal is linked automatically.',
       ],
-    });
+    };
+    proposals.push({ ...hypothesis, ...rankOpportunityGoals(hypothesis, goals, now) });
   }
-  // Goal relevance breaks ties without inventing a probability or a business score.
+  // Only one defensible contribution improves priority; competing links never inflate it.
   proposals.sort((a, b) => b.goalCandidates.length - a.goalCandidates.length
     || b.recurrence.distinctDays - a.recurrence.distinctDays || a.patternKey.localeCompare(b.patternKey));
   return {
