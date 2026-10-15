@@ -1,6 +1,6 @@
 # F-06: safe, typed chat progress
 
-F-06 adds conversation-scoped activity data for real tool, sub-agent and task execution. It is stacked on the corrected F-05 commit `f98cd312ca0b450bb5180320fc8c0491757cae67`, following the owner's unmerged F-line stack. It does not mount or change the production UI. D-15 owns presentation and motion.
+F-06 adds conversation-scoped activity data for real tool, sub-agent and task execution. It does not mount or change the production UI. D-15 owns presentation and motion.
 
 ## Activation
 
@@ -40,11 +40,9 @@ From the dedicated worktree, these fixtures use isolated databases, temporary fi
 bun test src/brief/progress.test.ts src/brief/progress-transport.test.ts src/actions/progress-context.test.ts src/daemon/agent-service-progress.test.ts src/daemon/ws-service-conversation.test.ts src/agents/sub-agent-runner.test.ts ui/src/brief/chat/store.test.ts src/actions/progress-tools.test.ts src/agents/task-manager.test.ts src/vault/chat-turns.test.ts
 ```
 
-Expected: 79 passing tests. The suite also checks real file reads and shell exit codes, protocol-shaped sidecar receipts, an actual background runner finishing after the parent answer, preserved execution scope, and indexed lookup on fresh/upgraded databases. They exercise actual registry, AgentService, authenticated WebSocket and sub-agent paths; interleave conversations A and B; cancel A while B finishes; throw errors containing private canaries; restore a disk database after interruption; and replay more than one page into the browser store. Assertions check fixed labels, stable identity/order, no private canaries, no replay animation and truthful failure states.
+The suite also checks real file reads and shell exit codes, protocol-shaped sidecar receipts, an actual background runner finishing after the parent answer outside the caller's execution scope (#988), and indexed lookup on fresh/upgraded databases. They exercise actual registry, AgentService, authenticated WebSocket and sub-agent paths; interleave conversations A and B; cancel A while B finishes; throw errors containing private canaries; restore a disk database after interruption; and replay more than one page into the browser store. Assertions check fixed labels, stable identity/order, no private canaries, no replay animation and truthful failure states.
 
 For a future D-15 preview, start one tool in A and another in B, then cancel A. Only A's unfinished row should stop. Reconnect and confirm the same rows remain in order, final rows stay still, and neither call executes again. There is no visual screenshot for F-06 because this change supplies the producer and adapter only.
-
-The receipt and raw verification evidence are in `docs/brief-delivery/F-06.json` and `docs/brief-delivery/evidence/F-06/`. The original implementation includes five rejected unsafe mutations. Review-fix evidence separately records 13 regression failures on the reviewed implementation before the fixes and the passing corrected suite. No real model or user data is needed. The broader local run passed 1,432 tests with three skips and one existing Chromium 143 DevTools fixture failure; the same failure was reproduced on the reviewed production sources. Exact remote head and full CI status are recorded in the PR description.
 
 ## Rollback
 
