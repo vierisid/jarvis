@@ -94,6 +94,16 @@ test('corrupt legacy data is unavailable and does not initialize a journey', asy
   setSetting(USER_PROFILE_SETTING_KEY, JSON.stringify({ version: 1, answers: {}, interview_facts: [null] }));
   expect(() => readLegacyJourney(getDb())).toThrow();
 });
+test('an unusable legacy tour step is dropped as a hint instead of blocking the journey (#1067)', () => {
+  for (const step of ['x'.repeat(201), '   ', '']) {
+    setSetting('cfg.onboarding', JSON.stringify({ setup_completed_at: 1, tutorial_progress_step: step }));
+    const legacy = readLegacyJourney(getDb());
+    expect(legacy.tutorial_progress_step).toBeNull();
+    expect(legacy.setup_completed).toBe(true);
+  }
+  setSetting('cfg.onboarding', JSON.stringify({ tutorial_progress_step: 'x'.repeat(200) }));
+  expect(readLegacyJourney(getDb()).tutorial_progress_step).toBe('x'.repeat(200));
+});
 
 const setupEntry = runtimeModules.find(m => m.manifest.id === 'ON-B-02');
 for (const initiallyRunning of [false, true]) test.skipIf(!setupEntry)(`real optional setup applies live bindings and confirms startup (already running: ${initiallyRunning})`, async () => {

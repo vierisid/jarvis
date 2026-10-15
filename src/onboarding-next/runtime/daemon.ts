@@ -18,6 +18,12 @@ function factory<T>(module: Record<string, unknown>, name: string): T {
   if (typeof module[name] !== 'function') throw new Error('Missing onboarding export');
   return module[name] as T;
 }
+/** The legacy progress route stores any string, but the journey accepts only
+ * a 1..200 char identity. The step is a resume hint, so an unusable one is
+ * dropped instead of leaving the journey permanently legacy_status_unknown (#1067). */
+function legacyStepHint(step: unknown): string | null {
+  return typeof step === 'string' && step.trim().length > 0 && step.length <= 200 ? step : null;
+}
 /** Strictly validate before using legacy normalizers that intentionally tolerate
  * corrupted data. Unreadable progress cannot create a synthetic new journey. */
 export function readLegacyJourney(db: Database) {
@@ -45,7 +51,7 @@ export function readLegacyJourney(db: Database) {
   return {
     setup_completed: o?.setup_completed_at != null, setup_skipped_profile: o?.setup_skipped_profile === true,
     profile_completed: hasUserProfile(getUserProfile()), tutorial_completed: o?.tutorial_completed_at != null,
-    tutorial_dismissed: o?.tutorial_dismissed_at != null, tutorial_progress_step: o?.tutorial_progress_step ?? null,
+    tutorial_dismissed: o?.tutorial_dismissed_at != null, tutorial_progress_step: legacyStepHint(o?.tutorial_progress_step),
   };
 }
 export function daemonBindings(ctx: ApiContext, authorize: (req: Request) => Scope | null): Partial<Record<import('./contract.ts').Capability, Binder>> {
