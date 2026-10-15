@@ -1,4 +1,5 @@
 import type { Database } from 'bun:sqlite';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { currentOrigin } from './origin';
 import { getLLMErrorCode, LLMProviderError, type LLMMessage, type LLMOptions, type LLMProvider, type LLMStreamEvent } from './provider';
 
@@ -112,6 +113,39 @@ export function backgroundBudgetStatus() {
   catch { return { state: 'unavailable' as const, reason: 'budget_unavailable', retryAt: null }; }
 }
 
+/**
+ * Admission class, separate from `LLMOrigin` on purpose. The origin says whose
+ * words a request carries (hosted screening) and must stay `background` for a
+ * commitment turn or a report built from screen data. Admission says whether
+ * this governor may refuse or meter the call:
+ * - `exempt`: work the person scheduled or requested and that runs at most once
+ *   (commitment execution, the daily morning/evening rhythm). Never refused by
+ *   this governor and not charged to the rolling allowance.
+ * - `foreground`: a person is waiting on the answer (a clicked report). Treated
+ *   like a `user` origin: bypasses the governor and holds off new background starts.
+ * Unset means the origin decides.
+ */
+export type AdmissionClass = 'exempt' | 'foreground';
+const admissionStore = new AsyncLocalStorage<AdmissionClass | undefined>();
+/**
+ * Run `fn` (and everything it starts) under `admission`; nested calls override.
+ * `undefined` clears an inherited class (a chained turn must not pick up the
+ * exemption of the turn that resolved before it).
+ */
+export function runWithAdmission<T>(admission: AdmissionClass | undefined, fn: () => T): T {
+  return admissionStore.run(admission, fn);
+}
+export function currentAdmission(): AdmissionClass | undefined {
+  return admissionStore.getStore();
+}
+/** How this governor treats the current call. */
+function admissionMode(): 'governed' | 'foreground' | 'unmanaged' {
+  const admission = currentAdmission();
+  if (admission === 'exempt') return 'unmanaged';
+  if (admission === 'foreground' || currentOrigin() === 'user') return 'foreground';
+  return currentOrigin() === 'background' ? 'governed' : 'unmanaged';
+}
+
 /** A provider-internal retry is another transport, not part of the first reservation. */
 function acquireProviderLease(governor: BackgroundBudget, messages: LLMMessage[], options?: LLMOptions) {
   let lease = governor.acquire(messages, options);
@@ -127,9 +161,10 @@ function acquireProviderLease(governor: BackgroundBudget, messages: LLMMessage[]
 }
 
 export async function backgroundChat(provider: LLMProvider, messages: LLMMessage[], options?: LLMOptions) {
-  const governor = currentOrigin() === 'background' ? budget : null;
+  const mode = admissionMode();
+  const governor = mode === 'governed' ? budget : null;
   if (!governor) {
-    const release = currentOrigin() === 'user' ? budget?.foregroundStarted() : undefined;
+    const release = mode === 'foreground' ? budget?.foregroundStarted() : undefined;
     try { return await provider.chat(messages, options); } finally { release?.(); }
   }
   const lease = acquireProviderLease(governor, messages, options);
@@ -139,9 +174,10 @@ export async function backgroundChat(provider: LLMProvider, messages: LLMMessage
   finally { lease.release(); }
 }
 export async function* backgroundStream(provider: LLMProvider, messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamEvent> {
-  const governor = currentOrigin() === 'background' ? budget : null;
+  const mode = admissionMode();
+  const governor = mode === 'governed' ? budget : null;
   if (!governor) {
-    const release = currentOrigin() === 'user' ? budget?.foregroundStarted() : undefined;
+    const release = mode === 'foreground' ? budget?.foregroundStarted() : undefined;
     try { yield* provider.stream(messages, options); } finally { release?.(); }
     return;
   }

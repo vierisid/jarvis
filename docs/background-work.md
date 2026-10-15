@@ -43,6 +43,32 @@ The previous attempt stays spent. Its settled transport releases its slot before
 retry admission, so another active background call does not double-count this
 request. Foreground hosted retries retain their existing behavior.
 
+## Exempt and foreground work
+
+Admission is a separate flag from the `x-jarvis-origin` tag (`runWithAdmission` in
+`src/llm/background-budget.ts`); hosted screening still sees `background` for all
+of the work below.
+
+- **Exempt**: commitment execution (`CommitmentExecutor`) and the daily morning plan
+  and evening review. These are work the person scheduled and they run at most once,
+  so a refusal would drop them. The governor never refuses them (no
+  `foreground_busy`, `concurrency`, `daily_budget`, `provider_backoff` or size
+  refusal), does not charge them to the rolling allowance and does not count them in
+  the two background slots. Their own volume is bounded by how many commitments are
+  due and by one rhythm run per window. Model calls they start inherit the
+  exemption, including delegated specialists. A background-agent turn queued behind
+  an exempt one does not inherit it.
+- **Foreground**: the weekly awareness report, requested by a click. Treated like a
+  user call: never refused, not charged, and holds off new background starts while
+  it runs.
+
+Everything else with the `background` origin stays bounded: awareness vision and
+session summaries, error and struggle auto-research, event reactions, memory
+extraction, dialogue compaction, task summaries, accountability sweeps and
+suggestion composition. A refused background-agent turn rejects with
+`background_throttled` instead of returning its error text, so it is never spoken
+or shown as an answer.
+
 The existing `background` origin marks awareness, background agents and memory
 extraction. Suggestion composition now explicitly uses that origin. The composer
 adapter treats a detached call with no origin as background too, including the
