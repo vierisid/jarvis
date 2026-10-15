@@ -491,11 +491,11 @@ instead. The sub-agent's audit rows now record what happened: a call that
 needed approval is `approval_required` and not executed, and an allowed call
 is recorded after it ran.
 
-### Required nested workflow continuation (Q-10)
+### Required nested workflow continuation
 
-On the 2026-10-14 rebase, delegated execution keeps main's single-use approval
-for starting the agent. The same execution then supplies Q-10's stable delegation
-identity and uncertain-outcome report. An approval to start the agent does not
+Delegated execution keeps the single-use approval for starting the agent, and
+the same execution reports the delegation's stable identity and any uncertain
+outcome. An approval to start the agent does not
 authorize its later tool calls; those retain their own principal, intent and
 approval checks. An uncertain tool effect remains uncertain even if the agent
 finishes its conversation.
@@ -529,7 +529,7 @@ agent uncertainty now stops the conversation and reaches the parent as an
 This uses the current queue, effect boundary, agent loop and waitpoints; it
 introduces no orchestration service. No existing graph opts into required
 completion automatically. Build the Jarvis pieces and refresh the catalog when
-installing this version. Before reverting Q-10, cancel or finish active required
+installing this version. Before downgrading, cancel or finish active required
 parent/child runs and remove their `waitForCompletion` settings. Older binaries
 ignore that input and would otherwise restore asynchronous behavior. Retain the
 additive table and historical receipts; never retry an uncertain run as rollback.
