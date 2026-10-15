@@ -71,6 +71,7 @@ import {
   type RunEnvironment,
 } from "../db/repos/flow-run";
 import { countQueued, enqueue } from "../db/repos/job-queue";
+import { listChildRuns } from "../db/repos/child-run";
 import { cancelFlowRun } from "../db/repos/run-cancellation";
 import { startWorkItemRun } from "../../goals/workflow-bridge";
 import { WorkItemError } from "../../goals/work-items";
@@ -1382,6 +1383,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           }
           const ownedEffect = getWorkflowDb().query('SELECT id FROM workflow_effect WHERE waitpoint_id=?').get(id);
           if (ownedEffect) return err('This waitpoint is owned by Authority; resolve its approval request', 403);
+          if (getWorkflowDb().query('SELECT effect_id FROM workflow_child_run WHERE waitpoint_id=?').get(id)) {
+            return err('This waitpoint resumes when the required child workflow completes', 403);
+          }
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
           const run = getFlowRun(wp.flowRunId);
           if (!run) return err("waitpoint references a missing run", 410);
@@ -2123,7 +2127,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         const { runId } = (req as RequestWithParams<{ runId: string }>).params;
         if (!scopedRun(req, runId)) return err('run not found', 404);
         const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
-        return ok({ runId, effects: listWorkflowEffects(runId) });
+        return ok({ runId, effects: listWorkflowEffects(runId), children: listChildRuns(runId) });
       }),
     },
 
@@ -2175,13 +2179,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = scopedRun(req, runId);
           if (!run) return err("run not found", 404);
+          const children = listChildRuns(runId);
           const waitpoints = listWaitpointsByFlowRun(runId, /* resumed */ false).map((wp) => ({
             id: wp.id,
             stepName: wp.stepName,
             type: wp.type,
             resumeDateTime: wp.resumeDateTime,
             created: wp.created,
-            resumeUrl: `/api/webhooks/waitpoints/${wp.id}`,
+            ...(children.some(child => child.waitpointId === wp.id)
+              ? { child: children.find(child => child.waitpointId === wp.id) }
+              : { resumeUrl: `/api/webhooks/waitpoints/${wp.id}` }),
           }));
           return ok({ runId, waitpoints });
         }),

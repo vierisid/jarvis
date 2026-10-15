@@ -96,7 +96,7 @@ func TestReviewedElementActionRefusesASupersededSnapshot(t *testing.T) {
 func TestReviewedClickOnTheReviewedSnapshotProceeds(t *testing.T) {
 	fb := newTypeFixture(t)
 	res, errs := startElementAction(makeBrowserClickHandler(guardTestConfig()),
-		map[string]any{"element_id": float64(1), "elem_gen": currentElemGen(fb.client)})
+		map[string]any{"element_id": float64(1), "elem_gen": currentElemGen(fb.client), "action_outcome": true})
 
 	c := fb.nextCommand()
 	if c.Method != "Page.getFrameTree" {
