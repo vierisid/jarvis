@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-U-03",
+  "kind": "view",
+  "entry": "./index.tsx",
+  "provides": ["google-view.v1"],
+  "requires": ["google-state.v1"]
+}

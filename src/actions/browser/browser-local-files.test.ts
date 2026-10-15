@@ -180,7 +180,9 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
       const settled = await until(async () => {
         const tree = await cdp.send('Page.getFrameTree');
         const url = String(tree.frameTree?.frame?.url ?? '');
-        return url && url !== 'about:blank' ? url : '';
+        // Chromium can expose ':' while a newly created target is navigating.
+        // It is still a placeholder, not the settled page this assertion checks.
+        return url && url !== 'about:blank' && url !== ':' ? url : '';
       });
       expect(settled).toStartWith('chrome-error://');
       const body = await cdp.send('Runtime.evaluate', { expression: 'document.documentElement.outerHTML', returnByValue: true });

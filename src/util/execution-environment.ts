@@ -507,31 +507,40 @@ export function osDisciplineLines(): string[] {
  * it unconditionally.
  */
 export function renderExecutionEnvironment(targets: ExecutionTarget[]): string[] {
-  if (targets.length === 0) return [];
+  const { inventory, rules } = renderExecutionEnvironmentSections(targets);
+  return [...inventory, ...rules];
+}
+
+/** Keep machine-authored fields separate from repo-authored instructions so a
+ * model caller can frame the inventory without disclaiming the routing rules.
+ */
+export function renderExecutionEnvironmentSections(targets: ExecutionTarget[]): { inventory: string[]; rules: string[] } {
+  if (targets.length === 0) return { inventory: [], rules: [] };
   const reachable = reachableFamilies(targets);
   const sidecars = targets.filter((t) => !t.isHost);
-  const lines = [
+  const inventory = [
     "## Execution environment (machines this workflow runs on)",
     "Any step that runs a command, launches an app, or touches the filesystem lands on one of these:",
     ...targets.map(targetLine),
+  ];
+  const rules = [
     "Rules:",
     ...osDisciplineLines().map((l) => `  - ${l}`),
     "  - A step that names no `target` runs on a connected sidecar advertising the capability it needs,",
     "    and only falls back to the brain host when no sidecar can serve it.",
   ];
   if (sidecars.length > 1) {
-    lines.push(
-      '  - More than one machine is listed: set the tool\'s `target` param to the machine name (e.g. `target: "' +
-        (sidecars[0]?.name ?? "") +
-        '"`) so the step runs where the user meant. An OS-specific step on a mixed fleet MUST name one.',
+    rules.push(
+      '  - More than one machine is listed: set the tool\'s `target` param to the machine name from the inventory ' +
+        'so the step runs where the user meant. An OS-specific step on a mixed fleet MUST name one.',
     );
   }
   if (reachable && reachable.size > 0) {
-    lines.push(
+    rules.push(
       `  - The machines above run ${[...reachable].map(familyLabel).join(" / ")}. If the request only ` +
         `makes sense on another OS, say what is missing instead of composing it anyway -- a step ` +
         `written for an OS nothing here runs fails on every single run.`,
     );
   }
-  return lines;
+  return { inventory, rules };
 }

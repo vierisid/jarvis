@@ -1,0 +1,8 @@
+{
+  "schemaVersion": 1,
+  "id": "ON-B-02",
+  "kind": "provider",
+  "entry": "./index.ts",
+  "provides": ["setup.v1"],
+  "requires": []
+}

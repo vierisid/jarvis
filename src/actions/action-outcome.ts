@@ -1,3 +1,5 @@
+import type { ActionVerification } from './action-verification';
+
 /** Transport completion is distinct from action completion, and neither proves
  * a business outcome. Shared by daemon tools, durable receipts and pieces. */
 export type ActionFailure = {
@@ -7,7 +9,7 @@ export type ActionFailure = {
   /** An error response can follow a partial effect. Never infer safe retry. */
   effect: 'not_started' | 'may_have_occurred';
 };
-export type ActionOutcome = { status: 'succeeded' } | ActionFailure;
+export type ActionOutcome = { status: 'succeeded'; verification?: ActionVerification } | ActionFailure;
 
 export class ActionOutcomeError extends Error {
   constructor(public readonly outcome: ActionFailure) {
