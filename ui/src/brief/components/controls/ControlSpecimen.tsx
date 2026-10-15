@@ -12,7 +12,7 @@ export function ControlSpecimen() {
   const [theme, setTheme] = useState("light");
   const [width, setWidth] = useState("wide");
   const [size, setSize] = useState<ControlSize>("md");
-  const [name, setName] = useState("Vieri Balboni");
+  const [name, setName] = useState("Alex Morgan");
   const [state, setState] = useState<ActionState>("idle");
   const [invalid, setInvalid] = useState(false);
   const [failure, setFailure] = useState(false);
@@ -65,7 +65,7 @@ export function ControlSpecimen() {
               onChange={event => { setName(event.target.value); setInvalid(false); setState("idle"); }}
               readOnly={state === "pending"} hint="Shown in your workspace." reserveMessage={nameError}
               error={invalid ? nameError : undefined} saved={state === "success" ? "Name saved in this example." : undefined} />
-            <BriefInput density={size} label="Email address" type="email" defaultValue="vieri.balboni+design-review@example.com"
+            <BriefInput density={size} label="Email address" type="email" defaultValue="alex.morgan+design-review@example.com"
               hint="A long value stays inside its field." />
             <BriefSelect density={size} label="Summary frequency" defaultValue="weekly" hint="Native selection, shared geometry.">
               <option value="daily">Every day</option><option value="weekly">Every week</option><option value="monthly">Every month</option>
