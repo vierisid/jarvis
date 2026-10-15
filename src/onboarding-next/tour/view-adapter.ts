@@ -3,6 +3,8 @@ import { isTourStep } from './steps.ts';
 import type { TourCommand, TourResult, TourSnapshot } from './types.ts';
 
 type Context = { journey: { scopeId: string; journeyId: string; revision: number }; signal: AbortSignal };
+// Receipt IDs are opaque. getRandomValues also works on plain HTTP LAN origins.
+const newRequestId = () => Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
 /** Structural U10 adapter. Render ports are trusted local D implementations,
  * never values read from transport. No registration or sibling imports. */
 export function createTourViewAdapter(deps: {
@@ -44,8 +46,9 @@ export function createTourViewAdapter(deps: {
       // U10 reads the journey first. A concurrent update requires a fresh host
       // read, not a model from one revision paired with another navigation key.
       if (next.revision !== c.journey.revision || !next.active) return fail();
-      current = next;
       const state = sandbox.present(next);
+      // A late response must pass the sandbox's freshness check before replacing the navigation key.
+      current = next;
       return { model: { ...state.model }, ports: {
         renderer: state.roomStatus === 'ready' ? deps.renderer : { isolation: 'fixture-only',
           renderRoom: () => ({ status: state.roomStatus === 'unsupported' ? 'unsupported' : 'error' }) },
@@ -66,7 +69,7 @@ export function createTourViewAdapter(deps: {
         from: i.from, action: action as 'next' | 'back' | 'skip' | 'finish', ...(i.to !== undefined ? { to: i.to as any } : {}) };
       const key = JSON.stringify(value);
       // Retain the exact receipt identity when transport loses an acknowledgement.
-      if (!pending || pending.key !== key) pending = { key, command: { ...value, requestId: crypto.randomUUID() } };
+      if (!pending || pending.key !== key) pending = { key, command: { ...value, requestId: newRequestId() } };
       const next = ready(await deps.call(pending.command, c.signal), c);
       if (next.revision <= current.revision) return fail();
       sandbox.present(next); current = next; pending = null;
