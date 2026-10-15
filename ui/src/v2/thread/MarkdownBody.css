@@ -7,8 +7,8 @@
   color: inherit;
 }
 
-.v2-md > *:first-child { margin-top: 0; }
-.v2-md > *:last-child  { margin-bottom: 0; }
+.v2-md > .safe-markdown > *:first-child { margin-top: 0; }
+.v2-md > .safe-markdown > *:last-child  { margin-bottom: 0; }
 
 .v2-md__p {
   margin: 0 0 0.75em;
