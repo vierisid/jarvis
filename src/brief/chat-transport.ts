@@ -147,11 +147,19 @@ export class BriefChatTransport implements BriefProvider {
 
   /** Requests retain their canonical approval ID even after cancellation, tab switch or restart. */
   approval(request: ApprovalRequest): boolean {
-    const context = currentBriefTurn();
-    const owner = context ?? this.repository.approvalOwner(request.id);
-    if (!owner) return false;
-    this.emit(this.repository.approval(owner, request.id, request.status));
-    return true;
+    // Callers deliver the card to other channels and finish an approved action
+    // after this returns. A turn that cannot take the card falls back to the
+    // ordinary dashboard card instead of throwing into them.
+    try {
+      const context = currentBriefTurn();
+      const owner = context ?? this.repository.approvalOwner(request.id);
+      if (!owner) return false;
+      this.emit(this.repository.approval(owner, request.id, request.status));
+      return true;
+    } catch (error) {
+      console.error('[BriefChat] Approval stays on the dashboard:', error instanceof Error ? error.message : 'unknown');
+      return false;
+    }
   }
 
   private subscribe(client: Client, conversationId: string): void {

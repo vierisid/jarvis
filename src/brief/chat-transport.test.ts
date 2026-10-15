@@ -10,7 +10,7 @@ import { createBriefCapabilities } from './registrations/index.ts';
 import { registerConversations } from './registrations/conversations.ts';
 import { registerChatTransport } from './registrations/chat-transport.ts';
 import type { BriefChatEvent, BriefSendTurn } from './contracts.ts';
-import { currentBriefTurn } from './chat-context.ts';
+import { currentBriefTurn, withBriefTurn } from './chat-context.ts';
 
 afterEach(() => closeDb());
 const done = (): LLMStreamEvent => ({ type: 'done', response: { content: '', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 }, model: 'fixture', finish_reason: 'stop' } });
@@ -297,4 +297,13 @@ test('repeated queued cancellation releases retained jobs before the active turn
     f.push(next.turnId, done()); await f.transport.idle();
     expect(f.inputs.size).toBe(2);
   } finally { f.transport.stop(); await f.transport.idle(); }
+});
+
+test('an approval its turn cannot take falls back to the dashboard instead of throwing', () => {
+  initDatabase(':memory:', { quiet: true });
+  const transport = new BriefChatTransport({ db: getDb(), runner: { ready: () => true, stream: () => { throw new Error('unused'); } }, send: () => {} });
+  const missing = { conversationId: 'gone', turnId: 'gone', requestId: 'gone', signal: new AbortController().signal, progress: () => {} };
+  const request = { id: 'approval-without-turn', status: 'pending' } as import('../authority/approval.ts').ApprovalRequest;
+  expect(withBriefTurn(missing, () => transport.approval(request))).toBe(false);
+  expect(transport.approval(request)).toBe(false);
 });
