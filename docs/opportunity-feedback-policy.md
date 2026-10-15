@@ -104,4 +104,4 @@ not been benchmarked. No production/native UI or paid-provider evaluation ran.
 For containment, disable existing awareness. Roll back to the prior versioned
 policy while retaining durable identities, feedback, privacy guards and user work.
 The family storage key preserves older-writer deduplication. Never drop records or
-replay effects to roll back. See [the delivery receipt](brief-delivery/Q-14.json).
+replay effects to roll back.
