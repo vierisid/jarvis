@@ -32,7 +32,7 @@ beforeAll(async () => {
 });
 beforeEach(() => {
   host = document.createElement("div"); document.body.append(host); root = createRoot(host); goalMounts = 0; showToday = true; actions = [];
-  shell = { mode: "preview", route: { room: "today", selection: { approvalId: "fixture-approval-alex" } }, sidebar: "expanded", theme: "light", chatOpen: false,
+  shell = { mode: "preview", route: { room: "today", selection: { approvalId: "fixture-approval-jordan" } }, sidebar: "expanded", theme: "light", chatOpen: false,
     setSidebar: sidebar => { shell = { ...shell, sidebar }; }, setChatOpen: chatOpen => { shell = { ...shell, chatOpen }; },
     setTheme: theme => { shell = { ...shell, theme }; }, navigate: route => { shell = { ...shell, route }; } };
   binding = { source: "fixture", state: { status: "ready", data: samplePaper("ready", false) }, onAction: (d, action) => {
@@ -48,7 +48,7 @@ async function render() {
     <NavigationShell shell={shell} rooms={{ today: { id: "today", title: "Today" } }} reducedMotion
       binding={{ capabilities: null, view: { source: "fixture", state: { status: "ready", data: UNKNOWN_NAVIGATION } } }}
       conversation={{ source: "fixture", content: <textarea aria-label="Retained conversation" data-pebble-focus defaultValue="Draft" /> }}>
-      {showToday ? <TodayLayout shell={shell} greeting="Good morning, Vieri." dateLabel="Thursday, 17 September" decision={binding} reducedMotion
+      {showToday ? <TodayLayout shell={shell} greeting="Good morning, Alex." dateLabel="Thursday, 17 September" decision={binding} reducedMotion
         slots={{ goal: <Goal />, outcomes: <section>Outcomes</section>, activity: <section>Recent activity</section>, opportunities: <div>Prepared opportunity</div> }} /> : <h1>Another room</h1>}
     </NavigationShell>
   </div>));
@@ -86,7 +86,7 @@ test("ten re-hover cycles in all eight shell/chat/theme combinations leave the s
     }
     expect(host.querySelector('[aria-label="Retained goal view"]')).toBe(goal); expect(goal.value).toBe("Keep goal selection");
     expect(host.querySelector("textarea")).toBe(chat); expect(chat.value).toBe("Keep chat draft");
-    expect(shell.route.selection.approvalId).toBe("fixture-approval-alex");
+    expect(shell.route.selection.approvalId).toBe("fixture-approval-jordan");
   }
   expect(goalMounts).toBe(1); expect(actions).toEqual([]);
 });

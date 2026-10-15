@@ -3,11 +3,11 @@ import type { DecisionPaper } from "../hero-paper/model";
 /** Isolated review data only. Never imported by a live room/provider. */
 export const FOLLOW_UP: DecisionPaper = {
   decision: { decisionId: "fixture-decision-follow-up", revision: "fixture-v1", workItemId: "fixture-work-follow-up", workStatus: "blocked",
-    approval: { approvalId: "fixture-approval-alex", status: "pending", executionMode: "workflow", executionOutcome: null },
+    approval: { approvalId: "fixture-approval-jordan", status: "pending", executionMode: "workflow", executionOutcome: null },
     workflow: null, run: null, actions: ["approve", "keep_draft", "inspect"] },
   title: "Follow-up draft", summary: "The follow-up is ready.\nOne detail needs your eyes.",
-  description: "Your email to Alex is drafted.\nConfirm the pilot date before sending.", reviewLabel: "Review follow-up",
-  document: { recipient: "Alex", subject: "Our pilot: next steps", paragraphs: ["Hi Alex,", "Let’s start with meeting follow-ups."],
+  description: "Your email to Jordan is drafted.\nConfirm the pilot date before sending.", reviewLabel: "Review follow-up",
+  document: { recipient: "Jordan", subject: "Our pilot: next steps", paragraphs: ["Hi Jordan,", "Let’s start with meeting follow-ups."],
     attention: "Would Thursday, 17 September work for your pilot kickoff?" },
   actionLabels: { approve: "Approve & send", keep_draft: "Keep draft" }, queueCount: 2,
 };

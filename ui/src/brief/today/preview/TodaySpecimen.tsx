@@ -24,7 +24,7 @@ export function TodaySpecimen() {
   const shell = useMemo<BriefShellPort>(() => ({ mode: "preview", route, sidebar, setSidebar, chatOpen, setChatOpen, theme, setTheme, navigate: setRoute }), [route, sidebar, chatOpen, theme, setTheme]);
   const paper = useMemo(() => samplePaper(scenario, long), [scenario, long]);
   const binding: BriefNavigationBinding = { capabilities: null, view: { source: "fixture", state: { status: "ready", data: {
-    ...UNKNOWN_NAVIGATION, workspaceName: "Vieri’s workspace", connection: "connected", account: { name: "Vieri Balboni", plan: { status: "ready", data: "Pro plan" } }, badges: { workflows: 4, opportunities: 2, "needs-you": 1 },
+    ...UNKNOWN_NAVIGATION, workspaceName: "Northwind workspace", connection: "connected", account: { name: "Alex Morgan", plan: { status: "ready", data: "Pro plan" } }, badges: { workflows: 4, opportunities: 2, "needs-you": 1 },
   } } } };
   const decision: DecisionBinding = { source: "fixture",
     state: scenario === "loading" || scenario === "empty" ? { status: scenario } : scenario === "unavailable" ? { status: "unavailable", reason: "We couldn’t load your decisions. Your work is unchanged." }
@@ -49,7 +49,7 @@ export function TodaySpecimen() {
     <div className="brief-today-review-viewport" style={{ width: width === "fluid" ? "100%" : Number(width) }}>
       <NavigationShell shell={shell} rooms={{ today: { id: "today", title: "Today" } }} binding={binding} reducedMotion={reduced}
         conversation={{ source: "fixture", content: <Conversation /> }}>
-        {route.room === "today" ? <TodayLayout shell={shell} greeting="Good morning, Vieri." dateLabel="Thursday, 17 September" dateTime="2026-09-17" decision={decision} reducedMotion={reduced}
+        {route.room === "today" ? <TodayLayout shell={shell} greeting="Good morning, Alex." dateLabel="Thursday, 17 September" dateTime="2026-09-17" decision={decision} reducedMotion={reduced}
           slots={{ goal: <Goal />, outcomes: <Outcomes />, activity: <Activity />, opportunities: <Opportunity /> }} />
           : <><h1 className="brief-type-room-title">Isolated Today review</h1><BriefButton onClick={() => setRoute({ room: "today", selection: {} })}>Return to Today</BriefButton></>}
       </NavigationShell>
@@ -73,6 +73,6 @@ function Opportunity() { return <article className="brief-today-sample-opportuni
 function Conversation() {
   const [draft, setDraft] = useState("");
   return <><div className="sample-conversation-tabs">General</div><div className="sample-conversation-thread"><h2 className="brief-type-section-heading">What are we moving forward?</h2></div>
-    <div className="sample-conversation-suggestions"><BriefButton size="sm" variant="secondary" onClick={() => setDraft("Prepare my next call with Alex.")}>Prepare a call</BriefButton><BriefButton size="sm" variant="secondary" onClick={() => setDraft("Review the follow-up workflow.")}>Review a workflow</BriefButton></div>
+    <div className="sample-conversation-suggestions"><BriefButton size="sm" variant="secondary" onClick={() => setDraft("Prepare my next call with Jordan.")}>Prepare a call</BriefButton><BriefButton size="sm" variant="secondary" onClick={() => setDraft("Review the follow-up workflow.")}>Review a workflow</BriefButton></div>
     <textarea className="sample-conversation-input" aria-label="Conversation draft" data-pebble-focus rows={2} value={draft} onChange={e => setDraft(e.target.value)} placeholder="Ask Jarvis…" /></>;
 }
