@@ -88,6 +88,10 @@ Logging is queued, not awaited by operations. Inject a nonblocking local logger;
 a synchronous logger that monopolizes the JavaScript thread cannot be preempted.
 Throw, rejection or timeout trips a per-instance circuit, aborts the active signal
 and drops queued deliveries with counters. Later records still reach receipts.
+The native signal guards callbacks registered through `addEventListener` and
+`onabort`, containing synchronous throws and rejected callback promises without
+global exception handlers. Disposal counts active and queued losses once, even
+if the logger later resolves or rejects; acknowledged deliveries are not dropped.
 There is no automatic retry or unbounded set of hung promises, even if the logger
 ignores abort. Overflow drops delivery, not the receipt. Logger mutations cannot
 change retained events. The logger receives only the sanitized event.

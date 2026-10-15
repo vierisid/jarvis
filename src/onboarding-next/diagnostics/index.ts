@@ -1,5 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { identity, normalize } from './normalize.ts';
+import { createLoggerAbortController } from './logger-abort.ts';
 import { LIMITS, type DeliveryState, type DiagnosticEvent, type Options, type Receipt, type RecordResult } from './types.ts';
 export * from './types.ts';
 export { observeOperation } from './observe.ts';
@@ -17,10 +18,9 @@ export function createDiagnosticsProvider<Context>(options: Options<Context>) {
   const journals = new Map<string, Journal>();
   const queue: Array<{ event: DiagnosticEvent; journal: Journal }> = [];
   let key: Uint8Array | undefined;
-  let closed = false, active = false;
+  let closed = false;
   let delivery: DeliveryState = options.logger ? 'idle' : 'absent';
-  let controller: AbortController | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
+  let cancelActive: (() => void) | undefined;
   const timeout = Number.isFinite(options.deliveryTimeoutMs) ? Math.max(1, Math.min(1000, options.deliveryTimeoutMs!)) : 100;
   function hash(field: string, value: string) {
     if (!key) {
@@ -39,21 +39,23 @@ export function createDiagnosticsProvider<Context>(options: Options<Context>) {
     for (const item of queue.splice(0)) item.journal.droppedDeliveries = increment(item.journal.droppedDeliveries);
   }
   function drain() {
-    if (active || closed || !options.logger || delivery === 'failed' || delivery === 'timed_out') return;
+    if (cancelActive || closed || !options.logger || delivery === 'failed' || delivery === 'timed_out') return;
     const item = queue.shift(); if (!item) { delivery = 'idle'; return; }
-    active = true; delivery = 'pending';
-    const abort = controller = new AbortController();
+    delivery = 'pending';
+    const abort = createLoggerAbortController();
     let settled = false;
-    const finish = (outcome: 'idle' | 'failed' | 'timed_out') => {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (outcome: 'idle' | 'failed' | 'timed_out' | 'closed') => {
       if (settled) return;
-      settled = true; clearTimeout(timer); timer = undefined; controller = undefined;
-      if (closed) return;
-      active = false; delivery = outcome;
+      settled = true; clearTimeout(timer); cancelActive = undefined;
+      delivery = outcome;
       if (outcome !== 'idle') {
         item.journal.droppedDeliveries = increment(item.journal.droppedDeliveries);
-        abort.abort(); dropQueue();
+        // Settle accounting before callbacks can dispose or record reentrantly.
+        dropQueue(); abort.abort();
       } else queueMicrotask(drain);
     };
+    cancelActive = () => finish('closed');
     timer = setTimeout(() => finish('timed_out'), timeout);
     try {
       // The logger sees a detached projection. Its mutations cannot taint a receipt.
@@ -107,6 +109,9 @@ export function createDiagnosticsProvider<Context>(options: Options<Context>) {
           delivery, droppedDeliveries: journal.droppedDeliveries };
       } catch { return null; }
     },
-    dispose() { closed = true; delivery = 'closed'; clearTimeout(timer); controller?.abort(); dropQueue(); },
+    dispose() {
+      if (closed) return;
+      closed = true; delivery = 'closed'; cancelActive?.(); dropQueue();
+    },
   };
 }
