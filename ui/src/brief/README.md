@@ -174,3 +174,31 @@ sidebar changes.
 
 `?brief=preview&specimen=pebble#/_brief_preview` opens an illustrative review with fixture rooms
 (Today, canvas, list, detail, form) and a fixture conversation. It starts no API read, socket or voice.
+
+## Today composition
+
+`today/layout/TodayLayout.tsx` lays out the Today room: greeting, the decision paper, and the goal,
+outcomes, activity and opportunities slots. `rooms/today/registration.ts` exports
+`createTodayRoom(useToday)` for the composition root; nothing calls it yet, so the registered Today room
+is unchanged.
+
+- The decision comes only as a `DecisionBinding` (`today/hero-paper/model.ts`), a `BriefViewPort` over
+  an F-01 `BriefDecision` plus its presentation. `decisionView` shows it only when `source` is
+  `"fixture"` in preview mode, or `"live"` with the `decisions` capability enabled in live mode;
+  anything else renders "unavailable". Loading, empty, stale and unavailable are distinct states.
+- Approve, Keep draft and Reject call `binding.onAction(decision, action)` with the exact decision id and
+  revision, once, and only while the decision is `ready`, the server listed the action and any approval
+  is still `pending`. D-07 performs no write: the owner must route the action through the existing
+  approval endpoints and report progress in `binding.operation`. An approved but unconfirmed effect is
+  never shown as done.
+- Review opens the full document in place below the summary; Escape or Close returns focus to the
+  Review button. A new decision id or revision resets hover and review state.
+- Slots are plain nodes supplied and gated by their owners; the layout invents no fallback cards.
+  `slots.goal` renders through `PebbleCompanion` into the one companion slot `PebbleLayout` keeps above
+  the conversation, so the goal stays mounted and above Pebble when chat opens. While chat is closed,
+  wheel input over the goal scrolls the room.
+- `today/figma-reference.json` records the source values.
+
+`?brief=preview&specimen=today#/_brief_preview` opens the composition with fixture decisions and
+fixture goal/outcome/opportunity cards. Its actions only change local state; it starts no API read,
+socket or approval.
