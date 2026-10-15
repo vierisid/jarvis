@@ -357,7 +357,8 @@ describe('live observation', () => {
     const before = changes();
 
     const snapshot = observeNextAction({ now: Date.now() });
-    expect(snapshot.goals.map(g => [g.title, g.parentId === objective.id])).toEqual([['Grow revenue', false], ['Follow up with leads', true], ['Update pricing page', true]]);
+    // Goals made in the same millisecond with the same order tie on (sort_order, created_at) and fall back to their random id.
+    expect(snapshot.goals.map(g => [g.title, g.parentId === objective.id]).sort()).toEqual([['Follow up with leads', true], ['Grow revenue', false], ['Update pricing page', true]]);
     expect(snapshot.work.map(w => [w.title, w.status])).toEqual([['Send lead follow-ups', 'ready'], ['Call Bo about the renewal', 'proposed']]);
     expect(snapshot.commitments.map(c => c.what)).toEqual(['Update pricing page']);
     expect(snapshot.workflows).toEqual({ [`${flow.id}:${version.id}`]: { ready: false, reason: 'send: Piece catalog is unavailable; readiness cannot be verified' } });

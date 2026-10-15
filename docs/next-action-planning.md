@@ -68,7 +68,8 @@ still holds, F-13 compares `basis`, not the revision.
 Rationales and questions quote blocker reasons and check summaries, clipped to
 200 characters. For a failed run the reason is the failed step's error message,
 which is outside text. Show it to the user as data, and frame it as untrusted
-wherever plan text reaches a model, as `goals/rhythm.ts` does.
+wherever plan text reaches a model, with `wrapUntrusted` from
+`src/roles/untrusted.ts`, as `goals/rhythm.ts` does.
 
 ## Candidates and order
 
